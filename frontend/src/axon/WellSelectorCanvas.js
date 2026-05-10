@@ -24,6 +24,7 @@ export const Mode = Object.freeze({
   CUP_SELECT: "cup",
   AREA_SELECT: "area",
   MOVE_CAMERA: "camera",
+  FREEHAND_DRAW: "freehand",
 });
 
 export const Shape = Object.freeze({
@@ -61,6 +62,13 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   //mode: single
   const [dragPointIndex, setDragPointIndex] = useState(-1);
 
+  //mode: freehand draw – polygon vertices in physical (µm) coordinates
+  const [freehandPoints, setFreehandPoints] = useState([]);
+  const [isFreehandDrawing, setIsFreehandDrawing] = useState(false);
+  const [freehandClosed, setFreehandClosed] = useState(false);
+  // Throttle: minimum stage distance between recorded freehand points (µm).
+  const FREEHAND_MIN_STEP_UM = 500;
+
   //##################################################################################
 
   // redux dispatcher
@@ -88,6 +96,44 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     resetHistory: () => {
       //clear position history
       setPositionHistory([]);
+    },
+    clearFreehand: () => {
+      setFreehandPoints([]);
+      setIsFreehandDrawing(false);
+      setFreehandClosed(false);
+    },
+    /**
+     * Generate scan positions inside the closed freehand polygon using
+     * the current objective FOV (with optional overlap).
+     * Returns an array of {x, y} in physical (µm) coordinates.
+     */
+    generateFreehandScanPositions: (overlap = 0) => {
+      const polygon = freehandPoints;
+      if (!polygon || polygon.length < 3) return [];
+      const fovX = objectiveState?.fovX || 0;
+      const fovY = objectiveState?.fovY || 0;
+      if (fovX <= 0 || fovY <= 0) return [];
+      const stepX = fovX * (1 - overlap);
+      const stepY = fovY * (1 - overlap);
+      let minX = Infinity,
+        minY = Infinity,
+        maxX = -Infinity,
+        maxY = -Infinity;
+      polygon.forEach((p) => {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      });
+      const positions = [];
+      for (let y = minY; y <= maxY; y += stepY) {
+        for (let x = minX; x <= maxX; x += stepX) {
+          if (wsUtils.isPointInPolygon({ x, y }, polygon)) {
+            positions.push({ x, y });
+          }
+        }
+      }
+      return positions;
     },
   }));
 
@@ -820,6 +866,9 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     //------------ draw position trace
     drawPositionTrace(ctx);
 
+    //------------ draw freehand polygon
+    drawFreehandPolygon(ctx);
+
     //------------ draw overview camera overlay images
     drawOverviewOverlay(ctx);
 
@@ -827,6 +876,36 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     drawFocusMapOverlay(ctx);
 
     //ctx.restore();
+  };
+
+  //##################################################################################
+  // Draw the user's freehand polygon (and a closed-fill once finished).
+  const drawFreehandPolygon = (ctx) => {
+    if (!freehandPoints || freehandPoints.length === 0) return;
+    ctx.save();
+    ctx.beginPath();
+    freehandPoints.forEach((p, i) => {
+      const px = calcPhyPoint2PxPoint(p);
+      if (i === 0) ctx.moveTo(px.x, px.y);
+      else ctx.lineTo(px.x, px.y);
+    });
+    if (freehandClosed) {
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255, 200, 0, 0.15)";
+      ctx.fill();
+    }
+    ctx.strokeStyle = freehandClosed ? "rgba(255, 150, 0, 0.9)" : "rgba(0, 150, 255, 0.9)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Vertices
+    ctx.fillStyle = "rgba(0, 100, 200, 0.9)";
+    freehandPoints.forEach((p) => {
+      const px = calcPhyPoint2PxPoint(p);
+      ctx.beginPath();
+      ctx.arc(px.x, px.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
   };
 
   //##################################################################################
@@ -1114,6 +1193,14 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
         }
       });
     }
+
+    // Freehand drawing: start a new polygon (or restart after closing one)
+    if (wellSelectorState.mode == Mode.FREEHAND_DRAW) {
+      const phy = calcPxPoint2PhyPoint(newMousePosition);
+      setFreehandPoints([phy]);
+      setIsFreehandDrawing(true);
+      setFreehandClosed(false);
+    }
   };
 
   //##################################################################################
@@ -1142,6 +1229,25 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
       }
     }
 
+    // Freehand drawing: append a vertex when the cursor moved far enough
+    if (
+      wellSelectorState.mode == Mode.FREEHAND_DRAW &&
+      isFreehandDrawing &&
+      mouseDownFlag
+    ) {
+      const phy = calcPxPoint2PhyPoint(newMousePosition);
+      const last = freehandPoints[freehandPoints.length - 1];
+      if (!last) {
+        setFreehandPoints([phy]);
+      } else {
+        const dx = phy.x - last.x;
+        const dy = phy.y - last.y;
+        if (Math.hypot(dx, dy) >= FREEHAND_MIN_STEP_UM) {
+          setFreehandPoints([...freehandPoints, phy]);
+        }
+      }
+    }
+
     //handle offset
     if (!isCanvasDragging) return;
     setOffset({
@@ -1157,6 +1263,12 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     //handle mode single select
     if (wellSelectorState.mode == Mode.SINGLE_SELECT) {
       setDragPointIndex(-1);
+    }
+
+    // Freehand drawing: close the polygon on mouse-up
+    if (wellSelectorState.mode == Mode.FREEHAND_DRAW && isFreehandDrawing) {
+      setIsFreehandDrawing(false);
+      if (freehandPoints.length >= 3) setFreehandClosed(true);
     }
 
     //handle mode cup select

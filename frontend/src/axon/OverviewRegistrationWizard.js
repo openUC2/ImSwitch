@@ -349,6 +349,9 @@ const OverviewRegistrationWizard = () => {
         imageHeight: regState.snapshotHeight,
         cornersPx: regState.pickedCorners,
         slotStageCorners: slot.corners.map((c) => ({ x: c.x, y: c.y })),
+        // Persist the stage position recorded at snapshot time so the
+        // autonomous overview scan can revisit each slot later.
+        stagePosition: regState.snapshotStagePosition,
       });
 
       dispatch(overviewRegSlice.setLastRegistrationResult(result));

@@ -334,6 +334,29 @@ export function isSquareInsideRect(x, y, rasterSize, x1, y1, x2, y2) {
 }
 
 //##################################################################################
+/**
+ * Ray-casting test: is `point` inside the closed polygon `polygon`?
+ * @param {{x:number, y:number}} point
+ * @param {Array<{x:number, y:number}>} polygon vertices in any order (>=3)
+ * @returns {boolean}
+ */
+export function isPointInPolygon(point, polygon) {
+  if (!polygon || polygon.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x;
+    const yi = polygon[i].y;
+    const xj = polygon[j].x;
+    const yj = polygon[j].y;
+    const intersect =
+      yi > point.y !== yj > point.y &&
+      point.x < ((xj - xi) * (point.y - yi)) / (yj - yi + 1e-12) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+//##################################################################################
 export function isSquareInsideRect2(x, y, rasterSize, x1, y1, x2, y2) {
   // Normalize the rectangle to ensure x1, y1 is the top-left and x2, y2 is the bottom-right
   const rectX1 = Math.min(x1, x2);

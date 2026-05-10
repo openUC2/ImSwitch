@@ -53,6 +53,13 @@ const initialOverviewRegistrationState = {
   overlayOpacity: 0.6,
   overlayData: {}, // { slides: { "1": {imageBase64, stageBounds, ...}, ... } }
 
+  // Autonomous overview scan state
+  autonomousScanRunning: false,
+  autonomousScanProgress: { current: 0, total: 0, slotId: "" },
+
+  // Editable registration config (XYZ table etc.)
+  registrationConfig: null,
+
   // Loading / error state
   isLoading: false,
   error: null,
@@ -154,6 +161,39 @@ const overviewRegistrationSlice = createSlice({
       state.overlayData = action.payload;
     },
 
+    // Autonomous overview scan
+    setAutonomousScanRunning: (state, action) => {
+      state.autonomousScanRunning = action.payload;
+    },
+    setAutonomousScanProgress: (state, action) => {
+      state.autonomousScanProgress = {
+        current: action.payload.current ?? 0,
+        total: action.payload.total ?? 0,
+        slotId: action.payload.slotId ?? "",
+      };
+    },
+
+    // Editable registration config
+    setRegistrationConfig: (state, action) => {
+      state.registrationConfig = action.payload;
+    },
+    updateRegistrationConfigSlot: (state, action) => {
+      const { slotId, patch } = action.payload;
+      if (!state.registrationConfig || !state.registrationConfig.slots) return;
+      const slot = state.registrationConfig.slots[slotId];
+      if (!slot) return;
+      state.registrationConfig.slots[slotId] = { ...slot, ...patch };
+    },
+    updateRegistrationConfigSlotPosition: (state, action) => {
+      const { slotId, axis, value } = action.payload;
+      if (!state.registrationConfig || !state.registrationConfig.slots) return;
+      const slot = state.registrationConfig.slots[slotId];
+      if (!slot) return;
+      const pos = { ...(slot.stagePosition || { x: 0, y: 0, z: 0 }) };
+      pos[axis] = value;
+      slot.stagePosition = pos;
+    },
+
     // Loading / error
     setIsLoading: (state, action) => {
       state.isLoading = action.payload;
@@ -195,6 +235,11 @@ export const {
   setOverlayEnabled,
   setOverlayOpacity,
   setOverlayData,
+  setAutonomousScanRunning,
+  setAutonomousScanProgress,
+  setRegistrationConfig,
+  updateRegistrationConfigSlot,
+  updateRegistrationConfigSlotPosition,
   setIsLoading,
   setError,
   resetWizard,

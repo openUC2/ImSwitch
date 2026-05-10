@@ -3103,6 +3103,7 @@ class ExperimentController(ImConWidgetController):
                 corners_px=corners_px,
                 slot_stage_corners=slot_stage_corners,
                 raw_image=raw_image,
+                stage_position=registration_data.get("stagePosition"),
             )
 
             return {
@@ -3184,6 +3185,131 @@ class ExperimentController(ImConWidgetController):
         """
         cam_name = camera_name or self._overview_camera_name or "overviewcamera"
         return self._overview_registration.get_overlay_data(cam_name, layout_name)
+
+    # ------------------------------------------------------------------
+    # Autonomous overview scan + registration config endpoints
+    # ------------------------------------------------------------------
+    @APIExport(requestType="POST")
+    def runAutonomousOverviewScan(
+        self,
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+        settle_time_s: float = 0.5,
+    ):
+        """
+        Iterate all registered slots, move the stage to the stored XYZ
+        position, snap an image, re-warp using the stored homography and
+        write the resulting overlay JPEG/PNG. Returns per-slot results plus
+        the full overlay payload for direct frontend display.
+        """
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        cam = self._overview_camera
+        if cam is None:
+            raise HTTPException(status_code=400, detail="Overview camera not available")
+
+        config = self._overview_registration.load_registration_config(cam_name, layout_name)
+        if not config or not config.get("slots"):
+            raise HTTPException(
+                status_code=400,
+                detail="No registration config found. Run the manual wizard first.",
+            )
+
+        results: Dict[str, Any] = {}
+        for slot_id, slot_data in config["slots"].items():
+            pos = slot_data.get("stagePosition") or {}
+            try:
+                # Move XY together when possible, then Z separately
+                if self.mStage is not None:
+                    if "x" in pos and "y" in pos:
+                        self.mStage.move(
+                            value=(float(pos["x"]), float(pos["y"])),
+                            axis="XY",
+                            is_absolute=True,
+                            is_blocking=True,
+                        )
+                    if "z" in pos:
+                        self.mStage.move(
+                            value=float(pos["z"]),
+                            axis="Z",
+                            is_absolute=True,
+                            is_blocking=True,
+                        )
+                if settle_time_s and settle_time_s > 0:
+                    time.sleep(float(settle_time_s))
+
+                frame = cam.getLatestFrame()
+                if frame is None:
+                    results[slot_id] = {"success": False, "error": "No frame from camera"}
+                    continue
+                frame = np.ascontiguousarray(frame)
+
+                refresh = self._overview_registration.refresh_overlay_image(
+                    camera_name=cam_name,
+                    layout_name=layout_name,
+                    slot_id=slot_id,
+                    new_image=frame,
+                )
+                results[slot_id] = {"success": True, **refresh}
+            except Exception as exc:
+                self._logger.error(
+                    f"Autonomous scan failed for slot {slot_id}: {exc}", exc_info=True
+                )
+                results[slot_id] = {"success": False, "error": str(exc)}
+
+        overlay_data = self._overview_registration.get_overlay_data(cam_name, layout_name)
+        return {"success": True, "scanResults": results, "overlayData": overlay_data}
+
+    @APIExport(requestType="GET")
+    def getOverviewRegistrationConfigData(
+        self,
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+    ):
+        """Return the persisted overview-registration config for editing."""
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        config = self._overview_registration.load_registration_config(cam_name, layout_name)
+        if config is None:
+            return {"exists": False, "config": None}
+        return {"exists": True, "config": config}
+
+    @APIExport(requestType="POST")
+    def updateOverviewRegistrationConfig(self, config_data: dict):
+        """Apply edits to the registration config (e.g. updated XYZ positions)."""
+        if not isinstance(config_data, dict):
+            raise HTTPException(status_code=400, detail="config_data must be an object")
+        cam_name = config_data.get(
+            "cameraName", self._overview_camera_name or "overviewcamera"
+        )
+        layout_name = config_data.get("layoutName", "Heidstar 4x Histosample")
+        try:
+            path = self._overview_registration.save_registration_config_from_dict(
+                cam_name, layout_name, config_data
+            )
+            return {"success": True, "path": path}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @APIExport(requestType="GET")
+    def getOverviewOverlayImage(
+        self,
+        slot_id: str = "1",
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+    ):
+        """Return the stored JPEG overlay (base64) for a single slot."""
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        b64 = self._overview_registration.load_overlay_jpeg(
+            cam_name, layout_name, slot_id
+        )
+        if b64 is None:
+            raise HTTPException(
+                status_code=404, detail="No overlay image found for this slot"
+            )
+        return {
+            "imageBase64": b64,
+            "imageMimeType": "image/jpeg",
+            "slotId": slot_id,
+        }
 
 
 # Copyright (C) 2025 Benedict Diederich

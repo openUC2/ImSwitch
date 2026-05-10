@@ -16,6 +16,7 @@ import * as overviewRegSlice from '../state/slices/OverviewRegistrationSlice.js'
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 import OverviewRegistrationWizard from "./OverviewRegistrationWizard.js";
+import OverviewScanTab from "./OverviewScanTab.js";
 import LabwareSelectionPanel from "../components/LabwareSelectionPanel.jsx";
 
 import {
@@ -31,9 +32,8 @@ import {
   FormHelperText,
   FormControlLabel,
   ButtonGroup,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
+  Tabs,
+  Tab,
   Slider,
   Dialog,
   DialogActions,
@@ -54,6 +54,9 @@ const WellSelectorComponent = () => {
   // Pending layout switch awaiting user confirmation when pointList is non-empty
   const [pendingLayoutEvent, setPendingLayoutEvent] = useState(null);
 
+  // Active tab in the parameter / overview-scan section
+  const [activeTab, setActiveTab] = useState(0);
+
   //child ref
   const childRef = useRef();//canvas 
   const infoPopupRef = useRef();
@@ -73,27 +76,41 @@ const WellSelectorComponent = () => {
     dispatch(overviewRegSlice.setWizardOpen(true));
   };
 
-  const handleOverlayToggle = (event) => {
-    dispatch(overviewRegSlice.setOverlayEnabled(event.target.checked));
-    // Load overlay data if enabling and not yet loaded
-    if (event.target.checked && (!overviewRegState.overlayData || !overviewRegState.overlayData.slides || Object.keys(overviewRegState.overlayData.slides || {}).length === 0)) {
-      loadOverlayData();
+  // Convert the current freehand polygon (drawn on the canvas) into
+  // experiment scan points using the current FOV and area-scan overlap.
+  const handleConvertFreehandToPoints = () => {
+    if (!childRef.current || !childRef.current.generateFreehandScanPositions) {
+      if (infoPopupRef.current) {
+        infoPopupRef.current.showMessage("Freehand drawing not available.");
+      }
+      return;
     }
-  };
-
-  const handleOverlayOpacityChange = (event, newValue) => {
-    dispatch(overviewRegSlice.setOverlayOpacity(newValue));
-  };
-
-  const loadOverlayData = async () => {
-    try {
-      const data = await apiGetOverviewOverlayData(
-        overviewRegState.cameraName,
-        overviewRegState.layoutName || experimentState.wellLayout.name
+    const overlap = wellSelectorState.areaSelectOverlap || 0;
+    const positions = childRef.current.generateFreehandScanPositions(overlap);
+    if (!positions || positions.length === 0) {
+      if (infoPopupRef.current) {
+        infoPopupRef.current.showMessage(
+          "Draw a closed freehand region first (FREEHAND mode, click+drag)."
+        );
+      }
+      return;
+    }
+    positions.forEach((p, idx) => {
+      dispatch(
+        experimentSlice.createPoint({
+          x: p.x,
+          y: p.y,
+          name: `Freehand_${idx + 1}`,
+          shape: "",
+          areaType: "free_scan",
+        })
       );
-      dispatch(overviewRegSlice.setOverlayData(data));
-    } catch (e) {
-      console.warn("Failed to load overlay data:", e);
+    });
+    childRef.current.clearFreehand && childRef.current.clearFreehand();
+    if (infoPopupRef.current) {
+      infoPopupRef.current.showMessage(
+        `Created ${positions.length} freehand scan point(s).`
+      );
     }
   };
 
@@ -416,6 +433,23 @@ const WellSelectorComponent = () => {
           <Button
             variant="contained"
             style={{}}
+            onClick={() => handleModeChange(Mode.FREEHAND_DRAW)}
+            disabled={wellSelectorState.mode == Mode.FREEHAND_DRAW}
+          >
+            FREEHAND DRAW
+          </Button>
+
+          <Button
+            variant="contained"
+            style={{}}
+            onClick={handleConvertFreehandToPoints}
+          >
+            CONVERT FREEHAND TO SCAN POINTS
+          </Button>
+
+          <Button
+            variant="contained"
+            style={{}}
             onClick={() => handleAddCurrentPosition()}
           >
             ADD CURRENT POSITION
@@ -433,46 +467,25 @@ const WellSelectorComponent = () => {
 
       <InfoPopup ref={infoPopupRef}/>
 
-      {/* Overview Camera Overlay Controls */}
-      <Accordion sx={{ mt: 1 }} defaultExpanded={false}>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Typography variant="body2">Overview Camera Overlay</Typography>
-        </AccordionSummary>
-        <AccordionDetails>
-          <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap", mb: 1 }}>
-            <Button
-              variant="contained"
-              size="small"
-              onClick={handleOpenOverviewWizard}
-            >
-              Overview Overlay Wizard
-            </Button>
-            <label style={{ fontSize: "14px", display: "flex", alignItems: "center", gap: "4px" }}>
-              <input
-                type="checkbox"
-                checked={overviewRegState.overlayEnabled}
-                onChange={handleOverlayToggle}
-              />
-              Show Overlay
-            </label>
+      {/* Tabbed parameter / overview-scan area (replaces former Accordion) */}
+      <Box sx={{ mt: 1, borderTop: "1px solid #eee" }}>
+        <Tabs
+          value={activeTab}
+          onChange={(_e, v) => setActiveTab(v)}
+          variant="standard"
+        >
+          <Tab label="Points / Parameters" />
+          <Tab label="Overview Scan" />
+        </Tabs>
+        {activeTab === 0 && (
+          <Box sx={{ p: 1 }}>
+            <Typography variant="caption" color="text.secondary">
+              Use the buttons above to add points to the current experiment.
+            </Typography>
           </Box>
-          {overviewRegState.overlayEnabled && (
-            <Box sx={{ display: "flex", alignItems: "center", gap: 2, mt: 1 }}>
-              <Typography variant="caption" sx={{ minWidth: 60 }}>Opacity:</Typography>
-              <Slider
-                value={overviewRegState.overlayOpacity}
-                onChange={handleOverlayOpacityChange}
-                min={0}
-                max={1}
-                step={0.05}
-                size="small"
-                sx={{ maxWidth: 200 }}
-              />
-              <Typography variant="caption">{Math.round(overviewRegState.overlayOpacity * 100)}%</Typography>
-            </Box>
-          )}
-        </AccordionDetails>
-      </Accordion>
+        )}
+        {activeTab === 1 && <OverviewScanTab />}
+      </Box>
 
       {/* Overview Registration Wizard Dialog */}
       <OverviewRegistrationWizard />

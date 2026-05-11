@@ -89,9 +89,12 @@ const OverviewRegistrationWizard = () => {
   }, [regState.wizardOpen]);
 
   //##################################################################################
-  // Build MJPEG stream URL
+  // Build MJPEG stream URL whenever the wizard is open. We don't gate this
+  // on ``cameraAvailable`` so the live overview stream is shown immediately
+  // during the "Align & Snap" step; the existing ``streamError`` handler
+  // covers the case where the backend has no overview camera configured.
   useEffect(() => {
-    if (regState.wizardOpen && regState.cameraAvailable) {
+    if (regState.wizardOpen) {
       const base = `${connectionSettings.ip}:${connectionSettings.apiPort}/imswitch/api`;
       setStreamUrl(
         `${base}/PixelCalibrationController/overviewStream?startStream=true`
@@ -100,7 +103,6 @@ const OverviewRegistrationWizard = () => {
     }
   }, [
     regState.wizardOpen,
-    regState.cameraAvailable,
     connectionSettings.ip,
     connectionSettings.apiPort,
   ]);

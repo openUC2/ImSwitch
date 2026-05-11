@@ -94,7 +94,7 @@ function labwareDefinitionToWellLayout(def) {
  * Renders the first well of the labware (circle or rectangle) and overlays
  * the dot offsets so the user sees exactly what will be applied.
  */
-function SubPositionPreview({ labwareDef, offsets }) {
+function WellSubPositionPreview({ labwareDef, offsets }) {
   if (!labwareDef || !labwareDef.wells) return null;
   const firstId = (labwareDef.well_names_flat && labwareDef.well_names_flat[0]) ||
     Object.keys(labwareDef.wells)[0];
@@ -132,6 +132,74 @@ function SubPositionPreview({ labwareDef, offsets }) {
           <circle key={i} cx={o.dx} cy={o.dy} r={Math.max(viewHalfW, viewHalfH) * 0.04} fill="#d32f2f" />
         ))}
       </svg>
+    </Box>
+  );
+}
+
+/**
+ * Shows the currently-applied points grouped by well. Each well row is
+ * collapsible: clicking it reveals the individual sub-positions (their
+ * absolute X/Y/Z and shared ``areaId`` / ``groupId``). This makes the
+ * per-well grouping that the zarr/tif writer uses visible to the user.
+ */
+function PerWellPointsOverview({ points }) {
+  const [expandedWell, setExpandedWell] = useState(null);
+  const grouped = useMemo(() => {
+    const map = new Map();
+    for (const p of points || []) {
+      const key = p.wellId || p.areaId || p.groupId || p.name || `pt_${p.id}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(p);
+    }
+    return Array.from(map.entries());
+  }, [points]);
+  if (grouped.length === 0) return null;
+  return (
+    <Box sx={{ mt: 1, border: "1px solid #eee", borderRadius: 1, p: 1 }}>
+      <Typography variant="caption" sx={{ display: "block", mb: 0.5 }}>
+        Points per well ({grouped.length} group{grouped.length !== 1 ? "s" : ""})
+      </Typography>
+      <Stack spacing={0.25}>
+        {grouped.map(([wellKey, pts]) => {
+          const isOpen = expandedWell === wellKey;
+          return (
+            <Box key={wellKey}>
+              <Box
+                onClick={() => setExpandedWell(isOpen ? null : wellKey)}
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  cursor: "pointer",
+                  px: 0.5,
+                  py: 0.25,
+                  borderRadius: 0.5,
+                  "&:hover": { background: "#f5f5f5" },
+                }}
+              >
+                <Typography variant="body2" sx={{ flex: 1 }}>
+                  <strong>{wellKey}</strong>
+                  {pts[0]?.conditionLabel && ` · ${pts[0].conditionLabel}`}
+                </Typography>
+                <Chip size="small" label={`${pts.length} pt`} />
+              </Box>
+              {isOpen && (
+                <Box sx={{ pl: 2, pb: 0.5 }}>
+                  {pts.map((p) => (
+                    <Typography
+                      key={p.id}
+                      variant="caption"
+                      sx={{ display: "block", fontFamily: "monospace" }}
+                    >
+                      {p.name || "(unnamed)"} · X={Math.round(p.x)} Y=
+                      {Math.round(p.y)} Z={Math.round(p.z)}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
+            </Box>
+          );
+        })}
+      </Stack>
     </Box>
   );
 }
@@ -340,6 +408,11 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
       if (subPosMode !== "grid" || subOffsets.length <= 1) return points;
       const expanded = [];
       for (const p of points) {
+        // All sub-positions of one well share an areaId / groupId so the
+        // downstream zarr/tif writer co-locates their tiles in a single
+        // per-well folder (mirrors the area-select grouping).
+        const wellKey = p.wellId || p.name || `${p.x}_${p.y}`;
+        const areaId = `well_${wellKey}`;
         for (const off of subOffsets) {
           const suffix = `_r${off.iy}c${off.ix}`;
           expanded.push({
@@ -347,6 +420,9 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
             x: (p.x || 0) + off.dx,
             y: (p.y || 0) + off.dy,
             name: (p.name || "") + suffix,
+            areaId,
+            groupId: areaId,
+            areaType: p.areaType || "well_subpositions",
           });
         }
       }
@@ -543,7 +619,7 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
                     </Typography>
                   </Box>
                 )}
-                <SubPositionPreview
+                <WellSubPositionPreview
                   labwareDef={labwareDef}
                   offsets={subOffsets}
                 />
@@ -579,6 +655,12 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
                   Apply to experiment
                 </Button>
               </Box>
+
+              {/* Structured per-well point overview. Groups currently
+                  applied points by their ``wellId`` (sub-positions of one
+                  well share an areaId / groupId so they end up in the same
+                  zarr/tif folder downstream). */}
+              <PerWellPointsOverview points={experimentState?.pointList || []} />
             </>
           )}
         </Stack>

@@ -16,7 +16,6 @@ import * as overviewRegSlice from '../state/slices/OverviewRegistrationSlice.js'
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 import OverviewRegistrationWizard from "./OverviewRegistrationWizard.js";
-import OverviewScanTab from "./OverviewScanTab.js";
 import LabwareSelectionPanel from "../components/LabwareSelectionPanel.jsx";
 
 import {
@@ -32,8 +31,6 @@ import {
   FormHelperText,
   FormControlLabel,
   ButtonGroup,
-  Tabs,
-  Tab,
   Slider,
   Dialog,
   DialogActions,
@@ -53,9 +50,6 @@ const WellSelectorComponent = () => {
 
   // Pending layout switch awaiting user confirmation when pointList is non-empty
   const [pendingLayoutEvent, setPendingLayoutEvent] = useState(null);
-
-  // Active tab in the parameter / overview-scan section
-  const [activeTab, setActiveTab] = useState(0);
 
   //child ref
   const childRef = useRef();//canvas 
@@ -95,6 +89,11 @@ const WellSelectorComponent = () => {
       }
       return;
     }
+    // All points generated from a single freehand polygon belong to one
+    // logical scan area, so they share the same ``areaId`` (mirrors the
+    // grouping that area-select / labware sub-positions use). Downstream
+    // writers will store these tiles in a common zarr/tif folder.
+    const areaId = `freehand_${Date.now()}`;
     positions.forEach((p, idx) => {
       dispatch(
         experimentSlice.createPoint({
@@ -103,6 +102,8 @@ const WellSelectorComponent = () => {
           name: `Freehand_${idx + 1}`,
           shape: "",
           areaType: "free_scan",
+          areaId,
+          groupId: areaId,
         })
       );
     });
@@ -466,26 +467,6 @@ const WellSelectorComponent = () => {
       </div>
 
       <InfoPopup ref={infoPopupRef}/>
-
-      {/* Tabbed parameter / overview-scan area (replaces former Accordion) */}
-      <Box sx={{ mt: 1, borderTop: "1px solid #eee" }}>
-        <Tabs
-          value={activeTab}
-          onChange={(_e, v) => setActiveTab(v)}
-          variant="standard"
-        >
-          <Tab label="Points / Parameters" />
-          <Tab label="Overview Scan" />
-        </Tabs>
-        {activeTab === 0 && (
-          <Box sx={{ p: 1 }}>
-            <Typography variant="caption" color="text.secondary">
-              Use the buttons above to add points to the current experiment.
-            </Typography>
-          </Box>
-        )}
-        {activeTab === 1 && <OverviewScanTab />}
-      </Box>
 
       {/* Overview Registration Wizard Dialog */}
       <OverviewRegistrationWizard />

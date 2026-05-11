@@ -321,6 +321,14 @@ const experimentSlice = createSlice({
         rectMinusY: (action.payload.rectMinusY != null) ? (action.payload.rectMinusY) : (0),
         circleRadiusX: (action.payload.circleRadiusX != null) ? (action.payload.circleRadiusX) : (0),
         circleRadiusY: (action.payload.circleRadiusY != null) ? (action.payload.circleRadiusY) : (0),
+        // Optional grouping metadata. Points sharing the same ``areaId`` /
+        // ``groupId`` belong to a single logical scan area (e.g. freehand
+        // polygon, area-select rectangle, per-well subpoints) and downstream
+        // writers should co-locate their images in one zarr/tif folder.
+        areaId: action.payload.areaId,
+        areaType: action.payload.areaType,
+        groupId: action.payload.groupId,
+        wellId: action.payload.wellId,
       };
       
       console.log("createPoint newPoint", newPoint);
@@ -375,6 +383,8 @@ const experimentSlice = createSlice({
           labwareLoadName: p.labwareLoadName,
           conditionLabel: p.conditionLabel,
           areaType: p.areaType,
+          areaId: p.areaId,
+          groupId: p.groupId,
         };
         const key = `${newPoint.x}|${newPoint.y}|${newPoint.name}`;
         if (!seen.has(key)) {
@@ -406,6 +416,8 @@ const experimentSlice = createSlice({
         labwareLoadName: p.labwareLoadName,
         conditionLabel: p.conditionLabel,
         areaType: p.areaType,
+        areaId: p.areaId,
+        groupId: p.groupId,
       }));
     },
     removePoint: (state, action) => {

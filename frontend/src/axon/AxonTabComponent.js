@@ -13,6 +13,7 @@ import ResizablePanel from "./ResizablePanel"; //<ResizablePanel></ResizablePane
 import FocusLockMiniController from "../components/FocusLockMiniController";
 import Frame3DViewerPanel from "./Frame3DViewerPanel.jsx";
 import PictureInPicture, { PiPToggleButton } from "./PictureInPicture";
+import OverviewScanTab from "./OverviewScanTab";
 
 const AxonTabComponent = () => {
   // PiP (picture-in-picture) floating live preview
@@ -67,7 +68,8 @@ const AxonTabComponent = () => {
 //              "Tile View",
               "Points",
               "Parameter",
-              "Focus Lock"
+              "Focus Lock",
+              "Overview Scan"
             ]}
           >
             <LiveViewControlWrapper />
@@ -76,6 +78,7 @@ const AxonTabComponent = () => {
             <ParameterEditorWrapper />
             {/*<ExperimentComponent />*/}
             <FocusLockMiniController />
+            <OverviewScanTab />
           </GenericTabBar>
         </div>
       </div>

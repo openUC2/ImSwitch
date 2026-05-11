@@ -53,6 +53,7 @@ from imswitch.imcontrol.controller.controllers.experiment_controller import (
 )
 from imswitch.imcontrol.model.focus_map import FocusMap, FocusMapManager, FocusMapResult
 from imswitch.imcontrol.model.overview_registration import OverviewRegistrationService, PixelPoint, StagePoint, SlotDefinition
+from imswitch.imcontrol.model import configfiletools
 
 
 class ExperimentController(ImConWidgetController):
@@ -175,6 +176,15 @@ class ExperimentController(ImConWidgetController):
         except Exception as exc:
             self._logger.warning(f"Failed to resolve overview camera: {exc}")
 
+        # Load persisted overview registration entries from the setup config
+        # (single source of truth) into the in-memory store.
+        try:
+            self._loadOverviewRegistrationFromSetup()
+        except Exception as exc:
+            self._logger.warning(
+                f"Could not load overview registration from setup file: {exc}"
+            )
+
         # Initialize Opentrons-style labware manager. A single bad labware file
         # must never block controller startup, so we swallow exceptions.
         try:
@@ -198,20 +208,17 @@ class ExperimentController(ImConWidgetController):
     # Wellplate / labware endpoints
     #
     # All layouts are now served by the Opentrons-style ``LabwareManager``
-    # (see ``imswitch.imcontrol.model.labware``).  The historical
-    # ``getAvailableWellplateLayouts`` / ``getWellplateLayout`` endpoints are
-    # kept as thin compatibility wrappers that forward to the manager and
-    # return the legacy dict shape the frontend canvas understands.  The
-    # ``generateCustomWellplateLayout`` endpoint and the
-    # ``wellplate_layouts`` module have been removed — drop a JSON into
-    # ``imswitch/imcontrol/model/labware/definitions/`` (see
-    # ``docs/labware_opentrons.md``) to add a new plate.
+    # (see ``imswitch.imcontrol.model.labware``). Use ``getLabwareList`` /
+    # ``getLabwareDefinition`` from new clients. The internal helper
+    # ``_labware_to_layout_dict`` is still needed by the overview-camera
+    # registration code, which consumes the canvas-style dict.
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _labware_to_legacy_layout(lab, offset_x: float = 0.0, offset_y: float = 0.0) -> dict:
-        """Convert a ``LabwareDefinition`` to the legacy wellplate-layout dict
-        the frontend canvas consumes.  µm everywhere."""
+    def _labware_to_layout_dict(lab, offset_x: float = 0.0, offset_y: float = 0.0) -> dict:
+        """Convert a ``LabwareDefinition`` to the canvas-style wellplate
+        layout dict used by the overview-camera registration code. µm
+        everywhere."""
         spacing_x = 0.0
         spacing_y = 0.0
         if len(lab.columns) >= 2:
@@ -227,7 +234,7 @@ class ExperimentController(ImConWidgetController):
             if w_a and w_b:
                 spacing_y = abs(w_b.y - w_a.y)
 
-        legacy_wells = []
+        wells_out = []
         for wid in lab.well_names_flat:
             w = lab.wells[wid]
             entry = {
@@ -244,7 +251,7 @@ class ExperimentController(ImConWidgetController):
             else:
                 entry["width"] = w.geometry.width
                 entry["height"] = w.geometry.height
-            legacy_wells.append(entry)
+            wells_out.append(entry)
         return {
             "name": lab.display_name,
             "description": ", ".join(lab.tags) if lab.tags else "",
@@ -254,57 +261,12 @@ class ExperimentController(ImConWidgetController):
             "well_spacing_y": spacing_y,
             "offset_x": offset_x,
             "offset_y": offset_y,
-            "wells": legacy_wells,
+            "wells": wells_out,
             "unit": "um",
             "width": lab.dimensions.x,
             "height": lab.dimensions.y,
             "labwareLoadName": lab.load_name,
         }
-
-    @APIExport(requestType="GET")
-    def getAvailableWellplateLayouts(self):
-        """Return summaries of available wellplate layouts.
-
-        Compatibility wrapper: prefer ``getLabwareList`` for new clients.
-        """
-        try:
-            if not self.labware_manager:
-                return {}
-            out = {}
-            for s in self.labware_manager.list_summaries():
-                out[s["load_name"]] = {
-                    "name": s["display_name"],
-                    "description": ", ".join(s.get("tags", [])),
-                    "rows": s["rows"],
-                    "cols": s["cols"],
-                    "well_count": s["well_count"],
-                    "well_spacing_x": 0,  # filled in via getWellplateLayout
-                    "well_spacing_y": 0,
-                }
-            return out
-        except Exception as e:
-            self._logger.error(f"Failed to get wellplate layouts: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @APIExport(requestType="GET")
-    def getWellplateLayout(self, layout_name: str, offset_x: float = 0, offset_y: float = 0):
-        """Get a specific wellplate layout in the legacy format (µm).
-
-        Compatibility wrapper: prefer ``getLabwareDefinition`` for new clients.
-        """
-        try:
-            if not self.labware_manager:
-                raise HTTPException(status_code=503, detail="LabwareManager unavailable")
-            try:
-                lab = self.labware_manager.get(layout_name)
-            except KeyError:
-                raise HTTPException(status_code=404, detail=f"Layout '{layout_name}' not found")
-            return self._labware_to_legacy_layout(lab, offset_x, offset_y)
-        except HTTPException:
-            raise
-        except Exception as e:
-            self._logger.error(f"Failed to get wellplate layout '{layout_name}': {e}")
-            raise HTTPException(status_code=500, detail=str(e))
 
     # ------------------------------------------------------------------
     # New Opentrons-style endpoints
@@ -2947,7 +2909,7 @@ class ExperimentController(ImConWidgetController):
             if self.labware_manager:
                 try:
                     lab = self.labware_manager.get(layout_name)
-                    layout_dict = self._labware_to_legacy_layout(lab)
+                    layout_dict = self._labware_to_layout_dict(lab)
                 except KeyError:
                     layout_dict = None
             if layout_dict is None:
@@ -3117,6 +3079,15 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Registration failed: {e}", exc_info=True)
             raise HTTPException(status_code=400, detail=str(e))
+        finally:
+            try:
+                self._persistOverviewRegistrationToSetup(
+                    cam_name, layout_name
+                )
+            except Exception as _exc:
+                self._logger.debug(
+                    f"Skip persisting overview registration: {_exc}"
+                )
 
     @APIExport(requestType="GET")
     def getOverviewRegistrationStatus(self, camera_name: str = "", layout_name: str = "Heidstar 4x Histosample"):
@@ -3285,6 +3256,7 @@ class ExperimentController(ImConWidgetController):
             path = self._overview_registration.save_registration_config_from_dict(
                 cam_name, layout_name, config_data
             )
+            self._persistOverviewRegistrationToSetup(cam_name, layout_name)
             return {"success": True, "path": path}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
@@ -3310,6 +3282,53 @@ class ExperimentController(ImConWidgetController):
             "imageMimeType": "image/jpeg",
             "slotId": slot_id,
         }
+
+    # ------------------------------------------------------------------
+    # Overview registration <-> setup-config persistence helpers
+    # ------------------------------------------------------------------
+    def _overviewRegistrationKey(self, camera_name: str, layout_name: str) -> str:
+        """Composite key used inside ``_setupInfo.overviewRegistration``."""
+        return f"{camera_name}__{layout_name}"
+
+    def _loadOverviewRegistrationFromSetup(self):
+        """Push any persisted entries from the setup file into the in-memory
+        registration store, so they survive process restarts."""
+        store = getattr(self._setupInfo, "overviewRegistration", None)
+        if not store or not isinstance(store, dict):
+            return
+        for key, cfg in store.items():
+            if not isinstance(cfg, dict):
+                continue
+            cam_name = cfg.get("cameraName") or self._overview_camera_name or "overviewcamera"
+            layout_name = cfg.get("layoutName") or "Heidstar 4x Histosample"
+            try:
+                self._overview_registration.save_registration_config_from_dict(
+                    cam_name, layout_name, cfg
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to load overview registration '{key}': {exc}"
+                )
+
+    def _persistOverviewRegistrationToSetup(self, camera_name: str, layout_name: str):
+        """Mirror the latest registration config into the imcontrol_setups
+        JSON (single source of truth, alongside ``stageOffsets``)."""
+        cfg = self._overview_registration.load_registration_config(
+            camera_name, layout_name
+        )
+        if cfg is None:
+            return
+        if getattr(self._setupInfo, "overviewRegistration", None) is None:
+            self._setupInfo.overviewRegistration = {}
+        key = self._overviewRegistrationKey(camera_name, layout_name)
+        self._setupInfo.overviewRegistration[key] = cfg
+        try:
+            options = configfiletools.loadOptions()[0]
+            configfiletools.saveSetupInfo(options, self._setupInfo)
+        except Exception as exc:
+            self._logger.warning(
+                f"saveSetupInfo failed for overview registration: {exc}"
+            )
 
 
 # Copyright (C) 2025 Benedict Diederich

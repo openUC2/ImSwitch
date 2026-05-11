@@ -858,6 +858,10 @@ class SetupInfo:
     """ Instrument metadata for OME-types integration. Contains microscope identification,
     optical configuration, and UC2-specific metadata. """
 
+    overviewRegistration: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
+    """ Overview-camera slide registration config (per camera/layout, including
+    stage XYZ positions and homographies). Persisted by ExperimentController. """
+
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """
 

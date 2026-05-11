@@ -1,7 +1,7 @@
 import createAxiosInstance from "./createAxiosInstance";
 
 // Function to move to a specific objective based on the slot
-const apiObjectiveControllerMoveToObjective = async (slot, skipZ) => {
+const apiObjectiveControllerMoveToObjective = async (slot, skipZ = false) => {
   try {
     const axiosInstance = createAxiosInstance(); // Create Axios instance
     // print URL 

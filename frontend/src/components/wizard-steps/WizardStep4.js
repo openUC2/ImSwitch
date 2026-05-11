@@ -74,6 +74,9 @@ const WizardStep4 = ({
         });
     };
     fetchPos();
+    // Poll every second so Z updates while the user adjusts focus
+    const interval = setInterval(fetchPos, 1000);
+    return () => clearInterval(interval);
   }, [dispatch]);
 
   const fetchCurrentPositions = () => {

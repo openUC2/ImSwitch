@@ -47,8 +47,8 @@ const FRAMESettings = () => {
         {selectedTab === 0 && <PixelCalibrationTab />}
         {selectedTab === 1 && <ManualPixelCalibrationTab />}
         {selectedTab === 2 && <SetLasersTab />}
-        {selectedTab === 4 && <TestHomingTab />}
-        {selectedTab === 5 && <ObjectiveControllerTab />}
+        {selectedTab === 3 && <TestHomingTab />}
+        {selectedTab === 4 && <ObjectiveControllerTab />}
       </Box>
     </Paper>
   );

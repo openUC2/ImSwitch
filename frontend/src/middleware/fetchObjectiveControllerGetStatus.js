@@ -21,8 +21,12 @@ const fetchObjectiveControllerGetStatus = (dispatch) => {
       dispatch(objectiveSlice.setPosZ1(config.z1));
       dispatch(objectiveSlice.setMagnification(config.magnification))
       dispatch(objectiveSlice.setNA(config.NA))
-      dispatch(objectiveSlice.setmagnification1(config.availableObjectivesNames[0]))
-      dispatch(objectiveSlice.setmagnification2(config.availableObjectivesNames[1]))
+      dispatch(objectiveSlice.setmagnification1(config.availableObjectiveMagnifications?.[0] ?? 0))
+      dispatch(objectiveSlice.setmagnification2(config.availableObjectiveMagnifications?.[1] ?? 0))
+      dispatch(objectiveSlice.setAvailableObjectivesNames(config.availableObjectivesNames || ["Obj 1", "Obj 2"]))
+      dispatch(objectiveSlice.setAvailableObjectiveMagnifications(config.availableObjectiveMagnifications || [0, 0]))
+      dispatch(objectiveSlice.setAvailableObjectiveNAs(config.availableObjectiveNAs || [0, 0]))
+      dispatch(objectiveSlice.setAvailableObjectivePixelSizes(config.availableObjectivePixelSizes || [0, 0]))
       // Sync runtime slot selection so the switcher spinner can resolve
       if (config.currentObjective != null) {
         dispatch(objectiveSlice.setCurrentObjective(config.currentObjective));

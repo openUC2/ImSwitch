@@ -6,6 +6,7 @@ import {
   Switch,
   Box,
   Typography,
+  Alert,
 } from "@mui/material";
 import { Camera } from "@mui/icons-material";
 
@@ -49,36 +50,42 @@ export default function DetectorParameters({ hostIP, hostPort }) {
   const editingRef = useRef({ exposure: false, gain: false, blacklevel: false });
 
   // Fetch existing detector parameters on mount and when connection changes
-  useEffect(() => {
-    let cancelled = false;
-    async function fetchParams() {
-      try {
-        const resp = await fetch(
-          `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorParameters`
-        );
-        if (!resp.ok || cancelled) return;
-        const data = await resp.json();
-        const newParams = {
-          exposure: data.exposure ?? "",
-          gain: data.gain ?? "",
-          pixelSize: data.pixelSize ?? "",
-          binning: data.binning ?? "",
-          blacklevel: data.blacklevel ?? "",
-          isRGB: data.isRGB === 1,
-          mode: (data.mode ?? "manual").toLowerCase(),
-        };
-        setDetectorParams(newParams);
-        // Sync local text fields only if user is not currently editing
-        if (!editingRef.current.exposure) setLocalExposure(String(newParams.exposure));
-        if (!editingRef.current.gain) setLocalGain(String(newParams.gain));
-        if (!editingRef.current.blacklevel) setLocalBlacklevel(String(newParams.blacklevel));
-      } catch (error) {
-        console.error("Error fetching detector parameters:", error);
-      }
+  const fetchParams = useCallback(async () => {
+    try {
+      const resp = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorParameters`
+      );
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const newParams = {
+        exposure: data.exposure ?? "",
+        gain: data.gain ?? "",
+        pixelSize: data.pixelSize ?? "",
+        binning: data.binning ?? "",
+        blacklevel: data.blacklevel ?? "",
+        isRGB: data.isRGB === 1,
+        mode: (data.mode ?? "manual").toLowerCase(),
+      };
+      setDetectorParams(newParams);
+      // Sync local text fields only if user is not currently editing
+      if (!editingRef.current.exposure) setLocalExposure(String(newParams.exposure));
+      if (!editingRef.current.gain) setLocalGain(String(newParams.gain));
+      if (!editingRef.current.blacklevel) setLocalBlacklevel(String(newParams.blacklevel));
+    } catch (error) {
+      console.error("Error fetching detector parameters:", error);
     }
-    fetchParams();
-    return () => { cancelled = true; };
   }, [hostIP, hostPort]);
+
+  useEffect(() => {
+    fetchParams();
+  }, [fetchParams]);
+
+  // Poll backend every 2 s when auto-exposure is active to show real values
+  useEffect(() => {
+    if (detectorParams.mode !== "auto") return;
+    const interval = setInterval(fetchParams, 2000);
+    return () => clearInterval(interval);
+  }, [detectorParams.mode, fetchParams]);
 
   // Commit a numeric field to the backend.
   // Called on blur or Enter – NOT on every keystroke.
@@ -237,6 +244,12 @@ export default function DetectorParameters({ hostIP, hostPort }) {
         <MenuItem value="manual">Manual</MenuItem>
         <MenuItem value="auto">Auto</MenuItem>
       </TextField>
+
+      {detectorParams.mode === "auto" && (
+        <Alert severity="warning" sx={{ mt: 1 }}>
+          Auto mode is for preview only. Disable during experiments for quantitative imaging.
+        </Alert>
+      )}
     </Box>
   );
 }

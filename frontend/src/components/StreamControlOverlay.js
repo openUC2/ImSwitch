@@ -19,6 +19,7 @@ import {
   FormControlLabel,
   Alert,
   CircularProgress,
+  Tooltip,
   useTheme,
 } from "@mui/material";
 import {
@@ -60,6 +61,8 @@ const StreamControlOverlay = ({
   const liveStreamState = useSelector(getLiveStreamState);
   const [isExpanded, setIsExpanded] = useState(forceExpanded);
   const [activeTab, setActiveTab] = useState(0); // 0 = Controls, 1 = Settings, 2 = Info
+  const [detectorNames, setDetectorNames] = useState([]);
+  const [selectedDetector, setSelectedDetector] = useState(null);
 
   const connectionSettingsState = useSelector(
     connectionSettingsSlice.getConnectionSettingsState
@@ -86,7 +89,7 @@ const StreamControlOverlay = ({
   // Determine if we're in JPEG mode
   const isJpeg = imageFormat === "jpeg";
   const maxRange = isJpeg ? 255 : 65535;
-  const formatLabel = isJpeg ? "JPEG" : "Binary";
+  const formatLabel = isJpeg ? "JPEG" : "RAW";
   const rangeLabel = `0–${maxRange}`;
 
   // Debug log on mount to verify persisted state
@@ -104,6 +107,27 @@ const StreamControlOverlay = ({
 
   // Load settings from backend on mount - use a ref to track if already loaded
   const hasLoadedSettings = useRef(false);
+
+  // Fetch available detector names on mount
+  useEffect(() => {
+    const loadDetectorNames = async () => {
+      try {
+        const resp = await fetch(
+          `${connectionSettingsState.ip}:${connectionSettingsState.apiPort}/imswitch/api/SettingsController/getDetectorNames`
+        );
+        if (!resp.ok) return;
+        const names = await resp.json();
+        if (Array.isArray(names) && names.length > 0) {
+          setDetectorNames(names);
+          setSelectedDetector(names[0]);
+        }
+      } catch (err) {
+        console.warn("Failed to fetch detector names:", err);
+      }
+    };
+    loadDetectorNames();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     // Only load once on mount
@@ -266,6 +290,7 @@ const StreamControlOverlay = ({
           throttle_ms: draftSettings.webrtc?.throttle_ms || 33,
           subsampling_factor: draftSettings.webrtc?.subsampling_factor || 1,
           crop_size: draftSettings.crop_size || 0,
+          ...(selectedDetector ? { detector_name: selectedDetector } : {}),
         });
       } else if (isJpegMode) {
         // Set JPEG stream parameters
@@ -274,6 +299,7 @@ const StreamControlOverlay = ({
           subsampling_factor: draftSettings.jpeg?.subsampling?.factor || 1,
           throttle_ms: draftSettings.jpeg?.throttle_ms || 100,
           crop_size: draftSettings.crop_size || 0,
+          ...(selectedDetector ? { detector_name: selectedDetector } : {}),
         });
       } else {
         // Set binary stream parameters
@@ -284,6 +310,7 @@ const StreamControlOverlay = ({
           subsampling_factor: draftSettings.binary?.subsampling?.factor || 4,
           throttle_ms: draftSettings.binary?.throttle_ms || 100,
           crop_size: draftSettings.crop_size || 0,
+          ...(selectedDetector ? { detector_name: selectedDetector } : {}),
         });
       }
 
@@ -609,6 +636,26 @@ const StreamControlOverlay = ({
                   Stream Settings
                 </Typography>
 
+                {/* Detector selector — shown only when multiple detectors are present */}
+                {detectorNames.length > 1 && (
+                  <Box sx={{ mb: 3 }}>
+                    <FormControl fullWidth size="small">
+                      <InputLabel>Detector</InputLabel>
+                      <Select
+                        value={selectedDetector || ""}
+                        label="Detector"
+                        onChange={(e) => setSelectedDetector(e.target.value)}
+                      >
+                        {detectorNames.map((name) => (
+                          <MenuItem key={name} value={name}>
+                            {name}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Box>
+                )}
+
                 {/* Crop Control - Shared across all formats */}
                 <Box sx={{ mb: 3 }}>
                   <Box
@@ -691,9 +738,11 @@ const StreamControlOverlay = ({
                         console.log("Format changed to:", newFormat);
                       }}
                     >
+                    <Tooltip title="Raw pixel values without compression. Higher data fidelity but slower transfer.">
                       <MenuItem value="binary">
-                        Binary (16-bit) - High Quality
+                        RAW (16-bit) - High Quality
                       </MenuItem>
+                    </Tooltip>
                       <MenuItem value="jpeg">JPEG (8-bit) - Legacy</MenuItem>
                       <MenuItem value="webrtc">WebRTC - Low Latency</MenuItem>
                     </Select>
@@ -707,7 +756,7 @@ const StreamControlOverlay = ({
                     {draftSettings?.webrtc?.enabled
                       ? "WebRTC"
                       : draftSettings?.binary?.enabled
-                      ? "Binary"
+                      ? "RAW"
                       : "JPEG"}
                   </Typography>
                 </Box>

@@ -35,6 +35,7 @@ class SettingsController(ImConWidgetController):
 
         self.settingAttr = False
         self.allParams = {}
+        self._perDetectorStreamParams = {}
 
         if not self._master.detectorsManager.hasDevices():
             return
@@ -468,7 +469,7 @@ class SettingsController(ImConWidgetController):
         return self._master.detectorsManager.getGlobalDetectorParams()
 
     @APIExport(requestType="POST")
-    def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None):
+    def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None, detectorName: str = None):
         """Set streaming parameters for binary frame streaming.
         
         This method is maintained for backward compatibility but now delegates to LiveViewController.
@@ -478,7 +479,23 @@ class SettingsController(ImConWidgetController):
             subsampling: Dict with 'factor' key
             throttle_ms: Throttling interval in milliseconds (preferred)
             throttlems: Throttling interval in milliseconds (alternative naming)
+            detectorName: Target detector name. Defaults to the first available detector.
         """
+        # Resolve detectorName: default to first available detector
+        if detectorName is None:
+            allNames = self._master.detectorsManager.getAllDeviceNames()
+            detectorName = allNames[0] if allNames else None
+
+        # Store per-detector settings
+        if detectorName is not None:
+            stored = self._perDetectorStreamParams.get(detectorName, {})
+            if compression:
+                stored['compression'] = compression
+            if subsampling:
+                stored['subsampling'] = subsampling
+            if throttle_ms is not None:
+                stored['throttle_ms'] = throttle_ms
+            self._perDetectorStreamParams[detectorName] = stored
         # Try to use LiveViewController if available through CommunicationChannel
         print("RReceived parameters: ", compression, subsampling, throttle_ms)
         try:
@@ -525,11 +542,20 @@ class SettingsController(ImConWidgetController):
         return {"status": "success", "updated": update_params}
 
     @APIExport()
-    def getStreamParams(self):
+    def getStreamParams(self, detectorName: str = None):
         """Get current streaming parameters.
         
         This method is maintained for backward compatibility but now delegates to LiveViewController.
+
+        Args:
+            detectorName: Target detector name. If provided, per-detector overrides are
+                          merged into the response under the key 'per_detector'.
+                          Defaults to the first available detector.
         """
+        # Resolve detectorName: default to first available detector
+        if detectorName is None:
+            allNames = self._master.detectorsManager.getAllDeviceNames()
+            detectorName = allNames[0] if allNames else None
         # Try to use LiveViewController if available through CommunicationChannel
         try:
             # Access controllers through _commChannel.__main
@@ -543,7 +569,7 @@ class SettingsController(ImConWidgetController):
                         binary_params = protocols.get('binary', {})
                         jpeg_params = protocols.get('jpeg', {})
 
-                        return {
+                        response = {
                             "current_compression_algorithm": binary_params.get('compression_algorithm', 'lz4'),
                             "binary": {
                                 "compression": {
@@ -559,6 +585,9 @@ class SettingsController(ImConWidgetController):
                                 "compression_level": jpeg_params.get('jpeg_quality', 80)
                             }
                         }
+                        if detectorName and detectorName in self._perDetectorStreamParams:
+                            response['per_detector'] = self._perDetectorStreamParams[detectorName]
+                        return response
         except Exception:
             # If LiveViewController not available, fall back to legacy behavior
             pass
@@ -566,7 +595,7 @@ class SettingsController(ImConWidgetController):
         # Fallback to legacy behavior
         global_params = self._master.detectorsManager.getGlobalDetectorParams()
 
-        return {
+        fallback_response = {
             "current_compression_algorithm": global_params.get('stream_compression_algorithm', 'lz4'),
             "binary": {
                 "compression": {
@@ -582,6 +611,9 @@ class SettingsController(ImConWidgetController):
                 "compression_level": global_params.get('compressionlevel', 80)
             }
         }
+        if detectorName and detectorName in self._perDetectorStreamParams:
+            fallback_response['per_detector'] = self._perDetectorStreamParams[detectorName]
+        return fallback_response
 
     @APIExport()
     def getDetectorParameters(self) -> dict:

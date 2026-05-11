@@ -161,7 +161,7 @@ class ExperimentController(ImConWidgetController):
             candidates = []
             if preferred:
                 candidates.append(preferred)
-            candidates.append("overviewcamera")
+            candidates.append("ObservationCamera")
             for name in candidates:
                 if name and name in allDetectorNames:
                     self._overview_camera_name = name

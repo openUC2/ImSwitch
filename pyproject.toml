@@ -72,10 +72,11 @@ dependencies = [
     "uc2-rest>=0.2.0.33",
     "unitelabs-sila",
     "unitelabs-cdk",
-    "opencv-python>=4.13.0.92",
     "mikro-next>=1",
     "pip>=26.1",
     "opencv-contrib-python-headless>=4.13.0.92",
+    "opencv-contrib-python>=4.13.0.92",
+    "opencv-python>=4.13.0.92",
 ]
 
 [project.optional-dependencies]

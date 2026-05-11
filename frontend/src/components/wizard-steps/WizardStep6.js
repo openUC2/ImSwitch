@@ -171,7 +171,7 @@ const WizardStep6 = ({ hostIP, hostPort, onNext, onBack, onComplete, activeStep,
         </Grid>
       </Grid>
 
-      <Paper elevation={1} sx={{ p: 2, mt: 3, backgroundColor: '#f0f7ff' }}>
+      <Paper elevation={1} sx={{ p: 2, mt: 3, backgroundColor: 'secondary.main' }}>
         <Typography variant="h6" gutterBottom color="primary">
           💡 Tips for Best Results
         </Typography>

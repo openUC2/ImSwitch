@@ -216,7 +216,7 @@ const WizardStep5 = ({ hostIP, hostPort, onNext, onBack, activeStep, totalSteps 
           </Paper>
 
           {/* Summary of calibrated positions */}
-          <Paper elevation={1} sx={{ p: 2, mt: 2, backgroundColor: primary.main }}>
+          <Paper elevation={1} sx={{ p: 2, mt: 2, backgroundColor: "secondary.main" }}>
             <Typography variant="h6" gutterBottom>
               Calibration Summary
             </Typography>

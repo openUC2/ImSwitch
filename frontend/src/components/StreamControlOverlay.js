@@ -45,6 +45,7 @@ import apiLiveViewControllerGetStreamParameters from "../backendapi/apiLiveViewC
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView";
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice.js";
+import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 
 const StreamControlOverlay = ({
   stats,
@@ -343,6 +344,12 @@ const StreamControlOverlay = ({
 
       // Update Redux with new crop_size
       dispatch(setCropSize(draftSettings.crop_size || 0));
+
+      // Refresh objective status so fovX/fovY in Redux reflect the latest
+      // pixel size. Subsampling does not change fovX (which is always
+      // pixelsize * fullSensorWidth), but an explicit refresh ensures the
+      // value is populated even if no objective switch has happened yet.
+      fetchObjectiveControllerGetStatus(dispatch);
 
       setSubmitSuccess(true);
       setTimeout(() => setSubmitSuccess(false), 3000);

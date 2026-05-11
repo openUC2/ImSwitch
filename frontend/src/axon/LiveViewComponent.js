@@ -411,14 +411,39 @@ const LiveViewComponent = ({
     }
   }, []);
 
-  // Calculate adaptive pixel size based on field of view and canvas dimensions
+  // Calculate adaptive pixel size based on field of view and canvas dimensions.
+  // Primary: fovX (pixelsize * fullSensorWidth) / canvas.width (subsampled frame width)
+  //   = pixelsize * subsamplingFactor  →  physical µm per displayed pixel. Correct for
+  //   any subsampling level without needing to know the factor explicitly.
+  // Fallback: objectiveState.pixelsize * subsamplingFactor when fovX is not yet populated.
   const getAdaptivePixelSize = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !objectiveState.fovX || canvas.width === 0) {
-      return null;
+    if (!canvas || canvas.width === 0) return null;
+
+    // Primary path: fovX already encodes full-sensor FOV; dividing by the
+    // subsampled canvas width gives µm/displayed-pixel automatically.
+    if (objectiveState.fovX) {
+      return objectiveState.fovX / canvas.width;
     }
-    return objectiveState.fovX / canvas.width;
-  }, [objectiveState.fovX]);
+
+    // Fallback: compute from pixelsize + per-format subsampling factor.
+    // This covers the startup window where fovX has not been fetched yet.
+    const pixelsize = objectiveState.pixelsize;
+    if (!pixelsize) return null;
+
+    const settings = liveStreamState.streamSettings;
+    const currentFormat = liveStreamState.imageFormat || "jpeg";
+    let subsamplingFactor = 1;
+    if (currentFormat === "binary") {
+      subsamplingFactor = settings?.binary?.subsampling?.factor ?? 4;
+    } else if (currentFormat === "jpeg") {
+      subsamplingFactor = settings?.jpeg?.subsampling?.factor ?? 1;
+    } else if (currentFormat === "webrtc") {
+      subsamplingFactor = settings?.webrtc?.subsampling_factor ?? 1;
+    }
+
+    return pixelsize * subsamplingFactor;
+  }, [objectiveState.fovX, objectiveState.pixelsize, liveStreamState.streamSettings, liveStreamState.imageFormat]);
 
   // Handle single click for ROI selection etc.
   const handleCanvasClick = useCallback(

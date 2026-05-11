@@ -62,6 +62,8 @@ const TilingDimension = () => {
     dispatch(experimentSlice.setOverlapHeight(overlapValue));
     dispatch(wellSelectorSlice.setOverlapWidth(overlapValue));
     dispatch(wellSelectorSlice.setOverlapHeight(overlapValue));
+    // Keep areaSelectOverlap in sync so it isn't 0 when the run starts in area mode
+    dispatch(wellSelectorSlice.setAreaSelectOverlap(overlapValue));
   };
 
   // Handle snakescan toggle
@@ -280,6 +282,7 @@ const TilingDimension = () => {
                   onChange={(e, val) => {
                     dispatch(experimentSlice.setOverlapWidth(val / 100));
                     dispatch(wellSelectorSlice.setOverlapWidth(val / 100));
+                    dispatch(wellSelectorSlice.setAreaSelectOverlap(val / 100));
                   }}
                   valueLabelDisplay="auto"
                   valueLabelFormat={(val) => `${val}%`}
@@ -306,6 +309,7 @@ const TilingDimension = () => {
                   onChange={(e, val) => {
                     dispatch(experimentSlice.setOverlapHeight(val / 100));
                     dispatch(wellSelectorSlice.setOverlapHeight(val / 100));
+                    dispatch(wellSelectorSlice.setAreaSelectOverlap(val / 100));
                   }}
                   valueLabelDisplay="auto"
                   valueLabelFormat={(val) => `${val}%`}

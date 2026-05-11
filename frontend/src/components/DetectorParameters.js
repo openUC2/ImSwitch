@@ -84,8 +84,10 @@ export default function DetectorParameters({ hostIP, hostPort }) {
   // Called on blur or Enter – NOT on every keystroke.
   const commitField = useCallback(async (field, rawValue) => {
     editingRef.current[field] = false;
-    const value = Number(rawValue);
-    if (rawValue === "" || isNaN(value)) return; // ignore empty / non-numeric
+    // Normalize comma decimal separators (e.g. "0,5" → "0.5")
+    const normalizedValue = rawValue.replace(',', '.');
+    const value = Number(normalizedValue);
+    if (rawValue === "" || normalizedValue === "." || isNaN(value)) return; // ignore empty / non-numeric
     // Update canonical state
     setDetectorParams((prev) => ({ ...prev, [field]: value }));
     try {

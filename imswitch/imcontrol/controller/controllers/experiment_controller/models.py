@@ -170,6 +170,7 @@ class ParameterValue(BaseModel):
     exposureTimes: Union[List[float], float] = None
     gains: Union[List[float], float] = None
     speed: float = 20000.0
+    z_speed: float = 5000.0
     performanceMode: bool = False
     performanceTriggerMode: TriggerMode = Field(
         "hardware",

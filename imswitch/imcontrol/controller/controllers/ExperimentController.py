@@ -705,11 +705,13 @@ class ExperimentController(ImConWidgetController):
         if p.speed <= 0:
             self.SPEED_X = self.SPEED_X_default
             self.SPEED_Y = self.SPEED_Y_default
-            self.SPEED_Z = self.SPEED_Z_default
         else:
             self.SPEED_X = p.speed
             self.SPEED_Y = p.speed
-            self.SPEED_Z = p.speed
+        if p.z_speed <= 0:
+            self.SPEED_Z = self.SPEED_Z_default
+        else:
+            self.SPEED_Z = p.z_speed
 
         # Autofocus and timepoint values are read from `p` (ParameterValue)
         # directly via ExecutionContext.to_kwargs(); no local aliases needed.
@@ -1457,7 +1459,9 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Channel {channel} not found in available lasers: {self.allIlluNames}")
             return None
         self._master.lasersManager[channel].setValue(power, getReturn=True)
-        if self._master.lasersManager[channel].enabled == 0:
+        # Use `not enabled` instead of `== 0` to handle False/None/0 returned
+        # after _switch_off_all_illumination calls setEnabled(False).
+        if power > 0 and not self._master.lasersManager[channel].enabled:
             self._master.lasersManager[channel].setEnabled(1, getReturn=True)
         self._logger.debug(f"Setting laser power to {power} for channel {channel}")
         time.sleep(0.04)  # Short delay to ensure power is set before next acquisition # TODO: Necessary?

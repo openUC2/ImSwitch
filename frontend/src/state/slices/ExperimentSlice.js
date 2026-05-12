@@ -74,7 +74,8 @@ const initialExperimentState = {
     zStackMin: 0.0,
     zStackMax: 0.0,
     zStackStepSize: 0.1,
-    speed: 0, 
+    speed: 20000,
+    z_speed: 5000,
     gains: 0,
     exposureTimes: 0,
     performanceMode: false,
@@ -239,6 +240,10 @@ const experimentSlice = createSlice({
     setSpeed: (state, action) => {
         console.log("setSpeed");
         state.parameterValue.speed = action.payload;
+    },
+    setZSpeed: (state, action) => {
+        console.log("setZSpeed");
+        state.parameterValue.z_speed = action.payload;
     },
     setGains: (state, action) => {
       console.log("setGains");
@@ -482,6 +487,7 @@ export const {
   setZStackMax,
   setZStackStepSize,
   setSpeed,
+  setZSpeed,
   setGains,
   setExposureTimes,
   setPerformanceMode,

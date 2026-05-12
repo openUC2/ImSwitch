@@ -1143,6 +1143,8 @@ const FocusMapDimension = () => {
                     size="small"
                     variant="contained"
                     startIcon={<PlayArrowIcon />}
+                    disabled={ui.isComputing || !config.use_manual_map}
+                    title={!config.use_manual_map ? "Enable 'Use manual map for all groups' above to activate manual fitting" : ""}
                     onClick={async () => {
                       dispatch(focusMapSlice.setFocusMapComputing({ isComputing: true, groupId: "manual" }));
                       dispatch(focusMapSlice.clearFocusMapError());
@@ -1195,7 +1197,8 @@ const FocusMapDimension = () => {
                 ui.isComputing ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />
               }
               onClick={handleComputeAll}
-              disabled={ui.isComputing}
+              disabled={ui.isComputing || config.use_manual_map}
+              title={config.use_manual_map ? "Disabled in manual map mode — use 'Fit from Points' instead" : ""}
             >
               {ui.isComputing ? "Computing..." : "Compute All"}
             </Button>

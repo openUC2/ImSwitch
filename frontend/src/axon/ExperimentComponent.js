@@ -82,6 +82,28 @@ const ExperimentComponent = () => {
     };
   }, []); // Empty dependency array ensures this runs once on mount
 
+  // Fetch current detector exposure/gain on mount and apply as defaults
+  const fetchAndApplyCameraSettings = () => {
+    const api = createAxiosInstance();
+    api.get("/SettingsController/getDetectorParameters")
+      .then((res) => res.data)
+      .then((data) => {
+        if (data.exposure != null) {
+          dispatch(experimentSlice.setExposureTimes(data.exposure));
+        }
+        if (data.gain != null) {
+          dispatch(experimentSlice.setGains(data.gain));
+        }
+      })
+      .catch((err) => {
+        console.warn("Could not fetch detector parameters:", err);
+      });
+  };
+
+  useEffect(() => {
+    fetchAndApplyCameraSettings();
+  }, []); // Run once on mount
+
   //##################################################################################
   const handleStart = () => {
     console.log("Experiment started");
@@ -403,6 +425,14 @@ const ExperimentComponent = () => {
           title="Open OME-Zarr in external vizarr.io viewer (requires internet)"
         >
           Open External Vizarr
+        </Button>
+
+        <Button
+          variant="outlined"
+          onClick={fetchAndApplyCameraSettings}
+          title="Read current detector exposure and gain, and apply them as experiment defaults"
+        >
+          Use Current Camera Settings
         </Button>
 
         {/* Display the step name (fixed width) and loading bar with percentage */}

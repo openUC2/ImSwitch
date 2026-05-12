@@ -20,6 +20,7 @@ import * as usbFlashSlice from "../state/slices/usbFlashSlice.js";
 import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 import * as storageSlice from "../state/slices/StorageSlice.js";
+import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
 
 import { io } from "socket.io-client";
 
@@ -874,6 +875,32 @@ const WebSocketHandler = () => {
           dispatch(storageSlice.setStorageSnapshot(storageSnapshot));
         } catch (error) {
           console.error("Error in sigStorageStatusUpdate handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigDetectorParametersUpdated") {
+        if (isWebSocketDebugEnabled()) {
+          console.log(
+            "[WS-DEBUG][detector] sigDetectorParametersUpdated received:",
+            dataJson,
+          );
+        }
+        try {
+          const parametersUpdate = dataJson.args?.p0 || dataJson.args || {};
+          // Extract parameters from the update
+          const { detectorName, parameters } = parametersUpdate;
+          if (parameters) {
+            dispatch(detectorParametersSlice.setParameters(parameters));
+            if (detectorName) {
+              dispatch(
+                detectorParametersSlice.setCurrentDetectorName(detectorName),
+              );
+            }
+          }
+        } catch (error) {
+          console.error(
+            "Error in sigDetectorParametersUpdated handler:",
+            error,
+          );
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateOMEZarrStore") {

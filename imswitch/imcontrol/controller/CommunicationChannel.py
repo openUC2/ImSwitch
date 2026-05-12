@@ -14,6 +14,7 @@ class CommunicationChannel(SignalInterface):
 
     sigUpdateStreamFrame = Signal()
 
+    sigDetectorParametersUpdated = Signal(dict)  # Emits: {'detectorName': str, 'parameters': dict}
 
     sigUpdateImage = Signal(
         str, np.ndarray, bool, list, bool

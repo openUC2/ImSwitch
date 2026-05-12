@@ -4,6 +4,7 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 
 from imswitch.imcommon.model import APIExport
+from imswitch.imcommon.framework import Signal
 from imswitch.imcontrol.model import configfiletools
 from imswitch.imcontrol.view import guitools as guitools
 from ..basecontrollers import ImConWidgetController
@@ -30,6 +31,9 @@ class SettingsControllerParams:
 class SettingsController(ImConWidgetController):
     """ Linked to SettingsWidget."""
 
+    # Signal emitted when detector parameters change (for WebSocket broadcasting)
+    sigDetectorParametersUpdated = Signal(dict)  # Emits: {'detectorName': str, 'parameters': dict}
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -39,9 +43,11 @@ class SettingsController(ImConWidgetController):
         if not self._master.detectorsManager.hasDevices():
             return
 
-
         # Connect CommunicationChannel signals
         self._commChannel.sigDetectorSwitched.connect(self.detectorSwitched)
+        
+        # Connect our signal with CommunicationChannel for WebSocket broadcasting
+        self.sigDetectorParametersUpdated.connect(self._commChannel.sigDetectorParametersUpdated.emit)
 
         self.roiAdded = False
 
@@ -689,6 +695,16 @@ class SettingsController(ImConWidgetController):
                        self.updateParamsFromDetector(detector=c))
         )
         self.updateSharedAttrs()
+        
+        # Emit signal with updated parameters for WebSocket broadcasting
+        try:
+            updated_params = self.getDetectorParameters()
+            self.sigDetectorParametersUpdated.emit({
+                'detectorName': detectorName,
+                'parameters': updated_params
+            })
+        except Exception as e:
+            print(f"Error emitting detector parameters update: {e}")
 
     @APIExport(runOnUIThread=True)
     def setDetectorMode(self, detectorName: str=None, isAuto: bool=True) -> None:

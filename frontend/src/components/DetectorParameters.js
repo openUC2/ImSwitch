@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useDispatch, useSelector } from "react-redux";
 import {
   TextField,
   MenuItem,
@@ -8,34 +9,25 @@ import {
   Typography,
 } from "@mui/material";
 import { Camera } from "@mui/icons-material";
+import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
 
 /**
- * This component fetches and updates the detector parameters from:
- *    /SettingsController/getDetectorParameters
+ * Detector Parameters Component - Now with WebSocket support
  *
- * It calls the known endpoints to update each parameter individually:
- *    setDetectorExposureTime?exposureTime=...
- *    setDetectorGain?gain=...
- *    setDetectorBinning?binning=...
- *    setDetectorBlackLevel?blacklevel=...
- *    setDetectorIsRGB?isRGB=...
- *    setDetectorMode?isAuto=...
- * (Adapt or expand if your API uses a different pattern.)
+ * This component displays and updates detector parameters.
+ * It now receives parameter updates via WebSocket when the backend changes them
+ * (e.g., in Auto Mode), without requiring polling.
  *
  * Usage:
  *   <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
  */
 export default function DetectorParameters({ hostIP, hostPort }) {
-  // Canonical values as last confirmed by the backend
-  const [detectorParams, setDetectorParams] = useState({
-    exposure: "",
-    gain: "",
-    pixelSize: "",
-    binning: "",
-    blacklevel: "",
-    isRGB: false,
-    mode: "manual",
-  });
+  const dispatch = useDispatch();
+
+  // Get detector parameters from Redux (updated via WebSocket)
+  const detectorParams = useSelector(
+    detectorParametersSlice.getDetectorParameters,
+  );
 
   // Local string values for text fields to avoid race conditions.
   // These are what the user sees while typing – they are NOT sent to
@@ -45,8 +37,12 @@ export default function DetectorParameters({ hostIP, hostPort }) {
   const [localBlacklevel, setLocalBlacklevel] = useState("");
 
   // Track whether a field is currently being edited so we don't
-  // overwrite the user's in-progress typing with a fetch result.
-  const editingRef = useRef({ exposure: false, gain: false, blacklevel: false });
+  // overwrite the user's in-progress typing with a WebSocket update.
+  const editingRef = useRef({
+    exposure: false,
+    gain: false,
+    blacklevel: false,
+  });
 
   // Fetch existing detector parameters on mount and when connection changes
   useEffect(() => {
@@ -54,7 +50,7 @@ export default function DetectorParameters({ hostIP, hostPort }) {
     async function fetchParams() {
       try {
         const resp = await fetch(
-          `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorParameters`
+          `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorParameters`,
         );
         if (!resp.ok || cancelled) return;
         const data = await resp.json();
@@ -67,73 +63,94 @@ export default function DetectorParameters({ hostIP, hostPort }) {
           isRGB: data.isRGB === 1,
           mode: (data.mode ?? "manual").toLowerCase(),
         };
-        setDetectorParams(newParams);
+        dispatch(detectorParametersSlice.setParameters(newParams));
         // Sync local text fields only if user is not currently editing
-        if (!editingRef.current.exposure) setLocalExposure(String(newParams.exposure));
+        if (!editingRef.current.exposure)
+          setLocalExposure(String(newParams.exposure));
         if (!editingRef.current.gain) setLocalGain(String(newParams.gain));
-        if (!editingRef.current.blacklevel) setLocalBlacklevel(String(newParams.blacklevel));
+        if (!editingRef.current.blacklevel)
+          setLocalBlacklevel(String(newParams.blacklevel));
       } catch (error) {
         console.error("Error fetching detector parameters:", error);
       }
     }
     fetchParams();
-    return () => { cancelled = true; };
-  }, [hostIP, hostPort]);
+    return () => {
+      cancelled = true;
+    };
+  }, [hostIP, hostPort, dispatch]);
+
+  // Sync local text fields when Redux state changes (from WebSocket)
+  // but only if user is not currently editing those fields
+  useEffect(() => {
+    if (!editingRef.current.exposure && detectorParams.exposure) {
+      setLocalExposure(String(detectorParams.exposure));
+    }
+    if (!editingRef.current.gain && detectorParams.gain) {
+      setLocalGain(String(detectorParams.gain));
+    }
+    if (!editingRef.current.blacklevel && detectorParams.blacklevel) {
+      setLocalBlacklevel(String(detectorParams.blacklevel));
+    }
+  }, [detectorParams.exposure, detectorParams.gain, detectorParams.blacklevel]);
 
   // Commit a numeric field to the backend.
   // Called on blur or Enter – NOT on every keystroke.
-  const commitField = useCallback(async (field, rawValue) => {
-    editingRef.current[field] = false;
-    const value = Number(rawValue);
-    if (rawValue === "" || isNaN(value)) return; // ignore empty / non-numeric
-    // Update canonical state
-    setDetectorParams((prev) => ({ ...prev, [field]: value }));
-    try {
-      switch (field) {
-        case "exposure":
-          await fetch(
-            `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorExposureTime?exposureTime=${value}`
-          );
-          break;
-        case "gain":
-          await fetch(
-            `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorGain?gain=${value}`
-          );
-          break;
-        case "blacklevel":
-          await fetch(
-            `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorBlackLevel?blacklevel=${value}`
-          );
-          break;
-        default:
-          break;
+  const commitField = useCallback(
+    async (field, rawValue) => {
+      editingRef.current[field] = false;
+      const value = Number(rawValue);
+      if (rawValue === "" || isNaN(value)) return; // ignore empty / non-numeric
+      // Update Redux state immediately for UI feedback
+      dispatch(detectorParametersSlice.updateParameter({ key: field, value }));
+      try {
+        switch (field) {
+          case "exposure":
+            await fetch(
+              `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorExposureTime?exposureTime=${value}`,
+            );
+            break;
+          case "gain":
+            await fetch(
+              `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorGain?gain=${value}`,
+            );
+            break;
+          case "blacklevel":
+            await fetch(
+              `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorBlackLevel?blacklevel=${value}`,
+            );
+            break;
+          default:
+            break;
+        }
+      } catch (error) {
+        console.error(`Error updating '${field}' to '${value}':`, error);
       }
-    } catch (error) {
-      console.error(`Error updating '${field}' to '${value}':`, error);
-    }
-  }, [hostIP, hostPort]);
+    },
+    [hostIP, hostPort, dispatch],
+  );
 
   // Handle non-numeric fields (binning, isRGB, mode) immediately on change
   const handleParamChange = async (field, value) => {
-    setDetectorParams((prev) => ({ ...prev, [field]: value }));
+    dispatch(detectorParametersSlice.updateParameter({ key: field, value }));
     try {
       switch (field) {
         case "binning":
           await fetch(
-            `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorBinning?binning=${value}`
+            `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorBinning?binning=${value}`,
           );
           break;
         case "isRGB": {
           const intVal = value ? 1 : 0;
           await fetch(
-            `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorIsRGB?isRGB=${intVal}`
+            `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorIsRGB?isRGB=${intVal}`,
           );
           break;
         }
         case "mode": {
           const isAuto = value === "auto";
           await fetch(
-            `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorMode?isAuto=${isAuto}`
+            `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorMode?isAuto=${isAuto}`,
           );
           break;
         }

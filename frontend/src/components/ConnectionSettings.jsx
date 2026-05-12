@@ -360,12 +360,11 @@ function ConnectionSettings() {
       {/* Connection Configuration Card */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
-          {/* Neue horizontale ConnectionGraph-Visualisierung mit Steps */}
+          {/* horizontal ConnectionGraph */}
           <ConnectionGraphHorizontal
             isBackendConnected={isBackendConnected}
             websocketTestStatus={websocketTestStatus}
             isHardwareConnected={isHardwareConnected}
-            isTestingConnection={isTestingConnection}
             hasRunConnectionTest={hasRunConnectionTest}
             hasWebsocketPort={Boolean(websocketPort)}
           />

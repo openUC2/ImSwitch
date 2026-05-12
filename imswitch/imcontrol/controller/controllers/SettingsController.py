@@ -641,26 +641,37 @@ class SettingsController(ImConWidgetController):
     @APIExport()
     def getDetectorParameters(self) -> dict:
         """ Returns the current parameters of the current detector. """
+        detector = self._master.detectorsManager.getCurrentDetector()
         # collect exposure time
-        try: mExposureTime = self._master.detectorsManager.getCurrentDetector().parameters['exposure'].value
-        except: mExposureTime = 1
+        try:
+            mExposureTime = detector.getParameter('exposure')
+        except Exception:
+            try:
+                mExposureTime = detector.parameters['exposure'].value
+            except Exception:
+                mExposureTime = 1
         # collect gain
-        try: mGain = self._master.detectorsManager.getCurrentDetector().parameters['gain'].value
-        except: mGain = 0
+        try:
+            mGain = detector.getParameter('gain')
+        except Exception:
+            try:
+                mGain = detector.parameters['gain'].value
+            except Exception:
+                mGain = 0
         # collect pixelSize
-        try: mPixelSize = self._master.detectorsManager.getCurrentDetector().pixelSizeUm[-1]
+        try: mPixelSize = detector.pixelSizeUm[-1]
         except: mPixelSize = 1
         # collect binning
-        try: mBinning = self._master.detectorsManager.getCurrentDetector().binning
+        try: mBinning = detector.binning
         except: mBinning = 1
         # get Black Level
-        try: mBlacklevel = self._master.detectorsManager.getCurrentDetector().parameters['blacklevel'].value
+        try: mBlacklevel = detector.parameters['blacklevel'].value
         except: mBlacklevel = 0
         # get rgb
-        try: mRGB = self._master.detectorsManager.getCurrentDetector()._isRGB
+        try: mRGB = detector._isRGB
         except: mRGB = 0
         # collect mode (auto/manual)
-        try: camMode = self._master.detectorsManager.getCurrentDetector().parameters['exposure_mode'].value
+        try: camMode = detector.parameters['exposure_mode'].value
         except: camMode = 'manual'
         mParameterDict = {
             'exposure': mExposureTime,
@@ -673,7 +684,6 @@ class SettingsController(ImConWidgetController):
         }
 
         # Include white-balance info when available (RGB cameras)
-        detector = self._master.detectorsManager.getCurrentDetector()
         if mRGB:
             try:
                 mParameterDict['awb_mode'] = detector.parameters.get('awb_mode', None)

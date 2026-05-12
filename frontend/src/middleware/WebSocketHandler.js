@@ -57,53 +57,54 @@ const WebSocketHandler = () => {
     async (ip = hostIP, port = hostPort) => {
       // Skip monitoring if backend connection is not configured
       if (!ip || !port) {
-        dispatch(uc2Slice.setUc2Connected(false));
-        return;
-      }
-
-      try {
-        console.debug(`Checking UC2 connection to ${ip}:${port}/imswitch`);
-
-        // Use cross-browser compatible fetch with timeout
-        const response = await fetchWithTimeout(
-          `${ip}:${port}/imswitch/api/UC2ConfigController/is_connected`,
-          { method: "GET" },
-          10000,
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          const hardwareConnected = data === true;
-
-          console.debug(
-            `Backend API: Connected, Hardware: ${
-              hardwareConnected ? "Connected" : "Disconnected"
-            }`,
-          );
-
-          // Update BOTH statuses
-          dispatch(uc2Slice.setBackendConnected(true)); // API is reachable
-          dispatch(uc2Slice.setUc2Connected(hardwareConnected)); // Hardware status
-
-          return hardwareConnected; // Return hardware status for compatibility
-        } else {
-          console.debug(`UC2 connection check: HTTP ${response.status}`);
-          dispatch(uc2Slice.setBackendConnected(false));
-          dispatch(uc2Slice.setUc2Connected(false));
-          return false;
-        }
-      } catch (error) {
-        if (error.name === "AbortError") {
-          console.debug("UC2 connection check: Request timeout");
-        } else {
-          console.debug("UC2 connection check: Network error", error.message);
-        }
         dispatch(uc2Slice.setBackendConnected(false));
         dispatch(uc2Slice.setUc2Connected(false));
         return false;
       }
+
+      // ── Schritt 1: Backend API erreichbar ──
+      const apiBase = `${ip}:${port}/imswitch/api/UC2ConfigController`;
+      let backendAlive = false;
+      try {
+        console.debug(`[Check 1] Backend liveness: ${apiBase}/is_connected`);
+        const livenessResponse = await fetchWithTimeout(
+          `${apiBase}/is_connected`,
+          { method: "GET" },
+          5000,
+        );
+        backendAlive = livenessResponse.ok;
+        console.debug(`[Check 1] Backend alive: ${backendAlive}`);
+      } catch (error) {
+        backendAlive = false;
+      }
+      dispatch(uc2Slice.setBackendConnected(backendAlive));
+
+      // ── Schritt 2: ESP32/UART hardware connectivity ──
+      let hardwareConnected = false;
+      if (backendAlive) {
+        try {
+          console.debug(`[Check 2] Hardware check: ${apiBase}/uc2_board_is_connected`);
+          const hwResponse = await fetchWithTimeout(
+            `${apiBase}/uc2_board_is_connected`,
+            { method: "GET" },
+            5000,
+          );
+          if (hwResponse.ok) {
+            const data = await hwResponse.json();
+            hardwareConnected = data === true;
+          }
+          console.debug(`[Check 2] Hardware (ESP32/UART) connected: ${hardwareConnected}`);
+        } catch (error) {
+          hardwareConnected = false;
+        }
+      }
+      dispatch(uc2Slice.setUc2Connected(hardwareConnected));
+
+      // Note: WebSocket connectivity bleibt separat in testWebSocketConnection()
+
+      return hardwareConnected; // Return hardware status for compatibility
     },
-    [hostIP, hostPort, dispatch], // Dependencies for useCallback
+    [hostIP, hostPort, dispatch],
   );
 
   // Sync livestream status with backend

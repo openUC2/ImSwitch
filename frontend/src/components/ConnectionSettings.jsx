@@ -370,39 +370,6 @@ function ConnectionSettings() {
             hasWebsocketPort={Boolean(websocketPort)}
           />
 
-          {/* Animierter Pfeil als Subkomponente */}
-          {/* Muss am Dateianfang eingefügt werden: */}
-          {/*
-          import { keyframes } from "@emotion/react";
-          */}
-
-          {/* AnimatedArrow-Komponente */}
-          {/*
-          const arrowAnim = keyframes`
-            0% { opacity: 0.2; transform: translateX(0); }
-            50% { opacity: 1; transform: translateX(6px); }
-            100% { opacity: 0.2; transform: translateX(0); }
-          `;
-
-          function AnimatedArrow({ active, success, testing }) {
-            return (
-              <span
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  margin: "0 4px",
-                  color: success ? "#2e7d32" : testing ? "#fbc02d" : "#bdbdbd",
-                  fontSize: 28,
-                  animation: active && testing ? `${arrowAnim} 1s linear infinite` : undefined,
-                  transition: "color 0.3s",
-                }}
-              >
-                &#8594;
-              </span>
-            );
-          }
-          */}
-
           <Alert severity="info" sx={{ mb: 3 }}>
             <Typography variant="body2">
               <strong>No configuration needed!</strong> Connection settings are

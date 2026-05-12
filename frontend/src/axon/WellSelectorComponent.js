@@ -15,7 +15,6 @@ import * as overviewRegSlice from '../state/slices/OverviewRegistrationSlice.js'
 
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
-import OverviewRegistrationWizard from "./OverviewRegistrationWizard.js";
 import LabwareSelectionPanel from "../components/LabwareSelectionPanel.jsx";
 
 import {
@@ -504,9 +503,6 @@ const WellSelectorComponent = () => {
       )}
 
       <InfoPopup ref={infoPopupRef}/>
-
-      {/* Overview Registration Wizard Dialog */}
-      <OverviewRegistrationWizard />
 
       {/* Confirm before swapping layout (clears existing points) */}
       <Dialog

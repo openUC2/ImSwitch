@@ -14,6 +14,7 @@ import FocusLockMiniController from "../components/FocusLockMiniController";
 import Frame3DViewerPanel from "./Frame3DViewerPanel.jsx";
 import PictureInPicture, { PiPToggleButton } from "./PictureInPicture";
 import OverviewScanTab from "./OverviewScanTab";
+import OverviewRegistrationWizard from "./OverviewRegistrationWizard.js";
 
 const AxonTabComponent = () => {
   // PiP (picture-in-picture) floating live preview
@@ -82,6 +83,10 @@ const AxonTabComponent = () => {
           </GenericTabBar>
         </div>
       </div>
+
+      {/* Overview Registration Wizard — mounted here so it's always available
+          regardless of which tab is active in the left GenericTabBar */}
+      <OverviewRegistrationWizard />
     </div>
   );
 };

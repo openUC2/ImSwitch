@@ -180,11 +180,12 @@ const TestHomingTab = () => {
             <Box 
               sx={{ 
                 backgroundColor: 'black', 
-                minHeight: 500,
+                height: 500,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                position: 'relative'
+                position: 'relative',
+                overflow: 'hidden',
               }}
             >
               {streamActive && liveStreamState.liveViewImage ? (
@@ -192,7 +193,10 @@ const TestHomingTab = () => {
                   src={`data:image/jpeg;base64,${liveStreamState.liveViewImage}`}
                   alt="Overview Camera"
                   style={{ 
-                    maxWidth: '100%'
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    objectFit: 'contain',
+                    display: 'block',
                   }}
                 />
               ) : (

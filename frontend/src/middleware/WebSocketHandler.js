@@ -37,6 +37,8 @@ const isWebSocketDebugEnabled = () =>
 const WebSocketHandler = () => {
   const dispatch = useDispatch();
   const connectionCheckRef = useRef(null);
+  const lastEspReconnectAttemptRef = useRef(0);
+  const espReconnectInFlightRef = useRef(false);
 
   // Per-instance server capabilities (each tab has its own)
   const serverCapabilitiesRef = useRef({
@@ -51,6 +53,7 @@ const WebSocketHandler = () => {
   );
   const hostIP = connectionSettingsState.ip;
   const hostPort = connectionSettingsState.apiPort;
+  const ESP_RECONNECT_COOLDOWN_MS = 15000;
 
   // Memoized connection check function
   const checkUc2Connection = useCallback(
@@ -100,6 +103,39 @@ const WebSocketHandler = () => {
           );
         } catch (error) {
           hardwareConnected = false;
+        }
+
+        // If ESP is unplugged and then replugged, trigger a throttled reconnect
+        // so the serial link can recover without restarting the backend.
+        if (!hardwareConnected) {
+          const now = Date.now();
+          const canAttemptReconnect =
+            !espReconnectInFlightRef.current &&
+            now - lastEspReconnectAttemptRef.current >=
+              ESP_RECONNECT_COOLDOWN_MS;
+
+          if (canAttemptReconnect) {
+            espReconnectInFlightRef.current = true;
+            lastEspReconnectAttemptRef.current = now;
+
+            try {
+              console.debug(
+                `[Check 2b] Trigger ESP reconnect: ${apiBase}/reconnect`,
+              );
+              await fetchWithTimeout(
+                `${apiBase}/reconnect`,
+                { method: "GET" },
+                5000,
+              );
+            } catch (error) {
+              console.debug(
+                "[Check 2b] ESP reconnect request failed:",
+                error?.message,
+              );
+            } finally {
+              espReconnectInFlightRef.current = false;
+            }
+          }
         }
       }
       dispatch(uc2Slice.setUc2Connected(hardwareConnected));

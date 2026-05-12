@@ -192,8 +192,8 @@ const SystemUpdateController = () => {
             <Memory color="primary" />
             <Typography variant="h6">UC2 Hardware Control</Typography>
             <Chip
-              label={isBackendConnected ? "Connected" : "Disconnected"}
-              color={isBackendConnected ? "success" : "error"}
+              label={uc2Connected ? "ESP32 Connected" : "ESP32 Disconnected"}
+              color={uc2Connected ? "success" : "error"}
               size="small"
               variant="outlined"
             />

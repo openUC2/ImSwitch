@@ -16,7 +16,6 @@ export default function ConnectionGraphHorizontal({
   isBackendConnected,
   websocketTestStatus,
   isHardwareConnected,
-  isTestingConnection,
   hasRunConnectionTest,
   hasWebsocketPort,
 }) {
@@ -51,11 +50,7 @@ export default function ConnectionGraphHorizontal({
       : failedColor;
 
   const apiArrowColor = apiColor;
-  const wsArrowColor = !hasRunConnectionTest
-    ? neutralColor
-    : !isBackendConnected
-      ? failedColor
-      : wsColor;
+  const wsArrowColor = wsColor;
   const espArrowColor = !hasRunConnectionTest
     ? neutralColor
     : !isBackendConnected
@@ -70,7 +65,7 @@ export default function ConnectionGraphHorizontal({
         alignItems: "center",
         mb: 3,
         justifyContent: "center",
-        gap: 3,
+        gap: 4,
       }}
     >
       {/* Step 1: Frontend */}
@@ -82,95 +77,94 @@ export default function ConnectionGraphHorizontal({
           <Computer sx={{ fontSize: 36, color: "#1976d2" }} />
         </Tooltip>
       </Box>
-      <span
-        style={{
+
+      {/* Branches from Frontend */}
+      <Box
+        sx={{
           display: "flex",
-          alignItems: "center",
-          margin: "0 4px",
-          color: apiArrowColor,
-          fontSize: 28,
+          flexDirection: "column",
+          alignItems: "flex-start",
+          gap: 2,
+          ml: 2,
         }}
       >
-        &#8594;
-      </span>
-
-      {/* Step 2: Backend/API */}
-      <Box
-        sx={{ display: "flex", flexDirection: "column", alignItems: "center" }}
-      >
-        <StepLabel step={2} label="API" />
-        <Tooltip title="Backend-Server (API)">
-          <Storage
-            sx={{
-              fontSize: 36,
-              color: apiColor,
+        {/* Upper branch: Frontend -> API -> ESP */}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 3 }}>
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              color: apiArrowColor,
+              fontSize: 24,
             }}
-          />
-        </Tooltip>
-      </Box>
+          >
+            &#8599;
+          </span>
 
-      {/* Backend → WebSocket */}
-      <Box
-        sx={{ display: "flex", flexDirection: "column", alignItems: "center" }}
-      >
-        <span
-          style={{
-            display: "flex",
-            alignItems: "center",
-            margin: "0 4px",
-            color: wsArrowColor,
-            fontSize: 28,
-          }}
-        >
-          &#8594;
-        </span>
-      </Box>
-
-      {/* Step 3: WebSocket */}
-      <Box
-        sx={{ display: "flex", flexDirection: "column", alignItems: "center" }}
-      >
-        <StepLabel step={3} label="WebSocket" />
-        <Tooltip title="WebSocket-connection (Live communication)">
-          <Lan
+          <Box
             sx={{
-              fontSize: 32,
-              color: wsColor,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
             }}
-          />
-        </Tooltip>
-      </Box>
+          >
+            <StepLabel step={2} label="API" />
+            <Tooltip title="Backend-Server (API)">
+              <Storage sx={{ fontSize: 36, color: apiColor }} />
+            </Tooltip>
+          </Box>
 
-      {/* Backend → ESP32 */}
-      <Box
-        sx={{ display: "flex", flexDirection: "column", alignItems: "center" }}
-      >
-        <span
-          style={{
-            display: "flex",
-            alignItems: "center",
-            margin: "0 4px",
-            color: espArrowColor,
-            fontSize: 28,
-          }}
-        >
-          &#8594;
-        </span>
-      </Box>
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              color: espArrowColor,
+              fontSize: 28,
+            }}
+          >
+            &#8594;
+          </span>
 
-      {/* Step 4: ESP32 */}
-      <Box
-        sx={{ display: "flex", flexDirection: "column", alignItems: "center" }}
-      >
-        <StepLabel step={4} label="ESP32" />
-        <Tooltip title="ESP32 Hardware (Controller)">
-          <Memory
+          <Box
             sx={{
-              fontSize: 32,
-              color: espColor,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
             }}
-          />
-        </Tooltip>
+          >
+            <StepLabel step={3} label="ESP32" />
+            <Tooltip title="ESP32 Hardware (Controller)">
+              <Memory sx={{ fontSize: 32, color: espColor }} />
+            </Tooltip>
+          </Box>
+        </Box>
+
+        {/* Lower branch: Frontend -> WebSocket */}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 3 }}>
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              color: wsArrowColor,
+              fontSize: 24,
+            }}
+          >
+            &#8600;
+          </span>
+
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+            }}
+          >
+            <StepLabel step={4} label="WebSocket" />
+            <Tooltip title="WebSocket-connection (Live communication)">
+              <Lan sx={{ fontSize: 32, color: wsColor }} />
+            </Tooltip>
+          </Box>
+        </Box>
       </Box>
     </Box>
   );

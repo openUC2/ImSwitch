@@ -33,6 +33,9 @@ import { fetchWithTimeout } from "../utils/fetchWithTimeout";
 const isWebSocketDebugEnabled = () =>
   typeof window !== "undefined" && Boolean(window.__IMSWITCH_DEBUG_WEBSOCKET__);
 
+// ESP32 auto-reconnect throttle: Wait 15 seconds between reconnect attempts
+const ESP_RECONNECT_COOLDOWN_MS = 15000;
+
 //##################################################################################
 const WebSocketHandler = () => {
   const dispatch = useDispatch();
@@ -53,7 +56,6 @@ const WebSocketHandler = () => {
   );
   const hostIP = connectionSettingsState.ip;
   const hostPort = connectionSettingsState.apiPort;
-  const ESP_RECONNECT_COOLDOWN_MS = 15000;
 
   // Memoized connection check function
   const checkUc2Connection = useCallback(
@@ -139,9 +141,6 @@ const WebSocketHandler = () => {
         }
       }
       dispatch(uc2Slice.setUc2Connected(hardwareConnected));
-
-      // Note: WebSocket connectivity bleibt separat in testWebSocketConnection()
-
       return hardwareConnected; // Return hardware status for compatibility
     },
     [hostIP, hostPort, dispatch],

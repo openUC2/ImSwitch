@@ -36,6 +36,8 @@ import apiSnapOverviewImage from "../backendapi/apiSnapOverviewImage.js";
 import apiRegisterOverviewSlide from "../backendapi/apiRegisterOverviewSlide.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 import apiRefreshOverviewSlideImage from "../backendapi/apiRefreshOverviewSlideImage.js";
+import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView.js";
+import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView.js";
 
 //##################################################################################
 // Wizard step labels
@@ -89,18 +91,30 @@ const OverviewRegistrationWizard = () => {
   }, [regState.wizardOpen]);
 
   //##################################################################################
-  // Build MJPEG stream URL whenever the wizard is open. We don't gate this
-  // on ``cameraAvailable`` so the live overview stream is shown immediately
-  // during the "Align & Snap" step; the existing ``streamError`` handler
-  // covers the case where the backend has no overview camera configured.
+  // Start LiveViewController MJPEG stream when wizard opens and stop it on close.
+  // ObservationCamera is always used for the overview stream with 1x subsampling.
   useEffect(() => {
-    if (regState.wizardOpen) {
-      const base = `${connectionSettings.ip}:${connectionSettings.apiPort}/imswitch/api`;
-      setStreamUrl(
-        `${base}/PixelCalibrationController/overviewStream?startStream=true`
-      );
-      setStreamError(false);
-    }
+    if (!regState.wizardOpen) return;
+
+    const base = `${connectionSettings.ip}:${connectionSettings.apiPort}/imswitch/api`;
+    setStreamError(false);
+
+    // Start the MJPEG stream with 1x subsampling via LiveViewController
+    apiLiveViewControllerStartLiveView('ObservationCamera', 'mjpeg', { subsampling_factor: 1 })
+      .then(() => {
+        setStreamUrl(
+          `${base}/LiveViewController/mjpeg_stream?detectorName=ObservationCamera`
+        );
+      }) // TODO: reuse existing component if possible 
+      .catch(() => {
+        setStreamError(true);
+      });
+
+    return () => {
+      // Stop the stream when the wizard closes
+      apiLiveViewControllerStopLiveView('ObservationCamera').catch(() => {});
+      setStreamUrl('');
+    };
   }, [
     regState.wizardOpen,
     connectionSettings.ip,

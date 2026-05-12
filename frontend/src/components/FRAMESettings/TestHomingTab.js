@@ -22,7 +22,8 @@ import { getConnectionSettingsState } from '../../state/slices/ConnectionSetting
 
 import apiPositionerControllerHomeAxis from '../../backendapi/apiPositionerControllerHomeAxis';
 import apiPixelCalibrationControllerOverviewVerifyHoming from '../../backendapi/apiPixelCalibrationControllerOverviewVerifyHoming';
-import apiPixelCalibrationControllerOverviewStream from '../../backendapi/apiPixelCalibrationControllerOverviewStream';
+import apiLiveViewControllerStartLiveView from '../../backendapi/apiLiveViewControllerStartLiveView';
+import apiLiveViewControllerStopLiveView from '../../backendapi/apiLiveViewControllerStopLiveView';
 
 /**
  * TestHomingTab - Axis homing verification
@@ -68,21 +69,24 @@ const TestHomingTab = () => {
   // Reference for MJPEG image
   const imgRef = useRef(null);
 
-  // Set up stream URL
+  // Set up stream URL for the ObservationCamera via LiveViewController MJPEG endpoint
   useEffect(() => {
     if (hostIP && hostPort) {
-      setStreamUrl(`${hostIP}:${hostPort}/imswitch/api/PixelCalibrationController/overviewStream`);
+      setStreamUrl(`${hostIP}:${hostPort}/imswitch/api/LiveViewController/mjpeg_stream?detectorName=ObservationCamera`);
     }
   }, [hostIP, hostPort]);
 
-  // Handle stream toggle
+  // Handle stream toggle using LiveViewController with 1x subsampling
   const handleStreamToggle = async () => {
     try {
       const newStreamState = !streamActive;
       
-      if (!newStreamState) {
-        // Stop stream via API
-        await apiPixelCalibrationControllerOverviewStream(false);
+      if (newStreamState) {
+        // Start MJPEG stream for ObservationCamera with 1x subsampling
+        await apiLiveViewControllerStartLiveView('ObservationCamera', 'mjpeg', { subsampling_factor: 1 });
+      } else {
+        // Stop stream via LiveViewController
+        await apiLiveViewControllerStopLiveView('ObservationCamera');
       }
       
       setStreamActive(newStreamState);

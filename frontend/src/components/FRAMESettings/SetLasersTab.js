@@ -22,7 +22,8 @@ import LiveViewControlWrapper from '../../axon/LiveViewControlWrapper';
 import apiLaserControllerSetLaserChannelIndex from '../../backendapi/apiLaserControllerSetLaserChannelIndex';
 import apiLaserControllerGetLaserNames from '../../backendapi/apiLaserControllerGetLaserNames';
 import apiLEDMatrixControllerSetAllLED from '../../backendapi/apiLEDMatrixControllerSetAllLED';
-import apiPixelCalibrationControllerOverviewStream from '../../backendapi/apiPixelCalibrationControllerOverviewStream';
+import apiLiveViewControllerStartLiveView from '../../backendapi/apiLiveViewControllerStartLiveView';
+import apiLiveViewControllerStopLiveView from '../../backendapi/apiLiveViewControllerStopLiveView';
 
 /**
  * SetLasersTab - Laser channel configuration and testing
@@ -56,10 +57,10 @@ const SetLasersTab = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Set up overview stream URL
+  // Set up overview stream URL for the ObservationCamera via LiveViewController MJPEG endpoint
   useEffect(() => {
     if (hostIP && hostPort) {
-      setOverviewStreamUrl(`${hostIP}:${hostPort}/imswitch/api/PixelCalibrationController/overviewStream`);
+      setOverviewStreamUrl(`${hostIP}:${hostPort}/imswitch/api/LiveViewController/mjpeg_stream?detectorName=ObservationCamera`);
     }
   }, [hostIP, hostPort]);
 
@@ -88,14 +89,17 @@ const SetLasersTab = () => {
     }
   }, [hostIP, hostPort]);
 
-  // Handle overview stream toggle
+  // Handle overview stream toggle using LiveViewController with 1x subsampling
   const handleOverviewStreamToggle = async () => {
     try {
       const newStreamState = !overviewStreamActive;
       
-      if (!newStreamState) {
-        // Stop stream via API
-        await apiPixelCalibrationControllerOverviewStream(false);
+      if (newStreamState) {
+        // Start MJPEG stream for ObservationCamera with 1x subsampling
+        await apiLiveViewControllerStartLiveView('ObservationCamera', 'mjpeg', { subsampling_factor: 1 });
+      } else {
+        // Stop stream via LiveViewController
+        await apiLiveViewControllerStopLiveView('ObservationCamera');
       }
       
       setOverviewStreamActive(newStreamState);

@@ -4,7 +4,7 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 
 from imswitch.imcommon.model import APIExport
-from imswitch.imcommon.framework import Signal
+from imswitch.imcommon.framework import Signal, Timer
 from imswitch.imcontrol.model import configfiletools
 from imswitch.imcontrol.view import guitools as guitools
 from ..basecontrollers import ImConWidgetController
@@ -39,6 +39,10 @@ class SettingsController(ImConWidgetController):
 
         self.settingAttr = False
         self.allParams = {}
+        self._last_detector_params_snapshot = None
+        self._detector_params_emit_interval_ms = 1000
+        self._detector_params_timer = Timer()
+        self._detector_params_timer.timeout.connect(self._emit_detector_parameters_if_changed)
 
         if not self._master.detectorsManager.hasDevices():
             return
@@ -54,6 +58,50 @@ class SettingsController(ImConWidgetController):
         self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
         self.detectorSwitched(self._master.detectorsManager.getCurrentDetectorName())
         self.updateSharedAttrs()
+
+        # Periodically emit detector parameters so backend-side auto adjustments
+        # (e.g. exposure in auto mode) are reflected in the frontend.
+        self._detector_params_timer.start(self._detector_params_emit_interval_ms)
+        self._emit_detector_parameters_if_changed(force=True)
+
+    def _build_detector_params_snapshot(self):
+        try:
+            detector_name = self._master.detectorsManager.getCurrentDetectorName()
+            params = self.getDetectorParameters()
+            return {
+                'detectorName': detector_name,
+                'parameters': params,
+            }
+        except Exception:
+            return None
+
+    def _emit_detector_parameters_if_changed(self, force: bool = False):
+        snapshot = self._build_detector_params_snapshot()
+        if snapshot is None:
+            return
+
+        if force or snapshot != self._last_detector_params_snapshot:
+            self._last_detector_params_snapshot = snapshot
+            self.sigDetectorParametersUpdated.emit(snapshot)
+
+    def closeEvent(self):
+        """Cleanup timer resources when controller is closed."""
+        try:
+            if hasattr(self, "_detector_params_timer") and self._detector_params_timer:
+                try:
+                    self._detector_params_timer.timeout.disconnect(self._emit_detector_parameters_if_changed)
+                except Exception:
+                    pass
+                self._detector_params_timer.stop()
+        except Exception:
+            pass
+
+    def __del__(self):
+        """Best-effort cleanup for non-Qt timer threads."""
+        try:
+            self.closeEvent()
+        except Exception:
+            pass
         
     def addROI(self):
         """ Adds the ROI to ImageWidget viewbox through the CommunicationChannel. """
@@ -382,6 +430,7 @@ class SettingsController(ImConWidgetController):
         """ Called when the user switches to another detector. """
         newDetectorShape = self._master.detectorsManager[newDetectorName].shape
         self._commChannel.sigAdjustFrame.emit(newDetectorShape)
+        self._emit_detector_parameters_if_changed(force=True)
         return
         self._widget.setDisplayedDetector(newDetectorName)
         self._widget.setImageFrameVisible(self._master.detectorsManager[newDetectorName].croppable)
@@ -695,16 +744,8 @@ class SettingsController(ImConWidgetController):
                        self.updateParamsFromDetector(detector=c))
         )
         self.updateSharedAttrs()
-        
-        # Emit signal with updated parameters for WebSocket broadcasting
-        try:
-            updated_params = self.getDetectorParameters()
-            self.sigDetectorParametersUpdated.emit({
-                'detectorName': detectorName,
-                'parameters': updated_params
-            })
-        except Exception as e:
-            print(f"Error emitting detector parameters update: {e}")
+
+        self._emit_detector_parameters_if_changed(force=True)
 
     @APIExport(runOnUIThread=True)
     def setDetectorMode(self, detectorName: str=None, isAuto: bool=True) -> None:

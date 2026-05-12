@@ -22,7 +22,8 @@ export default function ConnectionGraphHorizontal({
 }) {
   // Status für Farben
   const wsSuccess = websocketTestStatus === "success";
-  const wsFailed = websocketTestStatus === "failed" || websocketTestStatus === "timeout";
+  const wsFailed =
+    websocketTestStatus === "failed" || websocketTestStatus === "timeout";
 
   const neutralColor = "#bdbdbd";
   const successColor = "#2e7d32";
@@ -34,13 +35,14 @@ export default function ConnectionGraphHorizontal({
       ? successColor
       : failedColor;
 
-  const wsColor = !hasRunConnectionTest || !hasWebsocketPort
-    ? neutralColor
-    : wsSuccess
-      ? successColor
-      : wsFailed
-        ? failedColor
-        : neutralColor;
+  const wsColor =
+    !hasRunConnectionTest || !hasWebsocketPort
+      ? neutralColor
+      : wsSuccess
+        ? successColor
+        : wsFailed
+          ? failedColor
+          : neutralColor;
 
   const espColor = !hasRunConnectionTest
     ? neutralColor

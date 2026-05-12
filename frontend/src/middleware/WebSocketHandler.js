@@ -83,7 +83,9 @@ const WebSocketHandler = () => {
       let hardwareConnected = false;
       if (backendAlive) {
         try {
-          console.debug(`[Check 2] Hardware check: ${apiBase}/uc2_board_is_connected`);
+          console.debug(
+            `[Check 2] Hardware check: ${apiBase}/uc2_board_is_connected`,
+          );
           const hwResponse = await fetchWithTimeout(
             `${apiBase}/uc2_board_is_connected`,
             { method: "GET" },
@@ -93,7 +95,9 @@ const WebSocketHandler = () => {
             const data = await hwResponse.json();
             hardwareConnected = data === true;
           }
-          console.debug(`[Check 2] Hardware (ESP32/UART) connected: ${hardwareConnected}`);
+          console.debug(
+            `[Check 2] Hardware (ESP32/UART) connected: ${hardwareConnected}`,
+          );
         } catch (error) {
           hardwareConnected = false;
         }

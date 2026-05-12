@@ -17,6 +17,9 @@ const initialWellSelectorState = {
   // Cup select settings
   cupSelectShape: 'circle',    // string: 'circle' or 'rectangle' for well select shape
   cupSelectOverlap: 0.0,       // float: overlap percentage (0.0 = no overlap, 0.1 = 10% overlap)
+  // Move Camera mode speed settings (in µm/s)
+  moveCameraSpeedXY: 20000,    // float: XY stage speed when clicking in MOVE_CAMERA mode
+  moveCameraSpeedZ: 1000,      // float: Z stage speed when clicking in MOVE_CAMERA mode
   // Labware (Opentrons-style) selection state
   labwareLoadName: null,       // string|null: currently selected labware loadName
   selectedWellIds: [],         // array<string>: currently selected well IDs (e.g. ["A1","B3"])
@@ -139,6 +142,14 @@ const wellSelectorSlice = createSlice({
     clearConditionLabels: (state) => {
       state.conditionLabels = {};
     },
+    setMoveCameraSpeedXY: (state, action) => {
+      const v = parseFloat(action.payload);
+      state.moveCameraSpeedXY = isNaN(v) || v <= 0 ? 20000 : v;
+    },
+    setMoveCameraSpeedZ: (state, action) => {
+      const v = parseFloat(action.payload);
+      state.moveCameraSpeedZ = isNaN(v) || v <= 0 ? 1000 : v;
+    },
   },
 });
 
@@ -165,6 +176,8 @@ export const {
   setConditionLabel,
   setConditionLabels,
   clearConditionLabels,
+  setMoveCameraSpeedXY,
+  setMoveCameraSpeedZ,
 } = wellSelectorSlice.actions;
 
 // Selector helper

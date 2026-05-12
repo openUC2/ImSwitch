@@ -301,6 +301,16 @@ const WellSelectorComponent = () => {
   };
 
   //##################################################################################
+  const handleMoveCameraSpeedXYChange = (event) => {
+    dispatch(wellSelectorSlice.setMoveCameraSpeedXY(event.target.value));
+  };
+
+  //##################################################################################
+  const handleMoveCameraSpeedZChange = (event) => {
+    dispatch(wellSelectorSlice.setMoveCameraSpeedZ(event.target.value));
+  };
+
+  //##################################################################################
   return (
     <div style={{ border: "0px solid #eee", padding: "10px" }}>
 
@@ -465,6 +475,33 @@ const WellSelectorComponent = () => {
           </Button>
         </ButtonGroup>
       </div>
+
+      {/* MOVE CAMERA speed controls – only shown when MOVE_CAMERA mode is active */}
+      {wellSelectorState.mode === Mode.MOVE_CAMERA && (
+        <Box sx={{ display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", mb: 1, mt: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            Move Camera Speed:
+          </Typography>
+          <TextField
+            label="XY Speed (µm/s)"
+            type="number"
+            size="small"
+            value={wellSelectorState.moveCameraSpeedXY ?? 20000}
+            onChange={handleMoveCameraSpeedXYChange}
+            inputProps={{ min: 1, step: 1000 }}
+            sx={{ width: 160 }}
+          />
+          <TextField
+            label="Z Speed (µm/s)"
+            type="number"
+            size="small"
+            value={wellSelectorState.moveCameraSpeedZ ?? 1000}
+            onChange={handleMoveCameraSpeedZChange}
+            inputProps={{ min: 1, step: 100 }}
+            sx={{ width: 140 }}
+          />
+        </Box>
+      )}
 
       <InfoPopup ref={infoPopupRef}/>
 

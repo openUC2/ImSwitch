@@ -1445,12 +1445,13 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
     //handle mode
     if (wellSelectorState.mode == Mode.MOVE_CAMERA) {
+      const xySpeed = wellSelectorState.moveCameraSpeedXY ?? 20000;
       //move camera
       apiPositionerControllerMovePositioner({
         axis: "X",
         dist: calcPx2Phy(localPos.x),
         isAbsolute: true,
-        speed: 20000,
+        speed: xySpeed,
       })
         .then((positionerResponse) => {
           console.log("apiMovePositioner X", positionerResponse);
@@ -1463,7 +1464,7 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
         axis: "Y",
         dist: calcPx2Phy(localPos.y),
         isAbsolute: true,
-        speed: 20000,
+        speed: xySpeed,
       })
         .then((positionerResponse) => {
           console.log("apiMovePositioner Y", positionerResponse);

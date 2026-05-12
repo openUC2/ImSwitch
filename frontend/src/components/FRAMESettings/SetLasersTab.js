@@ -16,6 +16,8 @@ import {
 } from '@mui/material';
 import { useSelector } from 'react-redux';
 import { getConnectionSettingsState } from '../../state/slices/ConnectionSettingsSlice';
+import * as liveStreamSlice from '../../state/slices/LiveStreamSlice';
+import * as liveViewSlice from '../../state/slices/LiveViewSlice';
 
 import IlluminationController from '../IlluminationController';
 import LiveViewControlWrapper from '../../axon/LiveViewControlWrapper';
@@ -36,13 +38,15 @@ import apiLiveViewControllerStopLiveView from '../../backendapi/apiLiveViewContr
  */
 const SetLasersTab = () => {
   const connectionSettings = useSelector(getConnectionSettingsState);
+  const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
+  const liveViewState = useSelector(liveViewSlice.getLiveViewState);
   const hostIP = connectionSettings.ip;
   const hostPort = connectionSettings.apiPort;
 
   // Overview stream state
-  const [overviewStreamUrl, setOverviewStreamUrl] = useState('');
   const [overviewStreamActive, setOverviewStreamActive] = useState(false);
-  const overviewImgRef = useRef(null);
+  const prevDetectorRef = useRef(null); // Saves detector name active before switching to ObservationCamera
+  const prevProtocolRef = useRef('jpeg');
 
   // LED matrix state
   const [ledEnabled, setLedEnabled] = useState(false);
@@ -56,13 +60,6 @@ const SetLasersTab = () => {
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  // Set up overview stream URL for the ObservationCamera via LiveViewController MJPEG endpoint
-  useEffect(() => {
-    if (hostIP && hostPort) {
-      setOverviewStreamUrl(`${hostIP}:${hostPort}/imswitch/api/LiveViewController/mjpeg_stream?detectorName=ObservationCamera`);
-    }
-  }, [hostIP, hostPort]);
 
   // Fetch available laser names on mount
   useEffect(() => {
@@ -89,19 +86,27 @@ const SetLasersTab = () => {
     }
   }, [hostIP, hostPort]);
 
-  // Handle overview stream toggle using LiveViewController with 1x subsampling
+  // Handle overview stream toggle: reuses the existing WebSocket live stream by switching the
+  // active detector to ObservationCamera. Restores the previous detector on stop.
   const handleOverviewStreamToggle = async () => {
     try {
       const newStreamState = !overviewStreamActive;
-      
+
       if (newStreamState) {
-        // Start MJPEG stream for ObservationCamera with 1x subsampling
-        await apiLiveViewControllerStartLiveView('ObservationCamera', 'mjpeg', { subsampling_factor: 1 });
+        // Remember which detector / protocol is currently streaming
+        prevDetectorRef.current = liveViewState.detectors[liveViewState.activeTab] || null;
+        prevProtocolRef.current = liveStreamState.imageFormat || 'jpeg';
+        // Switch the main live stream to ObservationCamera (jpeg, 1x subsampling)
+        await apiLiveViewControllerStartLiveView('ObservationCamera', 'jpeg', { subsampling_factor: 1 });
       } else {
-        // Stop stream via LiveViewController
-        await apiLiveViewControllerStopLiveView('ObservationCamera');
+        // Restore the previous detector stream
+        if (prevDetectorRef.current) {
+          await apiLiveViewControllerStartLiveView(prevDetectorRef.current, prevProtocolRef.current);
+        } else {
+          await apiLiveViewControllerStopLiveView('ObservationCamera');
+        }
       }
-      
+
       setOverviewStreamActive(newStreamState);
       setStatus(newStreamState ? 'Overview stream started' : 'Overview stream stopped');
     } catch (err) {
@@ -271,10 +276,9 @@ const SetLasersTab = () => {
                 justifyContent: 'center'
               }}
             >
-              {overviewStreamActive ? (
+              {overviewStreamActive && liveStreamState.liveViewImage ? (
                 <img
-                  ref={overviewImgRef}
-                  src={overviewStreamUrl}
+                  src={`data:image/jpeg;base64,${liveStreamState.liveViewImage}`}
                   alt="Overview Camera"
                   style={{ 
                     display: 'block',
@@ -287,7 +291,7 @@ const SetLasersTab = () => {
                 />
               ) : (
                 <Typography color="white">
-                  Stream not active
+                  {overviewStreamActive ? 'Waiting for image...' : 'Stream not active'}
                 </Typography>
               )}
             </Box>

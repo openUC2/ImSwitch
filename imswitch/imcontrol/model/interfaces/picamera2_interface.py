@@ -1049,10 +1049,20 @@ class CameraPicamera2:
             try:
                 metadata = self.camera.capture_metadata()
                 if property_name == "exposure":
-                    exposure_us = metadata.get("ExposureTime", self.exposure_time)
+                    exposure_us = (
+                        metadata.get("ExposureTime")
+                        or metadata.get("AeExposureTime")
+                        or metadata.get("SensorExposureTime")
+                        or self.exposure_time
+                    )
                     self.exposure_time = exposure_us
                     return exposure_us / 1000  # Return ms
-                gain_val = metadata.get("AnalogueGain", self.gain)
+                gain_val = (
+                    metadata.get("AnalogueGain")
+                    or metadata.get("AeGain")
+                    or metadata.get("DigitalGain")
+                    or self.gain
+                )
                 self.gain = gain_val
                 return gain_val
             except Exception as e:

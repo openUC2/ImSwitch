@@ -889,7 +889,7 @@ const WebSocketHandler = () => {
           // Extract parameters from the update
           const { detectorName, parameters } = parametersUpdate;
           if (parameters) {
-            dispatch(detectorParametersSlice.setParameters(parameters));
+            dispatch(detectorParametersSlice.normalizeParameters(parameters));
             if (detectorName) {
               dispatch(
                 detectorParametersSlice.setCurrentDetectorName(detectorName),

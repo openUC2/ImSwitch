@@ -21,16 +21,38 @@ const detectorParametersSlice = createSlice({
   name: "detectorParametersState",
   initialState: initialDetectorParametersState,
   reducers: {
+    normalizeParameters: (state, action) => {
+      const payload = action.payload || {};
+      state.parameters = {
+        ...state.parameters,
+        ...payload,
+        mode:
+          typeof payload.mode === "string"
+            ? payload.mode.toLowerCase()
+            : state.parameters.mode,
+      };
+      state.lastUpdate = Date.now();
+    },
     setCurrentDetectorName: (state, action) => {
       state.currentDetectorName = action.payload;
     },
     setParameters: (state, action) => {
-      state.parameters = action.payload;
+      const payload = action.payload || {};
+      state.parameters = {
+        ...payload,
+        mode:
+          typeof payload.mode === "string"
+            ? payload.mode.toLowerCase()
+            : "manual",
+      };
       state.lastUpdate = Date.now();
     },
     updateParameter: (state, action) => {
       const { key, value } = action.payload;
-      state.parameters[key] = value;
+      state.parameters[key] =
+        key === "mode" && typeof value === "string"
+          ? value.toLowerCase()
+          : value;
       state.lastUpdate = Date.now();
     },
     setIsLoading: (state, action) => {
@@ -44,6 +66,7 @@ const detectorParametersSlice = createSlice({
 
 // Export actions from slice
 export const {
+  normalizeParameters,
   setCurrentDetectorName,
   setParameters,
   updateParameter,

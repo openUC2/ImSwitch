@@ -712,7 +712,21 @@ class SettingsController(ImConWidgetController):
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         try:
-            self.setDetectorParameter(detectorName, 'mode', 'Auto' if isAuto else 'Manual')
+            detector = self._master.detectorsManager[detectorName]
+            mode_parameter_name = 'exposure_mode' if 'exposure_mode' in detector.parameters else 'mode'
+
+            mode_parameter = detector.parameters.get(mode_parameter_name)
+            current_value = str(getattr(mode_parameter, 'value', '')).strip() if mode_parameter else ''
+            lower_value = current_value.lower()
+
+            if 'auto' in lower_value or 'manual' in lower_value:
+                target_value = 'auto' if isAuto else 'manual'
+                if current_value and current_value[0].isupper():
+                    target_value = target_value.capitalize()
+            else:
+                target_value = 'Auto' if isAuto else 'Manual'
+
+            self.setDetectorParameter(detectorName, mode_parameter_name, target_value)
         except Exception:
             pass
 

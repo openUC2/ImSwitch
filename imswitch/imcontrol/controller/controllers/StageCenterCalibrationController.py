@@ -145,10 +145,10 @@ class StageCenterCalibrationController(ImConWidgetController):
             "started_at": datetime.now().isoformat(timespec="seconds"),
         }
 
-        try:
-            pass # self.getDetector().setExposure(exposure_time_us)
-        except AttributeError:
-            pass
+
+        
+        
+        
 
         self._task = threading.Thread(
             target=self._rasterWorker,
@@ -176,14 +176,89 @@ class StageCenterCalibrationController(ImConWidgetController):
         """Return the raster samples plus the brightest spot."""
         return self._currentResult()
 
+    @APIExport()
+    def getRecommendedScanParameters(self) -> dict:
+        """Suggest ``step_um`` based on the active detector's FOV.
+
+        The frontend uses this to populate the scan inputs adaptively (so a
+        4x objective scans coarsely, a 60x scans finely) without having to
+        plumb pixel size + camera shape through the UI.
+
+        Returns:
+            ``{success, pixelSizeUm, frameWidth, frameHeight, fovXUm,
+              fovYUm, recommendedStepUm, recommendedMaxRadiusUm}``
+        """
+        detector = self.getDetector()
+        # Detector frame shape (height, width). Fall back to common defaults.
+        frame_h, frame_w = 2048, 2048
+        try:
+            shape = getattr(detector, "shape", None)
+            if shape is None:
+                latest = detector.getLatestFrame()
+                if latest is not None and getattr(latest, "shape", None):
+                    shape = latest.shape
+            if shape is not None and len(shape) >= 2:
+                frame_h, frame_w = int(shape[0]), int(shape[1])
+        except Exception:
+            pass
+
+        # Pixel size: prefer the PixelCalibration controller, fall back to the
+        # detector's reported value.
+        pixel_size_um = None
+        try:
+            pc = None
+            if hasattr(self._master, "subControllers"):
+                pc = self._master.subControllers.get("PixelCalibration")
+            if pc is None:
+                try:
+                    pc = self._commChannel.getController("PixelCalibration")
+                except Exception:
+                    pc = None
+            if pc is not None:
+                info = pc.getPixelSizeUm(detectorName=None, objectiveId=None)
+                if info and info.get("success"):
+                    pixel_size_um = float(info.get("pixelSizeUm") or 0.0) or None
+        except Exception:
+            pixel_size_um = None
+
+        if pixel_size_um is None:
+            try:
+                pixel_size_um = float(getattr(detector, "pixelSizeUm", 0.0)) or None
+            except Exception:
+                pixel_size_um = None
+
+        # Final fallback: assume 1 um/px so the UI gets *some* defaults.
+        if not pixel_size_um or pixel_size_um <= 0:
+            pixel_size_um = 1.0
+
+        fov_x_um = pixel_size_um * frame_w
+        fov_y_um = pixel_size_um * frame_h
+
+        # Step ~ 80% of the smaller FOV side, so neighbouring grid nodes overlap
+        # slightly and we never miss the bright spot between two samples.
+        step_um = max(10.0, 0.8 * min(fov_x_um, fov_y_um))
+        # Default radius: enough to cover ~10 FOVs in each direction by default.
+        max_radius_um = max(step_um * 4.0, 5000.0)
+
+        return {
+            "success": True,
+            "pixelSizeUm": float(pixel_size_um),
+            "frameWidth": int(frame_w),
+            "frameHeight": int(frame_h),
+            "fovXUm": float(fov_x_um),
+            "fovYUm": float(fov_y_um),
+            "recommendedStepUm": float(step_um),
+            "recommendedMaxRadiusUm": float(max_radius_um),
+        }
+
     # --------------------------- raster worker -------------------------------
 
     def _rasterWorker(self, cx: float, cy: float, speed: int,
                       step_um: float, max_r: float) -> None:
         try:
             stage = self.getStage()
-            stage.move("X", cx, True, True)
-            stage.move("Y", cy, True, True)
+            stage.move(axis="X", value=cx, is_absolute=True, is_blocking=True)
+            stage.move(axis="Y", value=cy, is_absolute=True, is_blocking=True)
 
             # Build symmetric grid around the start position. Use float steps so
             # the scan matches ``max_r`` exactly when it is divisible by
@@ -200,12 +275,12 @@ class StageCenterCalibrationController(ImConWidgetController):
                 # travel short.
                 row_offsets = offsets if row_idx % 2 == 0 else offsets[::-1]
                 target_y = cy + float(dy)
-                stage.move("Y", target_y, True, True)
+                stage.move(axis="Y", value=target_y, is_absolute=True, is_blocking=True)
                 for dx in row_offsets:
                     if not self._is_running:
                         break
                     target_x = cx + float(dx)
-                    stage.move("X", target_x, True, True)
+                    stage.move(axis="X", value=target_x, is_absolute=True, is_blocking=True)
                     intensity = self._grabMeanFrame()
                     if intensity is None:
                         continue

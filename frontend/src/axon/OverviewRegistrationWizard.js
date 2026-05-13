@@ -38,6 +38,7 @@ import apiSnapOverviewImage from "../backendapi/apiSnapOverviewImage.js";
 import apiRegisterOverviewSlide from "../backendapi/apiRegisterOverviewSlide.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 import apiRefreshOverviewSlideImage from "../backendapi/apiRefreshOverviewSlideImage.js";
+import apiExperimentControllerRecaptureSlot from "../backendapi/apiExperimentControllerRecaptureSlot.js";
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView.js";
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView.js";
 
@@ -480,6 +481,34 @@ const OverviewRegistrationWizard = () => {
   };
 
   //##################################################################################
+  // Selectively recapture a single slot: backend moves the stage to the slot
+  // center and snaps a new overview frame for that slide only (task 6.1).
+  const handleRecaptureSlot = async (slotId) => {
+    dispatch(overviewRegSlice.setIsLoading(true));
+    try {
+      await apiExperimentControllerRecaptureSlot({
+        slot_id: slotId,
+        layout_data: experimentState.wellLayout,
+        layout_name: regState.layoutName,
+        camera_name: regState.cameraName,
+      });
+      // Refresh overlay so the just-captured slide image becomes visible.
+      const overlayData = await apiGetOverviewOverlayData(
+        regState.cameraName,
+        regState.layoutName,
+      );
+      dispatch(overviewRegSlice.setOverlayData(overlayData));
+    } catch (e) {
+      dispatch(
+        overviewRegSlice.setError(
+          "Recapture failed: " + (e.message || String(e)),
+        ),
+      );
+    }
+    dispatch(overviewRegSlice.setIsLoading(false));
+  };
+
+  //##################################################################################
   const getCompletedCount = () => {
     return Object.values(regState.slideStatus).filter((s) => s.complete).length;
   };
@@ -540,6 +569,20 @@ const OverviewRegistrationWizard = () => {
                   </IconButton>
                 </Box>
               )}
+              {/* Retake: move stage to this slot and snap a fresh frame */}
+              <Box sx={{ mt: 1 }}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<CameraAltIcon fontSize="small" />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRecaptureSlot(slot.slotId);
+                  }}
+                >
+                  Retake
+                </Button>
+              </Box>
             </Box>
           );
         })}

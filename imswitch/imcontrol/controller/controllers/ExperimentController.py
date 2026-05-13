@@ -3014,6 +3014,100 @@ class ExperimentController(ImConWidgetController):
         return meta
 
     @APIExport(requestType="POST")
+    def recaptureSlot(
+        self,
+        slot_id: str = "1",
+        layout_data: dict = None,
+        layout_name: str = "Heidstar 4x Histosample",
+        camera_name: str = "",
+    ):
+        """Recapture a single overview slide slot instead of all 4.
+
+        Moves the stage to the slot center (computed from the supplied
+        ``layout_data`` or the labware/Heidstar fallback), then reuses
+        :meth:`snapOverviewImage` to grab a fresh frame. This avoids having to
+        rerun the full 4-slide overview registration when only one slot needs
+        to be retaken.
+        """
+        # Resolve the layout the same way getOverviewRegistrationConfig does.
+        if layout_data is not None and isinstance(layout_data, dict) and layout_data.get("wells"):
+            layout_dict = layout_data
+            layout_name = layout_data.get("name", layout_name)
+        else:
+            layout_dict = None
+            if self.labware_manager:
+                try:
+                    lab = self.labware_manager.get(layout_name)
+                    layout_dict = self._labware_to_layout_dict(lab)
+                except KeyError:
+                    layout_dict = None
+            if layout_dict is None:
+                # Heidstar fallback (matches getOverviewRegistrationConfig).
+                layout_dict = {
+                    "name": "Heidstar 4x Histosample",
+                    "unit": "um",
+                    "width": 127000,
+                    "height": 84000,
+                    "wells": [
+                        {"x": 18400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide1"},
+                        {"x": 48400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide2"},
+                        {"x": 78400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide3"},
+                        {"x": 108400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide4"},
+                    ],
+                }
+
+        # Compute slot center from slot definitions.
+        slots = self._overview_registration.get_slot_definitions(layout_dict)
+        slot_index = None
+        try:
+            slot_index = int(slot_id) - 1  # API uses 1-based slot ids
+        except (TypeError, ValueError):
+            pass
+        if slot_index is None or slot_index < 0 or slot_index >= len(slots):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid slot_id '{slot_id}' for layout with {len(slots)} slots",
+            )
+
+        slot = slots[slot_index]
+        slot_dict = slot.model_dump() if hasattr(slot, "model_dump") else slot.dict()
+        # Slot definitions expose 4 stage corners (TL, TR, BR, BL); the center
+        # is the average of those corners. Fall back to a 'center' field if the
+        # backend ever provides one directly.
+        center_x = slot_dict.get("centerX")
+        center_y = slot_dict.get("centerY")
+        if center_x is None or center_y is None:
+            corners = (
+                slot_dict.get("stageCorners")
+                or slot_dict.get("corners")
+                or []
+            )
+            if len(corners) >= 1:
+                xs = [c.get("x", 0.0) for c in corners]
+                ys = [c.get("y", 0.0) for c in corners]
+                center_x = sum(xs) / len(xs)
+                center_y = sum(ys) / len(ys)
+            else:
+                # Last-resort: derive from the matching well in layout_dict.
+                well = layout_dict["wells"][slot_index]
+                center_x = float(well.get("x", 0.0))
+                center_y = float(well.get("y", 0.0))
+
+        # Move the stage to the slot center (blocking) before snapping.
+        if self.mStage is not None:
+            try:
+                self.mStage.move(value=float(center_x), axis="X", is_absolute=True, is_blocking=True)
+                self.mStage.move(value=float(center_y), axis="Y", is_absolute=True, is_blocking=True)
+            except Exception as e:
+                self._logger.warning(f"recaptureSlot: stage move failed: {e}")
+
+        # Re-use the existing snap logic so the snapshot is stored consistently.
+        result = self.snapOverviewImage(slot_id=str(slot_id), camera_name=camera_name)
+        result["recapturedSlot"] = slot_id
+        result["slotCenter"] = {"x": float(center_x), "y": float(center_y)}
+        return result
+
+    @APIExport(requestType="POST")
     def registerOverviewSlide(self, registration_data: dict):
         """
         Save corner picks and compute per-slide registration (homography).

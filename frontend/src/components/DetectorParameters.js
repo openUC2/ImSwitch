@@ -8,6 +8,9 @@ import {
   Tooltip,
   IconButton,
   Button,
+  FormControl,
+  InputLabel,
+  Select,
 } from "@mui/material";
 import { Camera, InfoOutlined } from "@mui/icons-material";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
@@ -85,25 +88,23 @@ export default function DetectorParameters({ hostIP, hostPort }) {
   // Sync local text fields when Redux state changes (from WebSocket)
   // but only if user is not currently editing those fields
   useEffect(() => {
-    if (!editingRef.current.exposure && detectorParams.exposure) {
-      setLocalExposure(String(detectorParams.exposure));
+    if (!editingRef.current.exposure && detectorParams.exposure !== undefined && detectorParams.exposure !== null) {
+      setLocalExposure(Number(detectorParams.exposure).toFixed(1));
     }
-    if (!editingRef.current.gain && detectorParams.gain) {
-      setLocalGain(String(detectorParams.gain));
+    if (!editingRef.current.gain && detectorParams.gain !== undefined && detectorParams.gain !== null) {
+      setLocalGain(String(Math.round(Number(detectorParams.gain))));
     }
-    if (!editingRef.current.blacklevel && detectorParams.blacklevel) {
-      setLocalBlacklevel(String(detectorParams.blacklevel));
+    if (!editingRef.current.blacklevel && detectorParams.blacklevel !== undefined && detectorParams.blacklevel !== null) {
+      setLocalBlacklevel(String(Math.round(Number(detectorParams.blacklevel))));
     }
   }, [detectorParams.exposure, detectorParams.gain, detectorParams.blacklevel]);
 
-  // Commit a numeric field to the backend.
-  // Called on blur or Enter – NOT on every keystroke.
-  const commitField = useCallback(
+
+  // Update numeric field immediately on change
+  const handleImmediateFieldChange = useCallback(
     async (field, rawValue) => {
-      editingRef.current[field] = false;
       const value = Number(rawValue);
-      if (rawValue === "" || isNaN(value)) return; // ignore empty / non-numeric
-      // Update Redux state immediately for UI feedback
+      if (rawValue === "" || isNaN(value)) return;
       dispatch(detectorParametersSlice.updateParameter({ key: field, value }));
       try {
         switch (field) {
@@ -244,14 +245,46 @@ export default function DetectorParameters({ hostIP, hostPort }) {
             inputProps={{ inputMode: "decimal" }}
             value={localExposure}
             onChange={(e) => {
-              editingRef.current.exposure = true;
               setLocalExposure(e.target.value);
+              handleImmediateFieldChange("exposure", e.target.value);
             }}
-            onBlur={() => commitField("exposure", localExposure)}
-            onKeyDown={handleKeyDown("exposure", localExposure)}
             size="small"
-            margin="dense"
-            sx={{ width: 120 }}
+            sx={{
+              width: 130,
+              "& .MuiInputBase-root": {
+                height: 40,
+              },
+            }}
+            InputProps={{
+              endAdornment: (
+                <Box sx={{ display: "flex", flexDirection: "column", ml: 0.5 }}>
+                  <IconButton
+                    size="small"
+                    sx={{ p: 0, height: 18 }}
+                    aria-label="Increment exposure"
+                    onClick={() => {
+                      const next = Number(localExposure || 0) + 1;
+                      setLocalExposure(String(next));
+                      handleImmediateFieldChange("exposure", next);
+                    }}
+                  >
+                    <span style={{ fontSize: 14, lineHeight: 1 }}>▲</span>
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    sx={{ p: 0, height: 18 }}
+                    aria-label="Decrement exposure"
+                    onClick={() => {
+                      const next = Number(localExposure || 0) - 1;
+                      setLocalExposure(String(next));
+                      handleImmediateFieldChange("exposure", next);
+                    }}
+                  >
+                    <span style={{ fontSize: 14, lineHeight: 1 }}>▼</span>
+                  </IconButton>
+                </Box>
+              ),
+            }}
           />
         </Box>
 
@@ -261,18 +294,19 @@ export default function DetectorParameters({ hostIP, hostPort }) {
             placement="top-start"
             title="Manual: set exposure directly. Auto: camera continuously adjusts exposure. Gain is not auto-adjusted here."
           >
-            <TextField
-              label="Mode"
-              select
-              value={detectorParams.mode}
-              onChange={(e) => handleParamChange("mode", e.target.value)}
-              size="small"
-              margin="dense"
-              sx={{ width: 180 }}
-            >
-              <MenuItem value="manual">Manual</MenuItem>
-              <MenuItem value="auto">Auto</MenuItem>
-            </TextField>
+            <FormControl size="small" sx={{ width: 180, height: 40 }}>
+              <InputLabel id="detector-mode-label">Mode</InputLabel>
+              <Select
+                labelId="detector-mode-label"
+                id="detector-mode-select"
+                value={detectorParams.mode}
+                label="Mode"
+                onChange={(e) => handleParamChange("mode", e.target.value)}
+              >
+                <MenuItem value="manual">Manual</MenuItem>
+                <MenuItem value="auto">Auto</MenuItem>
+              </Select>
+            </FormControl>
           </Tooltip>
         </Box>
 
@@ -322,13 +356,45 @@ export default function DetectorParameters({ hostIP, hostPort }) {
             inputProps={{ inputMode: "decimal" }}
             value={localGain}
             onChange={(e) => {
-              editingRef.current.gain = true;
               setLocalGain(e.target.value);
+              handleImmediateFieldChange("gain", e.target.value);
             }}
-            onBlur={() => commitField("gain", localGain)}
-            onKeyDown={handleKeyDown("gain", localGain)}
             size="small"
-            margin="dense"
+            sx={{
+              "& .MuiInputBase-root": {
+                height: 40,
+              },
+            }}
+            InputProps={{
+              endAdornment: (
+                <Box sx={{ display: "flex", flexDirection: "column", ml: 0.5 }}>
+                  <IconButton
+                    size="small"
+                    sx={{ p: 0, height: 18 }}
+                    aria-label="Increment gain"
+                    onClick={() => {
+                      const next = Number(localGain || 0) + 1;
+                      setLocalGain(String(next));
+                      handleImmediateFieldChange("gain", next);
+                    }}
+                  >
+                    <span style={{ fontSize: 14, lineHeight: 1 }}>▲</span>
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    sx={{ p: 0, height: 18 }}
+                    aria-label="Decrement gain"
+                    onClick={() => {
+                      const next = Number(localGain || 0) - 1;
+                      setLocalGain(String(next));
+                      handleImmediateFieldChange("gain", next);
+                    }}
+                  >
+                    <span style={{ fontSize: 14, lineHeight: 1 }}>▼</span>
+                  </IconButton>
+                </Box>
+              ),
+            }}
           />
 
           <TextField
@@ -337,13 +403,45 @@ export default function DetectorParameters({ hostIP, hostPort }) {
             inputProps={{ inputMode: "decimal" }}
             value={localBlacklevel}
             onChange={(e) => {
-              editingRef.current.blacklevel = true;
               setLocalBlacklevel(e.target.value);
+              handleImmediateFieldChange("blacklevel", e.target.value);
             }}
-            onBlur={() => commitField("blacklevel", localBlacklevel)}
-            onKeyDown={handleKeyDown("blacklevel", localBlacklevel)}
             size="small"
-            margin="dense"
+            sx={{
+              "& .MuiInputBase-root": {
+                height: 40,
+              },
+            }}
+            InputProps={{
+              endAdornment: (
+                <Box sx={{ display: "flex", flexDirection: "column", ml: 0.5 }}>
+                  <IconButton
+                    size="small"
+                    sx={{ p: 0, height: 18 }}
+                    aria-label="Increment black level"
+                    onClick={() => {
+                      const next = Number(localBlacklevel || 0) + 1;
+                      setLocalBlacklevel(String(next));
+                      handleImmediateFieldChange("blacklevel", next);
+                    }}
+                  >
+                    <span style={{ fontSize: 14, lineHeight: 1 }}>▲</span>
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    sx={{ p: 0, height: 18 }}
+                    aria-label="Decrement black level"
+                    onClick={() => {
+                      const next = Number(localBlacklevel || 0) - 1;
+                      setLocalBlacklevel(String(next));
+                      handleImmediateFieldChange("blacklevel", next);
+                    }}
+                  >
+                    <span style={{ fontSize: 14, lineHeight: 1 }}>▼</span>
+                  </IconButton>
+                </Box>
+              ),
+            }}
           />
         </Box>
       </Box>

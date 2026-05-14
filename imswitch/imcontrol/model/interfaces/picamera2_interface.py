@@ -1045,29 +1045,6 @@ class CameraPicamera2:
 
     def getPropertyValue(self, property_name: str):
         """Get camera property by name"""
-        if property_name in ("exposure", "gain") and self.camera is not None and self.is_streaming:
-            try:
-                metadata = self.camera.capture_metadata()
-                if property_name == "exposure":
-                    exposure_us = (
-                        metadata.get("ExposureTime")
-                        or metadata.get("AeExposureTime")
-                        or metadata.get("SensorExposureTime")
-                        or self.exposure_time
-                    )
-                    self.exposure_time = exposure_us
-                    return exposure_us / 1000  # Return ms
-                gain_val = (
-                    metadata.get("AnalogueGain")
-                    or metadata.get("AeGain")
-                    or metadata.get("DigitalGain")
-                    or self.gain
-                )
-                self.gain = gain_val
-                return gain_val
-            except Exception as e:
-                self.__logger.debug(f"Failed to read live {property_name} metadata: {e}")
-
         property_map = {
             "exposure": lambda: self.exposure_time / 1000,  # Convert to ms
             "gain": lambda: self.gain,

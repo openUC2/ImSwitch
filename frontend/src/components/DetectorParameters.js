@@ -7,7 +7,6 @@ import {
   Typography,
   Tooltip,
   IconButton,
-  Stack,
   Button,
 } from "@mui/material";
 import { Camera, InfoOutlined } from "@mui/icons-material";
@@ -227,92 +226,127 @@ export default function DetectorParameters({ hostIP, hostPort }) {
         </Tooltip>
       </Box>
 
-      <TextField
-        label="Exposure"
-        type="text"
-        inputProps={{ inputMode: "decimal" }}
-        value={localExposure}
-        onChange={(e) => {
-          editingRef.current.exposure = true;
-          setLocalExposure(e.target.value);
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: {
+            xs: "1fr",
+            md: "130px 190px minmax(120px, 1fr)",
+          },
+          gap: 1,
+          alignItems: "end",
         }}
-        onBlur={() => commitField("exposure", localExposure)}
-        onKeyDown={handleKeyDown("exposure", localExposure)}
-        size="small"
-        margin="dense"
-      />
-      <TextField
-        label="Gain"
-        type="text"
-        inputProps={{ inputMode: "decimal" }}
-        value={localGain}
-        onChange={(e) => {
-          editingRef.current.gain = true;
-          setLocalGain(e.target.value);
-        }}
-        onBlur={() => commitField("gain", localGain)}
-        onKeyDown={handleKeyDown("gain", localGain)}
-        size="small"
-        margin="dense"
-      />
+      >
+        <Box>
+          <TextField
+            label="Exposure"
+            type="text"
+            inputProps={{ inputMode: "decimal" }}
+            value={localExposure}
+            onChange={(e) => {
+              editingRef.current.exposure = true;
+              setLocalExposure(e.target.value);
+            }}
+            onBlur={() => commitField("exposure", localExposure)}
+            onKeyDown={handleKeyDown("exposure", localExposure)}
+            size="small"
+            margin="dense"
+            sx={{ width: 120 }}
+          />
+        </Box>
 
-      <TextField
-        label="Black Level"
-        type="text"
-        inputProps={{ inputMode: "decimal" }}
-        value={localBlacklevel}
-        onChange={(e) => {
-          editingRef.current.blacklevel = true;
-          setLocalBlacklevel(e.target.value);
-        }}
-        onBlur={() => commitField("blacklevel", localBlacklevel)}
-        onKeyDown={handleKeyDown("blacklevel", localBlacklevel)}
-        size="small"
-        margin="dense"
-      />
-      <Stack spacing={0.5}>
-        <TextField
-          select
-          label="Exposure mode"
-          value={detectorParams.mode}
-          onChange={(e) => handleParamChange("mode", e.target.value)}
-          size="small"
-          margin="dense"
-          sx={{ width: 220 }}
-          helperText="Auto changes exposure only. Gain stays manual unless you change it separately."
-        >
-          <MenuItem value="manual">Manual</MenuItem>
-          <MenuItem value="auto">Auto</MenuItem>
-        </TextField>
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: 1,
-            flexWrap: "wrap",
-          }}
-        >
+        <Box>
+          <Tooltip
+            arrow
+            placement="top-start"
+            title="Manual: set exposure directly. Auto: camera continuously adjusts exposure. Gain is not auto-adjusted here."
+          >
+            <TextField
+              label="Mode"
+              select
+              value={detectorParams.mode}
+              onChange={(e) => handleParamChange("mode", e.target.value)}
+              size="small"
+              margin="dense"
+              sx={{ width: 180 }}
+            >
+              <MenuItem value="manual">Manual</MenuItem>
+              <MenuItem value="auto">Auto</MenuItem>
+            </TextField>
+          </Tooltip>
+        </Box>
+
+        <Box>
           <Tooltip
             title="Run a single auto-exposure pass and then return to manual mode."
             arrow
           >
-            <span>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={handleAutoExposureOnce}
-                disabled={detectorParams.mode !== "manual" || autoOncePending}
-              >
-                Auto once
-              </Button>
-            </span>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={handleAutoExposureOnce}
+              disabled={detectorParams.mode !== "manual" || autoOncePending}
+              sx={{
+                whiteSpace: "nowrap",
+                height: 40,
+                minHeight: 40,
+                width: 130,
+              }}
+            >
+              Auto once
+            </Button>
           </Tooltip>
-          <Typography variant="caption" color="text.secondary">
-            Use this when you want one quick auto adjustment without staying in
-            auto mode.
-          </Typography>
         </Box>
-      </Stack>
+      </Box>
+
+      <Box sx={{ pt: 0.5 }}>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ fontWeight: 500 }}
+        >
+          Advanced parameters
+        </Typography>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr", md: "160px 160px" },
+            gap: 1,
+            alignItems: "end",
+            mt: 0.25,
+          }}
+        >
+          <TextField
+            label="Gain"
+            type="text"
+            inputProps={{ inputMode: "decimal" }}
+            value={localGain}
+            onChange={(e) => {
+              editingRef.current.gain = true;
+              setLocalGain(e.target.value);
+            }}
+            onBlur={() => commitField("gain", localGain)}
+            onKeyDown={handleKeyDown("gain", localGain)}
+            size="small"
+            margin="dense"
+          />
+
+          <TextField
+            label="Black Level"
+            type="text"
+            inputProps={{ inputMode: "decimal" }}
+            value={localBlacklevel}
+            onChange={(e) => {
+              editingRef.current.blacklevel = true;
+              setLocalBlacklevel(e.target.value);
+            }}
+            onBlur={() => commitField("blacklevel", localBlacklevel)}
+            onKeyDown={handleKeyDown("blacklevel", localBlacklevel)}
+            size="small"
+            margin="dense"
+          />
+        </Box>
+      </Box>
     </Box>
   );
 }

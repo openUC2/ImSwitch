@@ -708,6 +708,28 @@ class SettingsController(ImConWidgetController):
         be passed to other detector-related functions. """
         return self._master.detectorsManager.getAllDeviceNames()
 
+    @APIExport()
+    def debugGetCameraMetadata(self) -> dict:
+        """ Returns raw camera metadata for debugging auto-exposure behaviour.
+        Call this while the camera is streaming and in Auto mode to see which
+        metadata fields actually change when the camera adjusts. """
+        try:
+            detector = self._master.detectorsManager.getCurrentDetector()
+            camera = detector._camera
+            if camera is None or not getattr(camera, 'is_streaming', False):
+                return {"error": "Camera not streaming"}
+            metadata = camera.camera.capture_metadata()
+            # Convert all values to basic Python types for JSON serialisation
+            result = {}
+            for k, v in metadata.items():
+                try:
+                    result[k] = float(v) if not isinstance(v, (str, bool, list, dict)) else v
+                except Exception:
+                    result[k] = str(v)
+            return result
+        except Exception as e:
+            return {"error": str(e)}
+
     @APIExport(runOnUIThread=True)
     def setDetectorBinning(self, detectorName: str, binning: int) -> None:
         """ Sets binning value for the specified detector. """

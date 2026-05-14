@@ -42,6 +42,7 @@ class SettingsController(ImConWidgetController):
         self._last_detector_params_snapshot = None
         self._detector_params_emit_interval_ms = 1000
         self._detector_params_timer = Timer()
+        self._detector_once_reset_timer = None
         self._detector_params_timer.timeout.connect(self._emit_detector_parameters_if_changed)
 
         if not self._master.detectorsManager.hasDevices():
@@ -708,21 +709,6 @@ class SettingsController(ImConWidgetController):
         be passed to other detector-related functions. """
         return self._master.detectorsManager.getAllDeviceNames()
 
-    @APIExport()
-    def debugGetCameraMetadata(self) -> dict:
-        """ Returns live camera parameter values for debugging auto-exposure behaviour. """
-        try:
-            detector = self._master.detectorsManager.getCurrentDetector()
-            result = {}
-            for name in ('exposure', 'gain', 'exposure_mode'):
-                try:
-                    result[name] = detector.getParameter(name)
-                except Exception as e:
-                    result[name] = f"error: {e}"
-            return result
-        except Exception as e:
-            return {"error": str(e)}
-
     @APIExport(runOnUIThread=True)
     def setDetectorBinning(self, detectorName: str, binning: int) -> None:
         """ Sets binning value for the specified detector. """
@@ -793,6 +779,49 @@ class SettingsController(ImConWidgetController):
                 target_value = 'Auto' if isAuto else 'Manual'
 
             self.setDetectorParameter(detectorName, mode_parameter_name, target_value)
+        except Exception:
+            pass
+
+    @APIExport(runOnUIThread=True)
+    def setDetectorExposureOnce(self, detectorName: str = None, resetDelayMs: int = 1500) -> None:
+        """Runs a single auto-exposure pass and then returns the detector to manual mode.
+
+        The UI keeps showing the detector as manual; the button is meant as a
+        temporary exposure correction action rather than a persistent mode.
+        """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+
+        try:
+            detector = self._master.detectorsManager[detectorName]
+            mode_parameter_name = 'exposure_mode' if 'exposure_mode' in detector.parameters else 'mode'
+
+            self._master.detectorsManager.execOn(
+                detectorName,
+                lambda c: c.setParameter(mode_parameter_name, 'once'),
+            )
+
+            if self._detector_once_reset_timer is not None:
+                try:
+                    self._detector_once_reset_timer.stop()
+                except Exception:
+                    pass
+
+            def _restore_manual():
+                try:
+                    self._master.detectorsManager.execOn(
+                        detectorName,
+                        lambda c: c.setParameter(mode_parameter_name, 'manual'),
+                    )
+                    self.updateParamsFromDetector(detector=detector)
+                    self.updateSharedAttrs()
+                    self._emit_detector_parameters_if_changed(force=True)
+                except Exception:
+                    pass
+
+            self._detector_once_reset_timer = Timer(singleShot=True)
+            self._detector_once_reset_timer.timeout.connect(_restore_manual)
+            self._detector_once_reset_timer.start(resetDelayMs)
         except Exception:
             pass
 

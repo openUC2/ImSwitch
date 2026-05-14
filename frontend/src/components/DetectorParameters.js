@@ -3,12 +3,14 @@ import { useDispatch, useSelector } from "react-redux";
 import {
   TextField,
   MenuItem,
-  FormControlLabel,
-  Switch,
   Box,
   Typography,
+  Tooltip,
+  IconButton,
+  Stack,
+  Button,
 } from "@mui/material";
-import { Camera } from "@mui/icons-material";
+import { Camera, InfoOutlined } from "@mui/icons-material";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
 
 /**
@@ -35,6 +37,7 @@ export default function DetectorParameters({ hostIP, hostPort }) {
   const [localExposure, setLocalExposure] = useState("");
   const [localGain, setLocalGain] = useState("");
   const [localBlacklevel, setLocalBlacklevel] = useState("");
+  const [autoOncePending, setAutoOncePending] = useState(false);
 
   // Track whether a field is currently being edited so we don't
   // overwrite the user's in-progress typing with a WebSocket update.
@@ -162,6 +165,19 @@ export default function DetectorParameters({ hostIP, hostPort }) {
     }
   };
 
+  const handleAutoExposureOnce = useCallback(async () => {
+    setAutoOncePending(true);
+    try {
+      await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorExposureOnce`,
+      );
+    } catch (error) {
+      console.error("Error running one-shot exposure auto:", error);
+    } finally {
+      setAutoOncePending(false);
+    }
+  }, [hostIP, hostPort]);
+
   // Helper: handle Enter key to commit
   const handleKeyDown = (field, localValue) => (e) => {
     if (e.key === "Enter") {
@@ -185,7 +201,7 @@ export default function DetectorParameters({ hostIP, hostPort }) {
       <Box
         component="legend"
         sx={{
-          display: "flex",
+          display: "inline-flex",
           alignItems: "center",
           gap: 0.5,
           px: 1,
@@ -195,6 +211,20 @@ export default function DetectorParameters({ hostIP, hostPort }) {
         <Typography variant="subtitle1" sx={{ fontWeight: "medium" }}>
           Detector Parameters
         </Typography>
+        <Tooltip
+          arrow
+          title={
+            <Box sx={{ whiteSpace: "pre-line" }}>
+              {
+                "Exposure mode controls exposure only on this camera.\n\nManual: you set exposure directly.\nAuto: the camera continuously adapts exposure time.\nAuto once: the camera makes a single exposure adjustment and then returns to manual."
+              }
+            </Box>
+          }
+        >
+          <IconButton size="small" sx={{ p: 0.25, color: "text.disabled" }}>
+            <InfoOutlined fontSize="inherit" />
+          </IconButton>
+        </Tooltip>
       </Box>
 
       <TextField
@@ -240,18 +270,49 @@ export default function DetectorParameters({ hostIP, hostPort }) {
         size="small"
         margin="dense"
       />
-      <TextField
-        select
-        label="Mode"
-        value={detectorParams.mode}
-        onChange={(e) => handleParamChange("mode", e.target.value)}
-        size="small"
-        margin="dense"
-        sx={{ width: 120 }}
-      >
-        <MenuItem value="manual">Manual</MenuItem>
-        <MenuItem value="auto">Auto</MenuItem>
-      </TextField>
+      <Stack spacing={0.5}>
+        <TextField
+          select
+          label="Exposure mode"
+          value={detectorParams.mode}
+          onChange={(e) => handleParamChange("mode", e.target.value)}
+          size="small"
+          margin="dense"
+          sx={{ width: 220 }}
+          helperText="Auto changes exposure only. Gain stays manual unless you change it separately."
+        >
+          <MenuItem value="manual">Manual</MenuItem>
+          <MenuItem value="auto">Auto</MenuItem>
+        </TextField>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            flexWrap: "wrap",
+          }}
+        >
+          <Tooltip
+            title="Run a single auto-exposure pass and then return to manual mode."
+            arrow
+          >
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={handleAutoExposureOnce}
+                disabled={detectorParams.mode !== "manual" || autoOncePending}
+              >
+                Auto once
+              </Button>
+            </span>
+          </Tooltip>
+          <Typography variant="caption" color="text.secondary">
+            Use this when you want one quick auto adjustment without staying in
+            auto mode.
+          </Typography>
+        </Box>
+      </Stack>
     </Box>
   );
 }

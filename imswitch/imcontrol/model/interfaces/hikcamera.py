@@ -838,8 +838,8 @@ class CameraHIK:
             stValue = MVCC_ENUMVALUE()
             ret = self.camera.MV_CC_GetEnumValue("ExposureAuto", stValue)
             if ret == 0:
-                # 0 = Off (manual), 1 = Once, 2 = Continuous (auto)
-                mode_map = {0: 'manual', 1: 'single', 2: 'auto'}
+                # 0 = Off (manual), 1 = Once (treated as a transient action in the UI), 2 = Continuous (auto)
+                mode_map = {0: 'manual', 1: 'manual', 2: 'auto'}
                 return mode_map.get(stValue.nCurValue, 'manual')
             return 'manual'
         elif property_name == "blacklevel":

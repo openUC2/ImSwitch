@@ -827,32 +827,46 @@ class CameraHIK:
         return property_value
 
     def getPropertyValue(self, property_name):
-        stValue = MVCC_ENUMVALUE()
         if property_name == "gain":
-            self.camera.MV_CC_GetEnumValue("Gain", stValue)
+            result = self.get_gain()
+            return result[0] if result and result[0] is not None else False
         elif property_name == "exposure":
-            self.camera.MV_CC_GetEnumValue("ExposureTime", stValue)
-        elif property_name == "frame_number":
-            self.camera.MV_CC_GetEnumValue("FrameNum", stValue)
+            result = self.get_exposuretime()
+            # SDK returns µs, UI/manager expects ms
+            return result[0] / 1000.0 if result and result[0] is not None else False
         elif property_name == "exposure_mode":
-            self.camera.MV_CC_GetEnumValue("ExposureAuto", stValue)
+            stValue = MVCC_ENUMVALUE()
+            ret = self.camera.MV_CC_GetEnumValue("ExposureAuto", stValue)
+            if ret == 0:
+                # 0 = Off (manual), 1 = Once, 2 = Continuous (auto)
+                mode_map = {0: 'manual', 1: 'single', 2: 'auto'}
+                return mode_map.get(stValue.nCurValue, 'manual')
+            return 'manual'
         elif property_name == "blacklevel":
+            stValue = MVCC_ENUMVALUE()
             self.camera.MV_CC_GetEnumValue("BlackLevel", stValue)
-        elif property_name == "image_width":
-            self.camera.MV_CC_GetEnumValue("Width", stValue)
-        elif property_name == "image_height":
-            self.camera.MV_CC_GetEnumValue("Height", stValue)
+            return stValue.nCurValue
+        elif property_name in ("image_width", "Width"):
+            stWidth = MVCC_INTVALUE()
+            self.camera.MV_CC_GetIntValue("Width", stWidth)
+            return stWidth.nCurValue
+        elif property_name in ("image_height", "Height"):
+            stHeight = MVCC_INTVALUE()
+            self.camera.MV_CC_GetIntValue("Height", stHeight)
+            return stHeight.nCurValue
+        elif property_name == "frame_number":
+            stValue = MVCC_ENUMVALUE()
+            self.camera.MV_CC_GetEnumValue("FrameNum", stValue)
+            return stValue.nCurValue
         elif property_name == "roi_size":
-            property_value = self.roi_size
+            return self.roi_size
         elif property_name == "frame_Rate":
-            property_value = self.frame_rate
+            return self.frame_rate
         elif property_name == "trigger_source":
-            property_value = self.trigger_source
+            return self.trigger_source
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
             return False
-        property_value = stValue.nCurValue
-        return property_value
 
     def setTriggerSource(self, trigger_source):
         """

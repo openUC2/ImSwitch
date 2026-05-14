@@ -249,6 +249,7 @@ export default function DetectorParameters({ hostIP, hostPort }) {
               handleImmediateFieldChange("exposure", e.target.value);
             }}
             size="small"
+            disabled={detectorParams.mode === "auto"}
             sx={{
               width: 130,
               "& .MuiInputBase-root": {
@@ -263,10 +264,12 @@ export default function DetectorParameters({ hostIP, hostPort }) {
                     sx={{ p: 0, height: 18 }}
                     aria-label="Increment exposure"
                     onClick={() => {
+                      if (detectorParams.mode === "auto") return;
                       const next = Number(localExposure || 0) + 1;
                       setLocalExposure(String(next));
                       handleImmediateFieldChange("exposure", next);
                     }}
+                    disabled={detectorParams.mode === "auto"}
                   >
                     <span style={{ fontSize: 14, lineHeight: 1 }}>▲</span>
                   </IconButton>
@@ -275,10 +278,12 @@ export default function DetectorParameters({ hostIP, hostPort }) {
                     sx={{ p: 0, height: 18 }}
                     aria-label="Decrement exposure"
                     onClick={() => {
+                      if (detectorParams.mode === "auto") return;
                       const next = Number(localExposure || 0) - 1;
                       setLocalExposure(String(next));
                       handleImmediateFieldChange("exposure", next);
                     }}
+                    disabled={detectorParams.mode === "auto"}
                   >
                     <span style={{ fontSize: 14, lineHeight: 1 }}>▼</span>
                   </IconButton>

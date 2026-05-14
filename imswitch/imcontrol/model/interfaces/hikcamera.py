@@ -860,7 +860,7 @@ class CameraHIK:
             return stValue.nCurValue
         elif property_name == "roi_size":
             return self.roi_size
-        elif property_name == "frame_Rate":
+        elif property_name == "frame_rate":
             return self.frame_rate
         elif property_name == "trigger_source":
             return self.trigger_source

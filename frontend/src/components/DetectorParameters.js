@@ -88,17 +88,28 @@ export default function DetectorParameters({ hostIP, hostPort }) {
   // Sync local text fields when Redux state changes (from WebSocket)
   // but only if user is not currently editing those fields
   useEffect(() => {
-    if (!editingRef.current.exposure && detectorParams.exposure !== undefined && detectorParams.exposure !== null) {
+    if (
+      !editingRef.current.exposure &&
+      detectorParams.exposure !== undefined &&
+      detectorParams.exposure !== null
+    ) {
       setLocalExposure(Number(detectorParams.exposure).toFixed(1));
     }
-    if (!editingRef.current.gain && detectorParams.gain !== undefined && detectorParams.gain !== null) {
+    if (
+      !editingRef.current.gain &&
+      detectorParams.gain !== undefined &&
+      detectorParams.gain !== null
+    ) {
       setLocalGain(String(Math.round(Number(detectorParams.gain))));
     }
-    if (!editingRef.current.blacklevel && detectorParams.blacklevel !== undefined && detectorParams.blacklevel !== null) {
+    if (
+      !editingRef.current.blacklevel &&
+      detectorParams.blacklevel !== undefined &&
+      detectorParams.blacklevel !== null
+    ) {
       setLocalBlacklevel(String(Math.round(Number(detectorParams.blacklevel))));
     }
   }, [detectorParams.exposure, detectorParams.gain, detectorParams.blacklevel]);
-
 
   // Update numeric field immediately on change
   const handleImmediateFieldChange = useCallback(
@@ -178,10 +189,23 @@ export default function DetectorParameters({ hostIP, hostPort }) {
     }
   }, [hostIP, hostPort]);
 
-  // Helper: handle Enter key to commit
-  const handleKeyDown = (field, localValue) => (e) => {
+  const beginEditing = (field) => {
+    editingRef.current[field] = true;
+  };
+
+  const endEditing = (field) => {
+    editingRef.current[field] = false;
+  };
+
+  const handleNumericFieldChange = (field, setValue) => (e) => {
+    beginEditing(field);
+    setValue(e.target.value);
+    handleImmediateFieldChange(field, e.target.value);
+  };
+
+  const handleNumericFieldKeyDown = (e) => {
     if (e.key === "Enter") {
-      e.target.blur(); // triggers onBlur → commitField
+      e.currentTarget.blur();
     }
   };
 
@@ -244,10 +268,10 @@ export default function DetectorParameters({ hostIP, hostPort }) {
             type="text"
             inputProps={{ inputMode: "decimal" }}
             value={localExposure}
-            onChange={(e) => {
-              setLocalExposure(e.target.value);
-              handleImmediateFieldChange("exposure", e.target.value);
-            }}
+            onFocus={() => beginEditing("exposure")}
+            onChange={handleNumericFieldChange("exposure", setLocalExposure)}
+            onBlur={() => endEditing("exposure")}
+            onKeyDown={handleNumericFieldKeyDown}
             size="small"
             disabled={detectorParams.mode === "auto"}
             sx={{
@@ -360,10 +384,10 @@ export default function DetectorParameters({ hostIP, hostPort }) {
             type="text"
             inputProps={{ inputMode: "decimal" }}
             value={localGain}
-            onChange={(e) => {
-              setLocalGain(e.target.value);
-              handleImmediateFieldChange("gain", e.target.value);
-            }}
+            onFocus={() => beginEditing("gain")}
+            onChange={handleNumericFieldChange("gain", setLocalGain)}
+            onBlur={() => endEditing("gain")}
+            onKeyDown={handleNumericFieldKeyDown}
             size="small"
             sx={{
               "& .MuiInputBase-root": {
@@ -407,10 +431,13 @@ export default function DetectorParameters({ hostIP, hostPort }) {
             type="text"
             inputProps={{ inputMode: "decimal" }}
             value={localBlacklevel}
-            onChange={(e) => {
-              setLocalBlacklevel(e.target.value);
-              handleImmediateFieldChange("blacklevel", e.target.value);
-            }}
+            onFocus={() => beginEditing("blacklevel")}
+            onChange={handleNumericFieldChange(
+              "blacklevel",
+              setLocalBlacklevel,
+            )}
+            onBlur={() => endEditing("blacklevel")}
+            onKeyDown={handleNumericFieldKeyDown}
             size="small"
             sx={{
               "& .MuiInputBase-root": {

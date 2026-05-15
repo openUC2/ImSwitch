@@ -829,11 +829,11 @@ class CameraHIK:
     def getPropertyValue(self, property_name):
         if property_name == "gain":
             result = self.get_gain()
-            return result[0] if result and result[0] is not None else False
+            return result[0] if result and result[0] is not None else None
         elif property_name == "exposure":
             result = self.get_exposuretime()
             # SDK returns µs, UI/manager expects ms
-            return result[0] / 1000.0 if result and result[0] is not None else False
+            return result[0] / 1000.0 if result and result[0] is not None else None
         elif property_name == "exposure_mode":
             stValue = MVCC_ENUMVALUE()
             ret = self.camera.MV_CC_GetEnumValue("ExposureAuto", stValue)
@@ -866,7 +866,7 @@ class CameraHIK:
             return self.trigger_source
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
-            return False
+            return None
 
     def setTriggerSource(self, trigger_source):
         """

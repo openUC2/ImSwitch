@@ -500,13 +500,16 @@ class ServerThread(threading.Thread):
             print("Server is stopping...")
 class ImSwitchServer(Worker):
 
-    def __init__(self, api, uiapi, setupInfo):
+    def __init__(self, api, uiapi, setupInfo, master=None):
         super().__init__()
 
         self._api = api
         self._uiapi = uiapi
+        self._setupInfo = setupInfo
+        self._master = master
         self._paused = False
         self._canceled = False
+        self._plugin_manager = None
 
         self.__logger =  initLogger(self)
 
@@ -520,6 +523,31 @@ class ImSwitchServer(Worker):
         # Note(ethanjli): all FastAPI path operations must be added before we call `include_router`!
         app.include_router(api_router)
 
+        # ── v2 plugin system ────────────────────────────────────────────
+        # Discover plugins from (a) the "imswitch.plugins" entry-point
+        # group and (b) $IMSWITCH_PLUGIN_DIR. The PluginManager mounts
+        # each plugin's APIRouter at /plugin/<name>/api and serves its
+        # built React bundle at /plugin/<name>/ui. It also appends a
+        # v1-shaped manifest record to ``_ui_manifests`` so the existing
+        # /api/plugins endpoint keeps working unchanged.
+        try:
+            from imswitch.plugin_manager import PluginManager
+            self._plugin_manager = PluginManager(
+                master              = self._master,
+                setup_info          = self._setupInfo,
+                socket_app          = socket_app,
+                legacy_manifest_sink= _ui_manifests,
+            )
+            self._plugin_manager.discover()
+            self._plugin_manager.attach_to_app(app)
+            self.__logger.info(
+                "v2 plugins: loaded %d, errors %d",
+                len(self._plugin_manager._plugins),
+                len(self._plugin_manager.errors()),
+            )
+        except Exception:
+            self.__logger.exception("PluginManager failed to initialise")
+
         # To operate remotely we need to provide https
         # openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365
         # uvicorn your_fastapi_app:app --host 0.0.0.0 --port 8001 --ssl-keyfile=./key.pem --ssl-certfile=./cert.pem
@@ -532,6 +560,11 @@ class ImSwitchServer(Worker):
     def stop(self):
         self.__logger.debug("Stopping ImSwitchServer")
         try:
+            if self._plugin_manager is not None:
+                try:
+                    self._plugin_manager.shutdown()
+                except Exception:
+                    self.__logger.exception("plugin manager shutdown failed")
             self.server_thread.stop()
             #self.server_thread.join()
         except Exception as e:

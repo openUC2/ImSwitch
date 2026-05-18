@@ -357,9 +357,18 @@ function App() {
 
   /*
   PLUGIN LOADING from ImSwitch
+  Supports both:
+    - v1 manifest fields { remote, scope, exposed } where `remote` is a
+      path appended to `${hostIP}:${apiPort}/imswitch/api`.
+    - v2 manifest fields { remote_entry, scope, exposed } where
+      `remote_entry` is an absolute path served by the same ImSwitch
+      host (mounted by the v2 PluginManager under /plugin/<name>/ui/...).
   */
-  function loadRemote({ remote, scope, exposed }) {
-    const url = `${hostIP}:${apiPort}/imswitch/api${remote}`;
+  function loadRemote({ remote, remote_entry, scope, exposed }) {
+    // Prefer the v2 absolute path when present; fall back to legacy v1.
+    const url = remote_entry
+      ? `${hostIP}:${apiPort}${remote_entry}`
+      : `${hostIP}:${apiPort}/imswitch/api${remote}`;
 
     return new Promise((resolve, reject) => {
       if (!document.querySelector(`script[data-mf="${scope}"]`)) {

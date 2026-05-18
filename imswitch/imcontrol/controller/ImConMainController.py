@@ -256,7 +256,9 @@ class ImConMainController(MainController):
 
 
         self.__logger.debug("Start ImSwitch Server")
-        self._serverWorker = ImSwitchServer(self.__api, self.__apiui, setupInfo)
+        self._serverWorker = ImSwitchServer(
+            self.__api, self.__apiui, setupInfo, master=self.__masterController,
+        )
         self._thread = threading.Thread(target=self._serverWorker.run)
         self._thread.start()
 

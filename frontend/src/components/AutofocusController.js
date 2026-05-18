@@ -1,12 +1,12 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { 
-  Paper, 
-  Grid, 
-  TextField, 
-  Button, 
-  FormControl, 
-  InputLabel, 
-  Select, 
+import {
+  Paper,
+  Grid,
+  TextField,
+  Button,
+  FormControl,
+  InputLabel,
+  Select,
   MenuItem,
   Typography,
   Box,
@@ -14,8 +14,12 @@ import {
   Switch,
   FormControlLabel,
   Alert,
-  CircularProgress
+  CircularProgress,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
 } from "@mui/material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import Plot from "react-plotly.js";
 import { useDispatch, useSelector } from "react-redux";
 import * as autofocusSlice from "../state/slices/AutofocusSlice.js";
@@ -25,10 +29,9 @@ import apiAutofocusControllerStartLiveMonitoring from "../backendapi/apiAutofocu
 import apiAutofocusControllerStopLiveMonitoring from "../backendapi/apiAutofocusControllerStopLiveMonitoring.js";
 import apiAutofocusControllerSetLiveMonitoringParameters from "../backendapi/apiAutofocusControllerSetLiveMonitoringParameters.js";
 
-
 const AutofocusController = ({ hostIP, hostPort }) => {
   const dispatch = useDispatch();
-  
+
   // Local state for backend sync and status
   const [backendState, setBackendState] = useState(null);
   const [currentZ, setCurrentZ] = useState(null);
@@ -37,13 +40,13 @@ const AutofocusController = ({ hostIP, hostPort }) => {
   const [isStopping, setIsStopping] = useState(false);
   // Rolling window of the last 20 live focus measurements
   const [focusHistory, setFocusHistory] = useState([]);
-  
+
   // Access autofocus state from Redux
   const autofocusState = useSelector(autofocusSlice.getAutofocusState);
-  const { 
-    rangeZ, 
-    resolutionZ, 
-    defocusZ, 
+  const {
+    rangeZ,
+    resolutionZ,
+    defocusZ,
     illuminationChannel,
     tSettle,
     isDebug,
@@ -57,39 +60,45 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     hillClimbingMinStep,
     hillClimbingStepReduction,
     hillClimbingMaxIterations,
-    isRunning, 
-    plotData, 
+    isRunning,
+    plotData,
     showPlot,
     isLiveMonitoring,
     liveFocusValue,
     liveMonitoringPeriod,
     liveMonitoringMethod,
-    liveMonitoringCropsize
+    liveMonitoringCropsize,
   } = autofocusState;
-  
+
   // Access parameter range state for available illumination sources
-  const parameterRangeState = useSelector(parameterRangeSlice.getParameterRangeState);
-  const connectionSettingsState = useSelector(connectionSettingsSlice.getConnectionSettingsState);
-  
+  const parameterRangeState = useSelector(
+    parameterRangeSlice.getParameterRangeState,
+  );
+  const connectionSettingsState = useSelector(
+    connectionSettingsSlice.getConnectionSettingsState,
+  );
+
   // Get available illumination sources and find currently active ones
   // Ensure it's always an array
-  const availableIlluminations = Array.isArray(parameterRangeState.illuSources) 
-    ? parameterRangeState.illuSources 
+  const availableIlluminations = Array.isArray(parameterRangeState.illuSources)
+    ? parameterRangeState.illuSources
     : [];
-  
+
   // Function to get currently active illumination (first one that's on)
   const getCurrentlyActiveIllumination = async () => {
     if (availableIlluminations.length === 0) return null;
-    
+
     const ip = connectionSettingsState.ip || hostIP;
     const port = connectionSettingsState.apiPort || hostPort;
-    
+
     if (!ip || !port) return availableIlluminations[0]; // Fallback to first available
-    
+
     try {
       for (const illumination of availableIlluminations) {
         const encodedName = encodeURIComponent(illumination);
-        const response = await fetch(`${ip}:${port}/imswitch/api/LaserController/getLaserValue?laserName=${encodedName}`);
+        const response = await fetch(
+          `${ip}:${port}/imswitch/api/LaserController/getLaserValue?laserName=${encodedName}`,
+        );
         if (response.ok) {
           const value = await response.json();
           if (value > 0) {
@@ -103,13 +112,13 @@ const AutofocusController = ({ hostIP, hostPort }) => {
       return availableIlluminations[0]; // Fallback to first available
     }
   };
-  
+
   // Set default illumination channel when component mounts or illumination sources change
   useEffect(() => {
     if (availableIlluminations.length > 0 && !illuminationChannel) {
       // If selected illumination is not available, find currently active one
       if (!availableIlluminations.includes(illuminationChannel)) {
-        getCurrentlyActiveIllumination().then(activeIllumination => {
+        getCurrentlyActiveIllumination().then((activeIllumination) => {
           if (activeIllumination) {
             dispatch(autofocusSlice.setIlluminationChannel(activeIllumination));
           }
@@ -121,13 +130,15 @@ const AutofocusController = ({ hostIP, hostPort }) => {
   // Fetch backend autofocus status on mount and periodically
   const fetchAutofocusStatus = useCallback(async () => {
     try {
-      const response = await fetch(`${hostIP}:${hostPort}/imswitch/api/AutofocusController/getAutofocusStatus`);
+      const response = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/AutofocusController/getAutofocusStatus`,
+      );
       if (response.ok) {
         const status = await response.json();
         setBackendState(status.state);
         setCurrentZ(status.currentZ);
         setPositionError(status.positionError);
-        
+
         // Sync running state with backend
         if (status.isRunning !== isRunning) {
           dispatch(autofocusSlice.setIsRunning(status.isRunning));
@@ -158,7 +169,10 @@ const AutofocusController = ({ hostIP, hostPort }) => {
   useEffect(() => {
     if (liveFocusValue && liveFocusValue.focus_value !== undefined) {
       setFocusHistory((prev) => {
-        const next = [...prev, { t: liveFocusValue.timestamp, v: liveFocusValue.focus_value }];
+        const next = [
+          ...prev,
+          { t: liveFocusValue.timestamp, v: liveFocusValue.focus_value },
+        ];
         return next.slice(-20);
       });
     }
@@ -170,32 +184,32 @@ const AutofocusController = ({ hostIP, hostPort }) => {
       console.warn("Autofocus already running or starting");
       return;
     }
-    
+
     setIsStarting(true);
     setPositionError(null);
-    
+
     try {
       // Use selected illumination channel or fallback to currently active one
       const selectedChannel = illuminationChannel || availableIlluminations[0];
-      
+
       let url;
       if (autofocusMode === "hillClimbing") {
         // Hill-climbing autofocus
         url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/autoFocusHillClimbing?initial_step=${hillClimbingInitialStep}&min_step=${hillClimbingMinStep}&step_reduction=${hillClimbingStepReduction}&max_iterations=${hillClimbingMaxIterations}&tSettle=${tSettle}&nCropsize=${nCropsize}&focusAlgorithm=${focusAlgorithm}&nGauss=${nGauss}&static_offset=${staticOffset}`;
       } else {
         // Standard Z-sweep autofocus
-        url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/autoFocus?rangez=${rangeZ}&resolutionz=${resolutionZ}&defocusz=${defocusZ}&illuminationChannel=${encodeURIComponent(selectedChannel || '')}&tSettle=${tSettle}&isDebug=${isDebug}&nGauss=${nGauss}&nCropsize=${nCropsize}&focusAlgorithm=${focusAlgorithm}&static_offset=${staticOffset}&twoStage=${twoStage}`;
+        url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/autoFocus?rangez=${rangeZ}&resolutionz=${resolutionZ}&defocusz=${defocusZ}&illuminationChannel=${encodeURIComponent(selectedChannel || "")}&tSettle=${tSettle}&isDebug=${isDebug}&nGauss=${nGauss}&nCropsize=${nCropsize}&focusAlgorithm=${focusAlgorithm}&static_offset=${staticOffset}&twoStage=${twoStage}`;
       }
       const response = await fetch(url, { method: "GET" });
       const result = await response.json();
-      
+
       if (result.status === "error") {
         setPositionError(result.message);
         console.error("Autofocus start error:", result.message);
       } else if (result.status === "started") {
         dispatch(autofocusSlice.setIsRunning(true));
         dispatch(autofocusSlice.setShowPlot(false)); // Hide plot when starting a new run
-        dispatch(autofocusSlice.clearPlotData());  // Clear old data
+        dispatch(autofocusSlice.clearPlotData()); // Clear old data
       }
     } catch (error) {
       console.error("Error starting autofocus:", error);
@@ -209,14 +223,14 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     if (!isRunning || isStopping) {
       return;
     }
-    
+
     setIsStopping(true);
-    
+
     try {
       const url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/stopAutofocus`;
       const response = await fetch(url, { method: "GET" });
       const result = await response.json();
-      
+
       if (result.status === "stopped") {
         dispatch(autofocusSlice.setIsRunning(false));
         setBackendState(result.state);
@@ -236,7 +250,11 @@ const AutofocusController = ({ hostIP, hostPort }) => {
 
   const handleStartLiveMonitoring = async () => {
     try {
-      const result = await apiAutofocusControllerStartLiveMonitoring(liveMonitoringPeriod, liveMonitoringMethod, liveMonitoringCropsize);
+      const result = await apiAutofocusControllerStartLiveMonitoring(
+        liveMonitoringPeriod,
+        liveMonitoringMethod,
+        liveMonitoringCropsize,
+      );
       if (result.status === "started" || result.status === "already_running") {
         dispatch(autofocusSlice.setIsLiveMonitoring(true));
       }
@@ -261,7 +279,10 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     dispatch(autofocusSlice.setLiveMonitoringPeriod(newPeriod));
     if (isLiveMonitoring) {
       try {
-        await apiAutofocusControllerSetLiveMonitoringParameters(newPeriod, null);
+        await apiAutofocusControllerSetLiveMonitoringParameters(
+          newPeriod,
+          null,
+        );
       } catch (error) {
         console.error("Error updating period:", error);
       }
@@ -272,7 +293,10 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     dispatch(autofocusSlice.setLiveMonitoringMethod(newMethod));
     if (isLiveMonitoring) {
       try {
-        await apiAutofocusControllerSetLiveMonitoringParameters(null, newMethod);
+        await apiAutofocusControllerSetLiveMonitoringParameters(
+          null,
+          newMethod,
+        );
       } catch (error) {
         console.error("Error updating method:", error);
       }
@@ -282,130 +306,15 @@ const AutofocusController = ({ hostIP, hostPort }) => {
   return (
     <Paper style={{ padding: "20px" }}>
       <Grid container spacing={2}>
-        {/* Autofocus Scan Section */}
-        <Grid item xs={12}>
-          <Typography variant="h6" gutterBottom>
-            Autofocus
-          </Typography>
-        </Grid>
-
-        {/* ── Live Focus Monitoring (placed first so it stays visible while adjusting Z) ── */}
-        <Grid item xs={12}>
-          <Typography variant="h6" gutterBottom>
-            Live Focus Monitoring
-          </Typography>
-        </Grid>
-
-        <Grid item xs={4}>
-          <TextField
-            label="Update Period (s)"
-            type="number"
-            value={liveMonitoringPeriod}
-            onChange={(e) => handlePeriodChange(parseFloat(e.target.value))}
-            inputProps={{ step: 0.1, min: 0.1, max: 10 }}
-            fullWidth
-            disabled={isLiveMonitoring}
-          />
-        </Grid>
-
-        <Grid item xs={4}>
-          <FormControl fullWidth disabled={isLiveMonitoring}>
-            <InputLabel>Focus Method</InputLabel>
-            <Select
-              value={liveMonitoringMethod}
-              onChange={(e) => handleMethodChange(e.target.value)}
-              label="Focus Method"
-            >
-              <MenuItem value="LAPE">LAPE (Laplacian)</MenuItem>
-              <MenuItem value="GLVA">GLVA (Variance)</MenuItem>
-              <MenuItem value="JPEG">JPEG (Compression)</MenuItem>
-            </Select>
-          </FormControl>
-        </Grid>
-
-        <Grid item xs={4}>
-          <TextField
-            label="Crop Size"
-            type="number"
-            value={liveMonitoringCropsize}
-            onChange={(e) => dispatch(autofocusSlice.setLiveMonitoringCropsize(parseInt(e.target.value)))}
-            inputProps={{ step: 128, min: 256, max: 4096 }}
-            fullWidth
-            disabled={isLiveMonitoring}
-          />
-        </Grid>
-
-        <Grid item xs={12}>
-          <Box display="flex" alignItems="center" height="100%">
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={isLiveMonitoring}
-                  onChange={isLiveMonitoring ? handleStopLiveMonitoring : handleStartLiveMonitoring}
-                  color="primary"
-                />
-              }
-              label={isLiveMonitoring ? "Monitoring Active" : "Start Monitoring"}
-            />
-          </Box>
-        </Grid>
-
-        {/* Live focus value + rolling-window plot */}
-        {isLiveMonitoring && (
-          <Grid item xs={12}>
-            <Box display="flex" alignItems="center" gap={2} mb={1}>
-              <Typography variant="h4" color="primary">
-                {liveFocusValue ? liveFocusValue.focus_value.toFixed(2) : "---"}
-              </Typography>
-              <Box>
-                <Typography variant="body2" color="textSecondary">
-                  Current Focus Value ({liveMonitoringMethod})
-                </Typography>
-                {liveFocusValue && (
-                  <Typography variant="caption" color="textSecondary" display="block">
-                    Last updated: {new Date(liveFocusValue.timestamp * 1000).toLocaleTimeString()}
-                  </Typography>
-                )}
-              </Box>
-            </Box>
-            {focusHistory.length > 1 && (
-              <Plot
-                data={[
-                  {
-                    x: focusHistory.map((p) => new Date(p.t * 1000).toLocaleTimeString()),
-                    y: focusHistory.map((p) => p.v),
-                    type: "scatter",
-                    mode: "lines+markers",
-                    marker: { color: "blue", size: 5 },
-                    line: { color: "blue" },
-                    name: liveMonitoringMethod,
-                  },
-                ]}
-                layout={{
-                  margin: { t: 20, r: 20, b: 40, l: 50 },
-                  xaxis: { title: "Time" },
-                  yaxis: { title: "Focus Value" },
-                  height: 180,
-                }}
-                style={{ width: "100%" }}
-                config={{ displayModeBar: false }}
-              />
-            )}
-          </Grid>
-        )}
-
-        {/* Divider separating live monitoring from scan controls */}
-        <Grid item xs={12}>
-          <Divider style={{ margin: "10px 0" }} />
-        </Grid>
-
         {/* ── Autofocus Scan Controls ── */}
         <Grid item xs={12}>
           <FormControl fullWidth>
             <InputLabel>Autofocus Mode</InputLabel>
             <Select
               value={autofocusMode || "scan"}
-              onChange={(e) => dispatch(autofocusSlice.setAutofocusMode(e.target.value))}
+              onChange={(e) =>
+                dispatch(autofocusSlice.setAutofocusMode(e.target.value))
+              }
               label="Autofocus Mode"
             >
               <MenuItem value="scan">Z-Sweep (Scan)</MenuItem>
@@ -421,7 +330,9 @@ const AutofocusController = ({ hostIP, hostPort }) => {
               <TextField
                 label="Range Z"
                 value={rangeZ}
-                onChange={(e) => dispatch(autofocusSlice.setRangeZ(e.target.value))}
+                onChange={(e) =>
+                  dispatch(autofocusSlice.setRangeZ(e.target.value))
+                }
                 fullWidth
               />
             </Grid>
@@ -429,7 +340,9 @@ const AutofocusController = ({ hostIP, hostPort }) => {
               <TextField
                 label="Resolution Z"
                 value={resolutionZ}
-                onChange={(e) => dispatch(autofocusSlice.setResolutionZ(e.target.value))}
+                onChange={(e) =>
+                  dispatch(autofocusSlice.setResolutionZ(e.target.value))
+                }
                 fullWidth
               />
             </Grid>
@@ -437,7 +350,9 @@ const AutofocusController = ({ hostIP, hostPort }) => {
               <TextField
                 label="Defocus Z"
                 value={defocusZ}
-                onChange={(e) => dispatch(autofocusSlice.setDefocusZ(e.target.value))}
+                onChange={(e) =>
+                  dispatch(autofocusSlice.setDefocusZ(e.target.value))
+                }
                 fullWidth
               />
             </Grid>
@@ -452,7 +367,13 @@ const AutofocusController = ({ hostIP, hostPort }) => {
                 label="Initial Step (\u00b5m)"
                 type="number"
                 value={hillClimbingInitialStep}
-                onChange={(e) => dispatch(autofocusSlice.setHillClimbingInitialStep(parseFloat(e.target.value)))}
+                onChange={(e) =>
+                  dispatch(
+                    autofocusSlice.setHillClimbingInitialStep(
+                      parseFloat(e.target.value),
+                    ),
+                  )
+                }
                 inputProps={{ step: 1, min: 0.1 }}
                 fullWidth
               />
@@ -462,7 +383,13 @@ const AutofocusController = ({ hostIP, hostPort }) => {
                 label="Min Step (\u00b5m)"
                 type="number"
                 value={hillClimbingMinStep}
-                onChange={(e) => dispatch(autofocusSlice.setHillClimbingMinStep(parseFloat(e.target.value)))}
+                onChange={(e) =>
+                  dispatch(
+                    autofocusSlice.setHillClimbingMinStep(
+                      parseFloat(e.target.value),
+                    ),
+                  )
+                }
                 inputProps={{ step: 0.1, min: 0.01 }}
                 fullWidth
               />
@@ -472,7 +399,13 @@ const AutofocusController = ({ hostIP, hostPort }) => {
                 label="Step Reduction"
                 type="number"
                 value={hillClimbingStepReduction}
-                onChange={(e) => dispatch(autofocusSlice.setHillClimbingStepReduction(parseFloat(e.target.value)))}
+                onChange={(e) =>
+                  dispatch(
+                    autofocusSlice.setHillClimbingStepReduction(
+                      parseFloat(e.target.value),
+                    ),
+                  )
+                }
                 inputProps={{ step: 0.1, min: 0.1, max: 0.9 }}
                 fullWidth
               />
@@ -482,7 +415,13 @@ const AutofocusController = ({ hostIP, hostPort }) => {
                 label="Max Iterations"
                 type="number"
                 value={hillClimbingMaxIterations}
-                onChange={(e) => dispatch(autofocusSlice.setHillClimbingMaxIterations(parseInt(e.target.value)))}
+                onChange={(e) =>
+                  dispatch(
+                    autofocusSlice.setHillClimbingMaxIterations(
+                      parseInt(e.target.value),
+                    ),
+                  )
+                }
                 inputProps={{ step: 1, min: 5, max: 200 }}
                 fullWidth
               />
@@ -494,8 +433,10 @@ const AutofocusController = ({ hostIP, hostPort }) => {
           <FormControl fullWidth>
             <InputLabel>Illumination Channel</InputLabel>
             <Select
-              value={illuminationChannel || ''}
-              onChange={(e) => dispatch(autofocusSlice.setIlluminationChannel(e.target.value))}
+              value={illuminationChannel || ""}
+              onChange={(e) =>
+                dispatch(autofocusSlice.setIlluminationChannel(e.target.value))
+              }
               label="Illumination Channel"
             >
               {availableIlluminations.map((illumination) => (
@@ -509,108 +450,280 @@ const AutofocusController = ({ hostIP, hostPort }) => {
 
         {/* Advanced Parameters Section */}
         <Grid item xs={12}>
-          <Typography variant="subtitle2" gutterBottom style={{ marginTop: "10px" }}>
-            Advanced Parameters
-          </Typography>
-        </Grid>
-
-        <Grid item xs={3}>
-          <TextField
-            label="Settle Time (s)"
-            type="number"
-            value={tSettle}
-            onChange={(e) => dispatch(autofocusSlice.setTSettle(parseFloat(e.target.value)))}
-            inputProps={{ step: 0.01, min: 0, max: 10 }}
-            fullWidth
-          />
-        </Grid>
-
-        <Grid item xs={3}>
-          <TextField
-            label="Gaussian Blur Sigma"
-            type="number"
-            value={nGauss}
-            onChange={(e) => dispatch(autofocusSlice.setNGauss(parseInt(e.target.value)))}
-            inputProps={{ step: 1, min: 0, max: 20 }}
-            fullWidth
-          />
-        </Grid>
-
-        <Grid item xs={3}>
-          <TextField
-            label="Crop Size"
-            type="number"
-            value={nCropsize}
-            onChange={(e) => dispatch(autofocusSlice.setNCropsize(parseInt(e.target.value)))}
-            inputProps={{ step: 128, min: 256, max: 4096 }}
-            fullWidth
-          />
-        </Grid>
-
-        <Grid item xs={3}>
-          <FormControl fullWidth>
-            <InputLabel>Focus Algorithm</InputLabel>
-            <Select
-              value={focusAlgorithm}
-              onChange={(e) => dispatch(autofocusSlice.setFocusAlgorithm(e.target.value))}
-              label="Focus Algorithm"
+          <Accordion sx={{ mt: 1 }}>
+            <AccordionSummary
+              expandIcon={<ExpandMoreIcon />}
+              id="autofocus-advanced-parameters-header"
+              aria-controls="autofocus-advanced-parameters-content"
             >
-              <MenuItem value="LAPE">LAPE (Laplacian)</MenuItem>
-              <MenuItem value="GLVA">GLVA (Variance)</MenuItem>
-              <MenuItem value="JPEG">JPEG (Compression)</MenuItem>
-            </Select>
-          </FormControl>
-        </Grid>
+              <Typography variant="subtitle2">Advanced Parameters</Typography>
+            </AccordionSummary>
+            <AccordionDetails id="autofocus-advanced-parameters-content">
+              <Grid container spacing={2}>
+                {/* ── Live Focus Monitoring ── */}
+                <Grid item xs={12}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Live Focus Monitoring
+                  </Typography>
+                </Grid>
 
-        <Grid item xs={3}>
-          <TextField
-            label="Static Offset"
-            type="number"
-            value={staticOffset}
-            onChange={(e) => dispatch(autofocusSlice.setStaticOffset(parseFloat(e.target.value)))}
-            inputProps={{ step: 0.1, min: -100, max: 100 }}
-            fullWidth
-          />
-        </Grid>
+                <Grid item xs={4}>
+                  <TextField
+                    label="Update Period (s)"
+                    type="number"
+                    value={liveMonitoringPeriod}
+                    onChange={(e) =>
+                      handlePeriodChange(parseFloat(e.target.value))
+                    }
+                    inputProps={{ step: 0.1, min: 0.1, max: 10 }}
+                    fullWidth
+                    disabled={isLiveMonitoring}
+                  />
+                </Grid>
 
-        <Grid item xs={3}>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={isDebug}
-                onChange={(e) => dispatch(autofocusSlice.setIsDebug(e.target.checked))}
-                color="primary"
-              />
-            }
-            label="Debug Mode"
-          />
-        </Grid>
+                <Grid item xs={4}>
+                  <FormControl fullWidth disabled={isLiveMonitoring}>
+                    <InputLabel>Focus Method</InputLabel>
+                    <Select
+                      value={liveMonitoringMethod}
+                      onChange={(e) => handleMethodChange(e.target.value)}
+                      label="Focus Method"
+                    >
+                      <MenuItem value="LAPE">LAPE (Laplacian)</MenuItem>
+                      <MenuItem value="GLVA">GLVA (Variance)</MenuItem>
+                      <MenuItem value="JPEG">JPEG (Compression)</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
 
-        {autofocusMode !== "hillClimbing" && (
-          <Grid item xs={3}>
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={twoStage}
-                  onChange={(e) => dispatch(autofocusSlice.setTwoStage(e.target.checked))}
-                  color="primary"
-                />
-              }
-            label="Two-Stage Focus"
-          />
+                <Grid item xs={4}>
+                  <TextField
+                    label="Crop Size (Monitoring)"
+                    type="number"
+                    value={liveMonitoringCropsize}
+                    onChange={(e) =>
+                      dispatch(
+                        autofocusSlice.setLiveMonitoringCropsize(
+                          parseInt(e.target.value),
+                        ),
+                      )
+                    }
+                    inputProps={{ step: 128, min: 256, max: 4096 }}
+                    fullWidth
+                    disabled={isLiveMonitoring}
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <Box display="flex" alignItems="center" height="100%">
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={isLiveMonitoring}
+                          onChange={
+                            isLiveMonitoring
+                              ? handleStopLiveMonitoring
+                              : handleStartLiveMonitoring
+                          }
+                          color="primary"
+                        />
+                      }
+                      label={
+                        isLiveMonitoring
+                          ? "Monitoring Active"
+                          : "Start Monitoring"
+                      }
+                    />
+                  </Box>
+                </Grid>
+
+                {/* Live focus value + rolling-window plot */}
+                {isLiveMonitoring && (
+                  <Grid item xs={12}>
+                    <Box display="flex" alignItems="center" gap={2} mb={1}>
+                      <Typography variant="h4" color="primary">
+                        {liveFocusValue
+                          ? liveFocusValue.focus_value.toFixed(2)
+                          : "---"}
+                      </Typography>
+                      <Box>
+                        <Typography variant="body2" color="textSecondary">
+                          Current Focus Value ({liveMonitoringMethod})
+                        </Typography>
+                        {liveFocusValue && (
+                          <Typography
+                            variant="caption"
+                            color="textSecondary"
+                            display="block"
+                          >
+                            Last updated:{" "}
+                            {new Date(
+                              liveFocusValue.timestamp * 1000,
+                            ).toLocaleTimeString()}
+                          </Typography>
+                        )}
+                      </Box>
+                    </Box>
+                    {focusHistory.length > 1 && (
+                      <Plot
+                        data={[
+                          {
+                            x: focusHistory.map((p) =>
+                              new Date(p.t * 1000).toLocaleTimeString(),
+                            ),
+                            y: focusHistory.map((p) => p.v),
+                            type: "scatter",
+                            mode: "lines+markers",
+                            marker: { color: "blue", size: 5 },
+                            line: { color: "blue" },
+                            name: liveMonitoringMethod,
+                          },
+                        ]}
+                        layout={{
+                          margin: { t: 20, r: 20, b: 40, l: 50 },
+                          xaxis: { title: "Time" },
+                          yaxis: { title: "Focus Value" },
+                          height: 180,
+                        }}
+                        style={{ width: "100%" }}
+                        config={{ displayModeBar: false }}
+                      />
+                    )}
+                  </Grid>
+                )}
+
+                <Grid item xs={12}>
+                  <Divider />
+                </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <TextField
+                    label="Settle Time (s)"
+                    type="number"
+                    value={tSettle}
+                    onChange={(e) =>
+                      dispatch(
+                        autofocusSlice.setTSettle(parseFloat(e.target.value)),
+                      )
+                    }
+                    inputProps={{ step: 0.01, min: 0, max: 10 }}
+                    fullWidth
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6} md={3}>
+                  <TextField
+                    label="Gaussian Blur Sigma"
+                    type="number"
+                    value={nGauss}
+                    onChange={(e) =>
+                      dispatch(
+                        autofocusSlice.setNGauss(parseInt(e.target.value)),
+                      )
+                    }
+                    inputProps={{ step: 1, min: 0, max: 20 }}
+                    fullWidth
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6} md={3}>
+                  <TextField
+                    label="Crop Size"
+                    type="number"
+                    value={nCropsize}
+                    onChange={(e) =>
+                      dispatch(
+                        autofocusSlice.setNCropsize(parseInt(e.target.value)),
+                      )
+                    }
+                    inputProps={{ step: 128, min: 256, max: 4096 }}
+                    fullWidth
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Focus Algorithm</InputLabel>
+                    <Select
+                      value={focusAlgorithm}
+                      onChange={(e) =>
+                        dispatch(
+                          autofocusSlice.setFocusAlgorithm(e.target.value),
+                        )
+                      }
+                      label="Focus Algorithm"
+                    >
+                      <MenuItem value="LAPE">LAPE (Laplacian)</MenuItem>
+                      <MenuItem value="GLVA">GLVA (Variance)</MenuItem>
+                      <MenuItem value="JPEG">JPEG (Compression)</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                <Grid item xs={12} sm={6} md={3}>
+                  <TextField
+                    label="Static Offset"
+                    type="number"
+                    value={staticOffset}
+                    onChange={(e) =>
+                      dispatch(
+                        autofocusSlice.setStaticOffset(
+                          parseFloat(e.target.value),
+                        ),
+                      )
+                    }
+                    inputProps={{ step: 0.1, min: -100, max: 100 }}
+                    fullWidth
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={isDebug}
+                        onChange={(e) =>
+                          dispatch(autofocusSlice.setIsDebug(e.target.checked))
+                        }
+                        color="primary"
+                      />
+                    }
+                    label="Debug Mode"
+                  />
+                </Grid>
+
+                {autofocusMode !== "hillClimbing" && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={twoStage}
+                          onChange={(e) =>
+                            dispatch(
+                              autofocusSlice.setTwoStage(e.target.checked),
+                            )
+                          }
+                          color="primary"
+                        />
+                      }
+                      label="Two-Stage Focus"
+                    />
+                  </Grid>
+                )}
+              </Grid>
+            </AccordionDetails>
+          </Accordion>
         </Grid>
-        )}
 
         {/* Status Display */}
         {(currentZ !== null || positionError || backendState) && (
           <Grid item xs={12}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1 }}>
               {currentZ !== null && (
                 <Typography variant="body2" color="textSecondary">
                   Current Z: {currentZ.toFixed(2)}
                 </Typography>
               )}
-              {backendState && backendState !== 'idle' && (
+              {backendState && backendState !== "idle" && (
                 <Typography variant="body2" color="primary">
                   State: {backendState}
                 </Typography>
@@ -629,12 +742,14 @@ const AutofocusController = ({ hostIP, hostPort }) => {
         )}
 
         <Grid item xs={12}>
-          <Button 
-            variant="contained" 
-            color="primary" 
+          <Button
+            variant="contained"
+            color="primary"
             onClick={handleStart}
             disabled={isRunning || isStarting}
-            startIcon={isStarting ? <CircularProgress size={16} color="inherit" /> : null}
+            startIcon={
+              isStarting ? <CircularProgress size={16} color="inherit" /> : null
+            }
           >
             {isStarting ? "Starting..." : "Start Autofocus"}
           </Button>
@@ -644,7 +759,9 @@ const AutofocusController = ({ hostIP, hostPort }) => {
             onClick={handleStop}
             style={{ marginLeft: "10px" }}
             disabled={!isRunning || isStopping}
-            startIcon={isStopping ? <CircularProgress size={16} color="inherit" /> : null}
+            startIcon={
+              isStopping ? <CircularProgress size={16} color="inherit" /> : null
+            }
           >
             {isStopping ? "Stopping..." : "Stop Autofocus"}
           </Button>
@@ -658,10 +775,10 @@ const AutofocusController = ({ hostIP, hostPort }) => {
             </Button>
           )}
           {isRunning && (
-            <Typography 
-              variant="body2" 
-              color="primary" 
-              style={{ marginLeft: "20px", display: 'inline' }}
+            <Typography
+              variant="body2"
+              color="primary"
+              style={{ marginLeft: "20px", display: "inline" }}
             >
               Autofocus running...
             </Typography>

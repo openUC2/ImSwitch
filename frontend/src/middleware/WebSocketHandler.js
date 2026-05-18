@@ -33,10 +33,15 @@ import { fetchWithTimeout } from "../utils/fetchWithTimeout";
 const isWebSocketDebugEnabled = () =>
   typeof window !== "undefined" && Boolean(window.__IMSWITCH_DEBUG_WEBSOCKET__);
 
+// ESP32 auto-reconnect throttle: Wait 15 seconds between reconnect attempts
+const ESP_RECONNECT_COOLDOWN_MS = 15000;
+
 //##################################################################################
 const WebSocketHandler = () => {
   const dispatch = useDispatch();
   const connectionCheckRef = useRef(null);
+  const lastEspReconnectAttemptRef = useRef(0);
+  const espReconnectInFlightRef = useRef(false);
 
   // Per-instance server capabilities (each tab has its own)
   const serverCapabilitiesRef = useRef({
@@ -57,53 +62,88 @@ const WebSocketHandler = () => {
     async (ip = hostIP, port = hostPort) => {
       // Skip monitoring if backend connection is not configured
       if (!ip || !port) {
-        dispatch(uc2Slice.setUc2Connected(false));
-        return;
-      }
-
-      try {
-        console.debug(`Checking UC2 connection to ${ip}:${port}/imswitch`);
-
-        // Use cross-browser compatible fetch with timeout
-        const response = await fetchWithTimeout(
-          `${ip}:${port}/imswitch/api/UC2ConfigController/is_connected`,
-          { method: "GET" },
-          10000,
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          const hardwareConnected = data === true;
-
-          console.debug(
-            `Backend API: Connected, Hardware: ${
-              hardwareConnected ? "Connected" : "Disconnected"
-            }`,
-          );
-
-          // Update BOTH statuses
-          dispatch(uc2Slice.setBackendConnected(true)); // API is reachable
-          dispatch(uc2Slice.setUc2Connected(hardwareConnected)); // Hardware status
-
-          return hardwareConnected; // Return hardware status for compatibility
-        } else {
-          console.debug(`UC2 connection check: HTTP ${response.status}`);
-          dispatch(uc2Slice.setBackendConnected(false));
-          dispatch(uc2Slice.setUc2Connected(false));
-          return false;
-        }
-      } catch (error) {
-        if (error.name === "AbortError") {
-          console.debug("UC2 connection check: Request timeout");
-        } else {
-          console.debug("UC2 connection check: Network error", error.message);
-        }
         dispatch(uc2Slice.setBackendConnected(false));
         dispatch(uc2Slice.setUc2Connected(false));
         return false;
       }
+
+      // ── Schritt 1: Backend API erreichbar ──
+      const apiBase = `${ip}:${port}/imswitch/api/UC2ConfigController`;
+      let backendAlive = false;
+      try {
+        console.debug(`[Check 1] Backend liveness: ${apiBase}/is_connected`);
+        const livenessResponse = await fetchWithTimeout(
+          `${apiBase}/is_connected`,
+          { method: "GET" },
+          5000,
+        );
+        backendAlive = livenessResponse.ok;
+        console.debug(`[Check 1] Backend alive: ${backendAlive}`);
+      } catch (error) {
+        backendAlive = false;
+      }
+      dispatch(uc2Slice.setBackendConnected(backendAlive));
+
+      // ── Schritt 2: ESP32/UART hardware connectivity ──
+      let hardwareConnected = false;
+      if (backendAlive) {
+        try {
+          console.debug(
+            `[Check 2] Hardware check: ${apiBase}/uc2_board_is_connected`,
+          );
+          const hwResponse = await fetchWithTimeout(
+            `${apiBase}/uc2_board_is_connected`,
+            { method: "GET" },
+            5000,
+          );
+          if (hwResponse.ok) {
+            const data = await hwResponse.json();
+            hardwareConnected = data === true;
+          }
+          console.debug(
+            `[Check 2] Hardware (ESP32/UART) connected: ${hardwareConnected}`,
+          );
+        } catch (error) {
+          hardwareConnected = false;
+        }
+
+        // If ESP is unplugged and then replugged, trigger a throttled reconnect
+        // so the serial link can recover without restarting the backend.
+        if (!hardwareConnected) {
+          const now = Date.now();
+          const canAttemptReconnect =
+            !espReconnectInFlightRef.current &&
+            now - lastEspReconnectAttemptRef.current >=
+              ESP_RECONNECT_COOLDOWN_MS;
+
+          if (canAttemptReconnect) {
+            espReconnectInFlightRef.current = true;
+            lastEspReconnectAttemptRef.current = now;
+
+            try {
+              console.debug(
+                `[Check 2b] Trigger ESP reconnect: ${apiBase}/reconnect`,
+              );
+              await fetchWithTimeout(
+                `${apiBase}/reconnect`,
+                { method: "GET" },
+                5000,
+              );
+            } catch (error) {
+              console.debug(
+                "[Check 2b] ESP reconnect request failed:",
+                error?.message,
+              );
+            } finally {
+              espReconnectInFlightRef.current = false;
+            }
+          }
+        }
+      }
+      dispatch(uc2Slice.setUc2Connected(hardwareConnected));
+      return hardwareConnected; // Return hardware status for compatibility
     },
-    [hostIP, hostPort, dispatch], // Dependencies for useCallback
+    [hostIP, hostPort, dispatch],
   );
 
   // Sync livestream status with backend

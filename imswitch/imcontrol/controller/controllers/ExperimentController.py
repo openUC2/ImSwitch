@@ -1340,12 +1340,12 @@ class ExperimentController(ImConWidgetController):
             "z_index": kwargs.get("z_index", 0),
             "channel_index": kwargs.get("channel_index", 0),
         }
-        
+
         # Enrich metadata with MetadataHub data if available
         try:
             if hasattr(self._master, 'metadataHub') and self._master.metadataHub is not None:
                 detector_name = self._master.detectorsManager.getAllDeviceNames()[0]
-                
+
                 # Get objective info from hub
                 hub_global = self._master.metadataHub.get_latest(flat=True, filter_category='Objective')
                 for key, value_dict in hub_global.items():
@@ -1357,7 +1357,7 @@ class ExperimentController(ImConWidgetController):
                         ome_metadata['objective_magnification'] = value_dict.get('value')
                     elif 'NA' in key:
                         ome_metadata['objective_na'] = value_dict.get('value')
-                
+
                 # Get detector context (includes isRGB, exposure, etc.)
                 detector_ctx = self._master.metadataHub.get_detector(detector_name)
                 if detector_ctx:
@@ -1690,12 +1690,12 @@ class ExperimentController(ImConWidgetController):
                       tPeriod:int=1, nTimes:int=1,
                       isSnakeScan:bool=True):
         """Full workflow: arm camera ➔ launch writer ➔ execute scan.
-        
+
         Args:
             xstart: Starting X position
             xstep: Step size in X direction
             nx: Number of steps in X
-            ystart: Starting Y position  
+            ystart: Starting Y position
             ystep: Step size in Y direction
             ny: Number of steps in Y
             zstart: Starting Z position (for Z-stacking)
@@ -1722,7 +1722,7 @@ class ExperimentController(ImConWidgetController):
         # Ensure illumination is a list
         if illumination is None:
             illumination = []
-        
+
         # Build illumination dict for metadata (maintain backward compatibility)
         illum_dict = {}
         for i, val in enumerate(illumination[:5]):  # Take up to 5 channels
@@ -1734,7 +1734,7 @@ class ExperimentController(ImConWidgetController):
         nScan = max(nIlluminations, 1)
         total_frames = nx * ny * nz * nScan
         self._logger.info(f"Stage-scan: {nx}×{ny}×{nz} ({total_frames} frames)")
-        
+
         def addDataPoint(metadataList, x, y, z, illuminationChannel, illuminationValue, runningNumber):
             """Helper function to add metadata for each position."""
             metadataList.append({
@@ -1758,7 +1758,7 @@ class ExperimentController(ImConWidgetController):
                     # Snake pattern: reverse X direction on odd rows
                     if isSnakeScan and iy % 2 == 1:
                         x = xstart + (nx - 1 - ix) * xstep
-                
+
                     # If there's at least one valid illumination or LED set, take only one image as "default"
                     if nIlluminations == 0:
                         runningNumber += 1
@@ -1800,10 +1800,10 @@ class ExperimentController(ImConWidgetController):
                     daemon=True
                 )
                 self._writer_thread_ome.start()
-            
+
             # Pad illumination list to 5 channels if needed
             illumination_padded = (illumination + [0] * 5)[:5] if illumination else [0, 0, 0, 0, 0]
-            
+
             # 3. execute stage scan (blocks until finished) ------------------------
             self.fastStageScanIsRunning = True  # Set flag to indicate scan is running
             self.mStage.start_stage_scanning(
@@ -1832,7 +1832,7 @@ class ExperimentController(ImConWidgetController):
                         self._master.lasersManager[laser_name].setValue(0)
                     except Exception as e:
                         self._logger.debug(f"Could not turn off laser {laser_name}: {e}")
-            
+
             self._logger.debug("All illumination sources switched off before scan")
         except Exception as e:
             self._logger.warning(f"Error switching off illumination: {e}")
@@ -2060,8 +2060,8 @@ class ExperimentController(ImConWidgetController):
     def start_mda_experiment(self, request: MDASequenceRequest) -> Dict[str, Any]:
         """
         Start an MDA experiment using useq-schema.
-        
-        This provides a modern, standardized interface for multi-dimensional 
+
+        This provides a modern, standardized interface for multi-dimensional
         acquisition experiments.
         """
         if not self.mda_manager.is_available():
@@ -2183,10 +2183,10 @@ class ExperimentController(ImConWidgetController):
     def run_native_mda_sequence(self, sequence_dict: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a native useq-schema MDASequence from JSON.
-        
+
         This endpoint accepts a native useq.MDASequence serialized as JSON (dict),
         following the EXACT pattern from pymmcore-plus and raman-mda-engine.
-        
+
         Args:
             sequence_dict: Native useq.MDASequence serialized to dict/JSON with fields:
                 - metadata: Dict with arbitrary experiment metadata
@@ -2198,10 +2198,10 @@ class ExperimentController(ImConWidgetController):
                 - autofocus_plan: Dict with autofocus configuration
                 - axis_order: String like "tpcz" defining acquisition order
                 - keep_shutter_open_across: Tuple of axes to keep shutter open
-        
+
         Returns:
             Dict with execution status and sequence information
-            
+
         Example request body:
             {
                 "metadata": {"experiment": "test", "user": "researcher"},
@@ -2547,7 +2547,7 @@ class ExperimentController(ImConWidgetController):
         if focusMapConfig.scan_areas is not None and len(focusMapConfig.scan_areas) > 0:
             # Caller provided scan areas directly (e.g. from frontend)
             self._last_scan_areas = focusMapConfig.scan_areas
-        
+
         effective_scan_areas = getattr(self, '_last_scan_areas', None)
         if effective_scan_areas is None or len(effective_scan_areas) == 0:
             # Fallback: use current stage position as single area
@@ -2666,7 +2666,7 @@ class ExperimentController(ImConWidgetController):
                     f"Focus map [{group_id}]: point {i+1}/{len(grid)} "
                     f"at ({gx:.1f}, {gy:.1f}) → Z={best_z:.3f}"
                 )
-                # settle for a moment 
+                # settle for a moment
                 time.sleep(0.5)
 
             except Exception as e:

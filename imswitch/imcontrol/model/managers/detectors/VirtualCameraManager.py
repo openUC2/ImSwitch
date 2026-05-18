@@ -165,7 +165,7 @@ class VirtualCameraManager(DetectorManager):
     def setFlipImage(self, flipY: bool, flipX: bool):
         """
         Set flip settings for the camera during runtime.
-        
+
         Args:
             flipY: Whether to flip vertically
             flipX: Whether to flip horizontally

@@ -30,9 +30,9 @@ const FRAMESettings = () => {
       <Typography variant="h4" gutterBottom>
         FRAME Settings
       </Typography>
-      
-      <Tabs 
-        value={selectedTab} 
+
+      <Tabs
+        value={selectedTab}
         onChange={handleTabChange}
         variant="scrollable"
         scrollButtons="auto"

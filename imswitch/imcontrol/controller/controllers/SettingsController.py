@@ -780,7 +780,10 @@ class SettingsController(ImConWidgetController):
 
             self.setDetectorParameter(detectorName, mode_parameter_name, target_value)
         except Exception:
-            pass
+            self._logger.warning(
+                f"Failed to set detector mode for '{detectorName}'",
+                exc_info=True,
+            )
 
     @APIExport(runOnUIThread=True)
     def setDetectorExposureOnce(self, detectorName: str = None, resetDelayMs: int = 1500) -> None:
@@ -805,7 +808,10 @@ class SettingsController(ImConWidgetController):
                 try:
                     self._detector_once_reset_timer.stop()
                 except Exception:
-                    pass
+                    self._logger.warning(
+                        "Failed to stop existing detector once-reset timer",
+                        exc_info=True,
+                    )
 
             def _restore_manual():
                 try:
@@ -817,13 +823,19 @@ class SettingsController(ImConWidgetController):
                     self.updateSharedAttrs()
                     self._emit_detector_parameters_if_changed(force=True)
                 except Exception:
-                    pass
+                    self._logger.warning(
+                        f"Failed to restore manual mode after auto-once for '{detectorName}'",
+                        exc_info=True,
+                    )
 
             self._detector_once_reset_timer = Timer(singleShot=True)
             self._detector_once_reset_timer.timeout.connect(_restore_manual)
             self._detector_once_reset_timer.start(resetDelayMs)
         except Exception:
-            pass
+            self._logger.warning(
+                f"Failed to run detector auto-once for '{detectorName}'",
+                exc_info=True,
+            )
 
     @APIExport()
     def getCameraStatus(self, detectorName: str = None) -> dict:

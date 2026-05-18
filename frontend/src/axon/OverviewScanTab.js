@@ -31,6 +31,7 @@ import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.j
 import apiGetOverviewRegistrationConfigData from "../backendapi/apiGetOverviewRegistrationConfigData.js";
 import apiUpdateOverviewRegistrationConfig from "../backendapi/apiUpdateOverviewRegistrationConfig.js";
 import apiRunAutonomousOverviewScan from "../backendapi/apiRunAutonomousOverviewScan.js";
+import apiExperimentControllerGetOverviewAsyncStatus from "../backendapi/apiExperimentControllerGetOverviewAsyncStatus.js";
 
 /**
  * Tab for the autonomous overview scan + overlay controls.
@@ -157,11 +158,31 @@ const OverviewScanTab = () => {
     );
 
     try {
-      const result = await apiRunAutonomousOverviewScan(
-        cameraName,
-        layoutName,
-        0.5
-      );
+      // The endpoint now spawns a daemon thread on the backend and returns
+      // ``{started: true}`` immediately so the FastAPI worker stays
+      // responsive. Poll the shared async-status endpoint for the real
+      // result.
+      await apiRunAutonomousOverviewScan(cameraName, layoutName, 0.5);
+      const deadline = Date.now() + 30 * 60 * 1000; // 30 min hard cap
+      let result = null;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        await new Promise((r) => setTimeout(r, 1500));
+        let status = null;
+        try {
+          status = await apiExperimentControllerGetOverviewAsyncStatus();
+        } catch (_) {
+          // transient - keep trying
+        }
+        if (status && status.running === false) {
+          if (status.error) throw new Error(status.error);
+          result = status.result || null;
+          break;
+        }
+        if (Date.now() > deadline) {
+          throw new Error("Autonomous scan timed out");
+        }
+      }
       if (result && result.overlayData) {
         dispatch(overviewRegSlice.setOverlayData(result.overlayData));
         dispatch(overviewRegSlice.setOverlayEnabled(true));

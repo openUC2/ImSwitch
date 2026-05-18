@@ -39,6 +39,7 @@ import apiRegisterOverviewSlide from "../backendapi/apiRegisterOverviewSlide.js"
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 import apiRefreshOverviewSlideImage from "../backendapi/apiRefreshOverviewSlideImage.js";
 import apiExperimentControllerRecaptureSlot from "../backendapi/apiExperimentControllerRecaptureSlot.js";
+import apiExperimentControllerGetOverviewAsyncStatus from "../backendapi/apiExperimentControllerGetOverviewAsyncStatus.js";
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView.js";
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView.js";
 
@@ -486,12 +487,38 @@ const OverviewRegistrationWizard = () => {
   const handleRecaptureSlot = async (slotId) => {
     dispatch(overviewRegSlice.setIsLoading(true));
     try {
+      // The backend kicks off a daemon thread and returns ``{started: true}``
+      // immediately so the FastAPI worker stays responsive. We poll the
+      // shared async-status endpoint until it reports ``running=false``
+      // before refreshing the overlay.
       await apiExperimentControllerRecaptureSlot({
         slot_id: slotId,
         layout_data: experimentState.wellLayout,
         layout_name: regState.layoutName,
         camera_name: regState.cameraName,
       });
+      // Poll up to ~60s. We sleep 750ms between probes - good enough latency
+      // for a UI button and gentle on the server.
+      const deadline = Date.now() + 60_000;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        await new Promise((r) => setTimeout(r, 750));
+        let status = null;
+        try {
+          status = await apiExperimentControllerGetOverviewAsyncStatus();
+        } catch (_) {
+          // transient - keep trying
+        }
+        if (status && status.running === false) {
+          if (status.error) {
+            throw new Error(status.error);
+          }
+          break;
+        }
+        if (Date.now() > deadline) {
+          throw new Error("Recapture timed out after 60s");
+        }
+      }
       // Refresh overlay so the just-captured slide image becomes visible.
       const overlayData = await apiGetOverviewOverlayData(
         regState.cameraName,

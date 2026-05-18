@@ -151,6 +151,19 @@ class ExperimentController(ImConWidgetController):
 
         # Initialize overview camera registration service
         self._overview_registration = OverviewRegistrationService()
+        # Background-task bookkeeping for overview-related endpoints. These
+        # endpoints (recaptureSlot, runAutonomousOverviewScan, ...) used to
+        # block the FastAPI worker thread for many seconds, freezing the UI.
+        # They now spawn worker threads and clients poll
+        # ``getOverviewAsyncStatus`` for completion.
+        self._overview_async_lock = threading.Lock()
+        self._overview_async_thread: Optional[threading.Thread] = None
+        self._overview_async_status: dict = {
+            "running": False,
+            "task": None,
+            "result": None,
+            "error": None,
+        }
         # Overview camera is resolved through the DetectorManager, using the
         # detector name configured in setup (experiment.overviewCameraName).
         # Falls back to a detector literally named "overviewcamera" if any.
@@ -3023,12 +3036,56 @@ class ExperimentController(ImConWidgetController):
     ):
         """Recapture a single overview slide slot instead of all 4.
 
-        Moves the stage to the slot center (computed from the supplied
-        ``layout_data`` or the labware/Heidstar fallback), then reuses
-        :meth:`snapOverviewImage` to grab a fresh frame. This avoids having to
-        rerun the full 4-slide overview registration when only one slot needs
-        to be retaken.
+        Returns immediately with ``{started: True, task: ...}``. The actual
+        stage move + snap runs in a background thread; clients poll
+        :meth:`getOverviewAsyncStatus` for completion / result. This unblocks
+        the FastAPI worker thread so the rest of the UI stays responsive.
         """
+        if not self._tryStartOverviewAsync(f"recapture_slot_{slot_id}"):
+            return {
+                "started": False,
+                "error": "Another overview task is still running",
+                "status": self._overview_async_status,
+            }
+
+        thread = threading.Thread(
+            target=self._recaptureSlotWorker,
+            args=(slot_id, layout_data, layout_name, camera_name),
+            daemon=True,
+            name=f"recaptureSlot-{slot_id}",
+        )
+        with self._overview_async_lock:
+            self._overview_async_thread = thread
+        thread.start()
+        return {"started": True, "task": f"recapture_slot_{slot_id}"}
+
+    def _recaptureSlotWorker(
+        self,
+        slot_id: str,
+        layout_data: Optional[dict],
+        layout_name: str,
+        camera_name: str,
+    ) -> None:
+        try:
+            result = self._recaptureSlotBlocking(
+                slot_id=slot_id,
+                layout_data=layout_data,
+                layout_name=layout_name,
+                camera_name=camera_name,
+            )
+            self._finishOverviewAsync(result=result)
+        except Exception as exc:
+            self._logger.error(f"recaptureSlot worker failed: {exc}", exc_info=True)
+            self._finishOverviewAsync(error=str(exc))
+
+    def _recaptureSlotBlocking(
+        self,
+        slot_id: str = "1",
+        layout_data: dict = None,
+        layout_name: str = "Heidstar 4x Histosample",
+        camera_name: str = "",
+    ) -> dict:
+        """Synchronous body of recaptureSlot - executed inside the worker."""
         # Resolve the layout the same way getOverviewRegistrationConfig does.
         if layout_data is not None and isinstance(layout_data, dict) and layout_data.get("wells"):
             layout_dict = layout_data
@@ -3064,16 +3121,12 @@ class ExperimentController(ImConWidgetController):
         except (TypeError, ValueError):
             pass
         if slot_index is None or slot_index < 0 or slot_index >= len(slots):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid slot_id '{slot_id}' for layout with {len(slots)} slots",
+            raise ValueError(
+                f"Invalid slot_id '{slot_id}' for layout with {len(slots)} slots"
             )
 
         slot = slots[slot_index]
         slot_dict = slot.model_dump() if hasattr(slot, "model_dump") else slot.dict()
-        # Slot definitions expose 4 stage corners (TL, TR, BR, BL); the center
-        # is the average of those corners. Fall back to a 'center' field if the
-        # backend ever provides one directly.
         center_x = slot_dict.get("centerX")
         center_y = slot_dict.get("centerY")
         if center_x is None or center_y is None:
@@ -3088,7 +3141,6 @@ class ExperimentController(ImConWidgetController):
                 center_x = sum(xs) / len(xs)
                 center_y = sum(ys) / len(ys)
             else:
-                # Last-resort: derive from the matching well in layout_dict.
                 well = layout_dict["wells"][slot_index]
                 center_x = float(well.get("x", 0.0))
                 center_y = float(well.get("y", 0.0))
@@ -3258,6 +3310,81 @@ class ExperimentController(ImConWidgetController):
     # ------------------------------------------------------------------
     # Autonomous overview scan + registration config endpoints
     # ------------------------------------------------------------------
+    # Async overview-task plumbing
+    # ------------------------------------------------------------------
+    def _tryStartOverviewAsync(self, task_name: str) -> bool:
+        """Reserve the single async overview slot. Returns False if busy."""
+        with self._overview_async_lock:
+            t = self._overview_async_thread
+            if t is not None and t.is_alive():
+                return False
+            self._overview_async_status = {
+                "running": True,
+                "task": task_name,
+                "result": None,
+                "error": None,
+            }
+            self._overview_async_thread = None
+            return True
+
+    def _finishOverviewAsync(self, result=None, error=None) -> None:
+        with self._overview_async_lock:
+            self._overview_async_status = {
+                "running": False,
+                "task": self._overview_async_status.get("task"),
+                "result": result,
+                "error": error,
+            }
+
+    @APIExport(requestType="GET")
+    def getOverviewAsyncStatus(self):
+        """Return the current background-overview-task state for polling."""
+        with self._overview_async_lock:
+            return dict(self._overview_async_status)
+
+    # ------------------------------------------------------------------
+    # Known calibration reference points per layout
+    # ------------------------------------------------------------------
+    # Hard-coded reference centres (in micrometres) for known calibration
+    # targets. ``StageOffsetCalibrationTab`` shows these as the "expected"
+    # position; the deviation from the brightest spot detected by the raster
+    # scan is what gets persisted as the stage offset.
+    _KNOWN_CALIBRATION_POINTS: Dict[str, Dict[str, Any]] = {
+        "Heidstar 4x Histosample": {
+            "x": 20000.0,
+            "y": 40000.0,
+            "description": "Centre of the openUC2 calibration pinhole on the Heidstar 4x slide carrier (slot 1).",
+        },
+        "openUC2 96-Well Calibration Chart": {
+            "x": 14380.0,
+            "y": 11240.0,
+            "description": "Centre well A1 of the openUC2 96-well calibration chart (slot 1).",
+        },
+    }
+
+    @APIExport(requestType="GET")
+    def getKnownCalibrationPoint(self, layout_name: str = "Heidstar 4x Histosample"):
+        """Return the expected (x_um, y_um) calibration centre for a layout.
+
+        The frontend uses this as the "true" position when storing a stage
+        offset: ``offset = expected - actual``.
+        """
+        ref = self._KNOWN_CALIBRATION_POINTS.get(layout_name)
+        if ref is None:
+            return {"success": False, "layoutName": layout_name, "known": None}
+        return {"success": True, "layoutName": layout_name, "known": dict(ref)}
+
+    @APIExport(requestType="GET")
+    def getKnownCalibrationLayouts(self):
+        """List every layout that ships a known calibration reference point."""
+        return {
+            "layouts": [
+                {"name": name, **dict(data)}
+                for name, data in self._KNOWN_CALIBRATION_POINTS.items()
+            ]
+        }
+
+    # ------------------------------------------------------------------
     @APIExport(requestType="POST")
     def runAutonomousOverviewScan(
         self,
@@ -3265,12 +3392,55 @@ class ExperimentController(ImConWidgetController):
         layout_name: str = "Heidstar 4x Histosample",
         settle_time_s: float = 0.5,
     ):
+        """Schedule an autonomous overview scan and return immediately.
+
+        The actual stage iteration + snap loop runs in a background thread so
+        the FastAPI worker stays free. Poll :meth:`getOverviewAsyncStatus` for
+        completion and the final ``scanResults`` / ``overlayData`` payload.
         """
-        Iterate all registered slots, move the stage to the stored XYZ
-        position, snap an image, re-warp using the stored homography and
-        write the resulting overlay JPEG/PNG. Returns per-slot results plus
-        the full overlay payload for direct frontend display.
-        """
+        if not self._tryStartOverviewAsync("autonomous_overview_scan"):
+            return {
+                "started": False,
+                "error": "Another overview task is still running",
+                "status": self._overview_async_status,
+            }
+
+        thread = threading.Thread(
+            target=self._runAutonomousOverviewScanWorker,
+            args=(camera_name, layout_name, settle_time_s),
+            daemon=True,
+            name="runAutonomousOverviewScan",
+        )
+        with self._overview_async_lock:
+            self._overview_async_thread = thread
+        thread.start()
+        return {"started": True, "task": "autonomous_overview_scan"}
+
+    def _runAutonomousOverviewScanWorker(
+        self,
+        camera_name: str,
+        layout_name: str,
+        settle_time_s: float,
+    ) -> None:
+        try:
+            result = self._runAutonomousOverviewScanBlocking(
+                camera_name=camera_name,
+                layout_name=layout_name,
+                settle_time_s=settle_time_s,
+            )
+            self._finishOverviewAsync(result=result)
+        except Exception as exc:
+            self._logger.error(
+                f"runAutonomousOverviewScan worker failed: {exc}", exc_info=True
+            )
+            self._finishOverviewAsync(error=str(exc))
+
+    def _runAutonomousOverviewScanBlocking(
+        self,
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+        settle_time_s: float = 0.5,
+    ) -> dict:
         cam_name = camera_name or self._overview_camera_name or "overviewcamera"
         cam = self._overview_camera
         if cam is None:

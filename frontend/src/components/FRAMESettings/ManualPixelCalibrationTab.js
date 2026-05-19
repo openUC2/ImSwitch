@@ -32,28 +32,34 @@ import {
 import LiveViewControlWrapper from '../../axon/LiveViewControlWrapper';
 import * as liveStreamSlice from '../../state/slices/LiveStreamSlice';
 import apiPositionerControllerMovePositioner from '../../backendapi/apiPositionerControllerMovePositioner';
-import apiPixelCalibrationControllerManualPixelSizeCalibration from '../../backendapi/apiPixelCalibrationControllerManualPixelSizeCalibration';
+import apiPixelCalibrationControllerManualFourPointCalibration from '../../backendapi/apiPixelCalibrationControllerManualFourPointCalibration';
 import apiPixelCalibrationControllerGetAvailableDetectors from '../../backendapi/apiPixelCalibrationControllerGetAvailableDetectors';
 import apiPixelCalibrationControllerGetCalibrationData from '../../backendapi/apiPixelCalibrationControllerGetCalibrationData';
 import apiPixelCalibrationControllerSetCalibrationData from '../../backendapi/apiPixelCalibrationControllerSetCalibrationData';
 
 /**
- * ManualPixelCalibrationTab – Interactive two-point pixel-size calibration
+ * ManualPixelCalibrationTab – Interactive four-point affine calibration
+ *
+ * Computes a full affine matrix (scale, rotation, flip) from two pairs of
+ * feature clicks – one pair per stage axis – exactly like the automated
+ * calibration but with user-selected key points.
  *
  * Workflow:
- *  1. Click a recognisable feature in the live image   → point1
- *  2. Move the stage by a KNOWN distance in X or Y
- *  3. Click the SAME feature again                      → point2
- *  4. Calculate and store: pixelSize = movementDistance / pixelDisplacement
+ *   Phase 1 (X-axis):
+ *     0. (Optional) Backlash pre-move along X
+ *     1. Click feature → P_A1
+ *     2. Move stage in X
+ *     3. Click same feature → P_A2
+ *   Phase 2 (Y-axis):
+ *     4. Click feature → P_B1
+ *     5. Move stage in Y
+ *     6. Click same feature → P_B2
+ *   Final:
+ *     7. Calculate & save
  */
 const ManualPixelCalibrationTab = () => {
-  // ---- Redux state for stream subsampling ----
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
 
-  // Compute the stream subsampling factor so we can convert preview pixels
-  // back to full-sensor pixels before sending coordinates to the backend.
-  // The live preview may be subsampled (e.g. factor 4) for performance,
-  // meaning 1 preview pixel = subsamplingFactor sensor pixels.
   const subsamplingFactor = useMemo(() => {
     const settings = liveStreamState.streamSettings;
     return settings?.jpeg?.subsampling?.factor ||
@@ -64,29 +70,28 @@ const ManualPixelCalibrationTab = () => {
 
   // ---- calibration state ----
   const [activeStep, setActiveStep] = useState(0);
-  const [point1, setPoint1] = useState(null);            // { x, y } in preview pixels
-  const [point2, setPoint2] = useState(null);             // { x, y } in preview pixels
-  const [imageDims, setImageDims] = useState(null);       // { width, height } in preview pixels
-  const [movementDistanceUm, setMovementDistanceUm] = useState(100);
-  const [movementAxis, setMovementAxis] = useState('X');
-  const [backlashDistanceUm, setBacklashDistanceUm] = useState(50); // Backlash pre-move distance
-  const [detectorName, setDetectorName] = useState('');             // empty = backend default
+  const [pointA1, setPointA1] = useState(null);
+  const [pointA2, setPointA2] = useState(null);
+  const [pointB1, setPointB1] = useState(null);
+  const [pointB2, setPointB2] = useState(null);
+  const [imageDims, setImageDims] = useState(null);
+  const [movementDistanceXUm, setMovementDistanceXUm] = useState(100);
+  const [movementDistanceYUm, setMovementDistanceYUm] = useState(100);
+  const [backlashDistanceUm, setBacklashDistanceUm] = useState(50);
+  const [detectorName, setDetectorName] = useState('');
   const [availableDetectors, setAvailableDetectors] = useState([]);
-  const [objectiveId, setObjectiveId] = useState('');     // empty = auto-detect
+  const [objectiveId, setObjectiveId] = useState('');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
 
-  // Editable per-(detector, objective) calibration state
   const [editPixelSizeUm, setEditPixelSizeUm] = useState('');
   const [existingCalib, setExistingCalib] = useState(null);
   const [editLoading, setEditLoading] = useState(false);
 
-  // Reference for overlay SVG dimensions
   const overlayRef = useRef(null);
 
-  // Load available detectors on mount
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -101,16 +106,12 @@ const ManualPixelCalibrationTab = () => {
     return () => { cancelled = true; };
   }, []);
 
-  // Reload the persisted calibration whenever the (detector, objective) selection changes
   useEffect(() => {
     let cancelled = false;
     if (!detectorName) { setExistingCalib(null); setEditPixelSizeUm(''); return undefined; }
     (async () => {
       try {
-        const resp = await apiPixelCalibrationControllerGetCalibrationData(
-          detectorName,
-          objectiveId,
-        );
+        const resp = await apiPixelCalibrationControllerGetCalibrationData(detectorName, objectiveId);
         if (cancelled) return;
         if (resp?.success) {
           setExistingCalib(resp);
@@ -130,31 +131,30 @@ const ManualPixelCalibrationTab = () => {
     return () => { cancelled = true; };
   }, [detectorName, objectiveId]);
 
-  // ---- helper: reset everything ----
   const handleReset = () => {
     setActiveStep(0);
-    setPoint1(null);
-    setPoint2(null);
+    setPointA1(null);
+    setPointA2(null);
+    setPointB1(null);
+    setPointB2(null);
     setResult(null);
     setStatus('');
     setError('');
   };
 
-  // ---- step 0: backlash compensation pre-move ----
+  // ---- step 0: backlash compensation ----
   const handleBacklashMove = async () => {
     try {
       setLoading(true);
       setError('');
-      setStatus(`Backlash pre-move: ${backlashDistanceUm} µm along ${movementAxis}…`);
+      setStatus(`Backlash pre-move: ${backlashDistanceUm} µm along X…`);
       await apiPositionerControllerMovePositioner({
-        axis: movementAxis,
+        axis: 'X',
         dist: backlashDistanceUm,
         isAbsolute: false,
         isBlocking: true,
       });
-      setStatus(
-        `Backlash compensation done. Now click on a recognisable feature in the image.`
-      );
+      setStatus('Backlash done. Click a recognisable feature in the image.');
       setActiveStep(1);
     } catch (err) {
       setError(`Backlash move failed: ${err.message}`);
@@ -163,68 +163,94 @@ const ManualPixelCalibrationTab = () => {
     }
   };
 
-  // ---- step 1: mark first point ----
+  // ---- image click handler (dispatches to the right step) ----
   const handleImageClick = useCallback(
     (pixelX, pixelY, imageWidth, imageHeight) => {
+      const dims = { width: imageWidth, height: imageHeight };
+      if (!imageDims) setImageDims(dims);
+
       if (activeStep === 1) {
-        // Mark point 1
-        setPoint1({ x: pixelX, y: pixelY });
-        setImageDims({ width: imageWidth, height: imageHeight });
-        setStatus(`Point 1 marked at (${Math.round(pixelX)}, ${Math.round(pixelY)})`);
+        setPointA1({ x: pixelX, y: pixelY });
+        setStatus(`P1 marked at (${Math.round(pixelX)}, ${Math.round(pixelY)}). Now move stage in X.`);
         setActiveStep(2);
       } else if (activeStep === 3) {
-        // Mark point 2
-        setPoint2({ x: pixelX, y: pixelY });
-        setStatus(`Point 2 marked at (${Math.round(pixelX)}, ${Math.round(pixelY)})`);
+        setPointA2({ x: pixelX, y: pixelY });
+        setStatus(`P2 marked. X-axis done. Now click a feature for the Y-axis measurement.`);
         setActiveStep(4);
+      } else if (activeStep === 4) {
+        setPointB1({ x: pixelX, y: pixelY });
+        setStatus(`P3 marked at (${Math.round(pixelX)}, ${Math.round(pixelY)}). Now move stage in Y.`);
+        setActiveStep(5);
+      } else if (activeStep === 6) {
+        setPointB2({ x: pixelX, y: pixelY });
+        setStatus('P4 marked. Ready to calculate the full affine calibration.');
+        setActiveStep(7);
       }
     },
-    [activeStep],
+    [activeStep, imageDims],
   );
 
-  // ---- step 2: move stage ----
-  const handleMoveStage = async () => {
+  // ---- step 2: move stage X ----
+  const handleMoveStageX = async () => {
     try {
       setLoading(true);
       setError('');
-      setStatus(`Moving stage ${movementDistanceUm} µm along ${movementAxis}…`);
+      setStatus(`Moving stage ${movementDistanceXUm} µm along X…`);
       await apiPositionerControllerMovePositioner({
-        axis: movementAxis,
-        dist: movementDistanceUm,
+        axis: 'X',
+        dist: movementDistanceXUm,
         isAbsolute: false,
         isBlocking: true,
       });
-      setStatus(
-        `Stage moved ${movementDistanceUm} µm along ${movementAxis}. ` +
-        'Now click the SAME feature again in the image.'
-      );
+      setStatus('Stage moved in X. Click the SAME feature again.');
       setActiveStep(3);
     } catch (err) {
-      setError(`Stage movement failed: ${err.message}`);
+      setError(`X stage move failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // ---- step 4: calculate & save ----
-  const handleCalculate = async () => {
-    if (!point1 || !point2) return;
-
+  // ---- step 5: move stage Y ----
+  const handleMoveStageY = async () => {
     try {
       setLoading(true);
       setError('');
-      setStatus('Calculating pixel size…');
+      setStatus(`Moving stage ${movementDistanceYUm} µm along Y…`);
+      await apiPositionerControllerMovePositioner({
+        axis: 'Y',
+        dist: movementDistanceYUm,
+        isAbsolute: false,
+        isBlocking: true,
+      });
+      setStatus('Stage moved in Y. Click the SAME feature again.');
+      setActiveStep(6);
+    } catch (err) {
+      setError(`Y stage move failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      // Send raw preview-pixel coords plus the subsampling factor; the backend
-      // does the multiplication. (We used to scale here, which double-scaled
-      // when the backend also applied the factor.)
-      const res = await apiPixelCalibrationControllerManualPixelSizeCalibration({
-        point1X: point1.x,
-        point1Y: point1.y,
-        point2X: point2.x,
-        point2Y: point2.y,
-        movementDistanceUm,
-        movementAxis,
+  // ---- step 7: calculate & save ----
+  const handleCalculate = async () => {
+    if (!pointA1 || !pointA2 || !pointB1 || !pointB2) return;
+    try {
+      setLoading(true);
+      setError('');
+      setStatus('Computing full affine calibration…');
+
+      const res = await apiPixelCalibrationControllerManualFourPointCalibration({
+        pointA1X: pointA1.x,
+        pointA1Y: pointA1.y,
+        pointA2X: pointA2.x,
+        pointA2Y: pointA2.y,
+        movementDistanceXUm,
+        pointB1X: pointB1.x,
+        pointB1Y: pointB1.y,
+        pointB2X: pointB2.x,
+        pointB2Y: pointB2.y,
+        movementDistanceYUm,
         detectorName: detectorName || undefined,
         objectiveId: objectiveId || undefined,
         previewSubsamplingFactor: subsamplingFactor,
@@ -233,7 +259,7 @@ const ManualPixelCalibrationTab = () => {
       if (res.success) {
         setResult(res);
         setStatus('');
-        setActiveStep(5);
+        setActiveStep(8);
       } else {
         setError(res.error || 'Calibration failed');
       }
@@ -244,76 +270,62 @@ const ManualPixelCalibrationTab = () => {
     }
   };
 
-  // ---- overlay: render marked points on top of the live view ----
-  const renderOverlay = () => {
-    // Only show overlay when we have at least one point
-    if (!point1 && !point2) return null;
+  // ---- overlay ----
+  const pointColor = (label) => {
+    if (label === 'A1' || label === 'A2') return '#00ff00';
+    return '#4488ff';
+  };
+  const renderPoint = (pt, label) => {
+    if (!pt) return null;
+    const c = pointColor(label);
+    return (
+      <g key={label}>
+        <line x1={pt.x - 12} y1={pt.y} x2={pt.x + 12} y2={pt.y} stroke={c} strokeWidth="2" />
+        <line x1={pt.x} y1={pt.y - 12} x2={pt.x} y2={pt.y + 12} stroke={c} strokeWidth="2" />
+        <circle cx={pt.x} cy={pt.y} r="7" fill="none" stroke={c} strokeWidth="2" />
+        <text x={pt.x + 12} y={pt.y - 8} fill={c} fontSize="13" fontWeight="bold">{label}</text>
+      </g>
+    );
+  };
 
+  const renderOverlay = () => {
+    if (!pointA1 && !pointA2 && !pointB1 && !pointB2) return null;
     return (
       <svg
         ref={overlayRef}
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%',
-          pointerEvents: 'none',
-          zIndex: 10,
-        }}
-        viewBox={
-          imageDims
-            ? `0 0 ${imageDims.width} ${imageDims.height}`
-            : '0 0 100 100'
-        }
+        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}
+        viewBox={imageDims ? `0 0 ${imageDims.width} ${imageDims.height}` : '0 0 100 100'}
         preserveAspectRatio="xMidYMid meet"
       >
-        {/* Point 1 marker */}
-        {point1 && (
-          <g>
-            {/* crosshair */}
-            <line x1={point1.x - 15} y1={point1.y} x2={point1.x + 15} y2={point1.y}
-              stroke="#00ff00" strokeWidth="2" />
-            <line x1={point1.x} y1={point1.y - 15} x2={point1.x} y2={point1.y + 15}
-              stroke="#00ff00" strokeWidth="2" />
-            <circle cx={point1.x} cy={point1.y} r="8"
-              fill="none" stroke="#00ff00" strokeWidth="2" />
-            <text x={point1.x + 14} y={point1.y - 10}
-              fill="#00ff00" fontSize="14" fontWeight="bold">P1</text>
-          </g>
+        {renderPoint(pointA1, 'A1')}
+        {renderPoint(pointA2, 'A2')}
+        {renderPoint(pointB1, 'B1')}
+        {renderPoint(pointB2, 'B2')}
+        {pointA1 && pointA2 && (
+          <line x1={pointA1.x} y1={pointA1.y} x2={pointA2.x} y2={pointA2.y}
+            stroke="#00ff00" strokeWidth="1.5" strokeDasharray="6,4" opacity="0.7" />
         )}
-
-        {/* Point 2 marker */}
-        {point2 && (
-          <g>
-            <line x1={point2.x - 15} y1={point2.y} x2={point2.x + 15} y2={point2.y}
-              stroke="#ff4444" strokeWidth="2" />
-            <line x1={point2.x} y1={point2.y - 15} x2={point2.x} y2={point2.y + 15}
-              stroke="#ff4444" strokeWidth="2" />
-            <circle cx={point2.x} cy={point2.y} r="8"
-              fill="none" stroke="#ff4444" strokeWidth="2" />
-            <text x={point2.x + 14} y={point2.y - 10}
-              fill="#ff4444" fontSize="14" fontWeight="bold">P2</text>
-          </g>
-        )}
-
-        {/* Line between points */}
-        {point1 && point2 && (
-          <line x1={point1.x} y1={point1.y} x2={point2.x} y2={point2.y}
-            stroke="#ffaa00" strokeWidth="1.5" strokeDasharray="6,4" />
+        {pointB1 && pointB2 && (
+          <line x1={pointB1.x} y1={pointB1.y} x2={pointB2.x} y2={pointB2.y}
+            stroke="#4488ff" strokeWidth="1.5" strokeDasharray="6,4" opacity="0.7" />
         )}
       </svg>
     );
   };
 
-  // Stepper labels
   const steps = [
-    'Backlash compensation move',
-    'Mark feature (point 1)',
-    'Move stage',
-    'Mark same feature (point 2)',
-    'Calculate pixel size',
+    'Backlash compensation',
+    'Mark feature (P1 before X move)',
+    'Move stage in X',
+    'Mark same feature (P2 after X move)',
+    'Mark feature (P3 before Y move)',
+    'Move stage in Y',
+    'Mark same feature (P4 after Y move)',
+    'Calculate affine calibration',
   ];
+
+  // Clickable steps — highlight which steps expect a click
+  const clickSteps = new Set([1, 3, 4, 6]);
 
   return (
     <Box>
@@ -325,26 +337,14 @@ const ManualPixelCalibrationTab = () => {
               Detector Camera
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              {activeStep === 0
-                ? 'First, perform backlash compensation move'
-                : activeStep === 1
-                  ? 'Click on a recognisable feature in the image to set Point 1'
-                  : activeStep === 3
-                    ? 'Click on the SAME feature again to set Point 2'
-                    : 'Live preview'}
+              {clickSteps.has(activeStep)
+                ? activeStep <= 3
+                  ? 'Click on a feature in the image (X-axis measurement)'
+                  : 'Click on a feature in the image (Y-axis measurement)'
+                : 'Live preview'}
             </Typography>
 
-            <Box
-              sx={{
-                border: '1px solid #ddd',
-                borderRadius: 2,
-                overflow: 'hidden',
-                minHeight: 400,
-                maxHeight: 500,
-                backgroundColor: '#000',
-                position: 'relative',
-              }}
-            >
+            <Box sx={{ border: '1px solid #ddd', borderRadius: 2, overflow: 'hidden', minHeight: 400, maxHeight: 500, backgroundColor: '#000', position: 'relative' }}>
               <LiveViewControlWrapper
                 useFastMode={true}
                 onClick={handleImageClick}
@@ -356,118 +356,51 @@ const ManualPixelCalibrationTab = () => {
 
             {/* Coordinate chips */}
             <Box sx={{ mt: 1, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-              {point1 && (
-                <Chip
-                  icon={<CrosshairIcon />}
-                  label={`P1: (${Math.round(point1.x)}, ${Math.round(point1.y)})`}
-                  color="success"
-                  size="small"
-                />
-              )}
-              {point2 && (
-                <Chip
-                  icon={<CrosshairIcon />}
-                  label={`P2: (${Math.round(point2.x)}, ${Math.round(point2.y)})`}
-                  color="error"
-                  size="small"
-                />
-              )}
-              {point1 && point2 && (() => {
-                const dxPrev = point2.x - point1.x;
-                const dyPrev = point2.y - point1.y;
-                const dispPreview = Math.sqrt(dxPrev ** 2 + dyPrev ** 2);
-                const dispSensor = dispPreview * subsamplingFactor;
-                return (
-                  <Chip
-                    label={
-                      subsamplingFactor > 1
-                        ? `Δ = ${Math.round(dispSensor)} sensor px (${Math.round(dispPreview)} preview px × ${subsamplingFactor})`
-                        : `Δ = ${Math.round(dispPreview)} px`
-                    }
-                    color="warning"
-                    size="small"
-                  />
-                );
+              {pointA1 && <Chip icon={<CrosshairIcon />} label={`A1: (${Math.round(pointA1.x)}, ${Math.round(pointA1.y)})`} color="success" size="small" />}
+              {pointA2 && <Chip icon={<CrosshairIcon />} label={`A2: (${Math.round(pointA2.x)}, ${Math.round(pointA2.y)})`} color="success" size="small" variant="outlined" />}
+              {pointB1 && <Chip icon={<CrosshairIcon />} label={`B1: (${Math.round(pointB1.x)}, ${Math.round(pointB1.y)})`} color="primary" size="small" />}
+              {pointB2 && <Chip icon={<CrosshairIcon />} label={`B2: (${Math.round(pointB2.x)}, ${Math.round(pointB2.y)})`} color="primary" size="small" variant="outlined" />}
+              {pointA1 && pointA2 && (() => {
+                const d = Math.sqrt((pointA2.x - pointA1.x) ** 2 + (pointA2.y - pointA1.y) ** 2);
+                return <Chip label={`ΔX = ${Math.round(d * subsamplingFactor)} sensor px`} color="warning" size="small" />;
               })()}
-              {/* Show subsampling factor when active so the user knows coordinates are scaled */}
-              {subsamplingFactor > 1 && (
-                <Chip
-                  label={`Subsampling ×${subsamplingFactor}`}
-                  variant="outlined"
-                  size="small"
-                />
-              )}
+              {pointB1 && pointB2 && (() => {
+                const d = Math.sqrt((pointB2.x - pointB1.x) ** 2 + (pointB2.y - pointB1.y) ** 2);
+                return <Chip label={`ΔY = ${Math.round(d * subsamplingFactor)} sensor px`} color="warning" size="small" />;
+              })()}
+              {subsamplingFactor > 1 && <Chip label={`Subsampling ×${subsamplingFactor}`} variant="outlined" size="small" />}
             </Box>
           </Paper>
         </Grid>
 
         {/* ---- Right: Controls ---- */}
         <Grid item xs={12} md={5}>
-          {/* Messages */}
-          {status && (
-            <Alert severity="info" sx={{ mb: 2 }} onClose={() => setStatus('')}>
-              {status}
-            </Alert>
-          )}
-          {error && (
-            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
-              {error}
-            </Alert>
-          )}
+          {status && <Alert severity="info" sx={{ mb: 2 }} onClose={() => setStatus('')}>{status}</Alert>}
+          {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
 
           {/* Parameters */}
           <Paper sx={{ p: 2, mb: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Calibration Parameters
-            </Typography>
+            <Typography variant="h6" gutterBottom>Calibration Parameters</Typography>
 
             <FormControl fullWidth sx={{ mb: 2 }}>
               <InputLabel>Detector</InputLabel>
-              <Select
-                value={detectorName}
-                label="Detector"
-                onChange={(e) => setDetectorName(e.target.value)}
-              >
-                {availableDetectors.length === 0 && (
-                  <MenuItem value="" disabled>
-                    <em>(no detectors available)</em>
-                  </MenuItem>
-                )}
-                {availableDetectors.map((name) => (
-                  <MenuItem key={name} value={name}>{name}</MenuItem>
-                ))}
+              <Select value={detectorName} label="Detector" onChange={(e) => setDetectorName(e.target.value)}>
+                {availableDetectors.length === 0 && <MenuItem value="" disabled><em>(no detectors)</em></MenuItem>}
+                {availableDetectors.map((name) => <MenuItem key={name} value={name}>{name}</MenuItem>)}
               </Select>
             </FormControl>
 
-            <TextField
-              label="Movement Distance (µm)"
-              type="number"
-              value={movementDistanceUm}
-              onChange={(e) => setMovementDistanceUm(parseFloat(e.target.value) || 0)}
-              fullWidth
-              sx={{ mb: 2 }}
-              helperText="Known stage travel distance for the calibration move"
-            />
+            <TextField label="X Movement Distance (µm)" type="number" value={movementDistanceXUm}
+              onChange={(e) => setMovementDistanceXUm(parseFloat(e.target.value) || 0)}
+              fullWidth sx={{ mb: 2 }} helperText="Known stage travel along X" />
 
-            <FormControl fullWidth sx={{ mb: 2 }}>
-              <InputLabel>Movement Axis</InputLabel>
-              <Select
-                value={movementAxis}
-                label="Movement Axis"
-                onChange={(e) => setMovementAxis(e.target.value)}
-              >
-                <MenuItem value="X">X</MenuItem>
-                <MenuItem value="Y">Y</MenuItem>
-              </Select>
-            </FormControl>
+            <TextField label="Y Movement Distance (µm)" type="number" value={movementDistanceYUm}
+              onChange={(e) => setMovementDistanceYUm(parseFloat(e.target.value) || 0)}
+              fullWidth sx={{ mb: 2 }} helperText="Known stage travel along Y" />
 
             <FormControl fullWidth sx={{ mb: 1 }}>
               <InputLabel>Objective</InputLabel>
-              <Select
-                value={objectiveId}
-                label="Objective"
-                onChange={(e) => setObjectiveId(e.target.value)}
-              >
+              <Select value={objectiveId} label="Objective" onChange={(e) => setObjectiveId(e.target.value)}>
                 <MenuItem value="">Current</MenuItem>
                 <MenuItem value="0">Objective 0</MenuItem>
                 <MenuItem value="1">Objective 1</MenuItem>
@@ -475,253 +408,197 @@ const ManualPixelCalibrationTab = () => {
             </FormControl>
           </Paper>
 
-          {/* Editable per-(detector, objective) calibration */}
+          {/* Editable calibration override */}
           <Paper sx={{ p: 2, mb: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Edit Calibration
-            </Typography>
+            <Typography variant="h6" gutterBottom>Edit Calibration</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               {existingCalib
-                ? `Current value for '${detectorName}' @ '${existingCalib.objectiveId}'.`
-                : `No calibration stored yet for '${detectorName || '(none)'}' @ '${objectiveId || 'current'}'.`}
+                ? `Current: ${detectorName} @ ${existingCalib.objectiveId}`
+                : `No calibration stored for ${detectorName || '(none)'}`}
             </Typography>
-            <TextField
-              label="Pixel Size (µm / pixel)"
-              type="number"
-              value={editPixelSizeUm}
+            <TextField label="Pixel Size (µm/px)" type="number" value={editPixelSizeUm}
               onChange={(e) => setEditPixelSizeUm(e.target.value)}
-              fullWidth
-              size="small"
-              sx={{ mb: 1 }}
-              inputProps={{ step: 0.001, min: 0 }}
-            />
-            <Button
-              variant="outlined"
-              size="small"
+              fullWidth size="small" sx={{ mb: 1 }} inputProps={{ step: 0.001, min: 0 }} />
+            <Button variant="outlined" size="small"
               startIcon={editLoading ? <CircularProgress size={16} /> : <SaveIcon />}
               disabled={editLoading || !detectorName || !editPixelSizeUm}
               onClick={async () => {
                 const px = parseFloat(editPixelSizeUm);
-                if (!isFinite(px) || px <= 0) {
-                  setError('Pixel size must be a positive number');
-                  return;
-                }
-                setEditLoading(true);
-                setError('');
+                if (!isFinite(px) || px <= 0) { setError('Pixel size must be positive'); return; }
+                setEditLoading(true); setError('');
                 try {
                   const resp = await apiPixelCalibrationControllerSetCalibrationData({
-                    detectorName,
-                    objectiveId: objectiveId || undefined,
+                    detectorName, objectiveId: objectiveId || undefined,
                     affineMatrix: [[px, 0.0, 0.0], [0.0, px, 0.0]],
-                    metrics: {
-                      scale_x_um_per_pixel: px,
-                      scale_y_um_per_pixel: px,
-                      rotation_deg: 0.0,
-                      method: 'manual_edit',
-                      quality: 'manual',
-                    },
+                    metrics: { scale_x_um_per_pixel: px, scale_y_um_per_pixel: px, rotation_deg: 0.0, method: 'manual_edit', quality: 'manual' },
                   });
                   if (resp?.success) {
                     setStatus(resp.message || 'Calibration saved');
-                    setExistingCalib({
-                      success: true,
-                      detectorName,
-                      objectiveId: resp.objectiveId,
-                      metrics: resp.metrics,
-                      affineMatrix: resp.affineMatrix,
-                    });
-                  } else {
-                    setError(resp?.error || 'Failed to save calibration');
-                  }
-                } catch (e) {
-                  setError(`Save failed: ${e.message}`);
-                } finally {
-                  setEditLoading(false);
-                }
-              }}
-            >
-              Save calibration
-            </Button>
+                    setExistingCalib({ success: true, detectorName, objectiveId: resp.objectiveId, metrics: resp.metrics, affineMatrix: resp.affineMatrix });
+                  } else { setError(resp?.error || 'Save failed'); }
+                } catch (e) { setError(`Save failed: ${e.message}`); }
+                finally { setEditLoading(false); }
+              }}>Save calibration</Button>
           </Paper>
 
           {/* Stepper workflow */}
           <Paper sx={{ p: 2, mb: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Calibration Workflow
-            </Typography>
+            <Typography variant="h6" gutterBottom>Four-Point Calibration Workflow</Typography>
 
             <Stepper activeStep={activeStep} orientation="vertical">
-              {/* Step 0 – backlash compensation */}
+              {/* Step 0 – backlash */}
               <Step>
-                <StepLabel
-                  StepIconProps={{
-                    icon: <MoveIcon color={activeStep === 0 ? 'primary' : 'inherit'} />,
-                  }}
-                >
+                <StepLabel StepIconProps={{ icon: <MoveIcon color={activeStep === 0 ? 'primary' : 'inherit'} /> }}>
                   {steps[0]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2" sx={{ mb: 1 }}>
-                    Move the stage <strong>{backlashDistanceUm} µm</strong> along{' '}
-                    <strong>{movementAxis}</strong> to compensate for mechanical backlash
-                    before marking the first feature.
+                    Move stage <strong>{backlashDistanceUm} µm</strong> along X to compensate backlash.
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
-                    <TextField
-                      label="Backlash (µm)"
-                      type="number"
-                      size="small"
-                      value={backlashDistanceUm}
-                      onChange={(e) => setBacklashDistanceUm(parseFloat(e.target.value) || 0)}
-                      sx={{ width: 120 }}
-                    />
-                    <Button
-                      variant="contained"
-                      size="small"
+                    <TextField label="Backlash (µm)" type="number" size="small" value={backlashDistanceUm}
+                      onChange={(e) => setBacklashDistanceUm(parseFloat(e.target.value) || 0)} sx={{ width: 120 }} />
+                    <Button variant="contained" size="small"
                       startIcon={loading ? <CircularProgress size={18} /> : <MoveIcon />}
-                      onClick={handleBacklashMove}
-                      disabled={loading}
-                    >
-                      {loading ? 'Moving…' : `Move ${backlashDistanceUm} µm`}
+                      onClick={handleBacklashMove} disabled={loading}>
+                      {loading ? 'Moving…' : 'Move'}
                     </Button>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      onClick={() => setActiveStep(1)}
-                    >
-                      Skip
-                    </Button>
+                    <Button variant="outlined" size="small" onClick={() => setActiveStep(1)}>Skip</Button>
                   </Box>
                 </StepContent>
               </Step>
 
-              {/* Step 1 – mark point 1 */}
+              {/* Step 1 – mark P_A1 */}
               <Step>
-                <StepLabel
-                  StepIconProps={{
-                    icon: <CrosshairIcon color={activeStep === 1 ? 'primary' : 'inherit'} />,
-                  }}
-                >
+                <StepLabel StepIconProps={{ icon: <CrosshairIcon color={activeStep === 1 ? 'primary' : 'inherit'} /> }}>
                   {steps[1]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2">
-                    Click on a clearly identifiable feature (e.g. an edge, particle
-                    or structure) in the live image.
+                    Click on a clearly identifiable feature in the live image.
                   </Typography>
                 </StepContent>
               </Step>
 
-              {/* Step 2 – move stage */}
+              {/* Step 2 – move X */}
               <Step>
-                <StepLabel
-                  StepIconProps={{
-                    icon: <MoveIcon color={activeStep === 2 ? 'primary' : 'inherit'} />,
-                  }}
-                >
+                <StepLabel StepIconProps={{ icon: <MoveIcon color={activeStep === 2 ? 'primary' : 'inherit'} /> }}>
                   {steps[2]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2" sx={{ mb: 1 }}>
-                    Move the stage by <strong>{movementDistanceUm} µm</strong> along{' '}
-                    <strong>{movementAxis}</strong>.
+                    Move stage <strong>{movementDistanceXUm} µm</strong> along <strong>X</strong>.
                   </Typography>
-                  <Button
-                    variant="contained"
+                  <Button variant="contained"
                     startIcon={loading ? <CircularProgress size={18} /> : <MoveIcon />}
-                    onClick={handleMoveStage}
-                    disabled={loading}
-                  >
-                    {loading ? 'Moving…' : `Move ${movementDistanceUm} µm ${movementAxis}`}
+                    onClick={handleMoveStageX} disabled={loading}>
+                    {loading ? 'Moving…' : `Move ${movementDistanceXUm} µm X`}
                   </Button>
                 </StepContent>
               </Step>
 
-              {/* Step 3 – mark point 2 */}
+              {/* Step 3 – mark P_A2 */}
               <Step>
-                <StepLabel
-                  StepIconProps={{
-                    icon: <CrosshairIcon color={activeStep === 3 ? 'primary' : 'inherit'} />,
-                  }}
-                >
+                <StepLabel StepIconProps={{ icon: <CrosshairIcon color={activeStep === 3 ? 'primary' : 'inherit'} /> }}>
                   {steps[3]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2">
-                    Click on the <strong>same</strong> feature you marked before. The
-                    shift in pixels will determine the pixel size.
+                    Click the <strong>same</strong> feature you marked in step 1.
                   </Typography>
                 </StepContent>
               </Step>
 
-              {/* Step 4 – calculate */}
+              {/* Step 4 – mark P_B1 */}
               <Step>
-                <StepLabel
-                  StepIconProps={{
-                    icon: <CalcIcon color={activeStep === 4 ? 'primary' : 'inherit'} />,
-                  }}
-                >
+                <StepLabel StepIconProps={{ icon: <CrosshairIcon color={activeStep === 4 ? 'primary' : 'inherit'} /> }}>
                   {steps[4]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2" sx={{ mb: 1 }}>
-                    Review the marked points and press <em>Calculate</em> to compute and
-                    save the pixel size.
+                    Click a feature for the Y-axis measurement (can be the same or a different one).
                   </Typography>
-                  <Button
-                    variant="contained"
-                    color="primary"
+                </StepContent>
+              </Step>
+
+              {/* Step 5 – move Y */}
+              <Step>
+                <StepLabel StepIconProps={{ icon: <MoveIcon color={activeStep === 5 ? 'primary' : 'inherit'} /> }}>
+                  {steps[5]}
+                </StepLabel>
+                <StepContent>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    Move stage <strong>{movementDistanceYUm} µm</strong> along <strong>Y</strong>.
+                  </Typography>
+                  <Button variant="contained"
+                    startIcon={loading ? <CircularProgress size={18} /> : <MoveIcon />}
+                    onClick={handleMoveStageY} disabled={loading}>
+                    {loading ? 'Moving…' : `Move ${movementDistanceYUm} µm Y`}
+                  </Button>
+                </StepContent>
+              </Step>
+
+              {/* Step 6 – mark P_B2 */}
+              <Step>
+                <StepLabel StepIconProps={{ icon: <CrosshairIcon color={activeStep === 6 ? 'primary' : 'inherit'} /> }}>
+                  {steps[6]}
+                </StepLabel>
+                <StepContent>
+                  <Typography variant="body2">
+                    Click the <strong>same</strong> feature you marked in step 4.
+                  </Typography>
+                </StepContent>
+              </Step>
+
+              {/* Step 7 – calculate */}
+              <Step>
+                <StepLabel StepIconProps={{ icon: <CalcIcon color={activeStep === 7 ? 'primary' : 'inherit'} /> }}>
+                  {steps[7]}
+                </StepLabel>
+                <StepContent>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    Review the four points and press <em>Calculate</em> to compute and save the affine calibration.
+                  </Typography>
+                  <Button variant="contained" color="primary"
                     startIcon={loading ? <CircularProgress size={18} /> : <CalcIcon />}
-                    onClick={handleCalculate}
-                    disabled={loading}
-                  >
+                    onClick={handleCalculate} disabled={loading}>
                     {loading ? 'Calculating…' : 'Calculate & Save'}
                   </Button>
                 </StepContent>
               </Step>
             </Stepper>
 
-            {/* Done state */}
-            {activeStep === 5 && (
+            {activeStep === 8 && (
               <Box sx={{ mt: 2, textAlign: 'center' }}>
                 <DoneIcon color="success" sx={{ fontSize: 48 }} />
                 <Typography variant="subtitle1" color="success.main">
-                  Calibration complete!
+                  Affine calibration complete!
                 </Typography>
               </Box>
             )}
 
             <Divider sx={{ my: 2 }} />
-
-            <Button
-              variant="outlined"
-              startIcon={<ResetIcon />}
-              onClick={handleReset}
-              fullWidth
-            >
+            <Button variant="outlined" startIcon={<ResetIcon />} onClick={handleReset} fullWidth>
               Reset / Start Over
             </Button>
           </Paper>
 
           {/* Info box */}
           <Paper sx={{ p: 2, mb: 2, backgroundColor: (theme) => theme.palette.mode === 'dark' ? 'rgba(144,202,249,0.08)' : '#f0f7ff' }}>
-            <Typography variant="subtitle2" gutterBottom>
-              How it works
-            </Typography>
+            <Typography variant="subtitle2" gutterBottom>How it works</Typography>
             <Typography variant="body2">
-              0. (Optional) Move stage to compensate for backlash.<br />
-              1. Mark a feature in the live image (Point 1).<br />
-              2. Move the stage by a <em>known</em> distance.<br />
-              3. Mark the <em>same</em> feature again (Point 2).<br />
-              4. The pixel size is: <strong>distance / displacement</strong>.<br />
-              5. The value is saved for the current objective.
+              This calibration measures <strong>both</strong> stage axes to compute a full
+              affine matrix — encoding pixel size, rotation <em>and</em> flip, just like the
+              automatic calibration.<br /><br />
+              <strong>X-axis:</strong> Mark a feature (P1), move stage in X, mark it again (P2).<br />
+              <strong>Y-axis:</strong> Mark a feature (P3), move stage in Y, mark it again (P4).<br />
+              The two pixel-shift vectors fully determine the 2×2 transform.
             </Typography>
             {subsamplingFactor > 1 && (
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                 <em>
-                  Note: The live preview is subsampled by &times;{subsamplingFactor}.
-                  Pixel coordinates are automatically scaled to full sensor
-                  resolution before the calibration calculation.
+                  The live preview is subsampled by &times;{subsamplingFactor}.
+                  Coordinates are automatically scaled to full sensor resolution.
                 </em>
               </Typography>
             )}
@@ -730,33 +607,47 @@ const ManualPixelCalibrationTab = () => {
           {/* Result display */}
           {result && (
             <Paper sx={{ p: 2, backgroundColor: (theme) => theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : '#f5f5f5' }}>
-              <Typography variant="h6" gutterBottom>
-                Result
-              </Typography>
-              <Alert severity="success" sx={{ mb: 2 }}>
-                {result.message}
-              </Alert>
+              <Typography variant="h6" gutterBottom>Result</Typography>
+              <Alert severity="success" sx={{ mb: 2 }}>{result.message}</Alert>
 
               <Box sx={{ mb: 1 }}>
                 <Typography variant="subtitle2">
-                  Pixel Size:{' '}
-                  <strong>{result.pixelSizeUm?.toFixed(4)} µm / pixel</strong>
+                  Pixel Size: <strong>{result.pixelSizeUm?.toFixed(4)} µm/px</strong>
                 </Typography>
               </Box>
               <Box sx={{ mb: 1 }}>
                 <Typography variant="body2">
-                  Displacement: {result.displacementPx?.toFixed(1)} px
+                  Scale X: {result.scaleXUmPerPixel?.toFixed(4)} µm/px
+                  {result.scaleXUmPerPixel < 0 && ' (flipped)'}
                 </Typography>
               </Box>
               <Box sx={{ mb: 1 }}>
                 <Typography variant="body2">
-                  Movement: {movementDistanceUm} µm along {movementAxis}
+                  Scale Y: {result.scaleYUmPerPixel?.toFixed(4)} µm/px
+                  {result.scaleYUmPerPixel < 0 && ' (flipped)'}
+                </Typography>
+              </Box>
+              {result.metrics?.rotation_deg != null && (
+                <Box sx={{ mb: 1 }}>
+                  <Typography variant="body2">
+                    Rotation: {result.metrics.rotation_deg.toFixed(1)}°
+                  </Typography>
+                </Box>
+              )}
+              {result.metrics?.condition_number != null && (
+                <Box sx={{ mb: 1 }}>
+                  <Typography variant="body2">
+                    Condition number: {result.metrics.condition_number.toFixed(2)}
+                  </Typography>
+                </Box>
+              )}
+              <Box sx={{ mb: 1 }}>
+                <Typography variant="body2">
+                  Movement: {movementDistanceXUm} µm X, {movementDistanceYUm} µm Y
                 </Typography>
               </Box>
               <Box sx={{ mb: 1 }}>
-                <Typography variant="body2">
-                  Objective: {result.objectiveId}
-                </Typography>
+                <Typography variant="body2">Objective: {result.objectiveId}</Typography>
               </Box>
             </Paper>
           )}

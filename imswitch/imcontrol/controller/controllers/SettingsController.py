@@ -4,6 +4,7 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 
 from imswitch.imcommon.model import APIExport
+from imswitch.imcommon.framework import Signal, Timer
 from imswitch.imcontrol.model import configfiletools
 from imswitch.imcontrol.view import guitools as guitools
 from ..basecontrollers import ImConWidgetController
@@ -30,24 +31,97 @@ class SettingsControllerParams:
 class SettingsController(ImConWidgetController):
     """ Linked to SettingsWidget."""
 
+    # Signal emitted when detector parameters change (for WebSocket broadcasting)
+    sigDetectorParametersUpdated = Signal(dict)  # Emits: {'detectorName': str, 'parameters': dict}
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.settingAttr = False
         self.allParams = {}
+        self._last_detector_params_snapshot = None
+        self._detector_params_emit_interval_ms = 5000
+        self._detector_params_timer = Timer()
+        self._detector_once_reset_timer = None
+        self._detector_params_timer.timeout.connect(self._emit_detector_parameters_if_changed)
 
         if not self._master.detectorsManager.hasDevices():
             return
 
-
         # Connect CommunicationChannel signals
         self._commChannel.sigDetectorSwitched.connect(self.detectorSwitched)
+        
+        # Connect our signal with CommunicationChannel for WebSocket broadcasting
+        self.sigDetectorParametersUpdated.connect(self._commChannel.sigDetectorParametersUpdated.emit)
 
         self.roiAdded = False
 
         self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
         self.detectorSwitched(self._master.detectorsManager.getCurrentDetectorName())
         self.updateSharedAttrs()
+
+        # Periodic fallback for detector parameter sync.
+        # Actual polling is gated in _emit_detector_parameters_if_changed and
+        # runs only for dynamic exposure modes (auto/once).
+        self._detector_params_timer.start(self._detector_params_emit_interval_ms)
+        self._emit_detector_parameters_if_changed(force=True)
+
+    def _is_dynamic_exposure_mode_active(self) -> bool:
+        """Return True when periodic detector polling is needed.
+
+        Dynamic exposure modes update parameters on the camera side over time,
+        so we keep fallback polling active only in these modes.
+        """
+        try:
+            detector = self._master.detectorsManager.getCurrentDetector()
+            mode_parameter_name = 'exposure_mode' if 'exposure_mode' in detector.parameters else 'mode'
+            mode_parameter = detector.parameters.get(mode_parameter_name)
+            mode_value = str(getattr(mode_parameter, 'value', '')).strip().lower()
+            return mode_value in {'auto', 'once'}
+        except Exception:
+            return False
+
+    def _build_detector_params_snapshot(self):
+        try:
+            detector_name = self._master.detectorsManager.getCurrentDetectorName()
+            params = self.getDetectorParameters()
+            return {
+                'detectorName': detector_name,
+                'parameters': params,
+            }
+        except Exception:
+            return None
+
+    def _emit_detector_parameters_if_changed(self, force: bool = False):
+        if not force and not self._is_dynamic_exposure_mode_active():
+            return
+
+        snapshot = self._build_detector_params_snapshot()
+        if snapshot is None:
+            return
+
+        if force or snapshot != self._last_detector_params_snapshot:
+            self._last_detector_params_snapshot = snapshot
+            self.sigDetectorParametersUpdated.emit(snapshot)
+
+    def closeEvent(self):
+        """Cleanup timer resources when controller is closed."""
+        try:
+            if hasattr(self, "_detector_params_timer") and self._detector_params_timer:
+                try:
+                    self._detector_params_timer.timeout.disconnect(self._emit_detector_parameters_if_changed)
+                except Exception:
+                    pass
+                self._detector_params_timer.stop()
+        except Exception:
+            pass
+
+    def __del__(self):
+        """Best-effort cleanup for non-Qt timer threads."""
+        try:
+            self.closeEvent()
+        except Exception:
+            pass
         
     def addROI(self):
         """ Adds the ROI to ImageWidget viewbox through the CommunicationChannel. """
@@ -376,6 +450,7 @@ class SettingsController(ImConWidgetController):
         """ Called when the user switches to another detector. """
         newDetectorShape = self._master.detectorsManager[newDetectorName].shape
         self._commChannel.sigAdjustFrame.emit(newDetectorShape)
+        self._emit_detector_parameters_if_changed(force=True)
         return
         self._widget.setDisplayedDetector(newDetectorName)
         self._widget.setImageFrameVisible(self._master.detectorsManager[newDetectorName].croppable)
@@ -586,26 +661,37 @@ class SettingsController(ImConWidgetController):
     @APIExport()
     def getDetectorParameters(self) -> dict:
         """ Returns the current parameters of the current detector. """
+        detector = self._master.detectorsManager.getCurrentDetector()
         # collect exposure time
-        try: mExposureTime = self._master.detectorsManager.getCurrentDetector().parameters['exposure'].value
-        except: mExposureTime = 1
+        try:
+            mExposureTime = detector.getParameter('exposure')
+        except Exception:
+            try:
+                mExposureTime = detector.parameters['exposure'].value
+            except Exception:
+                mExposureTime = 1
         # collect gain
-        try: mGain = self._master.detectorsManager.getCurrentDetector().parameters['gain'].value
-        except: mGain = 0
+        try:
+            mGain = detector.getParameter('gain')
+        except Exception:
+            try:
+                mGain = detector.parameters['gain'].value
+            except Exception:
+                mGain = 0
         # collect pixelSize
-        try: mPixelSize = self._master.detectorsManager.getCurrentDetector().pixelSizeUm[-1]
+        try: mPixelSize = detector.pixelSizeUm[-1]
         except: mPixelSize = 1
         # collect binning
-        try: mBinning = self._master.detectorsManager.getCurrentDetector().binning
+        try: mBinning = detector.binning
         except: mBinning = 1
         # get Black Level
-        try: mBlacklevel = self._master.detectorsManager.getCurrentDetector().parameters['blacklevel'].value
+        try: mBlacklevel = detector.parameters['blacklevel'].value
         except: mBlacklevel = 0
         # get rgb
-        try: mRGB = self._master.detectorsManager.getCurrentDetector()._isRGB
+        try: mRGB = detector._isRGB
         except: mRGB = 0
         # collect mode (auto/manual)
-        try: camMode = self._master.detectorsManager.getCurrentDetector().parameters['exposure_mode'].value
+        try: camMode = detector.parameters['exposure_mode'].value
         except: camMode = 'manual'
         mParameterDict = {
             'exposure': mExposureTime,
@@ -618,7 +704,6 @@ class SettingsController(ImConWidgetController):
         }
 
         # Include white-balance info when available (RGB cameras)
-        detector = self._master.detectorsManager.getCurrentDetector()
         if mRGB:
             try:
                 mParameterDict['awb_mode'] = detector.parameters.get('awb_mode', None)
@@ -690,15 +775,86 @@ class SettingsController(ImConWidgetController):
         )
         self.updateSharedAttrs()
 
+        self._emit_detector_parameters_if_changed(force=True)
+
     @APIExport(runOnUIThread=True)
     def setDetectorMode(self, detectorName: str=None, isAuto: bool=True) -> None:
         """ Sets the detector mode for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         try:
-            self.setDetectorParameter(detectorName, 'mode', 'Auto' if isAuto else 'Manual')
+            detector = self._master.detectorsManager[detectorName]
+            mode_parameter_name = 'exposure_mode' if 'exposure_mode' in detector.parameters else 'mode'
+
+            mode_parameter = detector.parameters.get(mode_parameter_name)
+            current_value = str(getattr(mode_parameter, 'value', '')).strip() if mode_parameter else ''
+            lower_value = current_value.lower()
+
+            if 'auto' in lower_value or 'manual' in lower_value:
+                target_value = 'auto' if isAuto else 'manual'
+                if current_value and current_value[0].isupper():
+                    target_value = target_value.capitalize()
+            else:
+                target_value = 'Auto' if isAuto else 'Manual'
+
+            self.setDetectorParameter(detectorName, mode_parameter_name, target_value)
         except Exception:
-            pass
+            self._logger.warning(
+                f"Failed to set detector mode for '{detectorName}'",
+                exc_info=True,
+            )
+
+    @APIExport(runOnUIThread=True)
+    def setDetectorExposureOnce(self, detectorName: str = None, resetDelayMs: int = 1500) -> None:
+        """Runs a single auto-exposure pass and then returns the detector to manual mode.
+
+        The UI keeps showing the detector as manual; the button is meant as a
+        temporary exposure correction action rather than a persistent mode.
+        """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+
+        try:
+            detector = self._master.detectorsManager[detectorName]
+            mode_parameter_name = 'exposure_mode' if 'exposure_mode' in detector.parameters else 'mode'
+
+            self._master.detectorsManager.execOn(
+                detectorName,
+                lambda c: c.setParameter(mode_parameter_name, 'once'),
+            )
+
+            if self._detector_once_reset_timer is not None:
+                try:
+                    self._detector_once_reset_timer.stop()
+                except Exception:
+                    self._logger.warning(
+                        "Failed to stop existing detector once-reset timer",
+                        exc_info=True,
+                    )
+
+            def _restore_manual():
+                try:
+                    self._master.detectorsManager.execOn(
+                        detectorName,
+                        lambda c: c.setParameter(mode_parameter_name, 'manual'),
+                    )
+                    self.updateParamsFromDetector(detector=detector)
+                    self.updateSharedAttrs()
+                    self._emit_detector_parameters_if_changed(force=True)
+                except Exception:
+                    self._logger.warning(
+                        f"Failed to restore manual mode after auto-once for '{detectorName}'",
+                        exc_info=True,
+                    )
+
+            self._detector_once_reset_timer = Timer(singleShot=True)
+            self._detector_once_reset_timer.timeout.connect(_restore_manual)
+            self._detector_once_reset_timer.start(resetDelayMs)
+        except Exception:
+            self._logger.warning(
+                f"Failed to run detector auto-once for '{detectorName}'",
+                exc_info=True,
+            )
 
     @APIExport()
     def getCameraStatus(self, detectorName: str = None) -> dict:

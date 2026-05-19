@@ -40,7 +40,7 @@ class SettingsController(ImConWidgetController):
         self.settingAttr = False
         self.allParams = {}
         self._last_detector_params_snapshot = None
-        self._detector_params_emit_interval_ms = 1000
+        self._detector_params_emit_interval_ms = 5000
         self._detector_params_timer = Timer()
         self._detector_once_reset_timer = None
         self._detector_params_timer.timeout.connect(self._emit_detector_parameters_if_changed)
@@ -60,10 +60,26 @@ class SettingsController(ImConWidgetController):
         self.detectorSwitched(self._master.detectorsManager.getCurrentDetectorName())
         self.updateSharedAttrs()
 
-        # Periodically emit detector parameters so backend-side auto adjustments
-        # (e.g. exposure in auto mode) are reflected in the frontend.
+        # Periodic fallback for detector parameter sync.
+        # Actual polling is gated in _emit_detector_parameters_if_changed and
+        # runs only for dynamic exposure modes (auto/once).
         self._detector_params_timer.start(self._detector_params_emit_interval_ms)
         self._emit_detector_parameters_if_changed(force=True)
+
+    def _is_dynamic_exposure_mode_active(self) -> bool:
+        """Return True when periodic detector polling is needed.
+
+        Dynamic exposure modes update parameters on the camera side over time,
+        so we keep fallback polling active only in these modes.
+        """
+        try:
+            detector = self._master.detectorsManager.getCurrentDetector()
+            mode_parameter_name = 'exposure_mode' if 'exposure_mode' in detector.parameters else 'mode'
+            mode_parameter = detector.parameters.get(mode_parameter_name)
+            mode_value = str(getattr(mode_parameter, 'value', '')).strip().lower()
+            return mode_value in {'auto', 'once'}
+        except Exception:
+            return False
 
     def _build_detector_params_snapshot(self):
         try:
@@ -77,6 +93,9 @@ class SettingsController(ImConWidgetController):
             return None
 
     def _emit_detector_parameters_if_changed(self, force: bool = False):
+        if not force and not self._is_dynamic_exposure_mode_active():
+            return
+
         snapshot = self._build_detector_params_snapshot()
         if snapshot is None:
             return

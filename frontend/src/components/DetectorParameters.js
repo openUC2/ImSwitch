@@ -81,12 +81,13 @@ export default function DetectorParameters({ hostIP, hostPort }) {
   }, [fetchParams]);
 
   // Poll backend every 2 s when auto-exposure is active to show real values
+  /* // TODO: BD: This creates a lot of unnecessary overhead in my opinion, we should use the signal.emit here instead
   useEffect(() => {
     if (detectorParams.mode !== "auto") return;
     const interval = setInterval(fetchParams, 2000);
     return () => clearInterval(interval);
   }, [detectorParams.mode, fetchParams]);
-
+  */
   // Commit a numeric field to the backend.
   // Called on blur or Enter – NOT on every keystroke.
   const commitField = useCallback(async (field, rawValue) => {

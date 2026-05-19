@@ -39,9 +39,13 @@ import {
   setStreamSettings,
   setImageFormat,
   setCropSize,
+  setPerDetectorSettings,
+  updateDetectorSettings,
 } from "../state/slices/LiveStreamSlice.js";
+import { getLiveViewState } from "../state/slices/LiveViewSlice.js";
 import apiLiveViewControllerSetStreamParameters from "../backendapi/apiLiveViewControllerSetStreamParameters";
 import apiLiveViewControllerGetStreamParameters from "../backendapi/apiLiveViewControllerGetStreamParameters";
+import apiLiveViewControllerSetDetectorStreamParameters from "../backendapi/apiLiveViewControllerSetDetectorStreamParameters";
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView";
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice.js";
@@ -64,6 +68,7 @@ const StreamControlOverlay = ({
   const connectionSettingsState = useSelector(
     connectionSettingsSlice.getConnectionSettingsState
   );
+  const liveViewState = useSelector(getLiveViewState);
 
   // Destructure liveStreamState FIRST before using its values
   const {
@@ -177,6 +182,11 @@ const StreamControlOverlay = ({
         }
 
         dispatch(setStreamSettings(loadedSettings));
+
+        // Sync per-detector settings from backend
+        if (response.per_detector) {
+          dispatch(setPerDetectorSettings(response.per_detector));
+        }
       } catch (error) {
         console.warn("Failed to load backend settings:", error);
         // Use Redux state as fallback or set defaults to JPEG
@@ -345,10 +355,53 @@ const StreamControlOverlay = ({
       // Update Redux with new crop_size
       dispatch(setCropSize(draftSettings.crop_size || 0));
 
-      // Refresh objective status so fovX/fovY in Redux reflect the latest
-      // pixel size. Subsampling does not change fovX (which is always
-      // pixelsize * fullSensorWidth), but an explicit refresh ensures the
-      // value is populated even if no objective switch has happened yet.
+      // Also save as per-detector settings for the currently active detector
+      const activeDetectorName =
+        liveViewState.detectors?.[liveViewState.activeTab] || null;
+      if (activeDetectorName) {
+        const detectorParams = isWebRTCMode
+          ? {
+              protocol: "webrtc",
+              max_width: draftSettings.webrtc?.max_width || 1280,
+              throttle_ms: draftSettings.webrtc?.throttle_ms || 33,
+              subsampling_factor: draftSettings.webrtc?.subsampling_factor || 1,
+              crop_size: draftSettings.crop_size || 0,
+            }
+          : isJpegMode
+          ? {
+              protocol: "jpeg",
+              jpeg_quality: draftSettings.jpeg?.quality || 85,
+              subsampling_factor: draftSettings.jpeg?.subsampling?.factor || 1,
+              throttle_ms: draftSettings.jpeg?.throttle_ms || 100,
+              crop_size: draftSettings.crop_size || 0,
+            }
+          : {
+              protocol: "binary",
+              compression_algorithm:
+                draftSettings.binary?.compression?.algorithm || "lz4",
+              compression_level: draftSettings.binary?.compression?.level || 0,
+              subsampling_factor:
+                draftSettings.binary?.subsampling?.factor || 4,
+              throttle_ms: draftSettings.binary?.throttle_ms || 100,
+              crop_size: draftSettings.crop_size || 0,
+            };
+
+        dispatch(
+          updateDetectorSettings({
+            detectorName: activeDetectorName,
+            settings: detectorParams,
+          })
+        );
+
+        // Fire-and-forget to backend
+        apiLiveViewControllerSetDetectorStreamParameters(
+          activeDetectorName,
+          detectorParams
+        ).catch((err) =>
+          console.warn("Failed to save per-detector params:", err)
+        );
+      }
+
       fetchObjectiveControllerGetStatus(dispatch);
 
       setSubmitSuccess(true);

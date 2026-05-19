@@ -644,25 +644,28 @@ const WebSocketHandler = () => {
         dispatch(tileStreamSlice.setTileViewImage(dataJson.image));
       } else if (dataJson.name === "sigObjectiveChanged") {
         console.log("sigObjectiveChanged", dataJson);
-        //update redux state
-        // TODO add check if parameter exists
-        // TODO check if this works
-        dispatch(objectiveSlice.setPixelSize(dataJson.args.p0.pixelsize));
-        dispatch(objectiveSlice.setNA(dataJson.args.p0.NA));
-        dispatch(
-          objectiveSlice.setMagnification(dataJson.args.p0.magnification),
-        );
-        dispatch(
-          objectiveSlice.setObjectiveName(dataJson.args.p0.objectiveName),
-        );
-        dispatch(objectiveSlice.setFovX(dataJson.args.p0.FOV[0]));
-        dispatch(objectiveSlice.setFovY(dataJson.args.p0.FOV[1]));
-
-        /*  data:
-        Args: {"p0":0.2,"p1":0.5,"p2":10,"p3":"10x","p4":100,"p5":100}
-        sigObjectiveChanged = Signal(float, float, float, str, float, float) 
-              # pixelsize, NA, magnification, objectiveName, FOVx, FOVy
-        */
+        const p = dataJson.args.p0;
+        if (p.pixelsize != null) dispatch(objectiveSlice.setPixelSize(p.pixelsize));
+        if (p.NA != null) dispatch(objectiveSlice.setNA(p.NA));
+        if (p.magnification != null) dispatch(objectiveSlice.setMagnification(p.magnification));
+        if (p.objectiveName != null) dispatch(objectiveSlice.setObjectiveName(p.objectiveName));
+        if (p.FOV) {
+          dispatch(objectiveSlice.setFovX(p.FOV[0]));
+          dispatch(objectiveSlice.setFovY(p.FOV[1]));
+        }
+        if (p.currentObjective != null) dispatch(objectiveSlice.setCurrentObjective(p.currentObjective));
+        if (p.x0 != null) dispatch(objectiveSlice.setPosX0(p.x0));
+        if (p.x1 != null) dispatch(objectiveSlice.setPosX1(p.x1));
+        if (p.z0 != null) dispatch(objectiveSlice.setPosZ0(p.z0));
+        if (p.z1 != null) dispatch(objectiveSlice.setPosZ1(p.z1));
+        if (p.availableObjectivesNames) dispatch(objectiveSlice.setAvailableObjectivesNames(p.availableObjectivesNames));
+        if (p.availableObjectiveMagnifications) dispatch(objectiveSlice.setAvailableObjectiveMagnifications(p.availableObjectiveMagnifications));
+        if (p.availableObjectiveNAs) dispatch(objectiveSlice.setAvailableObjectiveNAs(p.availableObjectiveNAs));
+        if (p.availableObjectivePixelSizes) dispatch(objectiveSlice.setAvailableObjectivePixelSizes(p.availableObjectivePixelSizes));
+        if (p.availableObjectiveMagnifications) {
+          dispatch(objectiveSlice.setmagnification1(p.availableObjectiveMagnifications[0] ?? 0));
+          dispatch(objectiveSlice.setmagnification2(p.availableObjectiveMagnifications[1] ?? 0));
+        }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateMotorPosition") {
         console.log("sigUpdateMotorPosition received:", dataJson);

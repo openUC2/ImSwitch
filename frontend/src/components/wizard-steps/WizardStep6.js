@@ -1,5 +1,5 @@
-import React from "react";
-import { useSelector } from "react-redux";
+import React, { useEffect } from "react";
+import { useSelector, useDispatch } from "react-redux";
 import {
   Typography,
   Box,
@@ -18,9 +18,15 @@ import {
   RestartAlt as RestartIcon,
 } from "@mui/icons-material";
 import * as objectiveSlice from "../../state/slices/ObjectiveSlice.js";
+import fetchObjectiveControllerGetStatus from "../../middleware/fetchObjectiveControllerGetStatus.js";
 
 const WizardStep6 = ({ hostIP, hostPort, onNext, onBack, onComplete, activeStep, totalSteps }) => {
+  const dispatch = useDispatch();
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+
+  useEffect(() => {
+    fetchObjectiveControllerGetStatus(dispatch);
+  }, [dispatch]);
 
   const calibrationComplete = 
     objectiveState.posX0 !== null && 

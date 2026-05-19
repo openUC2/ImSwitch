@@ -19,6 +19,8 @@ import * as objectiveSlice from "../../state/slices/ObjectiveSlice.js";
 import apiPositionerControllerMovePositioner from "../../backendapi/apiPositionerControllerMovePositioner.js";
 import apiPositionerControllerGetPositions from "../../backendapi/apiPositionerControllerGetPositions.js";
 import apiObjectiveControllerSetPositions from "../../backendapi/apiObjectiveControllerSetPositions.js";
+import apiObjectiveControllerSetObjectiveParameters from "../../backendapi/apiObjectiveControllerSetObjectiveParameters.js";
+import fetchObjectiveControllerGetStatus from "../../middleware/fetchObjectiveControllerGetStatus.js";
 
 const WizardStep3 = ({ hostIP, hostPort, onNext, onBack, activeStep, totalSteps }) => {
   const dispatch = useDispatch();
@@ -133,20 +135,18 @@ const WizardStep3 = ({ hostIP, hostPort, onNext, onBack, activeStep, totalSteps 
   };
 
   const handleSaveX1Position = () => {
-    if (currentPosition !== null) {
-      // Save current position as X1 using the proper API
-      apiObjectiveControllerSetPositions({
-        x1: currentPosition,
-        isBlocking: false,
+    if (currentPosition == null) return;
+    if (!window.confirm(`Save X1 position as ${currentPosition}?`)) return;
+    apiObjectiveControllerSetPositions({
+      x1: currentPosition,
+      isBlocking: false,
+    })
+      .then(() => {
+        dispatch(objectiveSlice.setPosX1(currentPosition));
       })
-        .then((data) => {
-          dispatch(objectiveSlice.setPosX1(currentPosition));
-          alert(`X1 position set to: ${currentPosition}`);
-        })
-        .catch((err) => {
-          console.error("Error setting X1:", err);
-        });
-    }
+      .catch((err) => {
+        console.error("Error setting X1:", err);
+      });
   };
 
   const handleObjectiveInfoChange = (field, value) => {
@@ -157,9 +157,16 @@ const WizardStep3 = ({ hostIP, hostPort, onNext, onBack, activeStep, totalSteps 
   };
 
   const commitObjectiveInfo = () => {
-    // Update Redux state with new objective 2 info
-    dispatch(objectiveSlice.setmagnification1(parseFloat(objectiveInfo.magnification) || 0));
-    alert("Objective 2 information updated");
+    const params = { objectiveSlot: 1 };
+    if (objectiveInfo.name) params.objectiveName = objectiveInfo.name;
+    if (objectiveInfo.magnification) params.magnification = parseInt(objectiveInfo.magnification, 10);
+    if (objectiveInfo.pixelsize) params.pixelsize = parseFloat(objectiveInfo.pixelsize);
+    if (objectiveInfo.NA) params.NA = parseFloat(objectiveInfo.NA);
+    apiObjectiveControllerSetObjectiveParameters(params)
+      .then(() => {
+        fetchObjectiveControllerGetStatus(dispatch);
+      })
+      .catch((err) => console.error("Error saving objective 2 metadata:", err));
   };
 
   const handleMoveToCustomPosition = (position) => {

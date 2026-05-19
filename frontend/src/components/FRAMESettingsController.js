@@ -4,7 +4,7 @@ import SetLasersTab from './FRAMESettings/SetLasersTab';
 import TestHomingTab from './FRAMESettings/TestHomingTab';
 import PixelCalibrationTab from './FRAMESettings/PixelCalibrationTab';
 import ManualPixelCalibrationTab from './FRAMESettings/ManualPixelCalibrationTab';
-import ObjectiveControllerTab from './FRAMESettings/ObjectiveControllerTab';
+import ExtendedObjectiveController from './ObjectiveController';
 import StageOffsetCalibrationTab from './FRAMESettings/StageOffsetCalibrationTab';
 
 /**
@@ -51,7 +51,7 @@ const FRAMESettings = () => {
         {selectedTab === 1 && <ManualPixelCalibrationTab />}
         {selectedTab === 2 && <SetLasersTab />}
         {selectedTab === 3 && <TestHomingTab />}
-        {selectedTab === 4 && <ObjectiveControllerTab />}
+        {selectedTab === 4 && <ExtendedObjectiveController />}
         {selectedTab === 5 && <StageOffsetCalibrationTab />}
       </Box>
     </Paper>

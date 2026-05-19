@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import {
   Typography,
   Box,
@@ -21,6 +21,8 @@ import LiveViewControlWrapper from "../../axon/LiveViewControlWrapper";
 import PositionControllerComponent from "../../axon/PositionControllerComponent";
 import * as objectiveSlice from "../../state/slices/ObjectiveSlice.js";
 
+import * as positionSlice from "../../state/slices/PositionSlice.js";
+
 import apiObjectiveControllerMoveToObjective from "../../backendapi/apiObjectiveControllerMoveToObjective.js";
 import apiPositionerControllerGetPositions from "../../backendapi/apiPositionerControllerGetPositions.js";
 import apiObjectiveControllerSetPositions from "../../backendapi/apiObjectiveControllerSetPositions.js";
@@ -34,6 +36,7 @@ const WizardStep4 = ({
   totalSteps,
 }) => {
   const dispatch = useDispatch();
+  const positionState = useSelector(positionSlice.getPositionState);
 
   const [setupComplete, setSetupComplete] = useState(false);
   const [movedToObjective1, setMovedToObjective1] = useState(false);
@@ -108,33 +111,31 @@ const WizardStep4 = ({
   };
 
   const handleSwitchToObjective1 = () => {
-    apiObjectiveControllerMoveToObjective(1)
+    apiObjectiveControllerMoveToObjective(0)
       .then((data) => {
-        dispatch(objectiveSlice.setCurrentObjective(1));
+        dispatch(objectiveSlice.setCurrentObjective(0));
         setMovedToObjective1(true);
-        // Small delay to ensure position is updated
         setTimeout(fetchCurrentPositions, 1000);
       })
       .catch((err) => {
-        console.error("Error switching to objective 1:", err);
+        console.error("Error switching to objective 0:", err);
       });
   };
 
   const handleSaveZ0Position = () => {
-    if (currentPositions.Z !== null) {
-      // Save current Z position as Z0 using the proper API
-      apiObjectiveControllerSetPositions({
-        z0: currentPositions.Z,
-        isBlocking: false,
+    const zVal = currentPositions.Z ?? positionState.z;
+    if (zVal == null) return;
+    if (!window.confirm(`Save Z0 focus position as ${zVal}?`)) return;
+    apiObjectiveControllerSetPositions({
+      z0: zVal,
+      isBlocking: false,
+    })
+      .then(() => {
+        dispatch(objectiveSlice.setPosZ0(zVal));
       })
-        .then((data) => {
-          dispatch(objectiveSlice.setPosZ0(currentPositions.Z));
-          alert(`Z0 position set to: ${currentPositions.Z}`);
-        })
-        .catch((err) => {
-          console.error("Error setting Z0:", err);
-        });
-    }
+      .catch((err) => {
+        console.error("Error setting Z0:", err);
+      });
   };
 
   return (
@@ -248,18 +249,18 @@ const WizardStep4 = ({
               Current Positions:
             </Typography>
             <Typography variant="body2" sx={{ mb: 1 }}>
-              X: <strong>{currentPositions.X || "Unknown"}</strong>, Y:{" "}
-              <strong>{currentPositions.Y || "Unknown"}</strong>
+              X: <strong>{positionState.x ?? currentPositions.X ?? "—"}</strong>, Y:{" "}
+              <strong>{positionState.y ?? currentPositions.Y ?? "—"}</strong>
             </Typography>
             <Typography variant="body2" sx={{ mb: 2 }}>
-              Z: <strong>{currentPositions.Z || "Unknown"}</strong>, A:{" "}
-              <strong>{currentPositions.A || "Unknown"}</strong>
+              Z: <strong>{positionState.z ?? currentPositions.Z ?? "—"}</strong>, A:{" "}
+              <strong>{positionState.a ?? currentPositions.A ?? "—"}</strong>
             </Typography>
             <Button
               variant="contained"
               color="success"
               onClick={handleSaveZ0Position}
-              disabled={!movedToObjective1 || currentPositions.Z === null}
+              disabled={!movedToObjective1 || (currentPositions.Z == null && positionState.z == null)}
               startIcon={<SaveIcon />}
             >
               Save Current Z as Z0

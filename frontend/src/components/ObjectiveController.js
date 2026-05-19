@@ -122,134 +122,52 @@ const ExtendedObjectiveController = () => {
       });
   };
 
-  // Move the objective lens via PositionerController
-  const movePositioner = (dist) => {
+  const movePositioner = (dist, axis = "A") => {
     apiPositionerControllerMovePositioner({
-      axis: "A",
-      dist: dist,
+      axis,
+      dist,
       isAbsolute: false,
       isBlocking: false,
     })
-      .then((positionerResponse) => {
-        console.log(`Move by ${dist} successful:`, positionerResponse);
-      })
-      .catch((error) => {
-        console.log(`Move by ${dist} error:`, error);
-      });
+      .then((r) => console.log(`Move ${axis} by ${dist}:`, r))
+      .catch((e) => console.log(`Move ${axis} by ${dist} error:`, e));
   };
 
-  // Set objective positions (x0 or x1) manually via backend
-  const handleSetX0 = (value) => {
-    //handle value
+  const handleSetPosition = (key, value, label) => {
     const numericValue = Number(value);
     if (isNaN(numericValue)) {
-      console.error("Error X0 must be a number");
+      console.error(`${label} must be a number`);
       return;
     }
-    //api request
+    if (!window.confirm(`Set ${label} to ${numericValue}?`)) return;
     apiObjectiveControllerSetPositions({
-      x0: numericValue,
+      [key]: numericValue,
       isBlocking: false,
     })
-      .then((data) => {
-        //refresh
-        refreshStatus();
-      })
-      .catch((err) => {
-        console.error("Api eror setting X0:", err);
-      });
+      .then(() => refreshStatus())
+      .catch((err) => console.error(`Error setting ${label}:`, err));
   };
 
-  const handleSetX1 = (value) => {
-    //handle value
-    const numericValue = Number(value);
-    if (isNaN(numericValue)) {
-      console.error("Error X1 must be a number");
-      return;
-    }
-    //api request
-    apiObjectiveControllerSetPositions({
-      x1: numericValue,
-      isBlocking: false,
-    })
-      .then((data) => {
-        //refresh
-        refreshStatus();
-      })
-      .catch((err) => {
-        console.error("Api eror setting X1:", err);
-      });
-  };
+  const handleSetX0 = (value) => handleSetPosition("x0", value, "Position 1 (X0)");
+  const handleSetX1 = (value) => handleSetPosition("x1", value, "Position 2 (X1)");
+  const handleSetZ0 = (value) => handleSetPosition("z0", value, "Focus 1 (Z0)");
+  const handleSetZ1 = (value) => handleSetPosition("z1", value, "Focus 2 (Z1)");
 
-  const handleSetZ0 = (value) => {
-    //handle value
-    const numericValue = Number(value);
-    if (isNaN(numericValue)) {
-      console.error("Error Z0 must be a number");
-      return;
-    }
-    //api request
-    apiObjectiveControllerSetPositions({
-      z0: numericValue,
-      isBlocking: false,
-    })
-      .then((data) => {
-        //refresh
-        refreshStatus();
-      })
-      .catch((err) => {
-        console.error("Api eror setting Z0:", err);
-      });
-  };
-
-  const handleSetZ1 = (value) => {
-    //handle value
-    const numericValue = Number(value);
-    if (isNaN(numericValue)) {
-      console.error("Error Z1 must be a number");
-      return;
-    }
-    //api request
-    apiObjectiveControllerSetPositions({
-      z1: numericValue,
-      isBlocking: false,
-    })
-      .then((data) => {
-        //refresh
-        refreshStatus();
-      })
-      .catch((err) => {
-        console.error("Api eror setting Z1:", err);
-      });
-  };
-
-  // Read current position from PositionerController and set as X0 or X1
   const handleSetCurrentAs = async (which) => {
     apiPositionerControllerGetPositions()
       .then((data) => {
-        // Handle success response
         let posA, posZ;
-        if (data.ESP32Stage) {
-          posZ = data.ESP32Stage.Z;
-          posA = data.ESP32Stage.A;
-          dispatch(objectiveSlice.setCurrentZ(posZ));
-          dispatch(objectiveSlice.setCurrentA(posA));
-        } else if (data.VirtualStage) {
-          posZ = data.VirtualStage.Z;
-          posA = data.VirtualStage.A;
+        const stage = data.ESP32Stage || data.VirtualStage;
+        if (stage) {
+          posZ = stage.Z;
+          posA = stage.A;
           dispatch(objectiveSlice.setCurrentZ(posZ));
           dispatch(objectiveSlice.setCurrentA(posA));
         }
-        // Use the freshly fetched values, not stale Redux state
-        if (which === "x0") {
-          handleSetX0(posA);
-        } else if (which === "x1") {
-          handleSetX1(posA);
-        } else if (which === "z0") {
-          handleSetZ0(posZ);
-        } else if (which === "z1") {
-          handleSetZ1(posZ);
-        }
+        if (which === "x0") handleSetX0(posA);
+        else if (which === "x1") handleSetX1(posA);
+        else if (which === "z0") handleSetZ0(posZ);
+        else if (which === "z1") handleSetZ1(posZ);
       })
       .catch((err) => {
         console.error(`Error setting current position as ${which}:`, err);
@@ -259,7 +177,6 @@ const ExtendedObjectiveController = () => {
   // Position updates now come automatically via WebSocketHandler -> positionSlice
   // No need to fetch positions or listen to socket events - data is in Redux
 
-  // Save editable metadata for a given objective slot
   const handleSaveObjectiveMeta = (slot) => {
     const meta = editMeta[slot] || {};
     const params = { objectiveSlot: slot };
@@ -267,6 +184,11 @@ const ExtendedObjectiveController = () => {
     if (meta.NA !== undefined && meta.NA !== "") params.NA = parseFloat(meta.NA);
     if (meta.magnification !== undefined && meta.magnification !== "") params.magnification = parseInt(meta.magnification, 10);
     if (meta.pixelsize !== undefined && meta.pixelsize !== "") params.pixelsize = parseFloat(meta.pixelsize);
+    const summary = Object.entries(params)
+      .filter(([k]) => k !== "objectiveSlot")
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(", ");
+    if (!window.confirm(`Save slot ${slot} metadata?\n${summary}`)) return;
     apiObjectiveControllerSetObjectiveParameters(params)
       .then(() => {
         refreshStatus();
@@ -455,23 +377,72 @@ const ExtendedObjectiveController = () => {
           </Typography>
           <Grid container spacing={1}>
             <Grid item>
+              <Button variant="outlined" onClick={() => movePositioner(-1000)}>
+                ←←← (1000)
+              </Button>
+            </Grid>
+            <Grid item>
               <Button variant="outlined" onClick={() => movePositioner(-100)}>
-                ←← (100 steps)
+                ←← (100)
               </Button>
             </Grid>
             <Grid item>
               <Button variant="outlined" onClick={() => movePositioner(-10)}>
-                ← (10 steps)
+                ← (10)
               </Button>
             </Grid>
             <Grid item>
               <Button variant="outlined" onClick={() => movePositioner(10)}>
-                (10 steps) →
+                (10) →
               </Button>
             </Grid>
             <Grid item>
               <Button variant="outlined" onClick={() => movePositioner(100)}>
-                (100 steps) →→
+                (100) →→
+              </Button>
+            </Grid>
+            <Grid item>
+              <Button variant="outlined" onClick={() => movePositioner(1000)}>
+                (1000) →→→
+              </Button>
+            </Grid>
+          </Grid>
+        </Grid>
+
+        {/* Z Focus Movement */}
+        <Grid item xs={12} md={6}>
+          <Typography variant="subtitle1" gutterBottom>
+            Move Focus (Axis Z)
+          </Typography>
+          <Grid container spacing={1}>
+            <Grid item>
+              <Button variant="outlined" onClick={() => movePositioner(-1000, "Z")}>
+                ↓↓↓ (1000)
+              </Button>
+            </Grid>
+            <Grid item>
+              <Button variant="outlined" onClick={() => movePositioner(-100, "Z")}>
+                ↓↓ (100)
+              </Button>
+            </Grid>
+            <Grid item>
+              <Button variant="outlined" onClick={() => movePositioner(-10, "Z")}>
+                ↓ (10)
+              </Button>
+            </Grid>
+            <Grid item>
+              <Button variant="outlined" onClick={() => movePositioner(10, "Z")}>
+                (10) ↑
+              </Button>
+            </Grid>
+            <Grid item>
+              <Button variant="outlined" onClick={() => movePositioner(100, "Z")}>
+                (100) ↑↑
+              </Button>
+            </Grid>
+            <Grid item>
+              <Button variant="outlined" onClick={() => movePositioner(1000, "Z")}>
+                (1000) ↑↑↑
               </Button>
             </Grid>
           </Grid>

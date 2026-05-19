@@ -15,6 +15,7 @@ import {
 import LiveViewControlWrapper from "../../axon/LiveViewControlWrapper";
 import PositionControllerComponent from "../../axon/PositionControllerComponent";
 import * as objectiveSlice from "../../state/slices/ObjectiveSlice.js";
+import * as positionSlice from "../../state/slices/PositionSlice.js";
 
 import apiObjectiveControllerMoveToObjective from "../../backendapi/apiObjectiveControllerMoveToObjective.js";
 import apiPositionerControllerGetPositions from "../../backendapi/apiPositionerControllerGetPositions.js";
@@ -23,7 +24,8 @@ import apiObjectiveControllerSetPositions from "../../backendapi/apiObjectiveCon
 const WizardStep5 = ({ hostIP, hostPort, onNext, onBack, activeStep, totalSteps }) => {
   const dispatch = useDispatch();
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
-  
+  const positionState = useSelector(positionSlice.getPositionState);
+
   const [movedToObjective2, setMovedToObjective2] = useState(false);
   const [currentPositions, setCurrentPositions] = useState({
     X: null,
@@ -33,7 +35,6 @@ const WizardStep5 = ({ hostIP, hostPort, onNext, onBack, activeStep, totalSteps 
   });
 
   useEffect(() => {
-    // Fetch current positions when component mounts
     const fetchPos = () => {
       apiPositionerControllerGetPositions()
         .then((data) => {
@@ -62,6 +63,8 @@ const WizardStep5 = ({ hostIP, hostPort, onNext, onBack, activeStep, totalSteps 
         });
     };
     fetchPos();
+    const interval = setInterval(fetchPos, 1000);
+    return () => clearInterval(interval);
   }, [dispatch]);
 
   const fetchCurrentPositions = () => {
@@ -93,33 +96,31 @@ const WizardStep5 = ({ hostIP, hostPort, onNext, onBack, activeStep, totalSteps 
   };
 
   const handleSwitchToObjective2 = () => {
-    apiObjectiveControllerMoveToObjective(2)
+    apiObjectiveControllerMoveToObjective(1)
       .then((data) => {
-        dispatch(objectiveSlice.setCurrentObjective(2));
+        dispatch(objectiveSlice.setCurrentObjective(1));
         setMovedToObjective2(true);
-        // Small delay to ensure position is updated
         setTimeout(fetchCurrentPositions, 1000);
       })
       .catch((err) => {
-        console.error("Error switching to objective 2:", err);
+        console.error("Error switching to objective 1:", err);
       });
   };
 
   const handleSaveZ1Position = () => {
-    if (currentPositions.Z !== null) {
-      // Save current Z position as Z1 using the proper API
-      apiObjectiveControllerSetPositions({
-        z1: currentPositions.Z,
-        isBlocking: false,
+    const zVal = currentPositions.Z ?? positionState.z;
+    if (zVal == null) return;
+    if (!window.confirm(`Save Z1 focus position as ${zVal}?`)) return;
+    apiObjectiveControllerSetPositions({
+      z1: zVal,
+      isBlocking: false,
+    })
+      .then(() => {
+        dispatch(objectiveSlice.setPosZ1(zVal));
       })
-        .then((data) => {
-          dispatch(objectiveSlice.setPosZ1(currentPositions.Z));
-          alert(`Z1 position set to: ${currentPositions.Z}`);
-        })
-        .catch((err) => {
-          console.error("Error setting Z1:", err);
-        });
-    }
+      .catch((err) => {
+        console.error("Error setting Z1:", err);
+      });
   };
 
   return (
@@ -197,18 +198,18 @@ const WizardStep5 = ({ hostIP, hostPort, onNext, onBack, activeStep, totalSteps 
               Current Positions:
             </Typography>
             <Typography variant="body2" sx={{ mb: 1 }}>
-              X: <strong>{currentPositions.X || "Unknown"}</strong>, 
-              Y: <strong>{currentPositions.Y || "Unknown"}</strong>
+              X: <strong>{positionState.x ?? currentPositions.X ?? "—"}</strong>,
+              Y: <strong>{positionState.y ?? currentPositions.Y ?? "—"}</strong>
             </Typography>
             <Typography variant="body2" sx={{ mb: 2 }}>
-              Z: <strong>{currentPositions.Z || "Unknown"}</strong>, 
-              A: <strong>{currentPositions.A || "Unknown"}</strong>
+              Z: <strong>{positionState.z ?? currentPositions.Z ?? "—"}</strong>,
+              A: <strong>{positionState.a ?? currentPositions.A ?? "—"}</strong>
             </Typography>
             <Button
               variant="contained"
               color="success"
               onClick={handleSaveZ1Position}
-              disabled={!movedToObjective2 || currentPositions.Z === null}
+              disabled={!movedToObjective2 || (currentPositions.Z == null && positionState.z == null)}
               startIcon={<SaveIcon />}
             >
               Save Current Z as Z1

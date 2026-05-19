@@ -15,6 +15,9 @@ import {
 import { Camera, InfoOutlined } from "@mui/icons-material";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
 
+const AUTO_ONCE_RESET_DELAY_MS = 1500;
+const AUTO_ONCE_UI_HOLD_MS = AUTO_ONCE_RESET_DELAY_MS + 300;
+
 /**
  * Detector Parameters Component - Now with WebSocket support
  *
@@ -179,9 +182,14 @@ export default function DetectorParameters({ hostIP, hostPort }) {
   const handleAutoExposureOnce = useCallback(async () => {
     setAutoOncePending(true);
     try {
-      await fetch(
-        `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorExposureOnce`,
+      const resp = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorExposureOnce?resetDelayMs=${AUTO_ONCE_RESET_DELAY_MS}`,
       );
+      if (!resp.ok) {
+        throw new Error(`Auto once request failed with status ${resp.status}`);
+      }
+      // Keep pending true until backend's once->manual reset window should be complete.
+      await new Promise((resolve) => setTimeout(resolve, AUTO_ONCE_UI_HOLD_MS));
     } catch (error) {
       console.error("Error running one-shot exposure auto:", error);
     } finally {

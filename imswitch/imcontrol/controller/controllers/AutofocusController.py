@@ -322,7 +322,7 @@ class AutofocusController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def autoFocus(self, rangez: int = 100, resolutionz: int = 10, defocusz: int = 0, tSettle:float=0.1, isDebug:bool=False,
-                               nGauss:int=0, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
+                               nGauss:int=0, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False, twoStageDivisor:int=10):
         """
         Step-scan autofocus with Gaussian peak fit.
 
@@ -336,7 +336,8 @@ class AutofocusController(ImConWidgetController):
             nCropsize: Crop size for focus calculation
             focusAlgorithm: Focus measurement method ("LAPE", "GLVA", or "JPEG")
             static_offset: Static offset to add to final focus position
-            twoStage: If True, perform coarse scan followed by fine scan (10x finer)
+            twoStage: If True, perform coarse scan followed by fine scan
+            twoStageDivisor: Divisor for fine scan range and resolution (default 10)
 
         Returns:
             dict with status information or None if started successfully
@@ -367,7 +368,7 @@ class AutofocusController(ImConWidgetController):
 
         self._AutofocusThead = threading.Thread(
             target=self.doAutofocusBackground,
-            args=(adjusted_rangez, resolutionz, defocusz, gAxis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset, twoStage),
+            args=(adjusted_rangez, resolutionz, defocusz, gAxis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset, twoStage, twoStageDivisor),
             daemon=True
         )
         self._AutofocusThead.start()
@@ -870,7 +871,7 @@ class AutofocusController(ImConWidgetController):
 
 
     # ---------- Step-scan autofocus with Gaussian fit ----------
-    def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=0, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
+    def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=0, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False, twoStageDivisor:int=10):
         try:
 
             self.__logger.info(f"Starting autofocus - Stage 1: Coarse scan (range=±{rangez}, resolution={resolutionz}), defocus={defocusz}, axis={axis}, tSettle={tSettle}, nGauss={nGauss}, nCropsize={nCropsize}, focusAlgorithm={focusAlgorithm}, static_offset={static_offset}, twoStage={twoStage}")
@@ -893,9 +894,10 @@ class AutofocusController(ImConWidgetController):
             # Stage 2: Fine scan if enabled
             if twoStage and self._getAutofocusState() != AutofocusState.ABORTED:
                 # Fine scan with 10x finer parameters around the coarse best position
-                fine_rangez = rangez / 10.0
-                fine_resolutionz = resolutionz / 10.0
-                self.__logger.info(f"Starting autofocus - Stage 2: Fine scan (range=±{fine_rangez}, resolution={fine_resolutionz}) around z={best_z_coarse}")
+                twoStageDivisor = max(2, twoStageDivisor)  # Ensure minimum divisor of 2
+                fine_rangez = rangez / float(twoStageDivisor)
+                fine_resolutionz = resolutionz / float(twoStageDivisor)
+                self.__logger.info(f"Starting autofocus - Stage 2: Fine scan (range=±{fine_rangez}, resolution={fine_resolutionz}, divisor={twoStageDivisor}) around z={best_z_coarse}")
 
                 # Move to coarse best position first (clamped)
                 clamped_coarse = self._clampPosition(best_z_coarse, axis)

@@ -29,6 +29,7 @@ import {
 import {
   Search as SearchIcon,
   Apps as AppsIcon,
+  Tune as TuneIcon,
   Star as StarIcon,
   Code as CodeIcon,
   Computer as ComputerIcon,
@@ -79,6 +80,12 @@ const CATEGORY_INFO = {
     icon: AppsIcon,
     color: "#4caf50",
     description: "Microscopy applications and tools",
+  },
+  [APP_CATEGORIES.CALIBRATION]: {
+    label: "Calibration",
+    icon: TuneIcon,
+    color: "#00acc1",
+    description: "Hardware calibration and alignment tools",
   },
   [APP_CATEGORIES.CODING]: {
     label: "Coding",

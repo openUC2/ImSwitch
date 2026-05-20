@@ -1,5 +1,6 @@
 import {
   Apps as AppsIcon,
+  Tune as TuneIcon,
   Code as CodeIcon,
   Computer as ComputerIcon,
   Dashboard as DashboardIcon,
@@ -70,6 +71,7 @@ const NavigationDrawer = ({
     return {
       essentials: true,
       apps: false,
+      calibration: false,
       coding: false,
       system: false,
       systemSettings: false,
@@ -242,6 +244,28 @@ const NavigationDrawer = ({
               expanded={groupsOpen.apps}
             >
               {renderAppsForCategory(APP_CATEGORIES.APPS, SIDEBAR_COLORS.apps)}
+            </DrawerEntry>
+          </>
+        )}
+
+        {/* Calibration Group - Hardware calibration tools */}
+        {getEnabledAppsByCategory(APP_CATEGORIES.CALIBRATION).length > 0 && (
+          <>
+            <Divider sx={{ my: 1 }} />
+            <DrawerEntry
+              icon={<TuneIcon />}
+              label="Calibration"
+              onClick={() => toggleGroup("calibration")}
+              tooltip="Hardware calibration and alignment tools"
+              color={SIDEBAR_COLORS.calibration}
+              collapsed={!sidebarVisible}
+              collapsible={true}
+              expanded={groupsOpen.calibration}
+            >
+              {renderAppsForCategory(
+                APP_CATEGORIES.CALIBRATION,
+                SIDEBAR_COLORS.calibration
+              )}
             </DrawerEntry>
           </>
         )}

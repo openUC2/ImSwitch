@@ -942,10 +942,8 @@ def build_timelapse(grid: ExperimentGrid, out_dir: str, use_mip: bool = False):
 
         fname = f"timelapse_stitched_{label}.ome.tif"
         fpath = os.path.join(out_dir, fname)
-        tif.imwrite(
-            fpath, stack, imagej=True,
-            metadata={"axes": "TCYX", "Channel": {"Name": grid.channels}},
-        )
+        tif.imwrite(fpath, stack, imagej=True,
+                    metadata={"axes": "TCYX", "Channel": {"Name": grid.channels}})
         print(f"  {fname}  shape={stack.shape}  dtype={dtype}  "
               f"({nT} timepoints, {nC} channels, "
               f"{len(xy_positions)} positions)")

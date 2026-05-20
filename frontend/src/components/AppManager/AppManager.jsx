@@ -29,6 +29,7 @@ import {
 import {
   Search as SearchIcon,
   Apps as AppsIcon,
+  Tune as TuneIcon,
   Star as StarIcon,
   Code as CodeIcon,
   Computer as ComputerIcon,
@@ -79,6 +80,12 @@ const CATEGORY_INFO = {
     icon: AppsIcon,
     color: "#4caf50",
     description: "Microscopy applications and tools",
+  },
+  [APP_CATEGORIES.CALIBRATION]: {
+    label: "Calibration",
+    icon: TuneIcon,
+    color: "#00acc1",
+    description: "Hardware calibration and alignment tools",
   },
   [APP_CATEGORIES.CODING]: {
     label: "Coding",
@@ -222,8 +229,8 @@ const AppCard = ({ app, isEnabled, onToggle, onLaunch }) => {
             app.essential
               ? "Essential (Always Available)"
               : isEnabled
-              ? "Show in Navigation"
-              : "Hidden from Navigation"
+                ? "Show in Navigation"
+                : "Hidden from Navigation"
           }
           sx={{
             flexGrow: 1,
@@ -335,7 +342,7 @@ const AppManager = ({ onNavigateToApp }) => {
     Object.values(APP_CATEGORIES).forEach((category) => {
       const appsInCategory = getAppsByCategory(category);
       const enabledInCategory = appsInCategory.filter((app) =>
-        enabledApps.includes(app.id)
+        enabledApps.includes(app.id),
       );
       stats[category] = {
         total: appsInCategory.length,

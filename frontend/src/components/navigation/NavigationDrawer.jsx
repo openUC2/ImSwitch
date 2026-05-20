@@ -50,7 +50,7 @@ const NavigationDrawer = ({
   // Helper function to get enabled apps by category
   const getEnabledAppsByCategory = (category) => {
     return Object.values(APP_REGISTRY).filter(
-      (app) => app.category === category && isAppEnabled(app.id)
+      (app) => app.category === category && isAppEnabled(app.id),
     );
   };
 
@@ -264,7 +264,7 @@ const NavigationDrawer = ({
             >
               {renderAppsForCategory(
                 APP_CATEGORIES.CALIBRATION,
-                SIDEBAR_COLORS.calibration
+                SIDEBAR_COLORS.calibration,
               )}
             </DrawerEntry>
           </>
@@ -286,7 +286,7 @@ const NavigationDrawer = ({
             >
               {renderAppsForCategory(
                 APP_CATEGORIES.CODING,
-                SIDEBAR_COLORS.coding
+                SIDEBAR_COLORS.coding,
               )}
             </DrawerEntry>
           </>
@@ -308,7 +308,7 @@ const NavigationDrawer = ({
             >
               {renderAppsForCategory(
                 APP_CATEGORIES.SYSTEM,
-                SIDEBAR_COLORS.system
+                SIDEBAR_COLORS.system,
               )}
             </DrawerEntry>
           </>

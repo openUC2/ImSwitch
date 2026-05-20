@@ -229,8 +229,8 @@ const AppCard = ({ app, isEnabled, onToggle, onLaunch }) => {
             app.essential
               ? "Essential (Always Available)"
               : isEnabled
-              ? "Show in Navigation"
-              : "Hidden from Navigation"
+                ? "Show in Navigation"
+                : "Hidden from Navigation"
           }
           sx={{
             flexGrow: 1,
@@ -342,7 +342,7 @@ const AppManager = ({ onNavigateToApp }) => {
     Object.values(APP_CATEGORIES).forEach((category) => {
       const appsInCategory = getAppsByCategory(category);
       const enabledInCategory = appsInCategory.filter((app) =>
-        enabledApps.includes(app.id)
+        enabledApps.includes(app.id),
       );
       stats[category] = {
         total: appsInCategory.length,

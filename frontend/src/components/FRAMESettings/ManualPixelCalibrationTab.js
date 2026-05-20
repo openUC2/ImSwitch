@@ -163,6 +163,26 @@ const ManualPixelCalibrationTab = () => {
     }
   };
 
+  const handleBacklashMoveY = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      setStatus(`Backlash pre-move: ${backlashDistanceUm} µm along Y…`);
+      await apiPositionerControllerMovePositioner({
+        axis: 'Y',
+        dist: backlashDistanceUm,
+        isAbsolute: false,
+        isBlocking: true,
+      });
+      setStatus('Backlash done. Click a recognisable feature in the image.');
+      setActiveStep(5);
+    } catch (err) {
+      setError(`Backlash move failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+  
   // ---- image click handler (dispatches to the right step) ----
   const handleImageClick = useCallback(
     (pixelX, pixelY, imageWidth, imageHeight) => {
@@ -177,14 +197,14 @@ const ManualPixelCalibrationTab = () => {
         setPointA2({ x: pixelX, y: pixelY });
         setStatus(`P2 marked. X-axis done. Now click a feature for the Y-axis measurement.`);
         setActiveStep(4);
-      } else if (activeStep === 4) {
+      } else if (activeStep === 5) {
         setPointB1({ x: pixelX, y: pixelY });
         setStatus(`P3 marked at (${Math.round(pixelX)}, ${Math.round(pixelY)}). Now move stage in Y.`);
-        setActiveStep(5);
-      } else if (activeStep === 6) {
+        setActiveStep(6);
+      } else if (activeStep === 7) {
         setPointB2({ x: pixelX, y: pixelY });
         setStatus('P4 marked. Ready to calculate the full affine calibration.');
-        setActiveStep(7);
+        setActiveStep(8);
       }
     },
     [activeStep, imageDims],
@@ -224,7 +244,7 @@ const ManualPixelCalibrationTab = () => {
         isBlocking: true,
       });
       setStatus('Stage moved in Y. Click the SAME feature again.');
-      setActiveStep(6);
+      setActiveStep(7);
     } catch (err) {
       setError(`Y stage move failed: ${err.message}`);
     } finally {
@@ -314,10 +334,11 @@ const ManualPixelCalibrationTab = () => {
   };
 
   const steps = [
-    'Backlash compensation',
+    'Backlash compensation in X',
     'Mark feature (P1 before X move)',
     'Move stage in X',
     'Mark same feature (P2 after X move)',
+    'Backlash compensation in Y (optional)',
     'Mark feature (P3 before Y move)',
     'Move stage in Y',
     'Mark same feature (P4 after Y move)',
@@ -325,7 +346,7 @@ const ManualPixelCalibrationTab = () => {
   ];
 
   // Clickable steps — highlight which steps expect a click
-  const clickSteps = new Set([1, 3, 4, 6]);
+  const clickSteps = new Set([1, 3, 5, 7]);
 
   return (
     <Box>
@@ -509,10 +530,32 @@ const ManualPixelCalibrationTab = () => {
                 </StepContent>
               </Step>
 
+              {/* Optional Step – backlash for Y */}
+              <Step>
+                  <StepLabel StepIconProps={{ icon: <MoveIcon color={activeStep === 4 ? 'primary' : 'inherit'} /> }}>
+                  {steps[4]}
+                </StepLabel>
+                <StepContent>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    Move stage <strong>{backlashDistanceUm} µm</strong> along Y to compensate backlash.
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
+                    <TextField label="Backlash (µm)" type="number" size="small" value={backlashDistanceUm}
+                      onChange={(e) => setBacklashDistanceUm(parseFloat(e.target.value) || 0)} sx={{ width: 120 }} />
+                    <Button variant="contained" size="small"
+                      startIcon={loading ? <CircularProgress size={18} /> : <MoveIcon />}
+                      onClick={handleBacklashMoveY} disabled={loading}>
+                      {loading ? 'Moving…' : 'Move'}
+                    </Button>
+                    <Button variant="outlined" size="small" onClick={() => setActiveStep(5)}>Skip</Button>
+                  </Box>
+                </StepContent>
+              </Step>
+
               {/* Step 4 – mark P_B1 */}
               <Step>
-                <StepLabel StepIconProps={{ icon: <CrosshairIcon color={activeStep === 4 ? 'primary' : 'inherit'} /> }}>
-                  {steps[4]}
+                <StepLabel StepIconProps={{ icon: <CrosshairIcon color={activeStep === 5 ? 'primary' : 'inherit'} /> }}>
+                  {steps[5]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2" sx={{ mb: 1 }}>
@@ -521,10 +564,10 @@ const ManualPixelCalibrationTab = () => {
                 </StepContent>
               </Step>
 
-              {/* Step 5 – move Y */}
+              {/* Step 6 – move Y */}
               <Step>
-                <StepLabel StepIconProps={{ icon: <MoveIcon color={activeStep === 5 ? 'primary' : 'inherit'} /> }}>
-                  {steps[5]}
+                <StepLabel StepIconProps={{ icon: <MoveIcon color={activeStep === 6 ? 'primary' : 'inherit'} /> }}>
+                  {steps[6]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2" sx={{ mb: 1 }}>
@@ -538,10 +581,10 @@ const ManualPixelCalibrationTab = () => {
                 </StepContent>
               </Step>
 
-              {/* Step 6 – mark P_B2 */}
+              {/* Step 7 – mark P_B2 */}
               <Step>
-                <StepLabel StepIconProps={{ icon: <CrosshairIcon color={activeStep === 6 ? 'primary' : 'inherit'} /> }}>
-                  {steps[6]}
+                <StepLabel StepIconProps={{ icon: <CrosshairIcon color={activeStep === 7 ? 'primary' : 'inherit'} /> }}>
+                  {steps[7]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2">
@@ -550,10 +593,10 @@ const ManualPixelCalibrationTab = () => {
                 </StepContent>
               </Step>
 
-              {/* Step 7 – calculate */}
+              {/* Step 8 – calculate */}
               <Step>
-                <StepLabel StepIconProps={{ icon: <CalcIcon color={activeStep === 7 ? 'primary' : 'inherit'} /> }}>
-                  {steps[7]}
+                <StepLabel StepIconProps={{ icon: <CalcIcon color={activeStep === 8 ? 'primary' : 'inherit'} /> }}>
+                  {steps[8]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2" sx={{ mb: 1 }}>
@@ -568,7 +611,7 @@ const ManualPixelCalibrationTab = () => {
               </Step>
             </Stepper>
 
-            {activeStep === 8 && (
+            {activeStep === 9 && (
               <Box sx={{ mt: 2, textAlign: 'center' }}>
                 <DoneIcon color="success" sx={{ fontSize: 48 }} />
                 <Typography variant="subtitle1" color="success.main">

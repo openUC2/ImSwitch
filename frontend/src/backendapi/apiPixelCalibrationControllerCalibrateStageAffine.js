@@ -7,9 +7,10 @@ const apiPixelCalibrationControllerCalibrateStageAffine = async ({
   stepSizeUm = 100.0,
   pattern = 'cross',
   nSteps = 4,
+  backlashUm = 0.0,
 }) => {
   const axiosInstance = createAxiosInstance();
-  const params = { stepSizeUm, pattern, nSteps };
+  const params = { stepSizeUm, pattern, nSteps, backlashUm };
   if (detectorName) params.detectorName = detectorName;
   if (objectiveId !== null && objectiveId !== undefined && objectiveId !== '') {
     params.objectiveId = String(objectiveId);

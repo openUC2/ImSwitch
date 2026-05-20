@@ -282,6 +282,7 @@ class PixelCalibrationController(LiveUpdatedController):
         nSteps: int = 1,
         crop_size: int = 1024,
         isDEBUG: bool = False,
+        backlashUm: float = 0.0,
     ):
         """Run an affine stage-to-camera calibration in a background thread.
 
@@ -311,7 +312,7 @@ class PixelCalibrationController(LiveUpdatedController):
 
         thread = threading.Thread(
             target=self._calibrateStageAffineInThread,
-            args=(detectorName, objectiveId, stepSizeUm, pattern, nSteps, crop_size, isDEBUG),
+            args=(detectorName, objectiveId, stepSizeUm, pattern, nSteps, crop_size, isDEBUG, backlashUm),
             daemon=True,
         )
         thread.start()
@@ -332,11 +333,13 @@ class PixelCalibrationController(LiveUpdatedController):
         nSteps: int,
         crop_size: int,
         isDEBUG: bool,
+        backlashUm: float = 0.0,
     ):
         key = self._makeKey(detectorName, objectiveId)
         try:
             helper = PixelCalibrationClass(self, detectorName=detectorName)
             result = helper.calibrate_affine(
+                backlash_um=backlashUm,
                 detector_name=detectorName,
                 step_size_um=stepSizeUm,
                 pattern=pattern,
@@ -960,6 +963,7 @@ class PixelCalibrationClass:
         settle_time: float = 0.2,
         crop_size: int = 1024,
         isDEBUG: bool = False,
+        backlash_um: float = 0.0,
     ):
         """Capture phase-correlation samples and compute an affine matrix."""
         if detector_name and detector_name != self._detectorName:
@@ -970,6 +974,15 @@ class PixelCalibrationClass:
 
         start_position = self._get_stage_position()
         self._parent._logger.info(f"Starting position: {start_position[:2]} µm")
+
+        # Backlash compensation: move away in X and Y, then back to start
+        if backlash_um > 0:
+            self._parent._logger.info(f"Backlash compensation: {backlash_um} µm in X and Y")
+            backlash_target = start_position + np.array([backlash_um, backlash_um, 0])
+            self._move_stage(backlash_target)
+            time.sleep(settle_time)
+            self._move_stage(start_position)
+            time.sleep(settle_time)
 
         time.sleep(settle_time)
         ref_image = self._grab_image(crop_size=crop_size)

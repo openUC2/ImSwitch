@@ -43,6 +43,7 @@ const PixelCalibrationTab = () => {
   const [stepSizeUm, setStepSizeUm] = useState(100.0);
   const [pattern, setPattern] = useState('cross');
   const [nSteps, setNSteps] = useState(4);
+  const [backlashUm, setBacklashUm] = useState(50.0);
 
   // Load the list of available detectors once on mount.
   useEffect(() => {
@@ -141,6 +142,7 @@ const PixelCalibrationTab = () => {
         stepSizeUm,
         pattern,
         nSteps,
+        backlashUm,
       });
     } catch (err) {
       setLoading(false);
@@ -308,6 +310,17 @@ const PixelCalibrationTab = () => {
               onChange={(e) => setNSteps(parseInt(e.target.value, 10))}
               fullWidth
               sx={{ mb: 2 }}
+            />
+
+            <TextField
+              label="Backlash compensation (µm)"
+              type="number"
+              value={backlashUm}
+              onChange={(e) => setBacklashUm(parseFloat(e.target.value) || 0)}
+              fullWidth
+              sx={{ mb: 2 }}
+              helperText="Pre-move distance in X and Y to eliminate backlash (0 = disabled)"
+              inputProps={{ step: 10, min: 0 }}
             />
 
             <Button

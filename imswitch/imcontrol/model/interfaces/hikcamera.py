@@ -588,6 +588,7 @@ class CameraHIK:
 
         # in case the camera is None, we have to restart it anyway
         if self.camera is None: # TODO: 2025-11-03 15:13:38 ERROR [LiveViewController] Error starting live view: 'NoneType' object has no attribute 'MV_CC_RegisterImageCallBackEx'
+            self.__logger.warning("Camera handle is None, attempting to reconnect - but why? CAmera cable broken?")
             self.reconnectCamera()
             ret = self.camera.MV_CC_StartGrabbing()
             if ret != 0:

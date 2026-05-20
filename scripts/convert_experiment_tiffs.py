@@ -20,33 +20,34 @@ stores integer grid indices (iX, iY) per iterator, or falls back to clustering
 the X/Y stage coordinates into grid indices automatically.
 
 Outputs (selectable via --mode):
-    composite   – Per-position Z/T composite stack for napari (multi-channel)
-    stitch      – Per-channel XY stitched OME-TIFF for Fiji
-    mip         – Max intensity projection per XY position, then stitched
-    mip-composite – Per-channel MIP stitched, then merged as composite
+    composite       – Per-position Z/T composite stack for napari (multi-channel)
+    stitch          – Per-channel XY stitched OME-TIFF for Fiji (simple grid placement)
+    mip             – Max intensity projection per XY position, then stitched
+    mip-composite   – Per-channel MIP stitched, then merged as composite
+    focus           – Best-focus plane per XY position, then stitched
+    tile-config     – Write Fiji TileConfiguration.txt for Grid/Collection stitching
+    ashlar          – Sub-pixel accurate stitching via ashlarUC2 (recommended)
 
 Dependencies:
-    pip install tifffile numpy
+    pip install tifffile numpy ashlaruc2
 
 Usage examples:
-    # Convert all timepoints, all modes
+    # All modes
     python convert_experiment_tiffs.py /path/to/base_dir/tiles
 
-    # Only stitch, auto-locate JSON protocol
-    python convert_experiment_tiffs.py /path/to/base_dir/tiles --mode stitch
+    # Ashlar stitching only (recommended for accurate whole-slide images)
+    python convert_experiment_tiffs.py /path/to/tiles --mode ashlar \\
+        --pixel-size 0.5 --maximum-shift 50 --align-channel 0
 
     # Explicit JSON path
-    python convert_experiment_tiffs.py /path/to/base_dir/tiles --protocol /path/to/protocol.json --mode mip-composite
+    python convert_experiment_tiffs.py /path/to/tiles \\
+        --protocol /path/to/protocol.json --mode mip-composite
 
     # Specify output directory
-    python convert_experiment_tiffs.py /path/to/base_dir/tiles -o /path/to/output
-    
+    python convert_experiment_tiffs.py /path/to/tiles -o /path/to/output
     python convert_experiment_tiffs.py     /Users/bene/Downloads/20260408_140128/
 
-    
     python /Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/MicronController/ImSwitch/scripts/convert_experiment_tiffs.py /Users/bene/ImSwitchConfig/data/ExperimentController/20260502_130052/20260502_130052_experiment0_0_experiment_0_/tiles --mode ashlar  --maximum-shift 50 --align-channel 0
-    
-   
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -446,7 +448,8 @@ def _focus_measure(frame: np.ndarray) -> float:
     """
     if _is_rgb(frame):
         # Weighted luminance: ITU-R BT.601
-        f = (0.299 * frame[:, :, 0] + 0.587 * frame[:, :, 1] + 0.114 * frame[:, :, 2]).astype(np.float32)
+        f = (0.299 * frame[:, :, 0] + 0.587 * frame[:, :, 1]
+             + 0.114 * frame[:, :, 2]).astype(np.float32)
     else:
         f = frame.astype(np.float32)
     # Discrete Laplacian: 4*center - top - bottom - left - right
@@ -512,15 +515,13 @@ def build_composite_stacks(grid: ExperimentGrid, out_dir: str):
 
         for it, tp in enumerate(grid.timepoints):
             for ic, ci in enumerate(grid.c_indices):
-                z_tiles = sorted(grid.get_tiles(tp, ix, iy, ci),
-                                 key=lambda t: t.z)
+                z_tiles = sorted(grid.get_tiles(tp, ix, iy, ci), key=lambda t: t.z)
                 for iz, tile in enumerate(z_tiles):
                     frame = _read_tile(tile)
                     stack[it, iz, ic] = frame[:h, :w]
 
         fname = f"composite_ix{ix:03d}_iy{iy:03d}.ome.tif"
         fpath = os.path.join(out_dir, fname)
-
         if is_rgb:
             metadata = {"axes": "TZCYXS", "Channel": {"Name": grid.channels}}
             _imwrite_auto(fpath, stack, photometric="rgb", metadata=metadata)
@@ -532,8 +533,7 @@ def build_composite_stacks(grid: ExperimentGrid, out_dir: str):
 
 
 # ---------------------------------------------------------------------------
-# Mode 2: Stitched OME-TIFF (per channel, for Fiji)
-# All XY positions in a grid for one channel → large canvas
+# Mode 2: Stitched OME-TIFF (simple grid placement, per channel)
 # ---------------------------------------------------------------------------
 
 def _compute_canvas_from_grid(grid: ExperimentGrid, h: int, w: int):
@@ -579,17 +579,7 @@ def _mip_or_first(tiles: List[TileInfo]) -> np.ndarray:
 
 
 def build_stitched_tiffs(grid: ExperimentGrid, out_dir: str):
-    """
-    For every channel × timepoint, stitch all XY grid positions onto a
-    single canvas using MIP over Z per position.  Produces one output
-    image per channel per timepoint.
-
-    NOTE: Because different XY positions may have different absolute Z
-    values (sample tilt / autofocus drift), there is no single Z-plane
-    that spans all tiles.  MIP is used to collapse the Z stack at each
-    position before compositing.
-    """
-    print("\n=== Building stitched OME-TIFFs (Fiji) ===")
+    print("\n=== Building stitched OME-TIFFs (Fiji, simple grid placement) ===")
     os.makedirs(out_dir, exist_ok=True)
 
     first_tile_list = next(iter(grid.lookup.values()))
@@ -947,13 +937,35 @@ def build_timelapse(grid: ExperimentGrid, out_dir: str, use_mip: bool = False):
         print(f"  {fname}  shape={stack.shape}  dtype={dtype}  "
               f"({nT} timepoints, {nC} channels, "
               f"{len(xy_positions)} positions)")
+        
+        
 # Mode 7: Ashlar-based stitching with sub-pixel alignment
 # ---------------------------------------------------------------------------
 
-def build_ashlar_stitched(grid: ExperimentGrid, out_dir: str,
-                          pixel_size: float = None,
-                          maximum_shift: float = 50.0,
-                          align_channel: int = 0):
+def _select_best_z_tile(tiles: List[TileInfo]) -> TileInfo:
+    """
+    From a Z-stack at one XY position/channel, return the single tile to
+    pass to ASHLAR.  With a real-time autofocus microscope there is usually
+    only one Z per position; when there are multiple we pick the sharpest.
+    """
+    if len(tiles) == 1:
+        return tiles[0]
+    best_tile, best_score = tiles[0], -1.0
+    for t in tiles:
+        img = tif.imread(t.filepath)
+        score = _focus_measure(img)
+        if score > best_score:
+            best_score, best_tile = score, t
+    return best_tile
+
+
+def build_ashlar_stitched(
+    grid: ExperimentGrid,
+    out_dir: str,
+    pixel_size: float = 1.0,
+    maximum_shift: float = 50.0,
+    align_channel: int = 0,
+):
     """
     Stitch tiles using ASHLAR (Alignment by Simultaneous Harmonization of
     Layer/Adjacency Registration) for sub-pixel-accurate stitching.
@@ -961,19 +973,32 @@ def build_ashlar_stitched(grid: ExperimentGrid, out_dir: str,
     For each timepoint, all channels are stitched together using ashlar's
     EdgeAligner so inter-tile shifts are globally optimised.  The result is
     written as a pyramidal OME-TIFF per timepoint.
+    
+    Strategy
+    --------
+    For each timepoint we collect one representative tile per (XY position,
+    channel).  When multiple Z planes exist at a position the sharpest frame
+    is chosen (Laplacian-variance focus measure).  The selected files are
+    passed directly to ``build_imswitch_reader``, which reads the stage
+    coordinates from the filenames and feeds them to ASHLAR's edge aligner.
+
+    Multi-channel handling
+    ----------------------
+    ASHLAR expects one *reader* per imaging cycle.  For a single-cycle
+    (single-timepoint, multi-channel) acquisition all channels share the
+    same stage positions and should be passed as one reader so that the
+    channel alignment is internally consistent.  ``build_imswitch_reader``
+    groups tiles by channel automatically when given a directory or list of
+    files, so we pass it the full per-timepoint file list and let it sort
+    out the channel ordering.
 
     Parameters
     ----------
-    grid : ExperimentGrid
-        Parsed tile grid.
-    out_dir : str
-        Output directory.
-    pixel_size : float
-        Physical pixel size in microns (used for position conversion).
-    maximum_shift : float
-        Maximum allowed per-tile corrective shift in microns (ashlar -m).
-    align_channel : int
-        Channel index used for alignment (ashlar -c).
+    grid         : ExperimentGrid
+    out_dir      : str  – output directory
+    pixel_size   : float – physical pixel size in µm/pixel
+    maximum_shift: float – max per-tile corrective shift in µm (ashlar -m)
+    align_channel: int   – channel index used for alignment (ashlar -c)
     """
     try:
         from ashlarUC2.scripts.ashlar import process_images, build_imswitch_reader
@@ -981,69 +1006,111 @@ def build_ashlar_stitched(grid: ExperimentGrid, out_dir: str,
         try:
             from ashlar.scripts.ashlar import process_images, build_imswitch_reader
         except ImportError:
-            print("  ERROR: ashlarUC2 (or ashlar) is not installed. "
-                  "Install with: pip install ashlarUC2")
+            print(
+                "  ERROR: ashlarUC2 is not installed.\n"
+                "  Install with:  pip install ashlarUC2\n"
+                "  or from source: pip install git+https://github.com/openUC2/ashlarUC2"
+            )
             return
 
-
-    print("\n=== Building ashlar-stitched OME-TIFFs ===")
+    print("\n=== Building ashlar-stitched OME-TIFFs (sub-pixel alignment) ===")
+    print(f"  pixel_size={pixel_size} µm  maximum_shift={maximum_shift} µm  "
+          f"align_channel={align_channel}")
     os.makedirs(out_dir, exist_ok=True)
 
     for tp in grid.timepoints:
-        # Collect all tile file paths for this timepoint (all channels)
-        tile_paths = []
-        for key, tile_list in grid.lookup.items():
-            key_tp = key[0]
-            if key_tp != tp:
-                continue
-            # Use MIP representative tile when Z-stack exists
-            best = sorted(tile_list, key=lambda t: t.z)[0] if tile_list else None
-            if best is not None:
-                tile_paths.append(best.filepath)
+        print(f"\n  --- Timepoint {tp} ---")
 
-        if not tile_paths:
+        # ------------------------------------------------------------------
+        # Collect one best-focus tile per (XY position, channel).
+        # We build a flat list of file paths; build_imswitch_reader parses
+        # the stage coordinates and channel indices from the filenames.
+        # ------------------------------------------------------------------
+        selected_paths: List[str] = []
+
+        # Iterate over all (ix, iy, c_idx) combinations that have tiles at
+        # this timepoint.
+        for ix in grid.ix_positions:
+            for iy in grid.iy_positions:
+                for ci in grid.c_indices:
+                    z_tiles = grid.get_tiles(tp, ix, iy, ci)
+                    if not z_tiles:
+                        continue
+                    best = _select_best_z_tile(
+                        sorted(z_tiles, key=lambda t: t.z)
+                    )
+                    selected_paths.append(best.filepath)
+
+        if not selected_paths:
+            print(f"  Skipping timepoint {tp}: no tiles found.")
             continue
 
-        # Deduplicate (same file could appear for different z-slices)
-        tile_paths = sorted(set(tile_paths))
+        n_channels = len(grid.c_indices)
+        n_positions = len(grid.ix_positions) * len(grid.iy_positions)
+        print(f"  {len(selected_paths)} tiles selected  "
+              f"({n_positions} XY positions × {n_channels} channel(s))")
+
+        # ------------------------------------------------------------------
+        # Build the ImSwitchTiffReader.
+        # ``build_imswitch_reader`` accepts either a directory path or an
+        # explicit list of file paths.  Passing the list is safer here
+        # because tiles from multiple timepoint subdirectories might coexist
+        # under tiles_dir; this ensures only the current timepoint's files
+        # are used.
+        # ------------------------------------------------------------------
+        try:
+            reader = build_imswitch_reader(selected_paths, pixel_size=pixel_size)
+        except Exception as exc:
+            print(f"  ERROR building ImSwitchTiffReader for tp={tp}: {exc}")
+            continue
 
         out_file = os.path.join(out_dir, f"ashlar_stitched_t{tp:04d}.ome.tif")
-        print(f"  Timepoint {tp}: {len(tile_paths)} tiles → {os.path.basename(out_file)}")
-        
-        # try to read the pixel_size from the image metadata
-        
-        
-        reader = build_imswitch_reader(tile_paths, pixel_size=pixel_size)
+        print(f"  Output → {os.path.basename(out_file)}")
 
-        result = process_images(
-            filepaths=[reader],
-            output=out_file,
-            align_channel=align_channel,
-            flip_x=False,
-            flip_y=False,
-            flip_mosaic_x=False,
-            flip_mosaic_y=False,
-            output_channels=None,
-            maximum_shift=maximum_shift,
-            stitch_alpha=0.01,
-            maximum_error=None,
-            filter_sigma=0,
-            pyramid=out_file.endswith(".ome.tif"),
-            tile_size=1024,
-            ffp=None,
-            dfp=None,
-            barrel_correction=0,
-            plates=False,
-            quiet=False,
-        )
+        # ------------------------------------------------------------------
+        # Run ASHLAR.
+        # ``filepaths`` takes a list where each element is either a file path
+        # string (BioFormats/TIFF reader) or a pre-built reader object.
+        # We pass our ImSwitchTiffReader directly as the single cycle.
+        # ------------------------------------------------------------------
+        try:
+            result = process_images(
+                filepaths=[reader],
+                output=out_file,
+                align_channel=align_channel,
+                flip_x=False,
+                flip_y=False,
+                flip_mosaic_x=False,
+                flip_mosaic_y=False,
+                output_channels=None,
+                maximum_shift=maximum_shift,
+                stitch_alpha=0.01,
+                maximum_error=None,
+                filter_sigma=0,
+                pyramid=out_file.endswith(".ome.tif") or out_file.endswith(".ome.tiff"),          # pyramidal OME-TIFF for large whole-slide images
+                tile_size=1024,
+                ffp=None,
+                dfp=None,
+                barrel_correction=0,
+                plates=False,
+                quiet=False,
+            )
+        except Exception as exc:
+            print(f"  ERROR during ashlar processing for tp={tp}: {exc}")
+            import traceback
+            traceback.print_exc()
+            continue
+
         if result and result != 0:
-            print(f"  WARNING: ashlar returned non-zero status {result}")
+            print(f"  WARNING: ashlar returned non-zero status {result} for tp={tp}")
         else:
             print(f"  Written: {out_file}")
 
+    print(f"\n  Ashlar outputs in: {out_dir}")
+
 
 # ---------------------------------------------------------------------------
-# Fiji TileConfiguration.txt (for precise Grid/Collection stitching)
+# Fiji TileConfiguration.txt
 # ---------------------------------------------------------------------------
 
 def write_tile_configuration(grid: ExperimentGrid, out_dir: str):
@@ -1151,14 +1218,14 @@ def main():
         type=float,
         default=1.0,
         metavar="MICRONS",
-        help="Physical pixel size in microns (used by ashlar mode, default: 1.0)",
+        help="Physical pixel size in µm (used by ashlar mode, default: 1.0)",
     )
     parser.add_argument(
         "--maximum-shift",
         type=float,
         default=50.0,
         metavar="MICRONS",
-        help="Maximum per-tile alignment shift in microns for ashlar (default: 50)",
+        help="Maximum per-tile alignment shift in µm for ashlar (default: 50)",
     )
     parser.add_argument(
         "--align-channel",
@@ -1202,54 +1269,42 @@ def main():
     print(f"  Z per pos   : up to {n_z_per_pos}")
     print(f"  Channels    : {grid.channels}")
 
-    # Run requested conversions
+    # Resolve pixel size: CLI arg overrides, but try to read from protocol JSON
+    pixel_size = args.pixel_size
+    protocol_json = args.protocol or _find_protocol_json(tiles_dir)
+    if protocol_json and os.path.isfile(protocol_json) and args.pixel_size == 1.0:
+        try:
+            with open(protocol_json) as f:
+                proto = json.load(f)
+            ps = next(
+                (step["post_params"]["pixel_size"]
+                 for step in proto.get("workflow_steps", [])
+                 if "pixel_size" in step.get("post_params", {})),
+                None,
+            )
+            if ps is not None:
+                pixel_size = float(ps)
+                print(f"  Pixel size from protocol JSON: {pixel_size} µm/pixel")
+        except Exception:
+            pass  # fall back to CLI value
+
     if "composite" in modes:
         build_composite_stacks(grid, os.path.join(out_dir, "composite"))
-
     if "stitch" in modes:
         build_stitched_tiffs(grid, os.path.join(out_dir, "stitched"))
-
     if "mip" in modes:
         build_mip_stitched(grid, os.path.join(out_dir, "mip_stitched"))
-
     if "mip-composite" in modes:
         build_mip_composite(grid, os.path.join(out_dir, "mip_composite"))
-
     if "focus" in modes:
         build_best_focus_stitched(grid, os.path.join(out_dir, "best_focus"))
-
     if "tile-config" in modes:
         write_tile_configuration(grid, os.path.join(out_dir, "tile_config"))
-
     if "timelapse" in modes:
         build_timelapse(grid, os.path.join(out_dir, "timelapse"), use_mip=False)
-
     if "timelapse-mip" in modes:
         build_timelapse(grid, os.path.join(out_dir, "timelapse_mip"), use_mip=True)
-        
     if "ashlar" in modes:
-        
-        # get parent-parent dir and find json file
-        parent_dir = os.path.dirname(os.path.dirname(tiles_dir))
-        print("Looking for protocol JSON file in parent directory: ", parent_dir)
-        json_file = None
-        for f in os.listdir(parent_dir):
-            if f.endswith("_protocol.json"):
-                json_file = os.path.join(parent_dir, f)
-                print("Found protocol JSON file: ", json_file)
-                break
-        if json_file is None:
-            print(f"  WARNING: No protocol JSON file found in {parent_dir}. "
-                    "Using default pixel size of 1.0 micron for ashlar.")
-            pixel_size = 1.0
-        else:
-            with open(json_file, "r") as f: protocolDict = json.load(f)
-            # search for "pixel_size" in protocolDict and use it if found, otherwise default to 1.0
-            pixel_size = next(step["post_params"]["pixel_size"] for step in protocolDict["workflow_steps"] if "pixel_size" in step.get("post_params", {}))
-            print(f"Using pixel size from protocol: {pixel_size} microns")
-            if pixel_size is None:
-                pixel_size = 1.0
-
         build_ashlar_stitched(
             grid,
             os.path.join(out_dir, "ashlar"),
@@ -1260,53 +1315,6 @@ def main():
 
     print(f"\nAll outputs written to: {out_dir}")
 
-
-# standalone test call for build_ashlar_stitched
-def test_build_ashlar_stitched():
-    tiles_dir = "/Users/bene/ImSwitchConfig/data/ExperimentController/20260501_134257/20260501_134257_experiment0_0_experiment_0_/tiles/"
-    json_file = "/Users/bene/ImSwitchConfig/data/ExperimentController/20260501_134257/20260501_134257_experiment_t0000_protocol.json"
-    
-    # load pixelsize from json_file 
-    with open(json_file, "r") as f: protocolDict = json.load(f)
-    # search for "pixel_size" in protocolDict and use it if found, otherwise default to 1.0
-    pixel_size = next(step["post_params"]["pixel_size"] for step in protocolDict["workflow_steps"] if "pixel_size" in step.get("post_params", {}))
-    if pixel_size is None:
-        pixel_size = 1.0
-    print(f"Using pixel size: {pixel_size} microns")
-    mode = "ashlar"
-    maximum_shift = 50
-    align_channel =  0
-    protol = None
-    tiles_dir = os.path.abspath(tiles_dir)
-    if not os.path.isdir(tiles_dir):
-        sys.exit(f"Not a directory: {tiles_dir}")
-
-    out_dir = os.path.join(tiles_dir, "converted")
-    os.makedirs(out_dir, exist_ok=True)
-
-    modes = set([mode])
-    if "all" in modes:
-        modes = set(ALL_MODES)
-
-    # Auto-detect layout: base dir with experiment subdirs vs plain tiles dir
-    if _is_multi_experiment_dir(tiles_dir):
-        print(f"Detected multi-experiment timelapse layout under: {tiles_dir}")
-        tiles = discover_tiles_from_base_dir(tiles_dir, protocol_json=protol)
-    else:
-        tiles = discover_tiles(tiles_dir, protocol_json=protol)
-    if not tiles:
-        sys.exit(1)
-
-    grid = ExperimentGrid.from_tiles(tiles)
-
-
-    build_ashlar_stitched(
-        grid,
-        os.path.join(out_dir, "ashlar"),
-        pixel_size=pixel_size,
-        maximum_shift=maximum_shift,
-        align_channel=align_channel,
-    )
 
 if __name__ == "__main__":
     main()

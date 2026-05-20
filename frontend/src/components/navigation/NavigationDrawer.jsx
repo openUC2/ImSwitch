@@ -1,5 +1,6 @@
 import {
   Apps as AppsIcon,
+  Tune as TuneIcon,
   Code as CodeIcon,
   Computer as ComputerIcon,
   Dashboard as DashboardIcon,
@@ -49,7 +50,7 @@ const NavigationDrawer = ({
   // Helper function to get enabled apps by category
   const getEnabledAppsByCategory = (category) => {
     return Object.values(APP_REGISTRY).filter(
-      (app) => app.category === category && isAppEnabled(app.id)
+      (app) => app.category === category && isAppEnabled(app.id),
     );
   };
 
@@ -70,6 +71,7 @@ const NavigationDrawer = ({
     return {
       essentials: true,
       apps: false,
+      calibration: false,
       coding: false,
       system: false,
       systemSettings: false,
@@ -246,6 +248,28 @@ const NavigationDrawer = ({
           </>
         )}
 
+        {/* Calibration Group - Hardware calibration tools */}
+        {getEnabledAppsByCategory(APP_CATEGORIES.CALIBRATION).length > 0 && (
+          <>
+            <Divider sx={{ my: 1 }} />
+            <DrawerEntry
+              icon={<TuneIcon />}
+              label="Calibration"
+              onClick={() => toggleGroup("calibration")}
+              tooltip="Hardware calibration and alignment tools"
+              color={SIDEBAR_COLORS.calibration}
+              collapsed={!sidebarVisible}
+              collapsible={true}
+              expanded={groupsOpen.calibration}
+            >
+              {renderAppsForCategory(
+                APP_CATEGORIES.CALIBRATION,
+                SIDEBAR_COLORS.calibration,
+              )}
+            </DrawerEntry>
+          </>
+        )}
+
         {/* Coding Group - Development Tools */}
         {getEnabledAppsByCategory(APP_CATEGORIES.CODING).length > 0 && (
           <>
@@ -262,7 +286,7 @@ const NavigationDrawer = ({
             >
               {renderAppsForCategory(
                 APP_CATEGORIES.CODING,
-                SIDEBAR_COLORS.coding
+                SIDEBAR_COLORS.coding,
               )}
             </DrawerEntry>
           </>
@@ -284,7 +308,7 @@ const NavigationDrawer = ({
             >
               {renderAppsForCategory(
                 APP_CATEGORIES.SYSTEM,
-                SIDEBAR_COLORS.system
+                SIDEBAR_COLORS.system,
               )}
             </DrawerEntry>
           </>

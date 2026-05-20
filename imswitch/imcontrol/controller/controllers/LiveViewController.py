@@ -760,6 +760,7 @@ class LiveViewController(LiveUpdatedController):
         self._activeStreams: Dict[str, tuple] = {}
         self._streamThreads: Dict[str, threading.Thread] = {}
         self._streamIsRunning = False
+        self._streamLock = threading.Lock()  # Protects _activeStreams and _streamThreads
 
         # WebRTC peer connections: {detectorName: RTCPeerConnection}
         self._webrtc_peers: Dict[str, Any] = {}
@@ -838,8 +839,10 @@ class LiveViewController(LiveUpdatedController):
         """Handle stop live acquisition signal."""
         if stop:
             self._logger.info("Stopping all live acquisitions")
-            # Stop all active streams
-            for detector_name in list(self._activeStreams.keys()):
+            # Stop all active streams (take snapshot of keys under lock)
+            with self._streamLock:
+                detector_names = list(self._activeStreams.keys())
+            for detector_name in detector_names:
                 self.stopLiveView(detector_name, stopCamera=False)
 
     @APIExport()
@@ -883,19 +886,20 @@ class LiveViewController(LiveUpdatedController):
             if not detector._running:
                 detector.startAcquisition()
 
-            # Check if detector already has an active stream
-            if detectorName in self._activeStreams:
-                old_protocol, old_worker = self._activeStreams[detectorName]
-                return {
-                    "status": "already_running",
-                    "detector": detectorName,
-                    "protocol": old_protocol,
-                    "message": f"Stream already active for {detectorName} with protocol {old_protocol}. Stop it first."
-                }
+            with self._streamLock:
+                # Check if detector already has an active stream
+                if detectorName in self._activeStreams:
+                    old_protocol, old_worker = self._activeStreams[detectorName]
+                    return {
+                        "status": "already_running",
+                        "detector": detectorName,
+                        "protocol": old_protocol,
+                        "message": f"Stream already active for {detectorName} with protocol {old_protocol}. Stop it first."
+                    }
 
             # Resolve effective stream parameters. Priority:
             # 1. Explicit params from this call
-            # 2. Previously saved per-detector params
+            # 2. Previously saved per-detector params (matching the requested protocol)
             # 3. Global protocol defaults
             global_params = self._streamParams.get(protocol, StreamParams(protocol=protocol))
             saved_detector = self._detectorParams.get(detectorName)
@@ -908,7 +912,17 @@ class LiveViewController(LiveUpdatedController):
                         setattr(stream_params, key, value)
             elif saved_detector is not None and saved_detector.protocol == protocol:
                 # Re-use the params from the last time this detector was streamed
+                # with the same protocol
                 stream_params = StreamParams(**saved_detector.to_dict())
+            elif saved_detector is not None and saved_detector.protocol != protocol:
+                # Detector has saved params but for a different protocol —
+                # start from global defaults but keep detector-specific settings
+                # like subsampling_factor, throttle_ms that are protocol-agnostic
+                stream_params = StreamParams(**global_params.to_dict())
+                # Carry over common detector-specific settings
+                for common_key in ('subsampling_factor', 'throttle_ms', 'crop_size'):
+                    if hasattr(saved_detector, common_key):
+                        setattr(stream_params, common_key, getattr(saved_detector, common_key))
             else:
                 stream_params = StreamParams(**global_params.to_dict())
 
@@ -937,14 +951,13 @@ class LiveViewController(LiveUpdatedController):
             worker.enableFrameBroadcast(True)
 
             # Start worker in thread
-            # mThread = Thread
-            # worker.moveToThread()
             thread = threading.Thread(target=worker.run, daemon=True)
             thread.start()
 
-            # Store worker and thread (only protocol and worker, not tuple key)
-            self._activeStreams[detectorName] = (protocol, worker)
-            self._streamThreads[detectorName] = thread
+            with self._streamLock:
+                # Store worker and thread (only protocol and worker, not tuple key)
+                self._activeStreams[detectorName] = (protocol, worker)
+                self._streamThreads[detectorName] = thread
 
             # Emit signal
             self.sigStreamStarted.emit(detectorName, protocol)
@@ -978,27 +991,28 @@ class LiveViewController(LiveUpdatedController):
             Dictionary with status
         """
         try:
-            # If no detector specified, stop first active stream
-            if detectorName is None:
-                if not self._activeStreams:
+            with self._streamLock:
+                # If no detector specified, stop first active stream
+                if detectorName is None:
+                    if not self._activeStreams:
+                        return {
+                            "status": "not_running",
+                            "message": "No active streams to stop"
+                        }
+                    detectorName = list(self._activeStreams.keys())[0]
+
+                # Check if detector has active stream
+                if detectorName not in self._activeStreams:
                     return {
                         "status": "not_running",
-                        "message": "No active streams to stop"
+                        "detector": detectorName,
+                        "message": f"No active stream for detector {detectorName}"
                     }
-                detectorName = list(self._activeStreams.keys())[0]
 
-            # Check if detector has active stream
-            if detectorName not in self._activeStreams:
-                return {
-                    "status": "not_running",
-                    "detector": detectorName,
-                    "message": f"No active stream for detector {detectorName}"
-                }
+                # Get protocol and worker
+                protocol, worker = self._activeStreams[detectorName]
 
-            # Get protocol and worker
-            protocol, worker = self._activeStreams[detectorName]
-
-            # Stop worker
+            # Stop worker (outside lock — worker.stop() may take time)
             worker.stop()
 
             # If it's WebRTC, close the peer connection
@@ -1019,10 +1033,12 @@ class LiveViewController(LiveUpdatedController):
                 except Exception as e:
                     self._logger.error(f"Error closing WebRTC peer: {e}")
 
-            # Clean up
-            del self._activeStreams[detectorName]
-            if detectorName in self._streamThreads:
-                del self._streamThreads[detectorName]
+            with self._streamLock:
+                # Clean up
+                if detectorName in self._activeStreams:
+                    del self._activeStreams[detectorName]
+                if detectorName in self._streamThreads:
+                    del self._streamThreads[detectorName]
 
             # Emit signal
             self.sigStreamStopped.emit(detectorName, protocol)

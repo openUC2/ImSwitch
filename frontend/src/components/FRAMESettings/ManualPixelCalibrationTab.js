@@ -36,6 +36,7 @@ import apiPixelCalibrationControllerManualFourPointCalibration from '../../backe
 import apiPixelCalibrationControllerGetAvailableDetectors from '../../backendapi/apiPixelCalibrationControllerGetAvailableDetectors';
 import apiPixelCalibrationControllerGetCalibrationData from '../../backendapi/apiPixelCalibrationControllerGetCalibrationData';
 import apiPixelCalibrationControllerSetCalibrationData from '../../backendapi/apiPixelCalibrationControllerSetCalibrationData';
+import apiObjectiveControllerGetStatus from '../../backendapi/apiObjectiveControllerGetStatus';
 
 /**
  * ManualPixelCalibrationTab – Interactive four-point affine calibration
@@ -90,7 +91,23 @@ const ManualPixelCalibrationTab = () => {
   const [existingCalib, setExistingCalib] = useState(null);
   const [editLoading, setEditLoading] = useState(false);
 
+  // --- objective info ---
+  const [objectiveInfo, setObjectiveInfo] = useState(null);
+
   const overlayRef = useRef(null);
+
+  // Fetch objective status on mount and when objectiveId changes
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await apiObjectiveControllerGetStatus();
+        if (cancelled) return;
+        setObjectiveInfo(resp);
+      } catch (_e) { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [objectiveId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -252,7 +269,7 @@ const ManualPixelCalibrationTab = () => {
     }
   };
 
-  // ---- step 7: calculate & save ----
+  // ---- step 8: compute calibration (does NOT save yet) ----
   const handleCalculate = async () => {
     if (!pointA1 || !pointA2 || !pointB1 || !pointB2) return;
     try {
@@ -278,8 +295,8 @@ const ManualPixelCalibrationTab = () => {
 
       if (res.success) {
         setResult(res);
-        setStatus('');
-        setActiveStep(8);
+        setStatus('Calibration computed. Review the results below, then Accept or Discard.');
+        setActiveStep(9);
       } else {
         setError(res.error || 'Calibration failed');
       }
@@ -288,6 +305,47 @@ const ManualPixelCalibrationTab = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // ---- step 9: accept (persist) computed calibration ----
+  const handleAcceptCalibration = async () => {
+    if (!result) return;
+    try {
+      setLoading(true);
+      setError('');
+
+      // Build affine matrix and metrics from the computed result
+      const affineMatrix = result.affineMatrix || result.affine_matrix;
+      const metrics = result.metrics || {
+        scale_x_um_per_pixel: result.scaleXUmPerPixel,
+        scale_y_um_per_pixel: result.scaleYUmPerPixel,
+      };
+
+      const resp = await apiPixelCalibrationControllerSetCalibrationData({
+        detectorName: detectorName || undefined,
+        objectiveId: objectiveId || undefined,
+        affineMatrix,
+        metrics,
+      });
+
+      if (resp?.success) {
+        setStatus(resp.message || 'Calibration applied and saved to detector.');
+        setActiveStep(10);
+      } else {
+        setError(resp?.error || 'Failed to apply calibration');
+      }
+    } catch (err) {
+      setError(`Failed to apply calibration: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ---- discard computed calibration ----
+  const handleDiscardCalibration = () => {
+    setResult(null);
+    setStatus('Calibration discarded. You can re-run the workflow.');
+    setActiveStep(8);
   };
 
   // ---- overlay ----
@@ -342,7 +400,8 @@ const ManualPixelCalibrationTab = () => {
     'Mark feature (P3 before Y move)',
     'Move stage in Y',
     'Mark same feature (P4 after Y move)',
-    'Calculate affine calibration',
+    'Compute affine calibration',
+    'Review & accept',
   ];
 
   // Clickable steps — highlight which steps expect a click
@@ -427,6 +486,27 @@ const ManualPixelCalibrationTab = () => {
                 <MenuItem value="1">Objective 1</MenuItem>
               </Select>
             </FormControl>
+
+            {/* Active objective info */}
+            {objectiveInfo && (
+              <Alert severity="info" sx={{ mt: 1 }}>
+                <Typography variant="body2">
+                  <strong>Active objective:</strong>{' '}
+                  {objectiveInfo.currentObjective != null
+                    ? (objectiveInfo.availableObjectivesNames?.[objectiveInfo.currentObjective] || `#${objectiveInfo.currentObjective}`)
+                    : 'None'}
+                  {objectiveInfo.availableObjectivePixelSizes?.[objectiveInfo.currentObjective] > 0 && (
+                    <> &mdash; Pixel size: {objectiveInfo.availableObjectivePixelSizes[objectiveInfo.currentObjective].toFixed(4)} µm/px</>
+                  )}
+                  {objectiveInfo.availableObjectiveMagnifications?.[objectiveInfo.currentObjective] > 0 && (
+                    <> &mdash; {objectiveInfo.availableObjectiveMagnifications[objectiveInfo.currentObjective]}×</>
+                  )}
+                  {objectiveInfo.availableObjectiveNAs?.[objectiveInfo.currentObjective] > 0 && (
+                    <> (NA {objectiveInfo.availableObjectiveNAs[objectiveInfo.currentObjective]})</>
+                  )}
+                </Typography>
+              </Alert>
+            )}
           </Paper>
 
           {/* Editable calibration override */}
@@ -593,29 +673,83 @@ const ManualPixelCalibrationTab = () => {
                 </StepContent>
               </Step>
 
-              {/* Step 8 – calculate */}
+              {/* Step 8 – compute */}
               <Step>
                 <StepLabel StepIconProps={{ icon: <CalcIcon color={activeStep === 8 ? 'primary' : 'inherit'} /> }}>
                   {steps[8]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2" sx={{ mb: 1 }}>
-                    Review the four points and press <em>Calculate</em> to compute and save the affine calibration.
+                    Review the four points and press <em>Compute</em> to calculate the affine calibration.
+                    Nothing is saved until you accept in the next step.
                   </Typography>
                   <Button variant="contained" color="primary"
                     startIcon={loading ? <CircularProgress size={18} /> : <CalcIcon />}
                     onClick={handleCalculate} disabled={loading}>
-                    {loading ? 'Calculating…' : 'Calculate & Save'}
+                    {loading ? 'Computing…' : 'Compute calibration'}
                   </Button>
+                </StepContent>
+              </Step>
+
+              {/* Step 9 – review & accept */}
+              <Step>
+                <StepLabel StepIconProps={{ icon: <DoneIcon color={activeStep === 9 ? 'success' : 'inherit'} /> }}>
+                  {steps[9]}
+                </StepLabel>
+                <StepContent>
+                  {result && (
+                    <Box>
+                      <Alert severity="warning" sx={{ mb: 2 }}>
+                        Verify the computed values below. Nothing is applied to the detector
+                        until you press <strong>Accept</strong>.
+                      </Alert>
+                      <Typography variant="body2" sx={{ mb: 0.5 }}>
+                        <strong>Pixel size:</strong> {result.pixelSizeUm?.toFixed(4)} µm/px
+                      </Typography>
+                      <Typography variant="body2" sx={{ mb: 0.5 }}>
+                        Scale X: {result.scaleXUmPerPixel?.toFixed(4)} µm/px
+                        {result.scaleXUmPerPixel < 0 && ' (flipped)'}
+                      </Typography>
+                      <Typography variant="body2" sx={{ mb: 0.5 }}>
+                        Scale Y: {result.scaleYUmPerPixel?.toFixed(4)} µm/px
+                        {result.scaleYUmPerPixel < 0 && ' (flipped)'}
+                      </Typography>
+                      {result.metrics?.rotation_deg != null && (
+                        <Typography variant="body2" sx={{ mb: 0.5 }}>
+                          Rotation: {result.metrics.rotation_deg.toFixed(1)}°
+                        </Typography>
+                      )}
+                      {result.metrics?.condition_number != null && (
+                        <Typography variant="body2" sx={{ mb: 1 }}>
+                          Condition number: {result.metrics.condition_number.toFixed(2)}
+                        </Typography>
+                      )}
+                      <Grid container spacing={1} sx={{ mt: 1 }}>
+                        <Grid item xs={6}>
+                          <Button variant="contained" color="success" fullWidth
+                            startIcon={loading ? <CircularProgress size={18} /> : <DoneIcon />}
+                            onClick={handleAcceptCalibration} disabled={loading}>
+                            {loading ? 'Saving…' : 'Accept & Save'}
+                          </Button>
+                        </Grid>
+                        <Grid item xs={6}>
+                          <Button variant="outlined" color="error" fullWidth
+                            onClick={handleDiscardCalibration} disabled={loading}>
+                            Discard
+                          </Button>
+                        </Grid>
+                      </Grid>
+                    </Box>
+                  )}
                 </StepContent>
               </Step>
             </Stepper>
 
-            {activeStep === 9 && (
+            {activeStep === 10 && (
               <Box sx={{ mt: 2, textAlign: 'center' }}>
                 <DoneIcon color="success" sx={{ fontSize: 48 }} />
                 <Typography variant="subtitle1" color="success.main">
-                  Affine calibration complete!
+                  Affine calibration applied and saved!
                 </Typography>
               </Box>
             )}

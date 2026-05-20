@@ -632,10 +632,11 @@ const StageOffsetCalibrationTab = () => {
               color="textSecondary"
               sx={{ display: "block", mb: 1 }}
             >
+              Detector: {recommended.frameWidth}×{recommended.frameHeight} px;
               Pixel size {recommended.pixelSizeUm.toFixed(3)} um/px;
-              FOV {Math.round(recommended.fovXUm)} x{" "}
-              {Math.round(recommended.fovYUm)} um (recommended step{" "}
-              {Math.round(recommended.recommendedStepUm)} um).
+              FOV {Math.round(recommended.fovXUm)} × {Math.round(recommended.fovYUm)} um
+              (= {recommended.frameWidth}px × {recommended.pixelSizeUm.toFixed(3)} um/px);
+              recommended step {Math.round(recommended.recommendedStepUm)} um.
             </Typography>
           )}
           <Grid container spacing={2}>

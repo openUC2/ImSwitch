@@ -37,6 +37,7 @@ import apiPixelCalibrationControllerGetAvailableDetectors from '../../backendapi
 import apiPixelCalibrationControllerGetCalibrationData from '../../backendapi/apiPixelCalibrationControllerGetCalibrationData';
 import apiPixelCalibrationControllerSetCalibrationData from '../../backendapi/apiPixelCalibrationControllerSetCalibrationData';
 import apiObjectiveControllerGetStatus from '../../backendapi/apiObjectiveControllerGetStatus';
+import apiLiveViewControllerGetStreamParameters from '../../backendapi/apiLiveViewControllerGetStreamParameters';
 
 /**
  * ManualPixelCalibrationTab – Interactive four-point affine calibration
@@ -61,13 +62,21 @@ import apiObjectiveControllerGetStatus from '../../backendapi/apiObjectiveContro
 const ManualPixelCalibrationTab = () => {
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
 
-  const subsamplingFactor = useMemo(() => {
+  // Authoritative subsampling factor fetched from the backend on tab open.
+  // Falls back to Redux/streamSettings only if the backend call hasn't
+  // returned yet (avoids the "factor = 1 by default" bug when the calibration
+  // tab is opened before the user has touched any stream setting).
+  const [backendSubsamplingFactor, setBackendSubsamplingFactor] = useState(null);
+
+  const subsamplingFromRedux = useMemo(() => {
     const settings = liveStreamState.streamSettings;
     return settings?.jpeg?.subsampling?.factor ||
            settings?.jpeg?.subsampling_factor ||
            settings?.binary?.subsampling?.factor ||
-           settings?.webrtc?.subsampling_factor || 1;
+           settings?.webrtc?.subsampling_factor || null;
   }, [liveStreamState.streamSettings]);
+
+  const subsamplingFactor = backendSubsamplingFactor ?? subsamplingFromRedux ?? 1;
 
   // ---- calibration state ----
   const [activeStep, setActiveStep] = useState(0);
@@ -108,6 +117,36 @@ const ManualPixelCalibrationTab = () => {
     })();
     return () => { cancelled = true; };
   }, [objectiveId]);
+
+  // Pull the *actual* subsampling factor from the backend, so we don't rely
+  // on (potentially undefined) Redux state. Uses the currently-active
+  // protocol if any, otherwise just reports the first non-null one found.
+  const refreshBackendSubsampling = async () => {
+    try {
+      const resp = await apiLiveViewControllerGetStreamParameters();
+      const activeProtocol = resp?.current_protocol;
+      const protos = resp?.protocols || {};
+      let factor = null;
+      if (activeProtocol && protos[activeProtocol]?.subsampling_factor != null) {
+        factor = Number(protos[activeProtocol].subsampling_factor);
+      } else {
+        for (const p of Object.keys(protos)) {
+          if (protos[p]?.subsampling_factor != null) {
+            factor = Number(protos[p].subsampling_factor);
+            break;
+          }
+        }
+      }
+      if (factor && factor > 0) setBackendSubsamplingFactor(factor);
+    } catch (_e) {
+      /* keep Redux fallback */
+    }
+  };
+
+  useEffect(() => {
+    refreshBackendSubsampling();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -277,6 +316,33 @@ const ManualPixelCalibrationTab = () => {
       setError('');
       setStatus('Computing full affine calibration…');
 
+      // Always re-confirm the live preview subsampling factor right before
+      // computing — otherwise a stale Redux value would silently undercount
+      // the displayed pixel size when the user changed it elsewhere.
+      let effectiveSubsampling = subsamplingFactor;
+      try {
+        const resp = await apiLiveViewControllerGetStreamParameters();
+        const activeProtocol = resp?.current_protocol;
+        const protos = resp?.protocols || {};
+        let factor = null;
+        if (activeProtocol && protos[activeProtocol]?.subsampling_factor != null) {
+          factor = Number(protos[activeProtocol].subsampling_factor);
+        } else {
+          for (const p of Object.keys(protos)) {
+            if (protos[p]?.subsampling_factor != null) {
+              factor = Number(protos[p].subsampling_factor);
+              break;
+            }
+          }
+        }
+        if (factor && factor > 0) {
+          effectiveSubsampling = factor;
+          setBackendSubsamplingFactor(factor);
+        }
+      } catch (_e) {
+        /* fall back to the previously known factor */
+      }
+
       const res = await apiPixelCalibrationControllerManualFourPointCalibration({
         pointA1X: pointA1.x,
         pointA1Y: pointA1.y,
@@ -290,7 +356,7 @@ const ManualPixelCalibrationTab = () => {
         movementDistanceYUm,
         detectorName: detectorName || undefined,
         objectiveId: objectiveId || undefined,
-        previewSubsamplingFactor: subsamplingFactor,
+        previewSubsamplingFactor: effectiveSubsampling,
       });
 
       if (res.success) {

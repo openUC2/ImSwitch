@@ -22,6 +22,7 @@ import IlluminationController from "./IlluminationController";
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView";
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
+import apiLiveViewControllerGetActiveStreams from "../backendapi/apiLiveViewControllerGetActiveStreams";
 import ObjectiveSwitcher from "./ObjectiveSwitcher";
 import DetectorTriggerController from "./DetectorTriggerController";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
@@ -187,6 +188,36 @@ export default function LiveView({ setFileManagerInitialPath }) {
       }
     })();
   }, [hostIP, hostPort, dispatch]);
+
+  /* Sync activeTab with the backend's currently-streaming detector.
+     Without this, the UI defaults to tab 0 (e.g. "Observationcamera")
+     even when the backend is actually streaming a different detector
+     (e.g. "WidefieldCamera"). */
+  useEffect(() => {
+    if (!detectors || detectors.length === 0) return;
+    (async () => {
+      try {
+        const resp = await apiLiveViewControllerGetActiveStreams();
+        const streams = resp?.active_streams || [];
+        if (streams.length === 0) return;
+        const activeDetectorName = streams[0]?.detector;
+        if (!activeDetectorName) return;
+        const idx = detectors.indexOf(activeDetectorName);
+        if (idx >= 0 && idx !== activeTab) {
+          console.log(
+            `[LiveView] Backend streams '${activeDetectorName}' — syncing activeTab ${activeTab} → ${idx}`,
+          );
+          // Mark prevActiveTab so the stream-switch effect doesn't re-trigger.
+          prevActiveTabRef.current = idx;
+          dispatch(liveViewSlice.setActiveTab(idx));
+        }
+      } catch (error) {
+        console.warn("[LiveView] Could not sync active detector tab:", error);
+      }
+    })();
+    // Only re-run when the detector list itself changes (not on tab clicks).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detectors]);
 
   /* min/max - disabled auto-windowing to allow manual control via slider */
   // Commented out to prevent overriding manual slider settings

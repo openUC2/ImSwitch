@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import {
   ToggleButton,
@@ -29,6 +29,7 @@ import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView";
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
+import apiLiveViewControllerGetActiveStreams from "../backendapi/apiLiveViewControllerGetActiveStreams";
 
 /**
  * DetectorToggle - Camera selector for switching between detectors
@@ -40,6 +41,29 @@ const DetectorToggle = () => {
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
   const detectors = liveViewState.detectors || [];
   const activeTab = liveViewState.activeTab || 0;
+
+  // Reflect the backend's actually-streaming detector in the UI on mount,
+  // so we don't show e.g. "Observationcamera" selected while the backend
+  // is streaming "WidefieldCamera".
+  useEffect(() => {
+    if (!detectors || detectors.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await apiLiveViewControllerGetActiveStreams();
+        if (cancelled) return;
+        const streams = resp?.active_streams || [];
+        if (streams.length === 0) return;
+        const activeDetectorName = streams[0]?.detector;
+        const idx = detectors.indexOf(activeDetectorName);
+        if (idx >= 0 && idx !== activeTab) {
+          dispatch(liveViewSlice.setActiveTab(idx));
+        }
+      } catch (_err) { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detectors.length]);
 
   if (detectors.length < 2) return null; // No toggle needed for single camera
 

@@ -23,7 +23,6 @@ import time
 import base64
 import traceback
 from typing import Optional, Dict, Any, List
-from scipy.ndimage import uniform_filter1d
 
 try:
     import cv2
@@ -40,23 +39,26 @@ from ..basecontrollers import LiveUpdatedController
 #  Default config — mirror-geometry algorithm
 # ──────────────────────────────────────────────
 DEFAULT_CONFIG = dict(
+    # Edge detection
     canny_low=30,
     canny_high=100,
     blur_ksize=5,
-    fit_frac=0.15,          # Fit radius as fraction of drop width
-    poly_degree=2,          # Degree of local polynomial fit
-    waist_rise_thresh=3,    # Min width increase (px) to confirm hydrophobic waist
-    angle_range=(1, 179),
+    # Polynomial fit near contact points
+    fit_frac=0.15,        # fit radius as fraction of drop width
+    poly_degree=2,        # 2 = parabola (robust default)
+    tangent_delta=1.0,    # finite-difference step for tangent
+    # Validation
+    angle_range_low=1,
+    angle_range_high=179,
 )
 
 
 # ──────────────────────────────────────────────
-#  Contact-angle image processing
-#  Auto-detects hydrophilic (θ < 90°) vs hydrophobic (θ > 90°)
+#  Contact-angle image processing (mirror-geometry algorithm)
 # ──────────────────────────────────────────────
 
-def find_drop_contour(gray, config):
-    """Find the drop+reflection contour via Canny."""
+def _find_drop_contour(gray, config):
+    """Return the widest external contour (drop+reflection lens)."""
     k = config['blur_ksize']
     if k % 2 == 0:
         k += 1
@@ -68,212 +70,124 @@ def find_drop_contour(gray, config):
     return max(contours, key=lambda c: cv2.boundingRect(c)[2])
 
 
-def detect_regime(contour, waist_rise_thresh=3):
-    """Determine whether the drop is hydrophobic (waist exists) or hydrophilic.
-
-    Builds a width-vs-row profile and looks for a local width minimum (waist)
-    below the widest row (equator). A waist means the drop overhangs the
-    contact line → hydrophobic.
-
-    Returns:
-        ('hydrophobic', ys, lefts, rights, widths, waist_idx)  or
-        ('hydrophilic', ys, lefts, rights, widths, equator_idx)
-    """
+def _find_tips(contour):
+    """Return (left_tip, right_tip) as the leftmost/rightmost contour points."""
     pts = contour[:, 0, :]
-    y_min, y_max = int(pts[:, 1].min()), int(pts[:, 1].max())
-    ys = np.arange(y_min, y_max + 1)
-    n = len(ys)
-    lefts = np.full(n, np.inf)
-    rights = np.full(n, -np.inf)
-
-    for x, y in pts:
-        idx = y - y_min
-        if 0 <= idx < n:
-            if x < lefts[idx]:
-                lefts[idx] = x
-            if x > rights[idx]:
-                rights[idx] = x
-
-    valid = (lefts < np.inf) & (rights > -np.inf)
-    widths = np.where(valid, rights - lefts, 0).astype(float)
-    smooth_w = uniform_filter1d(widths, size=max(3, n // 30))
-
-    equator_idx = int(np.argmax(smooth_w))
-
-    # Search below equator for a waist
-    min_idx = equator_idx
-    found_waist = False
-    for i in range(equator_idx + 1, len(smooth_w) - 1):
-        if smooth_w[i] < smooth_w[min_idx]:
-            min_idx = i
-        elif smooth_w[i] > smooth_w[min_idx] + waist_rise_thresh:
-            found_waist = True
-            break
-
-    if found_waist and min_idx > equator_idx:
-        return 'hydrophobic', ys, lefts, rights, widths, min_idx
-    else:
-        return 'hydrophilic', ys, lefts, rights, widths, equator_idx
+    left_tip = pts[np.argmin(pts[:, 0])]
+    right_tip = pts[np.argmax(pts[:, 0])]
+    return left_tip, right_tip
 
 
-def measure_hydrophilic(contour, config):
-    """Measure contact angles for a hydrophilic drop (θ < 90°).
-
-    The tips (leftmost/rightmost contour points) are the contact points.
-    Baseline = straight line through the two tips.
-    Fits y(x) on the upper contour near each tip.
-    """
-    pts = contour[:, 0, :]
-    left_tip = pts[np.argmin(pts[:, 0])].copy()
-    right_tip = pts[np.argmax(pts[:, 0])].copy()
-
+def _compute_baseline(left_tip, right_tip):
+    """Baseline through the two tips. Returns (slope, intercept, tilt_deg)."""
     dx = right_tip[0] - left_tip[0]
     dy = right_tip[1] - left_tip[1]
-    slope = dy / (dx + 1e-10)
+    if dx == 0:
+        return 0.0, float(left_tip[1]), 0.0
+    slope = dy / dx
     intercept = left_tip[1] - slope * left_tip[0]
-    baseline_tilt = float(np.degrees(np.arctan(slope)))
-
-    # Upper contour (above baseline)
-    baseline_y_at_x = slope * pts[:, 0] + intercept
-    upper = pts[pts[:, 1] < baseline_y_at_x - 1]
-    upper = upper[upper[:, 0].argsort()]
-
-    drop_width = right_tip[0] - left_tip[0]
-    fit_radius = max(10, int(drop_width * config['fit_frac']))
-
-    def fit_and_angle(tip_x, side):
-        if side == 'left':
-            mask = (upper[:, 0] >= tip_x) & (upper[:, 0] <= tip_x + fit_radius)
-        else:
-            mask = (upper[:, 0] <= tip_x) & (upper[:, 0] >= tip_x - fit_radius)
-        local = upper[mask]
-        if len(local) < config['poly_degree'] + 1:
-            return None, None
-        try:
-            poly = np.polyfit(local[:, 0].astype(float), local[:, 1].astype(float),
-                              config['poly_degree'])
-        except np.linalg.LinAlgError:
-            return None, None
-        delta = 1.0
-        yp = np.polyval(poly, tip_x + delta) - np.polyval(poly, tip_x - delta)
-        tangent = np.array([2 * delta, yp])
-        baseline_dir = np.array([1.0, slope])
-        cos_a = np.dot(tangent, baseline_dir) / (
-            np.linalg.norm(tangent) * np.linalg.norm(baseline_dir) + 1e-10)
-        angle = float(np.degrees(np.arccos(np.clip(cos_a, -1, 1))))
-        return poly, angle
-
-    poly_l, angle_l = fit_and_angle(left_tip[0], 'left')
-    poly_r, angle_r = fit_and_angle(right_tip[0], 'right')
-
-    result = {
-        'left_angle': angle_l, 'right_angle': angle_r,
-        'left_contact': (int(left_tip[0]), int(left_tip[1])),
-        'right_contact': (int(right_tip[0]), int(right_tip[1])),
-        'baseline_tilt_deg': baseline_tilt,
-        'is_hydrophobic': False,
-        'success': angle_l is not None and angle_r is not None,
-    }
-    debug = {
-        'contour': contour, 'upper_contour': upper,
-        'baseline_slope': slope, 'baseline_intercept': intercept,
-        'poly_left': poly_l, 'poly_right': poly_r,
-        'fit_radius': fit_radius, 'fit_mode': 'y(x)',
-    }
-    return result, debug
+    return slope, intercept, float(np.degrees(np.arctan(slope)))
 
 
-def measure_hydrophobic(contour, ys, lefts, rights, waist_idx, config):
-    """Measure contact angles for a hydrophobic drop (θ > 90°).
+def _extract_upper_contour(contour, slope, intercept, tolerance=1):
+    """Points above the baseline, sorted by x."""
+    pts = contour[:, 0, :]
+    baseline_y = slope * pts[:, 0] + intercept
+    upper = pts[pts[:, 1] < baseline_y - tolerance]
+    if len(upper) < 5:
+        return pts[pts[:, 0].argsort()]
+    return upper[upper[:, 0].argsort()]
 
-    The "waist" (local width minimum below the equator) defines the baseline.
-    Contact points are the left/right edges at the waist row.
-    Fits x(y) on each edge above the waist.
-    """
-    baseline_y = int(ys[waist_idx])
-    contact_left_x = int(lefts[waist_idx])
-    contact_right_x = int(rights[waist_idx])
 
-    # Build left/right edge arrays above waist
-    valid_above = np.arange(waist_idx)
-    valid_mask = (lefts[valid_above] < np.inf) & (rights[valid_above] > -np.inf)
-    vi = valid_above[valid_mask]
-    left_edge = np.column_stack([lefts[vi], ys[vi]])
-    right_edge = np.column_stack([rights[vi], ys[vi]])
+def _fit_local_polynomial(upper_pts, tip_x, radius, degree, side):
+    """Fit a polynomial y(x) locally near a contact tip."""
+    if side == 'left':
+        mask = (upper_pts[:, 0] >= tip_x) & (upper_pts[:, 0] <= tip_x + radius)
+    else:
+        mask = (upper_pts[:, 0] <= tip_x) & (upper_pts[:, 0] >= tip_x - radius)
+    local = upper_pts[mask]
+    if len(local) < degree + 1:
+        return None
+    try:
+        return np.polyfit(local[:, 0].astype(float), local[:, 1].astype(float), degree)
+    except np.linalg.LinAlgError:
+        return None
 
-    drop_width = contact_right_x - contact_left_x
-    fit_radius = max(10, int(drop_width * config['fit_frac']))
 
-    def fit_and_angle(edge, side):
-        mask = (edge[:, 1] >= baseline_y - fit_radius) & (edge[:, 1] < baseline_y)
-        local = edge[mask]
-        if len(local) < config['poly_degree'] + 1:
-            return None, None
-        try:
-            poly = np.polyfit(local[:, 1].astype(float), local[:, 0].astype(float),
-                              config['poly_degree'])
-        except np.linalg.LinAlgError:
-            return None, None
-        delta = 1.0
-        x_above = np.polyval(poly, baseline_y - delta)
-        x_at = np.polyval(poly, baseline_y)
-        tangent_up = np.array([x_above - x_at, delta])
-        baseline_in = np.array([1.0, 0.0]) if side == 'left' else np.array([-1.0, 0.0])
-        cos_a = np.dot(tangent_up, baseline_in) / (np.linalg.norm(tangent_up) + 1e-10)
-        angle = float(np.degrees(np.arccos(np.clip(cos_a, -1, 1))))
-        return poly, angle
-
-    poly_l, angle_l = fit_and_angle(left_edge, 'left')
-    poly_r, angle_r = fit_and_angle(right_edge, 'right')
-
-    result = {
-        'left_angle': angle_l, 'right_angle': angle_r,
-        'left_contact': (contact_left_x, baseline_y),
-        'right_contact': (contact_right_x, baseline_y),
-        'baseline_tilt_deg': 0.0,
-        'is_hydrophobic': True,
-        'success': angle_l is not None and angle_r is not None,
-    }
-    debug = {
-        'contour': contour,
-        'baseline_y': baseline_y,
-        'baseline_slope': 0.0, 'baseline_intercept': float(baseline_y),
-        'left_edge': left_edge, 'right_edge': right_edge,
-        'poly_left': poly_l, 'poly_right': poly_r,
-        'fit_radius': fit_radius, 'fit_mode': 'x(y)',
-    }
-    return result, debug
+def _compute_tangent_angle(poly, x_contact, baseline_slope, delta=1.0):
+    """Contact angle between polynomial tangent and baseline direction (degrees)."""
+    y_minus = np.polyval(poly, x_contact - delta)
+    y_plus = np.polyval(poly, x_contact + delta)
+    tangent = np.array([2 * delta, y_plus - y_minus])
+    baseline_dir = np.array([1.0, baseline_slope])
+    cos_angle = np.dot(tangent, baseline_dir) / (
+        np.linalg.norm(tangent) * np.linalg.norm(baseline_dir) + 1e-10
+    )
+    return float(np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
 
 
 def measure_contact_angles(gray, config=None, return_debug=False):
-    """Measure contact angles, auto-detecting hydrophilic vs hydrophobic."""
+    """Full pipeline: detect drop contour, find tips, build baseline, fit tangents."""
     if config is None:
         config = DEFAULT_CONFIG
-    gray = _resize_to_max(gray)
-    contour = find_drop_contour(gray, config)
+
+   # resize image if it's too large for faster processing (optional)
+    max_dim = 500 # TODO: this is important otherwise the slope fit will fail for no particular reason, the contouring is flipping for some reason
+    if max(gray.shape) > max_dim:
+        scale = max_dim / max(gray.shape)
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+    result = {
+        'left_angle': None, 'right_angle': None,
+        'baseline_tilt_deg': None, 'success': False,
+        'left_contact': None, 'right_contact': None,
+    }
+    debug = {}
+
+    contour = _find_drop_contour(gray, config)
     if contour is None:
-        r = {'left_angle': None, 'right_angle': None, 'success': False,
-             'is_hydrophobic': False, 'baseline_tilt_deg': 0.0,
-             'left_contact': None, 'right_contact': None}
-        return (r, {}) if return_debug else r
+        return (result, debug) if return_debug else result
+    debug['contour'] = contour
 
-    regime, ys, lefts, rights, widths, key_idx = detect_regime(
-        contour, config.get('waist_rise_thresh', 3)
-    )
+    left_tip, right_tip = _find_tips(contour)
+    result['left_contact'] = (int(left_tip[0]), int(left_tip[1]))
+    result['right_contact'] = (int(right_tip[0]), int(right_tip[1]))
+    result['gray'] =  None
+    
+    slope, intercept, tilt = _compute_baseline(left_tip, right_tip)
+    result['baseline_tilt_deg'] = tilt
+    debug['baseline_slope'] = slope
+    debug['baseline_intercept'] = intercept
 
-    if regime == 'hydrophobic':
-        result, debug = measure_hydrophobic(contour, ys, lefts, rights, key_idx, config)
-    else:
-        result, debug = measure_hydrophilic(contour, config)
-    print("Measured angles: left=%.1f, right=%.1f, regime=%s, we are in hydrophobic regime" if result.get('is_hydrophobic') else "we are in hydrophilic regime", result['left_angle'], result['right_angle'], "hydrophobic" if result.get('is_hydrophobic') else "hydrophilic")
-    lo, hi = config['angle_range']
-    if result['left_angle'] is not None and not (lo <= result['left_angle'] <= hi):
-        result['left_angle'] = None
-    if result['right_angle'] is not None and not (lo <= result['right_angle'] <= hi):
-        result['right_angle'] = None
-    result['success'] = (
-        result['left_angle'] is not None and result['right_angle'] is not None
-    )
+    upper = _extract_upper_contour(contour, slope, intercept)
+    debug['upper_contour'] = upper
+    if len(upper) < 10:
+        return (result, debug) if return_debug else result
+
+    drop_width = right_tip[0] - left_tip[0]
+    fit_radius = max(10, int(drop_width * config['fit_frac']))
+    debug['fit_radius'] = fit_radius
+
+    poly_left = _fit_local_polynomial(upper, left_tip[0], fit_radius, config['poly_degree'], 'left')
+    poly_right = _fit_local_polynomial(upper, right_tip[0], fit_radius, config['poly_degree'], 'right')
+    debug['poly_left'] = poly_left
+    debug['poly_right'] = poly_right
+
+    if poly_left is None or poly_right is None:
+        return (result, debug) if return_debug else result
+
+    delta = config['tangent_delta']
+    left_angle = _compute_tangent_angle(poly_left, left_tip[0], slope, delta)
+    right_angle = _compute_tangent_angle(poly_right, right_tip[0], slope, delta)
+
+    lo, hi = config['angle_range_low'], config['angle_range_high']
+    if lo <= left_angle <= hi:
+        result['left_angle'] = left_angle
+    if lo <= right_angle <= hi:
+        result['right_angle'] = right_angle
+
+    result['success'] = (result['left_angle'] is not None and result['right_angle'] is not None)
+    result['gray'] = gray  # include the (possibly resized) grayscale image for debugging/visualization
     return (result, debug) if return_debug else result
 
 
@@ -289,7 +203,8 @@ def _resize_to_max(frame, max_dim=800):
 def draw_result(frame, result, debug, config=None, crop_offset=None):
     """Overlay measurement annotations on *frame* and return a resized display image.
 
-    Supports both hydrophilic (fit_mode='y(x)') and hydrophobic (fit_mode='x(y)') rendering.
+    Annotations are drawn at the native frame resolution so all coordinates
+    (contour, contact points, polynomial curves) remain pixel-accurate.
     Annotation thicknesses and font sizes scale proportionally with the image size
     (reference: 500 px). The image is down-scaled to max 800 px at the end.
 
@@ -297,7 +212,8 @@ def draw_result(frame, result, debug, config=None, crop_offset=None):
     """
     if config is None:
         config = DEFAULT_CONFIG
-    frame = _resize_to_max(frame)
+
+    frame = result['gray'] if 'gray' in result and result['gray'] is not None else frame    
     vis = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     h, w = vis.shape[:2]
 
@@ -317,14 +233,12 @@ def draw_result(frame, result, debug, config=None, crop_offset=None):
                     (round(30 * ann), round(40 * ann)),
                     cv2.FONT_HERSHEY_SIMPLEX, max(0.5, 0.9 * ann),
                     (0, 0, 255), max(1, round(2 * ann)))
-        return vis
+        return _resize_to_max(vis)
 
-    left_pt = result['left_contact']
+    slope = debug['baseline_slope']
+    intercept = debug['baseline_intercept']
+    left_pt  = result['left_contact']
     right_pt = result['right_contact']
-    fit_radius = debug.get('fit_radius', 60)
-    fit_mode = debug.get('fit_mode', 'y(x)')
-    slope = debug.get('baseline_slope', 0.0)
-    intercept = debug.get('baseline_intercept', float(left_pt[1]))
 
     # Baseline across full image
     y_left  = int(slope * (0 - ox) + intercept + oy)
@@ -334,8 +248,8 @@ def draw_result(frame, result, debug, config=None, crop_offset=None):
     cv2.circle(vis, left_pt,  max(3, round(6 * ann)), (0, 255, 255), -1)
     cv2.circle(vis, right_pt, max(3, round(6 * ann)), (0, 255, 255), -1)
 
+    fit_radius  = debug.get('fit_radius', 60)
     tangent_len = max(round(80 * ann), round(fit_radius * 1.5))
-    delta = 1.0
 
     for side, poly, contact, angle in [
         ('left',  debug.get('poly_left'),  left_pt,  result['left_angle']),
@@ -344,33 +258,22 @@ def draw_result(frame, result, debug, config=None, crop_offset=None):
         if poly is None or angle is None:
             continue
 
-        if fit_mode == 'y(x)':
-            # Hydrophilic: polynomial y(x), draw curve and tangent in x-direction
-            cx = contact[0] - ox
-            if side == 'left':
-                xs = np.linspace(cx, cx + fit_radius, 200)
-            else:
-                xs = np.linspace(cx - fit_radius, cx, 200)
-            ys_fit = np.polyval(poly, xs)
-            curve = np.column_stack((xs + ox, ys_fit + oy)).astype(np.int32)
-            yp = np.polyval(poly, cx + delta) - np.polyval(poly, cx - delta)
-            tvec = np.array([2 * delta, yp])
+        cx = contact[0] - ox  # contact x in the polynomial's coordinate space
+        if side == 'left':
+            xs = np.linspace(cx, cx + fit_radius, 200)
         else:
-            # Hydrophobic: polynomial x(y), draw curve and tangent in y-direction
-            baseline_y = debug['baseline_y']
-            ys_fit = np.linspace(baseline_y - fit_radius, baseline_y, 200)
-            xs_fit = np.polyval(poly, ys_fit)
-            curve = np.column_stack((xs_fit + ox, ys_fit + oy)).astype(np.int32)
-            x_above = np.polyval(poly, baseline_y - delta)
-            x_at = np.polyval(poly, baseline_y)
-            tvec = np.array([x_above - x_at, -delta])  # Image coords (y-down)
-
+            xs = np.linspace(cx - fit_radius, cx, 200)
+        ys = np.polyval(poly, xs)
+        curve = np.column_stack((xs + ox, ys + oy)).astype(np.int32)
         for i in range(len(curve) - 1):
             cv2.line(vis, tuple(curve[i]), tuple(curve[i + 1]),
                      (0, 255, 255), max(1, round(2 * ann)))
 
-        tvec = tvec / (np.linalg.norm(tvec) + 1e-10)
-        pt = np.array([float(contact[0]), float(contact[1])])
+        delta = config['tangent_delta']
+        dy    = np.polyval(poly, cx + delta) - np.polyval(poly, cx - delta)
+        tvec  = np.array([2 * delta, dy])
+        tvec  = tvec / (np.linalg.norm(tvec) + 1e-10)
+        pt    = np.array([float(contact[0]), float(contact[1])])
         cv2.line(vis,
                  tuple((pt - tvec * tangent_len).astype(int)),
                  tuple((pt + tvec * tangent_len).astype(int)),
@@ -384,19 +287,18 @@ def draw_result(frame, result, debug, config=None, crop_offset=None):
         cv2.putText(vis, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
                     max(0.4, 0.7 * ann), (255, 255, 255), max(1, round(2 * ann)))
 
-    left_a  = result['left_angle']  or 0
-    right_a = result['right_angle'] or 0
-    label = "hydrophobic" if result.get('is_hydrophobic') else "hydrophilic"
-    cv2.putText(vis, f"{(left_a + right_a) / 2:.1f} deg avg ({label})",
-                (round(15 * ann), round(25 * ann)),
-                cv2.FONT_HERSHEY_SIMPLEX, max(0.4, 0.6 * ann),
-                (255, 255, 255), max(1, round(2 * ann)))
     tilt = result.get('baseline_tilt_deg', 0) or 0
     cv2.putText(vis, f"Tilt: {tilt:+.2f} deg",
-                (round(15 * ann), round(50 * ann)),
+                (round(15 * ann), round(25 * ann)),
                 cv2.FONT_HERSHEY_SIMPLEX, max(0.4, 0.6 * ann),
                 (0, 255, 0), max(1, round(2 * ann)))
-    return vis
+    left_a  = result['left_angle']  or 0
+    right_a = result['right_angle'] or 0
+    cv2.putText(vis, f"Avg: {(left_a + right_a) / 2:.1f} deg",
+                (round(15 * ann), round(50 * ann)),
+                cv2.FONT_HERSHEY_SIMPLEX, max(0.4, 0.6 * ann),
+                (255, 255, 255), max(1, round(2 * ann)))
+    return _resize_to_max(vis)
 
 
 def compute_manual_angle(baseline_pt1, baseline_pt2, tangent_pt):
@@ -648,7 +550,6 @@ class GoniometerController(LiveUpdatedController):
                 "left_angle": result.get("left_angle"),
                 "right_angle": result.get("right_angle"),
                 "baseline_tilt_deg": result.get("baseline_tilt_deg"),
-                "is_hydrophobic": result.get("is_hydrophobic", False),
                 "left_contact": result.get("left_contact"),
                 "right_contact": result.get("right_contact"),
                 "annotated_image": self._image_to_base64(self._result_image),
@@ -691,6 +592,7 @@ class GoniometerController(LiveUpdatedController):
                             (contact[0] + round(10 * ann), contact[1] - round(20 * ann)),
                             cv2.FONT_HERSHEY_SIMPLEX, max(0.4, 0.8 * ann),
                             (255, 255, 255), max(1, round(2 * ann)))
+                vis = _resize_to_max(vis)
                 self._result_image = vis
                 annotated_b64 = self._image_to_base64(vis)
 

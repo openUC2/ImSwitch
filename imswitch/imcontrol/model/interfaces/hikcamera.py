@@ -127,53 +127,68 @@ class CameraHIK:
             self.isRGB = bool(detected_rgb) if detected_rgb is not None else self._detect_rgb()
 
         self.__logger.info(f"Camera RGB mode: {self.isRGB}")
+        self._activePixelFormat = PixelType_Gvsp_Mono8  # safe default
 
-        # Set pixel format based on RGB mode
-        self._activePixelFormat = PixelType_Gvsp_Mono8  # default
         if self.isRGB:
-            # Try different RGB/YUV formats for color cameras
             formats_to_try = [
-                PixelType_Gvsp_RGB8_Packed,
-                PixelType_Gvsp_YUV422_YUYV_Packed,
-                PixelType_Gvsp_BayerRG8,
-                PixelType_Gvsp_BayerBG8,
-                PixelType_Gvsp_BayerGB8,
-                PixelType_Gvsp_BayerGR8
+                (PixelType_Gvsp_BayerRG8,       "BayerRG8"),
+                (PixelType_Gvsp_BayerBG8,       "BayerBG8"),
+                (PixelType_Gvsp_BayerGB8,       "BayerGB8"),
+                (PixelType_Gvsp_BayerGR8,       "BayerGR8"),
+                (PixelType_Gvsp_RGB8_Packed,    "RGB8_Packed"),
             ]
-
-            format_set = False
-            for pixel_format in formats_to_try:
+            for pixel_format, name in formats_to_try:
                 ret = self.camera.MV_CC_SetEnumValue("PixelFormat", pixel_format)
+                self.__logger.info(
+                    f"Trying RGB pixel format {name} (0x{pixel_format:x}): "
+                    f"{'OK' if ret == 0 else f'FAILED ret=0x{ret:x}'}"
+                )
                 if ret == 0:
-                    self.__logger.info(f"Successfully set pixel format to 0x{pixel_format:x} for RGB camera")
                     self._activePixelFormat = pixel_format
-                    format_set = True
+                    self.__logger.info(f"Active pixel format set to {name}")
                     break
-                else:
-                    self.__logger.info(f"Failed to set pixel format 0x{pixel_format:x}, ret=0x{ret:x}")
-
-            if not format_set:
-                self.__logger.warning("Could not set any RGB pixel format, camera may not work correctly")
+            else:
+                # Nothing worked — force Mono8 so we at least get frames,
+                # then demosaic manually in the callback
+                self.__logger.warning(
+                    "Could not set any RGB format. Forcing Mono8 and will "
+                    "demosaic in software. Check camera supports colour output."
+                )
+                self.camera.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_Mono8)
+                self._activePixelFormat = PixelType_Gvsp_Mono8
         else:
-            # For mono cameras, try highest bit-depth first, fall back to Mono8
-            mono_formats_to_try = [
+            # mono camera — try highest bit depth, fall back to Mono8
+            for pixel_format, name in [
                 (PixelType_Gvsp_Mono12, "Mono12"),
                 (PixelType_Gvsp_Mono10, "Mono10"),
-                (PixelType_Gvsp_Mono8, "Mono8"),
-            ]
-            format_set = False
-            for pixel_format, name in mono_formats_to_try:
+                (PixelType_Gvsp_Mono8,  "Mono8"),
+            ]:
                 ret = self.camera.MV_CC_SetEnumValue("PixelFormat", pixel_format)
+                self.__logger.info(
+                    f"Trying mono pixel format {name} (0x{pixel_format:x}): "
+                    f"{'OK' if ret == 0 else f'FAILED ret=0x{ret:x}'}"
+                )
                 if ret == 0:
-                    self.__logger.info(f"Set pixel format to {name} for monochrome camera")
                     self._activePixelFormat = pixel_format
-                    format_set = True
                     break
-                else:
-                    self.__logger.debug(f"Mono format {name} not supported, ret=0x{ret:x}")
-            if not format_set:
-                self.__logger.warning("Could not set any mono pixel format")
-                self._activePixelFormat = PixelType_Gvsp_Mono8
+
+        # verify what actually got set
+        stCheck = MVCC_ENUMVALUE()
+        ret = self.camera.MV_CC_GetEnumValue("PixelFormat", stCheck)
+        if ret == 0:
+            self.__logger.info(
+                f"Verified active pixel format: 0x{stCheck.nCurValue:x} "
+                f"(requested isRGB={self.isRGB})"
+            )
+
+        stActualFormat = MVCC_ENUMVALUE()
+        ret = self.camera.MV_CC_GetEnumValue("PixelFormat", stActualFormat)
+        if ret == 0:
+            self.__logger.info(
+                f"Active pixel format after negotiation: "
+                f"0x{stActualFormat.nCurValue:x} "
+                f"(isRGB={self.isRGB})"
+            )
 
         # Mark camera as connected after successful initialization
         self.is_connected = True
@@ -395,6 +410,10 @@ class CameraHIK:
             fid    = info.nFrameNum
             ts     = self._hw_timestamp(info)        # ← fixed
 
+            if not getattr(self, '_pix_logged', False):
+                self.__logger.info(f"First frame pixel type: {pix}  w={w} h={h}")
+                self._pix_logged = True
+
             # build NumPy view over the SDK buffer (zero-copy)
             # For >8-bit unpacked mono formats, each pixel is 2 bytes (uint16)
             if pix in _MONO_HIGHBIT_FORMATS:
@@ -403,24 +422,75 @@ class CameraHIK:
                     dtype=np.uint16
                 )
             elif pix in _MONO_PACKED_FORMATS:
-                # Bit-packed formats need SDK conversion to Mono16 first
-                nDst = w * h * 2  # 2 bytes per pixel in Mono16
+                nDst = w * h * 2
                 dst  = (c_ubyte * nDst)()
+
+                src_buf = (c_ubyte * nSize).from_address(addressof(pData.contents))
+
                 conv = MV_CC_PIXEL_CONVERT_PARAM()
                 memset(byref(conv), 0, sizeof(conv))
                 conv.nWidth         = w
                 conv.nHeight        = h
                 conv.enSrcPixelType = pix
                 conv.enDstPixelType = PixelType_Gvsp_Mono16
-                conv.pSrcData       = pData
+                conv.pSrcData       = src_buf          # ← was pData, now correct ctypes array
                 conv.nSrcDataLen    = nSize
                 conv.pDstBuffer     = dst
                 conv.nDstBufferSize = nDst
+
                 ret = self.camera.MV_CC_ConvertPixelType(conv)
                 if ret != 0:
-                    self.__logger.error(f"Packed mono convert failed 0x{ret:x}")
-                    return
-                buf = np.frombuffer(dst, dtype=np.uint16, count=w * h)
+                    self.__logger.error(
+                        f"Packed mono convert failed 0x{ret:x} "
+                        f"pix=0x{pix:x} w={w} h={h} nSize={nSize}"
+                    )
+                    # Last-resort: treat raw bytes as uint8, reshape, caller gets garbage
+                    # but at least the callback doesn't silently drop every frame
+                    buf = np.frombuffer(src_buf, dtype=np.uint8)
+                    frame = buf[:w*h].reshape(h, w).astype(np.uint16)
+                else:
+                    buf = np.frombuffer(dst, dtype=np.uint16, count=w * h)
+                    frame = buf.reshape(h, w)
+
+            elif pix in (PixelType_Gvsp_BayerRG8,
+                        PixelType_Gvsp_BayerBG8,
+                        PixelType_Gvsp_BayerGB8,
+                        PixelType_Gvsp_BayerGR8):
+                nRGB = w * h * 3
+                dst  = (c_ubyte * nRGB)()
+                conv = MV_CC_PIXEL_CONVERT_PARAM()
+                memset(byref(conv), 0, sizeof(conv))
+                conv.nWidth         = w
+                conv.nHeight        = h
+                conv.enSrcPixelType = pix
+                conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
+                conv.pSrcData       = pData
+                conv.nSrcDataLen    = nSize
+                conv.pDstBuffer     = dst
+                conv.nDstBufferSize = nRGB
+                ret = self.camera.MV_CC_ConvertPixelType(conv)
+                if ret != 0:
+                    self.__logger.error(
+                        f"[DIAG] Bayer→RGB convert FAILED: pix=0x{pix:x} ret=0x{ret:x} "
+                        f"w={w} h={h} nSize={nSize} nRGB={nRGB}"
+                    )
+                    # Fallback: numpy demosaic
+                    import cv2
+                    bayer_map = {
+                        PixelType_Gvsp_BayerRG8: cv2.COLOR_BayerRG2RGB,
+                        PixelType_Gvsp_BayerBG8: cv2.COLOR_BayerBG2RGB,
+                        PixelType_Gvsp_BayerGB8: cv2.COLOR_BayerGB2RGB,
+                        PixelType_Gvsp_BayerGR8: cv2.COLOR_BayerGR2RGB,
+                    }
+                    raw = np.frombuffer(
+                        (c_ubyte * nSize).from_address(addressof(pData.contents)),
+                        dtype=np.uint8
+                    ).reshape(h, w)
+                    frame = cv2.cvtColor(raw, bayer_map[pix])
+                else:
+                    buf   = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
+                    frame = buf.reshape(h, w, 3)
+
             else:
                 buf = np.frombuffer(
                     (c_ubyte * nSize).from_address(addressof(pData.contents)),
@@ -514,17 +584,6 @@ class CameraHIK:
             param_dict["model_name"] = stName.chCurValue.decode("utf-8")
             if param_dict["model_name"].find("UC")>0:
                 param_dict["isRGB"] = True
-        # if isRGB switch off AWB
-        if param_dict["isRGB"] and False: # TODO: Review
-            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_CONTINUOUS)
-            if ret != 0:
-                print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
-                self.init_ok = False
-            else:
-                # 2) Set color temperature mode to Wide
-                ret = self.camera.MV_CC_SetEnumValueByString("BalanceColorTempMode", "WideMode")
-                if ret != 0:
-                    print("set BalanceColorTempMode failed! ret [0x%x]" % ret)
         elif param_dict["isRGB"]:
             ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_OFF)
             if ret != 0:
@@ -586,39 +645,48 @@ class CameraHIK:
             return
         self.flushBuffer()
 
-        # in case the camera is None, we have to restart it anyway
-        if self.camera is None: # TODO: 2025-11-03 15:13:38 ERROR [LiveViewController] Error starting live view: 'NoneType' object has no attribute 'MV_CC_RegisterImageCallBackEx'
+        if self.camera is None:
             self.reconnectCamera()
-            ret = self.camera.MV_CC_StartGrabbing()
-            if ret != 0:
-                raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
-            self.is_streaming = True
-            return
 
-        # Re-register callback if needed (in case it was deregistered during stop)
+        # Set pixel format every time before grabbing, don't touch white balance
+        if self.isRGB:
+            for fmt, name in [
+                (PixelType_Gvsp_BayerRG8, "BayerRG8"),
+                (PixelType_Gvsp_BayerGB8, "BayerGB8"),
+                (PixelType_Gvsp_BayerBG8, "BayerBG8"),
+                (PixelType_Gvsp_BayerGR8, "BayerGR8"),
+            ]:
+                ret = self.camera.MV_CC_SetEnumValue("PixelFormat", fmt)
+                if ret == 0:
+                    self._activePixelFormat = fmt
+                    self.__logger.info(f"Fell back to {name} for demosaic in callback")
+                        # break
+
+        # Re-register callback if needed
         if hasattr(self, '_callback_registered') and not self._callback_registered:
             ret = self.camera.MV_CC_RegisterImageCallBackEx(self._sdk_cb, None)
             if ret != 0:
                 raise RuntimeError(f"Re-register callback failed 0x{ret:x}")
             self._callback_registered = True
-            self.__logger.debug("Callback re-registered successfully")
 
         try:
             ret = self.camera.MV_CC_StartGrabbing()
             if ret != 0:
-                #raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
                 self.reconnectCamera()
                 ret = self.camera.MV_CC_StartGrabbing()
                 if ret != 0:
-                    self.__logger.error(f"StartGrabbing exception: RuntimeError after reconnect 0x{ret:x}")
                     raise RuntimeError(f"StartGrabbing failed after reconnect 0x{ret:x}")
         except Exception:
             raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
+
         self.is_streaming = True
 
     def stop_live(self):
         if not self.is_streaming:
             return
+
+        diag = self.getDiagnostics()
+        self.__logger.info(f"Camera diagnostics before stopping live: {diag}")
 
         # Stop grabbing first
         self.camera.MV_CC_StopGrabbing()
@@ -908,6 +976,33 @@ class CameraHIK:
 
     def getFrameNumber(self):
         return self.frameNumber
+
+    def getDiagnostics(self) -> dict:
+        """Call this from the REST API or a notebook to see camera state."""
+        stFormat = MVCC_ENUMVALUE()
+        self.camera.MV_CC_GetEnumValue("PixelFormat", stFormat)
+        
+        frame = self.getLast()
+        frame_info = {}
+        if frame is not None:
+            frame_info = {
+                "shape": list(frame.shape),
+                "dtype": str(frame.dtype),
+                "min": int(frame.min()),
+                "max": int(frame.max()),
+                "mean_per_channel": (
+                    [float(frame[:,:,c].mean()) for c in range(frame.shape[2])]
+                    if frame.ndim == 3 else [float(frame.mean())]
+                ),
+            }
+        
+        return {
+            "active_pixel_format_hex": f"0x{self._activePixelFormat:x}",
+            "actual_pixel_format_hex": f"0x{stFormat.nCurValue:x}",
+            "isRGB": self.isRGB,
+            "is_streaming": self.is_streaming,
+            "frame": frame_info,
+        }
 
     # ── helper ---------------------------------------------------------------
     def _hw_timestamp(self, info):

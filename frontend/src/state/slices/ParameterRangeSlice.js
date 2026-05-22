@@ -36,10 +36,10 @@ const parameterRangeSlice = createSlice({
 
       // Setters for each parameter
       setIllumination: (state, action) => {
-        state.illumination = action.payload;
+        state.illumination = Array.isArray(action.payload) ? action.payload : [];
       },
       setIlluminationIntensities: (state, action) => {
-        state.illuIntensities = action.payload;
+        state.illuIntensities = Array.isArray(action.payload) ? action.payload : [];
       },
       setTimeLapsePeriodMin: (state, action) => {
         state.timeLapsePeriod.min = action.payload;
@@ -81,22 +81,25 @@ const parameterRangeSlice = createSlice({
         state.speed = action.payload;
       },
       setIlluSources: (state, action) => {
-        state.illuSources = action.payload;
+        // Defensive: backend may return null/undefined/object when no
+        // illumination hardware is configured; the UI assumes an array
+        // (illuSources.map(...) breaks otherwise).
+        state.illuSources = Array.isArray(action.payload) ? action.payload : [];
       },
       setIlluSourceMinIntensities: (state, action) => {
-        state.illuSourceMinIntensities = action.payload;
-      },  
+        state.illuSourceMinIntensities = Array.isArray(action.payload) ? action.payload : [];
+      },
       setIlluSourceMaxIntensities: (state, action) => {
-        state.illuSourceMaxIntensities = action.payload;
+        state.illuSourceMaxIntensities = Array.isArray(action.payload) ? action.payload : [];
       },
       setilluIntensities: (state, action) => {
-        state.illuIntensities = action.payload;
+        state.illuIntensities = Array.isArray(action.payload) ? action.payload : [];
       },
       setExposureTimes: (state, action) => {
-        state.exposureTimes = action.payload;
+        state.exposureTimes = Array.isArray(action.payload) ? action.payload : [];
       },
       setGains: (state, action) => {
-        state.gains = action.payload;
+        state.gains = Array.isArray(action.payload) ? action.payload : [];
       },
       setIsDPCpossible: (state, action) => {
         state.isDPCpossible = action.payload;

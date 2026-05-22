@@ -518,7 +518,7 @@ const FocusMapDimension = () => {
 
   const groupEntries = Object.entries(results);
   const channelOffsetEntries = Object.entries(config.channel_offsets || {});
-  const illuSources = parameterRange.illuSources || [];
+  const illuSources = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
 
   return (
     <Box>

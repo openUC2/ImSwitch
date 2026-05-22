@@ -45,6 +45,25 @@ class DetectorInfo(DeviceInfo):
     forFocusLock: bool = False
     """ Whether the detector is used for focus lock. """
 
+    defaultStreamSettings: Dict[str, Any] = field(default_factory=dict)
+    """ Optional per-detector defaults for the live stream applied at startup.
+
+    Recognised top-level keys (all optional):
+      - ``protocol``: ``"binary" | "jpeg" | "mjpeg" | "webrtc"``
+      - ``subsampling_factor``: int >= 1
+      - ``throttle_ms``: int
+      - ``jpeg_quality``: int (0..100, JPEG-specific)
+      - ``compression_algorithm``: ``"lz4" | "zstd" | ...`` (binary-specific)
+      - ``compression_level``: int (binary-specific)
+      - ``crop_size``: [width, height] or null
+
+    These are baked into the per-detector params on first stream start, so
+    the live view comes up with a sensible default per camera (e.g. heavy
+    subsampling on a large overview camera, lossless binary on a widefield
+    sensor). The frontend cannot mutate these — it can only override the
+    *current* session via ``setStreamParameters``/``setDetectorStreamParameters``.
+    """
+
 
 @dataclass(frozen=False)
 class LaserInfo(DeviceInfo):

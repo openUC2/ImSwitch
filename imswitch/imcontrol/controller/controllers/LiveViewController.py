@@ -779,6 +779,13 @@ class LiveViewController(LiveUpdatedController):
         # Stores the last-used params for each detector so they survive detector switches.
         self._detectorParams: Dict[str, StreamParams] = {}
 
+        # Load per-detector defaults from the setup config (DetectorInfo.defaultStreamSettings).
+        # These are *fixed* defaults — the frontend can override them for the
+        # current session via setStreamParameters but cannot persist changes
+        # back to the config. They are seeded into _detectorParams here so
+        # the first startLiveView() call uses them.
+        self._loadDetectorDefaultsFromConfig()
+
         # Connect to communication channel signals
         self._commChannel.sigStartLiveAcquistion.connect(self._onStartLiveAcquisition)
         self._commChannel.sigStopLiveAcquisition.connect(self._onStopLiveAcquisition)
@@ -791,6 +798,68 @@ class LiveViewController(LiveUpdatedController):
             self.sigAcquisitionStarted.emit()
             '''
         self._logger.info("LiveViewController initialized")
+
+    def _loadDetectorDefaultsFromConfig(self) -> None:
+        """Seed per-detector stream params from ``DetectorInfo.defaultStreamSettings``.
+
+        Called once during ``__init__``. Each detector's defaultStreamSettings
+        dict (from setup JSON) is merged on top of the global protocol
+        defaults and stored in ``_detectorParams[detectorName]``. Any later
+        ``startLiveView`` call without explicit params will use this entry,
+        giving each camera its own sensible default protocol + subsampling.
+        default dict structure example:
+        "defaultStreamingSettings": {
+            "protocol": "jpeg",
+            "jpeg_quality": 80,
+            "subsampling_factor": 4,
+            "throttle_ms": 50
+        }
+        """
+        detector_infos = {}
+        try:
+            if hasattr(self, '_setupInfo') and self._setupInfo is not None:
+                detector_infos = getattr(self._setupInfo, 'detectors', None) or {}
+        except Exception:
+            detector_infos = {}
+
+        for detector_name, info in detector_infos.items():
+            try:
+                defaults = getattr(info, 'defaultStreamSettings', None) or {}
+                if not isinstance(defaults, dict) or not defaults:
+                    continue
+                protocol = str(defaults.get('protocol') or 'binary').lower()
+                if protocol not in self._streamParams:
+                    self._logger.warning(
+                        f"Detector {detector_name}: unknown defaultStreamSettings.protocol "
+                        f"'{protocol}', falling back to 'binary'."
+                    )
+                    protocol = 'binary'
+
+                # Start from the global protocol baseline so we don't drop
+                # required fields, then layer the detector-specific defaults
+                # on top.
+                base = self._streamParams[protocol].to_dict()
+                base.update({k: v for k, v in defaults.items() if k != 'protocol'})
+                base['protocol'] = protocol
+
+                # StreamParams.from_dict is lenient about unknown keys.
+                try:
+                    params = StreamParams.from_dict(base)
+                except Exception:
+                    params = StreamParams(protocol=protocol)
+                    for k, v in defaults.items():
+                        if k != 'protocol' and hasattr(params, k):
+                            setattr(params, k, v)
+
+                self._detectorParams[detector_name] = params
+                self._logger.info(
+                    f"Detector {detector_name}: loaded default stream settings "
+                    f"protocol={protocol}, subsampling={getattr(params, 'subsampling_factor', '?')}"
+                )
+            except Exception as e:
+                self._logger.warning(
+                    f"Failed to load defaultStreamSettings for detector {detector_name}: {e}"
+                )
 
     def _get_or_create_webrtc_loop(self):
         """Get or create a persistent event loop for WebRTC in a separate thread."""

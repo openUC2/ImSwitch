@@ -30,7 +30,9 @@ const initialLiveStreamState = {
     },
     jpeg: {
       enabled: true,
-      quality: 85
+      quality: 85,
+      subsampling: { factor: 1 },
+      throttle_ms: 100,
     },
     webrtc: {
       enabled: false,

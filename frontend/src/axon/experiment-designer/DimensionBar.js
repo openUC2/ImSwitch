@@ -227,6 +227,7 @@ const DimensionBar = () => {
   const dimensionOrder = [
     DIMENSIONS.POSITIONS,
     DIMENSIONS.CHANNELS,
+    DIMENSIONS.OBJECTIVE,
     DIMENSIONS.Z_FOCUS,
     DIMENSIONS.FOCUS_MAP,
     DIMENSIONS.TIME,

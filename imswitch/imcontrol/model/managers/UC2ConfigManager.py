@@ -45,6 +45,9 @@ class UC2ConfigManager(SignalInterface):
         self.ESP32.serial.interruptCurrentSerialCommunication()
 
     def initSerial(self, baudrate=None):
+        if not hasattr(self, "ESP32"): 
+            self.__logger.info("we do not have any esp32 initiliazed")
+            return
         try:
             self.ESP32.serial.reconnect(baudrate=baudrate)
         except:

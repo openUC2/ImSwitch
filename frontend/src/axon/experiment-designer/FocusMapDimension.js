@@ -518,7 +518,7 @@ const FocusMapDimension = () => {
 
   const groupEntries = Object.entries(results);
   const channelOffsetEntries = Object.entries(config.channel_offsets || {});
-  const illuSources = parameterRange.illuSources || [];
+  const illuSources = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
 
   return (
     <Box>
@@ -1143,6 +1143,7 @@ const FocusMapDimension = () => {
                     size="small"
                     variant="contained"
                     startIcon={<PlayArrowIcon />}
+                    title={!config.use_manual_map ? "Enable 'Use manual map for all groups' above to activate manual fitting" : ""}
                     onClick={async () => {
                       dispatch(focusMapSlice.setFocusMapComputing({ isComputing: true, groupId: "manual" }));
                       dispatch(focusMapSlice.clearFocusMapError());
@@ -1195,9 +1196,10 @@ const FocusMapDimension = () => {
                 ui.isComputing ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />
               }
               onClick={handleComputeAll}
-              disabled={ui.isComputing}
+              disabled={ui.isComputing || config.use_manual_map}
+              title={config.use_manual_map ? "Disabled in manual map mode — use 'Fit from Points' instead" : ""}
             >
-              {ui.isComputing ? "Computing..." : "Compute All"}
+              {ui.isComputing ? "Measuring..." : "Auomatic Measure and Fit"} {/* TODO: We should only be able to click this button if we have not already entered items for the manual scan*/}
             </Button>
 
             {/* Interrupt button – only visible during computation */}

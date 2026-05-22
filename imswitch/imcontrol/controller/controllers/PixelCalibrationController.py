@@ -282,6 +282,7 @@ class PixelCalibrationController(LiveUpdatedController):
         nSteps: int = 1,
         crop_size: int = 1024,
         isDEBUG: bool = False,
+        backlashUm: float = 0.0,
     ):
         """Run an affine stage-to-camera calibration in a background thread.
 
@@ -311,7 +312,7 @@ class PixelCalibrationController(LiveUpdatedController):
 
         thread = threading.Thread(
             target=self._calibrateStageAffineInThread,
-            args=(detectorName, objectiveId, stepSizeUm, pattern, nSteps, crop_size, isDEBUG),
+            args=(detectorName, objectiveId, stepSizeUm, pattern, nSteps, crop_size, isDEBUG, backlashUm),
             daemon=True,
         )
         thread.start()
@@ -332,11 +333,13 @@ class PixelCalibrationController(LiveUpdatedController):
         nSteps: int,
         crop_size: int,
         isDEBUG: bool,
+        backlashUm: float = 0.0,
     ):
         key = self._makeKey(detectorName, objectiveId)
         try:
             helper = PixelCalibrationClass(self, detectorName=detectorName)
             result = helper.calibrate_affine(
+                backlash_um=backlashUm,
                 detector_name=detectorName,
                 step_size_um=stepSizeUm,
                 pattern=pattern,
@@ -732,6 +735,137 @@ class PixelCalibrationController(LiveUpdatedController):
         )
 
     # ------------------------------------------------------------------ #
+    # API: manual four-point affine calibration                           #
+    # ------------------------------------------------------------------ #
+
+    @APIExport(requestType="POST")
+    def manualFourPointCalibration(
+        self,
+        pointA1X: float = 0.0,
+        pointA1Y: float = 0.0,
+        pointA2X: float = 0.0,
+        pointA2Y: float = 0.0,
+        movementDistanceXUm: float = 100.0,
+        pointB1X: float = 0.0,
+        pointB1Y: float = 0.0,
+        pointB2X: float = 0.0,
+        pointB2Y: float = 0.0,
+        movementDistanceYUm: float = 100.0,
+        detectorName: str = None,
+        objectiveId: str = None,
+        previewSubsamplingFactor: float = 1.0,
+    ):
+        """Compute a full affine calibration from two point-pairs (one per axis).
+
+        Workflow (frontend drives the stage moves):
+          1. Mark feature → P_A1, move stage +X, mark same feature → P_A2
+          2. Mark feature → P_B1, move stage +Y, mark same feature → P_B2
+
+        The two pixel-shift / stage-shift pairs fully determine a 2×2 affine
+        matrix that encodes scale, rotation *and* flip — consistent with the
+        automatic ``calibrateStageAffine`` output.
+
+        ``previewSubsamplingFactor``: ratio sensor_pixels / preview_pixels.
+        Pass the live-stream subsampling factor so pixel coordinates are
+        scaled to full sensor resolution before computation.
+        """
+        if detectorName is None or detectorName == "":
+            detectorName = self._defaultDetectorName()
+        objectiveId = self._resolveObjectiveId(objectiveId)
+
+        if movementDistanceXUm <= 0:
+            return {"success": False, "error": "movementDistanceXUm must be > 0"}
+        if movementDistanceYUm <= 0:
+            return {"success": False, "error": "movementDistanceYUm must be > 0"}
+
+        try:
+            sub = float(previewSubsamplingFactor) if previewSubsamplingFactor else 1.0
+        except (TypeError, ValueError):
+            sub = 1.0
+        if sub <= 0:
+            sub = 1.0
+
+        # Pixel shifts scaled to sensor coordinates
+        pixel_shift_x = np.array([
+            (pointA2X - pointA1X) * sub,
+            (pointA2Y - pointA1Y) * sub,
+        ])
+        pixel_shift_y = np.array([
+            (pointB2X - pointB1X) * sub,
+            (pointB2Y - pointB1Y) * sub,
+        ])
+
+        min_disp = 1.0
+        if np.linalg.norm(pixel_shift_x) < min_disp:
+            return {"success": False, "error": "X-axis pixel displacement < 1 px — mark two distinct points or move further."}
+        if np.linalg.norm(pixel_shift_y) < min_disp:
+            return {"success": False, "error": "Y-axis pixel displacement < 1 px — mark two distinct points or move further."}
+
+        pixel_shifts = np.array([pixel_shift_x, pixel_shift_y])  # (2, 2)
+        stage_shifts = np.array([
+            [movementDistanceXUm, 0.0],
+            [0.0, movementDistanceYUm],
+        ])  # (2, 2)
+
+        # Solve for A: stage = pixel @ A^T  →  A^T = inv(pixel_shifts) @ stage_shifts
+        try:
+            A_T = np.linalg.solve(pixel_shifts, stage_shifts)
+        except np.linalg.LinAlgError:
+            return {
+                "success": False,
+                "error": "Pixel shifts are collinear — the four points don't span both axes.",
+            }
+        A = A_T.T  # 2×2
+
+        # SVD decomposition — same extraction as compute_affine_matrix
+        U, singular_values, Vt = np.linalg.svd(A)
+        rotation_deg = float(np.degrees(np.arctan2(U[1, 0], U[0, 0])))
+        scale_x = float(singular_values[0])
+        scale_y = float(singular_values[1])
+
+        # Encode reflection (flip) via determinant sign.
+        # det(A) < 0 means the mapping includes a mirror.
+        det_A = float(np.linalg.det(A))
+        if det_A < 0:
+            scale_y = -scale_y
+
+        # Build 2×3 affine matrix (zero translation — we measured shifts, not positions)
+        affine_matrix = [
+            [float(A[0, 0]), float(A[0, 1]), 0.0],
+            [float(A[1, 0]), float(A[1, 1]), 0.0],
+        ]
+
+        # Quality: with exactly 2 data points the fit is exact (RMSE = 0)
+        predicted = pixel_shifts @ A.T
+        residuals = stage_shifts - predicted
+        rmse = float(np.sqrt(np.mean(np.sum(residuals ** 2, axis=1))))
+
+        metrics = {
+            "scale_x_um_per_pixel": scale_x,
+            "scale_y_um_per_pixel": scale_y,
+            "rotation_deg": rotation_deg,
+            "rmse_um": rmse,
+            "quality": "manual",
+            "method": "manual_four_point",
+            "condition_number": float(np.linalg.cond(A)),
+            "determinant": det_A,
+            "point_a1": [float(pointA1X), float(pointA1Y)],
+            "point_a2": [float(pointA2X), float(pointA2Y)],
+            "point_b1": [float(pointB1X), float(pointB1Y)],
+            "point_b2": [float(pointB2X), float(pointB2Y)],
+            "movement_distance_x_um": float(movementDistanceXUm),
+            "movement_distance_y_um": float(movementDistanceYUm),
+            "pixel_shift_x": [float(pixel_shift_x[0]), float(pixel_shift_x[1])],
+            "pixel_shift_y": [float(pixel_shift_y[0]), float(pixel_shift_y[1])],
+        }
+        return self.setCalibrationData(
+            detectorName=detectorName,
+            affineMatrix=affine_matrix,
+            objectiveId=objectiveId,
+            metrics=metrics,
+        )
+
+    # ------------------------------------------------------------------ #
     # Internal helpers                                                    #
     # ------------------------------------------------------------------ #
 
@@ -829,6 +963,7 @@ class PixelCalibrationClass:
         settle_time: float = 0.2,
         crop_size: int = 1024,
         isDEBUG: bool = False,
+        backlash_um: float = 0.0,
     ):
         """Capture phase-correlation samples and compute an affine matrix."""
         if detector_name and detector_name != self._detectorName:
@@ -839,6 +974,15 @@ class PixelCalibrationClass:
 
         start_position = self._get_stage_position()
         self._parent._logger.info(f"Starting position: {start_position[:2]} µm")
+
+        # Backlash compensation: move away in X and Y, then back to start
+        if backlash_um > 0:
+            self._parent._logger.info(f"Backlash compensation: {backlash_um} µm in X and Y")
+            backlash_target = start_position + np.array([backlash_um, backlash_um, 0])
+            self._move_stage(backlash_target)
+            time.sleep(settle_time)
+            self._move_stage(start_position)
+            time.sleep(settle_time)
 
         time.sleep(settle_time)
         ref_image = self._grab_image(crop_size=crop_size)

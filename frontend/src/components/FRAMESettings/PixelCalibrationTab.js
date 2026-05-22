@@ -23,6 +23,7 @@ import apiPixelCalibrationControllerGetPendingCalibration from '../../backendapi
 import apiPixelCalibrationControllerApplyPendingCalibration from '../../backendapi/apiPixelCalibrationControllerApplyPendingCalibration';
 import apiPixelCalibrationControllerDiscardPendingCalibration from '../../backendapi/apiPixelCalibrationControllerDiscardPendingCalibration';
 import apiPixelCalibrationControllerGetAvailableDetectors from '../../backendapi/apiPixelCalibrationControllerGetAvailableDetectors';
+import apiObjectiveControllerGetStatus from '../../backendapi/apiObjectiveControllerGetStatus';
 
 /**
  * PixelCalibrationTab - Per-detector stage <-> camera affine calibration.
@@ -43,6 +44,23 @@ const PixelCalibrationTab = () => {
   const [stepSizeUm, setStepSizeUm] = useState(100.0);
   const [pattern, setPattern] = useState('cross');
   const [nSteps, setNSteps] = useState(4);
+  const [backlashUm, setBacklashUm] = useState(50.0);
+
+  // --- objective info ---
+  const [objectiveInfo, setObjectiveInfo] = useState(null);
+
+  // Fetch objective status on mount and when objectiveId changes
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await apiObjectiveControllerGetStatus();
+        if (cancelled) return;
+        setObjectiveInfo(resp);
+      } catch (_e) { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [objectiveId]);
 
   // Load the list of available detectors once on mount.
   useEffect(() => {
@@ -141,6 +159,7 @@ const PixelCalibrationTab = () => {
         stepSizeUm,
         pattern,
         nSteps,
+        backlashUm,
       });
     } catch (err) {
       setLoading(false);
@@ -279,6 +298,27 @@ const PixelCalibrationTab = () => {
               </Select>
             </FormControl>
 
+            {/* Active objective info */}
+            {objectiveInfo && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                <Typography variant="body2">
+                  <strong>Active objective:</strong>{' '}
+                  {objectiveInfo.currentObjective != null
+                    ? (objectiveInfo.availableObjectivesNames?.[objectiveInfo.currentObjective] || `#${objectiveInfo.currentObjective}`)
+                    : 'None'}
+                  {objectiveInfo.availableObjectivePixelSizes?.[objectiveInfo.currentObjective] > 0 && (
+                    <> &mdash; Pixel size: {objectiveInfo.availableObjectivePixelSizes[objectiveInfo.currentObjective].toFixed(4)} µm/px</>
+                  )}
+                  {objectiveInfo.availableObjectiveMagnifications?.[objectiveInfo.currentObjective] > 0 && (
+                    <> &mdash; {objectiveInfo.availableObjectiveMagnifications[objectiveInfo.currentObjective]}×</>
+                  )}
+                  {objectiveInfo.availableObjectiveNAs?.[objectiveInfo.currentObjective] > 0 && (
+                    <> (NA {objectiveInfo.availableObjectiveNAs[objectiveInfo.currentObjective]})</>
+                  )}
+                </Typography>
+              </Alert>
+            )}
+
             <TextField
               label="Step size (µm)"
               type="number"
@@ -308,6 +348,17 @@ const PixelCalibrationTab = () => {
               onChange={(e) => setNSteps(parseInt(e.target.value, 10))}
               fullWidth
               sx={{ mb: 2 }}
+            />
+
+            <TextField
+              label="Backlash compensation (µm)"
+              type="number"
+              value={backlashUm}
+              onChange={(e) => setBacklashUm(parseFloat(e.target.value) || 0)}
+              fullWidth
+              sx={{ mb: 2 }}
+              helperText="Pre-move distance in X and Y to eliminate backlash (0 = disabled)"
+              inputProps={{ step: 10, min: 0 }}
             />
 
             <Button

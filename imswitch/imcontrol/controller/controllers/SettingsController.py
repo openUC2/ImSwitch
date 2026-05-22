@@ -39,6 +39,7 @@ class SettingsController(ImConWidgetController):
 
         self.settingAttr = False
         self.allParams = {}
+        self._perDetectorStreamParams = {}
         self._last_detector_params_snapshot = None
         self._detector_params_emit_interval_ms = 5000
         self._detector_params_timer = Timer()
@@ -50,7 +51,7 @@ class SettingsController(ImConWidgetController):
 
         # Connect CommunicationChannel signals
         self._commChannel.sigDetectorSwitched.connect(self.detectorSwitched)
-        
+
         # Connect our signal with CommunicationChannel for WebSocket broadcasting
         self.sigDetectorParametersUpdated.connect(self._commChannel.sigDetectorParametersUpdated.emit)
 
@@ -122,7 +123,7 @@ class SettingsController(ImConWidgetController):
             self.closeEvent()
         except Exception:
             pass
-        
+
     def addROI(self):
         """ Adds the ROI to ImageWidget viewbox through the CommunicationChannel. """
         if not self.roiAdded:
@@ -543,17 +544,33 @@ class SettingsController(ImConWidgetController):
         return self._master.detectorsManager.getGlobalDetectorParams()
 
     @APIExport(requestType="POST")
-    def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None):
+    def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None, detectorName: str = None):
         """Set streaming parameters for binary frame streaming.
-        
+
         This method is maintained for backward compatibility but now delegates to LiveViewController.
-        
+
         Args:
             compression: Dict with 'algorithm' and 'level' keys
             subsampling: Dict with 'factor' key
             throttle_ms: Throttling interval in milliseconds (preferred)
             throttlems: Throttling interval in milliseconds (alternative naming)
+            detectorName: Target detector name. Defaults to the first available detector.
         """
+        # Resolve detectorName: default to first available detector
+        if detectorName is None:
+            allNames = self._master.detectorsManager.getAllDeviceNames()
+            detectorName = allNames[0] if allNames else None
+
+        # Store per-detector settings
+        if detectorName is not None:
+            stored = self._perDetectorStreamParams.get(detectorName, {})
+            if compression:
+                stored['compression'] = compression
+            if subsampling:
+                stored['subsampling'] = subsampling
+            if throttle_ms is not None:
+                stored['throttle_ms'] = throttle_ms
+            self._perDetectorStreamParams[detectorName] = stored
         # Try to use LiveViewController if available through CommunicationChannel
         print("RReceived parameters: ", compression, subsampling, throttle_ms)
         try:
@@ -600,11 +617,20 @@ class SettingsController(ImConWidgetController):
         return {"status": "success", "updated": update_params}
 
     @APIExport()
-    def getStreamParams(self):
+    def getStreamParams(self, detectorName: str = None):
         """Get current streaming parameters.
-        
+
         This method is maintained for backward compatibility but now delegates to LiveViewController.
+
+        Args:
+            detectorName: Target detector name. If provided, per-detector overrides are
+                          merged into the response under the key 'per_detector'.
+                          Defaults to the first available detector.
         """
+        # Resolve detectorName: default to first available detector
+        if detectorName is None:
+            allNames = self._master.detectorsManager.getAllDeviceNames()
+            detectorName = allNames[0] if allNames else None
         # Try to use LiveViewController if available through CommunicationChannel
         try:
             # Access controllers through _commChannel.__main
@@ -618,7 +644,7 @@ class SettingsController(ImConWidgetController):
                         binary_params = protocols.get('binary', {})
                         jpeg_params = protocols.get('jpeg', {})
 
-                        return {
+                        response = {
                             "current_compression_algorithm": binary_params.get('compression_algorithm', 'lz4'),
                             "binary": {
                                 "compression": {
@@ -634,6 +660,9 @@ class SettingsController(ImConWidgetController):
                                 "compression_level": jpeg_params.get('jpeg_quality', 80)
                             }
                         }
+                        if detectorName and detectorName in self._perDetectorStreamParams:
+                            response['per_detector'] = self._perDetectorStreamParams[detectorName]
+                        return response
         except Exception:
             # If LiveViewController not available, fall back to legacy behavior
             pass
@@ -641,7 +670,7 @@ class SettingsController(ImConWidgetController):
         # Fallback to legacy behavior
         global_params = self._master.detectorsManager.getGlobalDetectorParams()
 
-        return {
+        fallback_response = {
             "current_compression_algorithm": global_params.get('stream_compression_algorithm', 'lz4'),
             "binary": {
                 "compression": {
@@ -657,6 +686,9 @@ class SettingsController(ImConWidgetController):
                 "compression_level": global_params.get('compressionlevel', 80)
             }
         }
+        if detectorName and detectorName in self._perDetectorStreamParams:
+            fallback_response['per_detector'] = self._perDetectorStreamParams[detectorName]
+        return fallback_response
 
     @APIExport()
     def getDetectorParameters(self) -> dict:
@@ -860,10 +892,10 @@ class SettingsController(ImConWidgetController):
     def getCameraStatus(self, detectorName: str = None) -> dict:
         """ Returns comprehensive camera status information for the specified detector.
         If no detector name is provided, returns status for the current detector.
-        
+
         Args:
             detectorName: Optional detector name. If None, uses current detector.
-            
+
         Returns:
             Dictionary containing comprehensive camera status including:
             - Hardware specifications (model, sensor size, pixel size)
@@ -1144,4 +1176,3 @@ _detectorParameterSubCategory = 'Param'
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-

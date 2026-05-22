@@ -1311,5 +1311,4 @@ def test_build_ashlar_stitched():
     )
 
 if __name__ == "__main__":
-    #main()
-    test_build_ashlar_stitched()
+    main()

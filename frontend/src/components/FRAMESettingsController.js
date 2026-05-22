@@ -4,17 +4,19 @@ import SetLasersTab from './FRAMESettings/SetLasersTab';
 import TestHomingTab from './FRAMESettings/TestHomingTab';
 import PixelCalibrationTab from './FRAMESettings/PixelCalibrationTab';
 import ManualPixelCalibrationTab from './FRAMESettings/ManualPixelCalibrationTab';
-import ObjectiveControllerTab from './FRAMESettings/ObjectiveControllerTab';
+import ExtendedObjectiveController from './ObjectiveController';
+import StageOffsetCalibrationTab from './FRAMESettings/StageOffsetCalibrationTab';
 
 /**
  * FRAMESettings - Main component for pixel calibration and frame setup
  *
  * Provides a tabbed interface for:
+ * - Automatic Pixel Calibration (stage affine calibration)
+ * - Manual Pixel Calibration (two-point pixel-size calibration)
  * - Set Lasers (laser channel configuration)
  * - Test Homing (axis homing verification)
- * - Pixel Calibration (stage affine calibration)
- * - Manual Pixel Calibration (two-point pixel-size calibration)
  * - Objective Controller (objective management)
+ * - Stage Offset Calibration (raster scan -> stage offset)
  */
 const FRAMESettings = () => {
   const [selectedTab, setSelectedTab] = useState(0);
@@ -41,14 +43,16 @@ const FRAMESettings = () => {
         <Tab label="Set Lasers" />
         <Tab label="Test Homing" />
         <Tab label="Objective Controller" />
+        <Tab label="Stage Offset Calibration" />
       </Tabs>
 
       <Box sx={{ mt: 2 }}>
         {selectedTab === 0 && <PixelCalibrationTab />}
         {selectedTab === 1 && <ManualPixelCalibrationTab />}
         {selectedTab === 2 && <SetLasersTab />}
-        {selectedTab === 4 && <TestHomingTab />}
-        {selectedTab === 5 && <ObjectiveControllerTab />}
+        {selectedTab === 3 && <TestHomingTab />}
+        {selectedTab === 4 && <ExtendedObjectiveController />}
+        {selectedTab === 5 && <StageOffsetCalibrationTab />}
       </Box>
     </Paper>
   );

@@ -12,7 +12,6 @@ from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowContext, W
 from imswitch.imcontrol.model.managers.MDASequenceManager import MDASequenceManager
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
-from .wellplate_layouts import get_predefined_layouts, get_layout_by_name
 
 try:
     IS_ASHLAR_AVAILABLE = True
@@ -54,6 +53,7 @@ from imswitch.imcontrol.controller.controllers.experiment_controller import (
 )
 from imswitch.imcontrol.model.focus_map import FocusMap, FocusMapManager, FocusMapResult
 from imswitch.imcontrol.model.overview_registration import OverviewRegistrationService, PixelPoint, StagePoint, SlotDefinition
+from imswitch.imcontrol.model import configfiletools
 
 
 class ExperimentController(ImConWidgetController):
@@ -151,6 +151,19 @@ class ExperimentController(ImConWidgetController):
 
         # Initialize overview camera registration service
         self._overview_registration = OverviewRegistrationService()
+        # Background-task bookkeeping for overview-related endpoints. These
+        # endpoints (recaptureSlot, runAutonomousOverviewScan, ...) used to
+        # block the FastAPI worker thread for many seconds, freezing the UI.
+        # They now spawn worker threads and clients poll
+        # ``getOverviewAsyncStatus`` for completion.
+        self._overview_async_lock = threading.Lock()
+        self._overview_async_thread: Optional[threading.Thread] = None
+        self._overview_async_status: dict = {
+            "running": False,
+            "task": None,
+            "result": None,
+            "error": None,
+        }
         # Overview camera is resolved through the DetectorManager, using the
         # detector name configured in setup (experiment.overviewCameraName).
         # Falls back to a detector literally named "overviewcamera" if any.
@@ -162,7 +175,7 @@ class ExperimentController(ImConWidgetController):
             candidates = []
             if preferred:
                 candidates.append(preferred)
-            candidates.append("overviewcamera")
+            candidates.append("ObservationCamera")
             for name in candidates:
                 if name and name in allDetectorNames:
                     self._overview_camera_name = name
@@ -176,6 +189,24 @@ class ExperimentController(ImConWidgetController):
         except Exception as exc:
             self._logger.warning(f"Failed to resolve overview camera: {exc}")
 
+        # Load persisted overview registration entries from the setup config
+        # (single source of truth) into the in-memory store.
+        try:
+            self._loadOverviewRegistrationFromSetup()
+        except Exception as exc:
+            self._logger.warning(
+                f"Could not load overview registration from setup file: {exc}"
+            )
+
+        # Initialize Opentrons-style labware manager. A single bad labware file
+        # must never block controller startup, so we swallow exceptions.
+        try:
+            from imswitch.imcontrol.model.labware import LabwareManager as _LabwareManager
+            self.labware_manager = _LabwareManager()
+        except Exception as exc:
+            self._logger.warning(f"LabwareManager init failed: {exc}")
+            self.labware_manager = None
+
         # Initialize omero  parameters  # TODO: Maybe not needed!
         self.omero_url = self._master.experimentManager.omeroServerUrl
         self.omero_username = self._master.experimentManager.omeroUsername
@@ -186,89 +217,207 @@ class ExperimentController(ImConWidgetController):
     def getHardwareParameters(self):
         return self.ExperimentParams
 
-    @APIExport(requestType="GET")
-    def getAvailableWellplateLayouts(self):
-        """
-        Get list of available pre-defined wellplate layouts.
+    # ------------------------------------------------------------------
+    # Wellplate / labware endpoints
+    #
+    # All layouts are now served by the Opentrons-style ``LabwareManager``
+    # (see ``imswitch.imcontrol.model.labware``). Use ``getLabwareList`` /
+    # ``getLabwareDefinition`` from new clients. The internal helper
+    # ``_labware_to_layout_dict`` is still needed by the overview-camera
+    # registration code, which consumes the canvas-style dict.
+    # ------------------------------------------------------------------
 
-        Returns:
-            Dict with layout names as keys and layout metadata as values
-        """
-        try:
-            layouts = get_predefined_layouts()
-            return {
-                name: {
-                    "name": layout.name,
-                    "description": layout.description,
-                    "rows": layout.rows,
-                    "cols": layout.cols,
-                    "well_count": len(layout.wells),
-                    "well_spacing_x": layout.well_spacing_x,
-                    "well_spacing_y": layout.well_spacing_y
-                }
-                for name, layout in layouts.items()
+    @staticmethod
+    def _labware_to_layout_dict(lab, offset_x: float = 0.0, offset_y: float = 0.0) -> dict:
+        """Convert a ``LabwareDefinition`` to the canvas-style wellplate
+        layout dict used by the overview-camera registration code. µm
+        everywhere."""
+        spacing_x = 0.0
+        spacing_y = 0.0
+        if len(lab.columns) >= 2:
+            r = lab.rows[0]
+            w_a = lab.wells.get(f"{r}{lab.columns[0]}")
+            w_b = lab.wells.get(f"{r}{lab.columns[1]}")
+            if w_a and w_b:
+                spacing_x = abs(w_b.x - w_a.x)
+        if len(lab.rows) >= 2:
+            c = lab.columns[0]
+            w_a = lab.wells.get(f"{lab.rows[0]}{c}")
+            w_b = lab.wells.get(f"{lab.rows[1]}{c}")
+            if w_a and w_b:
+                spacing_y = abs(w_b.y - w_a.y)
+
+        wells_out = []
+        for wid in lab.well_names_flat:
+            w = lab.wells[wid]
+            entry = {
+                "id": wid,
+                "name": wid,
+                "x": w.x + offset_x,
+                "y": w.y + offset_y,
+                "shape": w.geometry.shape,
+                "row": lab.rows.index(w.row),
+                "col": lab.columns.index(w.column),
             }
-        except Exception as e:
-            self._logger.error(f"Failed to get wellplate layouts: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            if w.geometry.shape == "circle":
+                entry["radius"] = w.geometry.radius
+            else:
+                entry["width"] = w.geometry.width
+                entry["height"] = w.geometry.height
+            wells_out.append(entry)
+        return {
+            "name": lab.display_name,
+            "description": ", ".join(lab.tags) if lab.tags else "",
+            "rows": len(lab.rows),
+            "cols": len(lab.columns),
+            "well_spacing_x": spacing_x,
+            "well_spacing_y": spacing_y,
+            "offset_x": offset_x,
+            "offset_y": offset_y,
+            "wells": wells_out,
+            "unit": "um",
+            "width": lab.dimensions.x,
+            "height": lab.dimensions.y,
+            "labwareLoadName": lab.load_name,
+        }
+
+    # ------------------------------------------------------------------
+    # New Opentrons-style endpoints
+    # ------------------------------------------------------------------
+    @APIExport(requestType="GET")
+    def getLabwareList(self) -> List[dict]:
+        """List summaries of all loaded labware definitions (µm dimensions)."""
+        if not self.labware_manager:
+            return []
+        return self.labware_manager.list_summaries()
 
     @APIExport(requestType="GET")
-    def getWellplateLayout(self, layout_name: str, offset_x: float = 0, offset_y: float = 0):
-        """
-        Get a specific wellplate layout with optional offset parameters.
-
-        Args:
-            layout_name: Name of the layout (e.g., '96-well-standard', '384-well-standard')
-            offset_x: X offset in micrometers (default: 0)
-            offset_y: Y offset in micrometers (default: 0)
-
-        Returns:
-            Complete wellplate layout definition including all wells
-        """
+    def getLabwareDefinition(
+        self,
+        load_name: str,
+        offset_x_um: float = 0.0,
+        offset_y_um: float = 0.0,
+    ) -> dict:
+        """Return a full ``LabwareDefinition`` (µm). Optional offsets shift
+        every well's x/y to map plate -> stage coordinates."""
+        if not self.labware_manager:
+            raise HTTPException(status_code=503, detail="LabwareManager unavailable")
         try:
-            layout = get_layout_by_name(layout_name, offset_x=offset_x, offset_y=offset_y)
-            if not layout:
-                raise HTTPException(status_code=404, detail=f"Layout '{layout_name}' not found")
-            return layout.dict()
-        except HTTPException:
-            raise
-        except Exception as e:
-            self._logger.error(f"Failed to get wellplate layout '{layout_name}': {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            lab = self.labware_manager.get_with_offset(load_name, offset_x_um, offset_y_um)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return lab.model_dump()
 
     @APIExport(requestType="POST")
-    def generateCustomWellplateLayout(self, layout_params: dict):
-        """
-        Generate a custom wellplate layout with specified parameters.
+    def selectWellsByPattern(self, request: dict) -> dict:
+        """Resolve a ``WellSelectionPattern`` against a labware. Pure function;
+        does not mutate experiment state.
 
-        Args:
-            layout_params: Dictionary with layout parameters:
-                - name: str (required)
-                - rows: int (required)
-                - cols: int (required)
-                - well_spacing_x: float (required, micrometers)
-                - well_spacing_y: float (required, micrometers)
-                - well_shape: str ('circle' or 'rectangle', default: 'circle')
-                - well_radius: float (micrometers, for circular wells)
-                - well_width: float (micrometers, for rectangular wells)
-                - well_height: float (micrometers, for rectangular wells)
-                - offset_x: float (default: 0)
-                - offset_y: float (default: 0)
-                - description: str (default: '')
-
-        Returns:
-            Complete wellplate layout definition
+        Request shape:
+            {
+              "load_name": "corning_96_wellplate_360ul_flat",
+              "pattern": {"ranges": ["A1:H12"], "rows": ["A"], ...},
+              "offset_x_um": 0.0,
+              "offset_y_um": 0.0
+            }
         """
+        if not self.labware_manager:
+            raise HTTPException(status_code=503, detail="LabwareManager unavailable")
+        from imswitch.imcontrol.model.labware import (
+            WellSelectionPattern, resolve_pattern,
+        )
+        load_name = request.get("load_name")
+        pattern_raw = request.get("pattern") or {}
+        offset_x = float(request.get("offset_x_um") or 0.0)
+        offset_y = float(request.get("offset_y_um") or 0.0)
         try:
-            layout = get_layout_by_name("custom", **layout_params)
-            if not layout:
-                raise HTTPException(status_code=400, detail="Invalid layout parameters")
-            return layout.dict()
-        except HTTPException:
-            raise
-        except Exception as e:
-            self._logger.error(f"Failed to generate custom wellplate layout: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            lab = self.labware_manager.get(load_name)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            pattern = WellSelectionPattern.model_validate(pattern_raw)
+            wells = resolve_pattern(lab, pattern)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        resolved = []
+        for w in wells:
+            entry = {
+                "well_id": w.id,
+                "row": w.row,
+                "column": w.column,
+                "x_um": w.x + offset_x,
+                "y_um": w.y + offset_y,
+                "z_um": w.z,
+                "shape": w.geometry.shape,
+            }
+            if w.geometry.shape == "circle":
+                entry["radius_um"] = w.geometry.radius
+            else:
+                entry["width_um"] = w.geometry.width
+                entry["height_um"] = w.geometry.height
+            resolved.append(entry)
+        return {"load_name": load_name, "count": len(resolved), "wells": resolved}
+
+    @APIExport(requestType="POST")
+    def applyWellSelectionToExperiment(self, request: dict) -> dict:
+        """Resolve a pattern and return ``Point`` dicts ready for the
+        experiment's pointList.
+
+        Request shape:
+            {
+              "load_name": "...",
+              "pattern": {...},
+              "offset_x_um": 0,
+              "offset_y_um": 0,
+              "condition_labels": {"A1": "Donor1+DMSO", ...},
+              "point_name_template": "{well_id}"
+            }
+        """
+        if not self.labware_manager:
+            raise HTTPException(status_code=503, detail="LabwareManager unavailable")
+        from imswitch.imcontrol.model.labware import (
+            WellSelectionPattern, resolve_pattern,
+        )
+        load_name = request.get("load_name")
+        pattern_raw = request.get("pattern") or {}
+        offset_x = float(request.get("offset_x_um") or 0.0)
+        offset_y = float(request.get("offset_y_um") or 0.0)
+        condition_labels: Dict[str, str] = dict(request.get("condition_labels") or {})
+        template: str = request.get("point_name_template") or "{well_id}"
+        try:
+            lab = self.labware_manager.get(load_name)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            pattern = WellSelectionPattern.model_validate(pattern_raw)
+            wells = resolve_pattern(lab, pattern)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        points: List[dict] = []
+        for w in wells:
+            label = condition_labels.get(w.id)
+            try:
+                name = template.format(
+                    well_id=w.id, row=w.row, column=w.column, label=label or ""
+                )
+            except (KeyError, IndexError):
+                name = w.id
+            points.append({
+                "name": name,
+                "x": w.x + offset_x,
+                "y": w.y + offset_y,
+                "z": w.z if w.z != 0 else None,
+                "iX": 0,
+                "iY": 0,
+                "neighborPointList": [],
+                "wellId": w.id,
+                "wellRow": w.row,
+                "wellColumn": w.column,
+                "labwareLoadName": load_name,
+                "conditionLabel": label,
+                "areaType": "well",
+            })
+        return {"load_name": load_name, "count": len(points), "points": points}
 
     @APIExport(requestType="GET")
     def getOMEROConfig(self):
@@ -407,6 +556,10 @@ class ExperimentController(ImConWidgetController):
                         "y": pos.y,
                         "z": pos.z if pos.z is not None else (area.centerPosition.z if area.centerPosition.z is not None else None),
                         "wellId": area.wellId,
+                        "wellRow": area.wellRow,
+                        "wellColumn": area.wellColumn,
+                        "labwareLoadName": area.labwareLoadName,
+                        "conditionLabel": area.conditionLabel,
                         "areaName": area.areaName,
                         "areaType": area.areaType
                     })
@@ -433,6 +586,10 @@ class ExperimentController(ImConWidgetController):
                         "y": centerPoint.y,
                         "z": centerPoint.z,
                         "wellId": centerPoint.wellId,
+                        "wellRow": centerPoint.wellRow,
+                        "wellColumn": centerPoint.wellColumn,
+                        "labwareLoadName": centerPoint.labwareLoadName,
+                        "conditionLabel": centerPoint.conditionLabel,
                         "areaName": centerPoint.name,
                         "areaType": centerPoint.areaType or 'free_scan'
                     }]
@@ -449,6 +606,10 @@ class ExperimentController(ImConWidgetController):
                             "y": neighbor.y,
                             "z": neighbor.z if neighbor.z is not None else centerPoint.z,
                             "wellId": centerPoint.wellId,
+                            "wellRow": centerPoint.wellRow,
+                            "wellColumn": centerPoint.wellColumn,
+                            "labwareLoadName": centerPoint.labwareLoadName,
+                            "conditionLabel": centerPoint.conditionLabel,
                             "areaName": centerPoint.name,
                             "areaType": centerPoint.areaType or 'free_scan'
                         })
@@ -475,6 +636,10 @@ class ExperimentController(ImConWidgetController):
                 "x": current_x,
                 "y": current_y,
                 "wellId": None,
+                "wellRow": None,
+                "wellColumn": None,
+                "labwareLoadName": None,
+                "conditionLabel": None,
                 "areaName": "Current Position",
                 "areaType": "free_scan"
             }]
@@ -553,11 +718,13 @@ class ExperimentController(ImConWidgetController):
         if p.speed <= 0:
             self.SPEED_X = self.SPEED_X_default
             self.SPEED_Y = self.SPEED_Y_default
-            self.SPEED_Z = self.SPEED_Z_default
         else:
             self.SPEED_X = p.speed
             self.SPEED_Y = p.speed
-            self.SPEED_Z = p.speed
+        if p.z_speed <= 0:
+            self.SPEED_Z = self.SPEED_Z_default
+        else:
+            self.SPEED_Z = p.z_speed
 
         # Autofocus and timepoint values are read from `p` (ParameterValue)
         # directly via ExecutionContext.to_kwargs(); no local aliases needed.
@@ -1173,12 +1340,12 @@ class ExperimentController(ImConWidgetController):
             "z_index": kwargs.get("z_index", 0),
             "channel_index": kwargs.get("channel_index", 0),
         }
-        
+
         # Enrich metadata with MetadataHub data if available
         try:
             if hasattr(self._master, 'metadataHub') and self._master.metadataHub is not None:
                 detector_name = self._master.detectorsManager.getAllDeviceNames()[0]
-                
+
                 # Get objective info from hub
                 hub_global = self._master.metadataHub.get_latest(flat=True, filter_category='Objective')
                 for key, value_dict in hub_global.items():
@@ -1190,7 +1357,7 @@ class ExperimentController(ImConWidgetController):
                         ome_metadata['objective_magnification'] = value_dict.get('value')
                     elif 'NA' in key:
                         ome_metadata['objective_na'] = value_dict.get('value')
-                
+
                 # Get detector context (includes isRGB, exposure, etc.)
                 detector_ctx = self._master.metadataHub.get_detector(detector_name)
                 if detector_ctx:
@@ -1305,7 +1472,9 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Channel {channel} not found in available lasers: {self.allIlluNames}")
             return None
         self._master.lasersManager[channel].setValue(power, getReturn=True)
-        if self._master.lasersManager[channel].enabled == 0:
+        # Use `not enabled` instead of `== 0` to handle False/None/0 returned
+        # after _switch_off_all_illumination calls setEnabled(False).
+        if power > 0 and not self._master.lasersManager[channel].enabled:
             self._master.lasersManager[channel].setEnabled(1, getReturn=True)
         self._logger.debug(f"Setting laser power to {power} for channel {channel}")
         time.sleep(0.04)  # Short delay to ensure power is set before next acquisition # TODO: Necessary?
@@ -1521,12 +1690,12 @@ class ExperimentController(ImConWidgetController):
                       tPeriod:int=1, nTimes:int=1,
                       isSnakeScan:bool=True):
         """Full workflow: arm camera ➔ launch writer ➔ execute scan.
-        
+
         Args:
             xstart: Starting X position
             xstep: Step size in X direction
             nx: Number of steps in X
-            ystart: Starting Y position  
+            ystart: Starting Y position
             ystep: Step size in Y direction
             ny: Number of steps in Y
             zstart: Starting Z position (for Z-stacking)
@@ -1553,7 +1722,7 @@ class ExperimentController(ImConWidgetController):
         # Ensure illumination is a list
         if illumination is None:
             illumination = []
-        
+
         # Build illumination dict for metadata (maintain backward compatibility)
         illum_dict = {}
         for i, val in enumerate(illumination[:5]):  # Take up to 5 channels
@@ -1565,7 +1734,7 @@ class ExperimentController(ImConWidgetController):
         nScan = max(nIlluminations, 1)
         total_frames = nx * ny * nz * nScan
         self._logger.info(f"Stage-scan: {nx}×{ny}×{nz} ({total_frames} frames)")
-        
+
         def addDataPoint(metadataList, x, y, z, illuminationChannel, illuminationValue, runningNumber):
             """Helper function to add metadata for each position."""
             metadataList.append({
@@ -1589,7 +1758,7 @@ class ExperimentController(ImConWidgetController):
                     # Snake pattern: reverse X direction on odd rows
                     if isSnakeScan and iy % 2 == 1:
                         x = xstart + (nx - 1 - ix) * xstep
-                
+
                     # If there's at least one valid illumination or LED set, take only one image as "default"
                     if nIlluminations == 0:
                         runningNumber += 1
@@ -1631,10 +1800,10 @@ class ExperimentController(ImConWidgetController):
                     daemon=True
                 )
                 self._writer_thread_ome.start()
-            
+
             # Pad illumination list to 5 channels if needed
             illumination_padded = (illumination + [0] * 5)[:5] if illumination else [0, 0, 0, 0, 0]
-            
+
             # 3. execute stage scan (blocks until finished) ------------------------
             self.fastStageScanIsRunning = True  # Set flag to indicate scan is running
             self.mStage.start_stage_scanning(
@@ -1663,7 +1832,7 @@ class ExperimentController(ImConWidgetController):
                         self._master.lasersManager[laser_name].setValue(0)
                     except Exception as e:
                         self._logger.debug(f"Could not turn off laser {laser_name}: {e}")
-            
+
             self._logger.debug("All illumination sources switched off before scan")
         except Exception as e:
             self._logger.warning(f"Error switching off illumination: {e}")
@@ -1891,8 +2060,8 @@ class ExperimentController(ImConWidgetController):
     def start_mda_experiment(self, request: MDASequenceRequest) -> Dict[str, Any]:
         """
         Start an MDA experiment using useq-schema.
-        
-        This provides a modern, standardized interface for multi-dimensional 
+
+        This provides a modern, standardized interface for multi-dimensional
         acquisition experiments.
         """
         if not self.mda_manager.is_available():
@@ -2014,10 +2183,10 @@ class ExperimentController(ImConWidgetController):
     def run_native_mda_sequence(self, sequence_dict: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a native useq-schema MDASequence from JSON.
-        
+
         This endpoint accepts a native useq.MDASequence serialized as JSON (dict),
         following the EXACT pattern from pymmcore-plus and raman-mda-engine.
-        
+
         Args:
             sequence_dict: Native useq.MDASequence serialized to dict/JSON with fields:
                 - metadata: Dict with arbitrary experiment metadata
@@ -2029,10 +2198,10 @@ class ExperimentController(ImConWidgetController):
                 - autofocus_plan: Dict with autofocus configuration
                 - axis_order: String like "tpcz" defining acquisition order
                 - keep_shutter_open_across: Tuple of axes to keep shutter open
-        
+
         Returns:
             Dict with execution status and sequence information
-            
+
         Example request body:
             {
                 "metadata": {"experiment": "test", "user": "researcher"},
@@ -2378,7 +2547,7 @@ class ExperimentController(ImConWidgetController):
         if focusMapConfig.scan_areas is not None and len(focusMapConfig.scan_areas) > 0:
             # Caller provided scan areas directly (e.g. from frontend)
             self._last_scan_areas = focusMapConfig.scan_areas
-        
+
         effective_scan_areas = getattr(self, '_last_scan_areas', None)
         if effective_scan_areas is None or len(effective_scan_areas) == 0:
             # Fallback: use current stage position as single area
@@ -2497,7 +2666,7 @@ class ExperimentController(ImConWidgetController):
                     f"Focus map [{group_id}]: point {i+1}/{len(grid)} "
                     f"at ({gx:.1f}, {gy:.1f}) → Z={best_z:.3f}"
                 )
-                # settle for a moment 
+                # settle for a moment
                 time.sleep(0.5)
 
             except Exception as e:
@@ -2752,21 +2921,18 @@ class ExperimentController(ImConWidgetController):
             layout_dict = layout_data
             layout_name = layout_data.get("name", layout_name)
         else:
-            # 2. Try backend lookup
-            try:
-                layout = get_layout_by_name(layout_name)
-                if layout is None:
-                    raise ValueError(f"Layout '{layout_name}' not found")
-                if hasattr(layout, 'model_dump'):
-                    layout_dict = layout.model_dump()
-                elif hasattr(layout, 'dict'):
-                    layout_dict = layout.dict()
-                else:
-                    layout_dict = layout
-            except Exception:
+            # 2. Try the labware manager (Opentrons defs by load_name)
+            layout_dict = None
+            if self.labware_manager:
+                try:
+                    lab = self.labware_manager.get(layout_name)
+                    layout_dict = self._labware_to_layout_dict(lab)
+                except KeyError:
+                    layout_dict = None
+            if layout_dict is None:
                 # 3. Last-resort hardcoded Heidstar fallback
                 self._logger.warning(
-                    "No layout_data from frontend and backend lookup failed. "
+                    "No layout_data from frontend and labware lookup failed. "
                     "Using hardcoded Heidstar fallback – coordinates may not match canvas!"
                 )
                 layout_dict = {
@@ -2818,9 +2984,7 @@ class ExperimentController(ImConWidgetController):
         if frame is None:
             raise HTTPException(status_code=500, detail="No frame from overview camera")
 
-        # Apply flip settings if available (legacy ObservationCameraFlip is
-        # no longer used; overview flip should be set on the detector via
-        # PixelCalibrationController.applyPendingCalibration).
+
 
         # Get current stage position for traceability
         stage_x, stage_y, stage_z = 0.0, 0.0, 0.0
@@ -2861,6 +3025,139 @@ class ExperimentController(ImConWidgetController):
         meta["imageMimeType"] = "image/jpeg"
         meta["stagePosition"] = {"x": stage_x, "y": stage_y, "z": stage_z}
         return meta
+
+    @APIExport(requestType="POST")
+    def recaptureSlot(
+        self,
+        slot_id: str = "1",
+        layout_data: dict = None,
+        layout_name: str = "Heidstar 4x Histosample",
+        camera_name: str = "",
+    ):
+        """Recapture a single overview slide slot instead of all 4.
+
+        Returns immediately with ``{started: True, task: ...}``. The actual
+        stage move + snap runs in a background thread; clients poll
+        :meth:`getOverviewAsyncStatus` for completion / result. This unblocks
+        the FastAPI worker thread so the rest of the UI stays responsive.
+        """
+        if not self._tryStartOverviewAsync(f"recapture_slot_{slot_id}"):
+            return {
+                "started": False,
+                "error": "Another overview task is still running",
+                "status": self._overview_async_status,
+            }
+
+        thread = threading.Thread(
+            target=self._recaptureSlotWorker,
+            args=(slot_id, layout_data, layout_name, camera_name),
+            daemon=True,
+            name=f"recaptureSlot-{slot_id}",
+        )
+        with self._overview_async_lock:
+            self._overview_async_thread = thread
+        thread.start()
+        return {"started": True, "task": f"recapture_slot_{slot_id}"}
+
+    def _recaptureSlotWorker(
+        self,
+        slot_id: str,
+        layout_data: Optional[dict],
+        layout_name: str,
+        camera_name: str,
+    ) -> None:
+        try:
+            result = self._recaptureSlotBlocking(
+                slot_id=slot_id,
+                layout_data=layout_data,
+                layout_name=layout_name,
+                camera_name=camera_name,
+            )
+            self._finishOverviewAsync(result=result)
+        except Exception as exc:
+            self._logger.error(f"recaptureSlot worker failed: {exc}", exc_info=True)
+            self._finishOverviewAsync(error=str(exc))
+
+    def _recaptureSlotBlocking(
+        self,
+        slot_id: str = "1",
+        layout_data: dict = None,
+        layout_name: str = "Heidstar 4x Histosample",
+        camera_name: str = "",
+    ) -> dict:
+        """Synchronous body of recaptureSlot - executed inside the worker."""
+        # Resolve the layout the same way getOverviewRegistrationConfig does.
+        if layout_data is not None and isinstance(layout_data, dict) and layout_data.get("wells"):
+            layout_dict = layout_data
+            layout_name = layout_data.get("name", layout_name)
+        else:
+            layout_dict = None
+            if self.labware_manager:
+                try:
+                    lab = self.labware_manager.get(layout_name)
+                    layout_dict = self._labware_to_layout_dict(lab)
+                except KeyError:
+                    layout_dict = None
+            if layout_dict is None:
+                # Heidstar fallback (matches getOverviewRegistrationConfig).
+                layout_dict = {
+                    "name": "Heidstar 4x Histosample",
+                    "unit": "um",
+                    "width": 127000,
+                    "height": 84000,
+                    "wells": [
+                        {"x": 18400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide1"},
+                        {"x": 48400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide2"},
+                        {"x": 78400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide3"},
+                        {"x": 108400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide4"},
+                    ],
+                }
+
+        # Compute slot center from slot definitions.
+        slots = self._overview_registration.get_slot_definitions(layout_dict)
+        slot_index = None
+        try:
+            slot_index = int(slot_id) - 1  # API uses 1-based slot ids
+        except (TypeError, ValueError):
+            pass
+        if slot_index is None or slot_index < 0 or slot_index >= len(slots):
+            raise ValueError(
+                f"Invalid slot_id '{slot_id}' for layout with {len(slots)} slots"
+            )
+
+        slot = slots[slot_index]
+        slot_dict = slot.model_dump() if hasattr(slot, "model_dump") else slot.dict()
+        center_x = slot_dict.get("centerX")
+        center_y = slot_dict.get("centerY")
+        if center_x is None or center_y is None:
+            corners = (
+                slot_dict.get("stageCorners")
+                or slot_dict.get("corners")
+                or []
+            )
+            if len(corners) >= 1:
+                xs = [c.get("x", 0.0) for c in corners]
+                ys = [c.get("y", 0.0) for c in corners]
+                center_x = sum(xs) / len(xs)
+                center_y = sum(ys) / len(ys)
+            else:
+                well = layout_dict["wells"][slot_index]
+                center_x = float(well.get("x", 0.0))
+                center_y = float(well.get("y", 0.0))
+
+        # Move the stage to the slot center (blocking) before snapping.
+        if self.mStage is not None:
+            try:
+                self.mStage.move(value=float(center_x), axis="X", is_absolute=True, is_blocking=True)
+                self.mStage.move(value=float(center_y), axis="Y", is_absolute=True, is_blocking=True)
+            except Exception as e:
+                self._logger.warning(f"recaptureSlot: stage move failed: {e}")
+
+        # Re-use the existing snap logic so the snapshot is stored consistently.
+        result = self.snapOverviewImage(slot_id=str(slot_id), camera_name=camera_name)
+        result["recapturedSlot"] = slot_id
+        result["slotCenter"] = {"x": float(center_x), "y": float(center_y)}
+        return result
 
     @APIExport(requestType="POST")
     def registerOverviewSlide(self, registration_data: dict):
@@ -2918,6 +3215,7 @@ class ExperimentController(ImConWidgetController):
                 corners_px=corners_px,
                 slot_stage_corners=slot_stage_corners,
                 raw_image=raw_image,
+                stage_position=registration_data.get("stagePosition"),
             )
 
             return {
@@ -2931,6 +3229,15 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Registration failed: {e}", exc_info=True)
             raise HTTPException(status_code=400, detail=str(e))
+        finally:
+            try:
+                self._persistOverviewRegistrationToSetup(
+                    cam_name, layout_name
+                )
+            except Exception as _exc:
+                self._logger.debug(
+                    f"Skip persisting overview registration: {_exc}"
+                )
 
     @APIExport(requestType="GET")
     def getOverviewRegistrationStatus(self, camera_name: str = "", layout_name: str = "Heidstar 4x Histosample"):
@@ -2970,8 +3277,6 @@ class ExperimentController(ImConWidgetController):
         if frame is None:
             raise HTTPException(status_code=500, detail="No frame from overview camera")
 
-        # Apply flips (legacy ObservationCameraFlip removed; flip is now
-        # handled inside the DetectorManager via PixelCalibrationController).
 
         frame = np.ascontiguousarray(frame)
 
@@ -3001,6 +3306,297 @@ class ExperimentController(ImConWidgetController):
         """
         cam_name = camera_name or self._overview_camera_name or "overviewcamera"
         return self._overview_registration.get_overlay_data(cam_name, layout_name)
+
+    # ------------------------------------------------------------------
+    # Autonomous overview scan + registration config endpoints
+    # ------------------------------------------------------------------
+    # Async overview-task plumbing
+    # ------------------------------------------------------------------
+    def _tryStartOverviewAsync(self, task_name: str) -> bool:
+        """Reserve the single async overview slot. Returns False if busy."""
+        with self._overview_async_lock:
+            t = self._overview_async_thread
+            if t is not None and t.is_alive():
+                return False
+            self._overview_async_status = {
+                "running": True,
+                "task": task_name,
+                "result": None,
+                "error": None,
+            }
+            self._overview_async_thread = None
+            return True
+
+    def _finishOverviewAsync(self, result=None, error=None) -> None:
+        with self._overview_async_lock:
+            self._overview_async_status = {
+                "running": False,
+                "task": self._overview_async_status.get("task"),
+                "result": result,
+                "error": error,
+            }
+
+    @APIExport(requestType="GET")
+    def getOverviewAsyncStatus(self):
+        """Return the current background-overview-task state for polling."""
+        with self._overview_async_lock:
+            return dict(self._overview_async_status)
+
+    # ------------------------------------------------------------------
+    # Known calibration reference points per layout
+    # ------------------------------------------------------------------
+    # Hard-coded reference centres (in micrometres) for known calibration
+    # targets. ``StageOffsetCalibrationTab`` shows these as the "expected"
+    # position; the deviation from the brightest spot detected by the raster
+    # scan is what gets persisted as the stage offset.
+    _KNOWN_CALIBRATION_POINTS: Dict[str, Dict[str, Any]] = {
+        "Heidstar 4x Histosample": {
+            "x": 20000.0,
+            "y": 40000.0,
+            "description": "Centre of the openUC2 calibration pinhole on the Heidstar 4x slide carrier (slot 1).",
+        },
+        "openUC2 96-Well Calibration Chart": {
+            "x": 14380.0,
+            "y": 11240.0,
+            "description": "Centre well A1 of the openUC2 96-well calibration chart (slot 1).",
+        },
+    }
+
+    @APIExport(requestType="GET")
+    def getKnownCalibrationPoint(self, layout_name: str = "Heidstar 4x Histosample"):
+        """Return the expected (x_um, y_um) calibration centre for a layout.
+
+        The frontend uses this as the "true" position when storing a stage
+        offset: ``offset = expected - actual``.
+        """
+        ref = self._KNOWN_CALIBRATION_POINTS.get(layout_name)
+        if ref is None:
+            return {"success": False, "layoutName": layout_name, "known": None}
+        return {"success": True, "layoutName": layout_name, "known": dict(ref)}
+
+    @APIExport(requestType="GET")
+    def getKnownCalibrationLayouts(self):
+        """List every layout that ships a known calibration reference point."""
+        return {
+            "layouts": [
+                {"name": name, **dict(data)}
+                for name, data in self._KNOWN_CALIBRATION_POINTS.items()
+            ]
+        }
+
+    # ------------------------------------------------------------------
+    @APIExport(requestType="POST")
+    def runAutonomousOverviewScan(
+        self,
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+        settle_time_s: float = 0.5,
+    ):
+        """Schedule an autonomous overview scan and return immediately.
+
+        The actual stage iteration + snap loop runs in a background thread so
+        the FastAPI worker stays free. Poll :meth:`getOverviewAsyncStatus` for
+        completion and the final ``scanResults`` / ``overlayData`` payload.
+        """
+        if not self._tryStartOverviewAsync("autonomous_overview_scan"):
+            return {
+                "started": False,
+                "error": "Another overview task is still running",
+                "status": self._overview_async_status,
+            }
+
+        thread = threading.Thread(
+            target=self._runAutonomousOverviewScanWorker,
+            args=(camera_name, layout_name, settle_time_s),
+            daemon=True,
+            name="runAutonomousOverviewScan",
+        )
+        with self._overview_async_lock:
+            self._overview_async_thread = thread
+        thread.start()
+        return {"started": True, "task": "autonomous_overview_scan"}
+
+    def _runAutonomousOverviewScanWorker(
+        self,
+        camera_name: str,
+        layout_name: str,
+        settle_time_s: float,
+    ) -> None:
+        try:
+            result = self._runAutonomousOverviewScanBlocking(
+                camera_name=camera_name,
+                layout_name=layout_name,
+                settle_time_s=settle_time_s,
+            )
+            self._finishOverviewAsync(result=result)
+        except Exception as exc:
+            self._logger.error(
+                f"runAutonomousOverviewScan worker failed: {exc}", exc_info=True
+            )
+            self._finishOverviewAsync(error=str(exc))
+
+    def _runAutonomousOverviewScanBlocking(
+        self,
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+        settle_time_s: float = 0.5,
+    ) -> dict:
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        cam = self._overview_camera
+        if cam is None:
+            raise HTTPException(status_code=400, detail="Overview camera not available")
+
+        config = self._overview_registration.load_registration_config(cam_name, layout_name)
+        if not config or not config.get("slots"):
+            raise HTTPException(
+                status_code=400,
+                detail="No registration config found. Run the manual wizard first.",
+            )
+
+        results: Dict[str, Any] = {}
+        for slot_id, slot_data in config["slots"].items():
+            pos = slot_data.get("stagePosition") or {}
+            try:
+                # Move XY together when possible, then Z separately
+                if self.mStage is not None:
+                    if "x" in pos and "y" in pos:
+                        self.mStage.move(
+                            value=(float(pos["x"]), float(pos["y"])),
+                            axis="XY",
+                            is_absolute=True,
+                            is_blocking=True,
+                        )
+                    if "z" in pos:
+                        self.mStage.move(
+                            value=float(pos["z"]),
+                            axis="Z",
+                            is_absolute=True,
+                            is_blocking=True,
+                        )
+                if settle_time_s and settle_time_s > 0:
+                    time.sleep(float(settle_time_s))
+
+                frame = cam.getLatestFrame()
+                if frame is None:
+                    results[slot_id] = {"success": False, "error": "No frame from camera"}
+                    continue
+                frame = np.ascontiguousarray(frame)
+
+                refresh = self._overview_registration.refresh_overlay_image(
+                    camera_name=cam_name,
+                    layout_name=layout_name,
+                    slot_id=slot_id,
+                    new_image=frame,
+                )
+                results[slot_id] = {"success": True, **refresh}
+            except Exception as exc:
+                self._logger.error(
+                    f"Autonomous scan failed for slot {slot_id}: {exc}", exc_info=True
+                )
+                results[slot_id] = {"success": False, "error": str(exc)}
+
+        overlay_data = self._overview_registration.get_overlay_data(cam_name, layout_name)
+        return {"success": True, "scanResults": results, "overlayData": overlay_data}
+
+    @APIExport(requestType="GET")
+    def getOverviewRegistrationConfigData(
+        self,
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+    ):
+        """Return the persisted overview-registration config for editing."""
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        config = self._overview_registration.load_registration_config(cam_name, layout_name)
+        if config is None:
+            return {"exists": False, "config": None}
+        return {"exists": True, "config": config}
+
+    @APIExport(requestType="POST")
+    def updateOverviewRegistrationConfig(self, config_data: dict):
+        """Apply edits to the registration config (e.g. updated XYZ positions)."""
+        if not isinstance(config_data, dict):
+            raise HTTPException(status_code=400, detail="config_data must be an object")
+        cam_name = config_data.get(
+            "cameraName", self._overview_camera_name or "overviewcamera"
+        )
+        layout_name = config_data.get("layoutName", "Heidstar 4x Histosample")
+        try:
+            path = self._overview_registration.save_registration_config_from_dict(
+                cam_name, layout_name, config_data
+            )
+            self._persistOverviewRegistrationToSetup(cam_name, layout_name)
+            return {"success": True, "path": path}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @APIExport(requestType="GET")
+    def getOverviewOverlayImage(
+        self,
+        slot_id: str = "1",
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+    ):
+        """Return the stored JPEG overlay (base64) for a single slot."""
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        b64 = self._overview_registration.load_overlay_jpeg(
+            cam_name, layout_name, slot_id
+        )
+        if b64 is None:
+            raise HTTPException(
+                status_code=404, detail="No overlay image found for this slot"
+            )
+        return {
+            "imageBase64": b64,
+            "imageMimeType": "image/jpeg",
+            "slotId": slot_id,
+        }
+
+    # ------------------------------------------------------------------
+    # Overview registration <-> setup-config persistence helpers
+    # ------------------------------------------------------------------
+    def _overviewRegistrationKey(self, camera_name: str, layout_name: str) -> str:
+        """Composite key used inside ``_setupInfo.overviewRegistration``."""
+        return f"{camera_name}__{layout_name}"
+
+    def _loadOverviewRegistrationFromSetup(self):
+        """Push any persisted entries from the setup file into the in-memory
+        registration store, so they survive process restarts."""
+        store = getattr(self._setupInfo, "overviewRegistration", None)
+        if not store or not isinstance(store, dict):
+            return
+        for key, cfg in store.items():
+            if not isinstance(cfg, dict):
+                continue
+            cam_name = cfg.get("cameraName") or self._overview_camera_name or "overviewcamera"
+            layout_name = cfg.get("layoutName") or "Heidstar 4x Histosample"
+            try:
+                self._overview_registration.save_registration_config_from_dict(
+                    cam_name, layout_name, cfg
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to load overview registration '{key}': {exc}"
+                )
+
+    def _persistOverviewRegistrationToSetup(self, camera_name: str, layout_name: str):
+        """Mirror the latest registration config into the imcontrol_setups
+        JSON (single source of truth, alongside ``stageOffsets``)."""
+        cfg = self._overview_registration.load_registration_config(
+            camera_name, layout_name
+        )
+        if cfg is None:
+            return
+        if getattr(self._setupInfo, "overviewRegistration", None) is None:
+            self._setupInfo.overviewRegistration = {}
+        key = self._overviewRegistrationKey(camera_name, layout_name)
+        self._setupInfo.overviewRegistration[key] = cfg
+        try:
+            options = configfiletools.loadOptions()[0]
+            configfiletools.saveSetupInfo(options, self._setupInfo)
+        except Exception as exc:
+            self._logger.warning(
+                f"saveSetupInfo failed for overview registration: {exc}"
+            )
 
 
 # Copyright (C) 2025 Benedict Diederich

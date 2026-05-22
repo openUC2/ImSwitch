@@ -183,6 +183,8 @@ class HikCamManager(DetectorManager):
             self._camera.start_live()
             self._running = True
             self.__logger.debug('startlive')
+            debug = self._camera.getDiagnostics()
+            self.__logger.info(f"Camera diagnostics after starting live: {debug}")
 
     def stopAcquisition(self):
         if self._running:

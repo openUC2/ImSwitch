@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "version": 1,
+  "namespace": "openuc2",
+  "metadata": {
+    "displayName": "Ropod 2-Slide Holder",
+    "displayCategory": "wellPlate",
+    "displayVolumeUnits": "µL",
+    "tags": ["ropod", "uc2", "slide-holder"]
+  },
+  "brand": {"brand": "openUC2", "brandId": [], "links": []},
+  "parameters": {
+    "format": "irregular",
+    "isTiprack": false,
+    "loadName": "ropod_2slides_uc2",
+    "isMagneticModuleCompatible": false,
+    "quirks": [],
+    "isDeckSlotCompatible": true
+  },
+  "ordering": [["A1"], ["A2"]],
+  "cornerOffsetFromSlot": {"x": 0.0, "y": 0.0, "z": 0.0},
+  "dimensions": {
+    "xDimension": 160.0,
+    "yDimension": 30.0,
+    "zDimension": 5.0
+  },
+  "wells": {
+    "A1": {"shape": "rectangular", "depth": 0.1, "totalLiquidVolume": 50.0, "x": 40.0, "y": 15.0, "z": 0.0, "xDimension": 75.0, "yDimension": 25.0},
+    "A2": {"shape": "rectangular", "depth": 0.1, "totalLiquidVolume": 50.0, "x": 120.0, "y": 15.0, "z": 0.0, "xDimension": 75.0, "yDimension": 25.0}
+  },
+  "groups": [
+    {"wells": ["A1", "A2"], "metadata": {"displayCategory": "wellPlate"}}
+  ]
+}

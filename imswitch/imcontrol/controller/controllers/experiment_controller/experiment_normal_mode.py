@@ -11,6 +11,7 @@ import numpy as np
 
 from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowStep
 from imswitch.imcontrol.model.io import OMEWriter, OMEROConnectionParams
+from imswitch.imcontrol.model.io.ome_writers import write_plate_metadata_sidecar
 from .experiment_mode_base import ExperimentModeBase
 
 
@@ -336,6 +337,9 @@ class ExperimentNormalMode(ExperimentModeBase):
 
         # Original behavior: create separate writers for each tile position
         # but use shared individual_tiffs directory
+        wells_used: List[tuple] = []
+        labware_load_name: Optional[str] = None
+        condition_labels: Dict[str, str] = {}
         for position_center_index, tiles in enumerate(snake_tiles):
             experiment_name = f"{t}_{exp_name}_{position_center_index}"
             m_file_path = os.path.join(
@@ -367,6 +371,30 @@ class ExperimentNormalMode(ExperimentModeBase):
                 n_channels=n_channels
             )
 
+            # Extract per-well labware metadata from the first tile in this group.
+            # Tiles within a single position_center_index share a well, so the
+            # first one is representative.
+            well_metadata: Optional[Dict[str, Any]] = None
+            if tiles:
+                first = tiles[0]
+                w_row = first.get("wellRow")
+                w_col = first.get("wellColumn")
+                w_load = first.get("labwareLoadName")
+                w_cond = first.get("conditionLabel")
+                if w_row or w_col or w_load:
+                    well_metadata = {
+                        "wellRow": w_row,
+                        "wellColumn": w_col,
+                        "labwareLoadName": w_load,
+                        "conditionLabel": w_cond,
+                    }
+                    if w_row and w_col is not None:
+                        wells_used.append((str(w_row), str(int(w_col))))
+                    if w_load and labware_load_name is None:
+                        labware_load_name = w_load
+                    if w_cond and w_row and w_col is not None:
+                        condition_labels[f"{w_row}{int(w_col)}"] = w_cond
+
             # Create OME writer
             ome_writer = OMEWriter(
                 file_paths=file_paths,
@@ -378,8 +406,33 @@ class ExperimentNormalMode(ExperimentModeBase):
                 isRGB=isRGB,
                 omero_connection_params=omero_connection_params,
                 shared_omero_key=shared_omero_key,
+                well_metadata=well_metadata,
             )
             file_writers.append(ome_writer)
+
+        # Emit OME-NGFF plate sidecar once per acquisition (only on the first
+        # timepoint to avoid clobbering on every loop iteration).
+        if labware_load_name and t == 0 and self.controller.labware_manager is not None:
+            try:
+                lab = self.controller.labware_manager.get(labware_load_name)
+                if lab is not None:
+                    rows = list(lab.rows)
+                    columns = [str(c) for c in lab.columns]
+                    write_plate_metadata_sidecar(
+                        output_dir=dir_path,
+                        plate_name=labware_load_name,
+                        rows=rows,
+                        columns=columns,
+                        wells_used=wells_used,
+                        extra={
+                            "imswitch_labware": {
+                                "loadName": labware_load_name,
+                                "conditionLabels": condition_labels or None,
+                            }
+                        },
+                    )
+            except Exception as exc:  # noqa: BLE001 - sidecar is best-effort
+                self._logger.warning(f"Failed to write plate metadata sidecar: {exc}")
 
         return file_writers
 

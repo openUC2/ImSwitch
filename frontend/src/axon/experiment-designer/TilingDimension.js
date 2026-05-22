@@ -62,6 +62,8 @@ const TilingDimension = () => {
     dispatch(experimentSlice.setOverlapHeight(overlapValue));
     dispatch(wellSelectorSlice.setOverlapWidth(overlapValue));
     dispatch(wellSelectorSlice.setOverlapHeight(overlapValue));
+    // Keep areaSelectOverlap in sync so it isn't 0 when the run starts in area mode
+    dispatch(wellSelectorSlice.setAreaSelectOverlap(overlapValue));
   };
 
   // Handle snakescan toggle
@@ -280,6 +282,7 @@ const TilingDimension = () => {
                   onChange={(e, val) => {
                     dispatch(experimentSlice.setOverlapWidth(val / 100));
                     dispatch(wellSelectorSlice.setOverlapWidth(val / 100));
+                    dispatch(wellSelectorSlice.setAreaSelectOverlap(val / 100));
                   }}
                   valueLabelDisplay="auto"
                   valueLabelFormat={(val) => `${val}%`}
@@ -306,6 +309,7 @@ const TilingDimension = () => {
                   onChange={(e, val) => {
                     dispatch(experimentSlice.setOverlapHeight(val / 100));
                     dispatch(wellSelectorSlice.setOverlapHeight(val / 100));
+                    dispatch(wellSelectorSlice.setAreaSelectOverlap(val / 100));
                   }}
                   valueLabelDisplay="auto"
                   valueLabelFormat={(val) => `${val}%`}
@@ -320,9 +324,9 @@ const TilingDimension = () => {
             <Box>
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
                 <Typography variant="caption" sx={{ fontWeight: 500 }}>
-                  Stage Speed
+                  XY Speed
                 </Typography>
-                <Tooltip title="Speed of stage movement between tiles. Lower speeds reduce vibration but increase total scan time." arrow>
+                <Tooltip title="Speed of XY stage movement between tiles. Lower speeds reduce vibration but increase total scan time." arrow>
                   <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
                 </Tooltip>
               </Box>
@@ -332,6 +336,30 @@ const TilingDimension = () => {
                   onChange={(e) => dispatch(experimentSlice.setSpeed(Number(e.target.value)))}
                 >
                   {[5000, 10000, 15000, 20000, 25000, 30000].map((speed) => (
+                    <MenuItem key={speed} value={speed}>
+                      {speed} µm/s
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
+
+            {/* Z speed */}
+            <Box>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Z Speed
+                </Typography>
+                <Tooltip title="Speed of Z stage movement during focus steps. Use lower values to minimize mechanical vibration." arrow>
+                  <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
+              <FormControl size="small" fullWidth sx={{ mt: 0.5 }}>
+                <Select
+                  value={parameterValue.z_speed || 5000}
+                  onChange={(e) => dispatch(experimentSlice.setZSpeed(Number(e.target.value)))}
+                >
+                  {[500, 1000, 2000, 5000, 10000, 20000].map((speed) => (
                     <MenuItem key={speed} value={speed}>
                       {speed} µm/s
                     </MenuItem>

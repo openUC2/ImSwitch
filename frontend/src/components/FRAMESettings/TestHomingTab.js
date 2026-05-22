@@ -19,10 +19,13 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useSelector } from 'react-redux';
 import { getConnectionSettingsState } from '../../state/slices/ConnectionSettingsSlice';
+import * as liveStreamSlice from '../../state/slices/LiveStreamSlice';
+import * as liveViewSlice from '../../state/slices/LiveViewSlice';
 
 import apiPositionerControllerHomeAxis from '../../backendapi/apiPositionerControllerHomeAxis';
 import apiPixelCalibrationControllerOverviewVerifyHoming from '../../backendapi/apiPixelCalibrationControllerOverviewVerifyHoming';
-import apiPixelCalibrationControllerOverviewStream from '../../backendapi/apiPixelCalibrationControllerOverviewStream';
+import apiLiveViewControllerStartLiveView from '../../backendapi/apiLiveViewControllerStartLiveView';
+import apiLiveViewControllerStopLiveView from '../../backendapi/apiLiveViewControllerStopLiveView';
 
 /**
  * TestHomingTab - Axis homing verification
@@ -35,13 +38,16 @@ import apiPixelCalibrationControllerOverviewStream from '../../backendapi/apiPix
  */
 const TestHomingTab = () => {
   const connectionSettings = useSelector(getConnectionSettingsState);
+  const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
+  const liveViewState = useSelector(liveViewSlice.getLiveViewState);
   const hostIP = connectionSettings.ip;
   const hostPort = connectionSettings.apiPort;
 
   // Stream state
-  const [streamUrl, setStreamUrl] = useState('');
   const [streamActive, setStreamActive] = useState(false);
-  
+  const prevDetectorRef = useRef(null); // Saves detector name active before switching to ObservationCamera
+  const prevProtocolRef = useRef('jpeg');
+
   // UI state
   const [loading, setLoading] = useState(false);
   const [developerMode, setDeveloperMode] = useState(false);
@@ -65,26 +71,27 @@ const TestHomingTab = () => {
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
 
-  // Reference for MJPEG image
-  const imgRef = useRef(null);
-
-  // Set up stream URL
-  useEffect(() => {
-    if (hostIP && hostPort) {
-      setStreamUrl(`${hostIP}:${hostPort}/imswitch/api/PixelCalibrationController/overviewStream`);
-    }
-  }, [hostIP, hostPort]);
-
-  // Handle stream toggle
+  // Handle stream toggle: reuses the existing WebSocket live stream by switching the active
+  // detector to ObservationCamera. Restores the previous detector on stop.
   const handleStreamToggle = async () => {
     try {
       const newStreamState = !streamActive;
-      
-      if (!newStreamState) {
-        // Stop stream via API
-        await apiPixelCalibrationControllerOverviewStream(false);
+
+      if (newStreamState) {
+        // Remember which detector / protocol is currently streaming
+        prevDetectorRef.current = liveViewState.detectors[liveViewState.activeTab] || null;
+        prevProtocolRef.current = liveStreamState.imageFormat || 'jpeg';
+        // Switch the main live stream to ObservationCamera (jpeg, 1x subsampling)
+        await apiLiveViewControllerStartLiveView('ObservationCamera', 'jpeg', { subsampling_factor: 1 });
+      } else {
+        // Restore the previous detector stream
+        if (prevDetectorRef.current) {
+          await apiLiveViewControllerStartLiveView(prevDetectorRef.current, prevProtocolRef.current);
+        } else {
+          await apiLiveViewControllerStopLiveView('ObservationCamera');
+        }
       }
-      
+
       setStreamActive(newStreamState);
       setStatus(newStreamState ? 'Stream started' : 'Stream stopped');
     } catch (err) {
@@ -169,34 +176,32 @@ const TestHomingTab = () => {
               </Button>
             </Box>
 
-            {/* MJPEG Stream Display */}
+            {/* Live view image from Redux (shared WebSocket stream) */}
             <Box 
               sx={{ 
                 backgroundColor: 'black', 
-                minHeight: 500,
+                height: 500,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                position: 'relative'
+                position: 'relative',
+                overflow: 'hidden',
               }}
             >
-              {streamActive ? (
+              {streamActive && liveStreamState.liveViewImage ? (
                 <img
-                  ref={imgRef}
-                  src={streamUrl}
+                  src={`data:image/jpeg;base64,${liveStreamState.liveViewImage}`}
                   alt="Overview Camera"
                   style={{ 
-                    maxWidth: '100%', 
-                    maxHeight: 600,
-                    objectFit: 'contain'
-                  }}
-                  onError={() => {
-                    // Stream might not be active
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    objectFit: 'contain',
+                    display: 'block',
                   }}
                 />
               ) : (
                 <Typography color="white">
-                  Stream not active
+                  {streamActive ? 'Waiting for image...' : 'Stream not active'}
                 </Typography>
               )}
             </Box>

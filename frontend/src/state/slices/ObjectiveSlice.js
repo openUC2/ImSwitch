@@ -17,6 +17,11 @@ const initialObjectiveState = {
   posZ1: 0,
   magnification1: 0,
   magnification2: 0,
+
+  availableObjectivesNames: ["Obj 1", "Obj 2"],
+  availableObjectiveMagnifications: [0, 0],
+  availableObjectiveNAs: [0, 0],
+  availableObjectivePixelSizes: [0, 0],
   
   // Additional state for ObjectiveController
   currentA: "",
@@ -112,6 +117,18 @@ const objectiveSlice = createSlice({
     setManualZ1: (state, action) => {
       state.manualZ1 = action.payload;
     },
+    setAvailableObjectivesNames: (state, action) => {
+      state.availableObjectivesNames = action.payload;
+    },
+    setAvailableObjectiveMagnifications: (state, action) => {
+      state.availableObjectiveMagnifications = action.payload;
+    },
+    setAvailableObjectiveNAs: (state, action) => {
+      state.availableObjectiveNAs = action.payload;
+    },
+    setAvailableObjectivePixelSizes: (state, action) => {
+      state.availableObjectivePixelSizes = action.payload;
+    },
 
     resetState: (state) => {
       console.log("resetState");
@@ -143,6 +160,10 @@ export const {
   setManualX1,
   setManualZ0,
   setManualZ1,
+  setAvailableObjectivesNames,
+  setAvailableObjectiveMagnifications,
+  setAvailableObjectiveNAs,
+  setAvailableObjectivePixelSizes,
   resetState,
 } = objectiveSlice.actions;
 

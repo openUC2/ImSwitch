@@ -557,6 +557,7 @@ class CameraHIK:
             param_dict["gain_min"] = mGainValues[1]
             param_dict["gain_max"] = mGainValues[2]
 
+        # TODO: add blacklevel
         return param_dict
 
     def get_gain(self):

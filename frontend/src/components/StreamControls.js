@@ -29,6 +29,7 @@ import {
   GetApp,
 } from "@mui/icons-material";
 import StreamControlOverlay from "../components/StreamControlOverlay";
+import StreamPresets from "./StreamPresets";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner";
 import { useSelector, useDispatch } from "react-redux";
@@ -304,6 +305,10 @@ export default function StreamControls({
           Settings
         </Button>
       </Box>
+
+      {/* Stream presets / macros — recall named bundles of objective +
+          exposure + gain + livestream parameters. Frontend-only. */}
+      <StreamPresets />
 
       {/* Recording Controls Section */}
       <Box

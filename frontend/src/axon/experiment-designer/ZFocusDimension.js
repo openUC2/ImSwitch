@@ -460,7 +460,7 @@ const ZFocusDimension = () => {
                 onChange={(e) => dispatch(experimentSlice.setAutoFocusIlluminationChannel(e.target.value))}
               >
                 <MenuItem value="">Auto (use active channel)</MenuItem>
-                {parameterRange.illuSources?.map((source) => (
+                {(Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : []).map((source) => (
                   <MenuItem key={source} value={source}>
                     {source}
                   </MenuItem>

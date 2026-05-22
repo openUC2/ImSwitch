@@ -296,13 +296,15 @@ const ChannelsDimension = () => {
 
   // Parameter values from experiment state
   const parameterValue = experimentState.parameterValue;
-  const intensities = parameterValue.illuIntensities || [];
-  const exposures = parameterValue.exposureTimes || [];
-  const gains = parameterValue.gains || [];
-  const channelEnabledForExperiment = parameterValue.channelEnabledForExperiment || [];
-  const illuSources = parameterRange.illuSources || [];
-  const laserMinValues = parameterRange.illuSourceMinIntensities || [];
-  const laserMaxValues = parameterRange.illuSourceMaxIntensities || [];
+  // Defensive: every list must be an array. The backend can return null/object
+  // when no hardware is connected — slice + UI must both tolerate that.
+  const intensities = Array.isArray(parameterValue.illuIntensities) ? parameterValue.illuIntensities : [];
+  const exposures = Array.isArray(parameterValue.exposureTimes) ? parameterValue.exposureTimes : [];
+  const gains = Array.isArray(parameterValue.gains) ? parameterValue.gains : [];
+  const channelEnabledForExperiment = Array.isArray(parameterValue.channelEnabledForExperiment) ? parameterValue.channelEnabledForExperiment : [];
+  const illuSources = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
+  const laserMinValues = Array.isArray(parameterRange.illuSourceMinIntensities) ? parameterRange.illuSourceMinIntensities : [];
+  const laserMaxValues = Array.isArray(parameterRange.illuSourceMaxIntensities) ? parameterRange.illuSourceMaxIntensities : [];
 
   // Initialize timeout refs and cleanup
   useEffect(() => {
@@ -495,6 +497,33 @@ const ChannelsDimension = () => {
     dispatch(experimentSlice.setGains(newGains));
   };
 
+  // Fetch the live exposure + gain from the detector and write them into the
+  // experiment parameters for every channel. Useful after tuning exposure
+  // interactively in the Live View — you don't want to type the same values
+  // back into every channel by hand.
+  const handleStoreCurrentSettings = async () => {
+    try {
+      const hostIP = connectionSettings.ip;
+      const hostPort = connectionSettings.apiPort;
+      if (!hostIP || !hostPort) return;
+      const r = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorParameters`
+      );
+      if (!r.ok) return;
+      const data = await r.json();
+      const expVal = Number(data?.exposure);
+      const gainVal = Number(data?.gain);
+      if (Number.isFinite(expVal) && illuSources.length > 0) {
+        dispatch(experimentSlice.setExposureTimes(illuSources.map(() => expVal)));
+      }
+      if (Number.isFinite(gainVal) && illuSources.length > 0) {
+        dispatch(experimentSlice.setGains(illuSources.map(() => gainVal)));
+      }
+    } catch (e) {
+      console.warn("Failed to fetch current detector settings:", e);
+    }
+  };
+
   // Toggle channel expansion
   const toggleChannelExpand = (index) => {
     setExpandedChannels((prev) => ({
@@ -529,17 +558,35 @@ const ChannelsDimension = () => {
           </Tooltip>
         </Typography>
 
-        <Tooltip title="Copy settings from first channel to all others">
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<ContentCopyIcon />}
-            onClick={handleCopyToAll}
-            disabled={illuSources.length <= 1}
-          >
-            Copy settings to all channels
-          </Button>
-        </Tooltip>
+        <Box sx={{ display: "flex", gap: 1 }}>
+          <Tooltip title="Read current exposure & gain from the detector and apply to all channels">
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                color="secondary"
+                startIcon={<SettingsIcon />}
+                onClick={handleStoreCurrentSettings}
+                disabled={illuSources.length === 0}
+              >
+                Read and Apply current EXP/GAIN settings
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="Copy settings from first channel to all others">
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<ContentCopyIcon />}
+                onClick={handleCopyToAll}
+                disabled={illuSources.length <= 1}
+              >
+                Copy settings to all channels
+              </Button>
+            </span>
+          </Tooltip>
+        </Box>
       </Box>
 
       {/* Channel Blocks */}

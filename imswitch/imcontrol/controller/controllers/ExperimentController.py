@@ -3495,7 +3495,6 @@ class ExperimentController(ImConWidgetController):
                 "task": task_name,
                 "result": None,
                 "error": None,
-                "message": "",
             }
             self._overview_async_thread = None
             return True

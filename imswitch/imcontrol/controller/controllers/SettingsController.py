@@ -39,6 +39,7 @@ class SettingsController(ImConWidgetController):
 
         self.settingAttr = False
         self.allParams = {}
+        self._perDetectorStreamParams = {}
         self._last_detector_params_snapshot = None
         self._detector_params_emit_interval_ms = 5000
         self._detector_params_timer = Timer()
@@ -50,7 +51,7 @@ class SettingsController(ImConWidgetController):
 
         # Connect CommunicationChannel signals
         self._commChannel.sigDetectorSwitched.connect(self.detectorSwitched)
-        
+
         # Connect our signal with CommunicationChannel for WebSocket broadcasting
         self.sigDetectorParametersUpdated.connect(self._commChannel.sigDetectorParametersUpdated.emit)
 
@@ -122,7 +123,7 @@ class SettingsController(ImConWidgetController):
             self.closeEvent()
         except Exception:
             pass
-        
+
     def addROI(self):
         """ Adds the ROI to ImageWidget viewbox through the CommunicationChannel. """
         if not self.roiAdded:
@@ -545,9 +546,9 @@ class SettingsController(ImConWidgetController):
     @APIExport(requestType="POST")
     def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None, detectorName: str = None):
         """Set streaming parameters for binary frame streaming.
-        
+
         This method is maintained for backward compatibility but now delegates to LiveViewController.
-        
+
         Args:
             compression: Dict with 'algorithm' and 'level' keys
             subsampling: Dict with 'factor' key
@@ -618,7 +619,7 @@ class SettingsController(ImConWidgetController):
     @APIExport()
     def getStreamParams(self, detectorName: str = None):
         """Get current streaming parameters.
-        
+
         This method is maintained for backward compatibility but now delegates to LiveViewController.
 
         Args:
@@ -891,10 +892,10 @@ class SettingsController(ImConWidgetController):
     def getCameraStatus(self, detectorName: str = None) -> dict:
         """ Returns comprehensive camera status information for the specified detector.
         If no detector name is provided, returns status for the current detector.
-        
+
         Args:
             detectorName: Optional detector name. If None, uses current detector.
-            
+
         Returns:
             Dictionary containing comprehensive camera status including:
             - Hardware specifications (model, sensor size, pixel size)
@@ -1175,4 +1176,3 @@ _detectorParameterSubCategory = 'Param'
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-

@@ -90,6 +90,7 @@ const StreamPresets = () => {
 
   // Snapshot of "what the user would save right now."
   const currentSnapshot = useMemo(() => ({
+    currentDetector: liveViewState.detectors?.[liveViewState.activeTab] ?? null,
     imageFormat: liveStreamState.imageFormat,
     streamSettings: liveStreamState.streamSettings,
     snapFormat: liveViewState.snapFormat,
@@ -129,12 +130,14 @@ const StreamPresets = () => {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       name,
       createdAt: new Date().toISOString(),
+      // Detector
+      currentDetector: currentSnapshot.currentDetector,
       // Frontend state snapshot
       imageFormat: currentSnapshot.imageFormat,
       streamSettings: currentSnapshot.streamSettings,
       snapFormat: currentSnapshot.snapFormat,
       recordFormat: currentSnapshot.recordFormat,
-      // Detector state
+      // Detector exposure/gain state
       exposure,
       gain,
       // Objective state
@@ -158,6 +161,15 @@ const StreamPresets = () => {
     setError("");
     setInfo("");
     try {
+      // 0) Switch detector tab if the preset has one
+      if (preset.currentDetector) {
+        const detectors = liveViewState.detectors || [];
+        const idx = detectors.indexOf(preset.currentDetector);
+        if (idx >= 0) {
+          dispatch(liveViewSlice.setActiveTab(idx));
+        }
+      }
+
       // 1) Stream format + settings → Redux + backend
       if (preset.imageFormat) {
         dispatch(liveStreamSlice.setImageFormat(preset.imageFormat));
@@ -175,8 +187,8 @@ const StreamPresets = () => {
             await apiLiveViewControllerSetStreamParameters("binary", {
               compression_algorithm: bin.compression?.algorithm,
               compression_level: bin.compression?.level,
-              subsampling_factor: bin.subsampling?.factor,
-              throttle_ms: bin.throttle_ms,
+              subsampling_factor: bin.subsampling?.factor ?? bin.subsampling_factor ?? 4,
+              throttle_ms: bin.throttle_ms ?? 100,
             });
           } catch (_e) { /* non-fatal */ }
         }
@@ -278,6 +290,8 @@ const StreamPresets = () => {
             {presets.map((p) => (
               <MenuItem key={p.id} value={p.id}>
                 {p.name}
+                {p.currentDetector ? ` [${p.currentDetector}]` : ""}
+                {p.imageFormat ? ` · ${p.imageFormat}` : ""}
                 {p.objective?.name ? ` — ${p.objective.name}` : ""}
                 {p.exposure != null ? ` — ${p.exposure}ms` : ""}
               </MenuItem>
@@ -324,14 +338,44 @@ const StreamPresets = () => {
       <Dialog open={saveOpen} onClose={() => setSaveOpen(false)} fullWidth maxWidth="xs">
         <DialogTitle>Save current settings as preset</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Stored locally in your browser only. Includes:
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            Stored locally in your browser only. The following parameters will be saved:
           </Typography>
-          <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mb: 2 }}>
-            <Chip size="small" label={`Format: ${currentSnapshot.imageFormat || "?"}`} />
-            <Chip size="small" label={`Objective: ${currentSnapshot.objective?.name || `#${currentSnapshot.objective?.currentObjective ?? "?"}`}`} />
-            <Chip size="small" label="exposure + gain (fetched on save)" variant="outlined" />
-          </Stack>
+          <Box sx={{ mb: 2, p: 1, bgcolor: "action.hover", borderRadius: 1 }}>
+            <Stack spacing={0.75}>
+              <Stack direction="row" spacing={1} flexWrap="wrap">
+                <Chip size="small" color="primary" variant="outlined" label={`Detector: ${currentSnapshot.currentDetector || "(none)"}`} />
+                <Chip size="small" label={`Protocol: ${currentSnapshot.imageFormat || "?"}`} />
+              </Stack>
+              {currentSnapshot.streamSettings?.jpeg?.enabled && (
+                <Stack direction="row" spacing={1} flexWrap="wrap">
+                  <Chip size="small" label={`JPEG quality: ${currentSnapshot.streamSettings.jpeg.quality ?? "?"}`} />
+                  <Chip size="small" label={`JPEG subsample: ×${currentSnapshot.streamSettings.jpeg.subsampling?.factor ?? currentSnapshot.streamSettings.jpeg.subsampling_factor ?? "?"}`} />
+                  <Chip size="small" label={`JPEG throttle: ${currentSnapshot.streamSettings.jpeg.throttle_ms ?? "?"}ms`} />
+                </Stack>
+              )}
+              {currentSnapshot.streamSettings?.binary?.enabled && (
+                <Stack direction="row" spacing={1} flexWrap="wrap">
+                  <Chip size="small" label={`Codec: ${currentSnapshot.streamSettings.binary.compression?.algorithm ?? "?"} L${currentSnapshot.streamSettings.binary.compression?.level ?? "?"}`} />
+                  <Chip size="small" label={`Bin subsample: ×${currentSnapshot.streamSettings.binary.subsampling?.factor ?? "?"}`} />
+                  <Chip size="small" label={`Bin throttle: ${currentSnapshot.streamSettings.binary.throttle_ms ?? "?"}ms`} />
+                </Stack>
+              )}
+              {currentSnapshot.streamSettings?.webrtc?.enabled && (
+                <Stack direction="row" spacing={1} flexWrap="wrap">
+                  <Chip size="small" label={`WebRTC max-w: ${currentSnapshot.streamSettings.webrtc.max_width ?? "?"}`} />
+                  <Chip size="small" label={`WebRTC subsample: ×${currentSnapshot.streamSettings.webrtc.subsampling_factor ?? "?"}`} />
+                  <Chip size="small" label={`WebRTC throttle: ${currentSnapshot.streamSettings.webrtc.throttle_ms ?? "?"}ms`} />
+                </Stack>
+              )}
+              <Stack direction="row" spacing={1} flexWrap="wrap">
+                <Chip size="small" label={`Objective: ${currentSnapshot.objective?.name || `#${currentSnapshot.objective?.currentObjective ?? "?"}`}`} />
+                <Chip size="small" label={`Snap: ${currentSnapshot.snapFormat}`} variant="outlined" />
+                <Chip size="small" label={`Rec: ${currentSnapshot.recordFormat}`} variant="outlined" />
+                <Chip size="small" label="exposure + gain (fetched on save)" variant="outlined" />
+              </Stack>
+            </Stack>
+          </Box>
           <TextField
             autoFocus
             fullWidth

@@ -37,6 +37,7 @@ import {
   Typography,
 } from "@mui/material";
 
+
 import LiveViewControlWrapper from "../../axon/LiveViewControlWrapper";
 import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsSlice";
 import * as positionSlice from "../../state/slices/PositionSlice";
@@ -48,7 +49,9 @@ import apiStageCenterCalibrationGetRecommendedScanParameters from "../../backend
 import apiExperimentControllerGetKnownCalibrationLayouts from "../../backendapi/apiExperimentControllerGetKnownCalibrationLayouts";
 import apiPositionerControllerMovePositioner from "../../backendapi/apiPositionerControllerMovePositioner";
 
+
 const STEPS = ["Insert slide & start scan", "Review heatmap & accept"];
+
 
 // Built-in fallback layouts in case the backend has no entry yet (e.g. first
 // boot before the user has registered the openUC2 chart). The same dict
@@ -56,8 +59,8 @@ const STEPS = ["Insert slide & start scan", "Review heatmap & accept"];
 const FALLBACK_LAYOUTS = [
   {
     name: "Heidstar 4x Histosample",
-    x: 20000,
-    y: 40000,
+    x: 18400,
+    y: 40600,
     description: "Heidstar 4x slide carrier - centre of the calibration pinhole (slot 1).",
     bounds: { width: 127000, height: 84000 },
     slots: [
@@ -69,13 +72,14 @@ const FALLBACK_LAYOUTS = [
   },
   {
     name: "openUC2 96-Well Calibration Chart",
-    x: 14380,
-    y: 11240,
+    x: 63500,
+    y: 43000,
     description: "openUC2 96-well calibration chart - well A1 (slot 1).",
     bounds: { width: 127000, height: 86000 },
     slots: [{ x: 14380, y: 11240, w: 9000, h: 9000, name: "A1" }],
   },
 ];
+
 
 // ----------------------------------------------------------------------
 // LayoutMapMini - small canvas rendering layout slots + the current stage
@@ -95,6 +99,7 @@ const LayoutMapMini = ({
 }) => {
   const canvasRef = useRef(null);
 
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !layout) return;
@@ -105,6 +110,7 @@ const LayoutMapMini = ({
     ctx.fillStyle = "#101820";
     ctx.fillRect(0, 0, w, h);
 
+
     const lw = layout.bounds?.width || 127000;
     const lh = layout.bounds?.height || 84000;
     const sx = w / lw;
@@ -113,10 +119,12 @@ const LayoutMapMini = ({
     const offX = (w - lw * s) / 2;
     const offY = (h - lh * s) / 2;
 
+
     // Outer carrier rectangle.
     ctx.strokeStyle = "#666";
     ctx.lineWidth = 1;
     ctx.strokeRect(offX, offY, lw * s, lh * s);
+
 
     // Slot rectangles.
     ctx.fillStyle = "rgba(80, 140, 200, 0.25)";
@@ -131,6 +139,7 @@ const LayoutMapMini = ({
       ctx.fillText(slot.name || `Slot ${idx + 1}`, px + 3, py + 12);
       ctx.fillStyle = "rgba(80, 140, 200, 0.25)";
     });
+
 
     // Known calibration point (expected centre).
     if (knownX != null && knownY != null) {
@@ -149,6 +158,7 @@ const LayoutMapMini = ({
       ctx.stroke();
     }
 
+
     // Brightest point (detected).
     if (brightestX != null && brightestY != null) {
       const bx = offX + brightestX * s;
@@ -158,6 +168,7 @@ const LayoutMapMini = ({
       ctx.arc(bx, by, 4, 0, 2 * Math.PI);
       ctx.fill();
     }
+
 
     // Current stage position (red dot - "we are here").
     if (stageX != null && stageY != null) {
@@ -173,9 +184,11 @@ const LayoutMapMini = ({
     }
   }, [layout, stageX, stageY, knownX, knownY, brightestX, brightestY]);
 
+
   useEffect(() => {
     draw();
   }, [draw]);
+
 
   const handleClick = (event) => {
     if (!layout || !onClickMove) return;
@@ -184,6 +197,7 @@ const LayoutMapMini = ({
     const rect = canvas.getBoundingClientRect();
     const cx = ((event.clientX - rect.left) / rect.width) * canvas.width;
     const cy = ((event.clientY - rect.top) / rect.height) * canvas.height;
+
 
     const lw = layout.bounds?.width || 127000;
     const lh = layout.bounds?.height || 84000;
@@ -205,6 +219,7 @@ const LayoutMapMini = ({
     onClickMove(stageXClick, stageYClick);
   };
 
+
   return (
     <Box
       sx={{
@@ -225,6 +240,7 @@ const LayoutMapMini = ({
   );
 };
 
+
 // ----------------------------------------------------------------------
 // HeatmapCanvas - intensity grid + click-to-move stage.
 // ----------------------------------------------------------------------
@@ -232,6 +248,7 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
   const canvasRef = useRef(null);
   // Cache the projection so the click handler can invert it.
   const projectionRef = useRef(null);
+
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -246,6 +263,7 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
       return;
     }
 
+
     const xs = data.samples.map((s) => s.x);
     const ys = data.samples.map((s) => s.y);
     const is = data.samples.map((s) => s.intensity);
@@ -259,10 +277,12 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
     const yRange = yMax - yMin || 1;
     const iRange = iMax - iMin || 1;
 
+
     // Estimate grid spacing in stage units, then in pixels.
     const stepUm = data.meta?.step_um || 250;
     const cellW = Math.max(1, Math.round(w / Math.max(1, Math.round(xRange / stepUm) + 1)));
     const cellH = Math.max(1, Math.round(h / Math.max(1, Math.round(yRange / stepUm) + 1)));
+
 
     data.samples.forEach((s) => {
       const px = ((s.x - xMin) / xRange) * (w - cellW);
@@ -275,6 +295,7 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
       ctx.fillRect(px, py, cellW + 1, cellH + 1);
     });
 
+
     if (data.brightest) {
       const bx = ((data.brightest.x - xMin) / xRange) * (w - cellW);
       const by = h - cellH - ((data.brightest.y - yMin) / yRange) * (h - cellH);
@@ -285,8 +306,10 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
       ctx.stroke();
     }
 
+
     projectionRef.current = { xMin, xMax, yMin, yMax, w, h, cellW, cellH };
   }, [data]);
+
 
   const handleClick = (event) => {
     const proj = projectionRef.current;
@@ -303,6 +326,7 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
     onClickMove(stageX, stageY);
   };
 
+
   return (
     <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, p: 1, background: "#111" }}>
       <canvas
@@ -316,6 +340,7 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
   );
 };
 
+
 // ----------------------------------------------------------------------
 // Main tab
 // ----------------------------------------------------------------------
@@ -327,14 +352,17 @@ const StageOffsetCalibrationTab = () => {
   const hostIP = connectionSettings.ip;
   const hostPort = connectionSettings.apiPort;
 
+
   const [activeStep, setActiveStep] = useState(0);
   const [layouts, setLayouts] = useState(FALLBACK_LAYOUTS);
   const [layoutName, setLayoutName] = useState(FALLBACK_LAYOUTS[0].name);
+
 
   // Scan parameters - exposure intentionally removed (managed in detector).
   const [stepUm, setStepUm] = useState(250);
   const [maxRadiusUm, setMaxRadiusUm] = useState(5000);
   const [recommended, setRecommended] = useState(null);
+
 
   // Derived "running" state - driven by polling, NOT by the local action.
   // performCalibration returns immediately because the controller spawns its
@@ -345,16 +373,20 @@ const StageOffsetCalibrationTab = () => {
   const [info, setInfo] = useState("");
   const [heatmap, setHeatmap] = useState(null);
 
+
   // Manual override applied to the *known* point (gold cross).
   const [overrideKnownX, setOverrideKnownX] = useState("");
   const [overrideKnownY, setOverrideKnownY] = useState("");
 
+
   const pollRef = useRef(null);
+
 
   const selectedLayout = useMemo(
     () => layouts.find((l) => l.name === layoutName) || layouts[0],
     [layouts, layoutName]
   );
+
 
   const knownX =
     overrideKnownX !== ""
@@ -365,7 +397,9 @@ const StageOffsetCalibrationTab = () => {
       ? Number(overrideKnownY)
       : selectedLayout?.y;
 
+
   // ----- bootstrap -------------------------------------------------------
+
 
   useEffect(() => {
     let cancelled = false;
@@ -406,7 +440,9 @@ const StageOffsetCalibrationTab = () => {
     };
   }, []);
 
+
   // ----- polling ---------------------------------------------------------
+
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -415,7 +451,9 @@ const StageOffsetCalibrationTab = () => {
     }
   };
 
+
   useEffect(() => () => stopPolling(), []);
+
 
   const startPolling = () => {
     stopPolling();
@@ -437,7 +475,9 @@ const StageOffsetCalibrationTab = () => {
     }, 1000);
   };
 
+
   // ----- actions ---------------------------------------------------------
+
 
   const handleStart = async () => {
     setError("");
@@ -468,6 +508,7 @@ const StageOffsetCalibrationTab = () => {
     }
   };
 
+
   const handleStop = async () => {
     try {
       await apiStageCenterCalibrationStopCalibration();
@@ -477,6 +518,7 @@ const StageOffsetCalibrationTab = () => {
     setPollingRunning(false);
     stopPolling();
   };
+
 
   const moveStage = async (x, y) => {
     try {
@@ -496,6 +538,7 @@ const StageOffsetCalibrationTab = () => {
       setError(`Stage move failed: ${e.message || e}`);
     }
   };
+
 
   const acceptOffset = async () => {
     setError("");
@@ -526,16 +569,49 @@ const StageOffsetCalibrationTab = () => {
       );
       const dx = knownX - actualX;
       const dy = knownY - actualY;
+
+
+      // CRITICAL: the heatmap was recorded in the *old* coordinate frame.
+      // After applying the offset, the same physical point is now reported
+      // at (oldCoord + delta). Re-base every sample (and the brightest
+      // marker) into the new frame so a click-to-move on the heatmap sends
+      // the correct absolute coordinate — otherwise the stage would move to
+      // (oldCoord) which is now a different physical location.
+      if (heatmap?.samples?.length) {
+        const remapped = {
+          ...heatmap,
+          samples: heatmap.samples.map((s) => ({
+            ...s,
+            x: s.x + dx,
+            y: s.y + dy,
+          })),
+          brightest: heatmap.brightest
+            ? {
+                ...heatmap.brightest,
+                x: heatmap.brightest.x + dx,
+                y: heatmap.brightest.y + dy,
+              }
+            : heatmap.brightest,
+          // Tag so the click handler knows we're in post-offset coords now.
+          offsetApplied: { dx, dy, at: new Date().toISOString() },
+        };
+        setHeatmap(remapped);
+      }
+
+
       setInfo(
         `Stage offset stored. Computed deltas: dX=${dx.toFixed(1)} um, ` +
-          `dY=${dy.toFixed(1)} um.`
+          `dY=${dy.toFixed(1)} um. Heatmap re-based to the new frame; ` +
+          `click-to-move now uses corrected coordinates.`
       );
     } catch (e) {
       setError(`Failed to store offset: ${e.message || e}`);
     }
   };
 
+
   // ----- render ----------------------------------------------------------
+
 
   return (
     <Paper sx={{ p: 3 }}>
@@ -548,6 +624,7 @@ const StageOffsetCalibrationTab = () => {
         thinks it is and where the pinhole really sits as the stage offset.
       </Typography>
 
+
       <Stepper activeStep={activeStep} sx={{ mb: 3 }}>
         {STEPS.map((label) => (
           <Step key={label}>
@@ -555,6 +632,7 @@ const StageOffsetCalibrationTab = () => {
           </Step>
         ))}
       </Stepper>
+
 
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -567,6 +645,7 @@ const StageOffsetCalibrationTab = () => {
         </Alert>
       )}
 
+
       <Grid container spacing={3}>
         {/* Live view + reference layout selector + layout map */}
         <Grid item xs={12} md={6}>
@@ -576,6 +655,7 @@ const StageOffsetCalibrationTab = () => {
           <Box sx={{ mb: 2, maxHeight: 320, overflow: "hidden" }}>
             <LiveViewControlWrapper useFastMode={true} />
           </Box>
+
 
           <FormControl fullWidth sx={{ mb: 2 }}>
             <InputLabel id="ref-layout-label">Reference Layout</InputLabel>
@@ -602,6 +682,7 @@ const StageOffsetCalibrationTab = () => {
             </Alert>
           )}
 
+
           <Typography variant="subtitle2" gutterBottom>
             Layout map (click to move)
           </Typography>
@@ -620,6 +701,7 @@ const StageOffsetCalibrationTab = () => {
             detected brightest spot.
           </Typography>
         </Grid>
+
 
         {/* Scan parameters + actions */}
         <Grid item xs={12} md={6}>
@@ -662,6 +744,7 @@ const StageOffsetCalibrationTab = () => {
             </Grid>
           </Grid>
 
+
           <Box sx={{ mt: 2, display: "flex", gap: 1 }}>
             {!pollingRunning ? (
               <Button variant="contained" color="primary" onClick={handleStart}>
@@ -687,6 +770,7 @@ const StageOffsetCalibrationTab = () => {
           </Typography>
         </Grid>
 
+
         {/* Heatmap + accept controls */}
         <Grid item xs={12}>
           <Divider sx={{ my: 2 }} />
@@ -701,6 +785,13 @@ const StageOffsetCalibrationTab = () => {
                   ? `${heatmap.samples.length} samples; click anywhere to move stage there.`
                   : "No data yet - run a scan to populate."}
               </Typography>
+              {heatmap?.offsetApplied && (
+                <Alert severity="success" sx={{ mt: 1 }}>
+                  Heatmap re-based by dX={heatmap.offsetApplied.dx.toFixed(1)} um,
+                  dY={heatmap.offsetApplied.dy.toFixed(1)} um. Clicks now move to
+                  the corrected absolute coordinates.
+                </Alert>
+              )}
             </Grid>
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" gutterBottom>
@@ -773,5 +864,6 @@ const StageOffsetCalibrationTab = () => {
     </Paper>
   );
 };
+
 
 export default StageOffsetCalibrationTab;

@@ -68,6 +68,12 @@ jobs:
           echo "version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Record version
+        run: |
+          VERSION="${{ steps.version-string.outputs.version }}"
+          echo "export const APP_VERSION = \"$VERSION\";" > ./frontend/src/version.js
+          cat ./frontend/src/version.js
+
       - name: Build
         working-directory: ./frontend
         run: |

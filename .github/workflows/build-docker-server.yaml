@@ -123,6 +123,12 @@ jobs:
           echo "version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Record version
+        run: |
+          VERSION="${{ steps.version-string.outputs.version }}"
+          echo "version = \"$VERSION\"" > ./imswitch/version.py
+          cat ./imswitch/version.py
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6

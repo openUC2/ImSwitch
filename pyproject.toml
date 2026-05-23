@@ -112,9 +112,6 @@ Homepage = "https://github.com/openuc2/ImSwitch"
 [project.scripts]
 imswitch = "imswitch.__main__:main"
 
-[tool.setuptools.dynamic]
-version = {attr = "imswitch.__version__"}
-
 [tool.setuptools.packages.find]
 include = ["imswitch*"]
 

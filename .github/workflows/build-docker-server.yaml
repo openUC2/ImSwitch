@@ -108,9 +108,9 @@ jobs:
             ACTUAL_SHA="${{ github.sha }}"
           fi
 
-          TAG="$(git describe --tags --exact-match --match "v*" "$ACTUAL_SHA" || printf "")"
+          TAG="$(git describe --tags --exact-match --match "v*" "$ACTUAL_SHA" 2>/dev/null || printf "")"
           VERSION="$(git describe --tags --match "v*" --abbrev=7 "$ACTUAL_SHA")"
-          TIMESTAMP="$(TZ=UTC git show -s --format=%ad --date=format:'td%Y%m%d-tt%H%M%S' "$ACTUAL_SHA")"
+          TIMESTAMP="$(TZ=UTC git show -s --format=%ad --date=format:'t%Y%m%d%H%M%S' "$ACTUAL_SHA")"
 
           if [[ "$VERSION" != "$TAG" ]]; then
             VERSION="$VERSION-$TIMESTAMP"

@@ -54,7 +54,7 @@ jobs:
           fi
 
           TAG="$(git describe --tags --exact-match --match "v*" "$ACTUAL_SHA" || printf "")"
-          VERSION="$(git describe --tags --match "v*" --abbrev=7 "$ACTUAL_SHA)"
+          VERSION="$(git describe --tags --match "v*" --abbrev=7 "$ACTUAL_SHA")"
           TIMESTAMP="$(TZ=UTC git show -s --format=%ad --date=format:'td%Y%m%d-td%H%M%S' "$ACTUAL_SHA")"
 
           if [[ "$VERSION" != "$TAG" ]]; then

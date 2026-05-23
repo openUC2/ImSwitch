@@ -1,6 +1,7 @@
 [build-system]
 requires = [
     "setuptools>=42",
+    "setuptools-scm[simple]>=9.2",
     "wheel"
 ]
 build-backend = "setuptools.build_meta"
@@ -111,14 +112,14 @@ Homepage = "https://github.com/openuc2/ImSwitch"
 [project.scripts]
 imswitch = "imswitch.__main__:main"
 
-[tool.setuptools.dynamic]
-version = {attr = "imswitch.__version__"}
-
 [tool.setuptools.packages.find]
 include = ["imswitch*"]
 
 [tool.setuptools.package-data]
 "*" = ["*"]
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0.dev0"
 
 [project.entry-points."imswitch.implugins.detectors"]
 

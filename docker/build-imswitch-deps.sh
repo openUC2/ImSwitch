@@ -30,10 +30,6 @@ export PATH="/root/.local/bin:$PATH"
 # slow-changing dependencies without installing ImSwitch itself yet.
 # This creates a separately-cached Docker image layer from the rapidly-changing source.
 mkdir -p /opt/imswitch/imswitch
-cat >/opt/imswitch/imswitch/__init__.py <<EOF
-# temporary placeholder to be overwritten by build-imswitch.sh
-__version__ = "0.0.0"
-EOF
 cp /mnt/ImSwitch/pyproject.toml /opt/imswitch/pyproject.toml
 cp /mnt/ImSwitch/uv.lock /opt/imswitch/uv.lock
 cd /opt/imswitch
@@ -41,10 +37,10 @@ cd /opt/imswitch
 # Install all deps from the lockfile without installing ImSwitch itself.
 # Using --frozen ensures the lockfile is used as-is (no resolver conflicts).
 # The venv was already created by build-uv.sh so we don't pass --python here.
-uv sync --no-install-project --frozen
+SETUPTOOLS_SCM_PRETEND_VERSION="0.0.0" uv sync --no-install-project --frozen
 
 # Reinstall psygnal from source to work around binary-wheel ABI issues
-uv pip install psygnal --no-binary :all:
+SETUPTOOLS_SCM_PRETEND_VERSION="0.0.0" uv pip install psygnal --no-binary :all:
 
 # Clean up build-only tools
 

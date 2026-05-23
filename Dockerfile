@@ -79,7 +79,7 @@ ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 
 # Larger slowly-changing dependencies are installed in a separate container image layer before the
 # rapidly-changing ImSwitch repository:
-RUN --mount=type=bind,source=docker/build-imswitch-deps.sh,target=/mnt/build/build-imswitch-deps.sh --mount=type=bind,source=./pyproject.toml,target=/mnt/ImSwitch/pyproject.toml --mount=type=bind,source=./uv.lock,target=/mnt/ImSwitch/uv.lock --mount=type=bind,source=./.git,target=/mnt/ImSwitch/.git /mnt/build/build-imswitch-deps.sh
+RUN --mount=type=bind,source=docker/build-imswitch-deps.sh,target=/mnt/build/build-imswitch-deps.sh --mount=type=bind,source=./pyproject.toml,target=/mnt/ImSwitch/pyproject.toml --mount=type=bind,source=./uv.lock,target=/mnt/ImSwitch/uv.lock /mnt/build/build-imswitch-deps.sh
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Question(ethanjli): if we're copying the ImSwitch & UC2-REST repositories from local files using
@@ -87,7 +87,7 @@ RUN --mount=type=bind,source=docker/build-imswitch-deps.sh,target=/mnt/build/bui
 # this BUILD_DATE hack?
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE
-RUN --mount=type=bind,source=docker/build-imswitch.sh,target=/mnt/build/build-imswitch.sh --mount=type=bind,source=.,target=/mnt/ImSwitch --mount=type=bind,source=./.git,target=/mnt/ImSwitch/.git /mnt/build/build-imswitch.sh
+RUN --mount=type=bind,source=docker/build-imswitch.sh,target=/mnt/build/build-imswitch.sh --mount=type=bind,source=.,target=/mnt/ImSwitch /mnt/build/build-imswitch.sh
 # Expose HTTP port and Jupyter server port
 EXPOSE 8001 8888 8889
 

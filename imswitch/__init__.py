@@ -9,10 +9,10 @@ if "pytest" in sys.modules or any("pytest" in arg for arg in sys.argv):
 
 # Import the new configuration system
 from .config import get_config
-from . import version
+from .version import version
 
 # used to be, but actions will replace this with the current release TAG -> >2.1.0
-__version__ = version.version
+__version__ = version
 __httpport__ = 8001
 __ssl__ = True
 __jupyter_port__ = 8888

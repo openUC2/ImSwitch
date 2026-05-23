@@ -40,12 +40,8 @@ jobs:
             gha-runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.gha-runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
-          # We check out the PR's HEAD commit instead of its merge commit for traceability when
-          # determining the build output's version string; if the CI run isn't a PR, we'll just use
-          # the default ref via an empty string:
-          ref: ${{ github.event.pull_request.head.sha }}
           # Don't download unnecessary data:
           fetch-depth: 0
           filter: 'blob:none'
@@ -102,9 +98,19 @@ jobs:
       - name: Determine version string
         id: version-string
         run: |
-          TAG="$(git describe --tags --exact-match --match "v*")"
-          VERSION="$(git describe --tags --match "v*" --abbrev=7
-          TIMESTAMP="$(TZ=UTC git show -s --format=%ad --date=format:'%Y%m%d.%H%M%S')"
+          # Get the SHA of the actual commit (not the fake merge commit) on PR-triggered runs
+          # (refer to https://stackoverflow.com/a/68068674/23202949):
+          if [ -n "${{ github.event.pull_request.head.sha }}" ]; then
+            ACTUAL_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            # Note: we want to have a SHA to check out even in merge queues, so we always fall back
+            # to a SHA even if it's a fictional SHA detached from any branches:
+            ACTUAL_SHA="${{ github.sha }}"
+          fi
+
+          TAG="$(git describe --tags --exact-match --match "v*" "$ACTUAL_SHA" || printf "")"
+          VERSION="$(git describe --tags --match "v*" --abbrev=7 "$ACTUAL_SHA)"
+          TIMESTAMP="$(TZ=UTC git show -s --format=%ad --date=format:'td%Y%m%d-tt%H%M%S' "$ACTUAL_SHA")"
 
           if [[ "$VERSION" != "$TAG" ]]; then
             VERSION="$VERSION-$TIMESTAMP"

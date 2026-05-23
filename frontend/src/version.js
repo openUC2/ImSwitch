@@ -1,5 +1,4 @@
-/**
- * Application version - manually synchronized with package.json
- * Update this when bumping version in package.json
- */
-export const APP_VERSION = "1.6.6";
+// Note: for builds, the contents of this file are automatically replaced in GitHub Actions
+// with something like:
+// export const APP_VERSION = "v1.6.6";
+export const APP_VERSION = "development";

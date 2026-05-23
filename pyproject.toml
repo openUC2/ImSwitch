@@ -118,6 +118,9 @@ include = ["imswitch*"]
 [tool.setuptools.package-data]
 "*" = ["*"]
 
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
+
 [project.entry-points."imswitch.implugins.detectors"]
 
 [project.entry-points."imswitch.implugins.lasers"]

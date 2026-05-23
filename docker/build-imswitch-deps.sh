@@ -37,10 +37,10 @@ cd /opt/imswitch
 # Install all deps from the lockfile without installing ImSwitch itself.
 # Using --frozen ensures the lockfile is used as-is (no resolver conflicts).
 # The venv was already created by build-uv.sh so we don't pass --python here.
-SETUPTOOLS_SCM_PRETEND_VERSION="0.0.0" uv sync --no-install-project --frozen
+uv sync --no-install-project --frozen
 
 # Reinstall psygnal from source to work around binary-wheel ABI issues
-SETUPTOOLS_SCM_PRETEND_VERSION="0.0.0" uv pip install psygnal --no-binary :all:
+uv pip install psygnal --no-binary :all:
 
 # Clean up build-only tools
 

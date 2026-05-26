@@ -487,7 +487,10 @@ export default function DetectorParameters({ hostIP, hostPort }) {
                     sx={{ p: 0, height: 18 }}
                     aria-label="Decrement black level"
                     onClick={() => {
-                      const next = Math.max(0, Number(localBlacklevel || 0) - 1);
+                      const next = Math.max(
+                        0,
+                        Number(localBlacklevel || 0) - 1,
+                      );
                       setLocalBlacklevel(String(next));
                       handleImmediateFieldChange("blacklevel", next);
                     }}

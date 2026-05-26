@@ -11,8 +11,9 @@ const apiGetAvailableControllers = async () => {
       "Failed to fetch available controllers:",
       error?.message || error,
     );
-    return [];
+    throw error;
   }
+};
 };
 
 export default apiGetAvailableControllers;

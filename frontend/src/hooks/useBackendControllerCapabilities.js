@@ -26,6 +26,9 @@ const useBackendControllerCapabilities = ({
       "LEDMatrixController",
     );
     const hasDPCController = availableControllers.includes("DPCController");
+    const hasTimelapseController = availableControllers.includes(
+      "TimelapseController",
+    );
     if (selectedPlugin === "Objective" && !hasObjectiveController) {
       setSelectedPlugin("LiveView");
       return;
@@ -38,6 +41,10 @@ const useBackendControllerCapabilities = ({
       selectedPlugin === "DPCController" &&
       (!hasLEDMatrixController || !hasDPCController)
     ) {
+      setSelectedPlugin("LiveView");
+      return;
+    }
+    if (selectedPlugin === "Timelapse" && !hasTimelapseController) {
       setSelectedPlugin("LiveView");
     }
   }, [selectedPlugin, availableControllers, setSelectedPlugin]);

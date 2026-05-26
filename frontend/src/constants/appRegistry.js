@@ -266,6 +266,7 @@ export const APP_REGISTRY = {
     essential: false,
     keywords: ["timelapse", "time", "automated", "acquisition", "scheduling"],
     pluginId: "Timelapse",
+    requiredControllers: ["TimelapseController"],
   },
 
   flowStop: {

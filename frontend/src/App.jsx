@@ -26,6 +26,7 @@ import ObjectiveController from "./components/ObjectiveController.js";
 import LargeFovScanController from "./components/OpenLayers.js";
 import SocketView from "./components/SocketView.js";
 import StageOffsetCalibration from "./components/StageOffsetCalibrationController.jsx";
+import TimelapseController from "./components/TimelapseController.js";
 import STORMControllerArkitekt from "./components/STORMControllerArkitekt.js";
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
 import STORMControllerLocal from "./components/STORMControllerLocal.js";
@@ -604,6 +605,7 @@ function App() {
               <AppManagerPage onNavigateToApp={handlePluginChange} />
             )}
             {selectedPlugin === "LightSheet" && <LightsheetController />}
+            {selectedPlugin === "Timelapse" && <TimelapseController />}
             {selectedPlugin === "WiFi" && <WiFiController />}
             {plugins.map(
               (p) =>

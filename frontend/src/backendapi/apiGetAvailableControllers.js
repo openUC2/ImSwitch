@@ -14,6 +14,5 @@ const apiGetAvailableControllers = async () => {
     throw error;
   }
 };
-};
 
 export default apiGetAvailableControllers;

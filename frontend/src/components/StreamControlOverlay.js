@@ -488,30 +488,28 @@ const StreamControlOverlay = ({
           </Box>
         ) : (
           <>
-            {!forceExpanded && (
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  mb: 1,
-                }}
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                mb: 1,
+              }}
+            >
+              <Typography
+                variant="h6"
+                sx={{ fontWeight: "bold", fontSize: "1rem" }}
               >
-                <Typography
-                  variant="h6"
-                  sx={{ fontWeight: "bold", fontSize: "1rem" }}
-                >
-                  Stream Controls
-                </Typography>
-                <IconButton
-                  size="small"
-                  onClick={() => setIsExpanded(false)}
-                  sx={{ ml: "auto" }}
-                >
-                  <ExpandLessIcon />
-                </IconButton>
-              </Box>
-            )}
+                Stream Controls
+              </Typography>
+              <IconButton
+                size="small"
+                onClick={() => setIsExpanded(false)}
+                sx={{ ml: "auto" }}
+              >
+                <ExpandLessIcon />
+              </IconButton>
+            </Box>
 
             <Box
               sx={{
@@ -569,7 +567,10 @@ const StreamControlOverlay = ({
             variant="fullWidth"
             sx={{ borderBottom: 1, borderColor: "divider", flexShrink: 0 }}
           >
-            <Tab label="Controls" />
+            <Tab
+              label="Display Range
+"
+            />
             <Tab label="Settings" />
             <Tab label="Info" />
           </Tabs>
@@ -677,13 +678,6 @@ const StreamControlOverlay = ({
             {/* Settings Tab */}
             {activeTab === 1 && (
               <Box sx={{ p: 2, pb: 0 }}>
-                <Typography
-                  variant="body2"
-                  sx={{ mb: 2, fontWeight: "medium" }}
-                >
-                  Stream Settings
-                </Typography>
-
                 {/* Crop Control - Shared across all formats */}
                 <Box sx={{ mb: 3 }}>
                   <Box
@@ -1153,8 +1147,8 @@ const StreamControlOverlay = ({
                     pt: 1,
                     pb: 1,
                     mt: 3,
-                    backgroundColor: theme.palette.background.paper,
-                    borderTop: `1px solid ${theme.palette.divider}`,
+                    backgroundColor: "transparent",
+                    borderTop: "none",
                     display: "flex",
                     gap: 1,
                     zIndex: 1,

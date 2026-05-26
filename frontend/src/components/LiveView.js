@@ -27,6 +27,7 @@ import ObjectiveSwitcher from "./ObjectiveSwitcher";
 import DetectorTriggerController from "./DetectorTriggerController";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
+import { selectHasController } from "../state/slices/BackendCapabilitiesSlice";
 import { setNotification } from "../state/slices/NotificationSlice";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
 import ExtendedLEDMatrixController from "./ExtendedLEDMatrixController.jsx";
@@ -63,6 +64,12 @@ export default function LiveView({ setFileManagerInitialPath }) {
   // Access global Redux state
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
+  const hasObjectiveController = useSelector(
+    selectHasController("ObjectiveController"),
+  );
+  const hasLEDMatrixController = useSelector(
+    selectHasController("LEDMatrixController"),
+  );
 
   // Track if auto-start has been attempted to prevent re-triggering on format changes
   const autoStartAttemptedRef = React.useRef(false);
@@ -129,9 +136,12 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
           // Look up saved per-detector params from Redux
           const savedParams =
-            newDetectorName && liveStreamState.perDetectorSettings[newDetectorName];
+            newDetectorName &&
+            liveStreamState.perDetectorSettings[newDetectorName];
           const overrideParams =
-            savedParams && savedParams.protocol === protocol ? savedParams : null;
+            savedParams && savedParams.protocol === protocol
+              ? savedParams
+              : null;
 
           const result = await apiLiveViewControllerStartLiveView(
             newDetectorName,
@@ -663,6 +673,8 @@ export default function LiveView({ setFileManagerInitialPath }) {
               setStageControlTab={setStageControlTab}
               hostIP={hostIP}
               hostPort={hostPort}
+              hasObjectiveController={hasObjectiveController}
+              hasLEDMatrixController={hasLEDMatrixController}
             />
           </Box>
         )
@@ -677,6 +689,8 @@ function RightPanelContent({
   setStageControlTab,
   hostIP,
   hostPort,
+  hasObjectiveController,
+  hasLEDMatrixController,
 }) {
   return (
     <>
@@ -722,15 +736,19 @@ function RightPanelContent({
         <IlluminationController hostIP={hostIP} hostPort={hostPort} />
       </Box>
 
-      <Box mb={3}>
-        <Typography variant="h6">Objective</Typography>
-        <ObjectiveSwitcher hostIP={hostIP} hostPort={hostPort} />
-      </Box>
+      {hasObjectiveController && (
+        <Box mb={3}>
+          <Typography variant="h6">Objective</Typography>
+          <ObjectiveSwitcher hostIP={hostIP} hostPort={hostPort} />
+        </Box>
+      )}
 
-      <Box mb={3}>
-        <Typography variant="h6">Extended LED Matrix</Typography>
-        <ExtendedLEDMatrixController hostIP={hostIP} hostPort={hostPort} />
-      </Box>
+      {hasLEDMatrixController && (
+        <Box mb={3}>
+          <Typography variant="h6">Extended LED Matrix</Typography>
+          <ExtendedLEDMatrixController hostIP={hostIP} hostPort={hostPort} />
+        </Box>
+      )}
 
       <Box mb={3}>
         <Typography variant="h6">Detector Trigger</Typography>

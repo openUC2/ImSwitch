@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
-import { Paper, Tabs, Tab, Box, Typography } from '@mui/material';
-import SetLasersTab from './FRAMESettings/SetLasersTab';
-import TestHomingTab from './FRAMESettings/TestHomingTab';
-import PixelCalibrationTab from './FRAMESettings/PixelCalibrationTab';
-import ManualPixelCalibrationTab from './FRAMESettings/ManualPixelCalibrationTab';
-import ExtendedObjectiveController from './ObjectiveController';
-import StageOffsetCalibrationTab from './FRAMESettings/StageOffsetCalibrationTab';
+import React, { useEffect, useState } from "react";
+import { useSelector } from "react-redux";
+import { Tabs, Tab, Box } from "@mui/material";
+import SetLasersTab from "./FRAMESettings/SetLasersTab";
+import TestHomingTab from "./FRAMESettings/TestHomingTab";
+import PixelCalibrationTab from "./FRAMESettings/PixelCalibrationTab";
+import ManualPixelCalibrationTab from "./FRAMESettings/ManualPixelCalibrationTab";
+import ExtendedObjectiveController from "./ObjectiveController";
+import StageOffsetCalibrationTab from "./FRAMESettings/StageOffsetCalibrationTab";
+import { selectHasController } from "../state/slices/BackendCapabilitiesSlice";
 
 /**
  * FRAMESettings - Main component for pixel calibration and frame setup
@@ -19,42 +21,51 @@ import StageOffsetCalibrationTab from './FRAMESettings/StageOffsetCalibrationTab
  * - Stage Offset Calibration (raster scan -> stage offset)
  */
 const FRAMESettings = () => {
-  const [selectedTab, setSelectedTab] = useState(0);
+  const [selectedTab, setSelectedTab] = useState("autoPixel");
+  const hasObjectiveController = useSelector(
+    selectHasController("ObjectiveController"),
+  );
+
+  useEffect(() => {
+    if (!hasObjectiveController && selectedTab === "objective") {
+      setSelectedTab("autoPixel");
+    }
+  }, [hasObjectiveController, selectedTab]);
 
   const handleTabChange = (event, newValue) => {
     setSelectedTab(newValue);
   };
 
   return (
-    <Paper sx={{ p: 3, maxWidth: 1400, margin: '0 auto' }}>
-      <Typography variant="h4" gutterBottom>
-        FRAME Settings
-      </Typography>
-
+    <Box sx={{ width: "100%" }}>
       <Tabs
         value={selectedTab}
         onChange={handleTabChange}
         variant="scrollable"
         scrollButtons="auto"
-        sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}
+        sx={{ borderBottom: 1, borderColor: "divider", mb: 3 }}
       >
-        <Tab label="Automatic Pixel Calibration" />
-        <Tab label="Manual Pixel Calibration" />
-        <Tab label="Set Lasers" />
-        <Tab label="Test Homing" />
-        <Tab label="Objective Controller" />
-        <Tab label="Stage Offset Calibration" />
+        <Tab value="autoPixel" label="Automatic Pixel Calibration" />
+        <Tab value="manualPixel" label="Manual Pixel Calibration" />
+        <Tab value="setLasers" label="Set Lasers" />
+        <Tab value="testHoming" label="Test Homing" />
+        {hasObjectiveController && (
+          <Tab value="objective" label="Objective Controller" />
+        )}
+        <Tab value="stageOffset" label="Stage Offset Calibration" />
       </Tabs>
 
       <Box sx={{ mt: 2 }}>
-        {selectedTab === 0 && <PixelCalibrationTab />}
-        {selectedTab === 1 && <ManualPixelCalibrationTab />}
-        {selectedTab === 2 && <SetLasersTab />}
-        {selectedTab === 3 && <TestHomingTab />}
-        {selectedTab === 4 && <ExtendedObjectiveController />}
-        {selectedTab === 5 && <StageOffsetCalibrationTab />}
+        {selectedTab === "autoPixel" && <PixelCalibrationTab />}
+        {selectedTab === "manualPixel" && <ManualPixelCalibrationTab />}
+        {selectedTab === "setLasers" && <SetLasersTab />}
+        {selectedTab === "testHoming" && <TestHomingTab />}
+        {hasObjectiveController && selectedTab === "objective" && (
+          <ExtendedObjectiveController />
+        )}
+        {selectedTab === "stageOffset" && <StageOffsetCalibrationTab />}
       </Box>
-    </Paper>
+    </Box>
   );
 };
 

@@ -5,6 +5,7 @@ import numpy as np
 from typing import List, Optional, Dict, Any
 
 import os
+import sys
 import threading
 
 from imswitch.imcommon.framework import Signal
@@ -815,6 +816,7 @@ class ExperimentController(ImConWidgetController):
         drivePath = dirtools.UserFileDirs.getValidatedDataPath()
         dirPath = os.path.join(drivePath, 'ExperimentController', timeStamp)
         os.makedirs(dirPath, exist_ok=True)
+        self._last_experiment_dir = dirPath
         mFileName = f"{timeStamp}_{exp_name}"
 
         workflowSteps = []
@@ -1665,6 +1667,130 @@ class ExperimentController(ImConWidgetController):
     Assumes the micro‑controller (or the positioner itself) raises a TTL pulse
     **after** arriving at each grid co‑ordinate.
     """
+
+    @APIExport(requestType="GET")
+    def runAshlarStitching(
+        self,
+        pixelSize: float = 1.0,
+        maximumShift: float = 50.0,
+        alignChannel: int = 0,
+        experimentDir: str = "",
+    ) -> dict:
+        """
+        Schedule ashlarUC2 stitching for the last (or specified) experiment
+        directory and return immediately.
+
+        The actual stitching runs in a background thread identical to the
+        overview-scan async pattern.  Poll ``getOverviewAsyncStatus`` for
+        completion; the result dict will contain ``outputDir`` on success.
+
+        Parameters
+        ----------
+        pixelSize     : physical pixel size in µm/pixel
+        maximumShift  : max per-tile corrective shift in µm (ashlar -m)
+        alignChannel  : channel index used for alignment (ashlar -c)
+        experimentDir : absolute path to a specific experiment directory;
+                        uses the most recent experiment when empty
+        """
+        # Resolve which experiment directory to stitch before spawning the thread
+        target_dir = experimentDir.strip() if experimentDir else ""
+        if not target_dir:
+            target_dir = getattr(self, "_last_experiment_dir", "")
+        if not target_dir or not os.path.isdir(target_dir):
+            return {
+                "started": False,
+                "error": (
+                    f"Experiment directory not found: '{target_dir}'. "
+                    "Run an experiment first or provide experimentDir."
+                ),
+            }
+
+        if not self._tryStartOverviewAsync("ashlar_stitching"):
+            return {
+                "started": False,
+                "error": "Another background task is still running",
+                "status": self._overview_async_status,
+            }
+
+        thread = threading.Thread(
+            target=self._runAshlarStitchingWorker,
+            args=(target_dir, pixelSize, maximumShift, alignChannel),
+            daemon=True,
+            name="runAshlarStitching",
+        )
+        with self._overview_async_lock:
+            self._overview_async_thread = thread
+        thread.start()
+        return {"started": True, "task": "ashlar_stitching", "experimentDir": target_dir}
+
+
+    def _runAshlarStitchingWorker(
+        self,
+        target_dir: str,
+        pixelSize: float,
+        maximumShift: float,
+        alignChannel: int,
+    ) -> None:
+        """
+        Worker thread body for ashlar stitching.
+        Calls _finishOverviewAsync so getOverviewAsyncStatus reflects completion.
+        """
+        import subprocess, sys
+
+        self._logger.info(f"Ashlar stitching started for: {target_dir}")
+
+        # Locate convert_experiment_tiffs.py relative to this controller file.
+        # imswitch/imcontrol/controller/controllers/ → root → scripts/
+        script = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..", "..", "..", "..", "scripts",
+                "convert_experiment_tiffs.py",
+            )
+        )
+        if not os.path.isfile(script):
+            self._logger.error(f"Stitching script not found: {script}")
+            self._finishOverviewAsync(
+                error=f"convert_experiment_tiffs.py not found at: {script}"
+            )
+            return
+
+        cmd = [
+            sys.executable, script,
+            target_dir,
+            "--mode", "ashlar",
+            "--pixel-size", str(pixelSize),
+            "--maximum-shift", str(maximumShift),
+            "--align-channel", str(alignChannel),
+        ]
+        self._logger.info(f"Ashlar command: {' '.join(cmd)}")
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=7200,   # 2-hour hard timeout
+            )
+            if proc.returncode == 0:
+                output_dir = os.path.join(target_dir, "converted", "ashlar")
+                self._logger.info(f"Ashlar stitching completed → {output_dir}")
+                self._finishOverviewAsync(result={
+                    "status": "done",
+                    "outputDir": output_dir,
+                    "message": proc.stdout[-1000:],
+                })
+            else:
+                err = proc.stderr[-1000:] or proc.stdout[-500:]
+                self._logger.error(f"Ashlar stitching failed (rc={proc.returncode}): {err}")
+                self._finishOverviewAsync(error=err)
+
+        except subprocess.TimeoutExpired:
+            self._logger.error("Ashlar stitching timed out after 2 hours")
+            self._finishOverviewAsync(error="Stitching timed out after 2 hours")
+        except Exception as exc:
+            self._logger.error(f"Ashlar stitching worker exception: {exc}", exc_info=True)
+            self._finishOverviewAsync(error=str(exc))
 
     def setOmeZarrUrl(self, url):
         """Set the OME-Zarr URL for the experiment."""

@@ -949,33 +949,63 @@ def build_timelapse(grid: ExperimentGrid, out_dir: str, use_mip: bool = False):
         print(f"  {fname}  shape={stack.shape}  dtype={dtype}  "
               f"({nT} timepoints, {nC} channels, "
               f"{len(xy_positions)} positions)")
+
+
 # Mode 7: Ashlar-based stitching with sub-pixel alignment
 # ---------------------------------------------------------------------------
 
-def build_ashlar_stitched(grid: ExperimentGrid, out_dir: str,
-                          pixel_size: float = None,
-                          maximum_shift: float = 50.0,
-                          align_channel: int = 0):
+def _select_best_z_tile(tiles: List[TileInfo]) -> TileInfo:
     """
-    Stitch tiles using ASHLAR (Alignment by Simultaneous Harmonization of
-    Layer/Adjacency Registration) for sub-pixel-accurate stitching.
+    From a Z-stack at one XY position/channel, return the single tile to
+    pass to ASHLAR.  With a real-time autofocus microscope there is usually
+    only one Z per position; when there are multiple we pick the sharpest.
+    """
+    if len(tiles) == 1:
+        return tiles[0]
+    best_tile, best_score = tiles[0], -1.0
+    for t in tiles:
+        img = tif.imread(t.filepath)
+        score = _focus_measure(img)
+        if score > best_score:
+            best_score, best_tile = score, t
+    return best_tile
 
-    For each timepoint, all channels are stitched together using ashlar's
-    EdgeAligner so inter-tile shifts are globally optimised.  The result is
-    written as a pyramidal OME-TIFF per timepoint.
-
+def build_ashlar_stitched(
+    grid: ExperimentGrid,
+    out_dir: str,
+    pixel_size: float = 1.0,
+    maximum_shift: float = 50.0,
+    align_channel: int = 0,
+):
+    """
+    Stitch tiles for every timepoint using ashlarUC2's ImSwitchTiffReader,
+    which understands the ImSwitch filename convention natively.
+ 
+    Strategy
+    --------
+    For each timepoint we collect one representative tile per (XY position,
+    channel).  When multiple Z planes exist at a position the sharpest frame
+    is chosen (Laplacian-variance focus measure).  The selected files are
+    passed directly to ``build_imswitch_reader``, which reads the stage
+    coordinates from the filenames and feeds them to ASHLAR's edge aligner.
+ 
+    Multi-channel handling
+    ----------------------
+    ASHLAR expects one *reader* per imaging cycle.  For a single-cycle
+    (single-timepoint, multi-channel) acquisition all channels share the
+    same stage positions and should be passed as one reader so that the
+    channel alignment is internally consistent.  ``build_imswitch_reader``
+    groups tiles by channel automatically when given a directory or list of
+    files, so we pass it the full per-timepoint file list and let it sort
+    out the channel ordering.
+ 
     Parameters
     ----------
-    grid : ExperimentGrid
-        Parsed tile grid.
-    out_dir : str
-        Output directory.
-    pixel_size : float
-        Physical pixel size in microns (used for position conversion).
-    maximum_shift : float
-        Maximum allowed per-tile corrective shift in microns (ashlar -m).
-    align_channel : int
-        Channel index used for alignment (ashlar -c).
+    grid         : ExperimentGrid
+    out_dir      : str  – output directory
+    pixel_size   : float – physical pixel size in µm/pixel
+    maximum_shift: float – max per-tile corrective shift in µm (ashlar -m)
+    align_channel: int   – channel index used for alignment (ashlar -c)
     """
     try:
         from ashlarUC2.scripts.ashlar import process_images, build_imswitch_reader
@@ -983,65 +1013,107 @@ def build_ashlar_stitched(grid: ExperimentGrid, out_dir: str,
         try:
             from ashlar.scripts.ashlar import process_images, build_imswitch_reader
         except ImportError:
-            print("  ERROR: ashlarUC2 (or ashlar) is not installed. "
-                  "Install with: pip install ashlarUC2")
+            print(
+                "  ERROR: ashlarUC2 is not installed.\n"
+                "  Install with:  pip install ashlarUC2\n"
+                "  or from source: pip install git+https://github.com/openUC2/ashlarUC2"
+            )
             return
-
-
-    print("\n=== Building ashlar-stitched OME-TIFFs ===")
+ 
+    print("\n=== Building ashlar-stitched OME-TIFFs (sub-pixel alignment) ===")
+    print(f"  pixel_size={pixel_size} µm  maximum_shift={maximum_shift} µm  "
+          f"align_channel={align_channel}")
     os.makedirs(out_dir, exist_ok=True)
-
+ 
     for tp in grid.timepoints:
-        # Collect all tile file paths for this timepoint (all channels)
-        tile_paths = []
-        for key, tile_list in grid.lookup.items():
-            key_tp = key[0]
-            if key_tp != tp:
-                continue
-            # Use MIP representative tile when Z-stack exists
-            best = sorted(tile_list, key=lambda t: t.z)[0] if tile_list else None
-            if best is not None:
-                tile_paths.append(best.filepath)
-
-        if not tile_paths:
+        print(f"\n  --- Timepoint {tp} ---")
+ 
+        # ------------------------------------------------------------------
+        # Collect one best-focus tile per (XY position, channel).
+        # We build a flat list of file paths; build_imswitch_reader parses
+        # the stage coordinates and channel indices from the filenames.
+        # ------------------------------------------------------------------
+        selected_paths: List[str] = []
+ 
+        # Iterate over all (ix, iy, c_idx) combinations that have tiles at
+        # this timepoint.
+        for ix in grid.ix_positions:
+            for iy in grid.iy_positions:
+                for ci in grid.c_indices:
+                    z_tiles = grid.get_tiles(tp, ix, iy, ci)
+                    if not z_tiles:
+                        continue
+                    best = _select_best_z_tile(
+                        sorted(z_tiles, key=lambda t: t.z)
+                    )
+                    selected_paths.append(best.filepath)
+ 
+        if not selected_paths:
+            print(f"  Skipping timepoint {tp}: no tiles found.")
             continue
-
-        # Deduplicate (same file could appear for different z-slices)
-        tile_paths = sorted(set(tile_paths))
-
+ 
+        n_channels = len(grid.c_indices)
+        n_positions = len(grid.ix_positions) * len(grid.iy_positions)
+        print(f"  {len(selected_paths)} tiles selected  "
+              f"({n_positions} XY positions × {n_channels} channel(s))")
+ 
+        # ------------------------------------------------------------------
+        # Build the ImSwitchTiffReader.
+        # ``build_imswitch_reader`` accepts either a directory path or an
+        # explicit list of file paths.  Passing the list is safer here
+        # because tiles from multiple timepoint subdirectories might coexist
+        # under tiles_dir; this ensures only the current timepoint's files
+        # are used.
+        # ------------------------------------------------------------------
+        try:
+            reader = build_imswitch_reader(selected_paths, pixel_size=pixel_size)
+        except Exception as exc:
+            print(f"  ERROR building ImSwitchTiffReader for tp={tp}: {exc}")
+            continue
+ 
         out_file = os.path.join(out_dir, f"ashlar_stitched_t{tp:04d}.ome.tif")
-        print(f"  Timepoint {tp}: {len(tile_paths)} tiles → {os.path.basename(out_file)}")
-        
-        # try to read the pixel_size from the image metadata
-        
-        
-        reader = build_imswitch_reader(tile_paths, pixel_size=pixel_size)
-
-        result = process_images(
-            filepaths=[reader],
-            output=out_file,
-            align_channel=align_channel,
-            flip_x=False,
-            flip_y=False,
-            flip_mosaic_x=False,
-            flip_mosaic_y=False,
-            output_channels=None,
-            maximum_shift=maximum_shift,
-            stitch_alpha=0.01,
-            maximum_error=None,
-            filter_sigma=0,
-            pyramid=out_file.endswith(".ome.tif"),
-            tile_size=1024,
-            ffp=None,
-            dfp=None,
-            barrel_correction=0,
-            plates=False,
-            quiet=False,
-        )
+        print(f"  Output → {os.path.basename(out_file)}")
+ 
+        # ------------------------------------------------------------------
+        # Run ASHLAR.
+        # ``filepaths`` takes a list where each element is either a file path
+        # string (BioFormats/TIFF reader) or a pre-built reader object.
+        # We pass our ImSwitchTiffReader directly as the single cycle.
+        # ------------------------------------------------------------------
+        try:
+            result = process_images(
+                filepaths=[reader],
+                output=out_file,
+                align_channel=align_channel,
+                flip_x=False,
+                flip_y=False,
+                flip_mosaic_x=False,
+                flip_mosaic_y=False,
+                output_channels=None,
+                maximum_shift=maximum_shift,
+                stitch_alpha=0.01,
+                maximum_error=None,
+                filter_sigma=0,
+                pyramid=out_file.endswith(".ome.tif") or out_file.endswith(".ome.tiff"),
+                tile_size=1024,
+                ffp=None,
+                dfp=None,
+                barrel_correction=0,
+                plates=False,
+                quiet=False,
+            )
+        except Exception as exc:
+            print(f"  ERROR during ashlar processing for tp={tp}: {exc}")
+            import traceback
+            traceback.print_exc()
+            continue
+ 
         if result and result != 0:
-            print(f"  WARNING: ashlar returned non-zero status {result}")
+            print(f"  WARNING: ashlar returned non-zero status {result} for tp={tp}")
         else:
             print(f"  Written: {out_file}")
+ 
+    print(f"\n  Ashlar outputs in: {out_dir}")
 
 
 # ---------------------------------------------------------------------------

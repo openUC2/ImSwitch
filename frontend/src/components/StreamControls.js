@@ -11,7 +11,6 @@ import {
   Select,
   MenuItem,
   Dialog,
-  DialogTitle,
   DialogContent,
   Tooltip,
   Switch,
@@ -544,7 +543,6 @@ export default function StreamControls({
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>Stream Settings</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <StreamControlOverlay
             stats={hudData.stats}

@@ -135,7 +135,7 @@ export default function DetectorParameters({ hostIP, hostPort }) {
             break;
           case "blacklevel":
             await fetch(
-              `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorBlackLevel?blacklevel=${value}`,
+              `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorBlackLevel?blackLevel=${value}`,
             );
             break;
           default:

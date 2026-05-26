@@ -57,6 +57,7 @@ import frame3DViewerReducer from "./slices/Frame3DViewerSlice";
 import storageReducer from "./slices/StorageSlice";
 import goniometerReducer from "./slices/GoniometerSlice";
 import detectorParametersReducer from "./slices/DetectorParametersSlice";
+import backendCapabilitiesReducer from "./slices/BackendCapabilitiesSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -173,6 +174,7 @@ const rootReducer = combineReducers({
   storageState: storageReducer,
   goniometerState: goniometerReducer,
   detectorParametersState: detectorParametersReducer,
+  backendCapabilities: backendCapabilitiesReducer,
 });
 
 //#####################################################################################

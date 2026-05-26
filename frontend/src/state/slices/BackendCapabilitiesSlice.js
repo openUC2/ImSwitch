@@ -28,9 +28,10 @@ const backendCapabilitiesSlice = createSlice({
   reducers: {
     clearAvailableControllers: (state) => {
       state.availableControllers = [];
+      state.loading = false;
       state.error = null;
       state.lastUpdated = null;
-    },
+    }
   },
   extraReducers: (builder) => {
     builder

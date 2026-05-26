@@ -502,13 +502,15 @@ const StreamControlOverlay = ({
               >
                 Stream Controls
               </Typography>
-              <IconButton
-                size="small"
-                onClick={() => setIsExpanded(false)}
-                sx={{ ml: "auto" }}
-              >
-                <ExpandLessIcon />
-              </IconButton>
+              {!forceExpanded && (
+                <IconButton
+                  size="small"
+                  onClick={() => setIsExpanded(false)}
+                  sx={{ ml: "auto" }}
+                >
+                  <ExpandLessIcon />
+                </IconButton>
+              )}
             </Box>
 
             <Box

@@ -125,11 +125,14 @@ const WebSocketHandler = () => {
               console.debug(
                 `[Check 2b] Trigger ESP reconnect: ${apiBase}/reconnect`,
               );
+              //FIXME: Do not attempt aut reconnects! This results in a race condition where the stater if we are reconnected is actually not really in sync with the hardware, hence it periodically dis- and reconnects
+              /*
               await fetchWithTimeout(
                 `${apiBase}/reconnect`,
                 { method: "GET" },
                 5000,
               );
+              */
             } catch (error) {
               console.debug(
                 "[Check 2b] ESP reconnect request failed:",

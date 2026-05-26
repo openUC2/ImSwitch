@@ -569,10 +569,7 @@ const StreamControlOverlay = ({
             variant="fullWidth"
             sx={{ borderBottom: 1, borderColor: "divider", flexShrink: 0 }}
           >
-            <Tab
-              label="Display Range
-"
-            />
+            <Tab label="Display Range" />
             <Tab label="Settings" />
             <Tab label="Info" />
           </Tabs>

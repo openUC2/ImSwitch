@@ -11,7 +11,6 @@ import {
   FormControl,
   InputLabel,
   Select,
-  Alert,
 } from "@mui/material";
 import { Camera, InfoOutlined } from "@mui/icons-material";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
@@ -208,8 +207,23 @@ export default function DetectorParameters({ hostIP, hostPort }) {
 
   const handleNumericFieldChange = (field, setValue) => (e) => {
     beginEditing(field);
-    setValue(e.target.value);
-    handleImmediateFieldChange(field, e.target.value);
+    const raw = e.target.value;
+    if (field === "blacklevel") {
+      // Keep empty string while typing, but prevent committing negative values.
+      if (raw === "") {
+        setValue(raw);
+        return;
+      }
+      const num = Number(raw);
+      if (!isNaN(num)) {
+        const clamped = Math.max(0, num);
+        setValue(String(clamped));
+        handleImmediateFieldChange(field, clamped);
+        return;
+      }
+    }
+    setValue(raw);
+    handleImmediateFieldChange(field, raw);
   };
 
   const handleNumericFieldKeyDown = (e) => {
@@ -473,7 +487,7 @@ export default function DetectorParameters({ hostIP, hostPort }) {
                     sx={{ p: 0, height: 18 }}
                     aria-label="Decrement black level"
                     onClick={() => {
-                      const next = Number(localBlacklevel || 0) - 1;
+                      const next = Math.max(0, Number(localBlacklevel || 0) - 1);
                       setLocalBlacklevel(String(next));
                       handleImmediateFieldChange("blacklevel", next);
                     }}

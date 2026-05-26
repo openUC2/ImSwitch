@@ -21,6 +21,7 @@ import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 import * as storageSlice from "../state/slices/StorageSlice.js";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
+import { fetchAvailableControllers } from "../state/slices/BackendCapabilitiesSlice";
 
 import { io } from "socket.io-client";
 
@@ -341,6 +342,10 @@ const WebSocketHandler = () => {
       console.log(`WebSocket connected with socket id: ${socket.id}`);
       //update redux state
       dispatch(webSocketSlice.setConnected(true));
+
+      // Refetch available backend controllers on every reconnect so UI reacts
+      // to config/controller changes after backend restarts.
+      dispatch(fetchAvailableControllers());
 
       // Sync livestream status with backend on connect/reconnect
       // This ensures frontend state matches backend state after backend restart

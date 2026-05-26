@@ -22,7 +22,22 @@ const useBackendControllerCapabilities = ({
     const hasObjectiveController = availableControllers.includes(
       "ObjectiveController",
     );
+    const hasLEDMatrixController = availableControllers.includes(
+      "LEDMatrixController",
+    );
+    const hasDPCController = availableControllers.includes("DPCController");
     if (selectedPlugin === "Objective" && !hasObjectiveController) {
+      setSelectedPlugin("LiveView");
+      return;
+    }
+    if (selectedPlugin === "ExtendedLEDMatrix" && !hasLEDMatrixController) {
+      setSelectedPlugin("LiveView");
+      return;
+    }
+    if (
+      selectedPlugin === "DPCController" &&
+      (!hasLEDMatrixController || !hasDPCController)
+    ) {
       setSelectedPlugin("LiveView");
     }
   }, [selectedPlugin, availableControllers, setSelectedPlugin]);

@@ -67,6 +67,9 @@ export default function LiveView({ setFileManagerInitialPath }) {
   const hasObjectiveController = useSelector(
     selectHasController("ObjectiveController"),
   );
+  const hasLEDMatrixController = useSelector(
+    selectHasController("LEDMatrixController"),
+  );
 
   // Track if auto-start has been attempted to prevent re-triggering on format changes
   const autoStartAttemptedRef = React.useRef(false);
@@ -671,6 +674,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
               hostIP={hostIP}
               hostPort={hostPort}
               hasObjectiveController={hasObjectiveController}
+              hasLEDMatrixController={hasLEDMatrixController}
             />
           </Box>
         )
@@ -686,6 +690,7 @@ function RightPanelContent({
   hostIP,
   hostPort,
   hasObjectiveController,
+  hasLEDMatrixController,
 }) {
   return (
     <>
@@ -738,10 +743,12 @@ function RightPanelContent({
         </Box>
       )}
 
-      <Box mb={3}>
-        <Typography variant="h6">Extended LED Matrix</Typography>
-        <ExtendedLEDMatrixController hostIP={hostIP} hostPort={hostPort} />
-      </Box>
+      {hasLEDMatrixController && (
+        <Box mb={3}>
+          <Typography variant="h6">Extended LED Matrix</Typography>
+          <ExtendedLEDMatrixController hostIP={hostIP} hostPort={hostPort} />
+        </Box>
+      )}
 
       <Box mb={3}>
         <Typography variant="h6">Detector Trigger</Typography>

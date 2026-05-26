@@ -472,6 +472,7 @@ export const APP_REGISTRY = {
       "label-free",
     ],
     pluginId: "DPCController",
+    requiredControllers: ["LEDMatrixController", "DPCController"],
   },
 
   goniometerController: {
@@ -703,6 +704,7 @@ export const APP_REGISTRY = {
       "enhanced",
     ],
     pluginId: "ExtendedLEDMatrix",
+    requiredControllers: ["LEDMatrixController"],
   },
 };
 

@@ -527,6 +527,7 @@ export const APP_REGISTRY = {
       "switch",
     ],
     pluginId: "Objective",
+    requiredControllers: ["ObjectiveController"],
   },
 
   stresstest: {
@@ -718,6 +719,28 @@ export const getAppsByCategory = (category) => {
 export const getEnabledApps = (enabledAppIds = []) => {
   return Object.values(APP_REGISTRY).filter(
     (app) => app.essential || enabledAppIds.includes(app.id),
+  );
+};
+
+export const isAppAvailableForControllers = (
+  app,
+  availableControllers = [],
+) => {
+  const requiredControllers = app?.requiredControllers || [];
+  if (requiredControllers.length === 0) return true;
+
+  const availableSet = new Set(availableControllers);
+  return requiredControllers.every((controller) =>
+    availableSet.has(controller),
+  );
+};
+
+export const filterAppsByAvailableControllers = (
+  apps,
+  availableControllers = [],
+) => {
+  return apps.filter((app) =>
+    isAppAvailableForControllers(app, availableControllers),
   );
 };
 

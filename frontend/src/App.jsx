@@ -66,6 +66,7 @@ import {
 } from "./state/slices/NotificationSlice.js";
 import { getThemeState } from "./state/slices/ThemeSlice.js";
 import { SnackbarProvider, useSnackbar } from "notistack";
+import useBackendControllerCapabilities from "./hooks/useBackendControllerCapabilities";
 
 // Filemanager
 import { api } from "./FileManager/api/api.js";
@@ -195,6 +196,13 @@ function App() {
   const [storageRefreshKey, setStorageRefreshKey] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [files, setFiles] = useState([]);
+
+  useBackendControllerCapabilities({
+    hostIP,
+    apiPort,
+    selectedPlugin,
+    setSelectedPlugin,
+  });
 
   /*
   FileManager
@@ -539,7 +547,9 @@ function App() {
                 </JupyterProvider>
               </Box>
             )}
-            {selectedPlugin === "GoniometerController" && <GoniometerController />}  
+            {selectedPlugin === "GoniometerController" && (
+              <GoniometerController />
+            )}
             {selectedPlugin === "Infinity Scanning" && (
               <LargeFovScanController />
             )}

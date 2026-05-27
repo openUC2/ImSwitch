@@ -141,7 +141,7 @@ class VirtualMicroscopeManager:
 
         try:
             self._imagePath = rs232Info.managerProperties["imagePath"]
-            if self._imagePath not in ["simplant", "smlm", "astigmatism", "wellplatecalib", "april_tag"]:
+            if self._imagePath not in ["simplant", "smlm", "astigmatism", "wellplatecalib", "april_tag","stage_offset_calib"]:
                 raise NameError
         except:
             package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -644,6 +644,23 @@ class Camera:
             # downscale for performance
             subsamplingfactor = 3
             self._image = cv2.resize(self._image, (self._image.shape[1]//subsamplingfactor, self._image.shape[0]//subsamplingfactor), interpolation=cv2.INTER_AREA)
+            # flip top/bottom
+            #self._image = cv2.flip(self._image, 0)
+            # invert image
+            self._image = 255 - self._image
+            self._image = self._image / np.max(self._image)
+            self.SensorHeight = 300  # self._image.shape[1]
+            self.SensorWidth = 400  # self._image.shape[0]
+        elif self.filePath == "stage_offset_calib":
+            ''' load stage_offset_calib.png '''
+            package_dir = os.path.dirname(os.path.abspath(__file__))
+            self._imagePath = os.path.join(
+                package_dir, "_data/images/stage_offset_calib.png"
+            )
+            self._image = cv2.imread(self._imagePath, cv2.IMREAD_GRAYSCALE)
+            # downscale for performance
+            #subsamplingfactor = 1
+            #self._image = cv2.resize(self._image, (self._image.shape[1]//subsamplingfactor, self._image.shape[0]//subsamplingfactor), interpolation=cv2.INTER_AREA)
             # flip top/bottom
             #self._image = cv2.flip(self._image, 0)
             # invert image

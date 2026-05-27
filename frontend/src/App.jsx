@@ -25,7 +25,6 @@ import MotorSettingsController from "./components/MotorSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
 import LargeFovScanController from "./components/OpenLayers.js";
 import SocketView from "./components/SocketView.js";
-import StageOffsetCalibration from "./components/StageOffsetCalibrationController.jsx";
 import STORMControllerArkitekt from "./components/STORMControllerArkitekt.js";
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
 import STORMControllerLocal from "./components/STORMControllerLocal.js";
@@ -40,7 +39,6 @@ import VizarrViewer from "./components/VizarrViewer.jsx";
 import { JupyterProvider } from "./context/JupyterContext.js";
 import DemoController from "./components/DemoController.js";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
-import StageCenterCalibrationWizard from "./components/StageCenterCalibrationWizard.js";
 import GalvoScannerController from "./components/GalvoScannerController.jsx";
 import ShitScopeComponent from "./components/ShitScopeComponent.js";
 
@@ -524,9 +522,6 @@ function App() {
             {selectedPlugin === "Stresstest" && <StresstestController />}
             {selectedPlugin === "FocusLock" && <FocusLockController />}
             {selectedPlugin === "AcceptanceTest" && <AcceptanceTestComponent />}
-            {selectedPlugin === "StageCenterCalibration" && (
-              <StageCenterCalibrationWizard />
-            )}
             {selectedPlugin === "HoloController" && <HoloController />}
             {selectedPlugin === "OffAxisHoloController" && (
               <OffAxisHoloController />
@@ -612,9 +607,6 @@ function App() {
             )}
             {selectedPlugin === "CompositeComponent" && <CompositeComponent />}
             {selectedPlugin === "FlowStop" && <FlowStopController />}
-            {selectedPlugin === "StageOffsetCalibration" && (
-              <StageOffsetCalibration />
-            )}
             {selectedPlugin === "UC2" && <UC2ConfigurationController />}
             {selectedPlugin === "SerialDebug" && <SerialDebugController />}
             {selectedPlugin === "DetectorTrigger" && (

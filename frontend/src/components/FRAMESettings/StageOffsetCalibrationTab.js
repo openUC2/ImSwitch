@@ -1,28 +1,42 @@
 // src/components/FRAMESettings/StageOffsetCalibrationTab.js
 //
-// Two-step stage-offset calibration replacing the legacy StageCenterStep1..6
-// wizard.
+// Single source of truth for stage-offset calibration. Flow:
+//   1. (one-time) Ask the user whether the stage was homed since boot. Offer
+//      "Home now" buttons - the persisted offset is only meaningful relative
+//      to a stable device origin.
+//   2. Pick the inserted reference layout (openUC2 chart, Heidstar slide …);
+//      the layout map shows slot rectangles + current stage position; click
+//      moves the stage there.
+//   3. Scan: a raster around the current position records (x, y, intensity)
+//      tuples. The backend (a) renders into a JSON sidecar so the heatmap
+//      survives a page reload and (b) parks the stage at the brightest
+//      sample at the end so the user can verify visually.
+//   4. Review heatmap. Click anywhere to move the stage there (still in old
+//      user coords). The brightest sample is shown next to the layout's
+//      known/expected coordinate.
+//   5. Accept: a confirmation dialog asks the user to confirm overwriting
+//      the persisted offset; we pass the device position observed at the
+//      brightest spot so the math is atomic.
 //
-// Step 1: pick the inserted reference layout. A miniature layout map shows
-//         the slot rectangles + current stage position; clicking the map
-//         moves the stage to that XY in absolute coordinates (similar to the
-//         wellplate component). Scan parameters (step, radius) are
-//         pre-filled adaptively from the active detector's pixel size and
-//         frame shape - the user does not deal with exposure here.
-//
-// Step 2: a heatmap canvas renders the (x, y, intensity) raster samples.
-//         Clicking the heatmap moves the stage to that location (similar to
-//         the focus map). The detected brightest point is shown next to the
-//         expected (known) calibration point - the difference of the two is
-//         what gets persisted as the stage offset.
-//
-import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 import { useSelector } from "react-redux";
 import {
   Alert,
   Box,
   Button,
+  ButtonGroup,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Divider,
   FormControl,
   Grid,
@@ -37,25 +51,29 @@ import {
   Typography,
 } from "@mui/material";
 
-
 import LiveViewControlWrapper from "../../axon/LiveViewControlWrapper";
-import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsSlice";
 import * as positionSlice from "../../state/slices/PositionSlice";
 import apiStageCenterCalibrationPerformCalibration from "../../backendapi/apiStageCenterCalibrationPerformCalibration";
 import apiStageCenterCalibrationStopCalibration from "../../backendapi/apiStageCenterCalibrationStopCalibration";
 import apiStageCenterCalibrationGetHeatmap from "../../backendapi/apiStageCenterCalibrationGetHeatmap";
+import apiStageCenterCalibrationGetLatestHeatmap from "../../backendapi/apiStageCenterCalibrationGetLatestHeatmap";
 import apiStageCenterCalibrationGetIsRunning from "../../backendapi/apiStageCenterCalibrationGetIsRunning";
 import apiStageCenterCalibrationGetRecommendedScanParameters from "../../backendapi/apiStageCenterCalibrationGetRecommendedScanParameters";
 import apiExperimentControllerGetKnownCalibrationLayouts from "../../backendapi/apiExperimentControllerGetKnownCalibrationLayouts";
 import apiPositionerControllerMovePositioner from "../../backendapi/apiPositionerControllerMovePositioner";
+import apiPositionerControllerSetStageOffsetAxis from "../../backendapi/apiPositionerControllerSetStageOffsetAxis";
+import apiPositionerControllerGetDevicePositionAxis from "../../backendapi/apiPositionerControllerGetDevicePositionAxis";
+import apiPositionerControllerHomeAxis from "../../backendapi/apiPositionerControllerHomeAxis";
 
 
 const STEPS = ["Insert slide & start scan", "Review heatmap & accept"];
 
+// Local key used to track whether the user has confirmed the stage was homed
+// in this session. Cleared on page reload (sessionStorage) so the prompt
+// reappears after each restart.
+const HOMING_ACK_KEY = "stageOffsetHomingAck.v1";
 
-// Built-in fallback layouts in case the backend has no entry yet (e.g. first
-// boot before the user has registered the openUC2 chart). The same dict
-// shape as ``ExperimentController._KNOWN_CALIBRATION_POINTS``.
+// Fallback layouts when the backend has no entry yet.
 const FALLBACK_LAYOUTS = [
   {
     name: "Heidstar 4x Histosample",
@@ -99,7 +117,6 @@ const LayoutMapMini = ({
 }) => {
   const canvasRef = useRef(null);
 
-
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !layout) return;
@@ -110,7 +127,6 @@ const LayoutMapMini = ({
     ctx.fillStyle = "#101820";
     ctx.fillRect(0, 0, w, h);
 
-
     const lw = layout.bounds?.width || 127000;
     const lh = layout.bounds?.height || 84000;
     const sx = w / lw;
@@ -119,14 +135,10 @@ const LayoutMapMini = ({
     const offX = (w - lw * s) / 2;
     const offY = (h - lh * s) / 2;
 
-
-    // Outer carrier rectangle.
     ctx.strokeStyle = "#666";
     ctx.lineWidth = 1;
     ctx.strokeRect(offX, offY, lw * s, lh * s);
 
-
-    // Slot rectangles.
     ctx.fillStyle = "rgba(80, 140, 200, 0.25)";
     ctx.strokeStyle = "#5aa";
     (layout.slots || []).forEach((slot, idx) => {
@@ -140,8 +152,6 @@ const LayoutMapMini = ({
       ctx.fillStyle = "rgba(80, 140, 200, 0.25)";
     });
 
-
-    // Known calibration point (expected centre).
     if (knownX != null && knownY != null) {
       const kx = offX + knownX * s;
       const ky = offY + knownY * s;
@@ -158,8 +168,6 @@ const LayoutMapMini = ({
       ctx.stroke();
     }
 
-
-    // Brightest point (detected).
     if (brightestX != null && brightestY != null) {
       const bx = offX + brightestX * s;
       const by = offY + brightestY * s;
@@ -169,8 +177,6 @@ const LayoutMapMini = ({
       ctx.fill();
     }
 
-
-    // Current stage position (red dot - "we are here").
     if (stageX != null && stageY != null) {
       const px = offX + stageX * s;
       const py = offY + stageY * s;
@@ -184,11 +190,9 @@ const LayoutMapMini = ({
     }
   }, [layout, stageX, stageY, knownX, knownY, brightestX, brightestY]);
 
-
   useEffect(() => {
     draw();
   }, [draw]);
-
 
   const handleClick = (event) => {
     if (!layout || !onClickMove) return;
@@ -197,8 +201,6 @@ const LayoutMapMini = ({
     const rect = canvas.getBoundingClientRect();
     const cx = ((event.clientX - rect.left) / rect.width) * canvas.width;
     const cy = ((event.clientY - rect.top) / rect.height) * canvas.height;
-
-
     const lw = layout.bounds?.width || 127000;
     const lh = layout.bounds?.height || 84000;
     const w = canvas.width;
@@ -218,7 +220,6 @@ const LayoutMapMini = ({
     }
     onClickMove(stageXClick, stageYClick);
   };
-
 
   return (
     <Box
@@ -242,13 +243,15 @@ const LayoutMapMini = ({
 
 
 // ----------------------------------------------------------------------
-// HeatmapCanvas - intensity grid + click-to-move stage.
+// HeatmapCanvas - intensity grid + click-to-pick. We deliberately separate
+// "click to move the stage" from "click to pick the calibration target":
+// after a scan the user is more likely to want to pick a brighter sample
+// than to physically move the stage there. ``onPick`` returns the (x, y)
+// the user clicked, ``onMove`` is called if held with shift.
 // ----------------------------------------------------------------------
-const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
+const HeatmapCanvas = ({ data, onPick, onMove, picked, width = 420, height = 420 }) => {
   const canvasRef = useRef(null);
-  // Cache the projection so the click handler can invert it.
   const projectionRef = useRef(null);
-
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -263,7 +266,6 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
       return;
     }
 
-
     const xs = data.samples.map((s) => s.x);
     const ys = data.samples.map((s) => s.y);
     const is = data.samples.map((s) => s.intensity);
@@ -277,12 +279,9 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
     const yRange = yMax - yMin || 1;
     const iRange = iMax - iMin || 1;
 
-
-    // Estimate grid spacing in stage units, then in pixels.
     const stepUm = data.meta?.step_um || 250;
     const cellW = Math.max(1, Math.round(w / Math.max(1, Math.round(xRange / stepUm) + 1)));
     const cellH = Math.max(1, Math.round(h / Math.max(1, Math.round(yRange / stepUm) + 1)));
-
 
     data.samples.forEach((s) => {
       const px = ((s.x - xMin) / xRange) * (w - cellW);
@@ -295,7 +294,6 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
       ctx.fillRect(px, py, cellW + 1, cellH + 1);
     });
 
-
     if (data.brightest) {
       const bx = ((data.brightest.x - xMin) / xRange) * (w - cellW);
       const by = h - cellH - ((data.brightest.y - yMin) / yRange) * (h - cellH);
@@ -306,14 +304,22 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
       ctx.stroke();
     }
 
+    if (picked) {
+      const px = ((picked.x - xMin) / xRange) * (w - cellW);
+      const py = h - cellH - ((picked.y - yMin) / yRange) * (h - cellH);
+      ctx.strokeStyle = "#33ff99";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(px + cellW / 2, py + cellH / 2, Math.max(cellW, cellH) + 2, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
 
     projectionRef.current = { xMin, xMax, yMin, yMax, w, h, cellW, cellH };
-  }, [data]);
+  }, [data, picked]);
 
-
-  const handleClick = (event) => {
+  const eventToStage = (event) => {
     const proj = projectionRef.current;
-    if (!proj || !onClickMove) return;
+    if (!proj) return null;
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const cx = ((event.clientX - rect.left) / rect.width) * canvas.width;
@@ -323,9 +329,24 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
     const yRange = yMax - yMin || 1;
     const stageX = xMin + (cx / (w - cellW)) * xRange;
     const stageY = yMin + ((h - cellH - cy) / (h - cellH)) * yRange;
-    onClickMove(stageX, stageY);
+    return { x: stageX, y: stageY };
   };
 
+  const handleClick = (event) => {
+    const xy = eventToStage(event);
+    if (!xy) return;
+    if (event.shiftKey && onMove) {
+      onMove(xy.x, xy.y);
+    } else if (onPick) {
+      onPick(xy.x, xy.y);
+    }
+  };
+
+  const handleContextMenu = (event) => {
+    event.preventDefault();
+    const xy = eventToStage(event);
+    if (xy && onMove) onMove(xy.x, xy.y);
+  };
 
   return (
     <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, p: 1, background: "#111" }}>
@@ -335,7 +356,11 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
         height={height}
         style={{ width: "100%", height: "auto", display: "block", cursor: "crosshair" }}
         onClick={handleClick}
+        onContextMenu={handleContextMenu}
       />
+      <Typography variant="caption" color="textSecondary" sx={{ display: "block", mt: 0.5 }}>
+        Click to pick the calibration target. Shift-click or right-click to move the stage there.
+      </Typography>
     </Box>
   );
 };
@@ -345,84 +370,92 @@ const HeatmapCanvas = ({ data, onClickMove, width = 420, height = 420 }) => {
 // Main tab
 // ----------------------------------------------------------------------
 const StageOffsetCalibrationTab = () => {
-  const connectionSettings = useSelector(
-    connectionSettingsSlice.getConnectionSettingsState
-  );
   const positionState = useSelector(positionSlice.getPositionState);
-  const hostIP = connectionSettings.ip;
-  const hostPort = connectionSettings.apiPort;
-
 
   const [activeStep, setActiveStep] = useState(0);
   const [layouts, setLayouts] = useState(FALLBACK_LAYOUTS);
   const [layoutName, setLayoutName] = useState(FALLBACK_LAYOUTS[0].name);
-
 
   // Scan parameters - exposure intentionally removed (managed in detector).
   const [stepUm, setStepUm] = useState(250);
   const [maxRadiusUm, setMaxRadiusUm] = useState(5000);
   const [recommended, setRecommended] = useState(null);
 
-
-  // Derived "running" state - driven by polling, NOT by the local action.
-  // performCalibration returns immediately because the controller spawns its
-  // own raster thread, so toggling local state here would never flip back to
-  // "Stop" properly.
+  // Polling-driven scan-running state (controller spawns its own thread, so
+  // local optimistic toggles never flip back).
   const [pollingRunning, setPollingRunning] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [heatmap, setHeatmap] = useState(null);
 
+  // The user can override the brightest pick by clicking on the heatmap.
+  // null means "use the auto-detected brightest sample".
+  const [pickedTarget, setPickedTarget] = useState(null);
 
-  // Manual override applied to the *known* point (gold cross).
+  // Manual override applied to the *known* point (gold cross). Empty string
+  // means "use the layout default".
   const [overrideKnownX, setOverrideKnownX] = useState("");
   const [overrideKnownY, setOverrideKnownY] = useState("");
 
+  // Homing handshake. Defaults to "not acked" so the prompt appears on first
+  // load of the tab and after every page reload.
+  const [homingAck, setHomingAck] = useState(false);
+  const [homingDialogOpen, setHomingDialogOpen] = useState(false);
+  const [homingBusy, setHomingBusy] = useState(false);
+
+  // Accept-confirmation dialog.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const pollRef = useRef(null);
-
 
   const selectedLayout = useMemo(
     () => layouts.find((l) => l.name === layoutName) || layouts[0],
     [layouts, layoutName]
   );
 
-
   const knownX =
-    overrideKnownX !== ""
-      ? Number(overrideKnownX)
-      : selectedLayout?.x;
+    overrideKnownX !== "" ? Number(overrideKnownX) : selectedLayout?.x;
   const knownY =
-    overrideKnownY !== ""
-      ? Number(overrideKnownY)
-      : selectedLayout?.y;
+    overrideKnownY !== "" ? Number(overrideKnownY) : selectedLayout?.y;
 
+  // Effective target = manually picked sample (if any) else brightest.
+  const targetXY = useMemo(() => {
+    if (pickedTarget) return pickedTarget;
+    if (heatmap?.brightest) return { x: heatmap.brightest.x, y: heatmap.brightest.y };
+    return null;
+  }, [pickedTarget, heatmap]);
 
   // ----- bootstrap -------------------------------------------------------
-
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // Restore homing handshake from session storage.
+      try {
+        const ack = sessionStorage.getItem(HOMING_ACK_KEY);
+        if (ack === "1") setHomingAck(true);
+      } catch (e) {
+        /* ignore */
+      }
+      // Layouts.
       try {
         const res = await apiExperimentControllerGetKnownCalibrationLayouts();
         if (cancelled) return;
         if (res?.layouts?.length) {
-          // Merge backend-known layouts with our fallbacks (fallback wins on
-          // missing 'slots'/'bounds' since the backend only ships x/y).
           const merged = res.layouts.map((b) => {
             const fb = FALLBACK_LAYOUTS.find((f) => f.name === b.name);
             return { ...(fb || {}), ...b };
           });
-          // Also append any fallback layouts the backend does not know about.
           FALLBACK_LAYOUTS.forEach((f) => {
             if (!merged.find((m) => m.name === f.name)) merged.push(f);
           });
           setLayouts(merged);
         }
       } catch (e) {
-        // Use fallback only.
+        /* keep fallback */
       }
+      // Recommended scan params.
       try {
         const rec = await apiStageCenterCalibrationGetRecommendedScanParameters();
         if (cancelled) return;
@@ -432,7 +465,18 @@ const StageOffsetCalibrationTab = () => {
           setMaxRadiusUm(Math.round(rec.recommendedMaxRadiusUm));
         }
       } catch (e) {
-        // Keep static defaults.
+        /* static defaults */
+      }
+      // Pre-load the latest heatmap so the tab repopulates after reload.
+      try {
+        const latest = await apiStageCenterCalibrationGetLatestHeatmap();
+        if (cancelled) return;
+        if (latest && latest.samples && latest.samples.length) {
+          setHeatmap(latest);
+          setActiveStep(1);
+        }
+      } catch (e) {
+        /* no-op */
       }
     })();
     return () => {
@@ -440,9 +484,7 @@ const StageOffsetCalibrationTab = () => {
     };
   }, []);
 
-
   // ----- polling ---------------------------------------------------------
-
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -451,9 +493,7 @@ const StageOffsetCalibrationTab = () => {
     }
   };
 
-
   useEffect(() => () => stopPolling(), []);
-
 
   const startPolling = () => {
     stopPolling();
@@ -466,32 +506,45 @@ const StageOffsetCalibrationTab = () => {
         setPollingRunning(isRun);
         if (!isRun) {
           stopPolling();
-          // Auto-advance to step 2 once the scan is done.
           setActiveStep(1);
+          // Final fetch to grab the parked-at metadata.
+          try {
+            const final = await apiStageCenterCalibrationGetHeatmap();
+            if (final && final.samples) setHeatmap(final);
+          } catch (e) {
+            /* ignore */
+          }
         }
       } catch (e) {
-        // Keep polling - one tick failing is non-fatal.
+        /* keep polling */
       }
     }, 1000);
   };
 
-
   // ----- actions ---------------------------------------------------------
 
+  const acquirePosition = () => ({
+    x: positionState?.x ?? 0,
+    y: positionState?.y ?? 0,
+  });
 
   const handleStart = async () => {
     setError("");
     setInfo("");
+    if (!homingAck) {
+      setHomingDialogOpen(true);
+      return;
+    }
     setHeatmap(null);
+    setPickedTarget(null);
     setActiveStep(0);
     setPollingRunning(true);
     startPolling();
     try {
+      const { x, y } = acquirePosition();
       const result = await apiStageCenterCalibrationPerformCalibration({
-        // Start at the *current* stage position; user is supposed to move
-        // roughly above the calibration hole using the layout map first.
-        start_x: positionState?.x ?? 0,
-        start_y: positionState?.y ?? 0,
+        start_x: x,
+        start_y: y,
         step_um: Number(stepUm) || 250,
         max_radius_um: Number(maxRadiusUm) || 5000,
         speed: 5000,
@@ -508,17 +561,15 @@ const StageOffsetCalibrationTab = () => {
     }
   };
 
-
   const handleStop = async () => {
     try {
       await apiStageCenterCalibrationStopCalibration();
     } catch (e) {
-      // ignore
+      /* ignore */
     }
     setPollingRunning(false);
     stopPolling();
   };
-
 
   const moveStage = async (x, y) => {
     try {
@@ -539,79 +590,101 @@ const StageOffsetCalibrationTab = () => {
     }
   };
 
+  // ---- homing handshake ------------------------------------------------
 
-  const acceptOffset = async () => {
-    setError("");
-    setInfo("");
-    const actualX = heatmap?.brightest?.x;
-    const actualY = heatmap?.brightest?.y;
-    if (
-      actualX == null ||
-      actualY == null ||
-      knownX == null ||
-      knownY == null
-    ) {
-      setError("Need both a known and a measured X/Y position before saving.");
-      return;
-    }
-    // setStageOffsetAxis(knownPosition=known, currentPosition=actual) makes the
-    // stage report the known coordinate when it is mechanically at "actual",
-    // i.e. it bakes the (known - actual) deviation into the stored offset.
+  const ackHoming = () => {
+    setHomingAck(true);
     try {
-      const base = `${hostIP}:${hostPort}/imswitch/api/PositionerController/setStageOffsetAxis`;
-      await fetch(
-        `${base}?knownPosition=${encodeURIComponent(knownX)}` +
-          `&currentPosition=${encodeURIComponent(actualX)}&axis=X`
-      );
-      await fetch(
-        `${base}?knownPosition=${encodeURIComponent(knownY)}` +
-          `&currentPosition=${encodeURIComponent(actualY)}&axis=Y`
-      );
-      const dx = knownX - actualX;
-      const dy = knownY - actualY;
-
-
-      // CRITICAL: the heatmap was recorded in the *old* coordinate frame.
-      // After applying the offset, the same physical point is now reported
-      // at (oldCoord + delta). Re-base every sample (and the brightest
-      // marker) into the new frame so a click-to-move on the heatmap sends
-      // the correct absolute coordinate — otherwise the stage would move to
-      // (oldCoord) which is now a different physical location.
-      if (heatmap?.samples?.length) {
-        const remapped = {
-          ...heatmap,
-          samples: heatmap.samples.map((s) => ({
-            ...s,
-            x: s.x + dx,
-            y: s.y + dy,
-          })),
-          brightest: heatmap.brightest
-            ? {
-                ...heatmap.brightest,
-                x: heatmap.brightest.x + dx,
-                y: heatmap.brightest.y + dy,
-              }
-            : heatmap.brightest,
-          // Tag so the click handler knows we're in post-offset coords now.
-          offsetApplied: { dx, dy, at: new Date().toISOString() },
-        };
-        setHeatmap(remapped);
-      }
-
-
-      setInfo(
-        `Stage offset stored. Computed deltas: dX=${dx.toFixed(1)} um, ` +
-          `dY=${dy.toFixed(1)} um. Heatmap re-based to the new frame; ` +
-          `click-to-move now uses corrected coordinates.`
-      );
+      sessionStorage.setItem(HOMING_ACK_KEY, "1");
     } catch (e) {
-      setError(`Failed to store offset: ${e.message || e}`);
+      /* ignore */
+    }
+    setHomingDialogOpen(false);
+  };
+
+  const runHomeAxis = async (axis) => {
+    setHomingBusy(true);
+    try {
+      await apiPositionerControllerHomeAxis({ axis, isBlocking: true });
+    } catch (e) {
+      setError(`Homing ${axis} failed: ${e.message || e}`);
+    } finally {
+      setHomingBusy(false);
     }
   };
 
+  const homeAndAck = async () => {
+    setHomingBusy(true);
+    try {
+      await apiPositionerControllerHomeAxis({ axis: "X", isBlocking: true });
+      await apiPositionerControllerHomeAxis({ axis: "Y", isBlocking: true });
+      ackHoming();
+    } catch (e) {
+      setError(`Homing failed: ${e.message || e}`);
+    } finally {
+      setHomingBusy(false);
+    }
+  };
+
+  // ---- accept / store offset -------------------------------------------
+
+  const openConfirm = () => {
+    setError("");
+    setInfo("");
+    if (!targetXY) {
+      setError("No calibration target picked. Run a scan first.");
+      return;
+    }
+    if (knownX == null || knownY == null) {
+      setError("No known calibration point.");
+      return;
+    }
+    setConfirmOpen(true);
+  };
+
+  const acceptOffset = async () => {
+    setConfirmBusy(true);
+    setError("");
+    setInfo("");
+    try {
+      // Read the raw device position right now so the math is atomic. If the
+      // stage is parked at the target (default), this is the device coord we
+      // want; if the user moved away after the scan we still capture the
+      // *current* device position to keep the contract well-defined.
+      const dxRaw = await apiPositionerControllerGetDevicePositionAxis({ axis: "X" });
+      const dyRaw = await apiPositionerControllerGetDevicePositionAxis({ axis: "Y" });
+      const currentDeviceX = Number(dxRaw);
+      const currentDeviceY = Number(dyRaw);
+      await apiPositionerControllerSetStageOffsetAxis({
+        axis: "X",
+        knownPosition: knownX,
+        currentDevicePosition: currentDeviceX,
+      });
+      await apiPositionerControllerSetStageOffsetAxis({
+        axis: "Y",
+        knownPosition: knownY,
+        currentDevicePosition: currentDeviceY,
+      });
+      setInfo(
+        `Stage offset stored. Device (${currentDeviceX.toFixed(1)}, ` +
+          `${currentDeviceY.toFixed(1)}) -> known (${knownX.toFixed(1)}, ` +
+          `${knownY.toFixed(1)}).`
+      );
+      // Drop the old heatmap because the coord frame just changed; the user
+      // should re-scan to verify. The latest-on-disk one is still in the
+      // *old* frame so we do not reload it here.
+      setHeatmap(null);
+      setPickedTarget(null);
+      setActiveStep(0);
+    } catch (e) {
+      setError(`Failed to store offset: ${e.message || e}`);
+    } finally {
+      setConfirmBusy(false);
+      setConfirmOpen(false);
+    }
+  };
 
   // ----- render ----------------------------------------------------------
-
 
   return (
     <Paper sx={{ p: 3 }}>
@@ -620,10 +693,25 @@ const StageOffsetCalibrationTab = () => {
       </Typography>
       <Typography variant="body2" color="textSecondary" paragraph>
         Two-step calibration: scan a small XY area for the reference slide&apos;s
-        well-defined hole, then store the difference between where the stage
-        thinks it is and where the pinhole really sits as the stage offset.
+        well-defined hole, then store the offset that maps the current device
+        position to the known physical coordinate.
       </Typography>
 
+      {!homingAck && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={() => setHomingDialogOpen(true)}>
+              Confirm / home now
+            </Button>
+          }
+        >
+          The persisted offset is only meaningful once the stage has been homed
+          this session. Home the stage or confirm you already did before
+          starting the scan.
+        </Alert>
+      )}
 
       <Stepper activeStep={activeStep} sx={{ mb: 3 }}>
         {STEPS.map((label) => (
@@ -632,7 +720,6 @@ const StageOffsetCalibrationTab = () => {
           </Step>
         ))}
       </Stepper>
-
 
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -645,7 +732,6 @@ const StageOffsetCalibrationTab = () => {
         </Alert>
       )}
 
-
       <Grid container spacing={3}>
         {/* Live view + reference layout selector + layout map */}
         <Grid item xs={12} md={6}>
@@ -655,7 +741,6 @@ const StageOffsetCalibrationTab = () => {
           <Box sx={{ mb: 2, maxHeight: 320, overflow: "hidden" }}>
             <LiveViewControlWrapper useFastMode={true} />
           </Box>
-
 
           <FormControl fullWidth sx={{ mb: 2 }}>
             <InputLabel id="ref-layout-label">Reference Layout</InputLabel>
@@ -682,7 +767,6 @@ const StageOffsetCalibrationTab = () => {
             </Alert>
           )}
 
-
           <Typography variant="subtitle2" gutterBottom>
             Layout map (click to move)
           </Typography>
@@ -702,7 +786,6 @@ const StageOffsetCalibrationTab = () => {
           </Typography>
         </Grid>
 
-
         {/* Scan parameters + actions */}
         <Grid item xs={12} md={6}>
           <Typography variant="subtitle1" gutterBottom>
@@ -716,8 +799,7 @@ const StageOffsetCalibrationTab = () => {
             >
               Detector: {recommended.frameWidth}×{recommended.frameHeight} px;
               Pixel size {recommended.pixelSizeUm.toFixed(3)} um/px;
-              FOV {Math.round(recommended.fovXUm)} × {Math.round(recommended.fovYUm)} um
-              (= {recommended.frameWidth}px × {recommended.pixelSizeUm.toFixed(3)} um/px);
+              FOV {Math.round(recommended.fovXUm)} × {Math.round(recommended.fovYUm)} um;
               recommended step {Math.round(recommended.recommendedStepUm)} um.
             </Typography>
           )}
@@ -744,8 +826,7 @@ const StageOffsetCalibrationTab = () => {
             </Grid>
           </Grid>
 
-
-          <Box sx={{ mt: 2, display: "flex", gap: 1 }}>
+          <Box sx={{ mt: 2, display: "flex", gap: 1, flexWrap: "wrap" }}>
             {!pollingRunning ? (
               <Button variant="contained" color="primary" onClick={handleStart}>
                 Start scan
@@ -758,6 +839,19 @@ const StageOffsetCalibrationTab = () => {
             {pollingRunning && (
               <CircularProgress size={24} sx={{ alignSelf: "center" }} />
             )}
+            <ButtonGroup size="small" disabled={homingBusy}>
+              <Button onClick={() => runHomeAxis("X")}>Home X</Button>
+              <Button onClick={() => runHomeAxis("Y")}>Home Y</Button>
+              <Button
+                onClick={async () => {
+                  await runHomeAxis("X");
+                  await runHomeAxis("Y");
+                }}
+              >
+                Home X+Y
+              </Button>
+            </ButtonGroup>
+            {homingBusy && <CircularProgress size={20} sx={{ alignSelf: "center" }} />}
             <Box sx={{ flexGrow: 1 }} />
             <Typography variant="caption" color="textSecondary" sx={{ alignSelf: "center" }}>
               Stage at: X={positionState?.x?.toFixed?.(1) ?? "?"} um,
@@ -766,32 +860,30 @@ const StageOffsetCalibrationTab = () => {
           </Box>
           <Typography variant="caption" color="textSecondary" sx={{ mt: 1, display: "block" }}>
             Requires a valid pixel calibration. The backend will refuse to
-            start otherwise.
+            start otherwise. The stage parks at the brightest sample at the
+            end of the scan.
           </Typography>
         </Grid>
-
 
         {/* Heatmap + accept controls */}
         <Grid item xs={12}>
           <Divider sx={{ my: 2 }} />
           <Typography variant="subtitle1" gutterBottom>
-            Heatmap & result
+            Heatmap &amp; result
           </Typography>
           <Grid container spacing={2}>
             <Grid item xs={12} md={6}>
-              <HeatmapCanvas data={heatmap} onClickMove={moveStage} />
+              <HeatmapCanvas
+                data={heatmap}
+                onPick={(x, y) => setPickedTarget({ x, y })}
+                onMove={moveStage}
+                picked={pickedTarget}
+              />
               <Typography variant="caption" color="textSecondary">
                 {heatmap?.samples?.length
-                  ? `${heatmap.samples.length} samples; click anywhere to move stage there.`
-                  : "No data yet - run a scan to populate."}
+                  ? `${heatmap.samples.length} samples; the latest scan is auto-restored on reload.`
+                  : "No data yet - run a scan to populate (the last saved scan loads automatically)."}
               </Typography>
-              {heatmap?.offsetApplied && (
-                <Alert severity="success" sx={{ mt: 1 }}>
-                  Heatmap re-based by dX={heatmap.offsetApplied.dx.toFixed(1)} um,
-                  dY={heatmap.offsetApplied.dy.toFixed(1)} um. Clicks now move to
-                  the corrected absolute coordinates.
-                </Alert>
-              )}
             </Grid>
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" gutterBottom>
@@ -802,7 +894,7 @@ const StageOffsetCalibrationTab = () => {
                   <TextField
                     fullWidth
                     size="small"
-                    label="Actual X (um)"
+                    label="Brightest X (um)"
                     value={heatmap?.brightest?.x?.toFixed?.(1) ?? ""}
                     InputProps={{ readOnly: true }}
                   />
@@ -811,12 +903,25 @@ const StageOffsetCalibrationTab = () => {
                   <TextField
                     fullWidth
                     size="small"
-                    label="Actual Y (um)"
+                    label="Brightest Y (um)"
                     value={heatmap?.brightest?.y?.toFixed?.(1) ?? ""}
                     InputProps={{ readOnly: true }}
                   />
                 </Grid>
               </Grid>
+              {pickedTarget && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  Manual pick from heatmap will be used:
+                  ({pickedTarget.x.toFixed(1)}, {pickedTarget.y.toFixed(1)}) um.
+                  <Button
+                    size="small"
+                    onClick={() => setPickedTarget(null)}
+                    sx={{ ml: 1 }}
+                  >
+                    use brightest instead
+                  </Button>
+                </Alert>
+              )}
               <Typography variant="subtitle2" gutterBottom>
                 Expected (known) calibration point
               </Typography>
@@ -842,25 +947,94 @@ const StageOffsetCalibrationTab = () => {
                   />
                 </Grid>
               </Grid>
-              {heatmap?.brightest && knownX != null && knownY != null && (
+              {targetXY && knownX != null && knownY != null && (
                 <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 2 }}>
-                  Pending offset: dX={(knownX - heatmap.brightest.x).toFixed(1)} um,
-                  dY={(knownY - heatmap.brightest.y).toFixed(1)} um.
+                  Pending: stage report will shift by
+                  dX={(knownX - targetXY.x).toFixed(1)} um,
+                  dY={(knownY - targetXY.y).toFixed(1)} um after acceptance.
                 </Typography>
               )}
-              <Button
-                variant="contained"
-                color="success"
-                fullWidth
-                disabled={!heatmap?.brightest}
-                onClick={acceptOffset}
-              >
-                Accept and store stage offset
-              </Button>
+              <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                <Button
+                  variant="outlined"
+                  disabled={!targetXY}
+                  onClick={() => targetXY && moveStage(targetXY.x, targetXY.y)}
+                >
+                  Move to picked target
+                </Button>
+                <Button
+                  variant="contained"
+                  color="success"
+                  disabled={!targetXY || !homingAck}
+                  onClick={openConfirm}
+                >
+                  Accept and store stage offset
+                </Button>
+              </Box>
             </Grid>
           </Grid>
         </Grid>
       </Grid>
+
+      {/* Homing handshake dialog */}
+      <Dialog open={homingDialogOpen} onClose={() => setHomingDialogOpen(false)}>
+        <DialogTitle>Has the stage been homed this session?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            The persisted stage offset is the difference between the current
+            firmware device position and a known physical coordinate. If the
+            firmware was rebooted (or steps were lost) since the last homing
+            run, the persisted offset will not land you in the same physical
+            place. Home now or confirm you already did.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setHomingDialogOpen(false)}>Cancel</Button>
+          <Button
+            onClick={ackHoming}
+            color="primary"
+            disabled={homingBusy}
+          >
+            I already homed
+          </Button>
+          <Button
+            onClick={homeAndAck}
+            variant="contained"
+            color="primary"
+            disabled={homingBusy}
+          >
+            Home X+Y now
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Accept confirmation dialog */}
+      <Dialog open={confirmOpen} onClose={() => !confirmBusy && setConfirmOpen(false)}>
+        <DialogTitle>Overwrite stored stage offset?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            About to record the current device position as the known
+            coordinate ({knownX != null ? knownX.toFixed(1) : "?"},
+            {knownY != null ? ` ${knownY.toFixed(1)}` : " ?"}) um. The
+            previously persisted offset will be overwritten. Make sure the
+            stage is physically over the calibration point - the live view
+            should show the hole centred.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)} disabled={confirmBusy}>
+            Cancel
+          </Button>
+          <Button
+            onClick={acceptOffset}
+            variant="contained"
+            color="success"
+            disabled={confirmBusy}
+          >
+            {confirmBusy ? "Storing…" : "Confirm & store"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Paper>
   );
 };

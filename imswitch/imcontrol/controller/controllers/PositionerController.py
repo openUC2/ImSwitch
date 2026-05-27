@@ -281,97 +281,131 @@ class PositionerController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def resetStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):
-        """
-        Resets the stage offset for the given axis to 0 and persists to config.
-        """
+        """Reset the stage offset for the given axis to 0 and persist."""
         self.__logger.debug(f'Resetting stage offset for {axis} axis.')
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-        # Update in-memory offset in manager
         self._master.positionersManager[positionerName].resetStageOffsetAxis(axis=axis)
-        # Persist to config file
         self.saveStageOffset(positionerName=positionerName, axis=axis)
 
     @APIExport(runOnUIThread=False)
-    def setStageOffsetAxis(self, positionerName: Optional[str]=None, knownPosition:float=0, currentPosition:Optional[float]=None, knownOffset:Optional[float]=None,  axis:str="X"):
+    def setStageOffsetAxis(
+        self,
+        positionerName: Optional[str] = None,
+        knownPosition: float = 0,
+        currentDevicePosition: Optional[float] = None,
+        knownOffset: Optional[float] = None,
+        axis: str = "X",
+    ):
+        """Persist a stage offset for one axis.
+
+        Canonical contract::
+
+            offset = device_position_at_known_point - known_user_position
+
+        - ``knownPosition`` (required when ``knownOffset`` is not given):
+          desired user coordinate at the current physical position.
+        - ``currentDevicePosition`` (optional): raw device position to use.
+          If omitted the controller reads it atomically here so the offset is
+          based on a single, well-defined device snapshot.
+        - ``knownOffset`` (optional): if set, that value is stored verbatim
+          and ``knownPosition`` / ``currentDevicePosition`` are ignored.
         """
-        Sets the stage to a known offset aside from the home position and persists to config.
-        knownPosition and currentPosition have to be in physical coordinates (i.e. prior to applying the stepsize)
-        """
-        self.__logger.debug(f'Setting stage offset for {axis} axis.')
+        self.__logger.debug(
+            f'setStageOffsetAxis axis={axis} known={knownPosition} '
+            f'currentDevice={currentDevicePosition} knownOffset={knownOffset}'
+        )
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-        # Update in-memory offset in manager
-        self._master.positionersManager[positionerName].setStageOffsetAxis(knownPosition=knownPosition, currentPosition=currentPosition, knownOffset=knownOffset, axis=axis)
-        # Persist to config file
+        manager = self._master.positionersManager[positionerName]
+        # Snapshot the device position atomically when the frontend did not
+        # supply one. This avoids a race with the async position callback.
+        if knownOffset is None and currentDevicePosition is None:
+            try:
+                currentDevicePosition = float(manager.getDevicePositionAxis(axis))
+            except Exception as e:
+                self.__logger.error(f'getDevicePositionAxis failed: {e}')
+                currentDevicePosition = None
+        manager.setStageOffsetAxis(
+            knownPosition=knownPosition,
+            currentDevicePosition=currentDevicePosition,
+            knownOffset=knownOffset,
+            axis=axis,
+        )
         self.saveStageOffset(positionerName=positionerName, axis=axis)
+        return {
+            "success": True,
+            "axis": axis,
+            "offset": manager.getStageOffsetAxis(axis=axis),
+            "devicePosition": currentDevicePosition,
+            "knownPosition": knownPosition,
+        }
 
     @APIExport(runOnUIThread=False)
     def getStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):
-        """
-        Returns the stage offset for the given axis.
-        """
-        self.__logger.debug(f'Getting stage offset for {axis} axis.')
+        """Return the persisted stage offset for the given axis."""
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         return self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)
 
     @APIExport(runOnUIThread=False)
-    def getTruePositionerPositionWithoutOffset(self, positionerName: Optional[str]=None, axis:str="X"):
+    def getDevicePositionAxis(self, positionerName: Optional[str] = None, axis: str = "X"):
+        """Raw device position (no offset applied) for the given axis.
+
+        Use this to obtain a stable physical reference for offset calibration
+        - the firmware preserves device steps across software restarts so
+        repeated calibrations converge.
         """
-        Returns the true position of the positioner without the stage offset for the given axis.
-        """
-        self.__logger.debug(f'Getting true position without offset for {axis} axis.')
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-        currentPositionWithOffset = self.getPos(positionerName)[positionerName][axis]
-        currentOffset = self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)
-        return currentPositionWithOffset - currentOffset
+        return self._master.positionersManager[positionerName].getDevicePositionAxis(axis=axis)
+
+    # Back-compat alias for older frontends.
+    @APIExport(runOnUIThread=False)
+    def getTruePositionerPositionWithoutOffset(self, positionerName: Optional[str] = None, axis: str = "X"):
+        return self.getDevicePositionAxis(positionerName=positionerName, axis=axis)
 
     def saveStageOffset(self, positionerName: str, axis: str = None):
-        """
-        Save the current stage offset(s) to the config file.
-        
-        This follows the same pattern as PixelCalibrationController for config persistence.
-        The controller has access to _setupInfo which the manager does not.
-        
-        Args:
-            positionerName: Name of the positioner to save offsets for
-            axis: If provided, only mentioned for logging; all axes are always saved
+        """Persist the current stage offset(s) to the setup JSON.
+
+        Only axes for which the manager exposes ``stageOffsetPositions`` are
+        updated; previously persisted values for other axes are preserved.
+        This is critical for managers that do not own a hardware offset
+        (Virtual, TANGO, …) so that loading the JSON later does not silently
+        zero them.
         """
         try:
             if positionerName is None:
                 self.__logger.warning("Cannot save stage offset: positionerName is None")
                 return
+            if not hasattr(self, '_setupInfo') or self._setupInfo is None:
+                self.__logger.warning("Cannot save stage offset: _setupInfo not available")
+                return
+            if not hasattr(self._setupInfo, 'positioners') or positionerName not in self._setupInfo.positioners:
+                self.__logger.warning(f"Positioner {positionerName} not found in setupInfo.positioners")
+                return
 
             manager = self._master.positionersManager[positionerName]
+            positionerInfo = self._setupInfo.positioners[positionerName]
+            # Start from whatever was last persisted so unrelated axes survive.
+            currentOffsets = dict(getattr(positionerInfo, 'stageOffsets', {}) or {})
 
-            # Build stageOffsets dict from current manager state
-            axes = ["X", "Y", "Z", "A"]
-            stageOffsets = {}
             if hasattr(manager, 'stageOffsetPositions'):
-                for ax in axes:
-                    stageOffsets["stageOffsetPosition" + ax] = manager.stageOffsetPositions.get(ax, 0)
+                for ax in ("X", "Y", "Z", "A"):
+                    if ax in manager.stageOffsetPositions:
+                        currentOffsets["stageOffsetPosition" + ax] = float(
+                            manager.stageOffsetPositions[ax]
+                        )
             else:
-                # No offset positions defined in manager, use defaults
-                for ax in axes:
-                    stageOffsets["stageOffsetPosition" + ax] = 0
+                self.__logger.info(
+                    f"Manager {positionerName} has no stageOffsetPositions; "
+                    f"preserving previously persisted offsets unchanged."
+                )
 
-            # Update setupInfo and save to config file
-            if hasattr(self, '_setupInfo') and self._setupInfo is not None:
-                # Update the positioner's stageOffsets in setupInfo
-                if hasattr(self._setupInfo, 'positioners') and positionerName in self._setupInfo.positioners:
-                    self._setupInfo.positioners[positionerName].stageOffsets = stageOffsets
-
-                    # Save the updated setupInfo to disk
-                    mOptions, _ = configfiletools.loadOptions()
-                    configfiletools.saveSetupInfo(mOptions, self._setupInfo)
-                    self.__logger.info(f"Saved stage offsets for {positionerName}: {stageOffsets}")
-                else:
-                    self.__logger.warning(f"Positioner {positionerName} not found in setupInfo.positioners")
-            else:
-                self.__logger.warning("Cannot save stage offset: _setupInfo not available")
-
+            positionerInfo.stageOffsets = currentOffsets
+            mOptions, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(mOptions, self._setupInfo)
+            self.__logger.info(f"Saved stage offsets for {positionerName}: {currentOffsets}")
         except Exception as e:
             self.__logger.error(f"Could not save stage offset: {e}")
             import traceback

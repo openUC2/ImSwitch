@@ -87,6 +87,7 @@ const initialExperimentState = {
     ome_write_zarr: false,
     ome_write_stitched_tiff: true,
     ome_write_individual_tiffs: false,
+    ome_write_ashlar_stitch: false,
     // Tile overlap parameters (moved from WellSelectorSlice)
     overlapWidth: 0.0,  // 0.0 = no overlap (100% spacing), 0.1 = 10% overlap (90% spacing)
     overlapHeight: 0.0,  // 0.0 = no overlap (100% spacing), 0.1 = 10% overlap (90% spacing)
@@ -293,6 +294,10 @@ const experimentSlice = createSlice({
       console.log("setOmeWriteIndividualTiffs", action.payload);
       state.parameterValue.ome_write_individual_tiffs = action.payload;
     },
+    setOmeWriteAshlarStitch: (state, action) => {
+      console.log("setOmeWriteAshlarStitch", action.payload);
+      state.parameterValue.ome_write_ashlar_stitch = action.payload;
+    },
     //------------------------ overlap parameters
     setOverlapWidth: (state, action) => {
       console.log("setOverlapWidth", action.payload);
@@ -498,6 +503,7 @@ export const {
   setOmeWriteZarr,
   setOmeWriteStitchedTiff,
   setOmeWriteIndividualTiffs,
+  setOmeWriteAshlarStitch,
   setOverlapWidth,
   setOverlapHeight,
   setIsSnakescan,

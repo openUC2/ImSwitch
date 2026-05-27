@@ -103,12 +103,16 @@ const ExtendedObjectiveController = () => {
     const x0 = objectiveState.posX0;
     const x1 = objectiveState.posX1;
     const positionsConfigured =
-      x0 !== null && x0 !== undefined && x0 !== 0 &&
-      x1 !== null && x1 !== undefined && x1 !== 0;
+      x0 !== null &&
+      x0 !== undefined &&
+      x0 !== 0 &&
+      x1 !== null &&
+      x1 !== undefined &&
+      x1 !== 0;
     if (!positionsConfigured) {
       alert(
         "Objective positions (X0 / X1) are not configured yet.\n" +
-        "Please use the Calibration Wizard to set them before switching."
+          "Please use the Calibration Wizard to set them before switching.",
       );
       // return;
     }
@@ -148,8 +152,10 @@ const ExtendedObjectiveController = () => {
       .catch((err) => console.error(`Error setting ${label}:`, err));
   };
 
-  const handleSetX0 = (value) => handleSetPosition("x0", value, "Position 1 (X0)");
-  const handleSetX1 = (value) => handleSetPosition("x1", value, "Position 2 (X1)");
+  const handleSetX0 = (value) =>
+    handleSetPosition("x0", value, "Position 1 (X0)");
+  const handleSetX1 = (value) =>
+    handleSetPosition("x1", value, "Position 2 (X1)");
   const handleSetZ0 = (value) => handleSetPosition("z0", value, "Focus 1 (Z0)");
   const handleSetZ1 = (value) => handleSetPosition("z1", value, "Focus 2 (Z1)");
 
@@ -180,10 +186,14 @@ const ExtendedObjectiveController = () => {
   const handleSaveObjectiveMeta = (slot) => {
     const meta = editMeta[slot] || {};
     const params = { objectiveSlot: slot };
-    if (meta.name !== undefined && meta.name !== "") params.objectiveName = meta.name;
-    if (meta.NA !== undefined && meta.NA !== "") params.NA = parseFloat(meta.NA);
-    if (meta.magnification !== undefined && meta.magnification !== "") params.magnification = parseInt(meta.magnification, 10);
-    if (meta.pixelsize !== undefined && meta.pixelsize !== "") params.pixelsize = parseFloat(meta.pixelsize);
+    if (meta.name !== undefined && meta.name !== "")
+      params.objectiveName = meta.name;
+    if (meta.NA !== undefined && meta.NA !== "")
+      params.NA = parseFloat(meta.NA);
+    if (meta.magnification !== undefined && meta.magnification !== "")
+      params.magnification = parseInt(meta.magnification, 10);
+    if (meta.pixelsize !== undefined && meta.pixelsize !== "")
+      params.pixelsize = parseFloat(meta.pixelsize);
     const summary = Object.entries(params)
       .filter(([k]) => k !== "objectiveSlot")
       .map(([k, v]) => `${k}: ${v}`)
@@ -198,13 +208,17 @@ const ExtendedObjectiveController = () => {
   };
 
   return (
-    <Paper style={{ padding: "24px", maxWidth: 1100, margin: "0 auto" }}>
+    <Paper
+      style={{
+        padding: "24px",
+        width: "100%",
+        maxWidth: "100%",
+        margin: "0 auto",
+      }}
+    >
       <Grid container spacing={3}>
         {/* Objective Information */}
         <Grid item xs={12}>
-          <Typography variant="h5" gutterBottom>
-            Objective Controller
-          </Typography>
           <Typography>
             <b>Current Objective:</b>{" "}
             {objectiveState.currentObjective !== null
@@ -214,8 +228,8 @@ const ExtendedObjectiveController = () => {
           </Typography>
           <Typography>
             <b>Pixelsize:</b> {objectiveState.pixelsize ?? "Unknown"},{" "}
-            <b>NA:</b> {objectiveState.NA ?? "Unknown"},{" "}
-            <b>Magnification:</b> {objectiveState.magnification || "Unknown"}
+            <b>NA:</b> {objectiveState.NA ?? "Unknown"}, <b>Magnification:</b>{" "}
+            {objectiveState.magnification || "Unknown"}
           </Typography>
 
           {/* Per-slot metadata cards */}
@@ -224,20 +238,38 @@ const ExtendedObjectiveController = () => {
               <Grid item xs={12} md={6} key={slot}>
                 <Box sx={{ border: "1px solid #ddd", borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle2" gutterBottom>
-                    <b>Slot {slot} — {objectiveState.availableObjectivesNames?.[slot] || `Obj ${slot + 1}`}</b>
+                    <b>
+                      Slot {slot} —{" "}
+                      {objectiveState.availableObjectivesNames?.[slot] ||
+                        `Obj ${slot + 1}`}
+                    </b>
                   </Typography>
                   <Typography variant="body2">
-                    Magnification: {objectiveState.availableObjectiveMagnifications?.[slot] ?? "—"} &nbsp;|
-                    NA: {objectiveState.availableObjectiveNAs?.[slot] ?? "—"} &nbsp;|
-                    Pixelsize: {objectiveState.availableObjectivePixelSizes?.[slot] ?? "—"} µm/px
+                    Magnification:{" "}
+                    {objectiveState.availableObjectiveMagnifications?.[slot] ??
+                      "—"}{" "}
+                    &nbsp;| NA:{" "}
+                    {objectiveState.availableObjectiveNAs?.[slot] ?? "—"}{" "}
+                    &nbsp;| Pixelsize:{" "}
+                    {objectiveState.availableObjectivePixelSizes?.[slot] ?? "—"}{" "}
+                    µm/px
                   </Typography>
-                  <Box sx={{ display: "flex", gap: 1, mt: 1, flexWrap: "wrap" }}>
+                  <Box
+                    sx={{ display: "flex", gap: 1, mt: 1, flexWrap: "wrap" }}
+                  >
                     <TextField
                       label="Name"
                       size="small"
                       value={editMeta[slot]?.name ?? ""}
-                      placeholder={objectiveState.availableObjectivesNames?.[slot] || ""}
-                      onChange={(e) => setEditMeta((p) => ({ ...p, [slot]: { ...p[slot], name: e.target.value } }))}
+                      placeholder={
+                        objectiveState.availableObjectivesNames?.[slot] || ""
+                      }
+                      onChange={(e) =>
+                        setEditMeta((p) => ({
+                          ...p,
+                          [slot]: { ...p[slot], name: e.target.value },
+                        }))
+                      }
                       sx={{ width: 110 }}
                     />
                     <TextField
@@ -245,8 +277,17 @@ const ExtendedObjectiveController = () => {
                       size="small"
                       type="number"
                       value={editMeta[slot]?.magnification ?? ""}
-                      placeholder={String(objectiveState.availableObjectiveMagnifications?.[slot] ?? "")}
-                      onChange={(e) => setEditMeta((p) => ({ ...p, [slot]: { ...p[slot], magnification: e.target.value } }))}
+                      placeholder={String(
+                        objectiveState.availableObjectiveMagnifications?.[
+                          slot
+                        ] ?? "",
+                      )}
+                      onChange={(e) =>
+                        setEditMeta((p) => ({
+                          ...p,
+                          [slot]: { ...p[slot], magnification: e.target.value },
+                        }))
+                      }
                       sx={{ width: 110 }}
                     />
                     <TextField
@@ -254,8 +295,15 @@ const ExtendedObjectiveController = () => {
                       size="small"
                       type="number"
                       value={editMeta[slot]?.NA ?? ""}
-                      placeholder={String(objectiveState.availableObjectiveNAs?.[slot] ?? "")}
-                      onChange={(e) => setEditMeta((p) => ({ ...p, [slot]: { ...p[slot], NA: e.target.value } }))}
+                      placeholder={String(
+                        objectiveState.availableObjectiveNAs?.[slot] ?? "",
+                      )}
+                      onChange={(e) =>
+                        setEditMeta((p) => ({
+                          ...p,
+                          [slot]: { ...p[slot], NA: e.target.value },
+                        }))
+                      }
                       sx={{ width: 80 }}
                     />
                     <TextField
@@ -263,11 +311,23 @@ const ExtendedObjectiveController = () => {
                       size="small"
                       type="number"
                       value={editMeta[slot]?.pixelsize ?? ""}
-                      placeholder={String(objectiveState.availableObjectivePixelSizes?.[slot] ?? "")}
-                      onChange={(e) => setEditMeta((p) => ({ ...p, [slot]: { ...p[slot], pixelsize: e.target.value } }))}
+                      placeholder={String(
+                        objectiveState.availableObjectivePixelSizes?.[slot] ??
+                          "",
+                      )}
+                      onChange={(e) =>
+                        setEditMeta((p) => ({
+                          ...p,
+                          [slot]: { ...p[slot], pixelsize: e.target.value },
+                        }))
+                      }
                       sx={{ width: 90 }}
                     />
-                    <Button variant="contained" size="small" onClick={() => handleSaveObjectiveMeta(slot)}>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      onClick={() => handleSaveObjectiveMeta(slot)}
+                    >
                       Save
                     </Button>
                   </Box>
@@ -291,10 +351,7 @@ const ExtendedObjectiveController = () => {
                   borderRadius: 2,
                   p: 1,
                   mb: 2,
-                  maxWidth: 600,
-                  maxHeight: 400,
-                  overflow: "auto",
-                  background: "#fafbfc",
+                  width: "100%",
                 }}
               >
                 <LiveViewControlWrapper />
@@ -416,32 +473,50 @@ const ExtendedObjectiveController = () => {
           </Typography>
           <Grid container spacing={1}>
             <Grid item>
-              <Button variant="outlined" onClick={() => movePositioner(-1000, "Z")}>
+              <Button
+                variant="outlined"
+                onClick={() => movePositioner(-1000, "Z")}
+              >
                 ↓↓↓ (1000)
               </Button>
             </Grid>
             <Grid item>
-              <Button variant="outlined" onClick={() => movePositioner(-100, "Z")}>
+              <Button
+                variant="outlined"
+                onClick={() => movePositioner(-100, "Z")}
+              >
                 ↓↓ (100)
               </Button>
             </Grid>
             <Grid item>
-              <Button variant="outlined" onClick={() => movePositioner(-10, "Z")}>
+              <Button
+                variant="outlined"
+                onClick={() => movePositioner(-10, "Z")}
+              >
                 ↓ (10)
               </Button>
             </Grid>
             <Grid item>
-              <Button variant="outlined" onClick={() => movePositioner(10, "Z")}>
+              <Button
+                variant="outlined"
+                onClick={() => movePositioner(10, "Z")}
+              >
                 (10) ↑
               </Button>
             </Grid>
             <Grid item>
-              <Button variant="outlined" onClick={() => movePositioner(100, "Z")}>
+              <Button
+                variant="outlined"
+                onClick={() => movePositioner(100, "Z")}
+              >
                 (100) ↑↑
               </Button>
             </Grid>
             <Grid item>
-              <Button variant="outlined" onClick={() => movePositioner(1000, "Z")}>
+              <Button
+                variant="outlined"
+                onClick={() => movePositioner(1000, "Z")}
+              >
                 (1000) ↑↑↑
               </Button>
             </Grid>
@@ -460,8 +535,13 @@ const ExtendedObjectiveController = () => {
                 sx={{ border: "1px solid #eee", borderRadius: 2, p: 2, mb: 2 }}
               >
                 <Typography variant="body1">
-                  <b>Position 1 ({objectiveState.availableObjectivesNames?.[0] || "Obj 1"}):</b>{" "}
-                  {objectiveState.posX0 !== null ? objectiveState.posX0 : "Unknown"}
+                  <b>
+                    Position 1 (
+                    {objectiveState.availableObjectivesNames?.[0] || "Obj 1"}):
+                  </b>{" "}
+                  {objectiveState.posX0 !== null
+                    ? objectiveState.posX0
+                    : "Unknown"}
                 </Typography>
                 <TextField
                   label="Set Position 1"
@@ -504,7 +584,7 @@ const ExtendedObjectiveController = () => {
                   fullWidth
                 >
                   Switch to Objective 1 (incl. Z)
-                </Button>                
+                </Button>
               </Box>
             </Grid>
             {/* X1 */}
@@ -513,8 +593,13 @@ const ExtendedObjectiveController = () => {
                 sx={{ border: "1px solid #eee", borderRadius: 2, p: 2, mb: 2 }}
               >
                 <Typography variant="body1">
-                  <b>Position 2 ({objectiveState.availableObjectivesNames?.[1] || "Obj 2"}):</b>{" "}
-                  {objectiveState.posX1 !== null ? objectiveState.posX1 : "Unknown"}
+                  <b>
+                    Position 2 (
+                    {objectiveState.availableObjectivesNames?.[1] || "Obj 2"}):
+                  </b>{" "}
+                  {objectiveState.posX1 !== null
+                    ? objectiveState.posX1
+                    : "Unknown"}
                 </Typography>
                 <TextField
                   label="Set Position 2"
@@ -545,19 +630,19 @@ const ExtendedObjectiveController = () => {
                 <Button
                   variant="outlined"
                   color="secondary"
-                  onClick={() => handleSwitchObjective(1, true  )}
+                  onClick={() => handleSwitchObjective(1, true)}
                   fullWidth
                 >
                   Switch to Objective 2
                 </Button>
-              <Button
+                <Button
                   variant="outlined"
                   color="secondary"
-                  onClick={() => handleSwitchObjective(1, false  )}
+                  onClick={() => handleSwitchObjective(1, false)}
                   fullWidth
                 >
                   Switch to Objective 2 (incl. Z)
-                </Button>                
+                </Button>
               </Box>
             </Grid>
             {/* Z0 */}
@@ -566,8 +651,13 @@ const ExtendedObjectiveController = () => {
                 sx={{ border: "1px solid #eee", borderRadius: 2, p: 2, mb: 2 }}
               >
                 <Typography variant="body1">
-                  <b>Focus 1 ({objectiveState.availableObjectivesNames?.[0] || "Obj 1"}):</b>{" "}
-                  {objectiveState.posZ0 !== null ? objectiveState.posZ0 : "Unknown"}
+                  <b>
+                    Focus 1 (
+                    {objectiveState.availableObjectivesNames?.[0] || "Obj 1"}):
+                  </b>{" "}
+                  {objectiveState.posZ0 !== null
+                    ? objectiveState.posZ0
+                    : "Unknown"}
                 </Typography>
                 <TextField
                   label="Set Focus 1"
@@ -602,8 +692,13 @@ const ExtendedObjectiveController = () => {
                 sx={{ border: "1px solid #eee", borderRadius: 2, p: 2, mb: 2 }}
               >
                 <Typography variant="body1">
-                  <b>Focus 2 ({objectiveState.availableObjectivesNames?.[1] || "Obj 2"}):</b>{" "}
-                  {objectiveState.posZ1 !== null ? objectiveState.posZ1 : "Unknown"}
+                  <b>
+                    Focus 2 (
+                    {objectiveState.availableObjectivesNames?.[1] || "Obj 2"}):
+                  </b>{" "}
+                  {objectiveState.posZ1 !== null
+                    ? objectiveState.posZ1
+                    : "Unknown"}
                 </Typography>
                 <TextField
                   label="Set Focus 2"

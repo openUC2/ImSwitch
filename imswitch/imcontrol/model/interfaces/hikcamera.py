@@ -403,26 +403,28 @@ class CameraHIK:
             info = pInfo.contents
             w, h   = info.nWidth, info.nHeight
             nSize  = info.nFrameLen
-            pix    = info.enPixelType
+            pix    = int(info.enPixelType)
             fid    = info.nFrameNum
             ts     = self._hw_timestamp(info)        # ← fixed
+            src_buf = (c_ubyte * nSize).from_address(addressof(pData.contents))
 
             if not getattr(self, '_pix_logged', False):
                 self.__logger.info(f"First frame pixel type: {pix}  w={w} h={h}")
                 self._pix_logged = True
 
+            frame = None
+
             # build NumPy view over the SDK buffer (zero-copy)
             # For >8-bit unpacked mono formats, each pixel is 2 bytes (uint16)
             if pix in _MONO_HIGHBIT_FORMATS:
                 buf = np.frombuffer(
-                    (c_ubyte * nSize).from_address(addressof(pData.contents)),
+                    src_buf,
                     dtype=np.uint16
                 )
+                frame = buf.reshape(h, w)
             elif pix in _MONO_PACKED_FORMATS:
                 nDst = w * h * 2
                 dst  = (c_ubyte * nDst)()
-
-                src_buf = (c_ubyte * nSize).from_address(addressof(pData.contents))
 
                 conv = MV_CC_PIXEL_CONVERT_PARAM()
                 memset(byref(conv), 0, sizeof(conv))
@@ -430,7 +432,7 @@ class CameraHIK:
                 conv.nHeight        = h
                 conv.enSrcPixelType = pix
                 conv.enDstPixelType = PixelType_Gvsp_Mono16
-                conv.pSrcData       = src_buf          # ← was pData, now correct ctypes array
+                conv.pSrcData       = src_buf
                 conv.nSrcDataLen    = nSize
                 conv.pDstBuffer     = dst
                 conv.nDstBufferSize = nDst
@@ -449,10 +451,15 @@ class CameraHIK:
                     buf = np.frombuffer(dst, dtype=np.uint16, count=w * h)
                     frame = buf.reshape(h, w)
 
-            elif pix in (PixelType_Gvsp_BayerRG8,
-                        PixelType_Gvsp_BayerBG8,
-                        PixelType_Gvsp_BayerGB8,
-                        PixelType_Gvsp_BayerGR8):
+            elif pix == PixelType_Gvsp_Mono8:
+                buf = np.frombuffer(src_buf, dtype=np.uint8)
+                frame = buf.reshape(h, w)
+            elif pix in (
+                PixelType_Gvsp_BayerRG8,
+                PixelType_Gvsp_BayerBG8,
+                PixelType_Gvsp_BayerGB8,
+                PixelType_Gvsp_BayerGR8,
+            ):
                 nRGB = w * h * 3
                 dst  = (c_ubyte * nRGB)()
                 conv = MV_CC_PIXEL_CONVERT_PARAM()
@@ -461,17 +468,18 @@ class CameraHIK:
                 conv.nHeight        = h
                 conv.enSrcPixelType = pix
                 conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
-                conv.pSrcData       = pData
+                conv.pSrcData       = src_buf
                 conv.nSrcDataLen    = nSize
                 conv.pDstBuffer     = dst
                 conv.nDstBufferSize = nRGB
                 ret = self.camera.MV_CC_ConvertPixelType(conv)
-                if ret != 0:
-                    self.__logger.error(
-                        f"[DIAG] Bayer→RGB convert FAILED: pix=0x{pix:x} ret=0x{ret:x} "
-                        f"w={w} h={h} nSize={nSize} nRGB={nRGB}"
+                if ret == 0:
+                    buf = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
+                    frame = buf.reshape(h, w, 3)
+                else:
+                    self.__logger.warning(
+                        f"SDK Bayer->RGB conversion failed 0x{ret:x}; falling back to OpenCV demosaic"
                     )
-                    # Fallback: numpy demosaic
                     import cv2
                     bayer_map = {
                         PixelType_Gvsp_BayerRG8: cv2.COLOR_BayerRG2RGB,
@@ -479,55 +487,17 @@ class CameraHIK:
                         PixelType_Gvsp_BayerGB8: cv2.COLOR_BayerGB2RGB,
                         PixelType_Gvsp_BayerGR8: cv2.COLOR_BayerGR2RGB,
                     }
-                    raw = np.frombuffer(
-                        (c_ubyte * nSize).from_address(addressof(pData.contents)),
-                        dtype=np.uint8
-                    ).reshape(h, w)
+                    raw = np.frombuffer(src_buf, dtype=np.uint8).reshape(h, w)
                     frame = cv2.cvtColor(raw, bayer_map[pix])
-                else:
-                    buf   = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
-                    frame = buf.reshape(h, w, 3)
-
-            else:
-                buf = np.frombuffer(
-                    (c_ubyte * nSize).from_address(addressof(pData.contents)),
-                    dtype=np.uint8
-                )
-
-            # reshape according to pixel type
-            if pix in _MONO_HIGHBIT_FORMATS or pix in _MONO_PACKED_FORMATS:  # mono 10/12/16-bit
-                frame = buf.reshape(h, w)
-            elif pix == PixelType_Gvsp_Mono8:              # mono 8-bit
-                frame = buf.reshape(h, w)
-            elif pix in (PixelType_Gvsp_RGB8_Packed,
-                        PixelType_Gvsp_BayerRG8,
-                        PixelType_Gvsp_BayerBG8,
-                        PixelType_Gvsp_BayerGB8,
-                        PixelType_Gvsp_BayerGR8):
-                # convert to RGB for non-packed types
-                if pix != PixelType_Gvsp_RGB8_Packed:
-                    nRGB = w * h * 3
-                    dst  = (c_ubyte * nRGB)()
-                    conv = MV_CC_PIXEL_CONVERT_PARAM()
-                    memset(byref(conv), 0, sizeof(conv))
-                    conv.nWidth         = w
-                    conv.nHeight        = h
-                    conv.enSrcPixelType = pix
-                    conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
-                    conv.pSrcData       = pData
-                    conv.nSrcDataLen    = nSize
-                    conv.pDstBuffer     = dst
-                    conv.nDstBufferSize = nRGB
-                    ret = self.camera.MV_CC_ConvertPixelType(conv)
-                    if ret != 0:
-                        self.__logger.error(f"Pixel convert failed 0x{ret:x}")
-                        return
-                    buf   = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
+            elif pix == PixelType_Gvsp_RGB8_Packed:
+                buf = np.frombuffer(src_buf, dtype=np.uint8)
                 frame = buf.reshape(h, w, 3)
-            elif pix in (PixelType_Gvsp_YUV422_YUYV_Packed,
-                        PixelType_Gvsp_YUV422_Packed,
-                        PixelType_Gvsp_YUV444_Packed,
-                        PixelType_Gvsp_YUV411_Packed):
+            elif pix in (
+                PixelType_Gvsp_YUV422_YUYV_Packed,
+                PixelType_Gvsp_YUV422_Packed,
+                PixelType_Gvsp_YUV444_Packed,
+                PixelType_Gvsp_YUV411_Packed,
+            ):
                 # convert YUV to RGB
                 nRGB = w * h * 3
                 dst  = (c_ubyte * nRGB)()
@@ -537,7 +507,7 @@ class CameraHIK:
                 conv.nHeight        = h
                 conv.enSrcPixelType = pix
                 conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
-                conv.pSrcData       = pData
+                conv.pSrcData       = src_buf
                 conv.nSrcDataLen    = nSize
                 conv.pDstBuffer     = dst
                 conv.nDstBufferSize = nRGB

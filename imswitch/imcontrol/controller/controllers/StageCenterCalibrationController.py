@@ -175,10 +175,22 @@ class StageCenterCalibrationController(ImConWidgetController):
 
     @APIExport()
     def stopCalibration(self) -> dict:
+        """Stop the raster scan and persist whatever samples were collected.
+
+        The user often stops a scan early after visually identifying the
+        bright spot - we should keep the partial result on disk so the
+        frontend can still accept the brightest sample (or reload it later).
+        """
         self._is_running = False
         if self._task is not None:
             self._task.join()
             self._task = None
+        # Persist whatever samples we have so a "stop early" workflow still
+        # leaves a usable heatmap behind.
+        try:
+            self._persistLatestHeatmap()
+        except Exception as e:
+            self._logger.warning(f"Persist on stop failed: {e}")
         self._logger.info("Calibration stopped.")
         return self._currentResult()
 

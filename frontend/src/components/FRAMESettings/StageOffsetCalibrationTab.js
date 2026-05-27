@@ -25,7 +25,7 @@ import React, {
   useState,
   useCallback,
 } from "react";
-import { useSelector } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import {
   Alert,
   Box,
@@ -37,7 +37,6 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
-  Divider,
   FormControl,
   Grid,
   InputLabel,
@@ -47,12 +46,20 @@ import {
   Stepper,
   Step,
   StepLabel,
+  Tab,
+  Tabs,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 
 import LiveViewControlWrapper from "../../axon/LiveViewControlWrapper";
 import * as positionSlice from "../../state/slices/PositionSlice";
+import * as liveStreamSlice from "../../state/slices/LiveStreamSlice";
+import * as liveViewSlice from "../../state/slices/LiveViewSlice";
+import apiSettingsControllerGetDetectorNames from "../../backendapi/apiSettingsControllerGetDetectorNames";
+import IlluminationController from "../IlluminationController";
+import JoystickControl from "../JoystickControl";
 import apiStageCenterCalibrationPerformCalibration from "../../backendapi/apiStageCenterCalibrationPerformCalibration";
 import apiStageCenterCalibrationStopCalibration from "../../backendapi/apiStageCenterCalibrationStopCalibration";
 import apiStageCenterCalibrationGetHeatmap from "../../backendapi/apiStageCenterCalibrationGetHeatmap";
@@ -64,6 +71,10 @@ import apiPositionerControllerMovePositioner from "../../backendapi/apiPositione
 import apiPositionerControllerSetStageOffsetAxis from "../../backendapi/apiPositionerControllerSetStageOffsetAxis";
 import apiPositionerControllerGetDevicePositionAxis from "../../backendapi/apiPositionerControllerGetDevicePositionAxis";
 import apiPositionerControllerHomeAxis from "../../backendapi/apiPositionerControllerHomeAxis";
+import apiObjectiveControllerGetStatus from "../../backendapi/apiObjectiveControllerGetStatus";
+import apiLiveViewControllerStartLiveView from "../../backendapi/apiLiveViewControllerStartLiveView";
+import apiLiveViewControllerStopLiveView from "../../backendapi/apiLiveViewControllerStopLiveView";
+import { getConnectionSettingsState } from "../../state/slices/ConnectionSettingsSlice";
 
 
 const STEPS = ["Insert slide & start scan", "Review heatmap & accept"];
@@ -102,6 +113,9 @@ const FALLBACK_LAYOUTS = [
 // ----------------------------------------------------------------------
 // LayoutMapMini - small canvas rendering layout slots + the current stage
 // position. Click moves the stage to that XY (absolute, blocking).
+// Optionally overlays the planned scan area (current ± maxRadiusUm) and the
+// individual tile grid (one tile = one image at FOV size). Helps the user
+// see what they are about to scan before clicking start.
 // ----------------------------------------------------------------------
 const LayoutMapMini = ({
   layout,
@@ -111,6 +125,9 @@ const LayoutMapMini = ({
   knownY,
   brightestX,
   brightestY,
+  scanCenter = null,
+  maxRadiusUm = 0,
+  stepUm = 0,
   width = 380,
   height = 240,
   onClickMove,
@@ -152,6 +169,56 @@ const LayoutMapMini = ({
       ctx.fillStyle = "rgba(80, 140, 200, 0.25)";
     });
 
+    // Scan area preview - centred on ``scanCenter`` (defaults to the current
+    // stage position when given). Edge dashed = ± maxRadiusUm, faint grid =
+    // tile boundaries spaced by stepUm so the user can see where each FOV
+    // sample lands.
+    const centerForScan = scanCenter || (stageX != null && stageY != null ? { x: stageX, y: stageY } : null);
+    if (centerForScan && maxRadiusUm > 0) {
+      const cx = offX + centerForScan.x * s;
+      const cy = offY + centerForScan.y * s;
+      const half = maxRadiusUm * s;
+      ctx.save();
+      ctx.strokeStyle = "rgba(140, 220, 140, 0.9)";
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(cx - half, cy - half, 2 * half, 2 * half);
+      ctx.setLineDash([]);
+      if (stepUm > 0) {
+        // Number of tiles per side mirrors the controller: ``n_half`` rows on
+        // each side of the centre + the centre row itself.
+        const nHalf = Math.max(1, Math.round(maxRadiusUm / Math.max(stepUm, 1)));
+        const start = -nHalf * stepUm;
+        const end = nHalf * stepUm;
+        ctx.strokeStyle = "rgba(140, 220, 140, 0.25)";
+        ctx.lineWidth = 0.5;
+        for (let i = -nHalf; i <= nHalf + 1; i += 1) {
+          const t = start + (i + nHalf) * stepUm;
+          const px = cx + t * s;
+          if (px < cx - half - 0.5 || px > cx + half + 0.5) continue;
+          ctx.beginPath();
+          ctx.moveTo(px, cy - half);
+          ctx.lineTo(px, cy + half);
+          ctx.stroke();
+          const py = cy + t * s;
+          if (py < cy - half - 0.5 || py > cy + half + 0.5) continue;
+          ctx.beginPath();
+          ctx.moveTo(cx - half, py);
+          ctx.lineTo(cx + half, py);
+          ctx.stroke();
+        }
+        // light centre cross
+        ctx.strokeStyle = "rgba(140, 220, 140, 0.65)";
+        ctx.beginPath();
+        ctx.moveTo(cx - 5, cy);
+        ctx.lineTo(cx + 5, cy);
+        ctx.moveTo(cx, cy - 5);
+        ctx.lineTo(cx, cy + 5);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     if (knownX != null && knownY != null) {
       const kx = offX + knownX * s;
       const ky = offY + knownY * s;
@@ -188,7 +255,7 @@ const LayoutMapMini = ({
       ctx.lineWidth = 1;
       ctx.stroke();
     }
-  }, [layout, stageX, stageY, knownX, knownY, brightestX, brightestY]);
+  }, [layout, stageX, stageY, knownX, knownY, brightestX, brightestY, scanCenter, maxRadiusUm, stepUm]);
 
   useEffect(() => {
     draw();
@@ -249,20 +316,46 @@ const LayoutMapMini = ({
 // than to physically move the stage there. ``onPick`` returns the (x, y)
 // the user clicked, ``onMove`` is called if held with shift.
 // ----------------------------------------------------------------------
+// Shared LUT used for both the heatmap fill and its colorbar legend so that
+// the user can read off intensity values consistent with the rendered grid.
+const heatmapColor = (t) => {
+  const tt = Math.max(0, Math.min(1, t));
+  const r = Math.round(255 * Math.max(0, tt - 0.5) * 2);
+  const g = Math.round(255 * Math.min(1, tt * 1.5));
+  const b = Math.round(255 * Math.max(0, 1 - tt * 1.5));
+  return `rgb(${r},${g},${b})`;
+};
+
 const HeatmapCanvas = ({ data, onPick, onMove, picked, width = 420, height = 420 }) => {
   const canvasRef = useRef(null);
   const projectionRef = useRef(null);
+  // Right-side colorbar; reserved so the click-to-stage projection only spans
+  // the heatmap area, not the legend.
+  const COLORBAR_W = 24;
+  const COLORBAR_PAD_LEFT = 6;
+
+  // Range cached after each draw so the colorbar labels can display min/max
+  // without re-iterating the samples in the render path.
+  const [range, setRange] = useState({ iMin: null, iMax: null });
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
-    const w = canvas.width;
+    const totalW = canvas.width;
     const h = canvas.height;
+    const w = totalW - COLORBAR_W - COLORBAR_PAD_LEFT;
     ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, w, h);
+    ctx.fillRect(0, 0, totalW, h);
     if (!data?.samples?.length) {
       projectionRef.current = null;
+      // Still draw an empty colorbar so the layout doesn't jump.
+      const cbx = w + COLORBAR_PAD_LEFT;
+      for (let i = 0; i < h; i += 1) {
+        ctx.fillStyle = heatmapColor(1 - i / h);
+        ctx.fillRect(cbx, i, COLORBAR_W, 1);
+      }
+      setRange({ iMin: null, iMax: null });
       return;
     }
 
@@ -287,10 +380,7 @@ const HeatmapCanvas = ({ data, onPick, onMove, picked, width = 420, height = 420
       const px = ((s.x - xMin) / xRange) * (w - cellW);
       const py = h - cellH - ((s.y - yMin) / yRange) * (h - cellH);
       const t = (s.intensity - iMin) / iRange;
-      const r = Math.round(255 * Math.max(0, t - 0.5) * 2);
-      const g = Math.round(255 * Math.min(1, t * 1.5));
-      const b = Math.round(255 * Math.max(0, 1 - t * 1.5));
-      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillStyle = heatmapColor(t);
       ctx.fillRect(px, py, cellW + 1, cellH + 1);
     });
 
@@ -314,7 +404,19 @@ const HeatmapCanvas = ({ data, onPick, onMove, picked, width = 420, height = 420
       ctx.stroke();
     }
 
+    // Colorbar strip on the right edge.
+    const cbx = w + COLORBAR_PAD_LEFT;
+    for (let i = 0; i < h; i += 1) {
+      const t = 1 - i / (h - 1);
+      ctx.fillStyle = heatmapColor(t);
+      ctx.fillRect(cbx, i, COLORBAR_W, 1);
+    }
+    ctx.strokeStyle = "#888";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cbx, 0, COLORBAR_W, h - 1);
+
     projectionRef.current = { xMin, xMax, yMin, yMax, w, h, cellW, cellH };
+    setRange({ iMin, iMax });
   }, [data, picked]);
 
   const eventToStage = (event) => {
@@ -325,6 +427,7 @@ const HeatmapCanvas = ({ data, onPick, onMove, picked, width = 420, height = 420
     const cx = ((event.clientX - rect.left) / rect.width) * canvas.width;
     const cy = ((event.clientY - rect.top) / rect.height) * canvas.height;
     const { xMin, xMax, yMin, yMax, w, h, cellW, cellH } = proj;
+    if (cx > w) return null; // Ignore clicks on the colorbar strip.
     const xRange = xMax - xMin || 1;
     const yRange = yMax - yMin || 1;
     const stageX = xMin + (cx / (w - cellW)) * xRange;
@@ -350,16 +453,40 @@ const HeatmapCanvas = ({ data, onPick, onMove, picked, width = 420, height = 420
 
   return (
     <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, p: 1, background: "#111" }}>
-      <canvas
-        ref={canvasRef}
-        width={width}
-        height={height}
-        style={{ width: "100%", height: "auto", display: "block", cursor: "crosshair" }}
-        onClick={handleClick}
-        onContextMenu={handleContextMenu}
-      />
+      <Box sx={{ position: "relative" }}>
+        <canvas
+          ref={canvasRef}
+          width={width}
+          height={height}
+          style={{ width: "100%", height: "auto", display: "block", cursor: "crosshair" }}
+          onClick={handleClick}
+          onContextMenu={handleContextMenu}
+        />
+        {/* Colorbar min/max labels. Positioned over the rightmost strip. */}
+        <Box
+          sx={{
+            position: "absolute",
+            top: 0,
+            right: 2,
+            height: "100%",
+            width: 36,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+            pointerEvents: "none",
+            color: "#ddd",
+            textShadow: "0 0 2px #000",
+            fontSize: 10,
+            textAlign: "right",
+          }}
+        >
+          <span>{range.iMax != null ? range.iMax.toFixed(1) : "max"}</span>
+          <span>{range.iMin != null ? range.iMin.toFixed(1) : "min"}</span>
+        </Box>
+      </Box>
       <Typography variant="caption" color="textSecondary" sx={{ display: "block", mt: 0.5 }}>
         Click to pick the calibration target. Shift-click or right-click to move the stage there.
+        Colorbar shows mean intensity range.
       </Typography>
     </Box>
   );
@@ -370,16 +497,27 @@ const HeatmapCanvas = ({ data, onPick, onMove, picked, width = 420, height = 420
 // Main tab
 // ----------------------------------------------------------------------
 const StageOffsetCalibrationTab = () => {
+  const dispatch = useDispatch();
   const positionState = useSelector(positionSlice.getPositionState);
+  const liveViewState = useSelector(liveViewSlice.getLiveViewState);
+  const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
+  const connectionSettings = useSelector(getConnectionSettingsState);
+  const hostIP = connectionSettings.ip;
+  const hostPort = connectionSettings.apiPort;
 
   const [activeStep, setActiveStep] = useState(0);
   const [layouts, setLayouts] = useState(FALLBACK_LAYOUTS);
   const [layoutName, setLayoutName] = useState(FALLBACK_LAYOUTS[0].name);
 
-  // Scan parameters - exposure intentionally removed (managed in detector).
+  // Active objective drives step_um (one tile per FOV by default). User can
+  // still tweak the step manually.
+  const [objectiveStatus, setObjectiveStatus] = useState(null);
   const [stepUm, setStepUm] = useState(250);
   const [maxRadiusUm, setMaxRadiusUm] = useState(5000);
   const [recommended, setRecommended] = useState(null);
+  // Has the user manually overridden step_um? Once yes we stop auto-syncing
+  // from objective changes so we don't trample on their intent.
+  const stepManualRef = useRef(false);
 
   // Polling-driven scan-running state (controller spawns its own thread, so
   // local optimistic toggles never flip back).
@@ -407,6 +545,12 @@ const StageOffsetCalibrationTab = () => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmBusy, setConfirmBusy] = useState(false);
 
+  // Detector-tab switching mirrors the LiveView page: dispatching activeTab
+  // alone won't restart the stream when LiveView itself is unmounted, so we
+  // run the same stop → wait → start sequence locally to avoid two parallel
+  // streams pushing frames.
+  const detectorSwitchBusyRef = useRef(false);
+
   const pollRef = useRef(null);
 
   const selectedLayout = useMemo(
@@ -425,6 +569,20 @@ const StageOffsetCalibrationTab = () => {
     if (heatmap?.brightest) return { x: heatmap.brightest.x, y: heatmap.brightest.y };
     return null;
   }, [pickedTarget, heatmap]);
+
+  // Tile count + ETA. Mirrors the controller's ``n_half = round(max_r/step)``
+  // and ``2*n_half + 1`` per side. 1 s per tile is a coarse estimate that
+  // matches the empirical performance of the raster worker.
+  const tileGeom = useMemo(() => {
+    const step = Number(stepUm) || 0;
+    const radius = Number(maxRadiusUm) || 0;
+    if (step <= 0 || radius <= 0) return { nx: 0, ny: 0, total: 0, etaS: 0 };
+    const nHalf = Math.max(1, Math.round(radius / step));
+    const nx = 2 * nHalf + 1;
+    const ny = nx;
+    const total = nx * ny;
+    return { nx, ny, total, etaS: total };
+  }, [stepUm, maxRadiusUm]);
 
   // ----- bootstrap -------------------------------------------------------
 
@@ -468,8 +626,14 @@ const StageOffsetCalibrationTab = () => {
         /* static defaults */
       }
       // Pre-load the latest heatmap so the tab repopulates after reload.
+      // ``getLatestHeatmap`` is new (post-rework) so older backends 404 - in
+      // that case fall back to the live ``getCalibrationHeatmap`` which is
+      // empty after a fresh boot anyway.
       try {
-        const latest = await apiStageCenterCalibrationGetLatestHeatmap();
+        let latest = await apiStageCenterCalibrationGetLatestHeatmap();
+        if (!latest || latest.samples == null) {
+          latest = await apiStageCenterCalibrationGetHeatmap();
+        }
         if (cancelled) return;
         if (latest && latest.samples && latest.samples.length) {
           setHeatmap(latest);
@@ -477,6 +641,34 @@ const StageOffsetCalibrationTab = () => {
         }
       } catch (e) {
         /* no-op */
+      }
+      // Objective FOV → step_um. Step defaults to min(FOV_x, FOV_y) so each
+      // raster node corresponds to one full image.
+      try {
+        const status = await apiObjectiveControllerGetStatus();
+        if (cancelled || !status) return;
+        setObjectiveStatus(status);
+        const fov = status.FOV || [];
+        const fovMin = Math.min(...fov.filter((v) => v && Number.isFinite(v)));
+        if (Number.isFinite(fovMin) && fovMin > 0 && !stepManualRef.current) {
+          setStepUm(Math.round(fovMin));
+        }
+      } catch (e) {
+        /* objective endpoint may not exist - keep static defaults */
+      }
+      // Populate the detector tab strip. LiveView normally fills this in
+      // Redux but only while it is mounted; if the user lands directly on
+      // the FRAMESettings tab we still need the list ourselves.
+      try {
+        if (!liveViewState?.detectors || liveViewState.detectors.length === 0) {
+          const names = await apiSettingsControllerGetDetectorNames();
+          if (cancelled) return;
+          if (Array.isArray(names) && names.length) {
+            dispatch(liveViewSlice.setDetectors(names));
+          }
+        }
+      } catch (e) {
+        /* detectors will be empty - tab strip just hides itself */
       }
     })();
     return () => {
@@ -562,13 +754,28 @@ const StageOffsetCalibrationTab = () => {
   };
 
   const handleStop = async () => {
+    // The user often stops the scan early because they already see the bright
+    // spot. Persist the partial heatmap (backend does this too) and grab a
+    // final snapshot so the brightest sample is immediately available for
+    // accept without resetting any UI state.
     try {
-      await apiStageCenterCalibrationStopCalibration();
+      const stopped = await apiStageCenterCalibrationStopCalibration();
+      if (stopped && stopped.samples) {
+        setHeatmap(stopped);
+      } else {
+        try {
+          const final = await apiStageCenterCalibrationGetHeatmap();
+          if (final && final.samples) setHeatmap(final);
+        } catch (e) {
+          /* ignore */
+        }
+      }
     } catch (e) {
       /* ignore */
     }
     setPollingRunning(false);
     stopPolling();
+    setActiveStep(1);
   };
 
   const moveStage = async (x, y) => {
@@ -623,6 +830,49 @@ const StageOffsetCalibrationTab = () => {
       setError(`Homing failed: ${e.message || e}`);
     } finally {
       setHomingBusy(false);
+    }
+  };
+
+  // ---- detector-tab switch (same UX as the LiveView page) ----------------
+
+  const handleDetectorTabChange = async (newIndex) => {
+    const detectors = liveViewState?.detectors || [];
+    if (newIndex === liveViewState?.activeTab) return;
+    // Optimistically update activeTab so the Tabs UI is responsive even
+    // while the stream is being restarted.
+    dispatch(liveViewSlice.setActiveTab(newIndex));
+    if (detectorSwitchBusyRef.current) return;
+    detectorSwitchBusyRef.current = true;
+    try {
+      // Stop whatever is currently streaming, wait briefly so the backend
+      // releases the camera, then start the new one. This mirrors LiveView.js
+      // and prevents the brief two-stream overlap the user reported.
+      await apiLiveViewControllerStopLiveView();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const newDetectorName = detectors[newIndex] || null;
+      const protocol = liveStreamState?.imageFormat || "jpeg";
+      const savedParams =
+        newDetectorName &&
+        liveStreamState?.perDetectorSettings?.[newDetectorName];
+      const overrideParams =
+        savedParams && savedParams.protocol === protocol ? savedParams : null;
+      const result = await apiLiveViewControllerStartLiveView(
+        newDetectorName,
+        protocol,
+        overrideParams
+      );
+      if (result?.params && newDetectorName) {
+        dispatch(
+          liveStreamSlice.updateDetectorSettings({
+            detectorName: newDetectorName,
+            settings: result.params,
+          })
+        );
+      }
+    } catch (e) {
+      setError(`Failed to switch detector: ${e.message || e}`);
+    } finally {
+      detectorSwitchBusyRef.current = false;
     }
   };
 
@@ -732,247 +982,321 @@ const StageOffsetCalibrationTab = () => {
         </Alert>
       )}
 
-      <Grid container spacing={3}>
-        {/* Live view + reference layout selector + layout map */}
+      {/* 2x2 compact layout. Top: live view | heatmap. Bottom: layout map +
+          scan controls | brightest/known/accept + joystick. */}
+      <Grid container spacing={2}>
+        {/* ============= TOP-LEFT: live view + detector tabs + illum ======= */}
         <Grid item xs={12} md={6}>
-          <Typography variant="subtitle1" gutterBottom>
-            Live view
-          </Typography>
-          <Box sx={{ mb: 2, maxHeight: 320, overflow: "hidden" }}>
-            <LiveViewControlWrapper useFastMode={true} />
-          </Box>
-
-          <FormControl fullWidth sx={{ mb: 2 }}>
-            <InputLabel id="ref-layout-label">Reference Layout</InputLabel>
-            <Select
-              labelId="ref-layout-label"
-              label="Reference Layout"
-              value={layoutName}
-              onChange={(e) => {
-                setLayoutName(e.target.value);
-                setOverrideKnownX("");
-                setOverrideKnownY("");
-              }}
-            >
-              {layouts.map((l) => (
-                <MenuItem key={l.name} value={l.name}>
-                  {l.name}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          {selectedLayout?.description && (
-            <Alert severity="info" sx={{ mb: 2 }}>
-              {selectedLayout.description}
-            </Alert>
-          )}
-
-          <Typography variant="subtitle2" gutterBottom>
-            Layout map (click to move)
-          </Typography>
-          <LayoutMapMini
-            layout={selectedLayout}
-            stageX={positionState?.x}
-            stageY={positionState?.y}
-            knownX={knownX}
-            knownY={knownY}
-            brightestX={heatmap?.brightest?.x}
-            brightestY={heatmap?.brightest?.y}
-            onClickMove={moveStage}
-          />
-          <Typography variant="caption" color="textSecondary">
-            Red = current stage position, gold = expected pinhole, pink =
-            detected brightest spot.
-          </Typography>
+          <Paper variant="outlined" sx={{ p: 1, height: "100%" }}>
+            <Box sx={{ display: "flex", alignItems: "center", mb: 0.5 }}>
+              <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
+                Live view
+              </Typography>
+              {(liveViewState?.detectors?.length || 0) > 0 && (
+                <Tabs
+                  value={Math.min(
+                    liveViewState.activeTab || 0,
+                    Math.max(0, (liveViewState.detectors?.length || 1) - 1)
+                  )}
+                  onChange={(_, v) => handleDetectorTabChange(v)}
+                  variant="scrollable"
+                  scrollButtons="auto"
+                  sx={{
+                    minHeight: 32,
+                    "& .MuiTab-root": { minHeight: 32, py: 0 },
+                  }}
+                >
+                  {liveViewState.detectors.map((d) => (
+                    <Tab key={d} label={d} />
+                  ))}
+                </Tabs>
+              )}
+            </Box>
+            <Box sx={{ maxHeight: 360, overflow: "hidden" }}>
+              <LiveViewControlWrapper useFastMode={true} />
+            </Box>
+            <Box sx={{ mt: 1 }}>
+              <Typography variant="subtitle2" gutterBottom>
+                Illumination
+              </Typography>
+              <IlluminationController hostIP={hostIP} hostPort={hostPort} />
+            </Box>
+          </Paper>
         </Grid>
 
-        {/* Scan parameters + actions */}
+        {/* ============= TOP-RIGHT: heatmap ============== */}
         <Grid item xs={12} md={6}>
-          <Typography variant="subtitle1" gutterBottom>
-            Scan parameters (adaptive to detector FOV)
-          </Typography>
-          {recommended && (
-            <Typography
-              variant="caption"
-              color="textSecondary"
-              sx={{ display: "block", mb: 1 }}
-            >
-              Detector: {recommended.frameWidth}×{recommended.frameHeight} px;
-              Pixel size {recommended.pixelSizeUm.toFixed(3)} um/px;
-              FOV {Math.round(recommended.fovXUm)} × {Math.round(recommended.fovYUm)} um;
-              recommended step {Math.round(recommended.recommendedStepUm)} um.
+          <Paper variant="outlined" sx={{ p: 1, height: "100%" }}>
+            <Typography variant="subtitle2" gutterBottom>
+              Heatmap (click = pick, shift/right-click = move)
             </Typography>
-          )}
-          <Grid container spacing={2}>
-            <Grid item xs={6}>
-              <TextField
-                fullWidth
-                size="small"
-                label="Step (um)"
-                type="number"
-                value={stepUm}
-                onChange={(e) => setStepUm(e.target.value)}
-              />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField
-                fullWidth
-                size="small"
-                label="Max radius (um)"
-                type="number"
-                value={maxRadiusUm}
-                onChange={(e) => setMaxRadiusUm(e.target.value)}
-              />
-            </Grid>
-          </Grid>
+            <HeatmapCanvas
+              data={heatmap}
+              onPick={(x, y) => setPickedTarget({ x, y })}
+              onMove={moveStage}
+              picked={pickedTarget}
+              width={420}
+              height={360}
+            />
+            <Typography variant="caption" color="textSecondary" sx={{ display: "block", mt: 0.5 }}>
+              {heatmap?.samples?.length
+                ? `${heatmap.samples.length} samples; latest scan auto-restored on reload.`
+                : "No data yet - the last saved scan loads automatically."}
+            </Typography>
+          </Paper>
+        </Grid>
 
-          <Box sx={{ mt: 2, display: "flex", gap: 1, flexWrap: "wrap" }}>
-            {!pollingRunning ? (
-              <Button variant="contained" color="primary" onClick={handleStart}>
-                Start scan
-              </Button>
-            ) : (
-              <Button variant="contained" color="warning" onClick={handleStop}>
-                Stop
-              </Button>
-            )}
-            {pollingRunning && (
-              <CircularProgress size={24} sx={{ alignSelf: "center" }} />
-            )}
-            <ButtonGroup size="small" disabled={homingBusy}>
-              <Button onClick={() => runHomeAxis("X")}>Home X</Button>
-              <Button onClick={() => runHomeAxis("Y")}>Home Y</Button>
-              <Button
-                onClick={async () => {
-                  await runHomeAxis("X");
-                  await runHomeAxis("Y");
+        {/* ============= BOTTOM-LEFT: layout map + scan controls ============ */}
+        <Grid item xs={12} md={6}>
+          <Paper variant="outlined" sx={{ p: 1, height: "100%" }}>
+            <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+              <InputLabel id="ref-layout-label">Reference Layout</InputLabel>
+              <Select
+                labelId="ref-layout-label"
+                label="Reference Layout"
+                value={layoutName}
+                onChange={(e) => {
+                  setLayoutName(e.target.value);
+                  setOverrideKnownX("");
+                  setOverrideKnownY("");
                 }}
               >
-                Home X+Y
-              </Button>
-            </ButtonGroup>
-            {homingBusy && <CircularProgress size={20} sx={{ alignSelf: "center" }} />}
-            <Box sx={{ flexGrow: 1 }} />
-            <Typography variant="caption" color="textSecondary" sx={{ alignSelf: "center" }}>
-              Stage at: X={positionState?.x?.toFixed?.(1) ?? "?"} um,
-              Y={positionState?.y?.toFixed?.(1) ?? "?"} um
+                {layouts.map((l) => (
+                  <MenuItem key={l.name} value={l.name}>
+                    {l.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <LayoutMapMini
+              layout={selectedLayout}
+              stageX={positionState?.x}
+              stageY={positionState?.y}
+              knownX={knownX}
+              knownY={knownY}
+              brightestX={heatmap?.brightest?.x}
+              brightestY={heatmap?.brightest?.y}
+              scanCenter={{
+                x: positionState?.x ?? 0,
+                y: positionState?.y ?? 0,
+              }}
+              maxRadiusUm={Number(maxRadiusUm) || 0}
+              stepUm={Number(stepUm) || 0}
+              width={420}
+              height={200}
+              onClickMove={moveStage}
+            />
+            <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 1 }}>
+              Red = stage, gold = pinhole, pink = brightest, green dashed = scan area.
             </Typography>
-          </Box>
-          <Typography variant="caption" color="textSecondary" sx={{ mt: 1, display: "block" }}>
-            Requires a valid pixel calibration. The backend will refuse to
-            start otherwise. The stage parks at the brightest sample at the
-            end of the scan.
-          </Typography>
-        </Grid>
 
-        {/* Heatmap + accept controls */}
-        <Grid item xs={12}>
-          <Divider sx={{ my: 2 }} />
-          <Typography variant="subtitle1" gutterBottom>
-            Heatmap &amp; result
-          </Typography>
-          <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
-              <HeatmapCanvas
-                data={heatmap}
-                onPick={(x, y) => setPickedTarget({ x, y })}
-                onMove={moveStage}
-                picked={pickedTarget}
-              />
-              <Typography variant="caption" color="textSecondary">
-                {heatmap?.samples?.length
-                  ? `${heatmap.samples.length} samples; the latest scan is auto-restored on reload.`
-                  : "No data yet - run a scan to populate (the last saved scan loads automatically)."}
-              </Typography>
+            <Grid container spacing={1} sx={{ mb: 1 }}>
+              <Grid item xs={6}>
+                <Tooltip title="One tile per full FOV (= min(FOV_x, FOV_y) by default)">
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="Step (um)"
+                    type="number"
+                    value={stepUm}
+                    onChange={(e) => {
+                      stepManualRef.current = true;
+                      setStepUm(e.target.value);
+                    }}
+                  />
+                </Tooltip>
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Max radius (um)"
+                  type="number"
+                  value={maxRadiusUm}
+                  onChange={(e) => setMaxRadiusUm(e.target.value)}
+                />
+              </Grid>
             </Grid>
-            <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" gutterBottom>
-                Detected brightest position
+
+            <Alert severity="info" variant="outlined" sx={{ py: 0.25, mb: 1 }}>
+              <Typography variant="caption">
+                {tileGeom.nx} × {tileGeom.ny} tiles ({tileGeom.total} samples,
+                ~{tileGeom.etaS}s).
+                {objectiveStatus && (() => {
+                  const f = Math.min(...(objectiveStatus.FOV || []));
+                  if (
+                    Number.isFinite(f) &&
+                    f > 0 &&
+                    Math.abs(Number(stepUm) - f) > 1
+                  ) {
+                    return (
+                      <Button
+                        size="small"
+                        sx={{ ml: 1, py: 0 }}
+                        onClick={() => {
+                          stepManualRef.current = false;
+                          setStepUm(Math.round(f));
+                        }}
+                      >
+                        Reset to FOV ({Math.round(f)} um)
+                      </Button>
+                    );
+                  }
+                  return null;
+                })()}
               </Typography>
-              <Grid container spacing={2} sx={{ mb: 2 }}>
-                <Grid item xs={6}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    label="Brightest X (um)"
-                    value={heatmap?.brightest?.x?.toFixed?.(1) ?? ""}
-                    InputProps={{ readOnly: true }}
-                  />
-                </Grid>
-                <Grid item xs={6}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    label="Brightest Y (um)"
-                    value={heatmap?.brightest?.y?.toFixed?.(1) ?? ""}
-                    InputProps={{ readOnly: true }}
-                  />
-                </Grid>
-              </Grid>
-              {pickedTarget && (
-                <Alert severity="info" sx={{ mb: 2 }}>
-                  Manual pick from heatmap will be used:
-                  ({pickedTarget.x.toFixed(1)}, {pickedTarget.y.toFixed(1)}) um.
-                  <Button
-                    size="small"
-                    onClick={() => setPickedTarget(null)}
-                    sx={{ ml: 1 }}
-                  >
-                    use brightest instead
-                  </Button>
-                </Alert>
-              )}
-              <Typography variant="subtitle2" gutterBottom>
-                Expected (known) calibration point
-              </Typography>
-              <Grid container spacing={2} sx={{ mb: 2 }}>
-                <Grid item xs={6}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    label="Known X (um)"
-                    type="number"
-                    value={overrideKnownX !== "" ? overrideKnownX : selectedLayout?.x ?? ""}
-                    onChange={(e) => setOverrideKnownX(e.target.value)}
-                  />
-                </Grid>
-                <Grid item xs={6}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    label="Known Y (um)"
-                    type="number"
-                    value={overrideKnownY !== "" ? overrideKnownY : selectedLayout?.y ?? ""}
-                    onChange={(e) => setOverrideKnownY(e.target.value)}
-                  />
-                </Grid>
-              </Grid>
-              {targetXY && knownX != null && knownY != null && (
-                <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 2 }}>
-                  Pending: stage report will shift by
-                  dX={(knownX - targetXY.x).toFixed(1)} um,
-                  dY={(knownY - targetXY.y).toFixed(1)} um after acceptance.
+              {objectiveStatus && (
+                <Typography
+                  variant="caption"
+                  color="textSecondary"
+                  sx={{ display: "block" }}
+                >
+                  {objectiveStatus.objectiveName} ({objectiveStatus.magnification}×,
+                  NA {objectiveStatus.NA}, {objectiveStatus.pixelsize?.toFixed?.(3)} um/px,
+                  FOV {Math.round(objectiveStatus.FOV?.[0] || 0)} × {Math.round(objectiveStatus.FOV?.[1] || 0)} um)
                 </Typography>
               )}
-              <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
-                <Button
-                  variant="outlined"
-                  disabled={!targetXY}
-                  onClick={() => targetXY && moveStage(targetXY.x, targetXY.y)}
-                >
-                  Move to picked target
+            </Alert>
+
+            <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
+              {!pollingRunning ? (
+                <Button variant="contained" size="small" color="primary" onClick={handleStart}>
+                  Start scan
                 </Button>
-                <Button
-                  variant="contained"
-                  color="success"
-                  disabled={!targetXY || !homingAck}
-                  onClick={openConfirm}
-                >
-                  Accept and store stage offset
+              ) : (
+                <Button variant="contained" size="small" color="warning" onClick={handleStop}>
+                  Stop
                 </Button>
-              </Box>
+              )}
+              {pollingRunning && <CircularProgress size={20} />}
+              <ButtonGroup size="small" disabled={homingBusy}>
+                <Button onClick={() => runHomeAxis("X")}>Home X</Button>
+                <Button onClick={() => runHomeAxis("Y")}>Home Y</Button>
+                <Button
+                  onClick={async () => {
+                    await runHomeAxis("X");
+                    await runHomeAxis("Y");
+                  }}
+                >
+                  Home X+Y
+                </Button>
+              </ButtonGroup>
+              {homingBusy && <CircularProgress size={20} />}
+              <Box sx={{ flexGrow: 1 }} />
+              <Typography variant="caption" color="textSecondary">
+                X={positionState?.x?.toFixed?.(1) ?? "?"}, Y={positionState?.y?.toFixed?.(1) ?? "?"} um
+              </Typography>
+            </Box>
+          </Paper>
+        </Grid>
+
+        {/* ============= BOTTOM-RIGHT: brightest / known / accept / joystick ============ */}
+        <Grid item xs={12} md={6}>
+          <Paper variant="outlined" sx={{ p: 1, height: "100%" }}>
+            <Typography variant="subtitle2" gutterBottom>
+              Detected brightest position
+            </Typography>
+            <Grid container spacing={1} sx={{ mb: 1 }}>
+              <Grid item xs={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Brightest X (um)"
+                  value={heatmap?.brightest?.x?.toFixed?.(1) ?? ""}
+                  InputProps={{ readOnly: true }}
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Brightest Y (um)"
+                  value={heatmap?.brightest?.y?.toFixed?.(1) ?? ""}
+                  InputProps={{ readOnly: true }}
+                />
+              </Grid>
             </Grid>
-          </Grid>
+            {pickedTarget && (
+              <Alert severity="info" sx={{ mb: 1, py: 0.25 }}>
+                Manual pick: ({pickedTarget.x.toFixed(1)},{" "}
+                {pickedTarget.y.toFixed(1)}) um
+                <Button
+                  size="small"
+                  onClick={() => setPickedTarget(null)}
+                  sx={{ ml: 1 }}
+                >
+                  use brightest
+                </Button>
+              </Alert>
+            )}
+
+            <Typography variant="subtitle2" gutterBottom>
+              Expected (known) calibration point
+            </Typography>
+            <Grid container spacing={1} sx={{ mb: 1 }}>
+              <Grid item xs={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Known X (um)"
+                  type="number"
+                  value={
+                    overrideKnownX !== "" ? overrideKnownX : selectedLayout?.x ?? ""
+                  }
+                  onChange={(e) => setOverrideKnownX(e.target.value)}
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Known Y (um)"
+                  type="number"
+                  value={
+                    overrideKnownY !== "" ? overrideKnownY : selectedLayout?.y ?? ""
+                  }
+                  onChange={(e) => setOverrideKnownY(e.target.value)}
+                />
+              </Grid>
+            </Grid>
+            {targetXY && knownX != null && knownY != null && (
+              <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 1 }}>
+                Pending shift: dX={(knownX - targetXY.x).toFixed(1)} um,
+                dY={(knownY - targetXY.y).toFixed(1)} um.
+              </Typography>
+            )}
+            <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mb: 1 }}>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={!targetXY}
+                onClick={() => targetXY && moveStage(targetXY.x, targetXY.y)}
+              >
+                Move to sample
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={knownX == null || knownY == null}
+                onClick={() => moveStage(knownX, knownY)}
+              >
+                Move to known
+              </Button>
+              <Button
+                size="small"
+                variant="contained"
+                color="success"
+                disabled={!targetXY || !homingAck}
+                onClick={openConfirm}
+              >
+                Accept &amp; store offset
+              </Button>
+            </Box>
+            <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 0.5 }}>
+              Fine-tune over the bright spot before accepting.
+            </Typography>
+            <JoystickControl hostIP={hostIP} hostPort={hostPort} />
+          </Paper>
         </Grid>
       </Grid>
 

@@ -11,7 +11,6 @@ import {
   Select,
   MenuItem,
   Dialog,
-  DialogTitle,
   DialogContent,
   Tooltip,
   Switch,
@@ -29,6 +28,7 @@ import {
   GetApp,
 } from "@mui/icons-material";
 import StreamControlOverlay from "../components/StreamControlOverlay";
+import StreamPresets from "./StreamPresets";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner";
 import { useSelector, useDispatch } from "react-redux";
@@ -305,6 +305,10 @@ export default function StreamControls({
         </Button>
       </Box>
 
+      {/* Stream presets / macros — recall named bundles of objective +
+          exposure + gain + livestream parameters. Frontend-only. */}
+      <StreamPresets />
+
       {/* Recording Controls Section */}
       <Box
         component="fieldset"
@@ -539,7 +543,6 @@ export default function StreamControls({
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>Stream Settings</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <StreamControlOverlay
             stats={hudData.stats}

@@ -31,7 +31,6 @@ import {
   AccordionDetails,
 } from "@mui/material";
 import {
-  Cable,
   Wifi,
   Computer,
   CheckCircle,
@@ -42,6 +41,8 @@ import {
   ExpandMore,
   Tune,
 } from "@mui/icons-material";
+
+import ConnectionGraphHorizontal from "./ConnectionSettings_ConnectionGraphHorizontal";
 
 /**
  * ImSwitch Connection Settings Component
@@ -118,6 +119,7 @@ function ConnectionSettings() {
 
   // Auto-test connection on component mount if settings are already configured
   const [hasAutoTested, setHasAutoTested] = useState(false);
+  const [hasRunConnectionTest, setHasRunConnectionTest] = useState(false);
 
   // Pause periodic connection tests while user is in connection settings
   useEffect(() => {
@@ -132,6 +134,7 @@ function ConnectionSettings() {
     // Only auto-test once on mount if we have saved connection settings from Redux
     if (connectionSettings.ip && connectionSettings.apiPort && !hasAutoTested) {
       setHasAutoTested(true);
+      setHasRunConnectionTest(true);
 
       const timer = setTimeout(() => {
         // Trigger connection test with saved settings
@@ -178,6 +181,7 @@ function ConnectionSettings() {
 
     try {
       setIsTestingConnection(true);
+      setHasRunConnectionTest(true);
 
       const fullIP = `${hostProtocol}${hostIP}`;
 
@@ -356,41 +360,14 @@ function ConnectionSettings() {
       {/* Connection Configuration Card */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3 }}>
-            <Cable color="primary" />
-            <Typography variant="h6">Backend Configuration</Typography>
-            <Chip
-              label={isBackendConnected ? "API Connected" : "API Disconnected"}
-              color={isBackendConnected ? "success" : "error"}
-              size="small"
-              variant="outlined"
-            />
-            {isBackendConnected && (
-              <Chip
-                label={
-                  isHardwareConnected
-                    ? "Hardware Connected"
-                    : "Hardware Disconnected"
-                }
-                color={isHardwareConnected ? "success" : "warning"}
-                size="small"
-                variant="outlined"
-              />
-            )}
-            {websocketPort && (
-              <Chip
-                label={`WebSocket ${getWebSocketStatusLabel(
-                  websocketTestStatus,
-                )}`}
-                color={getWebSocketStatusColor(websocketTestStatus)}
-                size="small"
-                variant="outlined"
-                icon={
-                  websocketTestStatus === "testing" ? <Settings /> : undefined
-                }
-              />
-            )}
-          </Box>
+          {/* horizontal ConnectionGraph */}
+          <ConnectionGraphHorizontal
+            isBackendConnected={isBackendConnected}
+            websocketTestStatus={websocketTestStatus}
+            isHardwareConnected={isHardwareConnected}
+            hasRunConnectionTest={hasRunConnectionTest}
+            hasWebsocketPort={Boolean(websocketPort)}
+          />
 
           <Alert severity="info" sx={{ mb: 3 }}>
             <Typography variant="body2">

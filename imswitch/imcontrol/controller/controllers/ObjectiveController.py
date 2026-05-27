@@ -116,9 +116,38 @@ class ObjectiveController(LiveUpdatedController):
     # === State Property Accessors ===
 
     def _getCurrentPixelSize(self) -> Optional[float]:
-        """Get the pixel size for the current objective."""
-        if self._currentObjective is not None and 0 <= self._currentObjective < len(self._pixelsizes):
-            return self._pixelsizes[self._currentObjective]
+        """Get the pixel size for the current objective.
+
+        PixelCalibration is the single source of truth: ask it first for a
+        per-(detector, objective) calibration. Fall back to the legacy
+        ``ObjectiveInfo.pixelsizes`` list only for migration of old setups.
+        """
+        if self._currentObjective is None:
+            return None
+
+        # Try PixelCalibrationController first.
+        try:
+            pix_ctrl = self._master._controllersRegistry.get("PixelCalibration", None)
+            if pix_ctrl is not None and hasattr(pix_ctrl, "getPixelSize"):
+                detector_name = self._master.detectorsManager.getAllDeviceNames()[0]
+                sx, sy = pix_ctrl.getPixelSize(detector_name, str(self._currentObjective))
+                avg = (abs(sx) + abs(sy)) / 2.0
+                if avg > 0 and avg != 1.0:
+                    return avg
+        except Exception:
+            pass
+
+        # Legacy fallback (deprecated): static config-driven pixel sizes.
+        if 0 <= self._currentObjective < len(self._pixelsizes):
+            value = self._pixelsizes[self._currentObjective]
+            if not getattr(self, "_warnedLegacyPixelsize", False):
+                self._logger.warning(
+                    "ObjectiveInfo.pixelsizes is DEPRECATED - use the PixelCalibration "
+                    "controller as the single source of truth. Falling back to the "
+                    "value from the setup file (this warning is shown once)."
+                )
+                self._warnedLegacyPixelsize = True
+            return value
         return None
 
     def _getCurrentNA(self) -> Optional[float]:
@@ -212,8 +241,7 @@ class ObjectiveController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Objective homing failed: {e}", exc_info=True)
             self._isHomed = False
-        # need to state the current status after homing (e.g. 2 )
-        self._currentObjective = 2
+        self._currentObjective = None
 
     @APIExport(runOnUIThread=True)
     def moveToObjective(self, slot: int, skipZ: bool = False):
@@ -265,14 +293,9 @@ class ObjectiveController(LiveUpdatedController):
         success = self._moveMotorToSlot(slot)
 
         if success or not self._hasMotor:
-            # Update state
             self._currentObjective = slot
-
-
-            # Update detector pixel size
             self._updatePixelSize()
 
-            # Update UI if not headless
     @APIExport(runOnUIThread=True)
     def getCurrentObjective(self):
         """
@@ -534,35 +557,49 @@ class ObjectiveController(LiveUpdatedController):
         # Return updated parameters
         return self._configManager.getObjectiveParameters(objectiveSlot)
 
+    def _getPerSlotPixelSizes(self):
+        """Get pixel sizes for all slots, preferring PixelCalibrationController."""
+        result = list(self._pixelsizes)
+        try:
+            pix_ctrl = self._master._controllersRegistry.get("PixelCalibration", None)
+            if pix_ctrl is not None and hasattr(pix_ctrl, "getPixelSize"):
+                detector_name = self._master.detectorsManager.getAllDeviceNames()[0]
+                for slot in range(len(result)):
+                    sx, sy = pix_ctrl.getPixelSize(detector_name, str(slot))
+                    avg = (abs(sx) + abs(sy)) / 2.0
+                    if avg > 0 and avg != 1.0:
+                        result[slot] = avg
+        except Exception:
+            pass
+        return result
+
     @APIExport(runOnUIThread=True)
     def getstatus(self):
         """
         Get the current status of the objective.
-        
+
         Returns:
             Dictionary with complete objective status
         """
-        # Build status from controller state (single source of truth)
+        per_slot_pixelsizes = self._getPerSlotPixelSizes()
+
         status = {
-            # Current state
             "currentObjective": self._currentObjective,
             "isHomed": self._isHomed,
 
-            # Current objective parameters
             "objectiveName": self._getCurrentObjectiveName(),
             "pixelsize": self._getCurrentPixelSize(),
             "NA": self._getCurrentNA(),
             "magnification": self._getCurrentMagnification(),
             "FOV": self._getCurrentFOV(),
 
-            # Available objectives configuration
             "availableObjectives": [0, 1],
             "availableObjectivesNames": list(self._objectiveNames),
             "availableObjectivesPositions": list(self._objectivePositions),
-            "availableObjectiveZPositions": list(self._zPositions),  # z0, z1 focus offsets
+            "availableObjectiveZPositions": list(self._zPositions),
             "availableObjectiveMagnifications": list(self._magnifications),
             "availableObjectiveNAs": list(self._NAs),
-            "availableObjectivePixelSizes": list(self._pixelsizes),
+            "availableObjectivePixelSizes": per_slot_pixelsizes,
 
             # Legacy API aliases for x0, x1, z0, z1 (for frontend compatibility)
             "x0": self._objectivePositions[0] if len(self._objectivePositions) > 0 else None,

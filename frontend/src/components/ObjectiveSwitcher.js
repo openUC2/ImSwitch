@@ -19,10 +19,13 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const [currentSlot, setCurrentSlot] = useState(null); // Let's say local state, or read from Redux
   const [isSwitching, setIsSwitching] = useState(false); // Show spinner while switching
 
-  // Access global Redux state (objectiveState from objectiveSlice)
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
-  const magnification1 = objectiveState.magnification1;
-  const magnification2 = objectiveState.magnification2;
+  const name0 = objectiveState.availableObjectivesNames?.[0] || "Obj 1";
+  const name1 = objectiveState.availableObjectivesNames?.[1] || "Obj 2";
+  const mag0 = objectiveState.availableObjectiveMagnifications?.[0];
+  const mag1 = objectiveState.availableObjectiveMagnifications?.[1];
+  const label0 = mag0 ? `${name0} (${mag0}×)` : name0;
+  const label1 = mag1 ? `${name1} (${mag1}×)` : name1;
   // Fetch objective status on mount
   useEffect(() => {
     fetchObjectiveControllerGetStatus(dispatch);
@@ -95,15 +98,10 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                 color={currentSlot === 0 ? "secondary" : "primary"}
                 onClick={() => switchTo(0)}
               >
-                {/* Button text */}
-                Switch to{" "}
                 {isSwitching && currentSlot !== 0 ? (
-                  <CircularProgress
-                    size={14}
-                    sx={{ color: "#fff", marginLeft: 8 }}
-                  />
+                  <CircularProgress size={14} sx={{ color: "#fff", ml: 1 }} />
                 ) : (
-                  magnification1 && `(Mag: ${magnification1}×)`
+                  label0
                 )}
               </Button>
             </Grid>
@@ -113,9 +111,7 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                 color={currentSlot === 0 ? "secondary" : "primary"}
                 onClick={() => switchTo(0, false)}
               >
-                {/* Combined objective + Z motion */}
-                Switch + Z{" "}
-                {magnification1 && `(${magnification1}×)`}
+                {label0} + Z
               </Button>
             </Grid>
             <Grid item>
@@ -124,15 +120,10 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                 color={currentSlot === 1 ? "secondary" : "primary"}
                 onClick={() => switchTo(1)}
               >
-                {/* Button text */}
-                Switch to{" "}
                 {isSwitching && currentSlot !== 1 ? (
-                  <CircularProgress
-                    size={14}
-                    sx={{ color: "#fff", marginLeft: 8 }}
-                  />
+                  <CircularProgress size={14} sx={{ color: "#fff", ml: 1 }} />
                 ) : (
-                  magnification2 && `(Mag: ${magnification2}×)`
+                  label1
                 )}
               </Button>
             </Grid>
@@ -142,9 +133,7 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                 color={currentSlot === 1 ? "secondary" : "primary"}
                 onClick={() => switchTo(1, false)}
               >
-                {/* Combined objective + Z motion */}
-                Switch + Z{" "}
-                {magnification2 && `(${magnification2}×)`}
+                {label1} + Z
               </Button>
             </Grid>
           </Grid>

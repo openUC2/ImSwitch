@@ -25,6 +25,9 @@ jobs:
           # This repo has tons of cruft in its history, so we try to only fetch files we actually need:
           fetch-depth: 0
           filter: 'blob:none'
+          # We fetch tags so that the staged pallet bundle has a record of ancestral tags, for
+          # pseudoversion string generation:
+          fetch-tags: true
 
       - name: Use cached ~/.npm
         uses: actions/cache@v4
@@ -36,6 +39,40 @@ jobs:
       - name: Install build dependencies
         working-directory: ./frontend
         run: npm install
+
+      - name: Determine version string
+        id: version-string
+        run: |
+          # Get the SHA of the actual commit (not the fake merge commit) on PR-triggered runs
+          # (refer to https://stackoverflow.com/a/68068674/23202949):
+          if [ -n "${{ github.event.pull_request.head.sha }}" ]; then
+            ACTUAL_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            # Note: we want to have a SHA to check out even in merge queues, so we always fall back
+            # to a SHA even if it's a fictional SHA detached from any branches:
+            ACTUAL_SHA="${{ github.sha }}"
+          fi
+
+          TAG="$(git describe --tags --exact-match --match "v*" "$ACTUAL_SHA" 2>/dev/null || printf "")"
+          VERSION="$(git describe --tags --match "v*" --abbrev=7 "$ACTUAL_SHA")"
+          TIMESTAMP="$(TZ=UTC git show -s --format=%ad --date=format:'t%Y%m%d%H%M%S' "$ACTUAL_SHA")"
+
+          if [[ "$VERSION" != "$TAG" ]]; then
+            VERSION="$VERSION-$TIMESTAMP"
+            if [[ -n "${{ github.event.pull_request.head.sha }}" ]]; then
+              # We're in a pull request
+              VERSION="$VERSION-pr${{ github.event.pull_request.number }}"
+            fi
+          fi
+
+          echo "version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Record version
+        run: |
+          VERSION="${{ steps.version-string.outputs.version }}"
+          echo "export const APP_VERSION = \"$VERSION\";" > ./frontend/src/version.js
+          cat ./frontend/src/version.js
 
       - name: Build
         working-directory: ./frontend

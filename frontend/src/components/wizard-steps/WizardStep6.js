@@ -1,5 +1,5 @@
-import React from "react";
-import { useSelector } from "react-redux";
+import React, { useEffect } from "react";
+import { useSelector, useDispatch } from "react-redux";
 import {
   Typography,
   Box,
@@ -18,9 +18,15 @@ import {
   RestartAlt as RestartIcon,
 } from "@mui/icons-material";
 import * as objectiveSlice from "../../state/slices/ObjectiveSlice.js";
+import fetchObjectiveControllerGetStatus from "../../middleware/fetchObjectiveControllerGetStatus.js";
 
 const WizardStep6 = ({ hostIP, hostPort, onNext, onBack, onComplete, activeStep, totalSteps }) => {
+  const dispatch = useDispatch();
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+
+  useEffect(() => {
+    fetchObjectiveControllerGetStatus(dispatch);
+  }, [dispatch]);
 
   const calibrationComplete = 
     objectiveState.posX0 !== null && 
@@ -171,7 +177,7 @@ const WizardStep6 = ({ hostIP, hostPort, onNext, onBack, onComplete, activeStep,
         </Grid>
       </Grid>
 
-      <Paper elevation={1} sx={{ p: 2, mt: 3, backgroundColor: '#f0f7ff' }}>
+      <Paper elevation={1} sx={{ p: 2, mt: 3, backgroundColor: 'secondary.main' }}>
         <Typography variant="h6" gutterBottom color="primary">
           💡 Tips for Best Results
         </Typography>

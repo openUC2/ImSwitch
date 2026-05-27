@@ -70,7 +70,9 @@ class SlideRegistration(BaseModel):
     homography: List[List[float]]       # 3x3 matrix as nested list
     inverseHomography: List[List[float]]  # 3x3 inverse for stage→px
     reprojectionError: float = 0.0
-    overlayImageRef: str = ""           # relative path to warped overlay image
+    overlayImageRef: str = ""           # relative path to warped overlay image (PNG)
+    overlayImageJpegRef: str = ""       # relative path to warped overlay image (JPEG)
+    stagePosition: Optional[Dict[str, float]] = None  # {x, y, z} stage position when image was snapped
     createdAt: str = ""
     updatedAt: str = ""
 
@@ -313,6 +315,7 @@ class OverviewRegistrationService:
         corners_px: List[PixelPoint],
         slot_stage_corners: List[StagePoint],
         raw_image: Optional[np.ndarray] = None,
+        stage_position: Optional[Dict[str, float]] = None,
     ) -> SlideRegistration:
         """
         Compute homography and store per-slide registration.
@@ -379,6 +382,20 @@ class OverviewRegistrationService:
             )
             cv2.imwrite(overlay_path, warped)
             overlay_ref = overlay_fname
+            # Also save as JPEG (drop alpha channel)
+            try:
+                if warped.shape[2] == 4:
+                    warped_jpeg = cv2.cvtColor(warped, cv2.COLOR_BGRA2BGR)
+                else:
+                    warped_jpeg = warped
+                jpeg_fname = f"overlay_slot{slot_id}.jpg"
+                cv2.imwrite(
+                    os.path.join(sdir, jpeg_fname),
+                    warped_jpeg,
+                    [cv2.IMWRITE_JPEG_QUALITY, 90],
+                )
+            except Exception as exc:
+                self._logger.warning(f"Could not save JPEG overlay: {exc}")
             self._logger.info(
                 f"Created overlay image {overlay_fname} ({out_w}x{out_h}), "
                 f"reprojection error: {error:.2f} µm"
@@ -401,6 +418,8 @@ class OverviewRegistrationService:
             inverseHomography=[list(row) for row in H_inv.tolist()],
             reprojectionError=error,
             overlayImageRef=overlay_ref,
+            overlayImageJpegRef=(f"overlay_slot{slot_id}.jpg" if overlay_ref else ""),
+            stagePosition=stage_position,
             createdAt=now,
             updatedAt=now,
         )
@@ -414,6 +433,12 @@ class OverviewRegistrationService:
             )
         self._stores[key].slides[slot_id] = reg
         self._save_store(camera_name, layout_name)
+        # Also persist the canonical config JSON (single source of truth used
+        # by the new autonomous-scan UI / endpoints).
+        try:
+            self.save_registration_config(camera_name, layout_name)
+        except Exception as exc:
+            self._logger.warning(f"save_registration_config failed: {exc}")
 
         return reg
 
@@ -512,6 +537,21 @@ class OverviewRegistrationService:
             borderValue=(0, 0, 0, 0),
         )
         cv2.imwrite(overlay_path, warped)
+        # Also save as JPEG (drop alpha channel)
+        try:
+            if warped.shape[2] == 4:
+                warped_jpeg = cv2.cvtColor(warped, cv2.COLOR_BGRA2BGR)
+            else:
+                warped_jpeg = warped
+            jpeg_fname = f"overlay_slot{slot_id}.jpg"
+            cv2.imwrite(
+                os.path.join(sdir, jpeg_fname),
+                warped_jpeg,
+                [cv2.IMWRITE_JPEG_QUALITY, 90],
+            )
+            reg.overlayImageJpegRef = jpeg_fname
+        except Exception as exc:
+            self._logger.warning(f"Could not save JPEG overlay: {exc}")
 
         # Update timestamp
         reg.updatedAt = datetime.now().isoformat()
@@ -525,6 +565,10 @@ class OverviewRegistrationService:
         reg.snapshotTimestamp = ts
 
         self._save_store(camera_name, layout_name)
+        try:
+            self.save_registration_config(camera_name, layout_name)
+        except Exception as exc:
+            self._logger.warning(f"save_registration_config failed: {exc}")
 
         return {
             "slotId": slot_id,
@@ -607,4 +651,176 @@ class OverviewRegistrationService:
         fpath = os.path.join(sdir, reg.overlayImageRef)
         if os.path.isfile(fpath):
             return fpath
+        return None
+
+    # ── Registration Config Persistence (Feature 1 + 3) ─────────────────
+
+    def get_registration_config_as_dict(
+        self, camera_name: str, layout_name: str
+    ) -> Optional[dict]:
+        """
+        Build the canonical registration config dict for a camera/layout.
+
+        Returns a JSON-serializable dict with the same shape that is used by
+        ``save_registration_config`` and ``update_slot_stage_position``.
+        Returns ``None`` if no registrations exist for this camera/layout.
+        """
+        key = self._store_key(camera_name, layout_name)
+        store = self._stores.get(key)
+        if store is None or not store.slides:
+            return None
+
+        slots_dict: Dict[str, dict] = {}
+        for sid, reg in store.slides.items():
+            slots_dict[sid] = {
+                "slotId": reg.slotId,
+                "slotName": reg.slotName,
+                "stagePosition": reg.stagePosition or {"x": 0.0, "y": 0.0, "z": 0.0},
+                "cornersPx": [{"x": c.x, "y": c.y} for c in reg.cornersPx],
+                "slotStageCorners": [
+                    {"x": c.x, "y": c.y} for c in reg.slotStageCorners
+                ],
+                "warpMatrix": reg.homography,
+                "inverseHomography": reg.inverseHomography,
+                "imageWidth": reg.imageWidth,
+                "imageHeight": reg.imageHeight,
+                "reprojectionError": reg.reprojectionError,
+                "overlayImageRef": reg.overlayImageRef,
+                "overlayImageJpegRef": reg.overlayImageJpegRef,
+                "snapshotId": reg.snapshotId,
+                "snapshotTimestamp": reg.snapshotTimestamp,
+                "updatedAt": reg.updatedAt,
+            }
+
+        return {
+            "cameraName": camera_name,
+            "layoutName": layout_name,
+            "createdAt": datetime.now().isoformat(),
+            "slots": slots_dict,
+        }
+
+    def save_registration_config(
+        self, camera_name: str, layout_name: str
+    ) -> Optional[str]:
+        """
+        Persist the canonical registration config to a single JSON file.
+
+        Writes ``registration_config.json`` next to the existing
+        ``registrations.json`` so we have a single source of truth that the
+        frontend can read/edit. Returns the file path (or ``None`` if there is
+        nothing to save).
+        """
+        config = self.get_registration_config_as_dict(camera_name, layout_name)
+        if config is None:
+            return None
+        sdir = self._store_dir(camera_name, layout_name)
+        path = os.path.join(sdir, "registration_config.json")
+        with open(path, "w") as f:
+            json.dump(config, f, indent=2)
+        self._logger.info(f"Saved registration config to {path}")
+        return path
+
+    def load_registration_config(
+        self, camera_name: str, layout_name: str
+    ) -> Optional[dict]:
+        """
+        Load the persisted registration config JSON. Falls back to the
+        in-memory store (rebuilt via ``get_registration_config_as_dict``) when
+        the JSON file is missing.
+        """
+        sdir = self._store_dir(camera_name, layout_name)
+        path = os.path.join(sdir, "registration_config.json")
+        if os.path.isfile(path):
+            try:
+                with open(path, "r") as f:
+                    return json.load(f)
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to read {path}: {exc} – falling back to in-memory store"
+                )
+        return self.get_registration_config_as_dict(camera_name, layout_name)
+
+    def save_registration_config_from_dict(
+        self, camera_name: str, layout_name: str, config_data: dict
+    ) -> str:
+        """
+        Apply a config dict received from the frontend: update the in-memory
+        ``SlideRegistration`` objects (currently only ``stagePosition`` and
+        ``slotName`` are user-editable) and persist both the legacy
+        ``registrations.json`` and the new ``registration_config.json``.
+        """
+        key = self._store_key(camera_name, layout_name)
+        store = self._stores.get(key)
+        if store is None:
+            raise ValueError(
+                f"No registration store for camera='{camera_name}' layout='{layout_name}'"
+            )
+
+        for sid, slot in (config_data.get("slots") or {}).items():
+            reg = store.slides.get(sid)
+            if reg is None:
+                continue
+            new_pos = slot.get("stagePosition")
+            if isinstance(new_pos, dict):
+                reg.stagePosition = {
+                    "x": float(new_pos.get("x", 0.0)),
+                    "y": float(new_pos.get("y", 0.0)),
+                    "z": float(new_pos.get("z", 0.0)),
+                }
+            if slot.get("slotName"):
+                reg.slotName = str(slot["slotName"])
+            reg.updatedAt = datetime.now().isoformat()
+
+        self._save_store(camera_name, layout_name)
+        return self.save_registration_config(camera_name, layout_name) or ""
+
+    def update_slot_stage_position(
+        self,
+        camera_name: str,
+        layout_name: str,
+        slot_id: str,
+        new_position: Dict[str, float],
+    ) -> SlideRegistration:
+        """Update the stored stage position for a single slot."""
+        reg = self.get_registration(camera_name, layout_name, slot_id)
+        if reg is None:
+            raise ValueError(f"No registration for slot {slot_id}")
+        reg.stagePosition = {
+            "x": float(new_position.get("x", 0.0)),
+            "y": float(new_position.get("y", 0.0)),
+            "z": float(new_position.get("z", 0.0)),
+        }
+        reg.updatedAt = datetime.now().isoformat()
+        self._save_store(camera_name, layout_name)
+        self.save_registration_config(camera_name, layout_name)
+        return reg
+
+    def load_overlay_jpeg(
+        self, camera_name: str, layout_name: str, slot_id: str
+    ) -> Optional[str]:
+        """Load a stored JPEG overlay and return it base64-encoded."""
+        reg = self.get_registration(camera_name, layout_name, slot_id)
+        if reg is None:
+            return None
+        sdir = self._store_dir(camera_name, layout_name)
+        # Prefer JPEG; fall back to PNG re-encoded as JPEG on the fly
+        jpeg_ref = reg.overlayImageJpegRef
+        if jpeg_ref:
+            fpath = os.path.join(sdir, jpeg_ref)
+            if os.path.isfile(fpath):
+                with open(fpath, "rb") as f:
+                    return base64.b64encode(f.read()).decode("ascii")
+        if reg.overlayImageRef:
+            png_path = os.path.join(sdir, reg.overlayImageRef)
+            if os.path.isfile(png_path):
+                img = cv2.imread(png_path, cv2.IMREAD_UNCHANGED)
+                if img is None:
+                    return None
+                if len(img.shape) == 3 and img.shape[2] == 4:
+                    img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                ok, buf = cv2.imencode(
+                    ".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90]
+                )
+                if ok:
+                    return base64.b64encode(buf.tobytes()).decode("ascii")
         return None

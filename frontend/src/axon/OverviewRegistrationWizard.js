@@ -29,6 +29,8 @@ import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js"
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice.js";
 import * as experimentSlice from "../state/slices/ExperimentSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
+import * as liveViewSlice from "../state/slices/LiveViewSlice";
+import * as liveStreamSlice from '../state/slices/LiveStreamSlice';
 
 import apiGetOverviewRegistrationConfig from "../backendapi/apiGetOverviewRegistrationConfig.js";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
@@ -36,6 +38,10 @@ import apiSnapOverviewImage from "../backendapi/apiSnapOverviewImage.js";
 import apiRegisterOverviewSlide from "../backendapi/apiRegisterOverviewSlide.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 import apiRefreshOverviewSlideImage from "../backendapi/apiRefreshOverviewSlideImage.js";
+import apiExperimentControllerRecaptureSlot from "../backendapi/apiExperimentControllerRecaptureSlot.js";
+import apiExperimentControllerGetOverviewAsyncStatus from "../backendapi/apiExperimentControllerGetOverviewAsyncStatus.js";
+import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView.js";
+import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView.js";
 
 //##################################################################################
 // Wizard step labels
@@ -63,12 +69,13 @@ const OverviewRegistrationWizard = () => {
   const imgRef = useRef(null);
   const streamImgRef = useRef(null);
 
+  const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
+  const liveViewState = useSelector(liveViewSlice.getLiveViewState);
+
   // Redux state
-  const regState = useSelector(
-    overviewRegSlice.getOverviewRegistrationState
-  );
+  const regState = useSelector(overviewRegSlice.getOverviewRegistrationState);
   const connectionSettings = useSelector(
-    connectionSettingsSlice.getConnectionSettingsState
+    connectionSettingsSlice.getConnectionSettingsState,
   );
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const positionState = useSelector(positionSlice.getPositionState);
@@ -77,6 +84,13 @@ const OverviewRegistrationWizard = () => {
   const [streamUrl, setStreamUrl] = useState("");
   const [streamError, setStreamError] = useState(false);
 
+
+  // Overview stream state
+  const [overviewStreamActive, setOverviewStreamActive] = useState(false);
+  const prevDetectorRef = useRef(null);
+  const prevProtocolRef = useRef('jpeg');
+
+  
   // Local state for image natural dimensions (for coordinate mapping)
   const [imgNaturalSize, setImgNaturalSize] = useState({ w: 0, h: 0 });
 
@@ -89,21 +103,60 @@ const OverviewRegistrationWizard = () => {
   }, [regState.wizardOpen]);
 
   //##################################################################################
-  // Build MJPEG stream URL
+  // Start LiveViewController MJPEG stream when wizard opens and stop it on close.
+  // ObservationCamera is always used for the overview stream with 1x subsampling.
   useEffect(() => {
-    if (regState.wizardOpen && regState.cameraAvailable) {
-      const base = `${connectionSettings.ip}:${connectionSettings.apiPort}/imswitch/api`;
-      setStreamUrl(
-        `${base}/PixelCalibrationController/overviewStream?startStream=true`
-      );
-      setStreamError(false);
+    if (!regState.wizardOpen) return;
+
+    const base = `${connectionSettings.ip}:${connectionSettings.apiPort}/imswitch/api`;
+    setStreamError(false);
+
+    // Start the MJPEG stream with 1x subsampling via LiveViewController
+    /*
+    apiLiveViewControllerStartLiveView('ObservationCamera', 'mjpeg', { subsampling_factor: 1 })
+      .then(() => {
+        setStreamUrl(
+          `${base}/LiveViewController/mjpeg_stream?detectorName=ObservationCamera`
+        );
+      }) // TODO: reuse existing component if possible 
+      .catch(() => {
+        setStreamError(true);
+      });
+      */
+    // use JPEG instead
+
+    try {
+      const newStreamState = !overviewStreamActive;
+
+      if (newStreamState) {
+        prevDetectorRef.current =
+          liveViewState.detectors[liveViewState.activeTab] || null;
+        prevProtocolRef.current = liveStreamState.imageFormat || "jpeg";
+        apiLiveViewControllerStartLiveView("ObservationCamera", "jpeg", {
+          subsampling_factor: 1,
+        });
+      } else {
+        if (prevDetectorRef.current) {
+          apiLiveViewControllerStartLiveView(
+            prevDetectorRef.current,
+            prevProtocolRef.current,
+          );
+        } else {
+          apiLiveViewControllerStopLiveView("ObservationCamera");
+        }
+      }
+
+      setOverviewStreamActive(newStreamState);
+    } catch (err) {
+        console.log("Failed to toggle overview stream:", err);
     }
-  }, [
-    regState.wizardOpen,
-    regState.cameraAvailable,
-    connectionSettings.ip,
-    connectionSettings.apiPort,
-  ]);
+
+    return () => {
+      // Stop the stream when the wizard closes
+      apiLiveViewControllerStopLiveView("ObservationCamera").catch(() => {});
+      setStreamUrl("");
+    };
+  }, [regState.wizardOpen, connectionSettings.ip, connectionSettings.apiPort]);
 
   //##################################################################################
   const loadConfig = async () => {
@@ -116,13 +169,13 @@ const OverviewRegistrationWizard = () => {
         currentLayout && currentLayout.wells && currentLayout.wells.length > 0
           ? currentLayout
           : null,
-        regState.layoutName
+        regState.layoutName,
       );
       dispatch(overviewRegSlice.setConfig(config));
       dispatch(overviewRegSlice.setError(null));
     } catch (e) {
       dispatch(
-        overviewRegSlice.setError("Failed to load wizard config: " + e.message)
+        overviewRegSlice.setError("Failed to load wizard config: " + e.message),
       );
     }
     dispatch(overviewRegSlice.setIsLoading(false));
@@ -147,16 +200,14 @@ const OverviewRegistrationWizard = () => {
     try {
       const result = await apiSnapOverviewImage(
         regState.currentSlotId,
-        regState.cameraName
+        regState.cameraName,
       );
       dispatch(overviewRegSlice.setSnapshot(result));
       dispatch(overviewRegSlice.setCornerPickingActive(true));
       dispatch(overviewRegSlice.resetPickedCorners());
       dispatch(overviewRegSlice.setWizardStep(2)); // Go to Mark Corners
     } catch (e) {
-      dispatch(
-        overviewRegSlice.setError("Failed to snap image: " + e.message)
-      );
+      dispatch(overviewRegSlice.setError("Failed to snap image: " + e.message));
     }
     dispatch(overviewRegSlice.setIsLoading(false));
   };
@@ -189,7 +240,7 @@ const OverviewRegistrationWizard = () => {
       regState.cornerPickingActive,
       regState.pickedCorners.length,
       imgNaturalSize,
-    ]
+    ],
   );
 
   //##################################################################################
@@ -286,7 +337,7 @@ const OverviewRegistrationWizard = () => {
         ctx.fillText(
           `Click to place: ${nextLabel}`,
           canvas.width / 2,
-          canvas.height - 15
+          canvas.height - 15,
         );
       }
     };
@@ -329,7 +380,7 @@ const OverviewRegistrationWizard = () => {
 
     // Find current slot definition
     const slot = regState.slots.find(
-      (s) => s.slotId === regState.currentSlotId
+      (s) => s.slotId === regState.currentSlotId,
     );
     if (!slot) {
       dispatch(overviewRegSlice.setError("Slot definition not found"));
@@ -349,6 +400,9 @@ const OverviewRegistrationWizard = () => {
         imageHeight: regState.snapshotHeight,
         cornersPx: regState.pickedCorners,
         slotStageCorners: slot.corners.map((c) => ({ x: c.x, y: c.y })),
+        // Persist the stage position recorded at snapshot time so the
+        // autonomous overview scan can revisit each slot later.
+        stagePosition: regState.snapshotStagePosition,
       });
 
       dispatch(overviewRegSlice.setLastRegistrationResult(result));
@@ -364,13 +418,11 @@ const OverviewRegistrationWizard = () => {
             hasOverlayImage: result.hasOverlayImage,
             updatedAt: result.createdAt,
           },
-        })
+        }),
       );
       dispatch(overviewRegSlice.setWizardStep(3)); // Go to Save/Summary
     } catch (e) {
-      dispatch(
-        overviewRegSlice.setError("Registration failed: " + e.message)
-      );
+      dispatch(overviewRegSlice.setError("Registration failed: " + e.message));
     }
     dispatch(overviewRegSlice.setIsLoading(false));
   };
@@ -397,7 +449,7 @@ const OverviewRegistrationWizard = () => {
     try {
       const overlayData = await apiGetOverviewOverlayData(
         regState.cameraName,
-        regState.layoutName
+        regState.layoutName,
       );
       dispatch(overviewRegSlice.setOverlayData(overlayData));
       dispatch(overviewRegSlice.setOverlayEnabled(true));
@@ -415,17 +467,69 @@ const OverviewRegistrationWizard = () => {
       await apiRefreshOverviewSlideImage(
         slotId,
         regState.cameraName,
-        regState.layoutName
+        regState.layoutName,
       );
       // Reload overlay data
       const overlayData = await apiGetOverviewOverlayData(
         regState.cameraName,
-        regState.layoutName
+        regState.layoutName,
+      );
+      dispatch(overviewRegSlice.setOverlayData(overlayData));
+    } catch (e) {
+      dispatch(overviewRegSlice.setError("Refresh failed: " + e.message));
+    }
+    dispatch(overviewRegSlice.setIsLoading(false));
+  };
+
+  //##################################################################################
+  // Selectively recapture a single slot: backend moves the stage to the slot
+  // center and snaps a new overview frame for that slide only (task 6.1).
+  const handleRecaptureSlot = async (slotId) => {
+    dispatch(overviewRegSlice.setIsLoading(true));
+    try {
+      // The backend kicks off a daemon thread and returns ``{started: true}``
+      // immediately so the FastAPI worker stays responsive. We poll the
+      // shared async-status endpoint until it reports ``running=false``
+      // before refreshing the overlay.
+      await apiExperimentControllerRecaptureSlot({
+        slot_id: slotId,
+        layout_data: experimentState.wellLayout,
+        layout_name: regState.layoutName,
+        camera_name: regState.cameraName,
+      });
+      // Poll up to ~60s. We sleep 750ms between probes - good enough latency
+      // for a UI button and gentle on the server.
+      const deadline = Date.now() + 60_000;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        await new Promise((r) => setTimeout(r, 750));
+        let status = null;
+        try {
+          status = await apiExperimentControllerGetOverviewAsyncStatus();
+        } catch (_) {
+          // transient - keep trying
+        }
+        if (status && status.running === false) {
+          if (status.error) {
+            throw new Error(status.error);
+          }
+          break;
+        }
+        if (Date.now() > deadline) {
+          throw new Error("Recapture timed out after 60s");
+        }
+      }
+      // Refresh overlay so the just-captured slide image becomes visible.
+      const overlayData = await apiGetOverviewOverlayData(
+        regState.cameraName,
+        regState.layoutName,
       );
       dispatch(overviewRegSlice.setOverlayData(overlayData));
     } catch (e) {
       dispatch(
-        overviewRegSlice.setError("Refresh failed: " + e.message)
+        overviewRegSlice.setError(
+          "Recapture failed: " + (e.message || String(e)),
+        ),
       );
     }
     dispatch(overviewRegSlice.setIsLoading(false));
@@ -460,7 +564,10 @@ const OverviewRegistrationWizard = () => {
                 minWidth: 120,
                 textAlign: "center",
                 cursor: "pointer",
-                "&:hover": { borderColor: "primary.main", bgcolor: "action.hover" },
+                "&:hover": {
+                  borderColor: "primary.main",
+                  bgcolor: "action.hover",
+                },
               }}
               onClick={() => handleSlotSelect(slot.slotId)}
             >
@@ -489,6 +596,20 @@ const OverviewRegistrationWizard = () => {
                   </IconButton>
                 </Box>
               )}
+              {/* Retake: move stage to this slot and snap a fresh frame */}
+              <Box sx={{ mt: 1 }}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<CameraAltIcon fontSize="small" />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRecaptureSlot(slot.slotId);
+                  }}
+                >
+                  Retake
+                </Button>
+              </Box>
             </Box>
           );
         })}
@@ -510,13 +631,14 @@ const OverviewRegistrationWizard = () => {
   //##################################################################################
   const renderLiveAlignStep = () => {
     const slot = regState.slots.find(
-      (s) => s.slotId === regState.currentSlotId
+      (s) => s.slotId === regState.currentSlotId,
     );
     return (
       <Box>
         <Typography variant="subtitle1" sx={{ mb: 1 }}>
-          Align <strong>{slot?.name || `Slide ${regState.currentSlotId}`}</strong>{" "}
-          in the overview camera view, then snap an image.
+          Align{" "}
+          <strong>{slot?.name || `Slide ${regState.currentSlotId}`}</strong> in
+          the overview camera view, then snap an image.
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Manually move the XYZ stage until the physical slide appears centered
@@ -537,13 +659,18 @@ const OverviewRegistrationWizard = () => {
             bgcolor: "#000",
           }}
         >
-          {streamUrl && !streamError ? (
+          {overviewStreamActive && liveStreamState.liveViewImage ? (
             <img
-              ref={streamImgRef}
-              src={streamUrl}
-              alt="Overview camera live stream"
-              style={{ width: "100%", display: "block" }}
-              onError={() => setStreamError(true)}
+              src={`data:image/jpeg;base64,${liveStreamState.liveViewImage}`}
+              alt="Overview Camera"
+              style={{
+                display: "block",
+                margin: "auto",
+                maxWidth: "100%",
+                maxHeight: 300,
+                objectFit: "contain",
+                WebkitUserSelect: "none",
+              }}
             />
           ) : (
             <Box
@@ -593,63 +720,149 @@ const OverviewRegistrationWizard = () => {
             </Typography>
             {/* Corner number hints */}
             <Box sx={{ position: "absolute", top: 2, left: 4 }}>
-              <Typography sx={{ color: CORNER_COLORS[0], fontSize: 11, fontWeight: "bold" }}>1</Typography>
+              <Typography
+                sx={{
+                  color: CORNER_COLORS[0],
+                  fontSize: 11,
+                  fontWeight: "bold",
+                }}
+              >
+                1
+              </Typography>
             </Box>
             <Box sx={{ position: "absolute", top: 2, right: 4 }}>
-              <Typography sx={{ color: CORNER_COLORS[1], fontSize: 11, fontWeight: "bold" }}>2</Typography>
+              <Typography
+                sx={{
+                  color: CORNER_COLORS[1],
+                  fontSize: 11,
+                  fontWeight: "bold",
+                }}
+              >
+                2
+              </Typography>
             </Box>
             <Box sx={{ position: "absolute", bottom: 2, right: 4 }}>
-              <Typography sx={{ color: CORNER_COLORS[2], fontSize: 11, fontWeight: "bold" }}>3</Typography>
+              <Typography
+                sx={{
+                  color: CORNER_COLORS[2],
+                  fontSize: 11,
+                  fontWeight: "bold",
+                }}
+              >
+                3
+              </Typography>
             </Box>
             <Box sx={{ position: "absolute", bottom: 2, left: 4 }}>
-              <Typography sx={{ color: CORNER_COLORS[3], fontSize: 11, fontWeight: "bold" }}>4</Typography>
+              <Typography
+                sx={{
+                  color: CORNER_COLORS[3],
+                  fontSize: 11,
+                  fontWeight: "bold",
+                }}
+              >
+                4
+              </Typography>
             </Box>
           </Box>
         </Box>
 
         {/* Stage movement controls */}
         <Box sx={{ mt: 2, mb: 1 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: "block" }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ mb: 0.5, display: "block" }}
+          >
             Move stage to align slide:
           </Typography>
-          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.5, maxWidth: 220 }}>
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 0.5,
+              maxWidth: 220,
+            }}
+          >
             <Button
-              size="small" variant="outlined"
-              onClick={() => apiPositionerControllerMovePositioner({ axis: "Y", dist: -5000, speed: 10000 })}
+              size="small"
+              variant="outlined"
+              onClick={() =>
+                apiPositionerControllerMovePositioner({
+                  axis: "Y",
+                  dist: -5000,
+                  speed: 10000,
+                })
+              }
               sx={{ minWidth: 60 }}
             >
               Y ▲
             </Button>
             <Box sx={{ display: "flex", gap: 0.5 }}>
               <Button
-                size="small" variant="outlined"
-                onClick={() => apiPositionerControllerMovePositioner({ axis: "X", dist: -5000, speed: 10000})}
+                size="small"
+                variant="outlined"
+                onClick={() =>
+                  apiPositionerControllerMovePositioner({
+                    axis: "X",
+                    dist: -5000,
+                    speed: 10000,
+                  })
+                }
                 sx={{ minWidth: 60 }}
               >
                 ◄ X
               </Button>
-              <Box sx={{ width: 60, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <Typography variant="caption" color="text.secondary">5 mm</Typography>
+              <Box
+                sx={{
+                  width: 60,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  5 mm
+                </Typography>
               </Box>
               <Button
-                size="small" variant="outlined"
-                onClick={() => apiPositionerControllerMovePositioner({ axis: "X", dist: 5000, speed: 10000 })}
+                size="small"
+                variant="outlined"
+                onClick={() =>
+                  apiPositionerControllerMovePositioner({
+                    axis: "X",
+                    dist: 5000,
+                    speed: 10000,
+                  })
+                }
                 sx={{ minWidth: 60 }}
               >
                 X ►
               </Button>
             </Box>
             <Button
-              size="small" variant="outlined"
-              onClick={() => apiPositionerControllerMovePositioner({ axis: "Y", dist: 5000, speed: 10000 })}
+              size="small"
+              variant="outlined"
+              onClick={() =>
+                apiPositionerControllerMovePositioner({
+                  axis: "Y",
+                  dist: 5000,
+                  speed: 10000,
+                })
+              }
               sx={{ minWidth: 60 }}
             >
               Y ▼
             </Button>
           </Box>
           {positionState && (
-            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block" }}>
-              Position: X={positionState.x?.toFixed(0) ?? "?"} Y={positionState.y?.toFixed(0) ?? "?"}
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ mt: 0.5, display: "block" }}
+            >
+              Position: X={positionState.x?.toFixed(0) ?? "?"} Y=
+              {positionState.y?.toFixed(0) ?? "?"}
             </Typography>
           )}
         </Box>
@@ -681,9 +894,8 @@ const OverviewRegistrationWizard = () => {
         Click the 4 slide corners in order: TL → TR → BR → BL
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Click directly on the snapped image to place corner markers. The
-        corners must follow the order shown in the guide (top-right corner of
-        image).
+        Click directly on the snapped image to place corner markers. The corners
+        must follow the order shown in the guide (top-right corner of image).
       </Typography>
 
       {/* Corner status chips */}
@@ -698,8 +910,7 @@ const OverviewRegistrationWizard = () => {
                 idx < regState.pickedCorners.length
                   ? CORNER_COLORS[idx]
                   : undefined,
-              color:
-                idx < regState.pickedCorners.length ? "#000" : undefined,
+              color: idx < regState.pickedCorners.length ? "#000" : undefined,
               fontWeight:
                 idx === regState.pickedCorners.length ? "bold" : "normal",
               border:
@@ -720,8 +931,7 @@ const OverviewRegistrationWizard = () => {
           border: "1px solid #444",
           borderRadius: 1,
           overflow: "hidden",
-          cursor:
-            regState.pickedCorners.length < 4 ? "crosshair" : "default",
+          cursor: regState.pickedCorners.length < 4 ? "crosshair" : "default",
         }}
       >
         <canvas
@@ -754,9 +964,7 @@ const OverviewRegistrationWizard = () => {
           color="primary"
           startIcon={<CheckCircleIcon />}
           onClick={handleConfirmCorners}
-          disabled={
-            regState.pickedCorners.length !== 4 || regState.isLoading
-          }
+          disabled={regState.pickedCorners.length !== 4 || regState.isLoading}
         >
           Confirm Corners
         </Button>
@@ -824,8 +1032,8 @@ const OverviewRegistrationWizard = () => {
         visibility and adjust opacity from the WellPlate controls.
       </Typography>
       <Typography variant="body2" sx={{ mb: 2 }}>
-        To update a single slide overlay later, use the refresh button (↻)
-        on the slide card without redoing the full wizard.
+        To update a single slide overlay later, use the refresh button (↻) on
+        the slide card without redoing the full wizard.
       </Typography>
       <Button variant="contained" color="success" onClick={handleFinish}>
         Finish & Enable Overlay

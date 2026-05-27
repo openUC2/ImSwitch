@@ -62,6 +62,11 @@ class ImConMainController(MainController):
                 )
             if widgetKey == "ImSwitchServer":
                 continue
+            # ensure that PixelCalibrationController is always created last, as it is required for the 
+            # correct functioning of other controllers => sort list of widgets so that PixelCalibration is last
+            if widgetKey == "PixelCalibration":
+                # delay creation of PixelCalibrationController until the end, as it is required for the correct functioning of other controllers
+                continue
             if widgetKey == "Arkitekt" and not hasattr(
                 self.__masterController, "arkitektManager"
             ):
@@ -141,6 +146,28 @@ class ImConMainController(MainController):
                 f"Could not dynamically import {controller_name}: {e}"
             )
 
+        # Add PixelCalibrationController for pixel calibration management 
+        try:
+            self.__logger.info("Creating controller for PixelCalibration ")
+            controller_name = "PixelCalibrationController"
+            module = importlib.import_module(
+                "imswitch.imcontrol.controller.controllers.PixelCalibrationController"
+            )
+            controller_class = getattr(module, controller_name)
+            if controller_class is not None:
+                self.controllers["PixelCalibration"] = self.__factory.createController(
+                    controller_class, self.__mainView.widgets["PixelCalibration"]
+                )
+                # Register PixelCalibrationController
+                self.__masterController.registerController(
+                    "PixelCalibration", self.controllers["PixelCalibration"]
+                )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not dynamically import {controller_name}: {e}"
+            )
+        
+        # Add LiveViewController for live streaming (if LiveView widget is present)
         try:
             self.__logger.info("Creating controller for LiveView ")
             controller_name = "LiveViewController"

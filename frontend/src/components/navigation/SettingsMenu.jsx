@@ -448,7 +448,7 @@ const SettingsMenu = ({ onNavigate }) => {
 
         <Divider />
 
-        {/* System Updates */}
+        {/* Firmware Updates */}
         <MenuItem
           onClick={() => handleNavigationClick("SystemUpdate")}
           disabled={!allowAccess}
@@ -466,12 +466,12 @@ const SettingsMenu = ({ onNavigate }) => {
             />
           </ListItemIcon>
           <ListItemText
-            primary="System Updates"
+            primary="Updates"
             secondary={
               allowAccess
                 ? isDeveloperMode && !isBackendConnected
-                  ? "Update system & firmware (Developer Mode)"
-                  : "Update system & firmware"
+                  ? "Update the device firmware (Developer Mode)"
+                  : "Update the device firmware"
                 : "Requires backend connection"
             }
           />

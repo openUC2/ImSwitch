@@ -38,6 +38,7 @@ import {
 export const APP_CATEGORIES = {
   ESSENTIALS: "essentials",
   APPS: "apps",
+  CALIBRATION: "calibration",
   CODING: "coding",
   SYSTEM: "system",
 };
@@ -201,10 +202,10 @@ export const APP_REGISTRY = {
 
   frameSettings: {
     id: "frameSettings",
-    name: "FRAMESettings",
+    name: "FRAME Settings",
     description:
       "Comprehensive settings for FRAMEModule including pixel calibration, stage tracking, and laser configuration.",
-    category: APP_CATEGORIES.APPS,
+    category: APP_CATEGORIES.CALIBRATION,
     icon: CropFreeIcon,
     enabled: false,
     essential: false,
@@ -265,6 +266,7 @@ export const APP_REGISTRY = {
     essential: false,
     keywords: ["timelapse", "time", "automated", "acquisition", "scheduling"],
     pluginId: "Timelapse",
+    requiredControllers: ["TimelapseController"],
   },
 
   flowStop: {
@@ -392,7 +394,7 @@ export const APP_REGISTRY = {
     name: "Stage Center Calibration",
     description:
       "Wizard-guided calibration of stage center position. Interactive tools to accurately define the center of the microscope stage.",
-    category: APP_CATEGORIES.SYSTEM,
+    category: APP_CATEGORIES.CALIBRATION,
     icon: TuneIcon,
     enabled: false,
     essential: false,
@@ -448,7 +450,7 @@ export const APP_REGISTRY = {
       "amplitude",
     ],
     pluginId: "OffAxisHoloController",
-  },  
+  },
 
   dpcController: {
     id: "dpcController",
@@ -471,6 +473,7 @@ export const APP_REGISTRY = {
       "label-free",
     ],
     pluginId: "DPCController",
+    requiredControllers: ["LEDMatrixController", "DPCController"],
   },
 
   goniometerController: {
@@ -508,18 +511,25 @@ export const APP_REGISTRY = {
     pluginId: "SerialDebug",
   },
 
-  // === MISSING APPS - Apps that exist in App.jsx but were not in registry ===
   objective: {
     id: "objective",
     name: "Objective Controller",
     description:
       "Control motorized objective turret. Switch between objectives during experiments for multi-magnification imaging.",
-    category: APP_CATEGORIES.SYSTEM,
+    category: APP_CATEGORIES.CALIBRATION,
     icon: PhotoCameraIcon,
     enabled: false,
     essential: false,
-    keywords: ["objective", "lens", "turret", "magnification", "switch"],
+    keywords: [
+      "objective",
+      "lens",
+      "turret",
+      "calibration",
+      "magnification",
+      "switch",
+    ],
     pluginId: "Objective",
+    requiredControllers: ["ObjectiveController"],
   },
 
   stresstest: {
@@ -540,7 +550,7 @@ export const APP_REGISTRY = {
     name: "Stage Offset Calibration",
     description:
       "Calibrate stage positioning offsets for accurate movement. Compensate for mechanical tolerances and improve positioning precision.",
-    category: APP_CATEGORIES.SYSTEM,
+    category: APP_CATEGORIES.CALIBRATION,
     icon: TuneIcon,
     enabled: false,
     essential: false,
@@ -555,7 +565,6 @@ export const APP_REGISTRY = {
     pluginId: "StageOffsetCalibration",
   },
 
-  // adding CompositeStreamViewer and CompositeAcquisition to registry
   compositeAcquisition: {
     id: "compositeAcquisition",
     name: "Composite Acquisition",
@@ -627,7 +636,14 @@ export const APP_REGISTRY = {
     icon: CropFreeIcon,
     enabled: false,
     essential: false,
-    keywords: ["shitscope", "scan", "paving", "single", "dedicated", "customer"],
+    keywords: [
+      "shitscope",
+      "scan",
+      "paving",
+      "single",
+      "dedicated",
+      "customer",
+    ],
     pluginId: "ShitScope",
   },
 
@@ -689,6 +705,7 @@ export const APP_REGISTRY = {
       "enhanced",
     ],
     pluginId: "ExtendedLEDMatrix",
+    requiredControllers: ["LEDMatrixController"],
   },
 };
 
@@ -705,6 +722,28 @@ export const getAppsByCategory = (category) => {
 export const getEnabledApps = (enabledAppIds = []) => {
   return Object.values(APP_REGISTRY).filter(
     (app) => app.essential || enabledAppIds.includes(app.id),
+  );
+};
+
+export const isAppAvailableForControllers = (
+  app,
+  availableControllers = [],
+) => {
+  const requiredControllers = app?.requiredControllers || [];
+  if (requiredControllers.length === 0) return true;
+
+  const availableSet = new Set(availableControllers);
+  return requiredControllers.every((controller) =>
+    availableSet.has(controller),
+  );
+};
+
+export const filterAppsByAvailableControllers = (
+  apps,
+  availableControllers = [],
+) => {
+  return apps.filter((app) =>
+    isAppAvailableForControllers(app, availableControllers),
   );
 };
 

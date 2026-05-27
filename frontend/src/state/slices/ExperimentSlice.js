@@ -74,7 +74,8 @@ const initialExperimentState = {
     zStackMin: 0.0,
     zStackMax: 0.0,
     zStackStepSize: 0.1,
-    speed: 0, 
+    speed: 20000,
+    z_speed: 5000,
     gains: 0,
     exposureTimes: 0,
     performanceMode: false,
@@ -240,6 +241,10 @@ const experimentSlice = createSlice({
         console.log("setSpeed");
         state.parameterValue.speed = action.payload;
     },
+    setZSpeed: (state, action) => {
+        console.log("setZSpeed");
+        state.parameterValue.z_speed = action.payload;
+    },
     setGains: (state, action) => {
       console.log("setGains");
       state.parameterValue.gains = action.payload;
@@ -321,6 +326,14 @@ const experimentSlice = createSlice({
         rectMinusY: (action.payload.rectMinusY != null) ? (action.payload.rectMinusY) : (0),
         circleRadiusX: (action.payload.circleRadiusX != null) ? (action.payload.circleRadiusX) : (0),
         circleRadiusY: (action.payload.circleRadiusY != null) ? (action.payload.circleRadiusY) : (0),
+        // Optional grouping metadata. Points sharing the same ``areaId`` /
+        // ``groupId`` belong to a single logical scan area (e.g. freehand
+        // polygon, area-select rectangle, per-well subpoints) and downstream
+        // writers should co-locate their images in one zarr/tif folder.
+        areaId: action.payload.areaId,
+        areaType: action.payload.areaType,
+        groupId: action.payload.groupId,
+        wellId: action.payload.wellId,
       };
       
       console.log("createPoint newPoint", newPoint);
@@ -345,6 +358,72 @@ const experimentSlice = createSlice({
     addPoint: (state, action) => {
       console.log("addPoint");
       state.pointList.push(action.payload);
+    },
+    appendPoints: (state, action) => {
+      // Append a batch of points (e.g. from labware well-selection apply).
+      // Skips duplicates by exact (x, y, name) match to avoid double-adding
+      // the same well twice.
+      const incoming = Array.isArray(action.payload) ? action.payload : [];
+      const seen = new Set(
+        state.pointList.map((p) => `${p.x}|${p.y}|${p.name || ""}`)
+      );
+      for (const p of incoming) {
+        const newPoint = {
+          id: p.id || uuidv4(),
+          name: p.name || "",
+          x: p.x,
+          y: p.y,
+          z: p.z != null ? p.z : 0,
+          shape: p.shape || "",
+          rectPlusX: p.rectPlusX || 0,
+          rectPlusY: p.rectPlusY || 0,
+          rectMinusX: p.rectMinusX || 0,
+          rectMinusY: p.rectMinusY || 0,
+          circleRadiusX: p.circleRadiusX || 0,
+          circleRadiusY: p.circleRadiusY || 0,
+          // Labware metadata pass-through
+          wellId: p.wellId,
+          wellRow: p.wellRow,
+          wellColumn: p.wellColumn,
+          labwareLoadName: p.labwareLoadName,
+          conditionLabel: p.conditionLabel,
+          areaType: p.areaType,
+          areaId: p.areaId,
+          groupId: p.groupId,
+        };
+        const key = `${newPoint.x}|${newPoint.y}|${newPoint.name}`;
+        if (!seen.has(key)) {
+          state.pointList.push(newPoint);
+          seen.add(key);
+        }
+      }
+    },
+    replacePoints: (state, action) => {
+      // Replace the entire pointList with a new batch (well-selection apply
+      // in "replace" mode).
+      const incoming = Array.isArray(action.payload) ? action.payload : [];
+      state.pointList = incoming.map((p) => ({
+        id: p.id || uuidv4(),
+        name: p.name || "",
+        x: p.x,
+        y: p.y,
+        z: p.z != null ? p.z : 0,
+        shape: p.shape || "",
+        rectPlusX: p.rectPlusX || 0,
+        rectPlusY: p.rectPlusY || 0,
+        rectMinusX: p.rectMinusX || 0,
+        rectMinusY: p.rectMinusY || 0,
+        circleRadiusX: p.circleRadiusX || 0,
+        circleRadiusY: p.circleRadiusY || 0,
+        wellId: p.wellId,
+        wellRow: p.wellRow,
+        wellColumn: p.wellColumn,
+        labwareLoadName: p.labwareLoadName,
+        conditionLabel: p.conditionLabel,
+        areaType: p.areaType,
+        areaId: p.areaId,
+        groupId: p.groupId,
+      }));
     },
     removePoint: (state, action) => {
       console.log("removePoint");
@@ -408,6 +487,7 @@ export const {
   setZStackMax,
   setZStackStepSize,
   setSpeed,
+  setZSpeed,
   setGains,
   setExposureTimes,
   setPerformanceMode,
@@ -424,6 +504,8 @@ export const {
   setKeepIlluminationOn,
   createPoint,
   addPoint,
+  appendPoints,
+  replacePoints,
   removePoint,
   setPointList,
   replacePoint,

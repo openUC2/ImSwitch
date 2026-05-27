@@ -693,9 +693,7 @@ class Camera:
         self.model = "VirtualCamera"
         self.PixelSize = 1.0
         self.isRGB = False
-        self.flipX = False
-        self.flipY = False
-        self.flipImage = (self.flipY, self.flipX)
+        self.flipImage = (False, False)
         self.frameNumber = 0
         # precompute noise so that we will save energy and trees
         self.noiseStack = np.abs(

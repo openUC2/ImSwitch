@@ -122,6 +122,12 @@ class ArkitektManager:
             )
             self._config = {"enabled": False}
 
+    async def _store_device_code_hook(self, device_code: str) -> None:
+        """Store the device code for user authentication."""
+        self.__logger.info(f"Received Arkitekt device code: {device_code}")
+        # Here you could implement logic to display the device code to the user
+        # or store it in a file for later retrieval. For now, we just log it.
+        
     def _initialize_arkitekt(self) -> None:
         """Initialize Arkitekt connection if enabled."""
         if not self._config.get("enabled", True):
@@ -138,6 +144,7 @@ class ArkitektManager:
                 identifier=self._config.get("app_name", "imswitch"),
                 redeem_token=redeem_token,
                 url=self._config.get("url", "go.arkitekt.live"),
+                device_code_hook=self._store_device_code_hook,
             )
             self.__logger.info(
                 "Starting Arkitekt on url: "

@@ -159,9 +159,15 @@ const ExperimentSummary = () => {
       durationStr = `${hours}h ${mins}m`;
     }
     
-    // Estimate data size (rough: 2MB per 16-bit 2048x2048 image)
-    const pixelWidth = objectiveState?.fov?.width || 2048;
-    const pixelHeight = objectiveState?.fov?.height || 2048;
+    // Estimate data size using FOV and pixel size to derive sensor dimensions.
+    // objectiveState.fovX / fovY are in µm; pixelsize is µm/px.
+    const effectivePixelSize = objectiveState?.pixelsize || 1;
+    const pixelWidth = effectivePixelSize > 0 && objectiveState?.fovX
+      ? Math.round(objectiveState.fovX / effectivePixelSize)
+      : 2048;
+    const pixelHeight = effectivePixelSize > 0 && objectiveState?.fovY
+      ? Math.round(objectiveState.fovY / effectivePixelSize)
+      : 2048;
     const bytesPerPixel = 2; // 16-bit
     const imageSizeMB = (pixelWidth * pixelHeight * bytesPerPixel) / (1024 * 1024);
     const totalImages = totalPositions * enabledChannels * zPlanes * timepoints;

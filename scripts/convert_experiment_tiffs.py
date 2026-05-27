@@ -1000,15 +1000,24 @@ class _NumpyReader:
     RGB/RGBA tiles are converted to grayscale on read.
     """
 
-    def __init__(self, metadata: _NumpyMetadata, tiles_dict: dict):
+    def __init__(self, metadata: _NumpyMetadata, tiles_dict: dict, is_rgb: bool = False):
         self._metadata = metadata
         self._tiles = tiles_dict  # {(series_idx, c_local): TileInfo}
+        self._is_rgb = is_rgb    # True → each tile is RGB; c is (c_orig*3 + plane)
 
     @property
     def metadata(self):
         return self._metadata
 
     def read(self, series, c):
+        if self._is_rgb:
+            c_orig, plane = divmod(c, 3)
+            tile = self._tiles.get((series, c_orig))
+            if tile is None:
+                h, w = self._metadata.size
+                return np.zeros((h, w), dtype=self._metadata.pixel_dtype)
+            img = tif.imread(tile.filepath)
+            return img[..., plane] if img.ndim == 3 else img
         tile = self._tiles.get((series, c))
         if tile is None:
             h, w = self._metadata.size
@@ -1038,6 +1047,7 @@ def _build_numpy_reader(
     tiles_dict: dict = {}
     ref_size: Optional[Tuple[int, int]] = None
     ref_dtype = None
+    is_rgb: bool = False
     pos_idx = 0
 
     for ix in grid.ix_positions:
@@ -1067,24 +1077,28 @@ def _build_numpy_reader(
 
                 if ref_size is None:
                     img = tif.imread(best.filepath)
-                    if img.ndim == 3 and img.shape[2] in (3, 4):
-                        img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(np.uint16)
+                    is_rgb = img.ndim == 3 and img.shape[2] in (3, 4)
                     ref_size = img.shape[:2]
-                    ref_dtype = img.dtype
+                    ref_dtype = img[..., 0].dtype if is_rgb else img.dtype
 
             pos_idx += 1
 
     if not positions_px:
         return None
 
+    # RGB tiles are split into R/G/B planes and exposed as 3× the channel count
+    # so ashlar stitches each colour plane independently (same alignment applied
+    # to all).  The output OME-TIFF will have channels [R0,G0,B0, R1,G1,B1, …]
+    # which viewers recombine as RGB.
+    num_channels = len(c_indices) * (3 if is_rgb else 1)
     meta = _NumpyMetadata(
         positions_px=positions_px,
         tile_size=ref_size,
         pixel_size_um=pixel_size_um,
-        num_channels=len(c_indices),
+        num_channels=num_channels,
         dtype=ref_dtype,
     )
-    return _NumpyReader(meta, tiles_dict)
+    return _NumpyReader(meta, tiles_dict, is_rgb=is_rgb)
 
 
 # Mode 7: Ashlar-based stitching with sub-pixel alignment

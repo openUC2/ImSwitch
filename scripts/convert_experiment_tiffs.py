@@ -951,6 +951,142 @@ def build_timelapse(grid: ExperimentGrid, out_dir: str, use_mip: bool = False):
               f"{len(xy_positions)} positions)")
 
 
+# ---------------------------------------------------------------------------
+# Minimal ashlar-compatible reader (fallback when build_imswitch_reader is absent)
+# ---------------------------------------------------------------------------
+
+class _NumpyMetadata:
+    """Minimal ashlar Metadata backed by numpy arrays derived from TileInfo objects."""
+
+    def __init__(self, positions_px, tile_size, pixel_size_um, num_channels, dtype):
+        # positions_px: list of (y_px, x_px) tuples in pixel units — ashlar requires this
+        self._positions = np.asarray(positions_px, dtype=np.float64)
+        self._size = np.array(tile_size)        # (height, width) as numpy array — ashlar calls .max() on it
+        self._pixel_size = float(pixel_size_um)
+        self._num_channels = int(num_channels)
+        self._dtype = dtype
+
+    @property
+    def num_images(self):
+        return len(self._positions)
+
+    @property
+    def num_channels(self):
+        return self._num_channels
+
+    @property
+    def pixel_size(self):
+        return self._pixel_size
+
+    @property
+    def positions(self):
+        return self._positions
+
+    @property
+    def size(self):
+        return self._size
+
+    @property
+    def pixel_dtype(self):
+        return self._dtype
+
+
+class _NumpyReader:
+    """
+    Minimal ashlar-compatible Reader backed by ImSwitch TileInfo file paths.
+
+    Mapping:  series = XY position index (scan order),  c = local channel index.
+    Stage positions are converted from ImSwitch µm×1000 integers to physical µm.
+    RGB/RGBA tiles are converted to grayscale on read.
+    """
+
+    def __init__(self, metadata: _NumpyMetadata, tiles_dict: dict):
+        self._metadata = metadata
+        self._tiles = tiles_dict  # {(series_idx, c_local): TileInfo}
+
+    @property
+    def metadata(self):
+        return self._metadata
+
+    def read(self, series, c):
+        tile = self._tiles.get((series, c))
+        if tile is None:
+            h, w = self._metadata.size
+            return np.zeros((h, w), dtype=self._metadata.pixel_dtype)
+        img = tif.imread(tile.filepath)
+        if img.ndim == 3 and img.shape[2] in (3, 4):
+            img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(np.uint16)
+        return img
+
+
+def _build_numpy_reader(
+    grid: "ExperimentGrid",
+    tp: int,
+    c_indices: List[int],
+    pixel_size_um: float,
+) -> Optional["_NumpyReader"]:
+    """
+    Build a _NumpyReader for one timepoint directly from the ExperimentGrid.
+
+    Positions are returned in PIXELS (not µm) because ashlar's neighbors_graph
+    and intersection() both use positions and size in the same unit (pixels).
+    Conversion: TileInfo.x/y are µm×1000 integers → divide by (1000 × pixel_size_um).
+
+    Returns None when no tiles are available for the requested timepoint.
+    """
+    positions_px: List[Tuple[float, float]] = []
+    tiles_dict: dict = {}
+    ref_size: Optional[Tuple[int, int]] = None
+    ref_dtype = None
+    pos_idx = 0
+
+    for ix in grid.ix_positions:
+        for iy in grid.iy_positions:
+            has_any = any(grid.get_tiles(tp, ix, iy, ci) for ci in c_indices)
+            if not has_any:
+                continue
+
+            # TileInfo x/y are µm×1000 integers; convert to pixels.
+            # pixel_size_um is µm/pixel, so: pixels = (raw / 1000) / pixel_size_um
+            ref_tile = None
+            for ci in c_indices:
+                z_tiles = grid.get_tiles(tp, ix, iy, ci)
+                if z_tiles:
+                    ref_tile = z_tiles[0]
+                    break
+            y_px = ref_tile.y / (1000.0 * pixel_size_um)
+            x_px = ref_tile.x / (1000.0 * pixel_size_um)
+            positions_px.append((y_px, x_px))
+
+            for c_local, ci in enumerate(c_indices):
+                z_tiles = grid.get_tiles(tp, ix, iy, ci)
+                if not z_tiles:
+                    continue
+                best = _select_best_z_tile(sorted(z_tiles, key=lambda t: t.z))
+                tiles_dict[(pos_idx, c_local)] = best
+
+                if ref_size is None:
+                    img = tif.imread(best.filepath)
+                    if img.ndim == 3 and img.shape[2] in (3, 4):
+                        img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(np.uint16)
+                    ref_size = img.shape[:2]
+                    ref_dtype = img.dtype
+
+            pos_idx += 1
+
+    if not positions_px:
+        return None
+
+    meta = _NumpyMetadata(
+        positions_px=positions_px,
+        tile_size=ref_size,
+        pixel_size_um=pixel_size_um,
+        num_channels=len(c_indices),
+        dtype=ref_dtype,
+    )
+    return _NumpyReader(meta, tiles_dict)
+
+
 # Mode 7: Ashlar-based stitching with sub-pixel alignment
 # ---------------------------------------------------------------------------
 
@@ -1007,36 +1143,96 @@ def build_ashlar_stitched(
     maximum_shift: float – max per-tile corrective shift in µm (ashlar -m)
     align_channel: int   – channel index used for alignment (ashlar -c)
     """
-    try:
-        from ashlarUC2.scripts.ashlar import process_images, build_imswitch_reader
-    except ImportError:
+    # Import process_images first — required by both backends.
+    process_images = None
+    build_imswitch_reader = None
+
+    for _pkg in ("ashlarUC2", "ashlar"):
         try:
-            from ashlar.scripts.ashlar import process_images, build_imswitch_reader
-        except ImportError:
-            print(
-                "  ERROR: ashlarUC2 is not installed.\n"
-                "  Install with:  pip install ashlarUC2\n"
-                "  or from source: pip install git+https://github.com/openUC2/ashlarUC2"
-            )
-            return
- 
+            _mod = __import__(f"{_pkg}.scripts.ashlar", fromlist=["process_images"])
+            process_images = getattr(_mod, "process_images", None)
+            build_imswitch_reader = getattr(_mod, "build_imswitch_reader", None)
+            if process_images is not None:
+                # process_single always calls build_reader(filepaths[0]) even when we pass
+                # a pre-built reader object.  Patch build_reader to short-circuit in that case
+                # so it never tries to instantiate BioformatsReader (which requires Java).
+                _orig_build_reader = getattr(_mod, "build_reader", None)
+                if _orig_build_reader is not None:
+                    def _patched_build_reader(path, *args, _orig=_orig_build_reader, **kwargs):
+                        if hasattr(path, "metadata") and hasattr(path, "read"):
+                            return path  # already a reader — pass through unchanged
+                        return _orig(path, *args, **kwargs)
+                    _mod.build_reader = _patched_build_reader
+
+                # scikit-image ≥ 0.22 removed the return_error keyword from
+                # phase_cross_correlation.  ashlarUC2.utils calls it via the module
+                # path skimage.registration.phase_cross_correlation(..., return_error=False).
+                # Patching the function on the skimage.registration module fixes it for
+                # every caller regardless of how they imported the symbol.
+                # scikit-image ≥ 0.22: return_error removed from phase_cross_correlation.
+                try:
+                    import skimage.registration as _skreg
+                    import inspect as _inspect
+                    _orig_pcc = _skreg.phase_cross_correlation
+                    if "return_error" not in _inspect.signature(_orig_pcc).parameters:
+                        def _compat_pcc(*args, return_error=None, **kwargs):
+                            result = _orig_pcc(*args, **kwargs)
+                            if return_error is False:
+                                return result[0] if hasattr(result, "__getitem__") else result
+                            return result
+                        _skreg.phase_cross_correlation = _compat_pcc
+                        print("  Patched skimage.registration.phase_cross_correlation "
+                              "for return_error compatibility")
+                except Exception as _patch_exc:
+                    print(f"  Note: could not patch phase_cross_correlation: {_patch_exc}")
+
+                # tifffile ≥ 2022.7.28: passing a unit as the 3rd element of the
+                # resolution tuple is deprecated/removed; use resolutionunit= instead.
+                try:
+                    import tifffile as _tifffile
+                    _orig_tw_write = _tifffile.TiffWriter.write
+                    def _compat_tw_write(self_tw, data, *args, resolution=None, **kwargs):
+                        if isinstance(resolution, (tuple, list)) and len(resolution) == 3:
+                            unit = resolution[2]
+                            resolution = (resolution[0], resolution[1])
+                            if "resolutionunit" not in kwargs:
+                                # Map common old-style unit strings to TIFF integer codes
+                                if isinstance(unit, str):
+                                    unit = 3 if "cent" in unit.lower() else (2 if "inch" in unit.lower() else unit)
+                                kwargs["resolutionunit"] = unit
+                        return _orig_tw_write(self_tw, data, *args, resolution=resolution, **kwargs)
+                    _tifffile.TiffWriter.write = _compat_tw_write
+                    print("  Patched tifffile.TiffWriter.write for resolution unit compatibility")
+                except Exception as _patch_exc:
+                    print(f"  Note: could not patch tifffile.TiffWriter.write: {_patch_exc}")
+
+                print(f"  Using {_pkg} (build_imswitch_reader={'yes' if build_imswitch_reader else 'no'})")
+                break
+        except Exception as _exc:
+            print(f"  Could not import {_pkg}: {_exc}")
+
+    if process_images is None:
+        print(
+            "  ERROR: Neither ashlarUC2 nor ashlar could be imported.\n"
+            "  Install with:  pip install ashlarUC2\n"
+            "  or from source: pip install git+https://github.com/openUC2/ashlarUC2"
+        )
+        sys.exit(1)
+
     print("\n=== Building ashlar-stitched OME-TIFFs (sub-pixel alignment) ===")
     print(f"  pixel_size={pixel_size} µm  maximum_shift={maximum_shift} µm  "
           f"align_channel={align_channel}")
     os.makedirs(out_dir, exist_ok=True)
- 
+
+    files_written: List[str] = []
+
     for tp in grid.timepoints:
         print(f"\n  --- Timepoint {tp} ---")
- 
+
         # ------------------------------------------------------------------
         # Collect one best-focus tile per (XY position, channel).
-        # We build a flat list of file paths; build_imswitch_reader parses
-        # the stage coordinates and channel indices from the filenames.
         # ------------------------------------------------------------------
         selected_paths: List[str] = []
- 
-        # Iterate over all (ix, iy, c_idx) combinations that have tiles at
-        # this timepoint.
         for ix in grid.ix_positions:
             for iy in grid.iy_positions:
                 for ci in grid.c_indices:
@@ -1047,42 +1243,49 @@ def build_ashlar_stitched(
                         sorted(z_tiles, key=lambda t: t.z)
                     )
                     selected_paths.append(best.filepath)
- 
+
         if not selected_paths:
             print(f"  Skipping timepoint {tp}: no tiles found.")
             continue
- 
+
         n_channels = len(grid.c_indices)
         n_positions = len(grid.ix_positions) * len(grid.iy_positions)
         print(f"  {len(selected_paths)} tiles selected  "
               f"({n_positions} XY positions × {n_channels} channel(s))")
- 
-        # ------------------------------------------------------------------
-        # Build the ImSwitchTiffReader.
-        # ``build_imswitch_reader`` accepts either a directory path or an
-        # explicit list of file paths.  Passing the list is safer here
-        # because tiles from multiple timepoint subdirectories might coexist
-        # under tiles_dir; this ensures only the current timepoint's files
-        # are used.
-        # ------------------------------------------------------------------
-        try:
-            reader = build_imswitch_reader(selected_paths, pixel_size=pixel_size)
-        except Exception as exc:
-            print(f"  ERROR building ImSwitchTiffReader for tp={tp}: {exc}")
-            continue
- 
+
         out_file = os.path.join(out_dir, f"ashlar_stitched_t{tp:04d}.ome.tif")
         print(f"  Output → {os.path.basename(out_file)}")
- 
+
+        # ------------------------------------------------------------------
+        # Build reader.  Prefer build_imswitch_reader when available; fall back to
+        # the built-in _NumpyReader which parses stage coords from TileInfo objects.
+        # ------------------------------------------------------------------
+        if build_imswitch_reader is not None:
+            try:
+                reader = build_imswitch_reader(selected_paths, pixel_size=pixel_size)
+                filepaths_arg = [reader]
+            except Exception as exc:
+                print(f"  WARNING: build_imswitch_reader failed ({exc}), falling back to numpy reader")
+                import traceback; traceback.print_exc()
+                reader = _build_numpy_reader(grid, tp, grid.c_indices, pixel_size)
+                if reader is None:
+                    print(f"  Skipping timepoint {tp}: no tiles for reader construction.")
+                    continue
+                filepaths_arg = [reader]
+        else:
+            print("  build_imswitch_reader not available — using built-in numpy reader")
+            reader = _build_numpy_reader(grid, tp, grid.c_indices, pixel_size)
+            if reader is None:
+                print(f"  Skipping timepoint {tp}: no tiles for reader construction.")
+                continue
+            filepaths_arg = [reader]
+
         # ------------------------------------------------------------------
         # Run ASHLAR.
-        # ``filepaths`` takes a list where each element is either a file path
-        # string (BioFormats/TIFF reader) or a pre-built reader object.
-        # We pass our ImSwitchTiffReader directly as the single cycle.
         # ------------------------------------------------------------------
         try:
             result = process_images(
-                filepaths=[reader],
+                filepaths=filepaths_arg,
                 output=out_file,
                 align_channel=align_channel,
                 flip_x=False,
@@ -1107,13 +1310,20 @@ def build_ashlar_stitched(
             import traceback
             traceback.print_exc()
             continue
- 
+
         if result and result != 0:
             print(f"  WARNING: ashlar returned non-zero status {result} for tp={tp}")
-        else:
+        elif os.path.isfile(out_file):
             print(f"  Written: {out_file}")
- 
+            files_written.append(out_file)
+        else:
+            print(f"  WARNING: ashlar reported success but output file is missing: {out_file}")
+
     print(f"\n  Ashlar outputs in: {out_dir}")
+
+    if not files_written:
+        print("  ERROR: No output files were written by ashlar.")
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -1302,27 +1512,40 @@ def main():
         build_timelapse(grid, os.path.join(out_dir, "timelapse_mip"), use_mip=True)
         
     if "ashlar" in modes:
-        
-        # get parent-parent dir and find json file
-        parent_dir = os.path.dirname(os.path.dirname(tiles_dir))
-        print("Looking for protocol JSON file in parent directory: ", parent_dir)
+        # --pixel-size from the CLI takes precedence; fall back to protocol JSON
+        # only when the caller left it at the default (1.0) and a JSON is found.
+        pixel_size = args.pixel_size
+
         json_file = None
-        for f in os.listdir(parent_dir):
-            if f.endswith("_protocol.json"):
-                json_file = os.path.join(parent_dir, f)
-                print("Found protocol JSON file: ", json_file)
+        for search_dir in [tiles_dir, os.path.dirname(tiles_dir)]:
+            try:
+                for f in os.listdir(search_dir):
+                    if f.endswith("_protocol.json"):
+                        json_file = os.path.join(search_dir, f)
+                        break
+            except OSError:
+                pass
+            if json_file:
                 break
-        if json_file is None:
-            print(f"  WARNING: No protocol JSON file found in {parent_dir}. "
-                    "Using default pixel size of 1.0 micron for ashlar.")
-            pixel_size = 1.0
+
+        if json_file:
+            print(f"Found protocol JSON file: {json_file}")
+            try:
+                with open(json_file, "r") as f:
+                    protocolDict = json.load(f)
+                json_pixel_size = next(
+                    (step["post_params"]["pixel_size"]
+                     for step in protocolDict.get("workflow_steps", [])
+                     if "pixel_size" in step.get("post_params", {})),
+                    None,
+                )
+                if json_pixel_size is not None and pixel_size == 1.0:
+                    pixel_size = json_pixel_size
+                    print(f"Using pixel size from protocol JSON: {pixel_size} µm")
+            except Exception as exc:
+                print(f"  WARNING: Could not read pixel size from protocol JSON: {exc}")
         else:
-            with open(json_file, "r") as f: protocolDict = json.load(f)
-            # search for "pixel_size" in protocolDict and use it if found, otherwise default to 1.0
-            pixel_size = next(step["post_params"]["pixel_size"] for step in protocolDict["workflow_steps"] if "pixel_size" in step.get("post_params", {}))
-            print(f"Using pixel size from protocol: {pixel_size} microns")
-            if pixel_size is None:
-                pixel_size = 1.0
+            print(f"  No protocol JSON found — using pixel size from --pixel-size: {pixel_size} µm")
 
         build_ashlar_stitched(
             grid,

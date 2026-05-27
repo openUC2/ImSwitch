@@ -1322,6 +1322,11 @@ class ExperimentController(ImConWidgetController):
             self._logger.debug("No image found in metadata!")
             return
 
+        # RGB cameras produce (H, W, 3) arrays; convert to grayscale so the
+        # OME canvas (which has no colour axis) can accept the tile.
+        if img.ndim == 3 and img.shape[2] == 3:
+            img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype)
+
         # Get tile index to identify the correct OME writer
         position_center_index = kwargs.get("position_center_index")
         if position_center_index is None:
@@ -1765,29 +1770,70 @@ class ExperimentController(ImConWidgetController):
         ]
         self._logger.info(f"Ashlar command: {' '.join(cmd)}")
 
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=7200,   # 2-hour hard timeout
-            )
-            if proc.returncode == 0:
-                output_dir = os.path.join(target_dir, "converted", "ashlar")
-                self._logger.info(f"Ashlar stitching completed → {output_dir}")
-                self._finishOverviewAsync(result={
-                    "status": "done",
-                    "outputDir": output_dir,
-                    "message": proc.stdout[-1000:],
-                })
-            else:
-                err = proc.stderr[-1000:] or proc.stdout[-500:]
-                self._logger.error(f"Ashlar stitching failed (rc={proc.returncode}): {err}")
-                self._finishOverviewAsync(error=err)
+        import threading, time
+        deadline = time.monotonic() + 7200  # 2-hour hard timeout
 
-        except subprocess.TimeoutExpired:
-            self._logger.error("Ashlar stitching timed out after 2 hours")
-            self._finishOverviewAsync(error="Stitching timed out after 2 hours")
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+
+            stderr_lines: list[str] = []
+
+            def _stream():
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    self._logger.info(f"[ashlar] {line}")
+                    stderr_lines.append(line)
+                    with self._overview_async_lock:
+                        if self._overview_async_status.get("running"):
+                            self._overview_async_status["message"] = line
+
+            reader_thread = threading.Thread(target=_stream, daemon=True)
+            reader_thread.start()
+
+            # Wait for process with a per-second timeout check so we honour
+            # the 2-hour deadline even if Popen.wait() doesn't time out itself.
+            while proc.poll() is None:
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    reader_thread.join(timeout=5)
+                    self._logger.error("Ashlar stitching timed out after 2 hours")
+                    self._finishOverviewAsync(error="Stitching timed out after 2 hours")
+                    return
+                time.sleep(1)
+
+            reader_thread.join(timeout=10)
+            rc = proc.returncode
+
+            if rc == 0:
+                output_dir = os.path.join(target_dir, "converted", "ashlar")
+                output_files = []
+                if os.path.isdir(output_dir):
+                    output_files = [
+                        f for f in os.listdir(output_dir)
+                        if f.endswith(".tif") or f.endswith(".tiff")
+                    ]
+                if output_files:
+                    self._logger.info(f"Ashlar stitching completed → {output_dir} ({len(output_files)} file(s))")
+                    self._finishOverviewAsync(result={
+                        "status": "done",
+                        "outputDir": output_dir,
+                        "files": output_files,
+                        "message": stderr_lines[-1] if stderr_lines else "",
+                    })
+                else:
+                    tail = "\n".join(stderr_lines[-40:]) or "Script exited 0 but no stitched files were written."
+                    self._logger.error(f"Ashlar stitching produced no output files. Script output:\n{tail}")
+                    self._finishOverviewAsync(error=tail)
+            else:
+                tail = "\n".join(stderr_lines[-20:]) or f"Script exited with code {rc}"
+                self._logger.error(f"Ashlar stitching failed (rc={rc}): {tail}")
+                self._finishOverviewAsync(error=tail)
+
         except Exception as exc:
             self._logger.error(f"Ashlar stitching worker exception: {exc}", exc_info=True)
             self._finishOverviewAsync(error=str(exc))
@@ -3449,6 +3495,7 @@ class ExperimentController(ImConWidgetController):
                 "task": task_name,
                 "result": None,
                 "error": None,
+                "message": "",
             }
             self._overview_async_thread = None
             return True

@@ -18,7 +18,6 @@ class HikCamManager(DetectorManager):
         self.__logger = initLogger(self, instanceName=name)
         self.detectorInfo = detectorInfo
 
-        binning = 1
         cameraId = detectorInfo.managerProperties['cameraListIndex']
         # NOTE: pixel size and flip are owned by PixelCalibrationController and
         # injected via setPixelSizeUm() / setFlipImage() during startup. We only
@@ -44,6 +43,11 @@ class HikCamManager(DetectorManager):
         # per-detector affine calibration has been loaded from the setup config.
         flipImage = (False, False)
 
+        # load binning from config
+        try:
+            binning = detectorInfo.managerProperties['binning']
+        except:
+            binning = 1
         self._camera = self._getHikObj(cameraId, isRGB, binning, flipImage)
 
         for propertyName, propertyValue in detectorInfo.managerProperties['hikcam'].items():
@@ -183,8 +187,11 @@ class HikCamManager(DetectorManager):
             self._camera.start_live()
             self._running = True
             self.__logger.debug('startlive')
-            debug = self._camera.getDiagnostics()
-            self.__logger.info(f"Camera diagnostics after starting live: {debug}")
+            try:
+                debug = self._camera.getDiagnostics()
+                self.__logger.info(f"Camera diagnostics after starting live: {debug}")
+            except Exception as e:
+                self.__logger.warning(f"Could not get camera diagnostics: {e}")
 
     def stopAcquisition(self):
         if self._running:

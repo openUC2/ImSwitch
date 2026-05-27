@@ -80,7 +80,7 @@ CALLBACK_SIG = CFUNCTYPE(
 class CameraHIK:
     """Minimal wrapper that grabs frames via SDK callback (no polling)."""
 
-    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=2, flipImage=(False, False)):
+    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=1, flipImage=(False, False)):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -102,9 +102,6 @@ class CameraHIK:
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
         self.camera = None
         self.DEBUG = False
-        # Binning
-        if platform in ("darwin", "linux2", "linux"):
-            binning = 2
         self.binning = binning
 
         self.SensorHeight = 0
@@ -768,9 +765,30 @@ class CameraHIK:
 
     def setBinning(self, binning=1):
         try:
-            self.camera.MV_CC_SetIntValue("BinningX", binning)
-            self.camera.MV_CC_SetIntValue("BinningY", binning)
+            ret = self.camera.MV_CC_SetIntValue("BinningX", binning)
+            if ret != 0:
+                self.__logger.warning(f"BinningX set failed ret=0x{ret:x}")
+            ret = self.camera.MV_CC_SetIntValue("BinningY", binning)
+            if ret != 0:
+                self.__logger.warning(f"BinningY set failed ret=0x{ret:x}")
+
+            # Changing binning shifts WidthMax/HeightMax to the binned resolution.
+            # The camera keeps the old (now out-of-range) Width/Height values and
+            # silently reverts binning unless they are explicitly updated.
+            mWidth = MVCC_INTVALUE()
+            mHeight = MVCC_INTVALUE()
+            self.camera.MV_CC_GetIntValue("WidthMax", mWidth)
+            self.camera.MV_CC_GetIntValue("HeightMax", mHeight)
+            self.camera.MV_CC_SetIntValue("Width", mWidth.nCurValue)
+            self.camera.MV_CC_SetIntValue("Height", mHeight.nCurValue)
+            self.SensorWidth = mWidth.nCurValue
+            self.SensorHeight = mHeight.nCurValue
+
             self.binning = binning
+            self.__logger.debug(
+                f"Binning set to {binning}x{binning}, "
+                f"sensor size {self.SensorWidth}x{self.SensorHeight}"
+            )
         except Exception as e:
             self.__logger.error(e)
 

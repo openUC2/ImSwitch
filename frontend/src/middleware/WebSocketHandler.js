@@ -21,6 +21,7 @@ import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 import * as storageSlice from "../state/slices/StorageSlice.js";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
+import { fetchAvailableControllers } from "../state/slices/BackendCapabilitiesSlice";
 
 import { io } from "socket.io-client";
 
@@ -125,11 +126,14 @@ const WebSocketHandler = () => {
               console.debug(
                 `[Check 2b] Trigger ESP reconnect: ${apiBase}/reconnect`,
               );
+              //FIXME: Do not attempt aut reconnects! This results in a race condition where the stater if we are reconnected is actually not really in sync with the hardware, hence it periodically dis- and reconnects
+              /*
               await fetchWithTimeout(
                 `${apiBase}/reconnect`,
                 { method: "GET" },
                 5000,
               );
+              */
             } catch (error) {
               console.debug(
                 "[Check 2b] ESP reconnect request failed:",
@@ -338,6 +342,10 @@ const WebSocketHandler = () => {
       console.log(`WebSocket connected with socket id: ${socket.id}`);
       //update redux state
       dispatch(webSocketSlice.setConnected(true));
+
+      // Refetch available backend controllers on every reconnect so UI reacts
+      // to config/controller changes after backend restarts.
+      dispatch(fetchAvailableControllers());
 
       // Sync livestream status with backend on connect/reconnect
       // This ensures frontend state matches backend state after backend restart
@@ -646,26 +654,56 @@ const WebSocketHandler = () => {
       } else if (dataJson.name === "sigObjectiveChanged") {
         console.log("sigObjectiveChanged", dataJson);
         const p = dataJson.args.p0;
-        if (p.pixelsize != null) dispatch(objectiveSlice.setPixelSize(p.pixelsize));
+        if (p.pixelsize != null)
+          dispatch(objectiveSlice.setPixelSize(p.pixelsize));
         if (p.NA != null) dispatch(objectiveSlice.setNA(p.NA));
-        if (p.magnification != null) dispatch(objectiveSlice.setMagnification(p.magnification));
-        if (p.objectiveName != null) dispatch(objectiveSlice.setObjectiveName(p.objectiveName));
+        if (p.magnification != null)
+          dispatch(objectiveSlice.setMagnification(p.magnification));
+        if (p.objectiveName != null)
+          dispatch(objectiveSlice.setObjectiveName(p.objectiveName));
         if (p.FOV) {
           dispatch(objectiveSlice.setFovX(p.FOV[0]));
           dispatch(objectiveSlice.setFovY(p.FOV[1]));
         }
-        if (p.currentObjective != null) dispatch(objectiveSlice.setCurrentObjective(p.currentObjective));
+        if (p.currentObjective != null)
+          dispatch(objectiveSlice.setCurrentObjective(p.currentObjective));
         if (p.x0 != null) dispatch(objectiveSlice.setPosX0(p.x0));
         if (p.x1 != null) dispatch(objectiveSlice.setPosX1(p.x1));
         if (p.z0 != null) dispatch(objectiveSlice.setPosZ0(p.z0));
         if (p.z1 != null) dispatch(objectiveSlice.setPosZ1(p.z1));
-        if (p.availableObjectivesNames) dispatch(objectiveSlice.setAvailableObjectivesNames(p.availableObjectivesNames));
-        if (p.availableObjectiveMagnifications) dispatch(objectiveSlice.setAvailableObjectiveMagnifications(p.availableObjectiveMagnifications));
-        if (p.availableObjectiveNAs) dispatch(objectiveSlice.setAvailableObjectiveNAs(p.availableObjectiveNAs));
-        if (p.availableObjectivePixelSizes) dispatch(objectiveSlice.setAvailableObjectivePixelSizes(p.availableObjectivePixelSizes));
+        if (p.availableObjectivesNames)
+          dispatch(
+            objectiveSlice.setAvailableObjectivesNames(
+              p.availableObjectivesNames,
+            ),
+          );
+        if (p.availableObjectiveMagnifications)
+          dispatch(
+            objectiveSlice.setAvailableObjectiveMagnifications(
+              p.availableObjectiveMagnifications,
+            ),
+          );
+        if (p.availableObjectiveNAs)
+          dispatch(
+            objectiveSlice.setAvailableObjectiveNAs(p.availableObjectiveNAs),
+          );
+        if (p.availableObjectivePixelSizes)
+          dispatch(
+            objectiveSlice.setAvailableObjectivePixelSizes(
+              p.availableObjectivePixelSizes,
+            ),
+          );
         if (p.availableObjectiveMagnifications) {
-          dispatch(objectiveSlice.setmagnification1(p.availableObjectiveMagnifications[0] ?? 0));
-          dispatch(objectiveSlice.setmagnification2(p.availableObjectiveMagnifications[1] ?? 0));
+          dispatch(
+            objectiveSlice.setmagnification1(
+              p.availableObjectiveMagnifications[0] ?? 0,
+            ),
+          );
+          dispatch(
+            objectiveSlice.setmagnification2(
+              p.availableObjectiveMagnifications[1] ?? 0,
+            ),
+          );
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateMotorPosition") {

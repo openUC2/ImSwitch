@@ -14,7 +14,12 @@ import { useState } from "react";
 import { useSelector } from "react-redux";
 import { getSidebarColors } from "../../constants/sidebarColors.js";
 import { selectEnabledApps } from "../../state/slices/appManagerSlice.js";
-import { APP_REGISTRY, APP_CATEGORIES } from "../../constants/appRegistry.js";
+import { selectAvailableControllers } from "../../state/slices/BackendCapabilitiesSlice";
+import {
+  APP_REGISTRY,
+  APP_CATEGORIES,
+  isAppAvailableForControllers,
+} from "../../constants/appRegistry.js";
 import DrawerEntry from "./DrawerEntry.jsx";
 import DrawerHeader from "./DrawerHeader.jsx";
 
@@ -43,6 +48,7 @@ const NavigationDrawer = ({
 
   // Redux state
   const enabledApps = useSelector(selectEnabledApps);
+  const availableControllers = useSelector(selectAvailableControllers);
 
   // Helper function to check if an app is enabled
   const isAppEnabled = (appId) => enabledApps.includes(appId);
@@ -50,7 +56,10 @@ const NavigationDrawer = ({
   // Helper function to get enabled apps by category
   const getEnabledAppsByCategory = (category) => {
     return Object.values(APP_REGISTRY).filter(
-      (app) => app.category === category && isAppEnabled(app.id),
+      (app) =>
+        app.category === category &&
+        isAppEnabled(app.id) &&
+        isAppAvailableForControllers(app, availableControllers),
     );
   };
 

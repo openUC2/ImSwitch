@@ -266,6 +266,7 @@ export const APP_REGISTRY = {
     essential: false,
     keywords: ["timelapse", "time", "automated", "acquisition", "scheduling"],
     pluginId: "Timelapse",
+    requiredControllers: ["TimelapseController"],
   },
 
   flowStop: {
@@ -452,6 +453,7 @@ export const APP_REGISTRY = {
       "label-free",
     ],
     pluginId: "DPCController",
+    requiredControllers: ["LEDMatrixController", "DPCController"],
   },
 
   goniometerController: {
@@ -507,6 +509,7 @@ export const APP_REGISTRY = {
       "switch",
     ],
     pluginId: "Objective",
+    requiredControllers: ["ObjectiveController"],
   },
 
   stresstest: {
@@ -662,6 +665,7 @@ export const APP_REGISTRY = {
       "enhanced",
     ],
     pluginId: "ExtendedLEDMatrix",
+    requiredControllers: ["LEDMatrixController"],
   },
 };
 
@@ -678,6 +682,28 @@ export const getAppsByCategory = (category) => {
 export const getEnabledApps = (enabledAppIds = []) => {
   return Object.values(APP_REGISTRY).filter(
     (app) => app.essential || enabledAppIds.includes(app.id),
+  );
+};
+
+export const isAppAvailableForControllers = (
+  app,
+  availableControllers = [],
+) => {
+  const requiredControllers = app?.requiredControllers || [];
+  if (requiredControllers.length === 0) return true;
+
+  const availableSet = new Set(availableControllers);
+  return requiredControllers.every((controller) =>
+    availableSet.has(controller),
+  );
+};
+
+export const filterAppsByAvailableControllers = (
+  apps,
+  availableControllers = [],
+) => {
+  return apps.filter((app) =>
+    isAppAvailableForControllers(app, availableControllers),
   );
 };
 

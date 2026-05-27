@@ -982,10 +982,10 @@ const StageOffsetCalibrationTab = () => {
         </Alert>
       )}
 
-      {/* 2x2 compact layout. Top: live view | heatmap. Bottom: layout map +
-          scan controls | brightest/known/accept + joystick. */}
+      {/* 2x2 compact layout. Top: live view + joystick + illumination | heatmap.
+          Bottom: layout map + scan controls | brightest/known/accept. */}
       <Grid container spacing={2}>
-        {/* ============= TOP-LEFT: live view + detector tabs + illum ======= */}
+        {/* ============= TOP-LEFT: live view + detector tabs + joystick + illum ======= */}
         <Grid item xs={12} md={6}>
           <Paper variant="outlined" sx={{ p: 1, height: "100%" }}>
             <Box sx={{ display: "flex", alignItems: "center", mb: 0.5 }}>
@@ -1014,6 +1014,12 @@ const StageOffsetCalibrationTab = () => {
             </Box>
             <Box sx={{ maxHeight: 360, overflow: "hidden" }}>
               <LiveViewControlWrapper useFastMode={true} />
+            </Box>
+            <Box sx={{ mt: 1 }}>
+              <Typography variant="subtitle2" gutterBottom>
+                Joystick — nudge stage over the bright spot
+              </Typography>
+              <JoystickControl hostIP={hostIP} hostPort={hostPort} />
             </Box>
             <Box sx={{ mt: 1 }}>
               <Typography variant="subtitle2" gutterBottom>
@@ -1190,7 +1196,7 @@ const StageOffsetCalibrationTab = () => {
           </Paper>
         </Grid>
 
-        {/* ============= BOTTOM-RIGHT: brightest / known / accept / joystick ============ */}
+        {/* ============= BOTTOM-RIGHT: brightest / known / accept ============ */}
         <Grid item xs={12} md={6}>
           <Paper variant="outlined" sx={{ p: 1, height: "100%" }}>
             <Typography variant="subtitle2" gutterBottom>
@@ -1216,9 +1222,34 @@ const StageOffsetCalibrationTab = () => {
                 />
               </Grid>
             </Grid>
+            {/* Adopt-current-stage shortcut: after joystick fine-tuning, the
+                stage XY is usually more precise than the raster's brightest
+                sample. Stamp that XY as the picked target so the offset is
+                computed against the fine-tuned position. The "Brightest"
+                fields above intentionally stay readonly so the user can
+                always see the raw scan result. */}
+            <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mb: 1, alignItems: "center" }}>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={positionState?.x == null || positionState?.y == null}
+                onClick={() =>
+                  setPickedTarget({
+                    x: Number(positionState?.x ?? 0),
+                    y: Number(positionState?.y ?? 0),
+                  })
+                }
+              >
+                Use current stage position as target
+              </Button>
+              <Typography variant="caption" color="textSecondary">
+                Now at: X={positionState?.x?.toFixed?.(1) ?? "?"},
+                Y={positionState?.y?.toFixed?.(1) ?? "?"} um
+              </Typography>
+            </Box>
             {pickedTarget && (
               <Alert severity="info" sx={{ mb: 1, py: 0.25 }}>
-                Manual pick: ({pickedTarget.x.toFixed(1)},{" "}
+                Override active: ({pickedTarget.x.toFixed(1)},{" "}
                 {pickedTarget.y.toFixed(1)}) um
                 <Button
                   size="small"
@@ -1292,10 +1323,6 @@ const StageOffsetCalibrationTab = () => {
                 Accept &amp; store offset
               </Button>
             </Box>
-            <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 0.5 }}>
-              Fine-tune over the bright spot before accepting.
-            </Typography>
-            <JoystickControl hostIP={hostIP} hostPort={hostPort} />
           </Paper>
         </Grid>
       </Grid>

@@ -228,45 +228,46 @@ class ExperimentNormalMode(ExperimentModeBase):
         )
         step_id += 1
 
-        # Save experiment protocol to JSON
-        protocol_data = {
-            "experiment_name": exp_name,
-            "experiment_mode": "normal",
-            "directory": dir_path,
-            "filename": m_file_name,
-            "timepoint": t,
-            "total_timepoints": n_times,
-            "tile_count": len(snake_tiles),
-            "step_count": step_id,
-            "snake_tiles": snake_tiles,
-            "z_positions": z_positions,
-            "illumination_sources": illumination_sources,
-            "illumination_intensities": illumination_intensities,
-            "illumination_kinds": illumination_kinds,
-            "illumination_params": illumination_params,
-            "exposures": exposures,
-            "gains": gains,
-            "autofocus": {
-                "enabled": is_auto_focus,
-                "min": autofocus_min,
-                "max": autofocus_max,
-                "step_size": autofocus_step_size,
-                "channel": autofocus_illumination_channel,
-                "mode": autofocus_mode,
-                "software_method": autofocus_software_method,
-                "max_attempts": autofocus_max_attempts,
-                "target_focus_setpoint": autofocus_target_focus_setpoint,
-                "hc_initial_step": autofocus_hc_initial_step,
-                "hc_min_step": autofocus_hc_min_step,
-                "hc_step_reduction": autofocus_hc_step_reduction,
-                "hc_max_iterations": autofocus_hc_max_iterations,
-            },
-            "workflow_steps": [self._serialize_workflow_step(step) for step in workflow_steps]
-        }
-        
-        # Create protocol file path
-        protocol_file_path = os.path.join(dir_path, f"{m_file_name}_t{t:04d}")
-        self.save_experiment_protocol(protocol_data, protocol_file_path, mode="normal")
+        # Save experiment protocol to JSON exactly once, on the first timepoint.
+        # The file name has no _t{NNNN} suffix so it is stable for the whole
+        # experiment and is written only once regardless of n_times.
+        if t == 0:
+            protocol_data = {
+                "experiment_name": exp_name,
+                "experiment_mode": "normal",
+                "directory": dir_path,
+                "filename": m_file_name,
+                "total_timepoints": n_times,
+                "tile_count": len(snake_tiles),
+                "step_count": step_id,
+                "snake_tiles": snake_tiles,
+                "z_positions": z_positions,
+                "illumination_sources": illumination_sources,
+                "illumination_intensities": illumination_intensities,
+                "illumination_kinds": illumination_kinds,
+                "illumination_params": illumination_params,
+                "exposures": exposures,
+                "gains": gains,
+                "autofocus": {
+                    "enabled": is_auto_focus,
+                    "min": autofocus_min,
+                    "max": autofocus_max,
+                    "step_size": autofocus_step_size,
+                    "channel": autofocus_illumination_channel,
+                    "mode": autofocus_mode,
+                    "software_method": autofocus_software_method,
+                    "max_attempts": autofocus_max_attempts,
+                    "target_focus_setpoint": autofocus_target_focus_setpoint,
+                    "hc_initial_step": autofocus_hc_initial_step,
+                    "hc_min_step": autofocus_hc_min_step,
+                    "hc_step_reduction": autofocus_hc_step_reduction,
+                    "hc_max_iterations": autofocus_hc_max_iterations,
+                },
+                "workflow_steps": [self._serialize_workflow_step(step) for step in workflow_steps]
+            }
+            # Protocol file path — no _t{NNNN} suffix
+            protocol_file_path = os.path.join(dir_path, m_file_name)
+            self.save_experiment_protocol(protocol_data, protocol_file_path, mode="normal")
 
         return {
             "status": "workflow_created",

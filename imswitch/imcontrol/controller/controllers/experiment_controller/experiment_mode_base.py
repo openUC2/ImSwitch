@@ -290,7 +290,7 @@ class ExperimentModeBase(ABC):
             with open(protocol_file, 'w') as f:
                 json.dump(protocol_data, f, indent=2, default=self._json_serializer)
                 
-            self._logger.info(f"Experiment protocol saved to: {protocol_file}")
+            self._logger.info(f"Experiment protocol saved (one-time): {protocol_file}")
             return protocol_file
             
         except Exception as e:

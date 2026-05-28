@@ -52,6 +52,9 @@ class ObjectiveController(LiveUpdatedController):
         self._magnifications = list(self._configManager.magnifications)
         self._objectiveNames = list(self._configManager.objectiveNames)
 
+        # Compute which slots are actually configured (name truthy AND magnification > 0)
+        self._isSlotConfigured = self._computeIsSlotConfigured()
+
         # Connect to config manager signals for external parameter updates
         self._configManager.sigObjectiveParametersChanged.connect(self._onConfigParametersChanged)
 
@@ -114,6 +117,22 @@ class ObjectiveController(LiveUpdatedController):
         self._updatePixelSize()
 
     # === State Property Accessors ===
+
+    def _computeIsSlotConfigured(self):
+        """Return [bool, bool] — slot i is configured iff its name is truthy AND magnification > 0."""
+        result = []
+        for i in range(2):
+            name = self._objectiveNames[i] if i < len(self._objectiveNames) else None
+            mag = self._magnifications[i] if i < len(self._magnifications) else 0
+            result.append(bool(name) and (mag if mag is not None else 0) > 0)
+        return result
+
+    @APIExport(runOnUIThread=True)
+    def isSlotConfigured(self, slot: int) -> bool:
+        """Return True if the given slot (0 or 1) has a non-empty name and magnification > 0."""
+        if slot not in [0, 1]:
+            return False
+        return self._isSlotConfigured[slot]
 
     def _getCurrentPixelSize(self) -> Optional[float]:
         """Get the pixel size for the current objective.
@@ -262,6 +281,13 @@ class ObjectiveController(LiveUpdatedController):
             self._logger.error(f"Invalid objective slot: {slot} (must be 0 or 1)")
             return
 
+        if not self._isSlotConfigured[slot]:
+            self._logger.warning(
+                f"Objective slot {slot} is not configured (empty name or magnification=0); "
+                "refusing to issue axis-A motion."
+            )
+            return
+
         if False and slot == self._currentObjective:
             self._logger.debug(f"Already at objective slot {slot}, no movement needed")
             return
@@ -352,6 +378,9 @@ class ObjectiveController(LiveUpdatedController):
             self._objectivePositions[slot] = params["position"]
         if "zPosition" in params and slot < len(self._zPositions):
             self._zPositions[slot] = params["zPosition"]
+
+        # Recompute configured state in case name/magnification changed
+        self._isSlotConfigured = self._computeIsSlotConfigured()
 
         # If this is the current objective, update detector
         if slot == self._currentObjective:
@@ -554,6 +583,9 @@ class ObjectiveController(LiveUpdatedController):
             emitSignal=True
         )
 
+        # Recompute configured state — this call may promote a single-objective setup to dual
+        self._isSlotConfigured = self._computeIsSlotConfigured()
+
         # Return updated parameters
         return self._configManager.getObjectiveParameters(objectiveSlot)
 
@@ -594,6 +626,7 @@ class ObjectiveController(LiveUpdatedController):
             "FOV": self._getCurrentFOV(),
 
             "availableObjectives": [0, 1],
+            "slotConfigured": list(self._isSlotConfigured),
             "availableObjectivesNames": list(self._objectiveNames),
             "availableObjectivesPositions": list(self._objectivePositions),
             "availableObjectiveZPositions": list(self._zPositions),

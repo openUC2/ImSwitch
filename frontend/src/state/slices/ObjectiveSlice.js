@@ -22,6 +22,7 @@ const initialObjectiveState = {
   availableObjectiveMagnifications: [0, 0],
   availableObjectiveNAs: [0, 0],
   availableObjectivePixelSizes: [0, 0],
+  slotConfigured: [true, true],
   
   // Additional state for ObjectiveController
   currentA: "",
@@ -129,6 +130,9 @@ const objectiveSlice = createSlice({
     setAvailableObjectivePixelSizes: (state, action) => {
       state.availableObjectivePixelSizes = action.payload;
     },
+    setSlotConfigured: (state, action) => {
+      state.slotConfigured = action.payload;
+    },
 
     resetState: (state) => {
       console.log("resetState");
@@ -164,6 +168,7 @@ export const {
   setAvailableObjectiveMagnifications,
   setAvailableObjectiveNAs,
   setAvailableObjectivePixelSizes,
+  setSlotConfigured,
   resetState,
 } = objectiveSlice.actions;
 

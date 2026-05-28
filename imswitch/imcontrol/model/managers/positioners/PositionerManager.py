@@ -142,37 +142,56 @@ class PositionerManager(ABC):
         """ Move to sample mounting position. """
         pass
 
+    def getDevicePositionAxis(self, axis="X"):
+        """Raw device position (no offset applied) for the given axis.
+
+        The base implementation reads ``self.position[axis]`` and re-adds the
+        offset, which is correct only when ``self.position`` already stores the
+        offset-corrected (user) value. Concrete managers should override this
+        with a direct read from the hardware whenever possible so that the
+        controller can compute a stable offset atomically.
+        """
+        userPos = self.position.get(axis, 0) if hasattr(self, 'position') else 0
+        if hasattr(self, 'stageOffsetPositions'):
+            return userPos + self.stageOffsetPositions.get(axis, 0)
+        return userPos
+
     def resetStageOffsetAxis(self, axis="X"):
-        """
-        Resets the stage offset for the given axis to 0 (in-memory only).
-        Persistence is handled by the controller.
-        """
+        """Reset the stage offset for the given axis to 0 (in-memory only)."""
         if hasattr(self, '_logger'):
             self._logger.debug(f'Resetting stage offset for {axis} axis.')
-        self.setStageOffsetAxis(knownOffset=0, axis=axis)
+        if hasattr(self, 'stageOffsetPositions'):
+            self.stageOffsetPositions[axis] = 0
 
-    def setStageOffsetAxis(self, knownPosition=0, currentPosition=None, knownOffset=None, axis="X"):
-        """
-        Sets the stage to a known offset aside from the home position (in-memory only).
-        knownPosition and currentPosition have to be in physical coordinates (i.e. prior to applying the stepsize).
-        Persistence is handled by the controller.
+    def setStageOffsetAxis(self, knownPosition=0, currentDevicePosition=None,
+                            knownOffset=None, axis="X"):
+        """Set the stage offset using a single canonical contract.
+
+        The offset is defined as ``device_position - user_position`` so that
+        ``user_position = device_position - offset`` everywhere. Given a known
+        user-coordinate ``knownPosition`` and the raw device position at the
+        same physical point (``currentDevicePosition``) the new offset is::
+
+            offset = currentDevicePosition - knownPosition
+
+        When ``knownOffset`` is passed it is stored verbatim (escape hatch for
+        callers that already know the desired offset). When
+        ``currentDevicePosition`` is omitted the manager reads it via
+        :meth:`getDevicePositionAxis`.
         """
         if hasattr(self, '_logger'):
             self._logger.debug(f'Setting stage offset for {axis} axis.')
-        if currentPosition is None:
-            currentPosition = self.position[axis]
-        if knownOffset is None:
-            offset = currentPosition - knownPosition
+        if knownOffset is not None:
+            offset = float(knownOffset)
         else:
-            offset = knownOffset
-        # Store the offset in the manager (implement this in your concrete manager)
+            if currentDevicePosition is None:
+                currentDevicePosition = self.getDevicePositionAxis(axis)
+            offset = float(currentDevicePosition) - float(knownPosition)
         if hasattr(self, 'stageOffsetPositions'):
             self.stageOffsetPositions[axis] = offset
 
     def getStageOffsetAxis(self, axis="X"):
-        """
-        Returns the stage offset for the given axis.
-        """
+        """Return the stage offset for the given axis."""
         if hasattr(self, '_logger'):
             self._logger.debug(f'Getting stage offset for {axis} axis.')
         if hasattr(self, 'stageOffsetPositions'):

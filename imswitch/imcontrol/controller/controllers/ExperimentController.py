@@ -5,6 +5,7 @@ import numpy as np
 from typing import List, Optional, Dict, Any
 
 import os
+import sys
 import threading
 
 from imswitch.imcommon.framework import Signal
@@ -14,7 +15,7 @@ from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
 
 try:
-    IS_ASHLAR_AVAILABLE = True
+    IS_ASHLAR_AVAILABLE = True # TODO: seems wrong :D 
 except Exception:
     IS_ASHLAR_AVAILABLE = False
 
@@ -91,6 +92,29 @@ class ExperimentController(ImConWidgetController):
             # laser maanger
             self.availableIlluminations.append(self._master.lasersManager[iDevice])
 
+        # Detect LED matrix presence so we can offer synthetic "Ring" and
+        # "DPC" channels in the Wellplate designer.  We grab the *first*
+        # LED matrix (multi-matrix setups are out of scope for now).
+        self._ledMatrix = None
+        self._ledMatrixName = None
+        try:
+            ledMatrixManager = getattr(self._master, "LEDMatrixsManager", None)
+            if ledMatrixManager is not None:
+                ledMatrixNames = ledMatrixManager.getAllDeviceNames()
+                if ledMatrixNames:
+                    self._ledMatrixName = ledMatrixNames[0]
+                    self._ledMatrix = ledMatrixManager[self._ledMatrixName]
+        except Exception as e:  # noqa: BLE001 - best-effort detection
+            self._logger.warning(f"LEDMatrix detection failed: {e}")
+            self._ledMatrix = None
+
+        # Names for the synthetic LED-matrix channels.  Kept as class-level
+        # constants so the workflow builder and channel-list endpoint use
+        # identical strings.
+        self.LED_MATRIX_RING_CHANNEL = "LED Matrix Ring"
+        self.LED_MATRIX_DPC_CHANNEL = "LED Matrix DPC"
+        self.DPC_SUB_CHANNELS = ("top", "bottom", "left", "right")
+
         # select stage
         self.allPositionerNames = self._master.positionersManager.getAllDeviceNames()[0]
         try:
@@ -104,7 +128,11 @@ class ExperimentController(ImConWidgetController):
         # TODO: Adjust parameters
         # define changeable Experiment parameters as ExperimentWorkflowParams
         self.ExperimentParams = ExperimentWorkflowParams()
-        self.ExperimentParams.illuSources = self.allIlluNames
+        self.ExperimentParams.illuSources = list(self.allIlluNames)
+        # Per-source kind tag, parallel to illuSources.  Real lasers/LEDs are
+        # "default"; the LED-matrix synthetic channels appended below add
+        # "ring" and "dpc" entries.  Frontend renders kind-specific controls.
+        self.ExperimentParams.illuSourceKinds = ["default"] * len(self.allIlluNames)
         self.ExperimentParams.illuSourceMinIntensities = []
         self.ExperimentParams.illuSourceMaxIntensities = []
         self.ExperimentParams.illuIntensities = [0]*len(self.allIlluNames)
@@ -116,6 +144,66 @@ class ExperimentController(ImConWidgetController):
         for laserN in self.availableIlluminations:
             self.ExperimentParams.illuSourceMinIntensities.append(laserN.valueRangeMin)
             self.ExperimentParams.illuSourceMaxIntensities.append(laserN.valueRangeMax)
+
+        # Append LED-matrix synthetic channels when hardware is present.
+        # Intensity here is reported as the RGB byte range (0..255); the
+        # actual per-frame patterns (radius, RGB) come from
+        # parameterValue.illuminationParams[channel_name].
+        if self._ledMatrix is not None:
+            # Discover matrix size so the frontend can clamp the ring-radius
+            # slider to physically meaningful values.  Different LED matrix
+            # managers expose dimensions slightly differently, so we probe a
+            # few attribute names and fall back to a conservative 4×4 if all
+            # else fails.
+            _nx = (
+                getattr(self._ledMatrix, "Nx", None)
+                or getattr(self._ledMatrix, "nLedsX", None)
+                or getattr(self._ledMatrix, "Ncols", None)
+                or 4
+            )
+            _ny = (
+                getattr(self._ledMatrix, "Ny", None)
+                or getattr(self._ledMatrix, "nLedsY", None)
+                or getattr(self._ledMatrix, "Nrows", None)
+                or 4
+            )
+            try:
+                _nx = int(_nx)
+                _ny = int(_ny)
+            except (TypeError, ValueError):
+                _nx, _ny = 4, 4
+            # A ring of radius r needs r LEDs from the centre to the edge,
+            # so max usable radius is (min(N) - 1) // 2.  For an 8×8 matrix
+            # this gives 3 (rings at radii 0,1,2,3 → 4 distinct rings).
+            _max_ring_radius = max(0, (min(_nx, _ny) - 1) // 2)
+            self.ExperimentParams.ledMatrixInfo = {
+                "nLedsX": _nx,
+                "nLedsY": _ny,
+                "maxRingRadius": _max_ring_radius,
+            }
+            self.ExperimentParams.illuSources.append(self.LED_MATRIX_RING_CHANNEL)
+            self.ExperimentParams.illuSourceKinds.append("ring")
+            self.ExperimentParams.illuSourceMinIntensities.append(0)
+            self.ExperimentParams.illuSourceMaxIntensities.append(255)
+            self.ExperimentParams.illuIntensities.append(0)
+            self.ExperimentParams.exposureTimes.append(0)
+            self.ExperimentParams.gains.append(0)
+
+            self.ExperimentParams.illuSources.append(self.LED_MATRIX_DPC_CHANNEL)
+            self.ExperimentParams.illuSourceKinds.append("dpc")
+            self.ExperimentParams.illuSourceMinIntensities.append(0)
+            self.ExperimentParams.illuSourceMaxIntensities.append(255)
+            self.ExperimentParams.illuIntensities.append(0)
+            self.ExperimentParams.exposureTimes.append(0)
+            self.ExperimentParams.gains.append(0)
+            # Surface DPC capability separately so existing UI bits that
+            # only look at isDPCpossible can still gate features.
+            self.ExperimentParams.isDPCpossible = True
+            self._logger.info(
+                f"LEDMatrix '{self._ledMatrixName}' detected ({_nx}x{_ny}, "
+                f"maxRingRadius={_max_ring_radius}) — exposing synthetic "
+                f"channels: '{self.LED_MATRIX_RING_CHANNEL}', '{self.LED_MATRIX_DPC_CHANNEL}'."
+            )
         '''
         For Fast Scanning - Performance Mode -> Parameters will be sent to the hardware directly
         requires hardware triggering
@@ -691,6 +779,91 @@ class ExperimentController(ImConWidgetController):
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
 
+        # Resolve a per-source "kind" tag parallel to illuSources.  Sources
+        # are looked up by name in self.ExperimentParams.illuSources; anything
+        # not found falls back to "default" so legacy clients keep working.
+        _kind_by_name = {
+            name: kind
+            for name, kind in zip(
+                self.ExperimentParams.illuSources,
+                self.ExperimentParams.illuSourceKinds,
+            )
+        }
+        illuminationKinds = [
+            _kind_by_name.get(name, "default") for name in illuSources
+        ]
+        # Per-channel kind-specific params (radius, RGB).  May be None on
+        # legacy payloads — normalise to empty dict so workflow builder
+        # doesn't need to None-check.
+        illuminationParams = dict(p.illuminationParams or {})
+
+        # Promote RGB max → illuIntensities for synthetic (ring/dpc) channels.
+        # Synthetic channels carry their "intensity" in illuminationParams
+        # (R/G/B 0..255), so illuIntensities[i] is always 0 for them.  The
+        # workflow loop uses `illu_intensity > 0` as the active-channel gate;
+        # without this promotion, synthetic channels are silently treated as
+        # "off" (and worse: collapse passthrough mode below, which then mis-
+        # aligns illuminationKinds vs. the post-passthrough illuSources).
+        #
+        # IMPORTANT: only promote when the channel is actually enabled by
+        # the user.  `illuminationParams` is a sticky cache on the frontend
+        # — toggling a synthetic channel off does NOT clear its last-edited
+        # radius/RGB, so a naïve "has non-zero RGB → activate" rule would
+        # re-enable channels the user explicitly deselected.  We gate on
+        # `channelEnabledForExperiment` (sent by the frontend) when present.
+        # Pad illuminationIntensities to match illuSources first so the indexed
+        # update below is safe.
+        if len(illuminationIntensities) < len(illuSources):
+            illuminationIntensities = list(illuminationIntensities) + (
+                [0] * (len(illuSources) - len(illuminationIntensities))
+            )
+        else:
+            illuminationIntensities = list(illuminationIntensities)
+        _channel_enabled = p.channelEnabledForExperiment  # Optional[List[bool]]
+        for _i, (_name, _kind) in enumerate(zip(illuSources, illuminationKinds)):
+            if _kind not in ("ring", "dpc"):
+                continue
+            # Authoritative "is this channel enabled in the experiment" check.
+            # When the frontend sends channelEnabledForExperiment, honour it
+            # exactly; if absent (legacy clients), fall back to the previous
+            # permissive behaviour (treat any synthetic channel with RGB
+            # params as enabled).
+            if _channel_enabled is not None:
+                if _i >= len(_channel_enabled) or not _channel_enabled[_i]:
+                    # Make sure stale intensity doesn't sneak through either.
+                    illuminationIntensities[_i] = 0
+                    continue
+            if illuminationIntensities[_i] and illuminationIntensities[_i] > 0:
+                continue  # frontend already supplied a concrete intensity
+            _kp = illuminationParams.get(_name) or {}
+            _rgb_max = max(
+                int(_kp.get("intensityR", 0) or 0),
+                int(_kp.get("intensityG", 0) or 0),
+                int(_kp.get("intensityB", 0) or 0),
+            )
+            if _rgb_max > 0:
+                illuminationIntensities[_i] = _rgb_max
+        # Push back so any subsequent reads of p.* see the promoted values
+        # (passthrough_illumination, n_active_channels, resolve_keep_illumination_on
+        # are all properties that read self.illuIntensities).
+        try:
+            p.illuIntensities = illuminationIntensities
+        except Exception:
+            pass  # pydantic frozen model — fall back to local var only
+
+        # LED-matrix synthetic channels are software-controlled per-frame and
+        # cannot ride the hardware-trigger fast path.  If any are selected,
+        # silently fall back to normal mode so the user gets correct frames
+        # instead of a confusing failure.
+        _has_led_matrix_channel = any(k in ("ring", "dpc") for k in illuminationKinds)
+        if _has_led_matrix_channel and p.performanceMode:
+            self._logger.info(
+                "LED-matrix synthetic channel(s) selected — overriding "
+                "performanceMode=False (these patterns require per-frame "
+                "software control of the LED matrix)."
+            )
+            p.performanceMode = False
+
         # Detect passthrough mode: no illumination channels configured.
         # In this mode we acquire frames without touching the current
         # illumination, exposure, or gain settings on the device.
@@ -742,6 +915,13 @@ class ExperimentController(ImConWidgetController):
         if _passthrough_illumination:
             illuSources = [illuSources[0]] if illuSources else ["default"]
             illuminationIntensities = [1]  # sentinel: passes >0 gate; never sent to device
+            # Keep illuminationKinds parallel to the collapsed illuSources –
+            # the rest of the pipeline indexes into kinds by source position,
+            # so a length mismatch here used to make the workflow look up the
+            # wrong kind (e.g. mis-treating a ring source as a default laser).
+            illuminationKinds = [
+                _kind_by_name.get(illuSources[0], "default")
+            ] if illuSources else ["default"]
             gains = [-1]   # set_exposure_time_gain skips when gain < 0
             exposures = [0]  # set_exposure_time_gain skips when exposure_time <= 0
             keepIlluminationOn = True  # never send set_laser_power commands
@@ -815,6 +995,7 @@ class ExperimentController(ImConWidgetController):
         drivePath = dirtools.UserFileDirs.getValidatedDataPath()
         dirPath = os.path.join(drivePath, 'ExperimentController', timeStamp)
         os.makedirs(dirPath, exist_ok=True)
+        self._last_experiment_dir = dirPath
         mFileName = f"{timeStamp}_{exp_name}"
 
         workflowSteps = []
@@ -861,6 +1042,8 @@ class ExperimentController(ImConWidgetController):
                 initial_xyz=self._initial_experiment_position,
                 keep_illumination_on=keepIlluminationOn,
                 is_rgb=self.isRGB,
+                illumination_kinds=illuminationKinds,
+                illumination_params=illuminationParams,
             )
             result = self.performance_mode.execute_experiment(ctx=ctx)
             return {"status": "running", "mode": "performance"}
@@ -895,6 +1078,8 @@ class ExperimentController(ImConWidgetController):
                 initial_xyz=self._initial_experiment_position,
                 keep_illumination_on=keepIlluminationOn,
                 is_rgb=self.isRGB,
+                illumination_kinds=illuminationKinds,
+                illumination_params=illuminationParams,
             )
 
             for t in range(nTimes):
@@ -1320,6 +1505,11 @@ class ExperimentController(ImConWidgetController):
             self._logger.debug("No image found in metadata!")
             return
 
+        # RGB cameras produce (H, W, 3) arrays; convert to grayscale so the
+        # OME canvas (which has no colour axis) can accept the tile.
+        if img.ndim == 3 and img.shape[2] == 3:
+            img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype)
+
         # Get tile index to identify the correct OME writer
         position_center_index = kwargs.get("position_center_index")
         if position_center_index is None:
@@ -1479,6 +1669,70 @@ class ExperimentController(ImConWidgetController):
         self._logger.debug(f"Setting laser power to {power} for channel {channel}")
         time.sleep(0.04)  # Short delay to ensure power is set before next acquisition # TODO: Necessary?
         return power
+
+    def set_led_matrix_pattern(
+        self,
+        kind: str,
+        direction: Optional[str] = None,
+        radius: Optional[int] = None,
+        intensity_r: int = 0,
+        intensity_g: int = 0,
+        intensity_b: int = 0,
+        settle_s: float = 0.05,
+    ):
+        """Drive the LED matrix for a Wellplate-designer synthetic channel.
+
+        Args:
+            kind: "ring" | "halves" | "off".  "halves" is the DPC quadrant
+                primitive (combined with ``direction``).
+            direction: For ``kind="halves"``: "top" | "bottom" | "left" | "right".
+            radius: For ``kind="ring"``: ring radius in LED units.
+            intensity_r/g/b: 0..255 per colour channel.
+            settle_s: Sleep after setting so illumination stabilises before
+                the camera trigger fires.  setHalves/setRing return as soon
+                as the command is acked over serial, so a short settle is
+                important to avoid the first row of the rolling-shutter
+                frame capturing the previous pattern.
+        """
+        if self._ledMatrix is None:
+            self._logger.warning(
+                f"set_led_matrix_pattern({kind}) called but no LED matrix is configured."
+            )
+            return None
+        try:
+            if kind == "off":
+                self._ledMatrix.setAll(state=(0, 0, 0), getReturn=False)
+            elif kind == "ring":
+                if radius is None:
+                    self._logger.error("set_led_matrix_pattern(ring): missing 'radius'")
+                    return None
+                self._ledMatrix.setRing(
+                    radius=int(radius),
+                    intensity=(int(intensity_r), int(intensity_g), int(intensity_b)),
+                )
+            elif kind == "halves":
+                if direction is None or direction not in self.DPC_SUB_CHANNELS:
+                    self._logger.error(
+                        f"set_led_matrix_pattern(halves): direction must be one of "
+                        f"{self.DPC_SUB_CHANNELS}, got {direction!r}"
+                    )
+                    return None
+                self._ledMatrix.setHalves(
+                    intensity=(int(intensity_r), int(intensity_g), int(intensity_b)),
+                    region=direction,
+                )
+            else:
+                self._logger.error(f"set_led_matrix_pattern: unknown kind {kind!r}")
+                return None
+        except Exception as e:  # noqa: BLE001 - hardware errors surfaced as log warnings
+            self._logger.warning(f"set_led_matrix_pattern({kind}) failed: {e}")
+            return None
+
+        # Settle so the camera doesn't read mid-transition (rolling shutter
+        # captures the previous pattern on the top rows otherwise).
+        if settle_s > 0:
+            time.sleep(settle_s)
+        return kind
 
 
     def home_axis(self, axis: str, isBlocking: bool = True):
@@ -1665,6 +1919,171 @@ class ExperimentController(ImConWidgetController):
     Assumes the micro‑controller (or the positioner itself) raises a TTL pulse
     **after** arriving at each grid co‑ordinate.
     """
+
+    @APIExport(requestType="GET")
+    def runAshlarStitching(
+        self,
+        pixelSize: float = 1.0,
+        maximumShift: float = 50.0,
+        alignChannel: int = 0,
+        experimentDir: str = "",
+    ) -> dict:
+        """
+        Schedule ashlarUC2 stitching for the last (or specified) experiment
+        directory and return immediately.
+
+        The actual stitching runs in a background thread identical to the
+        overview-scan async pattern.  Poll ``getOverviewAsyncStatus`` for
+        completion; the result dict will contain ``outputDir`` on success.
+
+        Parameters
+        ----------
+        pixelSize     : physical pixel size in µm/pixel
+        maximumShift  : max per-tile corrective shift in µm (ashlar -m)
+        alignChannel  : channel index used for alignment (ashlar -c)
+        experimentDir : absolute path to a specific experiment directory;
+                        uses the most recent experiment when empty
+        """
+        # Resolve which experiment directory to stitch before spawning the thread
+        target_dir = experimentDir.strip() if experimentDir else ""
+        if not target_dir:
+            target_dir = getattr(self, "_last_experiment_dir", "")
+        if not target_dir or not os.path.isdir(target_dir):
+            return {
+                "started": False,
+                "error": (
+                    f"Experiment directory not found: '{target_dir}'. "
+                    "Run an experiment first or provide experimentDir."
+                ),
+            }
+
+        if not self._tryStartOverviewAsync("ashlar_stitching"):
+            return {
+                "started": False,
+                "error": "Another background task is still running",
+                "status": self._overview_async_status,
+            }
+
+        thread = threading.Thread(
+            target=self._runAshlarStitchingWorker,
+            args=(target_dir, pixelSize, maximumShift, alignChannel),
+            daemon=True,
+            name="runAshlarStitching",
+        )
+        with self._overview_async_lock:
+            self._overview_async_thread = thread
+        thread.start()
+        return {"started": True, "task": "ashlar_stitching", "experimentDir": target_dir}
+
+
+    def _runAshlarStitchingWorker(
+        self,
+        target_dir: str,
+        pixelSize: float,
+        maximumShift: float,
+        alignChannel: int,
+    ) -> None:
+        """
+        Worker thread body for ashlar stitching.
+        Calls _finishOverviewAsync so getOverviewAsyncStatus reflects completion.
+        """
+        import subprocess, sys
+
+        self._logger.info(f"Ashlar stitching started for: {target_dir}")
+
+        # Locate convert_experiment_tiffs.py relative to this controller file.
+        # imswitch/imcontrol/controller/controllers/ → root → scripts/
+        script = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..", "..", "..", "..", "scripts",
+                "convert_experiment_tiffs.py",
+            )
+        )
+        if not os.path.isfile(script):
+            self._logger.error(f"Stitching script not found: {script}")
+            self._finishOverviewAsync(
+                error=f"convert_experiment_tiffs.py not found at: {script}"
+            )
+            return
+
+        cmd = [
+            sys.executable, script,
+            target_dir,
+            "--mode", "ashlar",
+            "--pixel-size", str(pixelSize),
+            "--maximum-shift", str(maximumShift),
+            "--align-channel", str(alignChannel),
+        ]
+        self._logger.info(f"Ashlar command: {' '.join(cmd)}")
+
+        import threading, time
+        deadline = time.monotonic() + 7200  # 2-hour hard timeout
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+
+            stderr_lines: list[str] = []
+
+            def _stream():
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    self._logger.info(f"[ashlar] {line}")
+                    stderr_lines.append(line)
+                    with self._overview_async_lock:
+                        if self._overview_async_status.get("running"):
+                            self._overview_async_status["message"] = line
+
+            reader_thread = threading.Thread(target=_stream, daemon=True)
+            reader_thread.start()
+
+            # Wait for process with a per-second timeout check so we honour
+            # the 2-hour deadline even if Popen.wait() doesn't time out itself.
+            while proc.poll() is None:
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    reader_thread.join(timeout=5)
+                    self._logger.error("Ashlar stitching timed out after 2 hours")
+                    self._finishOverviewAsync(error="Stitching timed out after 2 hours")
+                    return
+                time.sleep(1)
+
+            reader_thread.join(timeout=10)
+            rc = proc.returncode
+
+            if rc == 0:
+                output_dir = os.path.join(target_dir, "converted", "ashlar")
+                output_files = []
+                if os.path.isdir(output_dir):
+                    output_files = [
+                        f for f in os.listdir(output_dir)
+                        if f.endswith(".tif") or f.endswith(".tiff")
+                    ]
+                if output_files:
+                    self._logger.info(f"Ashlar stitching completed → {output_dir} ({len(output_files)} file(s))")
+                    self._finishOverviewAsync(result={
+                        "status": "done",
+                        "outputDir": output_dir,
+                        "files": output_files,
+                        "message": stderr_lines[-1] if stderr_lines else "",
+                    })
+                else:
+                    tail = "\n".join(stderr_lines[-40:]) or "Script exited 0 but no stitched files were written."
+                    self._logger.error(f"Ashlar stitching produced no output files. Script output:\n{tail}")
+                    self._finishOverviewAsync(error=tail)
+            else:
+                tail = "\n".join(stderr_lines[-20:]) or f"Script exited with code {rc}"
+                self._logger.error(f"Ashlar stitching failed (rc={rc}): {tail}")
+                self._finishOverviewAsync(error=tail)
+
+        except Exception as exc:
+            self._logger.error(f"Ashlar stitching worker exception: {exc}", exc_info=True)
+            self._finishOverviewAsync(error=str(exc))
 
     def setOmeZarrUrl(self, url):
         """Set the OME-Zarr URL for the experiment."""
@@ -3323,6 +3742,7 @@ class ExperimentController(ImConWidgetController):
                 "task": task_name,
                 "result": None,
                 "error": None,
+                "message": "",
             }
             self._overview_async_thread = None
             return True

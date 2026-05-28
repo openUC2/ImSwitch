@@ -27,6 +27,7 @@ const fetchObjectiveControllerGetStatus = (dispatch) => {
       dispatch(objectiveSlice.setAvailableObjectiveMagnifications(config.availableObjectiveMagnifications || [0, 0]));
       dispatch(objectiveSlice.setAvailableObjectiveNAs(config.availableObjectiveNAs || [0, 0]));
       dispatch(objectiveSlice.setAvailableObjectivePixelSizes(config.availableObjectivePixelSizes || [0, 0]));
+      if (config.slotConfigured) dispatch(objectiveSlice.setSlotConfigured(config.slotConfigured));
 
       if (config.currentObjective != null) {
         dispatch(objectiveSlice.setCurrentObjective(config.currentObjective));

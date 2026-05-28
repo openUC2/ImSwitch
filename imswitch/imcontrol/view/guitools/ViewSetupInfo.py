@@ -51,10 +51,6 @@ class ViewSetupInfo(SetupInfo):
     """ Laser presets available to select (map preset name -> laser name ->
     LaserPresetInfo). """
 
-    stageOffsets: Dict[str, Dict[str, float]] = field(default_factory=dict)
-    """ Stage offsets available to select (map preset name -> stage name ->
-    stage offset). """
-
     defaultLaserPresetForScan: Optional[str] = field(default_factory=lambda: None)
     """ Default laser preset for scanning. """
 
@@ -127,10 +123,6 @@ class ViewSetupInfo(SetupInfo):
     def setLaserPreset(self, name, laserPresetInfos):
         """ :meta private: """
         self.laserPresets[name] = laserPresetInfos
-
-    def setStageOffset(self, name, stageOffsets):
-        """ :meta private: """
-        self.positioners[name].stageOffsets=stageOffsets
 
     def removeLaserPreset(self, name):
         """ :meta private: """

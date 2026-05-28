@@ -15,6 +15,7 @@ import {
   AccordionDetails,
   Chip,
   Tooltip,
+  TextField,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -24,6 +25,7 @@ import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import * as wellSelectorSlice from "../../state/slices/WellSelectorSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
+import apiExperimentControllerGetCurrentExperimentParams from "../../backendapi/apiExperimentControllerGetCurrentExperimentParams";
 
 /**
  * TilingDimension - Tiling/mosaic configuration interface
@@ -41,6 +43,18 @@ const TilingDimension = () => {
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const parameterValue = experimentState.parameterValue;
+
+  // Fetch calibrated pixel size from the backend once on mount and pre-fill
+  // the Ashlar pixel size field if the user hasn't manually set it yet.
+  useEffect(() => {
+    apiExperimentControllerGetCurrentExperimentParams()
+      .then((params) => {
+        if (params?.pixel_size_um) {
+          dispatch(experimentSlice.setAshlarPixelSizeCalibrated(params.pixel_size_um));
+        }
+      })
+      .catch(() => {});
+  }, [dispatch]);
 
   // Calculate overlap percentage for display
   const overlapPercent = Math.round((parameterValue.overlapWidth || 0) * 100);
@@ -229,6 +243,8 @@ const TilingDimension = () => {
             onChange={(e) => {
               dispatch(experimentSlice.setOmeWriteStitchedTiff(e.target.value === "full"));
               dispatch(experimentSlice.setOmeWriteAshlarStitch(e.target.value === "ashlar"));
+              // Ashlar stitches from individual tile TIFFs — ensure they are saved
+              dispatch(experimentSlice.setOmeWriteIndividualTiffs(e.target.value === "ashlar"));
             }}
             label="Stitching Mode"
           >
@@ -258,6 +274,56 @@ const TilingDimension = () => {
             </MenuItem>
           </Select>
         </FormControl>
+
+        {/* Ashlar parameters – shown only when Ashlar mode is active */}
+        {parameterValue.ome_write_ashlar_stitch && (
+          <Box sx={{ mt: 2, display: "flex", flexDirection: "column", gap: 2 }}>
+            <Typography variant="caption" color="textSecondary">
+              Ashlar Parameters
+            </Typography>
+            <Box sx={{ display: "flex", gap: 2 }}>
+              <Tooltip title="Physical pixel size in µm/pixel. Must match the objective + camera calibration." arrow>
+                <TextField
+                  label="Pixel Size (µm/px)"
+                  type="number"
+                  size="small"
+                  value={parameterValue.ashlar_pixel_size ?? 1.0}
+                  inputProps={{ min: 0.01, step: 0.01 }}
+                  onChange={(e) =>
+                    dispatch(experimentSlice.setAshlarPixelSize(parseFloat(e.target.value) || 1.0))
+                  }
+                  sx={{ flex: 1 }}
+                />
+              </Tooltip>
+              <Tooltip title="Maximum allowed per-tile corrective shift in µm. Increase if tiles are misaligned at their edges." arrow>
+                <TextField
+                  label="Max Shift (µm)"
+                  type="number"
+                  size="small"
+                  value={parameterValue.ashlar_maximum_shift ?? 50.0}
+                  inputProps={{ min: 0, step: 1 }}
+                  onChange={(e) =>
+                    dispatch(experimentSlice.setAshlarMaximumShift(parseFloat(e.target.value) || 50.0))
+                  }
+                  sx={{ flex: 1 }}
+                />
+              </Tooltip>
+              <Tooltip title="Zero-based index of the channel used for tile alignment. Use the channel with the best contrast." arrow>
+                <TextField
+                  label="Align Channel"
+                  type="number"
+                  size="small"
+                  value={parameterValue.ashlar_align_channel ?? 0}
+                  inputProps={{ min: 0, step: 1 }}
+                  onChange={(e) =>
+                    dispatch(experimentSlice.setAshlarAlignChannel(parseInt(e.target.value, 10) || 0))
+                  }
+                  sx={{ flex: 1 }}
+                />
+              </Tooltip>
+            </Box>
+          </Box>
+        )}
       </Box>
 
       {/* Advanced Settings */}

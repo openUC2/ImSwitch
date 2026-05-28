@@ -88,6 +88,10 @@ const initialExperimentState = {
     ome_write_stitched_tiff: true,
     ome_write_individual_tiffs: false,
     ome_write_ashlar_stitch: false,
+    ashlar_pixel_size: 1.0,           // µm/pixel — physical pixel size for Ashlar alignment
+    ashlar_pixel_size_user_set: false, // true once the user has manually edited the field
+    ashlar_maximum_shift: 50.0,   // µm — max per-tile corrective shift allowed by Ashlar
+    ashlar_align_channel: 0,      // zero-based channel index used for tile alignment
     // Tile overlap parameters (moved from WellSelectorSlice)
     overlapWidth: 0.0,  // 0.0 = no overlap (100% spacing), 0.1 = 10% overlap (90% spacing)
     overlapHeight: 0.0,  // 0.0 = no overlap (100% spacing), 0.1 = 10% overlap (90% spacing)
@@ -298,6 +302,21 @@ const experimentSlice = createSlice({
       console.log("setOmeWriteAshlarStitch", action.payload);
       state.parameterValue.ome_write_ashlar_stitch = action.payload;
     },
+    setAshlarPixelSize: (state, action) => {
+      state.parameterValue.ashlar_pixel_size = action.payload;
+      state.parameterValue.ashlar_pixel_size_user_set = true;
+    },
+    setAshlarPixelSizeCalibrated: (state, action) => {
+      if (!state.parameterValue.ashlar_pixel_size_user_set) {
+        state.parameterValue.ashlar_pixel_size = action.payload;
+      }
+    },
+    setAshlarMaximumShift: (state, action) => {
+      state.parameterValue.ashlar_maximum_shift = action.payload;
+    },
+    setAshlarAlignChannel: (state, action) => {
+      state.parameterValue.ashlar_align_channel = action.payload;
+    },
     //------------------------ overlap parameters
     setOverlapWidth: (state, action) => {
       console.log("setOverlapWidth", action.payload);
@@ -504,6 +523,10 @@ export const {
   setOmeWriteStitchedTiff,
   setOmeWriteIndividualTiffs,
   setOmeWriteAshlarStitch,
+  setAshlarPixelSize,
+  setAshlarPixelSizeCalibrated,
+  setAshlarMaximumShift,
+  setAshlarAlignChannel,
   setOverlapWidth,
   setOverlapHeight,
   setIsSnakescan,

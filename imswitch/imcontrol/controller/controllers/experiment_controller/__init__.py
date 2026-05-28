@@ -33,6 +33,7 @@ from .models import (
     FocusFitMethod,
     FocusMapConfig,
     FocusMapFromPointsRequest,
+    IlluminationKind,
     KeepIlluminationMode,
     MDAChannelConfig,
     MDASequenceInfo,

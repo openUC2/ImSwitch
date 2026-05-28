@@ -38,6 +38,14 @@ TriggerMode = Literal["hardware", "software"]
 FocusFitMethod = Literal["spline", "rbf", "constant"]
 FocusAlgorithm = Literal["LAPE", "GLVA", "JPEG"]
 ScanPattern = Literal["raster", "snake"]
+# Channel "kind" tag carried alongside the channel name in illuSources.
+# - "default" : conventional laser/LED illumination (existing behaviour).
+# - "ring"    : LED-matrix synthetic channel — a single frame illuminated
+#               by a ring of LEDs at a given radius with RGB intensities.
+# - "dpc"     : LED-matrix synthetic channel — at each XY position the
+#               workflow captures four frames (top/bottom/left/right half
+#               illumination) saved as four DPC_<dir> channels.
+IlluminationKind = Literal["default", "ring", "dpc"]
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +197,20 @@ class ParameterValue(BaseModel):
     keepIlluminationOn: KeepIlluminationMode = Field(
         "auto",
         description="Illumination mode: 'auto' (single channel stays on), 'on' (always on), 'off' (per-frame toggle)",
+    )
+    # Per-channel kind-specific parameters. Keyed by the channel name as it
+    # appears in `illumination`. Used by the workflow builder to drive
+    # LED-matrix synthetic channels:
+    #   "ring": {"radius": int, "intensityR": int, "intensityG": int, "intensityB": int}
+    #   "dpc" : {"intensityR": int, "intensityG": int, "intensityB": int}
+    # For "default" channels the dict is ignored; the legacy
+    # illuIntensities/exposureTimes/gains lists drive the acquisition.
+    illuminationParams: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description=(
+            "Per-channel kind-specific params keyed by channel name "
+            "(e.g. radius + RGB for 'ring', RGB-only for 'dpc')."
+        ),
     )
 
     # ------------------------------------------------------------------
@@ -362,6 +384,14 @@ class ExperimentWorkflowParams(BaseModel):
     illuSourceMinIntensities: List[float] = Field(default_factory=list, description="Minimum intensities for each source")
     illuSourceMaxIntensities: List[float] = Field(default_factory=list, description="Maximum intensities for each source")
     illuIntensities: List[float] = Field(default_factory=list, description="Intensities for each source")
+    # Per-source "kind" tag, parallel to illuSources.  Frontend uses this to
+    # render kind-specific controls (radius + RGB for "ring", RGB-only for
+    # "dpc", default exposure/gain/intensity for "default").  Empty list →
+    # all sources are treated as "default" for backward compatibility.
+    illuSourceKinds: List[str] = Field(
+        default_factory=list,
+        description="Per-source kind tag (parallel to illuSources): 'default' | 'ring' | 'dpc'",
+    )
 
     # Camera parameters
     exposureTimes: List[float] = Field(default_factory=list, description="Exposure times for each source")
@@ -417,6 +447,7 @@ __all__ = [
     "FocusFitMethod",
     "FocusAlgorithm",
     "ScanPattern",
+    "IlluminationKind",
     # Models
     "FocusMapFromPointsRequest",
     "NeighborPoint",

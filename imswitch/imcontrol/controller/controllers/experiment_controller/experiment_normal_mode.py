@@ -81,6 +81,19 @@ class ExperimentNormalMode(ExperimentModeBase):
         z_positions = kwargs.get('z_positions', [0])
         exposures = kwargs.get('exposures', [100])
         gains = kwargs.get('gains', [1])
+        # Per-source kind tags + kind-specific params (radius/RGB for the
+        # LED-matrix synthetic channels).  Default to "default"/empty so
+        # callers that don't yet thread these through keep working.
+        illumination_kinds = kwargs.get('illumination_kinds') or []
+        illumination_params = kwargs.get('illumination_params') or {}
+        if not illumination_kinds:
+            illumination_kinds = ["default"] * len(illumination_sources or [])
+        # Effective channel-frame count: ring contributes 1, dpc contributes 4,
+        # default contributes 1.  Used to size the OME writer's channel axis
+        # so DPC's four sub-frames all fit.
+        DPC_SUB_DIRS = ("top", "bottom", "left", "right")
+        def _effective_frames_for_kind(kind: str) -> int:
+            return 4 if kind == "dpc" else 1
         exp_name = kwargs.get('exp_name', 'experiment')
         dir_path = kwargs.get('dir_path', '')
         m_file_name = kwargs.get('m_file_name', 'experiment')
@@ -125,6 +138,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 omero_connection_params=omero_connection_params,
                 shared_omero_key=shared_omero_key,
                 n_times=n_times,
+                illumination_kinds=illumination_kinds,
             )
         # Compute writer offset for multi-timepoint experiments.
         # Each timepoint creates its own set of writers, so the flat
@@ -134,10 +148,14 @@ class ExperimentNormalMode(ExperimentModeBase):
 
         # If keep_illumination_on, turn on all active illumination sources once
         # at the beginning instead of toggling per frame.
+        # LED-matrix synthetic channels ("ring"/"dpc") are excluded — they must
+        # be toggled per-frame because each frame uses a different pattern
+        # (and DPC explicitly cycles 4 patterns per position).
         if keep_illumination_on:
             for illu_index, illu_source in enumerate(illumination_sources):
                 illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
-                if illu_intensity > 0:
+                illu_kind = illumination_kinds[illu_index] if illu_index < len(illumination_kinds) else "default"
+                if illu_intensity > 0 and illu_kind == "default":
                     workflow_steps.append(WorkflowStep(
                         name=f"Turn on illumination (continuous): {illu_source}",
                         step_id=step_id,
@@ -164,6 +182,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                 t_pre_s=t_pre_s, t_post_s=t_post_s,
                 writer_offset=writer_offset,
                 keep_illumination_on=keep_illumination_on,
+                illumination_kinds=illumination_kinds,
+                illumination_params=illumination_params,
             )
 
         # Add finalization steps
@@ -172,6 +192,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             illumination_intensities, t_period, t, n_times,
             writer_offset=writer_offset,
             keep_illumination_on=keep_illumination_on,
+            illumination_kinds=illumination_kinds,
         )
 
         # Add step to set LED status to idle when done
@@ -197,6 +218,8 @@ class ExperimentNormalMode(ExperimentModeBase):
             "z_positions": z_positions,
             "illumination_sources": illumination_sources,
             "illumination_intensities": illumination_intensities,
+            "illumination_kinds": illumination_kinds,
+            "illumination_params": illumination_params,
             "exposures": exposures,
             "gains": gains,
             "autofocus": {
@@ -308,7 +331,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                           isRGB: bool,
                           omero_connection_params: Optional[OMEROConnectionParams] = None,
                           shared_omero_key: Optional[str] = None,
-                          n_times: int = 1) -> List[OMEWriter]:
+                          n_times: int = 1,
+                          illumination_kinds: Optional[List[str]] = None) -> List[OMEWriter]:
 
         """
         Set up OME writers for each tile.
@@ -355,8 +379,50 @@ class ExperimentNormalMode(ExperimentModeBase):
             tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
             grid_shape, grid_geometry = self.calculate_grid_parameters(tiles)
 
-            # Create writer configuration
-            n_channels = sum(np.array(illumination_intensities) > 0)
+            # Create writer configuration.
+            # Effective channel count: active normal/ring channels contribute
+            # one frame each; an active DPC channel contributes four (one per
+            # half-illumination quadrant).  We have to size the OME writer's
+            # channel axis to fit the expanded total so DPC sub-frames land
+            # in distinct channel slots rather than overwriting each other.
+            # We also build the parallel channel_names list so OME-Zarr root
+            # metadata (omero.channels[].label) shows "DPC_top" etc. instead
+            # of generic "Channel_0", which makes the resulting stores
+            # immediately readable in napari/Fiji without manual renaming.
+            _ints = list(illumination_intensities) if illumination_intensities is not None else []
+            _kinds = list(illumination_kinds or [])
+            if len(_kinds) < len(_ints):
+                _kinds = _kinds + ["default"] * (len(_ints) - len(_kinds))
+            _sources_for_naming: List[str] = []
+            try:
+                _sources_for_naming = list(getattr(self.controller, '_illuminationSources', []) or [])
+            except Exception:
+                _sources_for_naming = []
+            n_channels = 0
+            channel_names_expanded: List[str] = []
+            DPC_DIRS = ("top", "bottom", "left", "right")
+            for src_idx, (_intensity, _kind) in enumerate(zip(_ints, _kinds)):
+                if _intensity is None or _intensity <= 0:
+                    continue
+                src_name = (
+                    _sources_for_naming[src_idx]
+                    if src_idx < len(_sources_for_naming)
+                    else f"Channel_{src_idx}"
+                )
+                if _kind == "dpc":
+                    for _d in DPC_DIRS:
+                        channel_names_expanded.append(f"DPC_{_d}")
+                    n_channels += 4
+                elif _kind == "ring":
+                    channel_names_expanded.append("Ring")
+                    n_channels += 1
+                else:
+                    channel_names_expanded.append(src_name)
+                    n_channels += 1
+            if n_channels == 0:
+                # Fallback to legacy behaviour when nothing is active.
+                n_channels = max(1, int(sum(np.array(_ints) > 0)))
+                channel_names_expanded = None  # let OMEWriter default to "Channel_N"
             write_omero = omero_connection_params is not None and getattr(self.controller, '_ome_write_omero', False)
             writer_config = self.create_writer_config(
                 write_tiff=self.controller._ome_write_tiff,
@@ -368,7 +434,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                 min_period=0.1,  # Faster for normal mode
                 n_time_points=n_times,
                 n_z_planes=len(z_positions),
-                n_channels=n_channels
+                n_channels=n_channels,
+                channel_names=channel_names_expanded,
             )
 
             # Extract per-well labware metadata from the first tile in this group.
@@ -465,7 +532,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   autofocus_hc_initial_step: float = 20.0,
                                   autofocus_hc_min_step: float = 1.0,
                                   autofocus_hc_step_reduction: float = 0.5,
-                                  autofocus_hc_max_iterations: int = 50) -> int:
+                                  autofocus_hc_max_iterations: int = 50,
+                                  illumination_kinds: Optional[List[str]] = None,
+                                  illumination_params: Optional[Dict[str, Dict[str, Any]]] = None) -> int:
         """
         Create workflow steps for a single tile.
         
@@ -618,9 +687,18 @@ class ExperimentNormalMode(ExperimentModeBase):
                     ))
                     step_id += 1
 
-                # Iterate over illumination sources
+                # Iterate over illumination sources.
+                # effective_channel_index walks the OME channel axis: each
+                # active normal/ring source consumes one slot, an active DPC
+                # source consumes four (one per direction). This must match
+                # the n_channels computed in _setup_ome_writers, otherwise
+                # DPC sub-frames overwrite each other in the Zarr store.
+                effective_channel_index = 0
+                _kinds = illumination_kinds or []
+                _params = illumination_params or {}
                 for illu_index, illu_source in enumerate(illumination_sources):
                     illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
+                    illu_kind = _kinds[illu_index] if illu_index < len(_kinds) else "default"
                     if illu_intensity <= 0:
                         continue
 
@@ -641,69 +719,211 @@ class ExperimentNormalMode(ExperimentModeBase):
                             ))
                             step_id += 1
 
-                    # Turn on illumination - use tPre as settle time after activation
-                    # Skip per-frame toggle when keep_illumination_on; light is already on.
-                    if not keep_illumination_on:
-                        workflow_steps.append(WorkflowStep(
-                            name="Turn on illumination",
-                            step_id=step_id,
-                            main_func=self.controller.set_laser_power,
-                            main_params={"power": illu_intensity, "channel": illu_source},
-                            post_funcs=[self.controller.wait_time],
-                            post_params={"seconds": t_pre_s},
-                        ))
-                        step_id += 1
-
-                    # Acquire frame
+                    # Per-channel exposure/gain (shared across DPC sub-frames).
                     exposure_time = exposures[illu_index] if illu_index < len(exposures) else exposures[0]
                     gain = gains[illu_index] if illu_index < len(gains) else gains[0]
 
-                    # In single TIFF mode, all positions within a timepoint use the same writer
-                    # The writer index corresponds to the timepoint for timelapse sequences.
-                    # In multi-tile mode, offset by timepoint * num_tiles to address
-                    # the correct writer in the flat file_writers list.
                     is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
                     writer_index = t if is_single_tiff_mode else (writer_offset + position_center_index)
 
-                    workflow_steps.append(WorkflowStep(
-                        name="Acquire frame",
-                        step_id=step_id,
-                        main_func=self.controller.acquire_frame,
-                        main_params={"channel": "Mono"},
-                        post_funcs=[self.controller.save_frame_ome],
-                        pre_funcs=[self.controller.set_exposure_time_gain],
-                        pre_params={"exposure_time": exposure_time, "gain": gain},
-                        post_params={
-                            "posX": m_point["x"],
-                            "posY": m_point["y"],
-                            "posZ": i_z,
-                            "iX": m_point["iX"],
-                            "iY": m_point["iY"],
-                            "pixel_size": m_pixel_size,
-                            "minX": min_x, "minY": min_y, "maxX": max_x, "maxY": max_y,
-                            "channel": illu_source,
-                            "time_index": t,
-                            "tile_index": m_index,
-                            "position_center_index": writer_index,  # Use writer_index instead
-                            "runningNumber": step_id,
-                            "illuminationChannel": illu_source,
-                            "illuminationValue": illu_intensity,
-                            "z_index": index_z,
-                            "channel_index": illu_index,
-                        },
-                    ))
-                    step_id += 1
+                    if illu_kind == "default":
+                        # ---- Conventional laser/LED channel: legacy behaviour ----
+                        # Turn on illumination - use tPre as settle time after activation.
+                        # Skip per-frame toggle when keep_illumination_on; light is already on.
+                        if not keep_illumination_on:
+                            workflow_steps.append(WorkflowStep(
+                                name="Turn on illumination",
+                                step_id=step_id,
+                                main_func=self.controller.set_laser_power,
+                                main_params={"power": illu_intensity, "channel": illu_source},
+                                post_funcs=[self.controller.wait_time],
+                                post_params={"seconds": t_pre_s},
+                            ))
+                            step_id += 1
 
-                    # Turn off illumination only if multiple sources (for switching between them)
-                    # Skip per-frame toggle when keep_illumination_on; finalization handles it.
-                    if not keep_illumination_on:
                         workflow_steps.append(WorkflowStep(
-                            name="Turn off illumination",
+                            name="Acquire frame",
                             step_id=step_id,
-                            main_func=self.controller.set_laser_power,
-                            main_params={"power": 0, "channel": illu_source},
+                            main_func=self.controller.acquire_frame,
+                            main_params={"channel": "Mono"},
+                            post_funcs=[self.controller.save_frame_ome],
+                            pre_funcs=[self.controller.set_exposure_time_gain],
+                            pre_params={"exposure_time": exposure_time, "gain": gain},
+                            post_params={
+                                "posX": m_point["x"],
+                                "posY": m_point["y"],
+                                "posZ": i_z,
+                                "iX": m_point["iX"],
+                                "iY": m_point["iY"],
+                                "pixel_size": m_pixel_size,
+                                "minX": min_x, "minY": min_y, "maxX": max_x, "maxY": max_y,
+                                "channel": illu_source,
+                                "time_index": t,
+                                "tile_index": m_index,
+                                "position_center_index": writer_index,
+                                "runningNumber": step_id,
+                                "illuminationChannel": illu_source,
+                                "illuminationValue": illu_intensity,
+                                "z_index": index_z,
+                                "channel_index": effective_channel_index,
+                            },
                         ))
                         step_id += 1
+                        effective_channel_index += 1
+
+                        # Turn off illumination only if multiple sources (for switching between them).
+                        if not keep_illumination_on:
+                            workflow_steps.append(WorkflowStep(
+                                name="Turn off illumination",
+                                step_id=step_id,
+                                main_func=self.controller.set_laser_power,
+                                main_params={"power": 0, "channel": illu_source},
+                            ))
+                            step_id += 1
+
+                    elif illu_kind == "ring":
+                        # ---- LED-matrix ring channel: one frame at given radius ----
+                        ring_params = _params.get(illu_source, {}) or {}
+                        radius = int(ring_params.get("radius", 8))
+                        r_int = int(ring_params.get("intensityR", illu_intensity))
+                        g_int = int(ring_params.get("intensityG", illu_intensity))
+                        b_int = int(ring_params.get("intensityB", illu_intensity))
+                        ring_channel_name = ring_params.get("channelName") or "Ring"
+
+                        workflow_steps.append(WorkflowStep(
+                            name=f"LED matrix ring r={radius}",
+                            step_id=step_id,
+                            main_func=self.controller.set_led_matrix_pattern,
+                            main_params={
+                                "kind": "ring",
+                                "radius": radius,
+                                "intensity_r": r_int,
+                                "intensity_g": g_int,
+                                "intensity_b": b_int,
+                                "settle_s": t_pre_s,
+                            },
+                        ))
+                        step_id += 1
+
+                        workflow_steps.append(WorkflowStep(
+                            name=f"Acquire frame ({ring_channel_name})",
+                            step_id=step_id,
+                            main_func=self.controller.acquire_frame,
+                            main_params={"channel": "Mono"},
+                            post_funcs=[self.controller.save_frame_ome],
+                            pre_funcs=[self.controller.set_exposure_time_gain],
+                            pre_params={"exposure_time": exposure_time, "gain": gain},
+                            post_params={
+                                "posX": m_point["x"],
+                                "posY": m_point["y"],
+                                "posZ": i_z,
+                                "iX": m_point["iX"],
+                                "iY": m_point["iY"],
+                                "pixel_size": m_pixel_size,
+                                "minX": min_x, "minY": min_y, "maxX": max_x, "maxY": max_y,
+                                "channel": ring_channel_name,
+                                "time_index": t,
+                                "tile_index": m_index,
+                                "position_center_index": writer_index,
+                                "runningNumber": step_id,
+                                "illuminationChannel": ring_channel_name,
+                                "illuminationValue": max(r_int, g_int, b_int),
+                                "illuminationPattern": "ring",
+                                "illuminationRadius": radius,
+                                "illuminationRGB": (r_int, g_int, b_int),
+                                "z_index": index_z,
+                                "channel_index": effective_channel_index,
+                            },
+                        ))
+                        step_id += 1
+                        effective_channel_index += 1
+
+                        # Always turn the LED matrix off after the snap so the
+                        # next step starts dark.  No "keep_illumination_on" for
+                        # synthetic channels — patterns must switch per frame.
+                        workflow_steps.append(WorkflowStep(
+                            name="LED matrix off",
+                            step_id=step_id,
+                            main_func=self.controller.set_led_matrix_pattern,
+                            main_params={"kind": "off"},
+                        ))
+                        step_id += 1
+
+                    elif illu_kind == "dpc":
+                        # ---- LED-matrix DPC channel: 4 frames, one per direction ----
+                        dpc_params = _params.get(illu_source, {}) or {}
+                        # DPC's documented gotcha: lower RGB values beat with
+                        # the rolling shutter, so default to full 255 across
+                        # whichever colour the user picked.
+                        r_int = int(dpc_params.get("intensityR", 0))
+                        g_int = int(dpc_params.get("intensityG", illu_intensity))
+                        b_int = int(dpc_params.get("intensityB", 0))
+
+                        for direction in DPC_SUB_DIRS:
+                            sub_channel_name = f"DPC_{direction}"
+
+                            workflow_steps.append(WorkflowStep(
+                                name=f"LED matrix halves: {direction}",
+                                step_id=step_id,
+                                main_func=self.controller.set_led_matrix_pattern,
+                                main_params={
+                                    "kind": "halves",
+                                    "direction": direction,
+                                    "intensity_r": r_int,
+                                    "intensity_g": g_int,
+                                    "intensity_b": b_int,
+                                    "settle_s": t_pre_s,
+                                },
+                            ))
+                            step_id += 1
+
+                            workflow_steps.append(WorkflowStep(
+                                name=f"Acquire frame ({sub_channel_name})",
+                                step_id=step_id,
+                                main_func=self.controller.acquire_frame,
+                                main_params={"channel": "Mono"},
+                                post_funcs=[self.controller.save_frame_ome],
+                                pre_funcs=[self.controller.set_exposure_time_gain],
+                                pre_params={"exposure_time": exposure_time, "gain": gain},
+                                post_params={
+                                    "posX": m_point["x"],
+                                    "posY": m_point["y"],
+                                    "posZ": i_z,
+                                    "iX": m_point["iX"],
+                                    "iY": m_point["iY"],
+                                    "pixel_size": m_pixel_size,
+                                    "minX": min_x, "minY": min_y, "maxX": max_x, "maxY": max_y,
+                                    "channel": sub_channel_name,
+                                    "time_index": t,
+                                    "tile_index": m_index,
+                                    "position_center_index": writer_index,
+                                    "runningNumber": step_id,
+                                    "illuminationChannel": sub_channel_name,
+                                    "illuminationValue": max(r_int, g_int, b_int),
+                                    "illuminationPattern": "dpc",
+                                    "illuminationDirection": direction,
+                                    "illuminationRGB": (r_int, g_int, b_int),
+                                    "z_index": index_z,
+                                    "channel_index": effective_channel_index,
+                                },
+                            ))
+                            step_id += 1
+                            effective_channel_index += 1
+
+                        workflow_steps.append(WorkflowStep(
+                            name="LED matrix off",
+                            step_id=step_id,
+                            main_func=self.controller.set_led_matrix_pattern,
+                            main_params={"kind": "off"},
+                        ))
+                        step_id += 1
+
+                    else:
+                        # Unknown kind — log + skip rather than fail the whole run.
+                        self._logger.warning(
+                            f"Unknown illumination kind '{illu_kind}' for source "
+                            f"'{illu_source}'; skipping this channel."
+                        )
 
             # After a Z-stack, return to base_z so the next tile starts from a
             # known Z reference (important for timelapse repeatability).
@@ -749,7 +969,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                               t_period: float,
                               t: int, n_times: int,
                               writer_offset: int = 0,
-                              keep_illumination_on: bool = False) -> int:
+                              keep_illumination_on: bool = False,
+                              illumination_kinds: Optional[List[str]] = None) -> int:
         """
         Add finalization workflow steps.
         
@@ -786,16 +1007,32 @@ class ExperimentNormalMode(ExperimentModeBase):
         # timepoint so the light stays on between timepoints for speed.
         should_turn_off = (not keep_illumination_on) or is_last_timepoint
         if should_turn_off:
+            _kinds = illumination_kinds or []
+            _has_synthetic = False
             for illu_index, illu_source in enumerate(illumination_sources):
                 illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
+                illu_kind = _kinds[illu_index] if illu_index < len(_kinds) else "default"
                 if illu_intensity <= 0:
                     continue
 
+                if illu_kind == "default":
+                    workflow_steps.append(WorkflowStep(
+                        name="Turn off illumination",
+                        step_id=step_id,
+                        main_func=self.controller.set_laser_power,
+                        main_params={"power": 0, "channel": illu_source},
+                    ))
+                    step_id += 1
+                else:
+                    # ring / dpc share the LED matrix; one off-call covers all.
+                    _has_synthetic = True
+
+            if _has_synthetic:
                 workflow_steps.append(WorkflowStep(
-                    name="Turn off illumination",
+                    name="LED matrix off (finalization)",
                     step_id=step_id,
-                    main_func=self.controller.set_laser_power,
-                    main_params={"power": 0, "channel": illu_source},
+                    main_func=self.controller.set_led_matrix_pattern,
+                    main_params={"kind": "off"},
                 ))
                 step_id += 1
 

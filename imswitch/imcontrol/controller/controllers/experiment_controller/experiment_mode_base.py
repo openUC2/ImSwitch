@@ -94,7 +94,8 @@ class ExperimentModeBase(ABC):
                            min_period: float = 0.2,
                            n_time_points: int = 1,
                            n_z_planes: int = 1,
-                           n_channels: int = 1) -> OMEWriterConfig:
+                           n_channels: int = 1,
+                           channel_names: Optional[List[str]] = None) -> OMEWriterConfig:
         """
         Create OME writer configuration.
         
@@ -128,7 +129,8 @@ class ExperimentModeBase(ABC):
             pixel_size=pixel_size,
             n_time_points=n_time_points,
             n_z_planes=n_z_planes,
-            n_channels=n_channels
+            n_channels=n_channels,
+            channel_names=channel_names,
         )
 
     def prepare_omero_connection_params(self) -> Optional[OMEROConnectionParams]:

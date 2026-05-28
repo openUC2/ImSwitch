@@ -20,6 +20,7 @@ import * as usbFlashSlice from "../state/slices/usbFlashSlice.js";
 import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 import * as storageSlice from "../state/slices/StorageSlice.js";
+import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
 
 import { io } from "socket.io-client";
 
@@ -124,11 +125,14 @@ const WebSocketHandler = () => {
               console.debug(
                 `[Check 2b] Trigger ESP reconnect: ${apiBase}/reconnect`,
               );
+              //FIXME: Do not attempt aut reconnects! This results in a race condition where the stater if we are reconnected is actually not really in sync with the hardware, hence it periodically dis- and reconnects
+              /*
               await fetchWithTimeout(
                 `${apiBase}/reconnect`,
                 { method: "GET" },
                 5000,
               );
+              */
             } catch (error) {
               console.debug(
                 "[Check 2b] ESP reconnect request failed:",
@@ -877,6 +881,32 @@ const WebSocketHandler = () => {
           dispatch(storageSlice.setStorageSnapshot(storageSnapshot));
         } catch (error) {
           console.error("Error in sigStorageStatusUpdate handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigDetectorParametersUpdated") {
+        if (isWebSocketDebugEnabled()) {
+          console.log(
+            "[WS-DEBUG][detector] sigDetectorParametersUpdated received:",
+            dataJson,
+          );
+        }
+        try {
+          const parametersUpdate = dataJson.args?.p0 || dataJson.args || {};
+          // Extract parameters from the update
+          const { detectorName, parameters } = parametersUpdate;
+          if (parameters) {
+            dispatch(detectorParametersSlice.normalizeParameters(parameters));
+            if (detectorName) {
+              dispatch(
+                detectorParametersSlice.setCurrentDetectorName(detectorName),
+              );
+            }
+          }
+        } catch (error) {
+          console.error(
+            "Error in sigDetectorParametersUpdated handler:",
+            error,
+          );
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateOMEZarrStore") {

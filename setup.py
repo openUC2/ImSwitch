@@ -1,20 +1,6 @@
 from setuptools import setup, find_packages
 
 
-# Version will be read from your package's __init__.py
-# Make sure __version__ is defined in imswitch/__init__.py
-def get_version():
-    version_file = 'imswitch/__init__.py'
-    with open(version_file, 'r') as file:
-        for line in file:
-            if line.startswith('__version__'):
-                # Strip the line to remove whitespaces and newline characters,
-                # then split it on '=' and strip again to remove any remaining whitespaces.
-                # Finally, strip the quotes from the version string.
-                return line.strip().split('=')[1].strip().strip('\'"')
-    raise RuntimeError('Unable to find version string.')
-
-
 # NOTE: This setup.py is maintained for backward compatibility.
 # The primary configuration is now in pyproject.toml for UV support.
 # When using UV, this file is not needed, but it's kept for pip compatibility.
@@ -25,7 +11,6 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="ImSwitchUC2",
-    version=get_version(),
     author="Benedict Diederich, Xavier Casas Moreno, et al.",
     author_email="benedictdied@gmail.com",
     description="Microscopy control",

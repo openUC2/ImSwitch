@@ -152,7 +152,7 @@ class HikCamManager(DetectorManager):
         contain a key with the specified parameter name, an error will be
         raised."""
 
-        if name not in self._parameters:
+        if name not in self.parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
 
         value = self._camera.getPropertyValue(name)
@@ -183,8 +183,11 @@ class HikCamManager(DetectorManager):
             self._camera.start_live()
             self._running = True
             self.__logger.debug('startlive')
-            debug = self._camera.getDiagnostics()
-            self.__logger.info(f"Camera diagnostics after starting live: {debug}")
+            try:
+                debug = self._camera.getDiagnostics()
+                self.__logger.info(f"Camera diagnostics after starting live: {debug}")
+            except Exception as e:
+                self.__logger.warning(f"Could not get camera diagnostics: {e}")
 
     def stopAcquisition(self):
         if self._running:

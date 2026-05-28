@@ -30,10 +30,6 @@ export PATH="/root/.local/bin:$PATH"
 # slow-changing dependencies without installing ImSwitch itself yet.
 # This creates a separately-cached Docker image layer from the rapidly-changing source.
 mkdir -p /opt/imswitch/imswitch
-cat >/opt/imswitch/imswitch/__init__.py <<EOF
-# temporary placeholder to be overwritten by build-imswitch.sh
-__version__ = "0.0.0"
-EOF
 cp /mnt/ImSwitch/pyproject.toml /opt/imswitch/pyproject.toml
 cp /mnt/ImSwitch/uv.lock /opt/imswitch/uv.lock
 cd /opt/imswitch

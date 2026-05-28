@@ -1,6 +1,5 @@
 {
-  "name": "microscope-app",
-  "version": "1.6.4",
+  "name": "imswitch-frontend",
   "private": true,
   "homepage": "/imswitch/ui",
   "dependencies": {

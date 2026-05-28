@@ -212,6 +212,20 @@ class ParameterValue(BaseModel):
             "(e.g. radius + RGB for 'ring', RGB-only for 'dpc')."
         ),
     )
+    # Per-channel "include in this experiment" flag, parallel to `illumination`.
+    # Authoritative signal for whether a channel should run, separate from
+    # `illuIntensities` (which the user can't directly edit for synthetic
+    # channels — their slider is hidden, so intensity stays at 0 even when
+    # the channel is enabled).  Backend uses this to decide whether to
+    # auto-promote synthetic-channel RGB params to a non-zero illuIntensity.
+    channelEnabledForExperiment: Optional[List[bool]] = Field(
+        default=None,
+        description=(
+            "Per-channel inclusion flag (parallel to `illumination`).  When "
+            "False, the channel is excluded from the experiment regardless "
+            "of its illuminationParams or illuIntensities entry."
+        ),
+    )
 
     # ------------------------------------------------------------------
     # Validators – run once at the API boundary so the controller can

@@ -1,12 +1,17 @@
 """OpticalFlowController.
 
-Camera <-> stage rotation alignment using optical flow.
+Camera <-> stage rotation alignment using **phase cross-correlation**.
 
-Moves the stage in a straight line at constant slow velocity and computes
-optical flow between consecutive camera frames. The angle between the stage
-axis and the camera axis is reported live to the frontend so the user can
-rotate the camera until the angle is zero -- making downstream stitching
-trivial.
+Moves the stage in a straight line at constant slow velocity and computes the
+sub-pixel shift between consecutive camera frames using
+:func:`cv2.phaseCorrelate` (FFT-based image registration). The angle between
+the stage axis and the camera axis is reported live so the user can rotate
+the camera until the angle is zero -- making downstream stitching trivial.
+
+Phase correlation replaces the previous Lucas-Kanade / Farneback optical-flow
+pipeline. It is much more robust on low-contrast or feature-poor samples
+because it integrates information from the whole frame in the frequency
+domain instead of relying on a handful of trackable corners.
 
 Architecture mirrors :mod:`AutofocusController`:
   * a ``MovementController`` runs the stage move in a background thread so
@@ -14,14 +19,6 @@ Architecture mirrors :mod:`AutofocusController`:
   * a thread-safe state machine guards the lifecycle;
   * per-frame results are pushed to the frontend via a Signal that the
     WebSocket bridge forwards into Redux for a live Plotly chart.
-
-Recommendations for the user (documented here so we can show them in the
-UI as hints):
-  * use a feature-rich sample -- clear water / uniform plastic give no flow;
-  * make sure exposure time < inter-frame interval, otherwise consecutive
-    frames are too similar for the Lucas-Kanade tracker;
-  * at the default speed (100 um/s) and a typical 0.5 um/px pixel size the
-    stage moves ~200 px/s -- the detector must deliver >= 5 fps.
 """
 
 import threading
@@ -114,14 +111,28 @@ class _MovementController:
     def abort(self):
         with self._lock:
             self._abort_flag = True
-        if hasattr(self.stages, "forceStop"):
+            axis = self.axis
+        # Try every escape hatch the stage might expose -- some managers
+        # implement forceStop(axis), some only stopAll(), some neither.
+        # We call them all in best-effort fashion, and *twice*, because the
+        # first call sometimes races with the blocking ``move`` in flight.
+        for _ in range(2):
             try:
-                if self.axis:
-                    self.stages.forceStop(self.axis)
-                else:
-                    self.stages.forceStop(gAxis)
+                if axis and hasattr(self.stages, "forceStop"):
+                    self.stages.forceStop(axis)
             except Exception:
                 pass
+            try:
+                if hasattr(self.stages, "stopAll"):
+                    self.stages.stopAll()
+            except Exception:
+                pass
+            try:
+                if hasattr(self.stages, "stop"):
+                    self.stages.stop()
+            except Exception:
+                pass
+            time.sleep(0.05)
         with self._lock:
             self.target_reached = True
 
@@ -164,7 +175,7 @@ class OpticalFlowController(ImConWidgetController):
 
         # Toggle to dump per-iteration optical-flow debug plots from
         # ``_flowVector``. Off by default so we don't spam the filesystem.
-        self.DEBUG = False
+        self.DEBUG = True
 
         # Worker handle and result cache for getstatus()
         self._worker: Optional[threading.Thread] = None
@@ -240,12 +251,20 @@ class OpticalFlowController(ImConWidgetController):
     # ----------------------- optical flow ------------------------------------
 
     @staticmethod
-    def _toGray(frame: np.ndarray) -> Optional[np.ndarray]:
+    def _processFrame(frame: np.ndarray) -> Optional[np.ndarray]:
         if frame is None:
             return None
+        
         img = frame
         if img.ndim == 3:
             img = np.mean(img, axis=-1)
+        
+        # crop frame to NxN (center) if larger, to speed up the flow computation
+        NSize = 1024
+        h, w = img.shape
+        if h > NSize or w > NSize:
+            ch, cw = h // 2, w // 2
+            img = img[max(0, ch - NSize//2):min(h, ch + NSize//2), max(0, cw - NSize//2):min(w, cw + NSize//2)]
         # Normalise to 8-bit for cv2 trackers
         if img.dtype == np.uint8:
             return img
@@ -258,59 +277,63 @@ class OpticalFlowController(ImConWidgetController):
 
     @staticmethod
     def _flowVector(prev_gray: np.ndarray, curr_gray: np.ndarray, DEBUG: bool = False) -> Optional[tuple]:
-        """Return (dx, dy) median displacement in pixels, or None on failure."""
+        """Return (dx, dy) sub-pixel shift between two frames via phase correlation.
+
+        Uses :func:`cv2.phaseCorrelate`, an FFT-based image-registration method
+        that is far more robust than feature tracking on low-contrast samples:
+        it integrates information from the whole frame in the frequency domain
+        and naturally rejects illumination drift via the cross-power spectrum.
+
+        Returns ``None`` on failure (mismatched shapes, missing cv2, noise).
+        """
         if not _HAS_CV2 or prev_gray is None or curr_gray is None:
             return None
         if prev_gray.shape != curr_gray.shape:
             return None
         try:
-            # Sparse LK on Shi-Tomasi corners -- fast enough for live updates.
-            corners = cv2.goodFeaturesToTrack(
-                prev_gray,
-                maxCorners=200,
-                qualityLevel=0.01,
-                minDistance=8,
-                blockSize=7,
-            )
-            if corners is None or len(corners) < 5:
-                # Fall back to dense Farneback on featureless frames
-                flow = cv2.calcOpticalFlowFarneback(
-                    prev_gray, curr_gray, None,
-                    0.5, 3, 21, 3, 5, 1.2, 0,
-                )
-                # Use median of dense field for robustness
-                dx = float(np.median(flow[..., 0]))
-                dy = float(np.median(flow[..., 1]))
-                return dx, dy
+            # phaseCorrelate requires float32 input.
+            a = prev_gray.astype(np.float32)
+            b = curr_gray.astype(np.float32)
 
-            next_pts, status, _err = cv2.calcOpticalFlowPyrLK(
-                prev_gray, curr_gray, corners, None,
-                winSize=(21, 21), maxLevel=3,
-            )
-            if next_pts is None or status is None:
+            # Hanning window suppresses the edge-artefact peak that
+            # otherwise dominates the cross-power spectrum.
+            try:
+                window = cv2.createHanningWindow(
+                    (a.shape[1], a.shape[0]), cv2.CV_32F,
+                )
+                (dx, dy), response = cv2.phaseCorrelate(a, b, window)
+            except Exception:
+                # Older cv2 builds: no window arg.
+                (dx, dy), response = cv2.phaseCorrelate(a, b)
+
+            if not np.isfinite(dx) or not np.isfinite(dy):
                 return None
-            mask = status.flatten() == 1
-            if mask.sum() < 5:
+            # ``response`` is the peak height of the normalised cross-power
+            # spectrum (~1.0 for a clean shift, ~0 for pure noise). Drop
+            # noisy frames so they don't pollute the aggregate.
+            if response is not None and response < 0.01:
                 return None
-            disp = (next_pts[mask] - corners[mask]).reshape(-1, 2)
-            
-            # plot and save the plot in case of debugging
-            if DEBUG: 
-                import matplotlib.pyplot as plt
-                plt.figure(figsize=(6, 6))
-                plt.quiver(corners[mask][:, 0, 0], corners[mask][:, 0, 1], disp[:, 0], disp[:, 1], angles='xy', scale_units='xy', scale=1)
-                plt.xlim(0, prev_gray.shape[1])
-                plt.ylim(prev_gray.shape[0], 0)
-                plt.title("Optical Flow Vectors")
-                plt.xlabel("X (pixels)")
-                plt.ylabel("Y (pixels)")
-                plt.grid()
-                plt.savefig("optical_flow_debug.png")
-                plt.close()
-            # Median is robust to mismatched tracks
-            dx = float(np.median(disp[:, 0]))
-            dy = float(np.median(disp[:, 1]))
-            return dx, dy
+
+            if DEBUG:
+                try:
+                    import tifffile as tif
+                    tif.imsave("phase_corr_debug.tif", np.stack([prev_gray, curr_gray], axis=0), append=True)
+                    import matplotlib.pyplot as plt
+                    plt.switch_backend("Agg")
+                    fig, axs = plt.subplots(1, 2, figsize=(8, 4))
+                    axs[0].imshow(prev_gray, cmap="gray")
+                    axs[0].set_title("prev")
+                    axs[1].imshow(curr_gray, cmap="gray")
+                    axs[1].set_title(f"curr -- shift=({dx:.2f}, {dy:.2f})")
+                    for ax in axs:
+                        ax.axis("off")
+                    plt.tight_layout()
+                    plt.savefig("phase_corr_debug.png")
+                    plt.close(fig)
+                except Exception:
+                    pass
+
+            return float(dx), float(dy)
         except Exception:
             return None
 
@@ -393,18 +416,62 @@ class OpticalFlowController(ImConWidgetController):
         """Abort the active sweep and stop the stage immediately."""
         self.__logger.info("Abort optical-flow measurement requested")
         with self._stateLock:
-            if self._state not in (FlowState.STARTING, FlowState.RUNNING):
-                return {"status": "idle", "state": self._state.value}
+            previous = self._state
+            # Always flip to ABORTED so the worker breaks out, even if it
+            # already moved past STARTING but hasn't entered RUNNING yet.
             self._state = FlowState.ABORTED
+
+        # 1) Tell the helper mover to stop -- it owns the per-axis stop call.
         try:
             self._moveController.abort()
         except Exception as e:
             self.__logger.error(f"Error aborting movement: {e}")
+
+        # 2) Direct, redundant stop on the stage manager. ``_MovementController``
+        # already tries this, but the user reported the stage kept moving
+        # after abort -- some stage managers only react to repeated stops or
+        # to a no-op absolute move to the current position. Belt-and-braces.
+        try:
+            if hasattr(self.stages, "stopAll"):
+                self.stages.stopAll()
+        except Exception:
+            pass
+        try:
+            for ax in ("X", "Y", "Z", "A"):
+                if hasattr(self.stages, "forceStop"):
+                    try:
+                        self.stages.forceStop(ax)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # 3) As a last resort, command the stage to stay where it is. For
+        # managers that ignore stop() this at least cancels any queued moves.
+        try:
+            pos = self.stages.getPosition()
+            here = pos if isinstance(pos, dict) else None
+            if here:
+                for ax in ("X", "Y", "Z"):
+                    if ax in here:
+                        try:
+                            self.stages.move(
+                                value=float(here[ax]), axis=ax,
+                                is_absolute=True, is_blocking=False,
+                            )
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
         try:
             self.sigFlowStateChanged.emit(FlowState.ABORTED.value)
         except Exception:
             pass
-        return {"status": "aborted", "state": FlowState.ABORTED.value}
+        return {
+            "status": "aborted",
+            "state": FlowState.ABORTED.value,
+            "previous": previous.value,
+        }
 
     @APIExport(runOnUIThread=True)
     def getstatusOpticalFlow(self) -> dict:
@@ -445,7 +512,7 @@ class OpticalFlowController(ImConWidgetController):
 
             # Prime the optical-flow loop with a baseline frame.
             prev_frame, prev_fn = self._grabFreshFrame(last_frame_number=-1)
-            prev_gray = self._toGray(prev_frame)
+            prev_gray = self._processFrame(prev_frame)
 
             # Kick off the asynchronous main move so we can poll frames.
             self._moveController.move_to_position(
@@ -460,7 +527,7 @@ class OpticalFlowController(ImConWidgetController):
                 if self._moveController.is_target_reached():
                     break
                 prev_frame, prev_fn = self._grabFreshFrame(last_frame_number=prev_fn)
-                prev_gray = self._toGray(prev_frame)
+                prev_gray = self._processFrame(prev_frame)
 
             t_start = time.time()
             times: list[float] = []
@@ -481,7 +548,7 @@ class OpticalFlowController(ImConWidgetController):
                     break
 
                 curr_frame, curr_fn = self._grabFreshFrame(last_frame_number=prev_fn)
-                curr_gray = self._toGray(curr_frame)
+                curr_gray = self._processFrame(curr_frame)
                 if curr_gray is None or prev_gray is None:
                     prev_frame, prev_fn, prev_gray = curr_frame, curr_fn, curr_gray
                     continue

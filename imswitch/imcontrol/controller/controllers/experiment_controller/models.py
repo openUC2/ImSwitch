@@ -391,6 +391,10 @@ class ExperimentWorkflowParams(BaseModel):
             "on the C++ hardware directly rather than on the Python side."
         ),
     )
+    pixel_size_um: float = Field(
+        1.0,
+        description="Calibrated pixel size (µm/px) of the primary acquisition detector.",
+    )
 
 
 # ---------------------------------------------------------------------------

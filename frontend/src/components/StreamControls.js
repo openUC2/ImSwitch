@@ -474,7 +474,7 @@ export default function StreamControls({
           {!isRecording ? (
             <Button
               variant="contained"
-              color="secondary"
+              color="primary"
               size="small"
               onClick={() => onStartRecord(snapFileName, recordFormat)}
               startIcon={<FiberManualRecord />}

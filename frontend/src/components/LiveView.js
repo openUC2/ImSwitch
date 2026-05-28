@@ -5,13 +5,22 @@ import {
   Box,
   Tabs,
   Tab,
+  Button,
+  ButtonGroup,
   Typography,
   IconButton,
   Drawer,
+  Tooltip,
   useMediaQuery,
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import CenterFocusStrongIcon from "@mui/icons-material/CenterFocusStrong";
+import LightModeIcon from "@mui/icons-material/LightMode";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import SensorsIcon from "@mui/icons-material/Sensors";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import ControlCameraIcon from "@mui/icons-material/ControlCamera";
 import AxisControl from "./AxisControl.jsx";
 import JoystickControl from "./JoystickControl.jsx";
 import VirtualJoystickControl from "./VirtualJoystickControl.js";
@@ -540,15 +549,55 @@ export default function LiveView({ setFileManagerInitialPath }) {
             px: 1,
           }}
         >
-          <Tabs
-            value={activeTab}
-            onChange={(_, v) => dispatch(liveViewSlice.setActiveTab(v))}
-            sx={{ mt: 1 }}
+          <Box
+            sx={{
+              mt: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              gap: 1,
+              flexWrap: "wrap",
+            }}
           >
-            {detectors.map((d) => (
-              <Tab key={d} label={d} />
-            ))}
-          </Tabs>
+            <Typography
+              variant="caption"
+              sx={{ color: "text.secondary", fontWeight: 600 }}
+            >
+              Detectors:
+            </Typography>
+            <ButtonGroup
+              variant="outlined"
+              color="primary"
+              size="small"
+              aria-label="Detector selection"
+              sx={{
+                flexWrap: "wrap",
+                "& .MuiButtonGroup-grouped": {
+                  minWidth: 120,
+                },
+              }}
+            >
+              {detectors.map((detectorName, idx) => (
+                <Button
+                  key={detectorName}
+                  onClick={() => dispatch(liveViewSlice.setActiveTab(idx))}
+                  sx={
+                    activeTab === idx
+                      ? {
+                          backgroundColor: "primary.main",
+                          color: "primary.contrastText",
+                          "&:hover": {
+                            backgroundColor: "primary.dark",
+                          },
+                        }
+                      : undefined
+                  }
+                >
+                  {detectorName}
+                </Button>
+              ))}
+            </ButtonGroup>
+          </Box>
 
           {/* Toggle button to open/close right panel */}
           <IconButton
@@ -695,19 +744,22 @@ function RightPanelContent({
   return (
     <>
       <Box mb={3}>
-        <Typography variant="h6">Stage Control</Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <ControlCameraIcon fontSize="small" color="action" />
+          <Typography variant="h6">Stage Control</Typography>
+        </Box>
 
         {/* Stage Control Tabs */}
         <Tabs
           value={stageControlTab}
           onChange={(_, v) => setStageControlTab(v)}
-          sx={{ mb: 2 }}
+          sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}
           variant="scrollable"
           scrollButtons="auto"
         >
-          <Tab label="Multiple Axis View" />
-          <Tab label="Joystick Control" />
-          <Tab label="Virtual Joystick (speed mode)" />
+          <Tab label="Axis View" />
+          <Tab label="Joystick" />
+          <Tab label="Virtual Joystick" />
         </Tabs>
 
         {/* Multiple Axis View */}
@@ -727,18 +779,35 @@ function RightPanelContent({
       </Box>
 
       <Box mb={3}>
-        <Typography variant="h6">Autofocus</Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <CenterFocusStrongIcon fontSize="small" color="action" />
+          <Typography variant="h6">Autofocus</Typography>
+        </Box>
         <AutofocusController hostIP={hostIP} hostPort={hostPort} />
       </Box>
 
       <Box mb={3}>
-        <Typography variant="h6">Illumination</Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <LightModeIcon fontSize="small" color="action" />
+          <Typography variant="h6">Illumination</Typography>
+          <Tooltip
+            title="Laser power and enabled state are updated in real-time via WebSocket. Adjust laser intensity and observe the color change on the detector stream."
+            arrow
+          >
+            <IconButton size="small" sx={{ ml: -0.5 }}>
+              <InfoOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
         <IlluminationController hostIP={hostIP} hostPort={hostPort} />
       </Box>
 
       {hasObjectiveController && (
         <Box mb={3}>
-          <Typography variant="h6">Objective</Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <VisibilityIcon fontSize="small" color="action" />
+            <Typography variant="h6">Objective</Typography>
+          </Box>
           <ObjectiveSwitcher hostIP={hostIP} hostPort={hostPort} />
         </Box>
       )}
@@ -751,7 +820,10 @@ function RightPanelContent({
       )}
 
       <Box mb={3}>
-        <Typography variant="h6">Detector Trigger</Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <SensorsIcon fontSize="small" color="action" />
+          <Typography variant="h6">Detector Trigger</Typography>
+        </Box>
         <DetectorTriggerController hostIP={hostIP} hostPort={hostPort} />
       </Box>
     </>

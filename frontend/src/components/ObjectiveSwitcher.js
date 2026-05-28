@@ -2,7 +2,11 @@ import React, { useState, useEffect } from "react";
 import {
   Paper,
   Grid,
+  Box,
   Button,
+  ButtonGroup,
+  FormControlLabel,
+  Switch,
   CircularProgress,
   Typography,
 } from "@mui/material";
@@ -12,12 +16,12 @@ import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveContr
 
 // Hypothetical backend helpers (adjust import paths if different)
 import apiObjectiveControllerMoveToObjective from "../backendapi/apiObjectiveControllerMoveToObjective.js";
-import apiObjectiveControllerGetCurrentObjective from "../backendapi/apiObjectiveControllerGetCurrentObjective.js";
 
 export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const dispatch = useDispatch();
   const [currentSlot, setCurrentSlot] = useState(null); // Let's say local state, or read from Redux
   const [isSwitching, setIsSwitching] = useState(false); // Show spinner while switching
+  const [zLevelingEnabled, setZLevelingEnabled] = useState(true);
 
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const name0 = objectiveState.availableObjectivesNames?.[0] || "Obj 1";
@@ -41,14 +45,15 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   }, [objectiveState.currentObjective]);
 
   useEffect(() => {
-      //refresh status
-      refreshStatus();
-    }, [hostIP, hostPort]); // on host ip/port change
-  
+    //refresh status
+    fetchObjectiveControllerGetStatus(dispatch);
+  }, [hostIP, hostPort, dispatch]); // on host ip/port change
+
   // Switch to a different objective, show spinner until we get update from the socket
-  const switchTo = async (slot, skipZ = 0) => {
+  const switchTo = async (slot) => {
     try {
       setIsSwitching(true);
+      const skipZ = !zLevelingEnabled;
       await apiObjectiveControllerMoveToObjective(slot, skipZ);
       // Move completed – update slot and clear spinner immediately; no need to wait for
       // a socket event that may never arrive.
@@ -63,13 +68,6 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
     }
   };
 
-  // Fetch objective status (x1 and x2) from backend
-  const refreshStatus = () => {
-      //request fetch status
-      fetchObjectiveControllerGetStatus(dispatch);
-    };
-  
-
   return (
     <Paper sx={{ p: 2 }}>
       <Grid container spacing={2} alignItems="center">
@@ -79,62 +77,86 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
             {/* Show numeric slot + name from Redux */}
             Current:{" "}
             {objectiveState.objectivName && `(${objectiveState.objectivName})`}
-          </Typography>
-          <Typography sx={{ fontSize: "0.9rem" }}>
             {objectiveState.magnification != null &&
-              `Mag: ${objectiveState.magnification}×  • `}
+              ` Mag: ${objectiveState.magnification}×  • `}
             {objectiveState.NA != null && `NA ${objectiveState.NA}  • `}
             {objectiveState.pixelsize != null &&
               `Pixel ${objectiveState.pixelsize} µm`}
           </Typography>
         </Grid>
 
-        {/* Buttons to switch objective */}
+        {/* Objective selection + Z leveling option */}
         <Grid item xs={12}>
-          <Grid container spacing={2}>
-            <Grid item>
-              <Button
-                variant="contained"
-                color={currentSlot === 0 ? "secondary" : "primary"}
-                onClick={() => switchTo(0)}
+          <Grid container spacing={1.5} alignItems="center">
+            <Grid item xs={12}>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 2,
+                  flexWrap: "wrap",
+                }}
               >
-                {isSwitching && currentSlot !== 0 ? (
-                  <CircularProgress size={14} sx={{ color: "#fff", ml: 1 }} />
-                ) : (
-                  label0
-                )}
-              </Button>
+                <ButtonGroup variant="outlined" size="small" color="primary">
+                  <Button
+                    variant={currentSlot === 0 ? "contained" : "outlined"}
+                    color="primary"
+                    onClick={() => switchTo(0)}
+                    disabled={isSwitching}
+                  >
+                    <Box
+                      sx={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 0.75,
+                      }}
+                    >
+                      {isSwitching && currentSlot !== 0 ? (
+                        <CircularProgress size={14} sx={{ color: "#fff" }} />
+                      ) : null}
+                      {label0}
+                    </Box>
+                  </Button>
+
+                  <Button
+                    variant={currentSlot === 1 ? "contained" : "outlined"}
+                    color="primary"
+                    onClick={() => switchTo(1)}
+                    disabled={isSwitching}
+                  >
+                    <Box
+                      sx={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 0.75,
+                      }}
+                    >
+                      {isSwitching && currentSlot !== 1 ? (
+                        <CircularProgress size={14} sx={{ color: "#fff" }} />
+                      ) : null}
+                      {label1}
+                    </Box>
+                  </Button>
+                </ButtonGroup>
+
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={zLevelingEnabled}
+                      onChange={(e) => setZLevelingEnabled(e.target.checked)}
+                      size="small"
+                    />
+                  }
+                  label="Z leveling"
+                  sx={{ ml: 0 }}
+                />
+              </Box>
             </Grid>
-            <Grid item>
-              <Button
-                variant="outlined"
-                color={currentSlot === 0 ? "secondary" : "primary"}
-                onClick={() => switchTo(0, false)}
-              >
-                {label0} + Z
-              </Button>
-            </Grid>
-            <Grid item>
-              <Button
-                variant="contained"
-                color={currentSlot === 1 ? "secondary" : "primary"}
-                onClick={() => switchTo(1)}
-              >
-                {isSwitching && currentSlot !== 1 ? (
-                  <CircularProgress size={14} sx={{ color: "#fff", ml: 1 }} />
-                ) : (
-                  label1
-                )}
-              </Button>
-            </Grid>
-            <Grid item>
-              <Button
-                variant="outlined"
-                color={currentSlot === 1 ? "secondary" : "primary"}
-                onClick={() => switchTo(1, false)}
-              >
-                {label1} + Z
-              </Button>
+            <Grid item xs={12}>
+              <Typography variant="caption" color="text.secondary">
+                Switching will apply{" "}
+                {zLevelingEnabled ? "with Z leveling" : "without Z leveling"}.
+              </Typography>
             </Grid>
           </Grid>
         </Grid>

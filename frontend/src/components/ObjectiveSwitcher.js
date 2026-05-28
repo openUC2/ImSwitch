@@ -26,6 +26,7 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const mag1 = objectiveState.availableObjectiveMagnifications?.[1];
   const label0 = mag0 ? `${name0} (${mag0}×)` : name0;
   const label1 = mag1 ? `${name1} (${mag1}×)` : name1;
+  const slot1Configured = objectiveState.slotConfigured?.[1] ?? true;
   // Fetch objective status on mount
   useEffect(() => {
     fetchObjectiveControllerGetStatus(dispatch);
@@ -114,28 +115,38 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                 {label0} + Z
               </Button>
             </Grid>
-            <Grid item>
-              <Button
-                variant="contained"
-                color={currentSlot === 1 ? "secondary" : "primary"}
-                onClick={() => switchTo(1)}
-              >
-                {isSwitching && currentSlot !== 1 ? (
-                  <CircularProgress size={14} sx={{ color: "#fff", ml: 1 }} />
-                ) : (
-                  label1
-                )}
-              </Button>
-            </Grid>
-            <Grid item>
-              <Button
-                variant="outlined"
-                color={currentSlot === 1 ? "secondary" : "primary"}
-                onClick={() => switchTo(1, false)}
-              >
-                {label1} + Z
-              </Button>
-            </Grid>
+            {slot1Configured ? (
+              <>
+                <Grid item>
+                  <Button
+                    variant="contained"
+                    color={currentSlot === 1 ? "secondary" : "primary"}
+                    onClick={() => switchTo(1)}
+                  >
+                    {isSwitching && currentSlot !== 1 ? (
+                      <CircularProgress size={14} sx={{ color: "#fff", ml: 1 }} />
+                    ) : (
+                      label1
+                    )}
+                  </Button>
+                </Grid>
+                <Grid item>
+                  <Button
+                    variant="outlined"
+                    color={currentSlot === 1 ? "secondary" : "primary"}
+                    onClick={() => switchTo(1, false)}
+                  >
+                    {label1} + Z
+                  </Button>
+                </Grid>
+              </>
+            ) : (
+              <Grid item>
+                <Typography variant="caption" sx={{ color: "text.secondary", alignSelf: "center" }}>
+                  Only one objective configured
+                </Typography>
+              </Grid>
+            )}
           </Grid>
         </Grid>
       </Grid>

@@ -30,10 +30,13 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  DialogContentText,
   Chip,
   Stack,
   Tooltip,
   Alert,
+  Switch,
+  Divider,
 } from "@mui/material";
 import {
   Bookmark as BookmarkIcon,
@@ -41,6 +44,8 @@ import {
   Delete as DeleteIcon,
   PlayArrow as ApplyIcon,
   WbSunny as IlluminationIcon,
+  Edit as EditIcon,
+  Refresh as RefreshIcon,
 } from "@mui/icons-material";
 
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
@@ -104,6 +109,17 @@ const StreamPresets = () => {
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [selectedId, setSelectedId] = useState("");
+
+  // Edit-dialog state. `editDraft` is an independent clone of the preset
+  // being edited — we never mutate the entry in `presets` directly, so the
+  // dialog can be cancelled cleanly and `handleApply()` keeps seeing the
+  // committed list as the source of truth.
+  const [editOpen, setEditOpen] = useState(false);
+  const [editDraft, setEditDraft] = useState(null);
+  const [editError, setEditError] = useState("");
+  // Pending "Save As New" that would overwrite a same-named preset.
+  // Holds the draft to commit once the user confirms.
+  const [overwriteConfirm, setOverwriteConfirm] = useState(null);
 
   // Keep storage in sync when presets list mutates.
   useEffect(() => { writePresets(presets); }, [presets]);
@@ -394,6 +410,164 @@ const StreamPresets = () => {
     if (p) handleApply(p);
   };
 
+  // ----- Edit dialog plumbing ---------------------------------------------
+
+  /** Open the edit dialog for a preset id, deep-cloning the entry. */
+  const openEdit = (id) => {
+    const p = presets.find((x) => x.id === id);
+    if (!p) return;
+    // Deep clone via JSON to detach all nested objects/arrays from state.
+    setEditDraft(JSON.parse(JSON.stringify(p)));
+    setEditError("");
+    setEditOpen(true);
+  };
+
+  const closeEdit = () => {
+    setEditOpen(false);
+    setEditDraft(null);
+    setEditError("");
+  };
+
+  /** Patch top-level fields on the draft (e.g. name, exposure, gain). */
+  const patchDraft = (patch) => {
+    setEditDraft((d) => (d ? { ...d, ...patch } : d));
+  };
+
+  /** Patch one laser entry in the draft by index. */
+  const patchDraftLaser = (idx, patch) => {
+    setEditDraft((d) => {
+      if (!d) return d;
+      const lasers = [...(d.illumination?.lasers || [])];
+      lasers[idx] = { ...lasers[idx], ...patch };
+      return { ...d, illumination: { ...(d.illumination || {}), lasers } };
+    });
+  };
+
+  /** Patch one LED entry in the draft by index. */
+  const patchDraftLed = (idx, patch) => {
+    setEditDraft((d) => {
+      if (!d) return d;
+      const leds = [...(d.illumination?.leds || [])];
+      leds[idx] = { ...leds[idx], ...patch };
+      return { ...d, illumination: { ...(d.illumination || {}), leds } };
+    });
+  };
+
+  /** Re-fetch current live hardware values and overwrite the draft form. */
+  const captureCurrentIntoDraft = async () => {
+    setEditError("");
+    const { exposure, gain } = await fetchExposureGain();
+    const illumination = await fetchIlluminationState();
+    setEditDraft((d) => (d ? {
+      ...d,
+      currentDetector: currentSnapshot.currentDetector,
+      imageFormat: currentSnapshot.imageFormat,
+      streamSettings: currentSnapshot.streamSettings,
+      snapFormat: currentSnapshot.snapFormat,
+      recordFormat: currentSnapshot.recordFormat,
+      objective: currentSnapshot.objective,
+      exposure,
+      gain,
+      illumination,
+    } : d));
+  };
+
+  /** Validate the draft. Returns an error string or "" if OK. */
+  const validateDraft = (d) => {
+    if (!d) return "No preset to save.";
+    if (!d.name || !d.name.trim()) return "Name must not be empty.";
+    if (d.exposure != null && d.exposure !== "" && !(Number(d.exposure) > 0)) {
+      return "Exposure must be a positive number.";
+    }
+    if (d.gain != null && d.gain !== "" && Number.isNaN(Number(d.gain))) {
+      return "Gain must be a number.";
+    }
+    for (const l of d.illumination?.lasers || []) {
+      if (l?.power != null && l.power !== "" && Number.isNaN(Number(l.power))) {
+        return `Laser "${l.name}" power must be a number.`;
+      }
+    }
+    for (const l of d.illumination?.leds || []) {
+      if (l?.intensity != null && l.intensity !== "" && Number.isNaN(Number(l.intensity))) {
+        return `LED "${l.name}" intensity must be a number.`;
+      }
+    }
+    return "";
+  };
+
+  /** Normalize string-numeric inputs back to numbers before persisting. */
+  const normalizeDraft = (d) => {
+    const num = (v) => (v === "" || v == null ? null : Number(v));
+    return {
+      ...d,
+      name: d.name.trim(),
+      exposure: num(d.exposure),
+      gain: num(d.gain),
+      illumination: {
+        ...(d.illumination || {}),
+        lasers: (d.illumination?.lasers || []).map((l) => ({
+          ...l,
+          power: num(l.power),
+        })),
+        leds: (d.illumination?.leds || []).map((l) => ({
+          ...l,
+          intensity: num(l.intensity),
+        })),
+      },
+      schemaVersion: 2,
+    };
+  };
+
+  /** Save (overwrite same id). */
+  const handleEditSave = () => {
+    const err = validateDraft(editDraft);
+    if (err) { setEditError(err); return; }
+    const normalized = normalizeDraft(editDraft);
+    setPresets((prev) => prev.map((p) => (p.id === normalized.id ? normalized : p)));
+    setInfo(`Updated preset "${normalized.name}".`);
+    closeEdit();
+  };
+
+  /** Save As New (new id). Prompts for confirmation if the name collides. */
+  const handleEditSaveAsNew = () => {
+    const err = validateDraft(editDraft);
+    if (err) { setEditError(err); return; }
+    const normalized = normalizeDraft(editDraft);
+    const clone = {
+      ...normalized,
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: new Date().toISOString(),
+    };
+    // Collision with a *different* preset of the same name?
+    const collision = presets.some(
+      (p) => p.id !== editDraft.id && p.name === clone.name,
+    );
+    if (collision) {
+      setOverwriteConfirm(clone);
+      return;
+    }
+    setPresets((prev) => [...prev, clone]);
+    setInfo(`Saved preset "${clone.name}".`);
+    closeEdit();
+  };
+
+  /** User confirmed the overwrite from the "Save As New" collision dialog. */
+  const confirmOverwriteAsNew = () => {
+    if (!overwriteConfirm) return;
+    const clone = overwriteConfirm;
+    const editedId = editDraft?.id;
+    // Drop every other preset with the same name (keep the originally edited
+    // entry untouched — Save-As-New must not silently destroy it), then
+    // append the new clone.
+    setPresets((prev) => [
+      ...prev.filter((p) => p.name !== clone.name || p.id === editedId),
+      clone,
+    ]);
+    setInfo(`Saved preset "${clone.name}" (overwrote existing).`);
+    setOverwriteConfirm(null);
+    closeEdit();
+  };
+
   return (
     <Box
       sx={{
@@ -463,6 +637,17 @@ const StreamPresets = () => {
             >
               Apply
             </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title="Edit the selected preset">
+          <span>
+            <IconButton
+              size="small"
+              disabled={!selectedId}
+              onClick={() => openEdit(selectedId)}
+            >
+              <EditIcon fontSize="small" />
+            </IconButton>
           </span>
         </Tooltip>
         <Tooltip title="Delete the selected preset">
@@ -551,6 +736,162 @@ const StreamPresets = () => {
           <Button onClick={() => setSaveOpen(false)}>Cancel</Button>
           <Button variant="contained" onClick={handleSave} disabled={!newName.trim()}>
             Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ----- Edit preset dialog -------------------------------------- */}
+      <Dialog open={editOpen} onClose={closeEdit} fullWidth maxWidth="sm">
+        <DialogTitle>
+          Edit preset
+          {editDraft?.name ? ` — "${editDraft.name}"` : ""}
+        </DialogTitle>
+        <DialogContent dividers>
+          {editDraft && (
+            <Stack spacing={2} sx={{ mt: 0.5 }}>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Preset name"
+                  value={editDraft.name ?? ""}
+                  onChange={(e) => patchDraft({ name: e.target.value })}
+                />
+                <Tooltip title="Re-fetch live exposure / gain / illumination from the hardware and overwrite the form below">
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<RefreshIcon />}
+                    onClick={captureCurrentIntoDraft}
+                  >
+                    Capture current
+                  </Button>
+                </Tooltip>
+              </Stack>
+
+              <Stack direction="row" spacing={1}>
+                <TextField
+                  size="small"
+                  type="number"
+                  label="Exposure (ms)"
+                  value={editDraft.exposure ?? ""}
+                  onChange={(e) => patchDraft({ exposure: e.target.value })}
+                  inputProps={{ step: "any", min: 0 }}
+                  sx={{ flex: 1 }}
+                />
+                <TextField
+                  size="small"
+                  type="number"
+                  label="Gain"
+                  value={editDraft.gain ?? ""}
+                  onChange={(e) => patchDraft({ gain: e.target.value })}
+                  inputProps={{ step: "any" }}
+                  sx={{ flex: 1 }}
+                />
+                <TextField
+                  size="small"
+                  type="number"
+                  label="Objective slot"
+                  value={editDraft.objective?.currentObjective ?? ""}
+                  onChange={(e) => patchDraft({
+                    objective: {
+                      ...(editDraft.objective || {}),
+                      currentObjective: e.target.value === "" ? null : Number(e.target.value),
+                    },
+                  })}
+                  inputProps={{ step: 1, min: 0 }}
+                  sx={{ flex: 1 }}
+                />
+              </Stack>
+
+              {(editDraft.illumination?.lasers?.length ?? 0) > 0 && (
+                <>
+                  <Divider textAlign="left">
+                    <Typography variant="caption" color="text.secondary">Lasers</Typography>
+                  </Divider>
+                  <Stack spacing={1}>
+                    {editDraft.illumination.lasers.map((l, i) => (
+                      <Stack key={`l-${l.name}-${i}`} direction="row" spacing={1} alignItems="center">
+                        <Chip size="small" label={l.name} sx={{ minWidth: 120 }} />
+                        <TextField
+                          size="small"
+                          type="number"
+                          label="Power"
+                          value={l.power ?? ""}
+                          onChange={(e) => patchDraftLaser(i, { power: e.target.value })}
+                          inputProps={{ step: "any" }}
+                          sx={{ flex: 1 }}
+                        />
+                        <Stack direction="row" alignItems="center" spacing={0.5}>
+                          <Typography variant="caption" color="text.secondary">On</Typography>
+                          <Switch
+                            size="small"
+                            checked={!!l.enabled}
+                            onChange={(e) => patchDraftLaser(i, { enabled: e.target.checked })}
+                          />
+                        </Stack>
+                      </Stack>
+                    ))}
+                  </Stack>
+                </>
+              )}
+
+              {(editDraft.illumination?.leds?.length ?? 0) > 0 && (
+                <>
+                  <Divider textAlign="left">
+                    <Typography variant="caption" color="text.secondary">LEDs</Typography>
+                  </Divider>
+                  <Stack spacing={1}>
+                    {editDraft.illumination.leds.map((l, i) => (
+                      <Stack key={`d-${l.name}-${i}`} direction="row" spacing={1} alignItems="center">
+                        <Chip size="small" label={l.name} sx={{ minWidth: 120 }} />
+                        <TextField
+                          size="small"
+                          type="number"
+                          label="Intensity"
+                          value={l.intensity ?? ""}
+                          onChange={(e) => patchDraftLed(i, { intensity: e.target.value })}
+                          inputProps={{ step: "any" }}
+                          sx={{ flex: 1 }}
+                        />
+                        <Stack direction="row" alignItems="center" spacing={0.5}>
+                          <Typography variant="caption" color="text.secondary">On</Typography>
+                          <Switch
+                            size="small"
+                            checked={!!l.enabled}
+                            onChange={(e) => patchDraftLed(i, { enabled: e.target.checked })}
+                          />
+                        </Stack>
+                      </Stack>
+                    ))}
+                  </Stack>
+                </>
+              )}
+
+              {editError && <Alert severity="error">{editError}</Alert>}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeEdit}>Cancel</Button>
+          <Button onClick={handleEditSaveAsNew}>Save As New</Button>
+          <Button variant="contained" onClick={handleEditSave}>Save</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ----- Overwrite-on-collision confirmation -------------------- */}
+      <Dialog open={!!overwriteConfirm} onClose={() => setOverwriteConfirm(null)}>
+        <DialogTitle>Overwrite existing preset?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            A preset named <strong>{overwriteConfirm?.name}</strong> already exists.
+            Saving as new will replace it. Continue?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOverwriteConfirm(null)}>Cancel</Button>
+          <Button color="warning" variant="contained" onClick={confirmOverwriteAsNew}>
+            Overwrite
           </Button>
         </DialogActions>
       </Dialog>

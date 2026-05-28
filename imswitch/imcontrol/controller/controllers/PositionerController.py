@@ -72,14 +72,14 @@ class PositionerController(ImConWidgetController):
                 
         try:
             # special case for UC2 positioner that takes more arguments
-            self._master.positionersManager[positionerName].move(dist, axis, isAbsolute, isBlocking, speed)
+            self._master.positionersManager[positionerName].move(value=dist, axis=axis, is_absolute=isAbsolute, is_blocking=isBlocking, speed=speed)
             if dist is None:
                 self.__logger.info(f"Moving {positionerName}, axis {axis}, at speed {str(speed)}")
                 self._master.positionersManager[positionerName].moveForeverByAxis(speed=speed, axis=axis, is_stop=~(abs(speed)>0))
         except Exception as e:
             # if the positioner does not have the move method, use the default move method
             self._logger.error(e)
-            self._master.positionersManager[positionerName].move(dist, axis)
+            self._master.positionersManager[positionerName].move(value=dist, axis=axis)
         # self._commChannel.sigUpdateMotorPosition.emit(self.getPos()) # TODO: Unsure if this is needed - for the ESP motor not as it will update the position itself asynchronously
 
     def moveForever(self, positionerName: str=None, axis="X", speed=0, is_stop:bool=False):

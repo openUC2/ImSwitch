@@ -61,7 +61,7 @@ const ImprovedAxisControl = ({ hostIP, hostPort }) => {
     (async () => {
       try {
         const r = await fetch(
-          `${hostIP}:${hostPort}/imswitch/api/PositionerController/getPositionerNames`
+          `${hostIP}:${hostPort}/imswitch/api/PositionerController/getPositionerNames`,
         );
         const d = await r.json();
         setPositionerName(d[0]);
@@ -98,19 +98,19 @@ const ImprovedAxisControl = ({ hostIP, hostPort }) => {
   const moveAxis = (axis, distance) =>
     call(
       `${base}/movePositioner?positionerName=${positionerName}` +
-        `&axis=${axis}&dist=${distance}&isAbsolute=false&isBlocking=false&speed=${globalSpeed}`
+        `&axis=${axis}&dist=${distance}&isAbsolute=false&isBlocking=false&speed=${globalSpeed}`,
     );
 
   const moveAxisAbs = (axis, target) =>
     call(
       `${base}/movePositioner?positionerName=${positionerName}` +
-        `&axis=${axis}&dist=${target}&isAbsolute=true&isBlocking=false&speed=${globalSpeed}`
+        `&axis=${axis}&dist=${target}&isAbsolute=true&isBlocking=false&speed=${globalSpeed}`,
     );
 
   const homeAxis = (axis) =>
     call(
       `${base}/homeAxis?positionerName=${positionerName}` +
-        `&axis=${axis}&isBlocking=false`
+        `&axis=${axis}&isBlocking=false`,
     );
 
   const stopAxis = (axis) =>
@@ -437,7 +437,7 @@ const ImprovedAxisControl = ({ hostIP, hostPort }) => {
           <Stack direction="row" spacing={1}>
             <Button
               variant="contained"
-              color="secondary"
+              color="primary"
               onClick={homeAll}
               startIcon={<Home />}
               size="small"

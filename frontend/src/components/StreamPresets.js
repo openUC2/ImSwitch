@@ -33,7 +33,6 @@ import {
   Chip,
   Stack,
   Tooltip,
-  Alert,
 } from "@mui/material";
 import {
   Bookmark as BookmarkIcon,
@@ -46,6 +45,7 @@ import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
+import { setNotification } from "../state/slices/NotificationSlice.js";
 
 import apiLiveViewControllerSetStreamParameters from "../backendapi/apiLiveViewControllerSetStreamParameters";
 import apiLiveViewControllerGetStreamParameters from "../backendapi/apiLiveViewControllerGetStreamParameters";
@@ -69,7 +69,7 @@ const writePresets = (presets) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(presets || []));
   } catch (_e) {
-    /* quota or disabled — silently ignore */
+    /* quota or disabled - silently ignore */
   }
 };
 
@@ -85,9 +85,11 @@ const StreamPresets = () => {
   const [presets, setPresets] = useState(readPresets);
   const [saveOpen, setSaveOpen] = useState(false);
   const [newName, setNewName] = useState("");
-  const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
   const [selectedId, setSelectedId] = useState("");
+
+  const showNotification = (message, type = "info") => {
+    dispatch(setNotification({ message, type, autoHideDuration: 3000 }));
+  };
 
   // Keep storage in sync when presets list mutates.
   useEffect(() => {
@@ -132,10 +134,9 @@ const StreamPresets = () => {
   const handleSave = async () => {
     const name = newName.trim();
     if (!name) {
-      setError("Please enter a name for the preset.");
+      showNotification("Please enter a name for the preset.", "warning");
       return;
     }
-    setError("");
 
     const { exposure, gain } = await fetchExposureGain();
 
@@ -160,19 +161,23 @@ const StreamPresets = () => {
     setPresets((prev) => [...prev, newPreset]);
     setNewName("");
     setSaveOpen(false);
-    setInfo(`Saved preset "${name}".`);
+    showNotification(`Saved preset "${name}".`, "success");
   };
 
   const handleDelete = (id) => {
+    const presetToDelete = presets.find((p) => p.id === id);
     setPresets((prev) => prev.filter((p) => p.id !== id));
     if (selectedId === id) setSelectedId("");
+
+    if (presetToDelete?.name) {
+      showNotification(`Deleted preset "${presetToDelete.name}".`, "info");
+    }
   };
 
   /** Apply a preset: dispatch Redux updates + fire matching backend calls. */
   const handleApply = async (preset) => {
     if (!preset) return;
-    setError("");
-    setInfo("");
+
     try {
       // 0) Switch detector tab if the preset has one
       if (preset.currentDetector) {
@@ -183,7 +188,7 @@ const StreamPresets = () => {
         }
       }
 
-      // 1) Stream format + settings → Redux + backend
+      // 1) Stream format + settings -> Redux + backend
       if (preset.imageFormat) {
         dispatch(liveStreamSlice.setImageFormat(preset.imageFormat));
       }
@@ -230,7 +235,7 @@ const StreamPresets = () => {
         dispatch(liveViewSlice.setRecordFormat(preset.recordFormat));
       }
 
-      // 3) Detector exposure/gain → backend
+      // 3) Detector exposure/gain -> backend
       if (preset.exposure != null) {
         try {
           await fetch(
@@ -274,9 +279,9 @@ const StreamPresets = () => {
         /* ignore */
       }
 
-      setInfo(`Applied preset "${preset.name}".`);
+      showNotification(`Applied preset "${preset.name}".`, "success");
     } catch (e) {
-      setError(`Failed to apply preset: ${e.message || e}`);
+      showNotification(`Failed to apply preset: ${e.message || e}`, "error");
     }
   };
 
@@ -318,17 +323,6 @@ const StreamPresets = () => {
         </Tooltip>
       </Box>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError("")}>
-          {error}
-        </Alert>
-      )}
-      {info && (
-        <Alert severity="success" sx={{ mb: 1 }} onClose={() => setInfo("")}>
-          {info}
-        </Alert>
-      )}
-
       <Stack
         direction="row"
         spacing={1}
@@ -352,8 +346,8 @@ const StreamPresets = () => {
                 {p.name}
                 {p.currentDetector ? ` [${p.currentDetector}]` : ""}
                 {p.imageFormat ? ` · ${p.imageFormat}` : ""}
-                {p.objective?.name ? ` — ${p.objective.name}` : ""}
-                {p.exposure != null ? ` — ${p.exposure}ms` : ""}
+                {p.objective?.name ? ` - ${p.objective.name}` : ""}
+                {p.exposure != null ? ` - ${p.exposure}ms` : ""}
               </MenuItem>
             ))}
           </Select>
@@ -390,7 +384,6 @@ const StreamPresets = () => {
             startIcon={<SaveIcon />}
             onClick={() => {
               setNewName("");
-              setError("");
               setSaveOpen(true);
             }}
           >
@@ -433,7 +426,7 @@ const StreamPresets = () => {
                   />
                   <Chip
                     size="small"
-                    label={`JPEG subsample: ×${currentSnapshot.streamSettings.jpeg.subsampling?.factor ?? currentSnapshot.streamSettings.jpeg.subsampling_factor ?? "?"}`}
+                    label={`JPEG subsample: x${currentSnapshot.streamSettings.jpeg.subsampling?.factor ?? currentSnapshot.streamSettings.jpeg.subsampling_factor ?? "?"}`}
                   />
                   <Chip
                     size="small"
@@ -449,7 +442,7 @@ const StreamPresets = () => {
                   />
                   <Chip
                     size="small"
-                    label={`Bin subsample: ×${currentSnapshot.streamSettings.binary.subsampling?.factor ?? "?"}`}
+                    label={`Bin subsample: x${currentSnapshot.streamSettings.binary.subsampling?.factor ?? "?"}`}
                   />
                   <Chip
                     size="small"
@@ -465,7 +458,7 @@ const StreamPresets = () => {
                   />
                   <Chip
                     size="small"
-                    label={`WebRTC subsample: ×${currentSnapshot.streamSettings.webrtc.subsampling_factor ?? "?"}`}
+                    label={`WebRTC subsample: x${currentSnapshot.streamSettings.webrtc.subsampling_factor ?? "?"}`}
                   />
                   <Chip
                     size="small"
@@ -502,13 +495,8 @@ const StreamPresets = () => {
             label="Preset name"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            placeholder="e.g. Overview 4× JPEG"
+            placeholder="e.g. Overview 4x JPEG"
           />
-          {error && (
-            <Alert severity="error" sx={{ mt: 2 }}>
-              {error}
-            </Alert>
-          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSaveOpen(false)}>Cancel</Button>

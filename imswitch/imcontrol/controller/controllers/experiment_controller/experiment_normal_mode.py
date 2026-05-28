@@ -28,7 +28,7 @@ DPC_SUB_DIRS = ("top", "bottom", "left", "right")
 class ExperimentNormalMode(ExperimentModeBase):
     """
     Normal mode experiment execution.
-    
+
     In normal mode, Python controls each step: moving stage, setting illumination,
     acquiring frames, and saving data. This provides maximum flexibility and
     precise control over the experiment sequence.
@@ -228,45 +228,46 @@ class ExperimentNormalMode(ExperimentModeBase):
         )
         step_id += 1
 
-        # Save experiment protocol to JSON
-        protocol_data = {
-            "experiment_name": exp_name,
-            "experiment_mode": "normal",
-            "directory": dir_path,
-            "filename": m_file_name,
-            "timepoint": t,
-            "total_timepoints": n_times,
-            "tile_count": len(snake_tiles),
-            "step_count": step_id,
-            "snake_tiles": snake_tiles,
-            "z_positions": z_positions,
-            "illumination_sources": illumination_sources,
-            "illumination_intensities": illumination_intensities,
-            "illumination_kinds": illumination_kinds,
-            "illumination_params": illumination_params,
-            "exposures": exposures,
-            "gains": gains,
-            "autofocus": {
-                "enabled": is_auto_focus,
-                "min": autofocus_min,
-                "max": autofocus_max,
-                "step_size": autofocus_step_size,
-                "channel": autofocus_illumination_channel,
-                "mode": autofocus_mode,
-                "software_method": autofocus_software_method,
-                "max_attempts": autofocus_max_attempts,
-                "target_focus_setpoint": autofocus_target_focus_setpoint,
-                "hc_initial_step": autofocus_hc_initial_step,
-                "hc_min_step": autofocus_hc_min_step,
-                "hc_step_reduction": autofocus_hc_step_reduction,
-                "hc_max_iterations": autofocus_hc_max_iterations,
-            },
-            "workflow_steps": [self._serialize_workflow_step(step) for step in workflow_steps]
-        }
-        
-        # Create protocol file path
-        protocol_file_path = os.path.join(dir_path, f"{m_file_name}_t{t:04d}")
-        self.save_experiment_protocol(protocol_data, protocol_file_path, mode="normal")
+        # Save experiment protocol to JSON exactly once, on the first timepoint.
+        # The file name has no _t{NNNN} suffix so it is stable for the whole
+        # experiment and is written only once regardless of n_times.
+        if t == 0:
+            protocol_data = {
+                "experiment_name": exp_name,
+                "experiment_mode": "normal",
+                "directory": dir_path,
+                "filename": m_file_name,
+                "total_timepoints": n_times,
+                "tile_count": len(snake_tiles),
+                "step_count": step_id,
+                "snake_tiles": snake_tiles,
+                "z_positions": z_positions,
+                "illumination_sources": illumination_sources,
+                "illumination_intensities": illumination_intensities,
+                "illumination_kinds": illumination_kinds,
+                "illumination_params": illumination_params,
+                "exposures": exposures,
+                "gains": gains,
+                "autofocus": {
+                    "enabled": is_auto_focus,
+                    "min": autofocus_min,
+                    "max": autofocus_max,
+                    "step_size": autofocus_step_size,
+                    "channel": autofocus_illumination_channel,
+                    "mode": autofocus_mode,
+                    "software_method": autofocus_software_method,
+                    "max_attempts": autofocus_max_attempts,
+                    "target_focus_setpoint": autofocus_target_focus_setpoint,
+                    "hc_initial_step": autofocus_hc_initial_step,
+                    "hc_min_step": autofocus_hc_min_step,
+                    "hc_step_reduction": autofocus_hc_step_reduction,
+                    "hc_max_iterations": autofocus_hc_max_iterations,
+                },
+                "workflow_steps": [self._serialize_workflow_step(step) for step in workflow_steps]
+            }
+            # Protocol file path — no _t{NNNN} suffix
+            protocol_file_path = os.path.join(dir_path, m_file_name)
+            self.save_experiment_protocol(protocol_data, protocol_file_path, mode="normal")
 
         return {
             "status": "workflow_created",
@@ -275,14 +276,14 @@ class ExperimentNormalMode(ExperimentModeBase):
             "file_writers": file_writers,
             "step_count": step_id
         }
-    
+
     def _serialize_workflow_step(self, step) -> Dict[str, Any]:
         """
         Serialize a WorkflowStep object to a dictionary for JSON export.
-        
+
         Args:
             step: WorkflowStep object
-            
+
         Returns:
             Dictionary representation of the workflow step
         """
@@ -311,11 +312,11 @@ class ExperimentNormalMode(ExperimentModeBase):
                                 n_times: int = 1) -> List[OMEWriter]:
         """
         Set up shared OME writers for multi-timepoint experiments.
-        
+
         This method creates writers that can be reused across multiple timepoints
         in a timelapse experiment. The writers are configured to handle all
         timepoints without creating new files for each timepoint.
-        
+
         Args:
             snake_tiles: List of tiles containing scan points
             exp_name: Experiment name
@@ -327,7 +328,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             omero_connection_params: Optional OMERO connection parameters
             shared_omero_key: Optional key for shared OMERO uploader
             n_times: Total number of time points
-            
+
         Returns:
             List of OMEWriter instances to be reused across timepoints
         """
@@ -360,7 +361,7 @@ class ExperimentNormalMode(ExperimentModeBase):
 
         """
         Set up OME writers for each tile.
-        
+
         Args:
             snake_tiles: List of tiles containing scan points
             t: Time index
@@ -373,12 +374,12 @@ class ExperimentNormalMode(ExperimentModeBase):
             omero_connection_params: Optional OMERO connection parameters
             shared_omero_key: Optional key for shared OMERO uploader
             n_times: Total number of time points
-            
+
         Returns:
             List of OMEWriter instances
         """
         file_writers = []
-        
+
         # Create shared directory for individual TIFFs - all tiles go under experiment folder
         # Structure: dir_path/m_file_name/tiles/timepoint_XXXX/
         shared_individual_tiffs_dir = None  # No longer needed - OMEFileStorePaths handles it internally
@@ -564,7 +565,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   illumination_params: Optional[Dict[str, Dict[str, Any]]] = None) -> int:
         """
         Create workflow steps for a single tile.
-        
+
         Args:
             tiles: List of points in the tile
             position_center_index: Index of the tile
@@ -584,8 +585,8 @@ class ExperimentNormalMode(ExperimentModeBase):
             autofocus_mode: Autofocus mode ('hardware' or 'software')
             autofocus_max_attempts,
             autofocus_target_focus_setpoint,
-                   
-            
+
+
         Returns:
             Updated step ID
         """
@@ -1005,7 +1006,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                               illumination_kinds: Optional[List[str]] = None) -> int:
         """
         Add finalization workflow steps.
-        
+
         Args:
             workflow_steps: List to append workflow steps to
             step_id: Current step ID
@@ -1014,7 +1015,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             illumination_intensities: List of illumination values
             t_period: Time period to wait
             t: Current time point index
-            
+
         Returns:
             Updated step ID
         """

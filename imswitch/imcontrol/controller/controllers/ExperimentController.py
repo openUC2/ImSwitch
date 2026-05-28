@@ -803,10 +803,14 @@ class ExperimentController(ImConWidgetController):
         # workflow loop uses `illu_intensity > 0` as the active-channel gate;
         # without this promotion, synthetic channels are silently treated as
         # "off" (and worse: collapse passthrough mode below, which then mis-
-        # aligns illuminationKinds vs. the post-passthrough illuSources).  By
-        # writing max(R,G,B) into illuminationIntensities here, the active
-        # gate, n_active_channels, and passthrough detection all see the
-        # synthetic channels as truly active.
+        # aligns illuminationKinds vs. the post-passthrough illuSources).
+        #
+        # IMPORTANT: only promote when the channel is actually enabled by
+        # the user.  `illuminationParams` is a sticky cache on the frontend
+        # — toggling a synthetic channel off does NOT clear its last-edited
+        # radius/RGB, so a naïve "has non-zero RGB → activate" rule would
+        # re-enable channels the user explicitly deselected.  We gate on
+        # `channelEnabledForExperiment` (sent by the frontend) when present.
         # Pad illuminationIntensities to match illuSources first so the indexed
         # update below is safe.
         if len(illuminationIntensities) < len(illuSources):
@@ -815,11 +819,22 @@ class ExperimentController(ImConWidgetController):
             )
         else:
             illuminationIntensities = list(illuminationIntensities)
+        _channel_enabled = p.channelEnabledForExperiment  # Optional[List[bool]]
         for _i, (_name, _kind) in enumerate(zip(illuSources, illuminationKinds)):
             if _kind not in ("ring", "dpc"):
                 continue
+            # Authoritative "is this channel enabled in the experiment" check.
+            # When the frontend sends channelEnabledForExperiment, honour it
+            # exactly; if absent (legacy clients), fall back to the previous
+            # permissive behaviour (treat any synthetic channel with RGB
+            # params as enabled).
+            if _channel_enabled is not None:
+                if _i >= len(_channel_enabled) or not _channel_enabled[_i]:
+                    # Make sure stale intensity doesn't sneak through either.
+                    illuminationIntensities[_i] = 0
+                    continue
             if illuminationIntensities[_i] and illuminationIntensities[_i] > 0:
-                continue  # frontend (or a prior controller) already supplied it
+                continue  # frontend already supplied a concrete intensity
             _kp = illuminationParams.get(_name) or {}
             _rgb_max = max(
                 int(_kp.get("intensityR", 0) or 0),

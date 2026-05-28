@@ -36,6 +36,7 @@ import mazeGameReducer from "./slices/MazeGameSlice";
 import themeReducer from "./slices/ThemeSlice";
 import notificationReducer from "./slices/NotificationSlice";
 import autofocusReducer from "./slices/AutofocusSlice";
+import opticalFlowReducer from "./slices/OpticalFlowSlice";
 import socketDebugReducer from "./slices/SocketDebugSlice";
 import appManagerReducer from "./slices/appManagerSlice";
 import canOtaReducer from "./slices/canOtaSlice";
@@ -148,6 +149,7 @@ const rootReducer = combineReducers({
   themeState: themeReducer,
   notification: notificationReducer,
   autofocusState: autofocusReducer,
+  opticalFlowState: opticalFlowReducer,
   socketDebugState: socketDebugReducer,
   appManager: appManagerReducer,
   canOtaState: canOtaReducer,

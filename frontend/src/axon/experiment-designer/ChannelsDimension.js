@@ -608,9 +608,37 @@ const ChannelsDimension = () => {
     }
   };
 
-  // Handler for toggling channel inclusion in experiment (no backend call)
+  // Handler for toggling channel inclusion in experiment.
+  // For synthetic (ring/dpc) channels we ALSO mirror the current max(R,G,B)
+  // into illuIntensities[index] when enabling, and zero it when disabling.
+  // Rationale: the intensity slider is hidden for synthetic channels so the
+  // user can't directly set illuIntensities — without this mirror, every
+  // synth channel ships with intensity=0, which collapses passthrough mode
+  // on the backend and the active-channel gate silently drops them.  The
+  // mirrored value is what the backend uses as `illu_intensity` for the
+  // workflow gate; the actual RGB pattern comes from illuminationParams.
   const handleIncludeInExperimentChange = (index, included) => {
     dispatch(experimentSlice.toggleChannelForExperiment(index));
+    const channelName = illuSources[index];
+    if (!channelName) return;
+    const kind = illuSourceKinds[index] || "default";
+    if (kind !== "ring" && kind !== "dpc") return;
+    // toggleChannelForExperiment inverts the existing flag.  Compute the
+    // post-toggle state ourselves rather than reading Redux (the dispatch
+    // above is async).
+    const willBeEnabled = !(channelEnabledForExperiment[index] === true);
+    const params = illuminationParams[channelName] || {};
+    const rgbMax = Math.max(
+      Number(params.intensityR ?? 0),
+      Number(params.intensityG ?? 0),
+      Number(params.intensityB ?? 0)
+    );
+    const newIntensity = willBeEnabled ? (rgbMax > 0 ? rgbMax : 0) : 0;
+    if ((intensities[index] ?? 0) !== newIntensity) {
+      const arr = [...intensities];
+      arr[index] = newIntensity;
+      dispatch(experimentSlice.setIlluminationIntensities(arr));
+    }
   };
 
   // Debounced LED-matrix live-preview firing.
@@ -675,6 +703,9 @@ const ChannelsDimension = () => {
   // Stores the new value under parameterValue.illuminationParams[channelName]
   // AND (for synthetic channels) fires a debounced LED-matrix live preview
   // so the user can see the pattern on the hardware as they tune sliders.
+  // When the channel is currently enabled for the experiment, also keeps
+  // illuIntensities[i] in sync with max(R,G,B) so the backend's active-gate
+  // and passthrough heuristics stay accurate.
   const handleKindParamChange = useCallback(
     (channelName, key, value) => {
       dispatch(
@@ -691,10 +722,34 @@ const ChannelsDimension = () => {
         // (the slice update is async — read-after-write on Redux state would
         // miss this change).
         const currentParams = illuminationParams[channelName] || {};
-        previewLedMatrix(kind, { ...currentParams, [key]: value });
+        const mergedParams = { ...currentParams, [key]: value };
+        previewLedMatrix(kind, mergedParams);
+        // Mirror max(R,G,B) into illuIntensities when this channel is enabled
+        // for the experiment — radius doesn't affect intensity so we only
+        // recompute when an RGB component changed.
+        if (channelEnabledForExperiment[idx] === true && key !== "radius") {
+          const rgbMax = Math.max(
+            Number(mergedParams.intensityR ?? 0),
+            Number(mergedParams.intensityG ?? 0),
+            Number(mergedParams.intensityB ?? 0)
+          );
+          if ((intensities[idx] ?? 0) !== rgbMax) {
+            const arr = [...intensities];
+            arr[idx] = rgbMax;
+            dispatch(experimentSlice.setIlluminationIntensities(arr));
+          }
+        }
       }
     },
-    [dispatch, illuSources, illuSourceKinds, illuminationParams, previewLedMatrix]
+    [
+      dispatch,
+      illuSources,
+      illuSourceKinds,
+      illuminationParams,
+      previewLedMatrix,
+      channelEnabledForExperiment,
+      intensities,
+    ]
   );
 
   // Handler for exposure change

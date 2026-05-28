@@ -259,12 +259,10 @@ class OpticalFlowController(ImConWidgetController):
         if img.ndim == 3:
             img = np.mean(img, axis=-1)
         
-        # crop frame to NxN (center) if larger, to speed up the flow computation
-        NSize = 1024
+        # crop frame to 512x512 (center) if larger, to speed up the flow computation
         h, w = img.shape
-        if h > NSize or w > NSize:
-            ch, cw = h // 2, w // 2
-            img = img[max(0, ch - NSize//2):min(h, ch + NSize//2), max(0, cw - NSize//2):min(w, cw + NSize//2)]
+        # cv resize to max 512 (shorter side) would be another option, but it can introduce artefacts that mess up the flow, so we crop instead
+        img = cv2.resize(img, (min(w, 512), min(h, 512)), interpolation=cv2.INTER_AREA) if _HAS_CV2 else img
         # Normalise to 8-bit for cv2 trackers
         if img.dtype == np.uint8:
             return img
@@ -347,6 +345,7 @@ class OpticalFlowController(ImConWidgetController):
         axis: str = "X",
         warmup_frames: int = 3,
         min_displacement_px: float = 0.5,
+        smoothing_window: int = 5,
     ) -> dict:
         """Run a calibration sweep and stream live angle samples.
 
@@ -359,6 +358,8 @@ class OpticalFlowController(ImConWidgetController):
                 do not pollute the aggregate.
             min_displacement_px: samples with |displacement| below this are
                 dropped from the angle aggregate (low signal-to-noise).
+            smoothing_window: size of the trailing circular-mean window used
+                to smooth the live angle emissions. ``1`` disables smoothing.
 
         Returns:
             ``{"status": "started"|"error", ...}``
@@ -371,6 +372,7 @@ class OpticalFlowController(ImConWidgetController):
             speed_um_s = float(speed_um_s)
             warmup_frames = int(warmup_frames)
             min_displacement_px = float(min_displacement_px)
+            smoothing_window = max(1, int(smoothing_window))
         except (TypeError, ValueError):
             return {"status": "error", "message": "Invalid numeric parameter."}
 
@@ -399,7 +401,8 @@ class OpticalFlowController(ImConWidgetController):
 
         self._worker = threading.Thread(
             target=self._runMeasurement,
-            args=(distance_um, speed_um_s, axis, warmup_frames, min_displacement_px),
+            args=(distance_um, speed_um_s, axis, warmup_frames,
+                  min_displacement_px, smoothing_window),
             daemon=True,
         )
         self._worker.start()
@@ -413,7 +416,13 @@ class OpticalFlowController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def abortMeasurement(self) -> dict:
-        """Abort the active sweep and stop the stage immediately."""
+        """Abort the active sweep and stop the stage immediately.
+
+        Safe to call at any time: even when the optical-flow loop has already
+        FINISHED, the stage may still be travelling toward its target
+        (frame rate too low, safety timeout fired, ...) and the user wants
+        to be able to stop it from the UI.
+        """
         self.__logger.info("Abort optical-flow measurement requested")
         with self._stateLock:
             previous = self._state
@@ -495,6 +504,7 @@ class OpticalFlowController(ImConWidgetController):
         axis: str,
         warmup_frames: int,
         min_displacement_px: float,
+        smoothing_window: int = 1,
     ):
         try:
             # Capture starting position so we issue an absolute target rather
@@ -510,9 +520,15 @@ class OpticalFlowController(ImConWidgetController):
 
             self._setState(FlowState.RUNNING)
 
-            # Prime the optical-flow loop with a baseline frame.
-            prev_frame, prev_fn = self._grabFreshFrame(last_frame_number=-1)
-            prev_gray = self._processFrame(prev_frame)
+            # Prime the loop with a baseline frame -- this will be the
+            # *reference* frame against which every subsequent frame is
+            # cross-correlated. Comparing every new frame against a fixed
+            # reference yields the cumulative displacement vector, which is
+            # exactly what we need to estimate the rotation angle between
+            # the stage axis and the camera axis.
+            first_frame, first_fn = self._grabFreshFrame(last_frame_number=-1)
+            first_gray = self._processFrame(first_frame)
+            last_fn = first_fn
 
             # Kick off the asynchronous main move so we can poll frames.
             self._moveController.move_to_position(
@@ -520,18 +536,22 @@ class OpticalFlowController(ImConWidgetController):
             )
 
             # Skip a few frames after the move starts so the stage actually
-            # has begun accelerating before we start collecting samples.
+            # has begun accelerating. After the warmup we re-grab the
+            # reference frame so the cumulative shift starts at zero from a
+            # moving baseline.
             for _ in range(int(warmup_frames)):
                 if self._getState() == FlowState.ABORTED:
                     break
                 if self._moveController.is_target_reached():
                     break
-                prev_frame, prev_fn = self._grabFreshFrame(last_frame_number=prev_fn)
-                prev_gray = self._processFrame(prev_frame)
+                _, last_fn = self._grabFreshFrame(last_frame_number=last_fn)
+            first_frame, last_fn = self._grabFreshFrame(last_frame_number=last_fn)
+            first_gray = self._processFrame(first_frame)
 
             t_start = time.time()
             times: list[float] = []
-            angles_deg: list[float] = []
+            angles_deg: list[float] = []        # raw per-frame angles
+            smoothed_deg: list[float] = []      # rolling circular mean
             disp_norms: list[float] = []
 
             # Safety: never run longer than (distance / speed) * 5 + 5 s
@@ -547,14 +567,18 @@ class OpticalFlowController(ImConWidgetController):
                     self.__logger.warning("Optical-flow loop hit safety timeout")
                     break
 
-                curr_frame, curr_fn = self._grabFreshFrame(last_frame_number=prev_fn)
+                curr_frame, curr_fn = self._grabFreshFrame(last_frame_number=last_fn)
+                last_fn = curr_fn
                 curr_gray = self._processFrame(curr_frame)
-                if curr_gray is None or prev_gray is None:
-                    prev_frame, prev_fn, prev_gray = curr_frame, curr_fn, curr_gray
+                if curr_gray is None or first_gray is None:
                     continue
 
-                vec = self._flowVector(prev_gray, curr_gray, DEBUG=self.DEBUG)
-                prev_frame, prev_fn, prev_gray = curr_frame, curr_fn, curr_gray
+                # Cross-correlate against the *first* frame so we measure the
+                # cumulative displacement -- the angle of that vector is the
+                # stage<->camera rotation we want, and the long baseline
+                # filters out per-frame noise far better than consecutive
+                # frame deltas.
+                vec = self._flowVector(first_gray, curr_gray, DEBUG=self.DEBUG)
                 if vec is None:
                     continue
 
@@ -581,26 +605,59 @@ class OpticalFlowController(ImConWidgetController):
                 angles_deg.append(angle)
                 disp_norms.append(norm)
 
+                # Rolling circular mean over the last ``smoothing_window``
+                # samples -- emit the smoothed value so the live plot stops
+                # jittering. We keep the raw arrays internally so the final
+                # aggregate uses the unfiltered data.
+                window = angles_deg[-int(smoothing_window):]
+                if len(window) == 1:
+                    smoothed = float(angle)
+                else:
+                    smoothed, _ = _circular_mean_std_deg(np.asarray(window, dtype=float))
+                smoothed_deg.append(float(smoothed))
+
                 # Keep snapshot for getstatusOpticalFlow() callers.
                 self._lastTimes = list(times)
-                self._lastAngles = list(angles_deg)
-                # Emit just the new sample (FocusLock-style streaming) so the
-                # frontend can append to a stable Redux array. This avoids the
-                # whole-plot redraw / blink that came from replacing the array
-                # reference on every update.
+                self._lastAngles = list(smoothed_deg)
+                # Emit the smoothed sample (FocusLock-style streaming).
                 try:
-                    self.sigUpdateFlowAngle.emit(float(t_now), float(angle))
+                    self.sigUpdateFlowAngle.emit(float(t_now), float(smoothed))
                 except Exception:
                     pass
 
-            # Aggregate result -- only use samples with enough displacement
+            # ----- post-loop: wait for the stage to actually settle ------
+            # The optical-flow loop may exit before the stage finishes its
+            # move (e.g. safety timeout, or frame rate too low). Keep the
+            # state as RUNNING so the frontend leaves the Abort button
+            # enabled -- the user can still hit Stop and we will tear the
+            # move down via abortMeasurement().
+            settle_deadline = time.time() + 30.0
+            while not self._moveController.is_target_reached():
+                if self._getState() == FlowState.ABORTED:
+                    break
+                if time.time() > settle_deadline:
+                    self.__logger.warning(
+                        "Stage did not reach target within settle timeout"
+                    )
+                    break
+                time.sleep(0.05)
+
+            # Aggregate result -- use only the last few samples, where the
+            # cumulative reference-frame correlation has had the longest
+            # baseline and the angle estimate is most reliable. Early
+            # samples are dominated by sub-pixel noise because the stage
+            # has barely moved relative to the reference frame.
             arr_angles = np.asarray(angles_deg, dtype=float)
             arr_disp = np.asarray(disp_norms, dtype=float)
             if arr_angles.size and arr_disp.size == arr_angles.size:
                 mask = arr_disp >= min_displacement_px
-                useful = arr_angles[mask] if mask.any() else arr_angles
+                filtered = arr_angles[mask] if mask.any() else arr_angles
             else:
-                useful = arr_angles
+                filtered = arr_angles
+
+            # Final mean is the circular mean of the last N samples only.
+            FINAL_TAIL = 5
+            useful = filtered[-FINAL_TAIL:] if filtered.size > FINAL_TAIL else filtered
 
             mean_angle, std_angle = _circular_mean_std_deg(useful)
 
@@ -613,6 +670,7 @@ class OpticalFlowController(ImConWidgetController):
                 "speedUmS": float(speed_um_s),
                 "axis": axis,
                 "minDisplacementPx": float(min_displacement_px),
+                "tailWindow": int(FINAL_TAIL),
             }
             try:
                 self.sigFlowResult.emit(dict(self._lastResult))

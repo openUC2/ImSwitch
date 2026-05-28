@@ -5,6 +5,8 @@ import {
   Box,
   Tabs,
   Tab,
+  Button,
+  ButtonGroup,
   Typography,
   IconButton,
   Drawer,
@@ -540,15 +542,55 @@ export default function LiveView({ setFileManagerInitialPath }) {
             px: 1,
           }}
         >
-          <Tabs
-            value={activeTab}
-            onChange={(_, v) => dispatch(liveViewSlice.setActiveTab(v))}
-            sx={{ mt: 1 }}
+          <Box
+            sx={{
+              mt: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              gap: 1,
+              flexWrap: "wrap",
+            }}
           >
-            {detectors.map((d) => (
-              <Tab key={d} label={d} />
-            ))}
-          </Tabs>
+            <Typography
+              variant="caption"
+              sx={{ color: "text.secondary", fontWeight: 600 }}
+            >
+              Detector Select:
+            </Typography>
+            <ButtonGroup
+              variant="outlined"
+              color="primary"
+              size="small"
+              aria-label="Detector selection"
+              sx={{
+                flexWrap: "wrap",
+                "& .MuiButtonGroup-grouped": {
+                  minWidth: 120,
+                },
+              }}
+            >
+              {detectors.map((detectorName, idx) => (
+                <Button
+                  key={detectorName}
+                  onClick={() => dispatch(liveViewSlice.setActiveTab(idx))}
+                  sx={
+                    activeTab === idx
+                      ? {
+                          backgroundColor: "primary.main",
+                          color: "primary.contrastText",
+                          "&:hover": {
+                            backgroundColor: "primary.dark",
+                          },
+                        }
+                      : undefined
+                  }
+                >
+                  {detectorName}
+                </Button>
+              ))}
+            </ButtonGroup>
+          </Box>
 
           {/* Toggle button to open/close right panel */}
           <IconButton
@@ -701,7 +743,7 @@ function RightPanelContent({
         <Tabs
           value={stageControlTab}
           onChange={(_, v) => setStageControlTab(v)}
-          sx={{ mb: 2 }}
+          sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}
           variant="scrollable"
           scrollButtons="auto"
         >

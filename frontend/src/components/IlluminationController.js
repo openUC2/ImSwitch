@@ -10,11 +10,15 @@ import apiLaserControllerGetLaserChannelIndex from "../backendapi/apiLaserContro
 
 export default function IlluminationController({ hostIP, hostPort }) {
   const dispatch = useDispatch();
-  
+
   // Get state from Redux
-  const parameterRangeState = useSelector(parameterRangeSlice.getParameterRangeState);
-  const connectionSettingsState = useSelector(connectionSettingsSlice.getConnectionSettingsState);
-  
+  const parameterRangeState = useSelector(
+    parameterRangeSlice.getParameterRangeState,
+  );
+  const connectionSettingsState = useSelector(
+    connectionSettingsSlice.getConnectionSettingsState,
+  );
+
   // Get laser state from Redux (updated via WebSocket sigUpdateLaserPower)
   const laserState = useSelector(laserSlice.getLaserState);
   const lasers = laserState.lasers;
@@ -33,7 +37,7 @@ export default function IlluminationController({ hostIP, hostPort }) {
   useEffect(() => {
     if (parameterRangeState.illuSources.length > 0) {
       // Initialize timeout refs object for each laser
-      parameterRangeState.illuSources.forEach(laserName => {
+      parameterRangeState.illuSources.forEach((laserName) => {
         if (!laserTimeoutRefs.current[laserName]) {
           laserTimeoutRefs.current[laserName] = null;
         }
@@ -45,7 +49,7 @@ export default function IlluminationController({ hostIP, hostPort }) {
   useEffect(() => {
     return () => {
       // Clear all pending timeouts
-      Object.values(laserTimeoutRefs.current).forEach(timeoutRef => {
+      Object.values(laserTimeoutRefs.current).forEach((timeoutRef) => {
         if (timeoutRef) {
           clearTimeout(timeoutRef);
         }
@@ -83,9 +87,13 @@ export default function IlluminationController({ hostIP, hostPort }) {
         }
         const encodedName = encodeURIComponent(name);
         try {
-          const valueRes = await fetch(`${hostIP}:${hostPort}/imswitch/api/LaserController/getLaserValue?laserName=${encodedName}`);
+          const valueRes = await fetch(
+            `${hostIP}:${hostPort}/imswitch/api/LaserController/getLaserValue?laserName=${encodedName}`,
+          );
           const power = await valueRes.json();
-          const activeRes = await fetch(`${hostIP}:${hostPort}/imswitch/api/LaserController/getLaserActive?laserName=${encodedName}`);
+          const activeRes = await fetch(
+            `${hostIP}:${hostPort}/imswitch/api/LaserController/getLaserActive?laserName=${encodedName}`,
+          );
           const enabled = await activeRes.json();
           dispatch(laserSlice.setLaserState({ laserName: name, power, enabled }));
         } catch (err) {
@@ -98,47 +106,59 @@ export default function IlluminationController({ hostIP, hostPort }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hostIP, hostPort, dispatch, parameterRangeState.illuSources, parameterRangeState.illuSourceKinds]);
 
-
   // Debounced laser value update to prevent serial overload
-  const debouncedSetLaserValue = useCallback((laserName, val) => {
-    // Update Redux state immediately for UI responsiveness
-    dispatch(laserSlice.setLaserPower({ laserName, power: val }));
-    
-    // Clear existing timeout for this laser
-    if (laserTimeoutRefs.current[laserName]) {
-      clearTimeout(laserTimeoutRefs.current[laserName]);
-    }
-    
-    // Set new timeout to send to backend after user stops adjusting
-    laserTimeoutRefs.current[laserName] = setTimeout(async () => {
-      const ip = connectionSettingsState.ip || hostIP;
-      const port = connectionSettingsState.apiPort || hostPort;
-      
-      if (ip && port) {
-        try {
-          const encodedLaserName = encodeURIComponent(laserName);
-          await fetch(`${ip}:${port}/imswitch/api/LaserController/setLaserValue?laserName=${encodedLaserName}&value=${val}`);
-          console.log(`${laserName} intensity updated to: ${val}`);
-        } catch (error) {
-          console.error("Failed to set laser value in backend:", error);
-        }
+  const debouncedSetLaserValue = useCallback(
+    (laserName, val) => {
+      // Update Redux state immediately for UI responsiveness
+      dispatch(laserSlice.setLaserPower({ laserName, power: val }));
+
+      // Clear existing timeout for this laser
+      if (laserTimeoutRefs.current[laserName]) {
+        clearTimeout(laserTimeoutRefs.current[laserName]);
       }
-    }, LASER_UPDATE_DEBOUNCE_MS);
-  }, [dispatch, connectionSettingsState.ip, connectionSettingsState.apiPort, hostIP, hostPort]);
+
+      // Set new timeout to send to backend after user stops adjusting
+      laserTimeoutRefs.current[laserName] = setTimeout(async () => {
+        const ip = connectionSettingsState.ip || hostIP;
+        const port = connectionSettingsState.apiPort || hostPort;
+
+        if (ip && port) {
+          try {
+            const encodedLaserName = encodeURIComponent(laserName);
+            await fetch(
+              `${ip}:${port}/imswitch/api/LaserController/setLaserValue?laserName=${encodedLaserName}&value=${val}`,
+            );
+            console.log(`${laserName} intensity updated to: ${val}`);
+          } catch (error) {
+            console.error("Failed to set laser value in backend:", error);
+          }
+        }
+      }, LASER_UPDATE_DEBOUNCE_MS);
+    },
+    [
+      dispatch,
+      connectionSettingsState.ip,
+      connectionSettingsState.apiPort,
+      hostIP,
+      hostPort,
+    ],
+  );
 
   // Update laser active state
   const setLaserActive = async (laserName, active) => {
     // Update Redux state immediately
     dispatch(laserSlice.setLaserEnabled({ laserName, enabled: active }));
-    
+
     // Update backend
     const ip = connectionSettingsState.ip || hostIP;
     const port = connectionSettingsState.apiPort || hostPort;
-    
+
     if (ip && port) {
       try {
         const encodedLaserName = encodeURIComponent(laserName);
-        await fetch(`${ip}:${port}/imswitch/api/LaserController/setLaserActive?laserName=${encodedLaserName}&active=${active}`);
+        await fetch(
+          `${ip}:${port}/imswitch/api/LaserController/setLaserActive?laserName=${encodedLaserName}&active=${active}`,
+        );
         console.log(`${laserName} active state updated to: ${active}`);
       } catch (error) {
         console.error("Failed to set laser active state in backend:", error);
@@ -166,13 +186,7 @@ export default function IlluminationController({ hostIP, hostPort }) {
 
   return (
     <Paper sx={{ p: 2 }}>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Laser power and enabled state are updated in real-time via WebSocket.
-        Adjust laser intensity and observe the color change on the detector stream.
-      </Typography>
-      
       <Grid container direction="column" spacing={2}>
-        
         {laserSources.length ? (
           laserSources.map((laserName, idx) => {
             // Get laser state from Redux (updated via WebSocket)
@@ -181,7 +195,7 @@ export default function IlluminationController({ hostIP, hostPort }) {
             const isActive = laserData.enabled;
             const minValue = laserMinValues[idx] || 0;
             const maxValue = laserMaxValues[idx] || 1023;
-            
+
             return (
               <Grid
                 item
@@ -189,9 +203,7 @@ export default function IlluminationController({ hostIP, hostPort }) {
                 sx={{ display: "flex", alignItems: "center", gap: 2 }}
               >
                 {/* Laser name */}
-                <Typography sx={{ minWidth: 120 }}>
-                  {laserName}
-                </Typography>
+                <Typography sx={{ minWidth: 120 }}>{laserName}</Typography>
 
                 {/* Slider with dynamic min and max */}
                 <Box sx={{ flex: 1, px: 1 }}>
@@ -199,18 +211,28 @@ export default function IlluminationController({ hostIP, hostPort }) {
                     value={currentValue}
                     min={minValue}
                     max={maxValue}
-                    onChange={(e) => debouncedSetLaserValue(laserName, e.target.value)}
-                    sx={{ width: '100%' }}
+                    onChange={(e) =>
+                      debouncedSetLaserValue(laserName, e.target.value)
+                    }
+                    sx={{ width: "100%" }}
                     valueLabelDisplay="auto"
                   />
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Typography variant="caption" color="textSecondary">{minValue}</Typography>
-                    <Typography variant="caption" color="textSecondary">{maxValue}</Typography>
+                  <Box
+                    sx={{ display: "flex", justifyContent: "space-between" }}
+                  >
+                    <Typography variant="caption" color="textSecondary">
+                      {minValue}
+                    </Typography>
+                    <Typography variant="caption" color="textSecondary">
+                      {maxValue}
+                    </Typography>
                   </Box>
                 </Box>
 
                 {/* Current slider value */}
-                <Typography sx={{ minWidth: 60, textAlign: 'center' }}>{currentValue}</Typography>
+                <Typography sx={{ minWidth: 60, textAlign: "center" }}>
+                  {currentValue}
+                </Typography>
 
                 {/* Active checkbox */}
                 <Checkbox

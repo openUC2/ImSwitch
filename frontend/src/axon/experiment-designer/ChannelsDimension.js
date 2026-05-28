@@ -1,14 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import createAxiosInstance from '../../backendapi/createAxiosInstance';
+import createAxiosInstance from "../../backendapi/createAxiosInstance";
 import {
   Box,
   Typography,
   Slider,
   TextField,
-  Switch,
-  FormControlLabel,
-  IconButton,
   Button,
   Accordion,
   AccordionSummary,
@@ -19,7 +16,6 @@ import {
   Select,
   MenuItem,
   FormControl,
-  InputLabel,
   Checkbox,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
@@ -68,7 +64,9 @@ const ChannelBlock = ({
   // Local string state for exposure so the user can type partial values
   // (e.g. "100." or clear the field) without it snapping to 0.
   const [exposureRaw, setExposureRaw] = useState(String(exposure ?? 100));
-  useEffect(() => { setExposureRaw(String(exposure)); }, [exposure]);
+  useEffect(() => {
+    setExposureRaw(String(exposure));
+  }, [exposure]);
   const commitExposure = () => {
     const v = parseFloat(exposureRaw);
     if (!isNaN(v) && v >= 0) onExposureChange(v);
@@ -131,7 +129,10 @@ const ChannelBlock = ({
         )}
 
         {/* Laser power toggle – physically turns the laser on/off */}
-        <Tooltip title="Toggle laser ON/OFF (physically enables the illumination source)" arrow>
+        <Tooltip
+          title="Toggle laser ON/OFF (physically enables the illumination source)"
+          arrow
+        >
           <Checkbox
             checked={isEnabled}
             onChange={(e) => {
@@ -141,13 +142,20 @@ const ChannelBlock = ({
             onClick={(e) => e.stopPropagation()}
             size="small"
             icon={<PowerSettingsNewIcon sx={{ fontSize: 20, opacity: 0.4 }} />}
-            checkedIcon={<PowerSettingsNewIcon sx={{ fontSize: 20, color: theme.palette.success.main }} />}
+            checkedIcon={
+              <PowerSettingsNewIcon
+                sx={{ fontSize: 20, color: theme.palette.success.main }}
+              />
+            }
             sx={{ mr: 0 }}
           />
         </Tooltip>
 
         {/* Include in experiment toggle – determines if this channel is used during acquisition */}
-        <Tooltip title="Include this channel in the experiment acquisition (does NOT toggle the laser)" arrow>
+        <Tooltip
+          title="Include this channel in the experiment acquisition (does NOT toggle the laser)"
+          arrow
+        >
           <Checkbox
             checked={isIncludedInExperiment}
             onChange={(e) => {
@@ -157,7 +165,11 @@ const ChannelBlock = ({
             onClick={(e) => e.stopPropagation()}
             size="small"
             icon={<ScienceIcon sx={{ fontSize: 20, opacity: 0.4 }} />}
-            checkedIcon={<ScienceIcon sx={{ fontSize: 20, color: theme.palette.info.main }} />}
+            checkedIcon={
+              <ScienceIcon
+                sx={{ fontSize: 20, color: theme.palette.info.main }}
+              />
+            }
             sx={{ mr: 0.5 }}
           />
         </Tooltip>
@@ -181,8 +193,18 @@ const ChannelBlock = ({
               <Typography variant="caption" sx={{ fontWeight: 500 }}>
                 Intensity
               </Typography>
-              <Tooltip title="Illumination power in mW. Higher values give brighter images but may cause photobleaching." arrow>
-                <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+              <Tooltip
+                title="Illumination power in mW. Higher values give brighter images but may cause photobleaching."
+                arrow
+              >
+                <InfoOutlinedIcon
+                  sx={{
+                    fontSize: 14,
+                    ml: 0.5,
+                    color: "text.disabled",
+                    cursor: "help",
+                  }}
+                />
               </Tooltip>
             </Box>
             <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
@@ -210,8 +232,18 @@ const ChannelBlock = ({
                 <Typography variant="caption" sx={{ fontWeight: 500 }}>
                   Exposure
                 </Typography>
-                <Tooltip title="Camera exposure time per frame. Longer exposure captures more light but slows down acquisition." arrow>
-                  <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+                <Tooltip
+                  title="Camera exposure time per frame. Longer exposure captures more light but slows down acquisition."
+                  arrow
+                >
+                  <InfoOutlinedIcon
+                    sx={{
+                      fontSize: 14,
+                      ml: 0.5,
+                      color: "text.disabled",
+                      cursor: "help",
+                    }}
+                  />
                 </Tooltip>
               </Box>
               <FormControl size="small" fullWidth>
@@ -227,7 +259,14 @@ const ChannelBlock = ({
                   onBlur={commitExposure}
                   inputProps={{ min: 0, step: 0.1 }}
                   InputProps={{
-                    endAdornment: <Typography variant="caption" sx={{ ml: 0.5, whiteSpace: 'nowrap' }}>ms</Typography>,
+                    endAdornment: (
+                      <Typography
+                        variant="caption"
+                        sx={{ ml: 0.5, whiteSpace: "nowrap" }}
+                      >
+                        ms
+                      </Typography>
+                    ),
                   }}
                 />
               </FormControl>
@@ -239,8 +278,18 @@ const ChannelBlock = ({
                 <Typography variant="caption" sx={{ fontWeight: 500 }}>
                   Gain
                 </Typography>
-                <Tooltip title="Camera sensor gain (amplification). Higher gain brightens the image but increases noise." arrow>
-                  <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+                <Tooltip
+                  title="Camera sensor gain (amplification). Higher gain brightens the image but increases noise."
+                  arrow
+                >
+                  <InfoOutlinedIcon
+                    sx={{
+                      fontSize: 14,
+                      ml: 0.5,
+                      color: "text.disabled",
+                      cursor: "help",
+                    }}
+                  />
                 </Tooltip>
               </Box>
               <FormControl size="small" fullWidth>
@@ -281,15 +330,19 @@ const ChannelsDimension = () => {
 
   // Redux state
   const experimentState = useSelector(experimentSlice.getExperimentState);
-  const parameterRange = useSelector(parameterRangeSlice.getParameterRangeState);
-  const connectionSettings = useSelector(connectionSettingsSlice.getConnectionSettingsState);
+  const parameterRange = useSelector(
+    parameterRangeSlice.getParameterRangeState,
+  );
+  const connectionSettings = useSelector(
+    connectionSettingsSlice.getConnectionSettingsState,
+  );
   const experimentUI = useSelector(experimentUISlice.getExperimentUIState);
   const laserState = useSelector(laserSlice.getLaserState);
   const lasers = laserState.lasers;
 
   // Local state for expanded channels
   const [expandedChannels, setExpandedChannels] = useState({});
-  
+
   // Debounce refs for laser value updates to prevent serial overload
   const laserTimeoutRefs = useRef({});
   const LASER_UPDATE_DEBOUNCE_MS = 300;
@@ -298,31 +351,47 @@ const ChannelsDimension = () => {
   const parameterValue = experimentState.parameterValue;
   // Defensive: every list must be an array. The backend can return null/object
   // when no hardware is connected — slice + UI must both tolerate that.
-  const intensities = Array.isArray(parameterValue.illuIntensities) ? parameterValue.illuIntensities : [];
-  const exposures = Array.isArray(parameterValue.exposureTimes) ? parameterValue.exposureTimes : [];
+  const intensities = Array.isArray(parameterValue.illuIntensities)
+    ? parameterValue.illuIntensities
+    : [];
+  const exposures = Array.isArray(parameterValue.exposureTimes)
+    ? parameterValue.exposureTimes
+    : [];
   const gains = Array.isArray(parameterValue.gains) ? parameterValue.gains : [];
-  const channelEnabledForExperiment = Array.isArray(parameterValue.channelEnabledForExperiment) ? parameterValue.channelEnabledForExperiment : [];
-  const illuSources = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
-  const laserMinValues = Array.isArray(parameterRange.illuSourceMinIntensities) ? parameterRange.illuSourceMinIntensities : [];
-  const laserMaxValues = Array.isArray(parameterRange.illuSourceMaxIntensities) ? parameterRange.illuSourceMaxIntensities : [];
+  const channelEnabledForExperiment = Array.isArray(
+    parameterValue.channelEnabledForExperiment,
+  )
+    ? parameterValue.channelEnabledForExperiment
+    : [];
+  const illuSources = Array.isArray(parameterRange.illuSources)
+    ? parameterRange.illuSources
+    : [];
+  const laserMinValues = Array.isArray(parameterRange.illuSourceMinIntensities)
+    ? parameterRange.illuSourceMinIntensities
+    : [];
+  const laserMaxValues = Array.isArray(parameterRange.illuSourceMaxIntensities)
+    ? parameterRange.illuSourceMaxIntensities
+    : [];
 
   // Initialize timeout refs and cleanup
   useEffect(() => {
     if (illuSources.length > 0) {
-      illuSources.forEach(laserName => {
+      illuSources.forEach((laserName) => {
         if (!laserTimeoutRefs.current[laserName]) {
           laserTimeoutRefs.current[laserName] = null;
         }
         // Initialize laser state in Redux if not exists
         if (!lasers[laserName]) {
-          dispatch(laserSlice.setLaserState({ laserName, power: 0, enabled: false }));
+          dispatch(
+            laserSlice.setLaserState({ laserName, power: 0, enabled: false }),
+          );
         }
       });
     }
-    
+
     return () => {
       // Clear all pending timeouts on unmount
-      Object.values(laserTimeoutRefs.current).forEach(timeoutRef => {
+      Object.values(laserTimeoutRefs.current).forEach((timeoutRef) => {
         if (timeoutRef) clearTimeout(timeoutRef);
       });
     };
@@ -331,11 +400,15 @@ const ChannelsDimension = () => {
   // Initialize arrays if needed
   useEffect(() => {
     if (illuSources.length > 0) {
-      const initIntensities = illuSources.map((_, idx) => intensities[idx] ?? 0);
+      const initIntensities = illuSources.map(
+        (_, idx) => intensities[idx] ?? 0,
+      );
       const initExposures = illuSources.map((_, idx) => exposures[idx] ?? 100);
       const initGains = illuSources.map((_, idx) => gains[idx] ?? 0);
       // Default: all channels excluded from experiment (user must explicitly enable)
-      const initChannelEnabled = illuSources.map((_, idx) => channelEnabledForExperiment[idx] ?? false);
+      const initChannelEnabled = illuSources.map(
+        (_, idx) => channelEnabledForExperiment[idx] ?? false,
+      );
 
       if (JSON.stringify(intensities) !== JSON.stringify(initIntensities)) {
         dispatch(experimentSlice.setIlluminationIntensities(initIntensities));
@@ -346,8 +419,13 @@ const ChannelsDimension = () => {
       if (JSON.stringify(gains) !== JSON.stringify(initGains)) {
         dispatch(experimentSlice.setGains(initGains));
       }
-      if (JSON.stringify(channelEnabledForExperiment) !== JSON.stringify(initChannelEnabled)) {
-        dispatch(experimentSlice.setChannelEnabledForExperiment(initChannelEnabled));
+      if (
+        JSON.stringify(channelEnabledForExperiment) !==
+        JSON.stringify(initChannelEnabled)
+      ) {
+        dispatch(
+          experimentSlice.setChannelEnabledForExperiment(initChannelEnabled),
+        );
       }
       dispatch(experimentSlice.setIllumination(illuSources));
     }
@@ -355,77 +433,89 @@ const ChannelsDimension = () => {
 
   // Update summary when channels change – count only enabled channels
   useEffect(() => {
-    const enabledCount = (channelEnabledForExperiment || []).filter(Boolean).length;
+    const enabledCount = (channelEnabledForExperiment || []).filter(
+      Boolean,
+    ).length;
     const totalCount = illuSources.length;
     const summary =
       totalCount === 0
         ? "No channels available"
         : enabledCount === 0
-        ? `0/${totalCount} channels`
-        : enabledCount === 1
-        ? `1/${totalCount} channel`
-        : `${enabledCount}/${totalCount} channels`;
+          ? `0/${totalCount} channels`
+          : enabledCount === 1
+            ? `1/${totalCount} channel`
+            : `${enabledCount}/${totalCount} channels`;
 
     dispatch(
       experimentUISlice.setDimensionSummary({
         dimension: DIMENSIONS.CHANNELS,
         summary,
-      })
+      }),
     );
     dispatch(
       experimentUISlice.setDimensionConfigured({
         dimension: DIMENSIONS.CHANNELS,
         configured: enabledCount > 0,
-      })
+      }),
     );
   }, [illuSources, channelEnabledForExperiment, dispatch]);
 
   // Debounced laser intensity update (copied from IlluminationController)
-  const debouncedSetLaserValue = useCallback((laserName, index, val) => {
-    // Update Redux state immediately for UI responsiveness
-    dispatch(laserSlice.setLaserPower({ laserName, power: val }));
-    
-    const arr = [...intensities];
-    arr[index] = val;
-    dispatch(experimentSlice.setIlluminationIntensities(arr));
-    
-    // Clear existing timeout for this laser
-    if (laserTimeoutRefs.current[laserName]) {
-      clearTimeout(laserTimeoutRefs.current[laserName]);
-    }
-    
-    // Set new timeout to send to backend after user stops adjusting
-    laserTimeoutRefs.current[laserName] = setTimeout(async () => {
+  const debouncedSetLaserValue = useCallback(
+    (laserName, index, val) => {
+      // Update Redux state immediately for UI responsiveness
+      dispatch(laserSlice.setLaserPower({ laserName, power: val }));
+
+      const arr = [...intensities];
+      arr[index] = val;
+      dispatch(experimentSlice.setIlluminationIntensities(arr));
+
+      // Clear existing timeout for this laser
+      if (laserTimeoutRefs.current[laserName]) {
+        clearTimeout(laserTimeoutRefs.current[laserName]);
+      }
+
+      // Set new timeout to send to backend after user stops adjusting
+      laserTimeoutRefs.current[laserName] = setTimeout(async () => {
+        if (connectionSettings.ip && connectionSettings.apiPort) {
+          try {
+            const api = createAxiosInstance();
+            const encodedLaserName = encodeURIComponent(laserName);
+            await api.get(
+              `/LaserController/setLaserValue?laserName=${encodedLaserName}&value=${val}`,
+            );
+            console.log(`${laserName} intensity updated to: ${val}`);
+          } catch (error) {
+            console.error("Failed to set laser value:", error);
+          }
+        }
+      }, LASER_UPDATE_DEBOUNCE_MS);
+    },
+    [dispatch, connectionSettings, intensities],
+  );
+
+  // Update laser active state (copied from IlluminationController)
+  const setLaserActive = useCallback(
+    async (laserName, active) => {
+      // Update Redux state immediately
+      dispatch(laserSlice.setLaserEnabled({ laserName, enabled: active }));
+
+      // Update backend
       if (connectionSettings.ip && connectionSettings.apiPort) {
         try {
           const api = createAxiosInstance();
           const encodedLaserName = encodeURIComponent(laserName);
-          await api.get(`/LaserController/setLaserValue?laserName=${encodedLaserName}&value=${val}`);
-          console.log(`${laserName} intensity updated to: ${val}`);
+          await api.get(
+            `/LaserController/setLaserActive?laserName=${encodedLaserName}&active=${active}`,
+          );
+          console.log(`${laserName} active state updated to: ${active}`);
         } catch (error) {
-          console.error("Failed to set laser value:", error);
+          console.error("Failed to set laser active state:", error);
         }
       }
-    }, LASER_UPDATE_DEBOUNCE_MS);
-  }, [dispatch, connectionSettings, intensities]);
-
-  // Update laser active state (copied from IlluminationController)
-  const setLaserActive = useCallback(async (laserName, active) => {
-    // Update Redux state immediately
-    dispatch(laserSlice.setLaserEnabled({ laserName, enabled: active }));
-    
-    // Update backend
-    if (connectionSettings.ip && connectionSettings.apiPort) {
-      try {
-        const api = createAxiosInstance();
-        const encodedLaserName = encodeURIComponent(laserName);
-        await api.get(`/LaserController/setLaserActive?laserName=${encodedLaserName}&active=${active}`);
-        console.log(`${laserName} active state updated to: ${active}`);
-      } catch (error) {
-        console.error("Failed to set laser active state:", error);
-      }
-    }
-  }, [dispatch, connectionSettings]);
+    },
+    [dispatch, connectionSettings],
+  );
 
   // Handler for intensity change - uses debounced update
   const handleIntensityChange = (index, value) => {
@@ -454,13 +544,15 @@ const ChannelsDimension = () => {
     arr[index] = Number(value);
     dispatch(experimentSlice.setExposureTimes(arr));
     // update backend immediately for real-time feedback
-    if ( connectionSettings.ip && connectionSettings.apiPort) {
+    if (connectionSettings.ip && connectionSettings.apiPort) {
       const api = createAxiosInstance();
-      api.get(
-        `/SettingsController/setDetectorExposureTime?exposureTime=${value}`
-      ).catch((error) => {
-        console.error("Failed to update detector exposure time:", error);
-      });
+      api
+        .get(
+          `/SettingsController/setDetectorExposureTime?exposureTime=${value}`,
+        )
+        .catch((error) => {
+          console.error("Failed to update detector exposure time:", error);
+        });
     }
   };
 
@@ -472,11 +564,11 @@ const ChannelsDimension = () => {
     // update backend immediately for real-time feedback
     if (connectionSettings.ip && connectionSettings.apiPort) {
       const api = createAxiosInstance();
-      api.get(
-        `/SettingsController/setDetectorGain?gain=${value}`
-      ).catch((error) => {
-        console.error("Failed to update detector gain:", error);
-      });
+      api
+        .get(`/SettingsController/setDetectorGain?gain=${value}`)
+        .catch((error) => {
+          console.error("Failed to update detector gain:", error);
+        });
     }
   };
 
@@ -498,7 +590,9 @@ const ChannelsDimension = () => {
   };
 
   // Fetch the live exposure + gain from the detector and write them into the
-  // experiment parameters for every channel. Useful after tuning exposure
+  // experiment parameters for every channel. Also copy current LED intensities
+  // from the live illumination state so channels mirror the live view setup.
+  // Useful after tuning settings
   // interactively in the Live View — you don't want to type the same values
   // back into every channel by hand.
   const handleStoreCurrentSettings = async () => {
@@ -506,15 +600,29 @@ const ChannelsDimension = () => {
       const hostIP = connectionSettings.ip;
       const hostPort = connectionSettings.apiPort;
       if (!hostIP || !hostPort) return;
+
+      // Pull LED intensity from live laser state (WebSocket-driven).
+      if (illuSources.length > 0) {
+        const liveIntensities = illuSources.map((source, idx) => {
+          const livePower = Number(lasers?.[source]?.power);
+          if (Number.isFinite(livePower)) return livePower;
+          const fallbackIntensity = Number(intensities[idx]);
+          return Number.isFinite(fallbackIntensity) ? fallbackIntensity : 0;
+        });
+        dispatch(experimentSlice.setIlluminationIntensities(liveIntensities));
+      }
+
       const r = await fetch(
-        `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorParameters`
+        `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorParameters`,
       );
       if (!r.ok) return;
       const data = await r.json();
       const expVal = Number(data?.exposure);
       const gainVal = Number(data?.gain);
       if (Number.isFinite(expVal) && illuSources.length > 0) {
-        dispatch(experimentSlice.setExposureTimes(illuSources.map(() => expVal)));
+        dispatch(
+          experimentSlice.setExposureTimes(illuSources.map(() => expVal)),
+        );
       }
       if (Number.isFinite(gainVal) && illuSources.length > 0) {
         dispatch(experimentSlice.setGains(illuSources.map(() => gainVal)));
@@ -544,7 +652,8 @@ const ChannelsDimension = () => {
         }}
       >
         <Typography variant="body2" color="textSecondary">
-          {illuSources.length} {illuSources.length === 1 ? "channel" : "channels"} selected
+          {illuSources.length}{" "}
+          {illuSources.length === 1 ? "channel" : "channels"} selected
           <Tooltip
             title={
               "Each channel has two toggles:\n" +
@@ -554,12 +663,20 @@ const ChannelsDimension = () => {
             }
             arrow
           >
-            <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, mb: -0.3, color: "text.disabled", cursor: "help" }} />
+            <InfoOutlinedIcon
+              sx={{
+                fontSize: 14,
+                ml: 0.5,
+                mb: -0.3,
+                color: "text.disabled",
+                cursor: "help",
+              }}
+            />
           </Tooltip>
         </Typography>
 
         <Box sx={{ display: "flex", gap: 1 }}>
-          <Tooltip title="Read current exposure & gain from the detector and apply to all channels">
+          <Tooltip title="Read current exposure & gain from detector and current LED intensities from live view, then apply to all channels">
             <span>
               <Button
                 size="small"
@@ -569,7 +686,7 @@ const ChannelsDimension = () => {
                 onClick={handleStoreCurrentSettings}
                 disabled={illuSources.length === 0}
               >
-                Read and Apply current EXP/GAIN settings
+                Read and Apply current EXP/GAIN/LED settings
               </Button>
             </span>
           </Tooltip>
@@ -608,8 +725,11 @@ const ChannelsDimension = () => {
       ) : (
         illuSources.map((source, idx) => {
           // Get laser state from Redux (updated via WebSocket)
-          const laserData = lasers[source] || { power: intensities[idx] ?? 0, enabled: false };
-          
+          const laserData = lasers[source] || {
+            power: intensities[idx] ?? 0,
+            enabled: false,
+          };
+
           return (
             <ChannelBlock
               key={`channel-${source}-${idx}`}
@@ -628,7 +748,9 @@ const ChannelsDimension = () => {
               onExposureChange={(val) => handleExposureChange(idx, val)}
               onGainChange={(val) => handleGainChange(idx, val)}
               onEnabledChange={(enabled) => handleEnabledChange(idx, enabled)}
-              onIncludeInExperimentChange={(included) => handleIncludeInExperimentChange(idx, included)}
+              onIncludeInExperimentChange={(included) =>
+                handleIncludeInExperimentChange(idx, included)
+              }
             />
           );
         })
@@ -645,7 +767,9 @@ const ChannelsDimension = () => {
         }}
       >
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <SettingsIcon sx={{ mr: 1, fontSize: 18, color: theme.palette.text.secondary }} />
+          <SettingsIcon
+            sx={{ mr: 1, fontSize: 18, color: theme.palette.text.secondary }}
+          />
           <Typography variant="body2">Advanced Settings</Typography>
         </AccordionSummary>
         <AccordionDetails>
@@ -664,15 +788,28 @@ const ChannelsDimension = () => {
                 }
                 arrow
               >
-                <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+                <InfoOutlinedIcon
+                  sx={{
+                    fontSize: 14,
+                    ml: 0.5,
+                    color: "text.disabled",
+                    cursor: "help",
+                  }}
+                />
               </Tooltip>
             </Box>
             <FormControl size="small" fullWidth>
               <Select
                 value={parameterValue.keepIlluminationOn || "auto"}
-                onChange={(e) => dispatch(experimentSlice.setKeepIlluminationOn(e.target.value))}
+                onChange={(e) =>
+                  dispatch(
+                    experimentSlice.setKeepIlluminationOn(e.target.value),
+                  )
+                }
               >
-                <MenuItem value="auto">Auto (single channel → on, multi → per-frame)</MenuItem>
+                <MenuItem value="auto">
+                  Auto (single channel → on, multi → per-frame)
+                </MenuItem>
                 <MenuItem value="on">Always On</MenuItem>
                 <MenuItem value="off">Per-Frame Toggle</MenuItem>
               </Select>

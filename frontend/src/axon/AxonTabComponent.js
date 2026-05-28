@@ -6,9 +6,7 @@ import {
   Typography,
   Box,
 } from "@mui/material";
-import {
-  Videocam as VideocamIcon,
-} from "@mui/icons-material";
+import { Videocam as VideocamIcon } from "@mui/icons-material";
 import LiveViewControlWrapper from "./LiveViewControlWrapper";
 import TileViewComponent from "./TileViewComponent";
 import ZarrTileViewController from "./ZarrTileView";
@@ -59,9 +57,13 @@ const DetectorToggle = () => {
         if (idx >= 0 && idx !== activeTab) {
           dispatch(liveViewSlice.setActiveTab(idx));
         }
-      } catch (_err) { /* ignore */ }
+      } catch (_err) {
+        /* ignore */
+      }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detectors.length]);
 
@@ -79,7 +81,8 @@ const DetectorToggle = () => {
         const protocol = liveStreamState.imageFormat || "jpeg";
         const newDetectorName = detectors[newIdx] || null;
         const savedParams =
-          newDetectorName && liveStreamState.perDetectorSettings?.[newDetectorName];
+          newDetectorName &&
+          liveStreamState.perDetectorSettings?.[newDetectorName];
         const overrideParams =
           savedParams && savedParams.protocol === protocol ? savedParams : null;
         const result = await apiLiveViewControllerStartLiveView(
@@ -104,13 +107,21 @@ const DetectorToggle = () => {
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
       <VideocamIcon fontSize="small" color="action" />
-      <Typography variant="caption" color="text.secondary">Camera:</Typography>
+      <Typography variant="caption" color="text.secondary">
+        Camera:
+      </Typography>
       <ToggleButtonGroup
         value={activeTab}
         exclusive
         onChange={handleSwitch}
         size="small"
-        sx={{ '& .MuiToggleButton-root': { textTransform: 'none', py: 0.25, px: 1.5 } }}
+        sx={{
+          "& .MuiToggleButton-root": {
+            textTransform: "none",
+            py: 0.25,
+            px: 1.5,
+          },
+        }}
       >
         {detectors.map((name, idx) => (
           <ToggleButton key={name} value={idx}>
@@ -129,7 +140,13 @@ const AxonTabComponent = () => {
   return (
     <div style={{ width: "100%" }}>
       {/* PiP toggle button – always visible in the top-right corner */}
-      <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 8px 0 0" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          padding: "2px 8px 0 0",
+        }}
+      >
         <PiPToggleButton
           active={pipVisible}
           onClick={() => setPipVisible((v) => !v)}
@@ -175,11 +192,11 @@ const AxonTabComponent = () => {
             id="2"
             tabNames={[
               "Live View",
-//              "Tile View",
+              //              "Tile View",
               "Points",
               "Parameter",
               "Focus Lock",
-              "Overview Scan"
+              "Overview Scan",
             ]}
           >
             <div>

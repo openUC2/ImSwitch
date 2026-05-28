@@ -100,7 +100,7 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                 <ButtonGroup variant="outlined" size="small" color="primary">
                   <Button
                     variant={currentSlot === 0 ? "contained" : "outlined"}
-                    color={currentSlot === 0 ? "secondary" : "primary"}
+                    color="primary"
                     onClick={() => switchTo(0)}
                     disabled={isSwitching}
                   >
@@ -120,7 +120,7 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
 
                   <Button
                     variant={currentSlot === 1 ? "contained" : "outlined"}
-                    color={currentSlot === 1 ? "secondary" : "primary"}
+                    color="primary"
                     onClick={() => switchTo(1)}
                     disabled={isSwitching}
                   >

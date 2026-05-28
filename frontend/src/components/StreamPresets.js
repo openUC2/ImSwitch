@@ -40,6 +40,7 @@ import {
   Save as SaveIcon,
   Delete as DeleteIcon,
   PlayArrow as ApplyIcon,
+  WbSunny as IlluminationIcon,
 } from "@mui/icons-material";
 
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
@@ -51,15 +52,34 @@ import apiLiveViewControllerSetStreamParameters from "../backendapi/apiLiveViewC
 import apiLiveViewControllerGetStreamParameters from "../backendapi/apiLiveViewControllerGetStreamParameters";
 import apiObjectiveControllerMoveToObjective from "../backendapi/apiObjectiveControllerMoveToObjective";
 
-const STORAGE_KEY = "imswitch.streamPresets.v1";
+const STORAGE_KEY_V1 = "imswitch.streamPresets.v1";
+const STORAGE_KEY = "imswitch.streamPresets.v2";
 
-/** Read presets from localStorage, falling back to an empty list. */
+/** Upgrade a single v1 preset to v2 shape (adds empty illumination block). */
+const migrateV1ToV2 = (p) => ({
+  ...p,
+  illumination: p?.illumination ?? {
+    lasers: [],
+    leds: [],
+    ledMatrix: null,
+  },
+  schemaVersion: 2,
+});
+
+/** Read presets from localStorage, falling back to an empty list. Migrates v1→v2 on read. */
 const readPresets = () => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
+    const rawV2 = localStorage.getItem(STORAGE_KEY);
+    if (rawV2) {
+      const arr = JSON.parse(rawV2);
+      return Array.isArray(arr) ? arr.map(migrateV1ToV2) : [];
+    }
+    // Fall back to v1 if v2 doesn't exist yet — migrate in-memory but don't
+    // write v2 until the user next saves, to avoid surprising side-effects.
+    const rawV1 = localStorage.getItem(STORAGE_KEY_V1);
+    if (!rawV1) return [];
+    const arr = JSON.parse(rawV1);
+    return Array.isArray(arr) ? arr.map(migrateV1ToV2) : [];
   } catch (_e) {
     return [];
   }
@@ -119,17 +139,77 @@ const StreamPresets = () => {
     }
   };
 
+  /**
+   * Fetch current illumination state (lasers + LEDs) so it can be re-applied
+   * when the preset is loaded. Degrades gracefully: any subsystem that is
+   * missing / fails just produces an empty list, the rest is still captured.
+   */
+  const fetchIlluminationState = async () => {
+    const result = { lasers: [], leds: [], ledMatrix: null };
+
+    // --- Lasers ---
+    try {
+      const namesRes = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/LaserController/getLaserNames`,
+      );
+      if (namesRes.ok) {
+        const names = await namesRes.json();
+        if (Array.isArray(names)) {
+          for (const name of names) {
+            const enc = encodeURIComponent(name);
+            let power = null;
+            let enabled = null;
+            try {
+              const v = await fetch(
+                `${hostIP}:${hostPort}/imswitch/api/LaserController/getLaserValue?laserName=${enc}`,
+              );
+              if (v.ok) power = await v.json();
+            } catch (_e) { /* per-laser non-fatal */ }
+            try {
+              const a = await fetch(
+                `${hostIP}:${hostPort}/imswitch/api/LaserController/getLaserActive?laserName=${enc}`,
+              );
+              if (a.ok) enabled = await a.json();
+            } catch (_e) { /* per-laser non-fatal */ }
+            result.lasers.push({ name, power, enabled });
+          }
+        }
+      }
+    } catch (_e) { /* no laser controller — leave lasers empty */ }
+
+    // --- LEDs ---
+    // LEDController only exposes setLEDValue/setLEDActive — there are no value
+    // getters. We still record the LED *names* so handleApply has something to
+    // iterate over, but value/enabled stay null until the user edits the
+    // preset manually.
+    try {
+      const namesRes = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/LEDController/getLEDNames`,
+      );
+      if (namesRes.ok) {
+        const names = await namesRes.json();
+        if (Array.isArray(names)) {
+          result.leds = names.map((name) => ({ name, intensity: null, enabled: null }));
+        }
+      }
+    } catch (_e) { /* no LED controller — leave leds empty */ }
+
+    return result;
+  };
+
   const handleSave = async () => {
     const name = newName.trim();
     if (!name) { setError("Please enter a name for the preset."); return; }
     setError("");
 
     const { exposure, gain } = await fetchExposureGain();
+    const illumination = await fetchIlluminationState();
 
     const newPreset = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       name,
       createdAt: new Date().toISOString(),
+      schemaVersion: 2,
       // Detector
       currentDetector: currentSnapshot.currentDetector,
       // Frontend state snapshot
@@ -142,6 +222,8 @@ const StreamPresets = () => {
       gain,
       // Objective state
       objective: currentSnapshot.objective,
+      // Illumination state (v2)
+      illumination,
     };
 
     setPresets((prev) => [...prev, newPreset]);
@@ -235,12 +317,73 @@ const StreamPresets = () => {
         } catch (_e) { /* non-fatal */ }
       }
 
-      // 5) Re-confirm backend stream params, so the UI labels match reality.
+      // 5) Illumination (lasers + LEDs). Each call is wrapped individually so
+      // one failed device (e.g. safety-interlocked laser) doesn't block the
+      // rest of the preset from applying. Failures are collected and surfaced
+      // as a single warning at the end.
+      const illuErrors = [];
+      const illu = preset.illumination || {};
+      for (const laser of illu.lasers || []) {
+        if (!laser?.name) continue;
+        const enc = encodeURIComponent(laser.name);
+        if (laser.power != null) {
+          try {
+            const r = await fetch(
+              `${hostIP}:${hostPort}/imswitch/api/LaserController/setLaserValue?laserName=${enc}&value=${laser.power}`,
+            );
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          } catch (e) {
+            illuErrors.push(`laser ${laser.name} power: ${e.message || e}`);
+          }
+        }
+        if (laser.enabled != null) {
+          try {
+            const r = await fetch(
+              `${hostIP}:${hostPort}/imswitch/api/LaserController/setLaserActive?laserName=${enc}&active=${laser.enabled}`,
+            );
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          } catch (e) {
+            illuErrors.push(`laser ${laser.name} active: ${e.message || e}`);
+          }
+        }
+      }
+      for (const led of illu.leds || []) {
+        if (!led?.name) continue;
+        const enc = encodeURIComponent(led.name);
+        if (led.intensity != null) {
+          try {
+            const r = await fetch(
+              `${hostIP}:${hostPort}/imswitch/api/LEDController/setLEDValue?ledName=${enc}&value=${led.intensity}`,
+            );
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          } catch (e) {
+            illuErrors.push(`led ${led.name} value: ${e.message || e}`);
+          }
+        }
+        if (led.enabled != null) {
+          try {
+            const r = await fetch(
+              `${hostIP}:${hostPort}/imswitch/api/LEDController/setLEDActive?ledName=${enc}&active=${led.enabled}`,
+            );
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          } catch (e) {
+            illuErrors.push(`led ${led.name} active: ${e.message || e}`);
+          }
+        }
+      }
+
+      // 6) Re-confirm backend stream params, so the UI labels match reality.
       try {
         await apiLiveViewControllerGetStreamParameters();
       } catch (_e) { /* ignore */ }
 
-      setInfo(`Applied preset "${preset.name}".`);
+      if (illuErrors.length > 0) {
+        setError(
+          `Applied preset "${preset.name}", but some illumination devices failed: ${illuErrors.join("; ")}`,
+        );
+      } else {
+        setInfo(`Applied preset "${preset.name}".`);
+      }
     } catch (e) {
       setError(`Failed to apply preset: ${e.message || e}`);
     }
@@ -287,15 +430,26 @@ const StreamPresets = () => {
                 <em>(none saved yet)</em>
               </MenuItem>
             )}
-            {presets.map((p) => (
-              <MenuItem key={p.id} value={p.id}>
-                {p.name}
-                {p.currentDetector ? ` [${p.currentDetector}]` : ""}
-                {p.imageFormat ? ` · ${p.imageFormat}` : ""}
-                {p.objective?.name ? ` — ${p.objective.name}` : ""}
-                {p.exposure != null ? ` — ${p.exposure}ms` : ""}
-              </MenuItem>
-            ))}
+            {presets.map((p) => {
+              const hasIllu =
+                (p.illumination?.lasers || []).some((l) => l?.power != null || l?.enabled) ||
+                (p.illumination?.leds || []).some((l) => l?.intensity != null || l?.enabled);
+              return (
+                <MenuItem key={p.id} value={p.id}>
+                  {p.name}
+                  {p.currentDetector ? ` [${p.currentDetector}]` : ""}
+                  {p.imageFormat ? ` · ${p.imageFormat}` : ""}
+                  {p.objective?.name ? ` — ${p.objective.name}` : ""}
+                  {p.exposure != null ? ` — ${p.exposure}ms` : ""}
+                  {hasIllu && (
+                    <IlluminationIcon
+                      fontSize="inherit"
+                      sx={{ ml: 0.75, verticalAlign: "middle", color: "warning.main" }}
+                    />
+                  )}
+                </MenuItem>
+              );
+            })}
           </Select>
         </FormControl>
         <Tooltip title="Apply the selected preset">
@@ -373,6 +527,13 @@ const StreamPresets = () => {
                 <Chip size="small" label={`Snap: ${currentSnapshot.snapFormat}`} variant="outlined" />
                 <Chip size="small" label={`Rec: ${currentSnapshot.recordFormat}`} variant="outlined" />
                 <Chip size="small" label="exposure + gain (fetched on save)" variant="outlined" />
+                <Chip
+                  size="small"
+                  icon={<IlluminationIcon />}
+                  label="illumination (fetched on save)"
+                  variant="outlined"
+                  color="warning"
+                />
               </Stack>
             </Stack>
           </Box>

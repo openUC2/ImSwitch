@@ -32,6 +32,10 @@ const fetchExperimentControllerGetCurrentExperimentParams = (dispatch) => {
       // Backends predating the LEDMatrix synthetic channels omit this field —
       // the slice falls back to empty (all-default) which the UI tolerates.
       dispatch(parameterRangeSlice.setIlluSourceKinds(data.illuSourceKinds || []));
+      // LED matrix hardware metadata (nLedsX/nLedsY/maxRingRadius) — null
+      // when no LED matrix is configured.  Drives the ring-radius slider
+      // bounds in the Wellplate designer.
+      dispatch(parameterRangeSlice.setLedMatrixInfo(data.ledMatrixInfo || null));
       dispatch(parameterRangeSlice.setIlluSourceMinIntensities(data.illuSourceMinIntensities || [0]));
       dispatch(parameterRangeSlice.setIlluSourceMaxIntensities(data.illuSourceMaxIntensities || [1023]));
       dispatch(parameterRangeSlice.setilluIntensities(data.illuIntensities || [0]));

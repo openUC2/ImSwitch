@@ -40,6 +40,9 @@ import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsS
 import * as laserSlice from "../../state/slices/LaserSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 import fetchLaserControllerCurrentValues from "../../middleware/fetchLaserControllerCurrentValues";
+import apiLEDMatrixControllerSetRing from "../../backendapi/apiLEDMatrixControllerSetRing";
+import apiLEDMatrixControllerSetHalves from "../../backendapi/apiLEDMatrixControllerSetHalves";
+import apiLEDMatrixControllerSetAllLED from "../../backendapi/apiLEDMatrixControllerSetAllLED";
 
 /**
  * Single channel block - collapsible card for each illumination source.
@@ -75,6 +78,7 @@ const ChannelBlock = ({
   kind = "default",
   kindParams = {},
   onKindParamChange = () => {},
+  ringMaxRadius = 3,
 }) => {
   const theme = useTheme();
   const isSynthetic = kind === "ring" || kind === "dpc";
@@ -253,15 +257,18 @@ const ChannelBlock = ({
             </Box>
           )}
 
-          {/* Ring: radius slider on top of RGB triplet */}
+          {/* Ring: radius slider on top of RGB triplet.
+              Max radius comes from backend ledMatrixInfo.maxRingRadius
+              (clamped to the physical matrix size).  For the common 8×8
+              ESP32 matrix this is 3 (rings 0..3). */}
           {kind === "ring" && (
             <Box sx={{ mb: 2 }}>
               <Box sx={{ display: "flex", alignItems: "center", mb: 0.5 }}>
                 <Typography variant="caption" sx={{ fontWeight: 500 }}>
-                  Ring Radius
+                  Ring Radius (0–{ringMaxRadius})
                 </Typography>
                 <Tooltip
-                  title="LED-matrix ring radius in LED units (typically 1-16 depending on matrix size). Larger radius = oblique illumination, smaller = bright-field-ish."
+                  title={`LED-matrix ring radius in LED units (0–${ringMaxRadius}, derived from the physical matrix size). Larger radius = more oblique illumination; r=0 = single centre LED.`}
                   arrow
                 >
                   <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
@@ -269,9 +276,9 @@ const ChannelBlock = ({
               </Box>
               <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
                 <Slider
-                  value={kindParams.radius ?? 8}
-                  min={1}
-                  max={16}
+                  value={Math.min(kindParams.radius ?? Math.min(2, ringMaxRadius), ringMaxRadius)}
+                  min={0}
+                  max={ringMaxRadius}
                   step={1}
                   marks
                   onChange={(e, val) => onKindParamChange("radius", val)}
@@ -281,7 +288,7 @@ const ChannelBlock = ({
                   variant="body2"
                   sx={{ minWidth: "60px", textAlign: "right", fontWeight: 500 }}
                 >
-                  {kindParams.radius ?? 8}
+                  {Math.min(kindParams.radius ?? Math.min(2, ringMaxRadius), ringMaxRadius)}
                 </Typography>
               </Box>
             </Box>
@@ -455,6 +462,14 @@ const ChannelsDimension = () => {
     parameterValue.illuminationParams && typeof parameterValue.illuminationParams === "object"
       ? parameterValue.illuminationParams
       : {};
+  // LED matrix hardware bounds.  Backend exposes maxRingRadius from the
+  // physical matrix size; we fall back to a safe 3 if absent (works for
+  // the common 8×8 matrix).
+  const ledMatrixInfo = parameterRange.ledMatrixInfo || null;
+  const maxRingRadius =
+    ledMatrixInfo && Number.isFinite(ledMatrixInfo.maxRingRadius)
+      ? Math.max(0, Math.floor(ledMatrixInfo.maxRingRadius))
+      : 3;
 
   // Initialize timeout refs and cleanup
   useEffect(() => {
@@ -598,11 +613,68 @@ const ChannelsDimension = () => {
     dispatch(experimentSlice.toggleChannelForExperiment(index));
   };
 
+  // Debounced LED-matrix live-preview firing.
+  // Whenever the user tweaks a radius / RGB slider for a synthetic channel,
+  // push the same pattern to the LED matrix so they can see what their
+  // experiment will look like.  The debounce coalesces the rapid Slider
+  // onChange stream into ~one HTTP request per pause so the ESP32 serial
+  // link doesn't get flooded.
+  const ledMatrixPreviewTimeoutRef = useRef(null);
+  const LED_MATRIX_PREVIEW_DEBOUNCE_MS = 120;
+  const previewLedMatrix = useCallback((kind, params) => {
+    if (ledMatrixPreviewTimeoutRef.current) {
+      clearTimeout(ledMatrixPreviewTimeoutRef.current);
+    }
+    ledMatrixPreviewTimeoutRef.current = setTimeout(async () => {
+      try {
+        if (kind === "ring") {
+          await apiLEDMatrixControllerSetRing({
+            ringRadius: Number(params.radius ?? 2),
+            intensity: Math.max(
+              Number(params.intensityR ?? 0),
+              Number(params.intensityG ?? 0),
+              Number(params.intensityB ?? 0)
+            ),
+            intensity_r: Number(params.intensityR ?? 0),
+            intensity_g: Number(params.intensityG ?? 0),
+            intensity_b: Number(params.intensityB ?? 0),
+          });
+        } else if (kind === "dpc") {
+          // Show just the "top" half as a representative preview — the user
+          // can tell whether RGB looks right from any single direction, and
+          // cycling all four would flash distractingly during slider drags.
+          await apiLEDMatrixControllerSetHalves({
+            intensity: Math.max(
+              Number(params.intensityR ?? 0),
+              Number(params.intensityG ?? 255),
+              Number(params.intensityB ?? 0)
+            ),
+            direction: "top",
+            intensity_r: Number(params.intensityR ?? 0),
+            intensity_g: Number(params.intensityG ?? 255),
+            intensity_b: Number(params.intensityB ?? 0),
+          });
+        }
+      } catch (err) {
+        // setRing / setHalves errors are already logged inside the helper
+        // — swallow here so a flaky preview doesn't break the dialog.
+      }
+    }, LED_MATRIX_PREVIEW_DEBOUNCE_MS);
+  }, []);
+
+  // Cleanup pending LED-matrix preview timeout on unmount.
+  useEffect(() => {
+    return () => {
+      if (ledMatrixPreviewTimeoutRef.current) {
+        clearTimeout(ledMatrixPreviewTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Handler for kind-specific param changes (radius, intensityR/G/B).
-  // Stores the new value under parameterValue.illuminationParams[channelName].
-  // No backend call here — params travel to the backend only when the
-  // experiment is started (apiExperimentControllerStartWellplateExperiment
-  // serialises the whole parameterValue object).
+  // Stores the new value under parameterValue.illuminationParams[channelName]
+  // AND (for synthetic channels) fires a debounced LED-matrix live preview
+  // so the user can see the pattern on the hardware as they tune sliders.
   const handleKindParamChange = useCallback(
     (channelName, key, value) => {
       dispatch(
@@ -611,8 +683,18 @@ const ChannelsDimension = () => {
           params: { [key]: value },
         })
       );
+      // Resolve the channel's kind to pick the right LED-matrix endpoint.
+      const idx = illuSources.indexOf(channelName);
+      const kind = idx >= 0 ? illuSourceKinds[idx] || "default" : "default";
+      if (kind === "ring" || kind === "dpc") {
+        // Merge the new value into the current params for an accurate preview
+        // (the slice update is async — read-after-write on Redux state would
+        // miss this change).
+        const currentParams = illuminationParams[channelName] || {};
+        previewLedMatrix(kind, { ...currentParams, [key]: value });
+      }
     },
-    [dispatch]
+    [dispatch, illuSources, illuSourceKinds, illuminationParams, previewLedMatrix]
   );
 
   // Handler for exposure change
@@ -803,6 +885,7 @@ const ChannelsDimension = () => {
               kind={channelKind}
               kindParams={channelKindParams}
               onKindParamChange={(key, value) => handleKindParamChange(source, key, value)}
+              ringMaxRadius={maxRingRadius}
             />
           );
         })

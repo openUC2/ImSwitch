@@ -150,6 +150,37 @@ class ExperimentController(ImConWidgetController):
         # actual per-frame patterns (radius, RGB) come from
         # parameterValue.illuminationParams[channel_name].
         if self._ledMatrix is not None:
+            # Discover matrix size so the frontend can clamp the ring-radius
+            # slider to physically meaningful values.  Different LED matrix
+            # managers expose dimensions slightly differently, so we probe a
+            # few attribute names and fall back to a conservative 4×4 if all
+            # else fails.
+            _nx = (
+                getattr(self._ledMatrix, "Nx", None)
+                or getattr(self._ledMatrix, "nLedsX", None)
+                or getattr(self._ledMatrix, "Ncols", None)
+                or 4
+            )
+            _ny = (
+                getattr(self._ledMatrix, "Ny", None)
+                or getattr(self._ledMatrix, "nLedsY", None)
+                or getattr(self._ledMatrix, "Nrows", None)
+                or 4
+            )
+            try:
+                _nx = int(_nx)
+                _ny = int(_ny)
+            except (TypeError, ValueError):
+                _nx, _ny = 4, 4
+            # A ring of radius r needs r LEDs from the centre to the edge,
+            # so max usable radius is (min(N) - 1) // 2.  For an 8×8 matrix
+            # this gives 3 (rings at radii 0,1,2,3 → 4 distinct rings).
+            _max_ring_radius = max(0, (min(_nx, _ny) - 1) // 2)
+            self.ExperimentParams.ledMatrixInfo = {
+                "nLedsX": _nx,
+                "nLedsY": _ny,
+                "maxRingRadius": _max_ring_radius,
+            }
             self.ExperimentParams.illuSources.append(self.LED_MATRIX_RING_CHANNEL)
             self.ExperimentParams.illuSourceKinds.append("ring")
             self.ExperimentParams.illuSourceMinIntensities.append(0)
@@ -169,7 +200,8 @@ class ExperimentController(ImConWidgetController):
             # only look at isDPCpossible can still gate features.
             self.ExperimentParams.isDPCpossible = True
             self._logger.info(
-                f"LEDMatrix '{self._ledMatrixName}' detected — exposing synthetic "
+                f"LEDMatrix '{self._ledMatrixName}' detected ({_nx}x{_ny}, "
+                f"maxRingRadius={_max_ring_radius}) — exposing synthetic "
                 f"channels: '{self.LED_MATRIX_RING_CHANNEL}', '{self.LED_MATRIX_DPC_CHANNEL}'."
             )
         '''
@@ -765,6 +797,45 @@ class ExperimentController(ImConWidgetController):
         # doesn't need to None-check.
         illuminationParams = dict(p.illuminationParams or {})
 
+        # Promote RGB max → illuIntensities for synthetic (ring/dpc) channels.
+        # Synthetic channels carry their "intensity" in illuminationParams
+        # (R/G/B 0..255), so illuIntensities[i] is always 0 for them.  The
+        # workflow loop uses `illu_intensity > 0` as the active-channel gate;
+        # without this promotion, synthetic channels are silently treated as
+        # "off" (and worse: collapse passthrough mode below, which then mis-
+        # aligns illuminationKinds vs. the post-passthrough illuSources).  By
+        # writing max(R,G,B) into illuminationIntensities here, the active
+        # gate, n_active_channels, and passthrough detection all see the
+        # synthetic channels as truly active.
+        # Pad illuminationIntensities to match illuSources first so the indexed
+        # update below is safe.
+        if len(illuminationIntensities) < len(illuSources):
+            illuminationIntensities = list(illuminationIntensities) + (
+                [0] * (len(illuSources) - len(illuminationIntensities))
+            )
+        else:
+            illuminationIntensities = list(illuminationIntensities)
+        for _i, (_name, _kind) in enumerate(zip(illuSources, illuminationKinds)):
+            if _kind not in ("ring", "dpc"):
+                continue
+            if illuminationIntensities[_i] and illuminationIntensities[_i] > 0:
+                continue  # frontend (or a prior controller) already supplied it
+            _kp = illuminationParams.get(_name) or {}
+            _rgb_max = max(
+                int(_kp.get("intensityR", 0) or 0),
+                int(_kp.get("intensityG", 0) or 0),
+                int(_kp.get("intensityB", 0) or 0),
+            )
+            if _rgb_max > 0:
+                illuminationIntensities[_i] = _rgb_max
+        # Push back so any subsequent reads of p.* see the promoted values
+        # (passthrough_illumination, n_active_channels, resolve_keep_illumination_on
+        # are all properties that read self.illuIntensities).
+        try:
+            p.illuIntensities = illuminationIntensities
+        except Exception:
+            pass  # pydantic frozen model — fall back to local var only
+
         # LED-matrix synthetic channels are software-controlled per-frame and
         # cannot ride the hardware-trigger fast path.  If any are selected,
         # silently fall back to normal mode so the user gets correct frames
@@ -829,6 +900,13 @@ class ExperimentController(ImConWidgetController):
         if _passthrough_illumination:
             illuSources = [illuSources[0]] if illuSources else ["default"]
             illuminationIntensities = [1]  # sentinel: passes >0 gate; never sent to device
+            # Keep illuminationKinds parallel to the collapsed illuSources –
+            # the rest of the pipeline indexes into kinds by source position,
+            # so a length mismatch here used to make the workflow look up the
+            # wrong kind (e.g. mis-treating a ring source as a default laser).
+            illuminationKinds = [
+                _kind_by_name.get(illuSources[0], "default")
+            ] if illuSources else ["default"]
             gains = [-1]   # set_exposure_time_gain skips when gain < 0
             exposures = [0]  # set_exposure_time_gain skips when exposure_time <= 0
             keepIlluminationOn = True  # never send set_laser_power commands

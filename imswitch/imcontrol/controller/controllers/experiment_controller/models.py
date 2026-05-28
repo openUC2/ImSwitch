@@ -421,6 +421,14 @@ class ExperimentWorkflowParams(BaseModel):
             "on the C++ hardware directly rather than on the Python side."
         ),
     )
+    # Optional LED-matrix hardware metadata used by the Wellplate designer to
+    # clamp slider ranges (max ring radius depends on the physical matrix
+    # size).  Absent / None when no LED matrix is configured.  Shape:
+    #   {"nLedsX": int, "nLedsY": int, "maxRingRadius": int}
+    ledMatrixInfo: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="LED matrix dimensions + derived limits (e.g. maxRingRadius).",
+    )
 
 
 # ---------------------------------------------------------------------------

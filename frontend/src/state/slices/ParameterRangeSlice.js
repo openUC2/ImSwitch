@@ -13,6 +13,11 @@ const initialParameterRangeState = {
     speed: [1,5,10,50,100,500,1000,10000,20000,100000],
     illuSources: [], // Array of illumination sources
     illuSourceKinds: [], // Per-source kind tag parallel to illuSources: "default" | "ring" | "dpc"
+    // LED-matrix hardware metadata.  Populated only when an LED matrix is
+    // configured.  Used to clamp the ring-radius slider in the Wellplate
+    // designer to physically meaningful values.  Shape:
+    //   { nLedsX, nLedsY, maxRingRadius }
+    ledMatrixInfo: null,
     illuSourceMinIntensities: [], // Array of minimum intensities for each illumination source
     illuSourceMaxIntensities: [], // Array of maximum intensities for each illumination source
     illuIntensities: [], // Array of intensities for each illumination source
@@ -93,6 +98,11 @@ const parameterRangeSlice = createSlice({
       setIlluSourceKinds: (state, action) => {
         state.illuSourceKinds = Array.isArray(action.payload) ? action.payload : [];
       },
+      // LED matrix hardware metadata { nLedsX, nLedsY, maxRingRadius }, or null.
+      setLedMatrixInfo: (state, action) => {
+        const p = action.payload;
+        state.ledMatrixInfo = p && typeof p === "object" ? p : null;
+      },
       setIlluSourceMinIntensities: (state, action) => {
         state.illuSourceMinIntensities = Array.isArray(action.payload) ? action.payload : [];
       },
@@ -140,6 +150,7 @@ export const {
     setSpeed, 
     setIlluSources,
     setIlluSourceKinds,
+    setLedMatrixInfo,
     setIlluSourceMinIntensities,
     setIlluSourceMaxIntensities,
     setilluIntensities,

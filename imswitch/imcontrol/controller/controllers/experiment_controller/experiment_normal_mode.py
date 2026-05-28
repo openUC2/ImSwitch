@@ -15,6 +15,16 @@ from imswitch.imcontrol.model.io.ome_writers import write_plate_metadata_sidecar
 from .experiment_mode_base import ExperimentModeBase
 
 
+# Module-level constant so every method in this file can reference the same
+# tuple.  Used by:
+#   - execute_experiment (size-of-channel calc)
+#   - _setup_ome_writers (channel-name expansion)
+#   - _create_tile_workflow_steps (per-position DPC step expansion)
+# Order matters: it's the order frames are acquired and saved per XY
+# position, and the OME channel-name ordering ("DPC_top", "DPC_bottom", ...).
+DPC_SUB_DIRS = ("top", "bottom", "left", "right")
+
+
 class ExperimentNormalMode(ExperimentModeBase):
     """
     Normal mode experiment execution.
@@ -88,10 +98,24 @@ class ExperimentNormalMode(ExperimentModeBase):
         illumination_params = kwargs.get('illumination_params') or {}
         if not illumination_kinds:
             illumination_kinds = ["default"] * len(illumination_sources or [])
+        # Defence-in-depth against array misalignment: build a name→kind dict
+        # so every downstream lookup goes by name, never by index.  Earlier
+        # bugs collapsed illumination_sources without touching the kinds
+        # array, which then mapped a synthetic "LED Matrix Ring" source to
+        # the kind "default" at index 0 and tried to drive it through
+        # set_laser_power (which has no laser by that name).  With this dict
+        # any future asymmetric filtering is harmless.
+        def _kind_for(name: str) -> str:
+            # Prefer explicit mapping from the parallel arrays as supplied;
+            # only fall back to "default" if the source is genuinely unknown.
+            for _n, _k in zip(illumination_sources or [], illumination_kinds or []):
+                if _n == name:
+                    return _k
+            return "default"
         # Effective channel-frame count: ring contributes 1, dpc contributes 4,
         # default contributes 1.  Used to size the OME writer's channel axis
-        # so DPC's four sub-frames all fit.
-        DPC_SUB_DIRS = ("top", "bottom", "left", "right")
+        # so DPC's four sub-frames all fit.  (DPC_SUB_DIRS is the module-level
+        # constant defined at the top of this file.)
         def _effective_frames_for_kind(kind: str) -> int:
             return 4 if kind == "dpc" else 1
         exp_name = kwargs.get('exp_name', 'experiment')
@@ -154,7 +178,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         if keep_illumination_on:
             for illu_index, illu_source in enumerate(illumination_sources):
                 illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
-                illu_kind = illumination_kinds[illu_index] if illu_index < len(illumination_kinds) else "default"
+                illu_kind = _kind_for(illu_source)  # name-based lookup; immune to array misalignment
                 if illu_intensity > 0 and illu_kind == "default":
                     workflow_steps.append(WorkflowStep(
                         name=f"Turn on illumination (continuous): {illu_source}",
@@ -390,18 +414,20 @@ class ExperimentNormalMode(ExperimentModeBase):
             # of generic "Channel_0", which makes the resulting stores
             # immediately readable in napari/Fiji without manual renaming.
             _ints = list(illumination_intensities) if illumination_intensities is not None else []
-            _kinds = list(illumination_kinds or [])
-            if len(_kinds) < len(_ints):
-                _kinds = _kinds + ["default"] * (len(_ints) - len(_kinds))
             _sources_for_naming: List[str] = []
             try:
                 _sources_for_naming = list(getattr(self.controller, '_illuminationSources', []) or [])
             except Exception:
                 _sources_for_naming = []
+            # Look kinds up by source name (defence-in-depth against array
+            # misalignment — the parallel arrays SHOULD match here, but
+            # name-based dispatch keeps us correct even when they don't).
+            _kind_by_name_local = {
+                n: k for n, k in zip(_sources_for_naming or [], list(illumination_kinds or []))
+            }
             n_channels = 0
             channel_names_expanded: List[str] = []
-            DPC_DIRS = ("top", "bottom", "left", "right")
-            for src_idx, (_intensity, _kind) in enumerate(zip(_ints, _kinds)):
+            for src_idx, _intensity in enumerate(_ints):
                 if _intensity is None or _intensity <= 0:
                     continue
                 src_name = (
@@ -409,8 +435,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                     if src_idx < len(_sources_for_naming)
                     else f"Channel_{src_idx}"
                 )
+                _kind = _kind_by_name_local.get(src_name, "default")
                 if _kind == "dpc":
-                    for _d in DPC_DIRS:
+                    for _d in DPC_SUB_DIRS:
                         channel_names_expanded.append(f"DPC_{_d}")
                     n_channels += 4
                 elif _kind == "ring":
@@ -694,11 +721,16 @@ class ExperimentNormalMode(ExperimentModeBase):
                 # the n_channels computed in _setup_ome_writers, otherwise
                 # DPC sub-frames overwrite each other in the Zarr store.
                 effective_channel_index = 0
-                _kinds = illumination_kinds or []
                 _params = illumination_params or {}
+                # Build local name→kind map for this loop.  Looking up by name
+                # rather than parallel-index protects against any upstream
+                # filtering that drops one array but not the other.
+                _local_kind_by_name = {
+                    n: k for n, k in zip(illumination_sources or [], illumination_kinds or [])
+                }
                 for illu_index, illu_source in enumerate(illumination_sources):
                     illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
-                    illu_kind = _kinds[illu_index] if illu_index < len(_kinds) else "default"
+                    illu_kind = _local_kind_by_name.get(illu_source, "default")
                     if illu_intensity <= 0:
                         continue
 
@@ -1007,11 +1039,15 @@ class ExperimentNormalMode(ExperimentModeBase):
         # timepoint so the light stays on between timepoints for speed.
         should_turn_off = (not keep_illumination_on) or is_last_timepoint
         if should_turn_off:
-            _kinds = illumination_kinds or []
+            # Name-based kind lookup (parallel-array indexing was historically
+            # brittle here when passthrough mode collapsed illumination_sources).
+            _local_kind_by_name = {
+                n: k for n, k in zip(illumination_sources or [], illumination_kinds or [])
+            }
             _has_synthetic = False
             for illu_index, illu_source in enumerate(illumination_sources):
                 illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
-                illu_kind = _kinds[illu_index] if illu_index < len(_kinds) else "default"
+                illu_kind = _local_kind_by_name.get(illu_source, "default")
                 if illu_intensity <= 0:
                     continue
 

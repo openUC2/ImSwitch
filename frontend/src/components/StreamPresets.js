@@ -68,7 +68,9 @@ const readPresets = () => {
 const writePresets = (presets) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(presets || []));
-  } catch (_e) { /* quota or disabled — silently ignore */ }
+  } catch (_e) {
+    /* quota or disabled — silently ignore */
+  }
 };
 
 const StreamPresets = () => {
@@ -76,7 +78,9 @@ const StreamPresets = () => {
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
-  const { ip: hostIP, apiPort: hostPort } = useSelector(getConnectionSettingsState);
+  const { ip: hostIP, apiPort: hostPort } = useSelector(
+    getConnectionSettingsState,
+  );
 
   const [presets, setPresets] = useState(readPresets);
   const [saveOpen, setSaveOpen] = useState(false);
@@ -86,21 +90,27 @@ const StreamPresets = () => {
   const [selectedId, setSelectedId] = useState("");
 
   // Keep storage in sync when presets list mutates.
-  useEffect(() => { writePresets(presets); }, [presets]);
+  useEffect(() => {
+    writePresets(presets);
+  }, [presets]);
 
   // Snapshot of "what the user would save right now."
-  const currentSnapshot = useMemo(() => ({
-    currentDetector: liveViewState.detectors?.[liveViewState.activeTab] ?? null,
-    imageFormat: liveStreamState.imageFormat,
-    streamSettings: liveStreamState.streamSettings,
-    snapFormat: liveViewState.snapFormat,
-    recordFormat: liveViewState.recordFormat,
-    objective: {
-      currentObjective: objectiveState.currentObjective,
-      name: objectiveState.objectivName,
-      pixelsize: objectiveState.pixelsize,
-    },
-  }), [liveStreamState, liveViewState, objectiveState]);
+  const currentSnapshot = useMemo(
+    () => ({
+      currentDetector:
+        liveViewState.detectors?.[liveViewState.activeTab] ?? null,
+      imageFormat: liveStreamState.imageFormat,
+      streamSettings: liveStreamState.streamSettings,
+      snapFormat: liveViewState.snapFormat,
+      recordFormat: liveViewState.recordFormat,
+      objective: {
+        currentObjective: objectiveState.currentObjective,
+        name: objectiveState.objectivName,
+        pixelsize: objectiveState.pixelsize,
+      },
+    }),
+    [liveStreamState, liveViewState, objectiveState],
+  );
 
   /** Fetch current exposure/gain from the backend so we can store them too. */
   const fetchExposureGain = async () => {
@@ -121,7 +131,10 @@ const StreamPresets = () => {
 
   const handleSave = async () => {
     const name = newName.trim();
-    if (!name) { setError("Please enter a name for the preset."); return; }
+    if (!name) {
+      setError("Please enter a name for the preset.");
+      return;
+    }
     setError("");
 
     const { exposure, gain } = await fetchExposureGain();
@@ -187,19 +200,25 @@ const StreamPresets = () => {
             await apiLiveViewControllerSetStreamParameters("binary", {
               compression_algorithm: bin.compression?.algorithm,
               compression_level: bin.compression?.level,
-              subsampling_factor: bin.subsampling?.factor ?? bin.subsampling_factor ?? 4,
+              subsampling_factor:
+                bin.subsampling?.factor ?? bin.subsampling_factor ?? 4,
               throttle_ms: bin.throttle_ms ?? 100,
             });
-          } catch (_e) { /* non-fatal */ }
+          } catch (_e) {
+            /* non-fatal */
+          }
         }
         if (jpg?.enabled) {
           try {
             await apiLiveViewControllerSetStreamParameters("jpeg", {
               jpeg_quality: jpg.quality,
-              subsampling_factor: jpg.subsampling?.factor ?? jpg.subsampling_factor ?? 1,
+              subsampling_factor:
+                jpg.subsampling?.factor ?? jpg.subsampling_factor ?? 1,
               throttle_ms: jpg.throttle_ms ?? 100,
             });
-          } catch (_e) { /* non-fatal */ }
+          } catch (_e) {
+            /* non-fatal */
+          }
         }
       }
 
@@ -217,28 +236,43 @@ const StreamPresets = () => {
           await fetch(
             `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorExposureTime?exposureTime=${preset.exposure}`,
           );
-        } catch (_e) { /* non-fatal */ }
+        } catch (_e) {
+          /* non-fatal */
+        }
       }
       if (preset.gain != null) {
         try {
           await fetch(
             `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorGain?gain=${preset.gain}`,
           );
-        } catch (_e) { /* non-fatal */ }
+        } catch (_e) {
+          /* non-fatal */
+        }
       }
 
       // 4) Objective slot
       if (preset.objective?.currentObjective != null) {
         try {
-          await apiObjectiveControllerMoveToObjective(preset.objective.currentObjective, true);
-          dispatch(objectiveSlice.setCurrentObjective(preset.objective.currentObjective));
-        } catch (_e) { /* non-fatal */ }
+          await apiObjectiveControllerMoveToObjective(
+            preset.objective.currentObjective,
+            true,
+          );
+          dispatch(
+            objectiveSlice.setCurrentObjective(
+              preset.objective.currentObjective,
+            ),
+          );
+        } catch (_e) {
+          /* non-fatal */
+        }
       }
 
       // 5) Re-confirm backend stream params, so the UI labels match reality.
       try {
         await apiLiveViewControllerGetStreamParameters();
-      } catch (_e) { /* ignore */ }
+      } catch (_e) {
+        /* ignore */
+      }
 
       setInfo(`Applied preset "${preset.name}".`);
     } catch (e) {
@@ -253,6 +287,7 @@ const StreamPresets = () => {
 
   return (
     <Box
+      component="fieldset"
       sx={{
         border: 1,
         borderColor: "divider",
@@ -261,20 +296,45 @@ const StreamPresets = () => {
         mt: 1,
       }}
     >
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-        <BookmarkIcon fontSize="small" color="action" />
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+      <Box
+        component="legend"
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 0.5,
+          px: 1,
+        }}
+      >
+        <BookmarkIcon fontSize="small" sx={{ color: "text.secondary" }} />
+        <Typography variant="subtitle1" sx={{ fontWeight: "medium" }}>
           Stream Presets
         </Typography>
         <Tooltip title="Frontend-only macros for objective, exposure, gain and livestream parameters">
-          <Chip label={`${presets.length} saved`} size="small" variant="outlined" />
+          <Chip
+            label={`${presets.length} saved`}
+            size="small"
+            variant="outlined"
+          />
         </Tooltip>
-      </Stack>
+      </Box>
 
-      {error && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError("")}>{error}</Alert>}
-      {info && <Alert severity="success" sx={{ mb: 1 }} onClose={() => setInfo("")}>{info}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError("")}>
+          {error}
+        </Alert>
+      )}
+      {info && (
+        <Alert severity="success" sx={{ mb: 1 }} onClose={() => setInfo("")}>
+          {info}
+        </Alert>
+      )}
 
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1, flexWrap: "wrap" }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
+        sx={{ mb: 1, flexWrap: "wrap" }}
+      >
         <FormControl size="small" sx={{ minWidth: 200, flexGrow: 1 }}>
           <InputLabel>Saved preset</InputLabel>
           <Select
@@ -328,51 +388,111 @@ const StreamPresets = () => {
             size="small"
             variant="outlined"
             startIcon={<SaveIcon />}
-            onClick={() => { setNewName(""); setError(""); setSaveOpen(true); }}
+            onClick={() => {
+              setNewName("");
+              setError("");
+              setSaveOpen(true);
+            }}
           >
             Save current
           </Button>
         </Tooltip>
       </Stack>
 
-      <Dialog open={saveOpen} onClose={() => setSaveOpen(false)} fullWidth maxWidth="xs">
+      <Dialog
+        open={saveOpen}
+        onClose={() => setSaveOpen(false)}
+        fullWidth
+        maxWidth="xs"
+      >
         <DialogTitle>Save current settings as preset</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Stored locally in your browser only. The following parameters will be saved:
+            Stored locally in your browser only. The following parameters will
+            be saved:
           </Typography>
           <Box sx={{ mb: 2, p: 1, bgcolor: "action.hover", borderRadius: 1 }}>
             <Stack spacing={0.75}>
               <Stack direction="row" spacing={1} flexWrap="wrap">
-                <Chip size="small" color="primary" variant="outlined" label={`Detector: ${currentSnapshot.currentDetector || "(none)"}`} />
-                <Chip size="small" label={`Protocol: ${currentSnapshot.imageFormat || "?"}`} />
+                <Chip
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                  label={`Detector: ${currentSnapshot.currentDetector || "(none)"}`}
+                />
+                <Chip
+                  size="small"
+                  label={`Protocol: ${currentSnapshot.imageFormat || "?"}`}
+                />
               </Stack>
               {currentSnapshot.streamSettings?.jpeg?.enabled && (
                 <Stack direction="row" spacing={1} flexWrap="wrap">
-                  <Chip size="small" label={`JPEG quality: ${currentSnapshot.streamSettings.jpeg.quality ?? "?"}`} />
-                  <Chip size="small" label={`JPEG subsample: ×${currentSnapshot.streamSettings.jpeg.subsampling?.factor ?? currentSnapshot.streamSettings.jpeg.subsampling_factor ?? "?"}`} />
-                  <Chip size="small" label={`JPEG throttle: ${currentSnapshot.streamSettings.jpeg.throttle_ms ?? "?"}ms`} />
+                  <Chip
+                    size="small"
+                    label={`JPEG quality: ${currentSnapshot.streamSettings.jpeg.quality ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`JPEG subsample: ×${currentSnapshot.streamSettings.jpeg.subsampling?.factor ?? currentSnapshot.streamSettings.jpeg.subsampling_factor ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`JPEG throttle: ${currentSnapshot.streamSettings.jpeg.throttle_ms ?? "?"}ms`}
+                  />
                 </Stack>
               )}
               {currentSnapshot.streamSettings?.binary?.enabled && (
                 <Stack direction="row" spacing={1} flexWrap="wrap">
-                  <Chip size="small" label={`Codec: ${currentSnapshot.streamSettings.binary.compression?.algorithm ?? "?"} L${currentSnapshot.streamSettings.binary.compression?.level ?? "?"}`} />
-                  <Chip size="small" label={`Bin subsample: ×${currentSnapshot.streamSettings.binary.subsampling?.factor ?? "?"}`} />
-                  <Chip size="small" label={`Bin throttle: ${currentSnapshot.streamSettings.binary.throttle_ms ?? "?"}ms`} />
+                  <Chip
+                    size="small"
+                    label={`Codec: ${currentSnapshot.streamSettings.binary.compression?.algorithm ?? "?"} L${currentSnapshot.streamSettings.binary.compression?.level ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`Bin subsample: ×${currentSnapshot.streamSettings.binary.subsampling?.factor ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`Bin throttle: ${currentSnapshot.streamSettings.binary.throttle_ms ?? "?"}ms`}
+                  />
                 </Stack>
               )}
               {currentSnapshot.streamSettings?.webrtc?.enabled && (
                 <Stack direction="row" spacing={1} flexWrap="wrap">
-                  <Chip size="small" label={`WebRTC max-w: ${currentSnapshot.streamSettings.webrtc.max_width ?? "?"}`} />
-                  <Chip size="small" label={`WebRTC subsample: ×${currentSnapshot.streamSettings.webrtc.subsampling_factor ?? "?"}`} />
-                  <Chip size="small" label={`WebRTC throttle: ${currentSnapshot.streamSettings.webrtc.throttle_ms ?? "?"}ms`} />
+                  <Chip
+                    size="small"
+                    label={`WebRTC max-w: ${currentSnapshot.streamSettings.webrtc.max_width ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`WebRTC subsample: ×${currentSnapshot.streamSettings.webrtc.subsampling_factor ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`WebRTC throttle: ${currentSnapshot.streamSettings.webrtc.throttle_ms ?? "?"}ms`}
+                  />
                 </Stack>
               )}
               <Stack direction="row" spacing={1} flexWrap="wrap">
-                <Chip size="small" label={`Objective: ${currentSnapshot.objective?.name || `#${currentSnapshot.objective?.currentObjective ?? "?"}`}`} />
-                <Chip size="small" label={`Snap: ${currentSnapshot.snapFormat}`} variant="outlined" />
-                <Chip size="small" label={`Rec: ${currentSnapshot.recordFormat}`} variant="outlined" />
-                <Chip size="small" label="exposure + gain (fetched on save)" variant="outlined" />
+                <Chip
+                  size="small"
+                  label={`Objective: ${currentSnapshot.objective?.name || `#${currentSnapshot.objective?.currentObjective ?? "?"}`}`}
+                />
+                <Chip
+                  size="small"
+                  label={`Snap: ${currentSnapshot.snapFormat}`}
+                  variant="outlined"
+                />
+                <Chip
+                  size="small"
+                  label={`Rec: ${currentSnapshot.recordFormat}`}
+                  variant="outlined"
+                />
+                <Chip
+                  size="small"
+                  label="exposure + gain (fetched on save)"
+                  variant="outlined"
+                />
               </Stack>
             </Stack>
           </Box>
@@ -384,11 +504,19 @@ const StreamPresets = () => {
             onChange={(e) => setNewName(e.target.value)}
             placeholder="e.g. Overview 4× JPEG"
           />
-          {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+          {error && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {error}
+            </Alert>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSaveOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleSave} disabled={!newName.trim()}>
+          <Button
+            variant="contained"
+            onClick={handleSave}
+            disabled={!newName.trim()}
+          >
             Save
           </Button>
         </DialogActions>

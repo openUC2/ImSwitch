@@ -1447,9 +1447,10 @@ def main():
     parser.add_argument(
         "--pixel-size",
         type=float,
-        default=1.0,
+        default=None,
         metavar="MICRONS",
-        help="Physical pixel size in microns (used by ashlar mode, default: 1.0)",
+        help="Physical pixel size in microns (used by ashlar mode). "
+             "Defaults to the value set during pixel calibration; falls back to 1.0 if not found.",
     )
     parser.add_argument(
         "--maximum-shift",
@@ -1526,40 +1527,15 @@ def main():
         build_timelapse(grid, os.path.join(out_dir, "timelapse_mip"), use_mip=True)
         
     if "ashlar" in modes:
-        # --pixel-size from the CLI takes precedence; fall back to protocol JSON
-        # only when the caller left it at the default (1.0) and a JSON is found.
-        pixel_size = args.pixel_size
+        # Priority: explicit --pixel-size CLI arg > 1.0 fallback
+        cli_pixel_size = args.pixel_size  # None when not supplied by the caller
 
-        json_file = None
-        for search_dir in [tiles_dir, os.path.dirname(tiles_dir)]:
-            try:
-                for f in os.listdir(search_dir):
-                    if f.endswith("_protocol.json"):
-                        json_file = os.path.join(search_dir, f)
-                        break
-            except OSError:
-                pass
-            if json_file:
-                break
-
-        if json_file:
-            print(f"Found protocol JSON file: {json_file}")
-            try:
-                with open(json_file, "r") as f:
-                    protocolDict = json.load(f)
-                json_pixel_size = next(
-                    (step["post_params"]["pixel_size"]
-                     for step in protocolDict.get("workflow_steps", [])
-                     if "pixel_size" in step.get("post_params", {})),
-                    None,
-                )
-                if json_pixel_size is not None and pixel_size == 1.0:
-                    pixel_size = json_pixel_size
-                    print(f"Using pixel size from protocol JSON: {pixel_size} µm")
-            except Exception as exc:
-                print(f"  WARNING: Could not read pixel size from protocol JSON: {exc}")
+        if cli_pixel_size is not None:
+            pixel_size = cli_pixel_size
+            print(f"  Using pixel size from --pixel-size flag: {pixel_size} µm")
         else:
-            print(f"  No protocol JSON found — using pixel size from --pixel-size: {pixel_size} µm")
+            pixel_size = 1.0
+            print(f"  WARNING: pixel size not supplied via --pixel-size; defaulting to {pixel_size} µm")
 
         build_ashlar_stitched(
             grid,

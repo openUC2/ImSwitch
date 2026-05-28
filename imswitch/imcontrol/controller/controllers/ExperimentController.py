@@ -216,7 +216,28 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="GET")
     def getHardwareParameters(self):
+        try:
+            det_px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+            self.ExperimentParams.pixel_size_um = float(det_px[1]) if len(det_px) > 1 else 1.0
+        except Exception:
+            pass
         return self.ExperimentParams
+
+    @APIExport(requestType="GET")
+    def getDetectorPixelSize(self) -> dict:
+        """Return the calibrated pixel size (µm/px) for the primary acquisition detector.
+
+        PixelCalibrationController injects the per-objective value from
+        PixelCalibration.affineCalibrations into the detector at startup and
+        whenever the objective changes, so this always reflects the current
+        calibration.
+        """
+        try:
+            px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+            value = float(px[1]) if len(px) > 1 else 1.0
+        except Exception:
+            value = 1.0
+        return {"pixel_size_um": value}
 
     # ------------------------------------------------------------------
     # Wellplate / labware endpoints
@@ -1717,9 +1738,25 @@ class ExperimentController(ImConWidgetController):
                 "status": self._overview_async_status,
             }
 
+        # Resolve pixel size: when the UI still shows the default (1.0) read the
+        # calibrated value that PixelCalibrationController pushed into the detector
+        # from PixelCalibration.affineCalibrations in the ImSwitchConfig file.
+        resolved_pixel_size = pixelSize
+        if pixelSize == 1.0:
+            try:
+                det_px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+                cal_px = float(det_px[1]) if len(det_px) > 1 else 1.0
+                if cal_px > 0 and cal_px != 1.0:
+                    resolved_pixel_size = cal_px
+                    self._logger.info(
+                        f"Ashlar: using calibrated pixel size from detector: {cal_px:.4f} µm/px"
+                    )
+            except Exception as exc:
+                self._logger.warning(f"Could not read detector pixel size: {exc}")
+
         thread = threading.Thread(
             target=self._runAshlarStitchingWorker,
-            args=(target_dir, pixelSize, maximumShift, alignChannel),
+            args=(target_dir, resolved_pixel_size, maximumShift, alignChannel),
             daemon=True,
             name="runAshlarStitching",
         )
@@ -1764,9 +1801,9 @@ class ExperimentController(ImConWidgetController):
             sys.executable, script,
             target_dir,
             "--mode", "ashlar",
-            "--pixel-size", str(pixelSize),
             "--maximum-shift", str(maximumShift),
             "--align-channel", str(alignChannel),
+            "--pixel-size", str(pixelSize),
         ]
         self._logger.info(f"Ashlar command: {' '.join(cmd)}")
 
@@ -3495,7 +3532,6 @@ class ExperimentController(ImConWidgetController):
                 "task": task_name,
                 "result": None,
                 "error": None,
-                "message": "",
             }
             self._overview_async_thread = None
             return True

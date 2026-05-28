@@ -1371,7 +1371,6 @@ def build_ashlar_stitched(
 
     if not files_written:
         print("  ERROR: No output files were written by ashlar.")
-        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

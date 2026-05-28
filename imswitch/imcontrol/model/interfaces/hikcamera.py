@@ -407,26 +407,28 @@ class CameraHIK:
             info = pInfo.contents
             w, h   = info.nWidth, info.nHeight
             nSize  = info.nFrameLen
-            pix    = info.enPixelType
+            pix    = int(info.enPixelType)
             fid    = info.nFrameNum
             ts     = self._hw_timestamp(info)        # ← fixed
+            src_buf = (c_ubyte * nSize).from_address(addressof(pData.contents))
 
             if not getattr(self, '_pix_logged', False):
                 self.__logger.info(f"First frame pixel type: {pix}  w={w} h={h}")
                 self._pix_logged = True
 
+            frame = None
+
             # build NumPy view over the SDK buffer (zero-copy)
             # For >8-bit unpacked mono formats, each pixel is 2 bytes (uint16)
             if pix in _MONO_HIGHBIT_FORMATS:
                 buf = np.frombuffer(
-                    (c_ubyte * nSize).from_address(addressof(pData.contents)),
+                    src_buf,
                     dtype=np.uint16
                 )
+                frame = buf.reshape(h, w)
             elif pix in _MONO_PACKED_FORMATS:
                 nDst = w * h * 2
                 dst  = (c_ubyte * nDst)()
-
-                src_buf = (c_ubyte * nSize).from_address(addressof(pData.contents))
 
                 conv = MV_CC_PIXEL_CONVERT_PARAM()
                 memset(byref(conv), 0, sizeof(conv))
@@ -434,7 +436,7 @@ class CameraHIK:
                 conv.nHeight        = h
                 conv.enSrcPixelType = pix
                 conv.enDstPixelType = PixelType_Gvsp_Mono16
-                conv.pSrcData       = src_buf          # ← was pData, now correct ctypes array
+                conv.pSrcData       = src_buf
                 conv.nSrcDataLen    = nSize
                 conv.pDstBuffer     = dst
                 conv.nDstBufferSize = nDst
@@ -529,7 +531,7 @@ class CameraHIK:
                 conv.nHeight        = h
                 conv.enSrcPixelType = pix
                 conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
-                conv.pSrcData       = pData
+                conv.pSrcData       = src_buf
                 conv.nSrcDataLen    = nSize
                 conv.pDstBuffer     = dst
                 conv.nDstBufferSize = nRGB

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useSelector } from "react-redux";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
+import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import {
   Dialog,
   DialogTitle,
@@ -21,20 +22,27 @@ import WizardStep4 from "./wizard-steps/WizardStep4";
 import WizardStep5 from "./wizard-steps/WizardStep5";
 import WizardStep6 from "./wizard-steps/WizardStep6";
 
-const steps = [
-  "Setup Instructions",
-  "Calibrate Slot 1 (X0)",
-  "Calibrate Slot 2 (X1)",
-  "Calibrate Focus Z0",
-  "Calibrate Focus Z1",
-  "Complete"
-];
-
 const ObjectiveCalibrationWizard = ({ open, onClose }) => {
   // Get connection settings from Redux
   const connectionSettings = useSelector(getConnectionSettingsState);
   const hostIP = connectionSettings.ip;
   const hostPort = connectionSettings.apiPort;
+
+  // Check whether slot 1 is configured to filter out slot-1 steps
+  const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+  const slot1Configured = objectiveState.slotConfigured?.[1] ?? true;
+
+  // Build the step list dynamically so we skip slot-1 steps in single-objective mode
+  const stepDefs = [
+    { label: "Setup Instructions",    Component: WizardStep1 },
+    { label: "Calibrate Slot 1 (X0)", Component: WizardStep2 },
+    ...(slot1Configured ? [{ label: "Calibrate Slot 2 (X1)", Component: WizardStep3 }] : []),
+    { label: "Calibrate Focus Z0",    Component: WizardStep4 },
+    ...(slot1Configured ? [{ label: "Calibrate Focus Z1",    Component: WizardStep5 }] : []),
+    { label: "Complete",              Component: WizardStep6 },
+  ];
+  const steps = stepDefs.map((d) => d.label);
+
   const [activeStep, setActiveStep] = useState(0);
   const theme = useTheme();
   const fullScreen = useMediaQuery(theme.breakpoints.down('md'));
@@ -57,6 +65,9 @@ const ObjectiveCalibrationWizard = ({ open, onClose }) => {
   };
 
   const getStepContent = (step) => {
+    const def = stepDefs[step];
+    if (!def) return null;
+    const { Component } = def;
     const commonProps = {
       hostIP,
       hostPort,
@@ -65,23 +76,8 @@ const ObjectiveCalibrationWizard = ({ open, onClose }) => {
       activeStep,
       totalSteps: steps.length,
     };
-
-    switch (step) {
-      case 0:
-        return <WizardStep1 {...commonProps} />;
-      case 1:
-        return <WizardStep2 {...commonProps} />;
-      case 2:
-        return <WizardStep3 {...commonProps} />;
-      case 3:
-        return <WizardStep4 {...commonProps} />;
-      case 4:
-        return <WizardStep5 {...commonProps} />;
-      case 5:
-        return <WizardStep6 {...commonProps} onComplete={handleClose} />;
-      default:
-        return <WizardStep1 {...commonProps} />;
-    }
+    const extra = step === stepDefs.length - 1 ? { onComplete: handleClose } : {};
+    return <Component {...commonProps} {...extra} />;
   };
 
   return (

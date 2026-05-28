@@ -840,7 +840,7 @@ class AutofocusController(ImConWidgetController):
 
         self.__logger.info("Live monitoring thread stopped")
 
-    def grabCameraFrame(self, frameSync: int = 2, returnFrameNumber: bool = False):
+    def grabCameraFrame(self, frameSync: int = 1, returnFrameNumber: bool = False):
         # ensure we get a fresh frame
         timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
         cTime = time.time()
@@ -850,6 +850,7 @@ class AutofocusController(ImConWidgetController):
         while(1):
             # get frame and frame number to get one that is newer than the one with illumination off eventually
             mFrame, currentFrameNumber = self.camera.getLatestFrame(returnFrameNumber=True)
+            self.__logger.debug(f"Grabbed frame with frame number: {currentFrameNumber}, last frame number: {lastFrameNumber}")
             if lastFrameNumber==-1:
                 # first round
                 lastFrameNumber = currentFrameNumber

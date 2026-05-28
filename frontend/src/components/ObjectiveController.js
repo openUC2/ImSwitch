@@ -41,6 +41,7 @@ const ExtendedObjectiveController = () => {
   const detectors = objectiveState.detectors;
   const manualZ0 = objectiveState.manualZ0;
   const manualZ1 = objectiveState.manualZ1;
+  const slot1Configured = objectiveState.slotConfigured?.[1] ?? true;
 
   // Local state for wizard
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -234,7 +235,14 @@ const ExtendedObjectiveController = () => {
 
           {/* Per-slot metadata cards */}
           <Grid container spacing={2} sx={{ mt: 1 }}>
-            {[0, 1].map((slot) => (
+            {!slot1Configured && (
+              <Grid item xs={12}>
+                <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                  Only one objective configured — slot 1 controls are hidden.
+                </Typography>
+              </Grid>
+            )}
+            {[0, 1].filter((slot) => slot === 0 || slot1Configured).map((slot) => (
               <Grid item xs={12} md={6} key={slot}>
                 <Box sx={{ border: "1px solid #ddd", borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle2" gutterBottom>
@@ -588,6 +596,7 @@ const ExtendedObjectiveController = () => {
               </Box>
             </Grid>
             {/* X1 */}
+            {slot1Configured && (
             <Grid item xs={12} md={6} lg={3}>
               <Box
                 sx={{ border: "1px solid #eee", borderRadius: 2, p: 2, mb: 2 }}
@@ -645,6 +654,7 @@ const ExtendedObjectiveController = () => {
                 </Button>
               </Box>
             </Grid>
+            )}
             {/* Z0 */}
             <Grid item xs={12} md={6} lg={3}>
               <Box
@@ -687,6 +697,7 @@ const ExtendedObjectiveController = () => {
               </Box>
             </Grid>
             {/* Z1 */}
+            {slot1Configured && (
             <Grid item xs={12} md={6} lg={3}>
               <Box
                 sx={{ border: "1px solid #eee", borderRadius: 2, p: 2, mb: 2 }}
@@ -727,6 +738,7 @@ const ExtendedObjectiveController = () => {
                 </Button>
               </Box>
             </Grid>
+            )}
           </Grid>
         </Grid>
       </Grid>

@@ -7,6 +7,7 @@ import PixelCalibrationTab from "./FRAMESettings/PixelCalibrationTab";
 import ManualPixelCalibrationTab from "./FRAMESettings/ManualPixelCalibrationTab";
 import ExtendedObjectiveController from "./ObjectiveController";
 import StageOffsetCalibrationTab from "./FRAMESettings/StageOffsetCalibrationTab";
+import OpticalFlowTab from "./FRAMESettings/OpticalFlowTab";
 import { selectHasController } from "../state/slices/BackendCapabilitiesSlice";
 
 /**
@@ -53,6 +54,7 @@ const FRAMESettings = () => {
           <Tab value="objective" label="Objective Controller" />
         )}
         <Tab value="stageOffset" label="Stage Offset Calibration" />
+        <Tab value="opticalFlow" label="Optical Flow Alignment" />
       </Tabs>
 
       <Box sx={{ mt: 2 }}>
@@ -64,6 +66,7 @@ const FRAMESettings = () => {
           <ExtendedObjectiveController />
         )}
         {selectedTab === "stageOffset" && <StageOffsetCalibrationTab />}
+        {selectedTab === "opticalFlow" && <OpticalFlowTab />}
       </Box>
     </Box>
   );

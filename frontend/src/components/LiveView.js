@@ -563,7 +563,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
               variant="caption"
               sx={{ color: "text.secondary", fontWeight: 600 }}
             >
-              Detector Select:
+              Detectors:
             </Typography>
             <ButtonGroup
               variant="outlined"

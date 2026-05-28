@@ -28,6 +28,10 @@ const fetchExperimentControllerGetCurrentExperimentParams = (dispatch) => {
 
       // New code to handle additional data fields
       dispatch(parameterRangeSlice.setIlluSources(data.illuSources || []));
+      // Per-source kind tag (parallel to illuSources): "default" | "ring" | "dpc".
+      // Backends predating the LEDMatrix synthetic channels omit this field —
+      // the slice falls back to empty (all-default) which the UI tolerates.
+      dispatch(parameterRangeSlice.setIlluSourceKinds(data.illuSourceKinds || []));
       dispatch(parameterRangeSlice.setIlluSourceMinIntensities(data.illuSourceMinIntensities || [0]));
       dispatch(parameterRangeSlice.setIlluSourceMaxIntensities(data.illuSourceMaxIntensities || [1023]));
       dispatch(parameterRangeSlice.setilluIntensities(data.illuIntensities || [0]));

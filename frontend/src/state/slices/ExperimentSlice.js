@@ -95,6 +95,12 @@ const initialExperimentState = {
     is_snakescan: false,  // Enable snakescan pattern (alternating row directions)
     // Illumination mode
     keepIlluminationOn: "auto",  // "auto" = on for single channel, off for multi | "on" = always keep on | "off" = per-frame toggle
+    // Per-channel kind-specific params (radius/RGB) keyed by channel name.
+    // Drives LED-matrix synthetic channels ("ring" / "dpc"); ignored for
+    // "default" channels.  Example shape:
+    //   { "LED Matrix Ring": { radius: 8, intensityR: 0, intensityG: 255, intensityB: 0 },
+    //     "LED Matrix DPC":  { intensityR: 0, intensityG: 255, intensityB: 0 } }
+    illuminationParams: {},
   },
 };
 
@@ -315,6 +321,25 @@ const experimentSlice = createSlice({
       console.log("setKeepIlluminationOn", action.payload);
       state.parameterValue.keepIlluminationOn = action.payload;
     },
+    // Wholesale replace the per-channel kind-specific params dict.  Used
+    // when hydrating from a preset or resetting the whole channel config.
+    setIlluminationParams: (state, action) => {
+      console.log("setIlluminationParams", action.payload);
+      state.parameterValue.illuminationParams =
+        action.payload && typeof action.payload === "object" ? action.payload : {};
+    },
+    // Merge a single channel's params dict.  Payload shape:
+    //   { channelName: "LED Matrix Ring", params: { radius: 8, intensityG: 255 } }
+    // Missing keys are preserved (partial updates), set value to undefined to remove a key.
+    setIlluminationParamsForChannel: (state, action) => {
+      const { channelName, params } = action.payload || {};
+      if (!channelName || !params || typeof params !== "object") return;
+      const current = state.parameterValue.illuminationParams || {};
+      state.parameterValue.illuminationParams = {
+        ...current,
+        [channelName]: { ...(current[channelName] || {}), ...params },
+      };
+    },
     //------------------------ points
     createPoint: (state, action) => {
       console.log("createPoint", action);
@@ -508,6 +533,8 @@ export const {
   setOverlapHeight,
   setIsSnakescan,
   setKeepIlluminationOn,
+  setIlluminationParams,
+  setIlluminationParamsForChannel,
   createPoint,
   addPoint,
   appendPoints,

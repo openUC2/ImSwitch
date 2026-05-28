@@ -12,6 +12,7 @@ const initialParameterRangeState = {
     zStackStepSize: { min: 0.1, max: 10 },
     speed: [1,5,10,50,100,500,1000,10000,20000,100000],
     illuSources: [], // Array of illumination sources
+    illuSourceKinds: [], // Per-source kind tag parallel to illuSources: "default" | "ring" | "dpc"
     illuSourceMinIntensities: [], // Array of minimum intensities for each illumination source
     illuSourceMaxIntensities: [], // Array of maximum intensities for each illumination source
     illuIntensities: [], // Array of intensities for each illumination source
@@ -19,7 +20,7 @@ const initialParameterRangeState = {
     gains: [], // Array of gain values for each illumination source
     isDPCpossible: false, // Boolean indicating if DPC is possible
     isDarkfieldpossible: false, // Boolean indicating if dark field is possible
-    performanceMode: false 
+    performanceMode: false
 };
 
 // Create slice
@@ -86,6 +87,12 @@ const parameterRangeSlice = createSlice({
         // (illuSources.map(...) breaks otherwise).
         state.illuSources = Array.isArray(action.payload) ? action.payload : [];
       },
+      // Per-source kind tag parallel to illuSources.  Empty array → all
+      // sources treated as "default" (legacy backends that don't ship this
+      // field still work).
+      setIlluSourceKinds: (state, action) => {
+        state.illuSourceKinds = Array.isArray(action.payload) ? action.payload : [];
+      },
       setIlluSourceMinIntensities: (state, action) => {
         state.illuSourceMinIntensities = Array.isArray(action.payload) ? action.payload : [];
       },
@@ -132,6 +139,7 @@ export const {
     setZStackStepSizeMax,
     setSpeed, 
     setIlluSources,
+    setIlluSourceKinds,
     setIlluSourceMinIntensities,
     setIlluSourceMaxIntensities,
     setilluIntensities,

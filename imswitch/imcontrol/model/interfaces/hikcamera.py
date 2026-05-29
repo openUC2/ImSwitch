@@ -115,6 +115,10 @@ class CameraHIK:
         self.lastFrameId = -1
         self.frameNumber = -1
         self.g_bExit = False
+        # Linux SDK holds the handle lock during callbacks, so MV_CC_ConvertPixelType
+        # returns MV_E_HANDLE (0x80000000) when called from within the callback thread.
+        # After the first failure we skip the SDK path and go straight to OpenCV.
+        self._sdk_convert_works = (platform == "darwin")
 
         self._open_camera(self.cameraNo)
 
@@ -456,40 +460,44 @@ class CameraHIK:
                         PixelType_Gvsp_BayerBG8,
                         PixelType_Gvsp_BayerGB8,
                         PixelType_Gvsp_BayerGR8):
-                nRGB = w * h * 3
-                dst  = (c_ubyte * nRGB)()
-                conv = MV_CC_PIXEL_CONVERT_PARAM()
-                memset(byref(conv), 0, sizeof(conv))
-                conv.nWidth         = w
-                conv.nHeight        = h
-                conv.enSrcPixelType = pix
-                conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
-                conv.pSrcData       = pData
-                conv.nSrcDataLen    = nSize
-                conv.pDstBuffer     = dst
-                conv.nDstBufferSize = nRGB
-                ret = self.camera.MV_CC_ConvertPixelType(conv)
-                if ret != 0:
-                    self.__logger.error(
-                        f"[DIAG] Bayer→RGB convert FAILED: pix=0x{pix:x} ret=0x{ret:x} "
-                        f"w={w} h={h} nSize={nSize} nRGB={nRGB}"
-                    )
-                    # Fallback: numpy demosaic
-                    import cv2
-                    bayer_map = {
-                        PixelType_Gvsp_BayerRG8: cv2.COLOR_BayerRG2RGB,
-                        PixelType_Gvsp_BayerBG8: cv2.COLOR_BayerBG2RGB,
-                        PixelType_Gvsp_BayerGB8: cv2.COLOR_BayerGB2RGB,
-                        PixelType_Gvsp_BayerGR8: cv2.COLOR_BayerGR2RGB,
-                    }
+                import cv2
+                bayer_map = {
+                    PixelType_Gvsp_BayerRG8: cv2.COLOR_BayerRG2RGB,
+                    PixelType_Gvsp_BayerBG8: cv2.COLOR_BayerBG2RGB,
+                    PixelType_Gvsp_BayerGB8: cv2.COLOR_BayerGB2RGB,
+                    PixelType_Gvsp_BayerGR8: cv2.COLOR_BayerGR2RGB,
+                }
+                sdk_ok = False
+                if self._sdk_convert_works:
+                    nRGB = w * h * 3
+                    dst  = (c_ubyte * nRGB)()
+                    conv = MV_CC_PIXEL_CONVERT_PARAM()
+                    memset(byref(conv), 0, sizeof(conv))
+                    conv.nWidth         = w
+                    conv.nHeight        = h
+                    conv.enSrcPixelType = pix
+                    conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
+                    conv.pSrcData       = pData
+                    conv.nSrcDataLen    = nSize
+                    conv.pDstBuffer     = dst
+                    conv.nDstBufferSize = nRGB
+                    ret = self.camera.MV_CC_ConvertPixelType(conv)
+                    if ret == 0:
+                        sdk_ok = True
+                        buf   = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
+                        frame = buf.reshape(h, w, 3)
+                    else:
+                        self.__logger.warning(
+                            f"MV_CC_ConvertPixelType returned 0x{ret:x} — "
+                            "disabling SDK Bayer conversion, using OpenCV for all future frames"
+                        )
+                        self._sdk_convert_works = False
+                if not sdk_ok:
                     raw = np.frombuffer(
                         (c_ubyte * nSize).from_address(addressof(pData.contents)),
                         dtype=np.uint8
                     ).reshape(h, w)
                     frame = cv2.cvtColor(raw, bayer_map[pix])
-                else:
-                    buf   = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
-                    frame = buf.reshape(h, w, 3)
 
             else:
                 buf = np.frombuffer(
@@ -507,26 +515,10 @@ class CameraHIK:
                         PixelType_Gvsp_BayerBG8,
                         PixelType_Gvsp_BayerGB8,
                         PixelType_Gvsp_BayerGR8):
-                # convert to RGB for non-packed types
-                if pix != PixelType_Gvsp_RGB8_Packed:
-                    nRGB = w * h * 3
-                    dst  = (c_ubyte * nRGB)()
-                    conv = MV_CC_PIXEL_CONVERT_PARAM()
-                    memset(byref(conv), 0, sizeof(conv))
-                    conv.nWidth         = w
-                    conv.nHeight        = h
-                    conv.enSrcPixelType = pix
-                    conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
-                    conv.pSrcData       = pData
-                    conv.nSrcDataLen    = nSize
-                    conv.pDstBuffer     = dst
-                    conv.nDstBufferSize = nRGB
-                    ret = self.camera.MV_CC_ConvertPixelType(conv)
-                    if ret != 0:
-                        self.__logger.error(f"Pixel convert failed 0x{ret:x}")
-                        return
-                    buf   = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
-                frame = buf.reshape(h, w, 3)
+                if pix == PixelType_Gvsp_RGB8_Packed:
+                    frame = buf.reshape(h, w, 3)
+                # else: Bayer frame was already converted to RGB in the block above
+                # (via SDK or OpenCV fallback) — reuse that result directly
             elif pix in (PixelType_Gvsp_YUV422_YUYV_Packed,
                         PixelType_Gvsp_YUV422_Packed,
                         PixelType_Gvsp_YUV444_Packed,

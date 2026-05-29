@@ -47,7 +47,7 @@ uv pip install psygnal --no-binary :all:
 cd ~
 git clone https://github.com/openuc2/UC2-REST
 cd UC2-REST
-uv pip install .
+uv pip install . -e
 
 # Download ImSwitch configurations (yes, this is a janky way of getting configurations)
 cd ~

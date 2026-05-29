@@ -2202,6 +2202,127 @@ class UC2ConfigController(ImConWidgetController):
             self.__logger.error(f"Failed to probe device state: {e}")
             return {"status": "error", "message": str(e)}
 
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def testDeviceAction(
+        self,
+        port: str = "",
+        device_type: str = "motor",
+        baud: int = 115200,
+        timeout: float = 2.0,
+        # Motor params
+        stepperid: int = 1,
+        speed: int = 2000,
+        position: int = 1000,
+        isabs: int = 0,
+        # LED array params
+        r: int = 25,
+        g: int = 25,
+        b: int = 25,
+        led_action: str = "fill",
+        # Laser params
+        laserid: int = 1,
+        laserval: int = 118,
+    ):
+        """
+        Send a device-specific validation/test command directly over serial.
+
+        Used after USB flashing + CAN address assignment to verify that the slave
+        firmware is actually functioning (motor moves, LEDs light up, laser turns on).
+
+        Parameters:
+          port: serial port device path (e.g. "/dev/ttyACM0").
+          device_type: one of "motor", "ledarray", "laser".
+          baud: serial baudrate (default 115200, can be overridden).
+          timeout: serial read timeout in seconds.
+          stepperid, speed, position, isabs: motor parameters (device_type="motor").
+          r, g, b, led_action: LED array parameters (device_type="ledarray").
+          laserid, laserval: laser parameters (device_type="laser").
+        """
+        import json as _json
+        import serial as _serial
+
+        if not port:
+            return {"status": "error", "message": "No serial port specified"}
+
+        dt = (device_type or "").lower().strip()
+        if dt == "motor":
+            cmd_obj = {
+                "task": "/motor_act",
+                "motor": {
+                    "steppers": [{
+                        "stepperid": int(stepperid),
+                        "speed": int(speed),
+                        "position": int(position),
+                        "isabs": int(isabs),
+                    }]
+                },
+                "qid": 5,
+            }
+        elif dt in ("ledarray", "led", "ledarr"):
+            cmd_obj = {
+                "task": "/ledarr_act",
+                "qid": 17,
+                "led": {
+                    "action": led_action or "fill",
+                    "r": int(r),
+                    "g": int(g),
+                    "b": int(b),
+                },
+            }
+        elif dt == "laser":
+            cmd_obj = {
+                "task": "/laser_act",
+                "LASERid": int(laserid),
+                "LASERval": int(laserval),
+                "qid": 1,
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Unknown device_type '{device_type}'. Use 'motor', 'ledarray', or 'laser'.",
+            }
+
+        cmd = _json.dumps(cmd_obj)
+        self.__logger.info(f"Test device action ({dt}) on {port} @ {baud} baud: {cmd}")
+
+        try:
+            with _serial.Serial(port, int(baud), timeout=float(timeout)) as ser:
+                ser.reset_input_buffer()
+                ser.write((cmd + "\n").encode("utf-8"))
+                ser.flush()
+                time.sleep(0.3)
+                response = ""
+                deadline = time.time() + float(timeout)
+                while time.time() < deadline:
+                    if ser.in_waiting:
+                        response += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                        time.sleep(0.05)
+                    else:
+                        if response:
+                            break
+                        time.sleep(0.1)
+
+            response_stripped = response.strip()
+            self.__logger.info(f"Test device response ({dt}): {response_stripped[:300]}")
+
+            # Heuristic success check: look for a JSON-ish status:ok or absence of error markers
+            ok = True
+            lower_resp = response_stripped.lower()
+            if "0xffffffff" in lower_resp or "invalid header" in lower_resp:
+                ok = False
+            if '"status":"error"' in lower_resp.replace(" ", ""):
+                ok = False
+
+            return {
+                "status": "success" if ok else "warning",
+                "device_type": dt,
+                "command": cmd_obj,
+                "response": response_stripped[:1000],
+            }
+        except Exception as e:
+            self.__logger.error(f"Failed to send test action ({dt}): {e}")
+            return {"status": "error", "message": str(e)}
+
     # Digital Input/Output API Methods
     @APIExport(runOnUIThread=False)
     def getDigitalIn(self, digitalinid=1, timeout=1, is_blocking=True):

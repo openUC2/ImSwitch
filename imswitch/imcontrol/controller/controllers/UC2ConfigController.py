@@ -2037,8 +2037,8 @@ class UC2ConfigController(ImConWidgetController):
 
         if not port:
             return {"status": "error", "message": "No serial port specified"}
-
-        cmd = _json.dumps({"task": "/can_act", "address": int(address)})
+        # new command {"task":"/can_act","nodeId":10,"canMotorAxis":1, "address":10}
+        cmd = _json.dumps({"task": "/can_act", "address": int(address), "nodeId": int(address), "canMotorAxis": int(1)})
         self.__logger.info(f"Sending CAN address {address} to {port} @ {baud} baud")
         self._emit_usb_flash_status("flashing", 92, f"Assigning CAN address {address}...")
 

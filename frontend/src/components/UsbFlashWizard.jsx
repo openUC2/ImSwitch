@@ -1048,7 +1048,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
             </FormControl>
 
             <Alert severity="info" sx={{ mt: 2 }}>
-              Will send <code>{`{"task":"/can_act","address":${usbFlashState.canAddress}}`}</code> to{" "}
+              Will send <code>{`{"task":"/can_act","address":${usbFlashState.canAddress}, "nodeId":${usbFlashState.canAddress}, "canMotorAxis":1}}`}</code> to{" "}
               {usbFlashState.selectedPort || usbFlashState.flashResult?.port || "auto-detected port"}
             </Alert>
           </Box>

@@ -7,6 +7,11 @@ Basler, ASI, Prior, Thorlabs, Coherent, etc.) alongside the existing
 ESP32/UC2-REST managers.
 
 
+## todo
+- automatically install mmcore install
+- ensure pymmcore is running int he same uv 
+- install drivers manually (SDK on windows)
+
 ## STEP 0 — Reconnaissance (do this FIRST, before writing any code)
 
 Run these commands and summarize what you find. Paste the summary as a

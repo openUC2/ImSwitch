@@ -280,8 +280,8 @@ class MMCoreDetectorManager(DetectorManager):
     # Parameter / binning / lifecycle
     # ------------------------------------------------------------------
     def setParameter(self, name, value):
-        if name == "Exposure":
-            try:
+        if name == "Exposure" or name == "exposure": # TODO: should be lower vs upper case 
+            try: # TODO
                 self._core.setExposure(float(value))
             except Exception:
                 self._logger.error(f"Failed to set exposure to {value}", exc_info=True)
@@ -293,6 +293,7 @@ class MMCoreDetectorManager(DetectorManager):
                     f"Failed to set MMCore property {name}={value}", exc_info=True
                 )
         return super().setParameter(name, value)
+
 
     def setBinning(self, binning: int) -> None:
         try:

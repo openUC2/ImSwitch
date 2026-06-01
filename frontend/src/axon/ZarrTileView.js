@@ -3,17 +3,15 @@
 // Example of handling invalid Zarr URL and disabling double-click zoom
 
 import React, { useEffect, useState } from "react";
-import { useDispatch, useSelector } from "react-redux";
+import { useSelector } from "react-redux";
 import DeckGL from "@deck.gl/react";
 import { OrthographicView, OrthographicController } from "@deck.gl/core";
 import { MultiscaleImageLayer } from "@hms-dbmi/viv";
 import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
-import { log } from "deck.gl";
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice.js";
 
 const   ZarrTileViewController = () => {
   // reference Redux state
-  const dispatch = useDispatch();
   const omeZarrState = useSelector(omeZarrSlice.getOmeZarrState);
   const [fullURL, setfullURL] = useState("");
 

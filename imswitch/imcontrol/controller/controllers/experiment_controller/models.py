@@ -190,6 +190,10 @@ class ParameterValue(BaseModel):
     ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
     ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
     ome_write_individual_tiffs: bool = Field(False, description="Whether to write individual TIFF files per frame")
+    ome_write_ashlar_stitch: bool = Field(False, description="Whether to run Ashlar stitching after acquisition")
+    ashlar_pixel_size: float = Field(1.0, description="Pixel size for Ashlar stitching (µm/px)")
+    ashlar_maximum_shift: float = Field(50.0, description="Maximum shift for Ashlar tile alignment (µm)")
+    ashlar_align_channel: int = Field(0, description="Channel index used for Ashlar tile alignment")
     ome_write_single_tiff: bool = Field(
         False,
         description="Whether to write a single OME-TIFF (auto-enabled for single-tile scans)",

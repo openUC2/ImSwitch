@@ -252,6 +252,7 @@ class ExperimentController(ImConWidgetController):
             "result": None,
             "error": None,
         }
+        self._ashlar_proc = None  # subprocess.Popen handle for the running ashlar process
         # Overview camera is resolved through the DetectorManager, using the
         # detector name configured in setup (experiment.overviewCameraName).
         # Falls back to a detector literally named "overviewcamera" if any.
@@ -1140,6 +1141,30 @@ class ExperimentController(ImConWidgetController):
 
             # Start the workflow
             self.workflow_manager.start_workflow(wf, context)
+
+            # Auto-trigger Ashlar stitching once the workflow thread finishes,
+            # guaranteeing all individual TIFFs are on disk before stitching starts.
+            if p.ome_write_ashlar_stitch:
+                _wf_thread = self.workflow_manager.current_thread
+                _pixel_size = getattr(p, 'ashlar_pixel_size', 1.0)
+                _max_shift = getattr(p, 'ashlar_maximum_shift', 50.0)
+                _align_ch = getattr(p, 'ashlar_align_channel', 0)
+                _exp_dir = dirPath
+
+                def _auto_stitch():
+                    if _wf_thread is not None:
+                        _wf_thread.join()
+                    self._logger.info("Experiment complete — auto-starting Ashlar stitching")
+                    self.runAshlarStitching(
+                        pixelSize=_pixel_size,
+                        maximumShift=_max_shift,
+                        alignChannel=_align_ch,
+                        experimentDir=_exp_dir,
+                    )
+
+                threading.Thread(
+                    target=_auto_stitch, daemon=True, name="AshlarAutoTrigger"
+                ).start()
 
         return {"status": "running"}
 
@@ -2066,6 +2091,8 @@ class ExperimentController(ImConWidgetController):
                 stderr=subprocess.STDOUT,
                 text=True,
             )
+            with self._overview_async_lock:
+                self._ashlar_proc = proc
 
             stderr_lines: list[str] = []
 
@@ -2093,6 +2120,8 @@ class ExperimentController(ImConWidgetController):
                 time.sleep(1)
 
             reader_thread.join(timeout=10)
+            with self._overview_async_lock:
+                self._ashlar_proc = None
             rc = proc.returncode
 
             if rc == 0:
@@ -3801,6 +3830,18 @@ class ExperimentController(ImConWidgetController):
         """Return the current background-overview-task state for polling."""
         with self._overview_async_lock:
             return dict(self._overview_async_status)
+
+    @APIExport(requestType="GET")
+    def stopAshlarStitching(self) -> dict:
+        """Kill the running Ashlar stitching subprocess, if any."""
+        with self._overview_async_lock:
+            proc = self._ashlar_proc
+        if proc is None or proc.poll() is not None:
+            return {"stopped": False, "message": "No stitching process is running"}
+        proc.kill()
+        self._logger.info("Ashlar stitching process killed by user request")
+        self._finishOverviewAsync(error="Stitching stopped by user")
+        return {"stopped": True}
 
     # ------------------------------------------------------------------
     # Known calibration reference points per layout

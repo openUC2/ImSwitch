@@ -89,8 +89,14 @@ const   ZarrTileViewController = () => {
         id="scan"
         loader={{ type: "zarr", url: fullURL }}
         onMetadata={(meta) => {
-          // English comment: shape is typically [t, c, z, y, x] but we only need y,x
-          const [y, x] = meta.data.shape.slice(-2);
+          // shape is typically [t, c, z, y, x]; RGB stores add a trailing
+          // samples axis -> [t, c, z, y, x, 3]. Pick y,x accordingly so the
+          // view isn't sized off the 3-sample axis.
+          const shape = meta.data.shape;
+          const [y, x] =
+            shape.length >= 3 && shape[shape.length - 1] === 3
+              ? shape.slice(-3, -1)
+              : shape.slice(-2);
           setDims({ w: x, h: y });
         }}
         pickable={false}

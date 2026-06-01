@@ -1526,9 +1526,11 @@ class ExperimentController(ImConWidgetController):
             self._logger.debug("No image found in metadata!")
             return
 
-        # RGB cameras produce (H, W, 3) arrays; convert to grayscale so the
-        # OME canvas (which has no colour axis) can accept the tile.
-        if img.ndim == 3 and img.shape[2] == 3:
+        # Colour (RGB) detectors deliver (H, W, 3) arrays. Preserve the colour
+        # for RGB cameras (the OME writer now carries a trailing samples axis);
+        # only collapse to grayscale for non-RGB detectors that nonetheless
+        # hand us a 3-channel frame.
+        if img.ndim == 3 and img.shape[2] == 3 and not getattr(self, 'isRGB', False):
             img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype)
 
         # Get tile index to identify the correct OME writer
@@ -2353,7 +2355,8 @@ class ExperimentController(ImConWidgetController):
             grid_shape=grid_shape,
             grid_geometry=grid_geometry,
             config=writer_config,
-            logger=self._logger
+            logger=self._logger,
+            isRGB=getattr(self, 'isRGB', False),
         )
 
         # ------------------------------------------------------------- main loop

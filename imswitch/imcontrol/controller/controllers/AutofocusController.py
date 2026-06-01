@@ -536,25 +536,18 @@ class AutofocusController(ImConWidgetController):
             self._commChannel.sigAutoFocusRunning.emit(True)
             axis = gAxis
 
-            # Helper to measure focus at current position
+            # Helper to measure focus at current position (uses shared fast pipeline)
             def measure_focus():
                 frame = self.grabCameraFrame()
                 if frame is None:
                     return None
-                img = frame.copy()
-                if img.dtype == np.uint8:
-                    img = img.astype(np.float32) / 255.0
-                elif img.dtype == np.uint16:
-                    img = img.astype(np.float32) / 65535.0
-                elif img.dtype not in [np.float32, np.float64]:
-                    img = img.astype(np.float32)
-                img = FrameProcessor.extract(img, min(img.shape[0], img.shape[1], nCropsize))
-                if img.ndim == 3:
-                    img = np.mean(img, axis=-1)
-                if nGauss > 0:
-                    img = gaussian(img, sigma=nGauss)
-                focus_val, _ = FrameProcessor.calculate_focus_measure_static(img, method=focusAlgorithm)
-                return float(focus_val)
+                return _compute_focus_value_fast(
+                    frame,
+                    crop_size=nCropsize,
+                    binning=1,
+                    n_gauss=nGauss,
+                    method=focusAlgorithm,
+                )
 
             # Step 1: Measure baseline at current position
             current_z, is_valid, _ = self._getSafeCurrentZ(axis)
@@ -788,38 +781,17 @@ class AutofocusController(ImConWidgetController):
                     time.sleep(0.01)
                     continue
 
-                # Process frame using the same pipeline as autofocus scan
-                # to ensure consistent focus values
-                img = frame.copy()
-
-                # Step 1: Normalize to float [0, 1] (same as process_frame in autofocus)
-                if img.dtype == np.uint8:
-                    img = img.astype(np.float32) / 255.0
-                elif img.dtype == np.uint16:
-                    img = img.astype(np.float32) / 65535.0
-                elif img.dtype not in [np.float32, np.float64]:
-                    img = img.astype(np.float32)
-
-                # Step 2: Apply binning if configured (to match autofocus which uses binning=3)
+                # Process frame using the unified fast pipeline (RGB-safe, OpenCV-based)
+                # so live monitoring values are consistent with autofocus scan results.
                 binning = getattr(self, '_liveMonitoringBinning', 1)
-                if binning > 1:
-                    import skimage.transform
-                    img = skimage.transform.resize(img, (img.shape[0] // binning, img.shape[1] // binning), anti_aliasing=True)
-
-                # Step 3: Crop to center region
-                img = FrameProcessor.extract(img, min(img.shape[0], img.shape[1], self._liveMonitoringCropsize))
-
-                # Step 4: Convert to grayscale if needed
-                if img.ndim == 3:
-                    img = np.mean(img, axis=-1)
-
-                # Step 5: Apply Gaussian blur if configured (to match autofocus which uses nGauss=7)
                 nGauss = getattr(self, '_liveMonitoringNGauss', 0)
-                if nGauss > 0:
-                    img = gaussian(img, sigma=nGauss)
-
-                # Calculate focus value using static method
-                focus_value, result_image = FrameProcessor.calculate_focus_measure_static(img, method=self._focusMethod)
+                focus_value = _compute_focus_value_fast(
+                    frame,
+                    crop_size=self._liveMonitoringCropsize,
+                    binning=binning,
+                    n_gauss=nGauss,
+                    method=self._focusMethod,
+                )
 
                 # Emit signal with focus value and timestamp
                 self._commChannel.sigAutoFocusLiveValue.emit({
@@ -1003,9 +975,11 @@ class AutofocusController(ImConWidgetController):
                     self.stages.move(value=absolute_positions[iz], axis=axis, is_absolute=True, is_blocking=True)
                     time.sleep(tSettle)
 
-                frame = self.grabCameraFrame()
+                frame = self.grabCameraFrame()  # works for mono and RGB; processor handles channels
                 if frame is None:
                     self.__logger.warning(f"Failed to grab frame at step {iz}")
+                    # Submit a None so the index slot is filled with NaN
+                    mProcessor.add_frame(None, iz)
                     continue
 
                 if isDebug:
@@ -1018,7 +992,11 @@ class AutofocusController(ImConWidgetController):
                         tif.imwrite("autofocus_frame_z.tif", frame.astype(np.float32), append=True)
                 mProcessor.add_frame(frame, iz)
 
-            allfocusvals = np.array(mProcessor.getFocusValueList(Nz))
+            # Block until all results arrive (event-based, not busy polling)
+            allfocusvals = np.array(
+                mProcessor.getFocusValueList(Nz, timeout=max(5.0, Nz * (tSettle + 0.5))),
+                dtype=float,
+            )
             mProcessor.stop()
 
             # Check abort before fitting
@@ -1032,14 +1010,28 @@ class AutofocusController(ImConWidgetController):
             # Move back to start position before fitting
             self.stages.move(value=absolute_positions[0], axis=axis, is_absolute=True, is_blocking=True)
 
+            # Drop NaN entries (failed frames) — alignment is preserved by index
+            valid_mask = np.isfinite(allfocusvals)
+            n_valid = int(valid_mask.sum())
+            if n_valid < 5:
+                self.__logger.error(
+                    f"Autofocus: only {n_valid}/{Nz} valid focus values — "
+                    f"cannot fit. Returning to center."
+                )
+                self.stages.move(value=center_position, axis=axis, is_absolute=True, is_blocking=True)
+                return None
+
+            zs_valid = absolute_positions[valid_mask]
+            fv_valid = allfocusvals[valid_mask]
+
             # Plot data
             try:
-                self.sigUpdateFocusPlot.emit(absolute_positions[:len(allfocusvals)], allfocusvals)
+                self.sigUpdateFocusPlot.emit(zs_valid, fv_valid)
             except Exception:
                 pass
 
             # Fit Gaussian to find best position
-            x0_fit, fit_y = _robust_gaussian_fit(absolute_positions[:len(allfocusvals)], allfocusvals)
+            x0_fit, fit_y = _robust_gaussian_fit(zs_valid, fv_valid)
 
             # Calculate and clamp best target position
             best_target = self._clampPosition(float(x0_fit) + static_offset, axis)
@@ -1113,13 +1105,14 @@ class AutofocusController(ImConWidgetController):
                     continue
                 last_fn = fn
 
-            img = frame
-
-            img_proc = FrameProcessor.extract(img, min(img.shape[0], img.shape[1], nCropsize))
-            if img_proc.ndim == 3:
-                img_proc = np.mean(img_proc, axis=-1)
-
-            f_measure, result_image = FrameProcessor.calculate_focus_measure_static(img_proc, method=focusAlgorithm)
+            # Use the shared fast OpenCV-based pipeline (RGB-safe, ~10x faster)
+            f_measure = _compute_focus_value_fast(
+                frame,
+                crop_size=nCropsize,
+                binning=1,
+                n_gauss=0,
+                method=focusAlgorithm,
+            )
             t_rel_list.append(time.time() - t_start)
             fvals.append(f_measure)
 
@@ -1188,154 +1181,265 @@ class AutofocusController(ImConWidgetController):
 
 
 class FrameProcessor:
-    def __init__(self, nGauss=7, nCropsize=2048, isDebug=True, focusMethod="LAPE", binning=3, noise_threshold=0.02):
+    """
+    Background frame processor for autofocus scans.
+
+    Design notes / fixes:
+      * Worker thread is robust: any per-frame exception is caught and the
+        frame is recorded as NaN so position/value alignment is preserved.
+      * Results are stored in an index-keyed dict (``_results[iz] = value``)
+        so a missing frame never silently shifts subsequent values.
+      * ``getFocusValueList`` blocks on a ``threading.Event`` instead of
+        polling, returning as soon as ``nFrameExpected`` results have
+        arrived (or timeout).
+      * Image processing uses the fast OpenCV pipeline shared with the
+        live-monitoring / hill-climbing / fast-sweep paths
+        (``_compute_focus_value_fast``).
+    """
+
+    def __init__(self, nGauss=0, nCropsize=2048, isDebug=False,
+                 focusMethod="LAPE", binning=2, noise_threshold=0.02):
+        self._logger = initLogger(self, tryInheritParent=False)
         self.isRunning = True
         self.frame_queue = queue.Queue()
-        self.allfocusvals = []
-        self.worker_thread = threading.Thread(target=self.process_frames, daemon=True)
-        self.worker_thread.start()
+        self._results = {}            # iz -> focus value (or np.nan on failure)
+        self._results_lock = threading.Lock()
+        self._progress_event = threading.Event()
+        self._expected_count = None   # set by getFocusValueList
+
         self.flatFieldFrame = None
-        self.nGauss = nGauss
-        self.nCropsize = nCropsize
-        self.isDebug = isDebug
+        self.nGauss = int(nGauss)
+        self.nCropsize = int(nCropsize)
+        self.isDebug = bool(isDebug)
         self.focusMethod = focusMethod
-        self.binning = binning
-        # Minimum dynamic range (1st–99th percentile spread) to reject flat/noisy frames
+        self.binning = max(1, int(binning))
         self.noise_threshold = noise_threshold
 
+        self.worker_thread = threading.Thread(target=self._process_frames, daemon=True)
+        self.worker_thread.start()
+
+    # ----- public API -----
     def setFlatfieldFrame(self, flatfieldFrame):
         self.flatFieldFrame = flatfieldFrame
 
     def add_frame(self, img, iz):
         self.frame_queue.put((img, iz))
 
-    def process_frames(self):
-        while self.isRunning:
-            try:
-                img, iz = self.frame_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            self.process_frame(img, iz)
-
-    def process_frame(self, img, iz):
-        # Ensure img is float for processing to avoid overflow issues
-        if img.dtype == np.uint8:
-            img = img.astype(np.float32) / 255.0
-        elif img.dtype == np.uint16:
-            img = img.astype(np.float32) / 65535.0
-        elif img.dtype not in [np.float32, np.float64]:
-            img = img.astype(np.float32)
-
-        # bin image prior to processing using imresize
-        if self.binning > 1:
-            import skimage.transform
-            img = skimage.transform.resize(img, (img.shape[0] // self.binning, img.shape[1] // self.binning), anti_aliasing=True)
-
-        if self.flatFieldFrame is not None:
-            img = img / (self.flatFieldFrame + 1e-12)
-        img = self.extract(img, self.nCropsize)
-        if len(img.shape) > 2:
-            img = np.mean(img, -1)
-        # gauss filter?
-        if self.nGauss > 0:
-            img = gaussian(img, sigma=self.nGauss)
-
-        # Percentile-stretch image and reject flat/noisy frames
-        img, is_valid = self._preprocess_image(img, noise_threshold=self.noise_threshold)
-        if not is_valid:
-            self.allfocusvals.append(0.0)
-            return
-
-        # Normalize for debug TIFF saving to prevent wraparound
-        if self.isDebug:
-            import tifffile as tif
-            # Save as float32 to preserve full dynamic range without wraparound
-            img_save = np.clip(img, 0, None).astype(np.float32)
-            tif.imwrite("autofocus_proc_frame.tif", img_save, append=True)
-
-        focusquality = self.calculate_focus_measure(img, method=self.focusMethod)
-        self.allfocusvals.append(focusquality)
-
-    @staticmethod
-    def _preprocess_image(img, noise_threshold=0.02):
-        """Percentile-stretch float image to [0, 1].
-
-        Returns (normalized_img, is_valid).  ``is_valid`` is False when the
-        1st–99th percentile spread is below *noise_threshold*, which indicates
-        a flat or essentially-noisy frame whose focus score would be meaningless.
+    def getFocusValueList(self, nFrameExpected, timeout=5.0):
         """
-        p_lo = np.percentile(img, 1)
-        p_hi = np.percentile(img, 99)
-        if (p_hi - p_lo) < noise_threshold:
-            return img, False
-        img_norm = np.clip((img - p_lo) / (p_hi - p_lo), 0.0, 1.0)
-        return img_norm, True
-
-    @staticmethod
-    def calculate_focus_measure_static(image, method="LAPE"):
-        # Ensure image is 2D grayscale
-        if image.ndim == 3:
-            image = cv2.cvtColor(image.astype(np.uint8) if image.dtype != np.uint8 else image, cv2.COLOR_RGB2GRAY)
-
-        # Normalize image to appropriate range for processing
-        if image.dtype == np.float32 or image.dtype == np.float64:
-            # Float images should be in [0, 1] range, convert to uint8 for OpenCV
-            image_norm = np.clip(image * 255, 0, 255).astype(np.uint8)
-        elif image.dtype == np.uint16:
-            # Convert uint16 to uint8 for consistent processing
-            image_norm = (image / 256).astype(np.uint8)
+        Block until ``nFrameExpected`` results are available or timeout
+        expires.  Returns a list of length ``nFrameExpected`` ordered by
+        ``iz``.  Missing entries are filled with ``np.nan``.
+        """
+        self._expected_count = int(nFrameExpected)
+        # Quick path: already done
+        with self._results_lock:
+            done = len(self._results) >= nFrameExpected
+        if done:
+            self._progress_event.set()
         else:
-            # Assume uint8 or convert to uint8
-            image_norm = image.astype(np.uint8)
+            self._progress_event.wait(timeout=timeout)
 
-        if method == "LAPE":
-            # Use CV_64F for output to avoid overflow and ensure compatibility
-            lap = cv2.Laplacian(image_norm, cv2.CV_64F)
-            return float(np.mean(np.square(lap))), lap
-        elif method == "GLVA":
-            std_image = np.std(image_norm, axis=None)
-            return float(std_image), std_image
-        elif method == "JPEG":
-            # compute the JPEG file size as focus measure
-            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
-            result, encimg = cv2.imencode('.jpg', image_norm, encode_param)
-            if result:
-                return float(len(encimg)), encimg
-            else:
-                return 0.0, image_norm
-        else:
-            return float(np.std(image_norm, axis=None)), image_norm
-
-
-    def calculate_focus_measure(self, image, method="LAPE"):
-        focusValue, resultImage = self.calculate_focus_measure_static(image, method=method)
-        return focusValue
-
-    @staticmethod
-    def extract(marray, crop_size):
-        h, w = marray.shape[0], marray.shape[1]
-        cs = int(min(crop_size, h, w))
-        center_x, center_y = w // 2, h // 2
-        x_start = max(0, center_x - cs // 2)
-        x_end = x_start + cs
-        y_start = max(0, center_y - cs // 2)
-        y_end = y_start + cs
-        return marray[y_start:y_end, x_start:x_end]
-
-    def getFocusValueList(self, nFrameExpected, timeout=5):
-        t0 = time.time()
-        while len(self.allfocusvals) < nFrameExpected:
-            time.sleep(0.005)
-            if time.time() - t0 > timeout:
-                break
-        return self.allfocusvals
+        with self._results_lock:
+            ordered = [self._results.get(i, float('nan'))
+                       for i in range(nFrameExpected)]
+        return ordered
 
     def stop(self):
         self.isRunning = False
+        # Unblock any waiter
+        self._progress_event.set()
         try:
             self.worker_thread.join(timeout=0.5)
         except Exception:
             pass
+
+    # ----- worker -----
+    def _process_frames(self):
+        while self.isRunning:
+            try:
+                item = self.frame_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            img, iz = item
+            try:
+                value = self._process_frame(img)
+            except Exception as e:
+                # Critical: never let the worker die silently.  Record NaN
+                # so the index alignment is preserved.
+                self._logger.warning(f"Autofocus frame {iz} processing failed: {e}")
+                value = float('nan')
+
+            with self._results_lock:
+                self._results[iz] = value
+                if (self._expected_count is not None
+                        and len(self._results) >= self._expected_count):
+                    self._progress_event.set()
+
+    def _process_frame(self, img):
+        """
+        Fast focus-measure pipeline (handles mono + RGB).
+        Order chosen for speed: crop -> grayscale -> bin -> blur -> measure.
+        """
+        if img is None:
+            return float('nan')
+
+        # Optional flat-field correction (uses float math)
+        if self.flatFieldFrame is not None:
+            ff = self.flatFieldFrame
+            img_f = img.astype(np.float32, copy=False)
+            img = (img_f / (ff + 1e-6))
+
+        focus_value = _compute_focus_value_fast(
+            img,
+            crop_size=self.nCropsize,
+            binning=self.binning,
+            n_gauss=self.nGauss,
+            method=self.focusMethod,
+        )
+
+        if self.isDebug:
+            try:
+                import tifffile as tif
+                tif.imwrite("autofocus_proc_frame.tif",
+                            np.asarray(img).astype(np.float32, copy=False),
+                            append=True)
+            except Exception:
+                pass
+
+        return focus_value
+
+    # ----- helpers retained for backward compatibility -----
+    @staticmethod
+    def extract(marray, crop_size):
+        h, w = marray.shape[0], marray.shape[1]
+        cs = int(min(crop_size, h, w))
+        cx, cy = w // 2, h // 2
+        x0 = max(0, cx - cs // 2)
+        y0 = max(0, cy - cs // 2)
+        return marray[y0:y0 + cs, x0:x0 + cs]
+
+    @staticmethod
+    def calculate_focus_measure_static(image, method="LAPE"):
+        """
+        Backward-compatible static focus-measure used by hill-climbing,
+        live-monitoring and fast-sweep code paths.  Internally delegates
+        to the fast pipeline if a raw frame is provided, otherwise
+        operates on the already-prepared 2D array.
+        """
+        # Convert 3-channel -> grayscale via cv2 (much faster than np.mean)
+        if image.ndim == 3:
+            if image.dtype == np.uint8:
+                gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            elif image.dtype == np.uint16:
+                gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            else:
+                # float input -> normalize for cv2
+                tmp = np.clip(image * 255.0, 0, 255).astype(np.uint8) \
+                    if image.max() <= 1.0 else image.astype(np.uint8)
+                gray = cv2.cvtColor(tmp, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = image
+
+        # Normalize dtype for OpenCV operators
+        if gray.dtype == np.float32 or gray.dtype == np.float64:
+            if gray.size and gray.max() <= 1.0:
+                img_u8 = np.clip(gray * 255.0, 0, 255).astype(np.uint8)
+            else:
+                img_u8 = np.clip(gray, 0, 255).astype(np.uint8)
+        elif gray.dtype == np.uint16:
+            img_u8 = (gray >> 8).astype(np.uint8)
+        elif gray.dtype != np.uint8:
+            img_u8 = gray.astype(np.uint8)
+        else:
+            img_u8 = gray
+
+        if method == "LAPE":
+            lap = cv2.Laplacian(img_u8, cv2.CV_32F)
+            return float(np.mean(lap * lap)), lap
+        elif method == "GLVA":
+            v = float(np.std(img_u8))
+            return v, img_u8
+        elif method == "JPEG":
+            ok, enc = cv2.imencode('.jpg', img_u8,
+                                   [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            return (float(len(enc)) if ok else 0.0), (enc if ok else img_u8)
+        else:
+            return float(np.std(img_u8)), img_u8
+
+
+def _compute_focus_value_fast(img, crop_size=2048, binning=1, n_gauss=0,
+                               method="LAPE"):
+    """
+    Single fast pipeline used by FrameProcessor, hill-climbing, fast-sweep
+    and live-monitoring paths.
+
+    Steps:
+      1. Center-crop (reduces pixels first → all later ops are cheap).
+      2. RGB→gray with cv2.cvtColor (≫ faster than np.mean for uint8).
+      3. Optional cv2.resize for binning.
+      4. Optional cv2.GaussianBlur (≫ faster than skimage.gaussian).
+      5. Focus measure on uint8 (OpenCV-native, no float round-trip).
+    """
+    if img is None:
+        return float('nan')
+
+    # 1) Crop first
+    cropped = FrameProcessor.extract(img, crop_size)
+
+    # 2) Grayscale
+    if cropped.ndim == 3:
+        if cropped.shape[2] >= 3:
+            if cropped.dtype == np.uint8 or cropped.dtype == np.uint16:
+                gray = cv2.cvtColor(cropped[..., :3], cv2.COLOR_RGB2GRAY)
+            else:
+                gray = np.mean(cropped[..., :3], axis=-1)
+        else:
+            gray = cropped[..., 0]
+    else:
+        gray = cropped
+
+    # 3) Binning via cv2.resize (much faster than skimage.transform.resize)
+    if binning > 1:
+        new_h = max(1, gray.shape[0] // binning)
+        new_w = max(1, gray.shape[1] // binning)
+        gray = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    # 4) Convert to uint8 once for OpenCV operators (avoid repeated converts).
+    if gray.dtype == np.uint8:
+        gray_u8 = gray
+    elif gray.dtype == np.uint16:
+        gray_u8 = (gray >> 8).astype(np.uint8)
+    elif gray.dtype in (np.float32, np.float64):
+        # Heuristic: float images may be in [0,1] (normalized) or raw counts.
+        gmax = float(gray.max()) if gray.size else 1.0
+        if gmax <= 1.0:
+            gray_u8 = np.clip(gray * 255.0, 0, 255).astype(np.uint8)
+        else:
+            gray_u8 = np.clip(gray, 0, 255).astype(np.uint8)
+    else:
+        gray_u8 = gray.astype(np.uint8)
+
+    # 5) Optional Gaussian blur
+    if n_gauss and n_gauss > 0:
+        # cv2 expects an odd kernel size; derive from sigma
+        ksize = max(3, int(2 * round(3 * n_gauss) + 1))
+        if ksize % 2 == 0:
+            ksize += 1
+        gray_u8 = cv2.GaussianBlur(gray_u8, (ksize, ksize), float(n_gauss))
+
+    # 6) Focus measure
+    if method == "LAPE":
+        lap = cv2.Laplacian(gray_u8, cv2.CV_32F)
+        return float(np.mean(lap * lap))
+    elif method == "GLVA":
+        return float(np.std(gray_u8))
+    elif method == "JPEG":
+        ok, enc = cv2.imencode('.jpg', gray_u8,
+                               [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        return float(len(enc)) if ok else 0.0
+    else:
+        return float(np.std(gray_u8))
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

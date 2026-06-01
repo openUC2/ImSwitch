@@ -280,18 +280,48 @@ class MMCoreDetectorManager(DetectorManager):
     # Parameter / binning / lifecycle
     # ------------------------------------------------------------------
     def setParameter(self, name, value):
-        if name == "Exposure" or name == "exposure": # TODO: should be lower vs upper case 
-            try: # TODO
+        # Accept any case variant of Exposure/exposure/exposureTime from callers.
+        # The base class lowercases names containing "posure" to "exposure",
+        # which would miss our "Exposure" key — handle it here and skip super().
+        if isinstance(name, str) and "posure" in name.lower():
+            try:
                 self._core.setExposure(float(value))
             except Exception:
                 self._logger.error(f"Failed to set exposure to {value}", exc_info=True)
-        elif name in self.parameters:
+            try:
+                actual = float(self._core.getExposure())
+            except Exception:
+                actual = float(value)
+            exposure_key = "Exposure" if "Exposure" in self.parameters else (
+                "exposure" if "exposure" in self.parameters else None
+            )
+            if exposure_key is not None:
+                self.parameters[exposure_key].value = actual
+            return self.parameters
+
+        if name in self.parameters:
             try:
                 self._core.setProperty(self._label, name, str(value))
             except Exception:
                 self._logger.error(
                     f"Failed to set MMCore property {name}={value}", exc_info=True
                 )
+            # Echo back what the device actually accepted — MMCore may clamp or
+            # snap to allowed values, and the UI needs the truth.
+            try:
+                actual = self._core.getProperty(self._label, name)
+            except Exception:
+                actual = value
+            param = self.parameters[name]
+            if isinstance(param, DetectorNumberParameter):
+                try:
+                    param.value = float(actual)
+                except (TypeError, ValueError):
+                    param.value = actual
+            else:
+                param.value = str(actual)
+            return self.parameters
+
         return super().setParameter(name, value)
 
 

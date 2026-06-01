@@ -241,7 +241,8 @@
         "Experiment",
         "LiveView",
         "LEDMatrix",
-        "StageCenterCalibration"
+        "StageCenterCalibration",
+        "MMCore"
     ],
     "nonAvailableWidgets": [],
     "designerId": null

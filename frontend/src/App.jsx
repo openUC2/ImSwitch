@@ -21,6 +21,7 @@ import LepMonController from "./components/LepmonController.js";
 import LightsheetController from "./components/LightsheetController.jsx";
 import LiveView from "./components/LiveView.js";
 import MazeGameController from "./components/MazeGameController.js";
+import MMCoreController from "./components/MMCoreController.jsx";
 import MotorSettingsController from "./components/MotorSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
 import LargeFovScanController from "./components/OpenLayers.js";
@@ -605,6 +606,7 @@ function App() {
               <AppManagerPage onNavigateToApp={handlePluginChange} />
             )}
             {selectedPlugin === "LightSheet" && <LightsheetController />}
+            {selectedPlugin === "MMCore" && <MMCoreController />}
             {selectedPlugin === "Timelapse" && <TimelapseController />}
             {selectedPlugin === "WiFi" && <WiFiController />}
             {plugins.map(

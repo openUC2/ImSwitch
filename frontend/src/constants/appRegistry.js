@@ -127,6 +127,28 @@ export const APP_REGISTRY = {
   },
 
   // === APPS - Optional microscopy applications ===
+  mmCore: {
+    id: "mmCore",
+    name: "MMCore",
+    description:
+      "Micro-Manager (pymmcore) parameter editor and long-exposure snap-to-disk. Use for Andor and other MM-supported cameras when you need single multi-minute exposures.",
+    category: APP_CATEGORIES.APPS,
+    icon: PhotoCameraIcon,
+    enabled: false,
+    essential: false,
+    keywords: [
+      "mmcore",
+      "micromanager",
+      "pymmcore",
+      "andor",
+      "long",
+      "exposure",
+      "snap",
+    ],
+    pluginId: "MMCore",
+    requiredControllers: ["MMCoreController"],
+  },
+
   wellSelector: {
     id: "wellSelector",
     name: "Well Plate",

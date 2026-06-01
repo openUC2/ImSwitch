@@ -105,7 +105,9 @@
         "Recording",
         "Image",
         "Laser",
-        "Positioner"
+        "Positioner",
+                "MMCore"
+
     ],
     "nonAvailableWidgets": [],
     "designerId": null

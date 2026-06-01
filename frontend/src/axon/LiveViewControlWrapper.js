@@ -439,8 +439,8 @@ const LiveViewControlWrapper = ({
             wheel={{
               step: 0.15,
               smoothStep: 0.01,
-              wheelDisabled: false,
-              touchPadDisabled: false,
+              wheelDisabled: true,
+              touchPadDisabled: true,
             }}
             pinch={{ step: 5 }}
             panning={{

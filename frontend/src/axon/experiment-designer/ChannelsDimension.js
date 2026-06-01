@@ -23,8 +23,6 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import SettingsIcon from "@mui/icons-material/Settings";
-import DeleteIcon from "@mui/icons-material/Delete";
-import AddIcon from "@mui/icons-material/Add";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import ScienceIcon from "@mui/icons-material/Science";
 import PowerSettingsNewIcon from "@mui/icons-material/PowerSettingsNew";

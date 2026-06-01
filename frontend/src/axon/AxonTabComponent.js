@@ -8,16 +8,12 @@ import {
 } from "@mui/material";
 import { Videocam as VideocamIcon } from "@mui/icons-material";
 import LiveViewControlWrapper from "./LiveViewControlWrapper";
-import TileViewComponent from "./TileViewComponent";
-import ZarrTileViewController from "./ZarrTileView";
 import GenericTabBar from "./GenericTabBar";
 import WellSelectorComponent from "./WellSelectorComponent";
 import PointListEditorComponent from "./PointListEditorComponent";
 import WebSocketComponent from "./WebSocketComponent";
 import PositionViewComponent from "./PositionViewComponent";
 import ParameterEditorWrapper from "./ParameterEditorWrapper";
-import ExperimentComponent from "./ExperimentComponent";
-import ResizablePanel from "./ResizablePanel"; //<ResizablePanel></ResizablePanel> performace issues :/
 import FocusLockMiniController from "../components/FocusLockMiniController";
 import Frame3DViewerPanel from "./Frame3DViewerPanel.jsx";
 import PictureInPicture, { PiPToggleButton } from "./PictureInPicture";

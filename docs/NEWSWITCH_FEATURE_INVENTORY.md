@@ -11,6 +11,7 @@ library), or is **dropped** as redundant / out-of-scope.
 
 Companion docs:
 
+- [NEWSWITCH_FEATURE_MINDMAP.svg](NEWSWITCH_FEATURE_MINDMAP.svg) — visual mindmap of this inventory, leaves colored by destination
 - [ImSwitch_Functionality_Overview.md](ImSwitch_Functionality_Overview.md) — older, shallower bullet list (Feb 2026)
 - [MIGRATION.md](MIGRATION.md) — newswitch port tracker (phase/PR table)
 - [STREAMING_REVIEW.md](STREAMING_REVIEW.md), [STREAMING_4B_NOTES.md](STREAMING_4B_NOTES.md), [ReviewCameraStreamingIssues.md](ReviewCameraStreamingIssues.md) — streaming subsystem deep-dives
@@ -760,6 +761,8 @@ against what ImSwitch happens to have.)
 - **Image annotations from analysis drawn over live view** — only manual ROIs today.
 - **OME-Zarr live append** — recording into Zarr today is by chunked write at end; live-append + tile-mosaic-into-Zarr should be the default.
 - **Native digital-twin sync back to Optikit** — the configurator should see live focus, stage position, current channel; today this is implied but not implemented.
+- **SLM/Display Integration**
+- 
 
 ---
 

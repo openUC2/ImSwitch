@@ -100,7 +100,7 @@ export default function DetectorParameters({ hostIP, hostPort }) {
       detectorParams.exposure !== undefined &&
       detectorParams.exposure !== null
     ) {
-      setLocalExposure(Number(detectorParams.exposure).toFixed(1));
+      setLocalExposure(Number(detectorParams.exposure).toFixed(3));
     }
     if (
       !editingRef.current.gain &&

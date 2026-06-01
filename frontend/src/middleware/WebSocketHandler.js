@@ -12,6 +12,7 @@ import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
 import * as focusLockSlice from "../state/slices/FocusLockSlice.js";
 import * as mazeGameSlice from "../state/slices/MazeGameSlice.js";
 import * as autofocusSlice from "../state/slices/AutofocusSlice.js";
+import * as opticalFlowSlice from "../state/slices/OpticalFlowSlice.js";
 import * as socketDebugSlice from "../state/slices/SocketDebugSlice.js";
 import * as uc2Slice from "../state/slices/UC2Slice.js";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
@@ -1135,6 +1136,39 @@ const WebSocketHandler = () => {
           }
         } catch (error) {
           console.error("Error parsing autofocus live value signal:", error);
+        }
+      } else if (dataJson.name === "sigUpdateFlowAngle") {
+        // Optical-flow live sample: p0=time (s), p1=angle (deg).
+        // Single-sample stream -- we append to the Redux array so the plot
+        // updates incrementally without redrawing from scratch.
+        try {
+          const t = Number(dataJson.args?.p0);
+          const a = Number(dataJson.args?.p1);
+          if (Number.isFinite(t) && Number.isFinite(a)) {
+            dispatch(opticalFlowSlice.appendSample({ time: t, angle: a }));
+          }
+        } catch (error) {
+          console.error("Error parsing optical-flow angle signal:", error);
+        }
+      } else if (dataJson.name === "sigFlowStateChanged") {
+        // Optical-flow FSM state transitions (idle/running/finished/...)
+        try {
+          const newState = dataJson.args?.p0 || dataJson.args || "idle";
+          if (typeof newState === "string") {
+            dispatch(opticalFlowSlice.setState(newState));
+          }
+        } catch (error) {
+          console.error("Error parsing optical-flow state signal:", error);
+        }
+      } else if (dataJson.name === "sigFlowResult") {
+        // Optical-flow aggregated result {meanAngle, std, n, ...}
+        try {
+          const payload = dataJson.args?.p0 || dataJson.args;
+          if (payload && typeof payload === "object") {
+            dispatch(opticalFlowSlice.setResult(payload));
+          }
+        } catch (error) {
+          console.error("Error parsing optical-flow result signal:", error);
         }
       } else if (dataJson.name === "sigGameState") {
         // Handle maze game state updates

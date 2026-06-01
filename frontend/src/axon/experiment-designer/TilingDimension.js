@@ -219,9 +219,16 @@ const TilingDimension = () => {
         <FormControl size="small" sx={{ minWidth: 200 }}>
           <InputLabel>Stitching Mode</InputLabel>
           <Select
-            value={parameterValue.ome_write_stitched_tiff ? "full" : "none"}
+            value={
+              parameterValue.ome_write_ashlar_stitch
+                ? "ashlar"
+                : parameterValue.ome_write_stitched_tiff
+                ? "full"
+                : "none"
+            }
             onChange={(e) => {
               dispatch(experimentSlice.setOmeWriteStitchedTiff(e.target.value === "full"));
+              dispatch(experimentSlice.setOmeWriteAshlarStitch(e.target.value === "ashlar"));
             }}
             label="Stitching Mode"
           >
@@ -238,6 +245,14 @@ const TilingDimension = () => {
                 <Typography variant="body2">Full Stitch</Typography>
                 <Typography variant="caption" color="textSecondary">
                   Combine into single large image
+                </Typography>
+              </Box>
+            </MenuItem>
+             <MenuItem value="ashlar">
+              <Box>
+                <Typography variant="body2">Ashlar Stitch</Typography>
+                <Typography variant="caption" color="textSecondary">
+                  Stitch tiles using Ashlar
                 </Typography>
               </Box>
             </MenuItem>

@@ -24,8 +24,6 @@ import histoScanReducer from "./slices/HistoScanSlice";
 import widgetReducer from "./slices/WidgetSlice";
 import lepmonReducer from "./slices/LepmonSlice";
 import uc2Reducer from "./slices/UC2Slice";
-import stageOffsetCalibrationReducer from "./slices/StageOffsetCalibrationSlice";
-import stageCenterCalibrationReducer from "./slices/StageCenterCalibrationSlice";
 import flowStopReducer from "./slices/FlowStopSlice";
 import lightsheetReducer from "./slices/LightsheetSlice";
 import zarrinitialZarrReducer from "./slices/OmeZarrTileStreamSlice";
@@ -38,6 +36,7 @@ import mazeGameReducer from "./slices/MazeGameSlice";
 import themeReducer from "./slices/ThemeSlice";
 import notificationReducer from "./slices/NotificationSlice";
 import autofocusReducer from "./slices/AutofocusSlice";
+import opticalFlowReducer from "./slices/OpticalFlowSlice";
 import socketDebugReducer from "./slices/SocketDebugSlice";
 import appManagerReducer from "./slices/appManagerSlice";
 import canOtaReducer from "./slices/canOtaSlice";
@@ -138,8 +137,6 @@ const rootReducer = combineReducers({
   widgetState: widgetReducer,
   lepmon: lepmonReducer,
   uc2State: uc2Reducer,
-  stageOffsetCalibration: stageOffsetCalibrationReducer,
-  stageCenterCalibration: stageCenterCalibrationReducer,
   flowStop: flowStopReducer,
   lightsheet: persistReducer(lightsheetPersistConfig, lightsheetReducer), // Nested persist for axis config
   omeZarrState: zarrinitialZarrReducer,
@@ -152,6 +149,7 @@ const rootReducer = combineReducers({
   themeState: themeReducer,
   notification: notificationReducer,
   autofocusState: autofocusReducer,
+  opticalFlowState: opticalFlowReducer,
   socketDebugState: socketDebugReducer,
   appManager: appManagerReducer,
   canOtaState: canOtaReducer,

@@ -12,11 +12,14 @@ class VirtualStageManager(PositionerManager):
         self.stepsizeY = positionerInfo.managerProperties.get("stepsizeY")
         self.stepsizeZ = positionerInfo.managerProperties.get("stepsizeZ")
         self.stepsizeA = positionerInfo.managerProperties.get("stepsizeA")
-        self.offset_x = 0.
-        self.offset_y = 0.
-        self.offset_z = 0.
-        self.offset_a = 0.
-        self.stageOffsetPositions = {"X": self.offset_x, "Y": self.offset_y, "Z": self.offset_z, "A": self.offset_a}
+        # Persisted offsets loaded from the setup JSON. Same key naming as
+        # ESP32StageManager so the controller can save/load uniformly.
+        self.stageOffsetPositions = {
+            "X": positionerInfo.stageOffsets.get('stageOffsetPositionX', 0),
+            "Y": positionerInfo.stageOffsets.get('stageOffsetPositionY', 0),
+            "Z": positionerInfo.stageOffsets.get('stageOffsetPositionZ', 0),
+            "A": positionerInfo.stageOffsets.get('stageOffsetPositionA', 0),
+        }
         try:
             self.VirtualMicroscope = lowLevelManagers["rs232sManager"]["VirtualMicroscope"]
         except:
@@ -28,22 +31,49 @@ class VirtualStageManager(PositionerManager):
         self._position = self.getPosition()
 
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=1):
+        # For absolute moves the caller passes user coordinates; the simulated
+        # device sees user + offset (same convention as ESP32StageManager).
+        ox = self.stageOffsetPositions.get("X", 0)
+        oy = self.stageOffsetPositions.get("Y", 0)
+        oz = self.stageOffsetPositions.get("Z", 0)
+        oa = self.stageOffsetPositions.get("A", 0)
         if axis == "X":
-            self._positioner.move(x=self.stepsizeX*(value+self.offset_x), is_absolute=is_absolute)
+            dv = (value + ox) if is_absolute else value
+            self._positioner.move(x=self.stepsizeX*dv, is_absolute=is_absolute)
         if axis == "Y":
-            self._positioner.move(y=self.stepsizeY*(value+self.offset_y), is_absolute=is_absolute)
+            dv = (value + oy) if is_absolute else value
+            self._positioner.move(y=self.stepsizeY*dv, is_absolute=is_absolute)
         if axis == "Z":
-            self._positioner.move(z=self.stepsizeZ*(value+self.offset_z), is_absolute=is_absolute)
+            dv = (value + oz) if is_absolute else value
+            self._positioner.move(z=self.stepsizeZ*dv, is_absolute=is_absolute)
         if axis == "A":
-            self._positioner.move(a=self.stepsizeA*(value+self.offset_a), is_absolute=is_absolute)
+            dv = (value + oa) if is_absolute else value
+            self._positioner.move(a=self.stepsizeA*dv, is_absolute=is_absolute)
         if axis == "XYZ":
-            self._positioner.move(x=self.stepsizeX*(value[0]+self.offset_x), y=self.stepsizeY*(value[1]+self.offset_y), z=self.stepsizeZ*(value[2]+self.offset_z), is_absolute=is_absolute)
+            self._positioner.move(
+                x=self.stepsizeX*((value[0]+ox) if is_absolute else value[0]),
+                y=self.stepsizeY*((value[1]+oy) if is_absolute else value[1]),
+                z=self.stepsizeZ*((value[2]+oz) if is_absolute else value[2]),
+                is_absolute=is_absolute,
+            )
         if axis == "XY":
-            self._positioner.move(x=self.stepsizeX*(value[0]+self.offset_x), y=self.stepsizeY*(value[1]+self.offset_y), is_absolute=is_absolute)
+            self._positioner.move(
+                x=self.stepsizeX*((value[0]+ox) if is_absolute else value[0]),
+                y=self.stepsizeY*((value[1]+oy) if is_absolute else value[1]),
+                is_absolute=is_absolute,
+            )
         for axes in ["A","X","Y","Z"]:
             self._position[axes] = self._positioner.position[axes]
 
         self.getPosition() # update position in GUI
+
+    def getDevicePositionAxis(self, axis="X"):
+        """Raw device position for one axis on the virtual stage."""
+        try:
+            all_positions = self._positioner.get_position()
+            return float(all_positions.get(axis, 0))
+        except Exception:
+            return float(self._position.get(axis, 0)) + float(self.stageOffsetPositions.get(axis, 0))
 
     def setPositionOnDevice(self, axis, value):
         if axis == "X":
@@ -72,14 +102,17 @@ class VirtualStageManager(PositionerManager):
         pass
 
     def getPosition(self):
-        # load position from device
-        # t,x,y,z
+        # Returns user (offset-corrected) coordinates so callers see the same
+        # frame as ESP32StageManager.getPosition().
         allPositionsDict = self._positioner.get_position()
-        posDict= {}
-        posDict["VirtualStage"] = allPositionsDict
-        try:self._commChannel.sigUpdateMotorPosition.emit(posDict)
-        except: pass # Should be a list TODO: This is a hacky workaround to force Imswitch to update the motor positions in the gui..
-        return allPositionsDict
+        corrected = {}
+        for ax in ("A", "X", "Y", "Z"):
+            if ax in allPositionsDict:
+                corrected[ax] = float(allPositionsDict[ax]) - float(self.stageOffsetPositions.get(ax, 0))
+        emitDict = {"VirtualStage": corrected}
+        try: self._commChannel.sigUpdateMotorPosition.emit(emitDict)
+        except: pass
+        return corrected
 
     def forceStop(self, axis):
         if axis=="X":
@@ -133,15 +166,6 @@ class VirtualStageManager(PositionerManager):
         if self.homeXenabled and self.homeYenabled and self.homeZenabled:
             [self.setPosition(axis=axis, value=0) for axis in ["X","Y","Z"]]
 
-
-    def setStageOffset(self, axis, offset):
-        if axis == "X": self._positioner.set_stage_offset(x=offset)
-        if axis == "Y": self._positioner.set_stage_offset(y=offset)
-        if axis == "Z": self._positioner.set_stage_offset(z=offset)
-        if axis == "A": self._positioner.set_stage_offset(a=offset)
-        if axis == "XYZ": self._positioner.set_stage_offset(xyz=offset)
-        if axis == "XY": self._positioner.set_stage_offset(xy=offset)
-        #self._commChannel.sigUpdateMotorPosition.emit()
 
     def start_stage_scanning(self, xstart=0, xstep=1, nx=100,
                              ystart=0, ystep=1, zstart=0, zstep=1, nz=100, ny=100, tsettle=0.1, tExposure=50, illumination=None, led=None):

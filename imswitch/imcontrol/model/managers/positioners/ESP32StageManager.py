@@ -600,33 +600,47 @@ class ESP32StageManager(PositionerManager):
         value = (self.sampleLoadingPositions["X"], self.sampleLoadingPositions["Y"], self.sampleLoadingPositions["Z"])
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
 
-    def setStageOffsetAxis(self, knownPosition=0, currentPosition=None, knownOffset=None, axis="X"):
-        """
-        Sets the stage offset for calibration purposes (in-memory only).
-        knownPosition and currentPosition are in physical (user) coordinates.
-        Persistence is handled by the controller.
-        """
-        if currentPosition is None:
-            currentPosition = self._position[axis]
-        if knownOffset is None:
-            # Calculate offset: offset = current_device_pos - known_user_pos
-            # Get raw device position
-            devicePositions = self._motor.get_position()
-            axisIndex = {"A": 0, "X": 1, "Y": 2, "Z": 3}[axis]
-            currentDevicePosition = devicePositions[axisIndex]
-            offset = currentDevicePosition - knownPosition
-        else:
-            offset = knownOffset
+    def getDevicePositionAxis(self, axis="X"):
+        """Live raw device position for one axis (no offset applied).
 
+        Reads directly from the ESP32 firmware; the firmware preserves position
+        across software restarts (steps survive reboot) so this is the stable
+        reference for offset calibration.
+        """
+        try:
+            allPositions = 1. * self._motor.get_position()
+            axisIndex = {"A": 0, "X": 1, "Y": 2, "Z": 3}[axis]
+            return float(allPositions[axisIndex])
+        except Exception as e:
+            self.__logger.error(f"getDevicePositionAxis({axis}) failed: {e}")
+            return float(self._position.get(axis, 0)) + float(self.stageOffsetPositions.get(axis, 0))
+
+    def setStageOffsetAxis(self, knownPosition=0, currentDevicePosition=None,
+                            knownOffset=None, axis="X"):
+        """Set the stage offset for one axis using the canonical contract.
+
+        ``offset = currentDevicePosition - knownPosition`` so that the user
+        coordinate equals ``knownPosition`` at the current physical place.
+        ``currentDevicePosition`` is provided by the controller to avoid a
+        race with asynchronous position updates; falling back to a live read
+        is only a convenience for direct callers.
+        """
+        if knownOffset is not None:
+            offset = float(knownOffset)
+        else:
+            if currentDevicePosition is None:
+                currentDevicePosition = self.getDevicePositionAxis(axis)
+            offset = float(currentDevicePosition) - float(knownPosition)
         self.stageOffsetPositions[axis] = offset
-        self.__logger.info(f"Set offset for {axis} axis to {offset} µm.")
+        self.__logger.info(
+            f"Set offset for {axis} axis to {offset} um "
+            f"(device={currentDevicePosition}, known={knownPosition}, knownOffset={knownOffset})."
+        )
 
     def resetStageOffsetAxis(self, axis="X"):
-        """
-        Resets the stage offset for the given axis to 0.
-        """
+        """Reset the stage offset for the given axis to 0."""
         self.__logger.info(f"Resetting stage offset for {axis} axis.")
-        self.setStageOffsetAxis(knownOffset=0, axis=axis)
+        self.stageOffsetPositions[axis] = 0
 
     def getStageOffsetAxis(self, axis:str="X"):
         """ Get the current stage offset for a given axis.

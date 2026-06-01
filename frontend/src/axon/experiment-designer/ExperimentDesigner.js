@@ -52,6 +52,7 @@ import apiExperimentControllerStopExperiment from "../../backendapi/apiExperimen
 import apiExperimentControllerPauseWorkflow from "../../backendapi/apiExperimentControllerPauseWorkflow";
 import apiExperimentControllerResumeExperiment from "../../backendapi/apiExperimentControllerResumeExperiment";
 import apiExperimentControllerInterruptFocusMap from "../../backendapi/apiExperimentControllerInterruptFocusMap";
+import apiExperimentControllerRunAshlarStitching from "../../backendapi/apiExperimentControllerRunAshlarStitching";
 import fetchGetExperimentStatus from "../../middleware/fetchExperimentControllerGetExperimentStatus";
 
 // Status enum
@@ -99,6 +100,35 @@ const ExperimentDesigner = () => {
     }, 3000);
     return () => clearInterval(intervalId);
   }, [dispatch]);
+
+  // Trigger Ashlar stitching automatically when the experiment finishes
+  const prevStatusRef = useRef(Status.IDLE);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    const curr = experimentStatus.status;
+    prevStatusRef.current = curr;
+
+    if (
+      prev === Status.RUNNING &&
+      curr === Status.IDLE &&
+      experimentState.parameterValue.ome_write_ashlar_stitch
+    ) {
+      console.log("Experiment finished with Ashlar mode — starting stitching");
+      apiExperimentControllerRunAshlarStitching()
+        .then((data) => {
+          if (data?.started) {
+            infoPopupRef.current?.showMessage("Ashlar stitching started in background");
+          } else {
+            infoPopupRef.current?.showMessage(
+              `Ashlar stitching could not start: ${data?.error ?? "unknown error"}`
+            );
+          }
+        })
+        .catch(() => {
+          infoPopupRef.current?.showMessage("Failed to start Ashlar stitching");
+        });
+    }
+  }, [experimentStatus.status, experimentState.parameterValue.ome_write_ashlar_stitch]);
 
   // Warn the user before leaving/refreshing the page while an experiment is running
   useEffect(() => {

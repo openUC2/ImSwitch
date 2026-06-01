@@ -1,56 +1,42 @@
 // src/backendapi/apiPositionerControllerSetStageOffsetAxis.js
-// API to set stage offset axis with known position (backend calculates offset)
+//
+// Set the stage offset for one axis via the canonical contract:
+//   offset = currentDevicePosition - knownPosition
+// so that the stage reports ``knownPosition`` at the current physical place.
+//
+// Usual call: pass ``knownPosition`` only and let the backend snapshot the
+// raw device position atomically. Pass ``currentDevicePosition`` only when
+// you need a deterministic reference (e.g. the brightest sample of a heatmap
+// captured in device coords). ``knownOffset`` is an escape hatch that stores
+// the offset verbatim.
 import createAxiosInstance from "./createAxiosInstance";
 
-/**
- * Set the stage offset for a specific axis using a known position.
- * The backend will calculate the offset based on the difference between
- * the known position and the current true position.
- * 
- * @param {Object} params - Parameters for setting stage offset
- * @param {string} [params.positionerName] - Name of the positioner (optional)
- * @param {number} params.knownPosition - The known/expected position at the current stage location
- * @param {number} [params.currentPosition] - Current position (optional, backend uses true position if not provided)
- * @param {number} [params.knownOffset] - Direct offset value (alternative to knownPosition)
- * @param {string} [params.axis="X"] - Axis to set offset for ("X" or "Y")
- * @returns {Promise<Object>} - Response from the backend
- */
 const apiPositionerControllerSetStageOffsetAxis = async ({
   positionerName,
   knownPosition,
-  currentPosition,
+  currentDevicePosition,
   knownOffset,
   axis = "X",
 }) => {
   try {
     const axiosInstance = createAxiosInstance();
-
-    // Build the query string dynamically
-    let url = "/PositionerController/setStageOffsetAxis?";
-    const queryParams = [];
-
+    const params = { axis };
     if (positionerName !== undefined && positionerName !== null) {
-      queryParams.push(`positionerName=${encodeURIComponent(positionerName)}`);
+      params.positionerName = positionerName;
     }
     if (knownPosition !== undefined && knownPosition !== null) {
-      queryParams.push(`knownPosition=${encodeURIComponent(knownPosition)}`);
+      params.knownPosition = knownPosition;
     }
-    if (currentPosition !== undefined && currentPosition !== null) {
-      queryParams.push(`currentPosition=${encodeURIComponent(currentPosition)}`);
+    if (currentDevicePosition !== undefined && currentDevicePosition !== null) {
+      params.currentDevicePosition = currentDevicePosition;
     }
     if (knownOffset !== undefined && knownOffset !== null) {
-      queryParams.push(`knownOffset=${encodeURIComponent(knownOffset)}`);
+      params.knownOffset = knownOffset;
     }
-    if (axis) {
-      queryParams.push(`axis=${encodeURIComponent(axis)}`);
-    }
-
-    // Join all query parameters with '&'
-    url += queryParams.join("&");
-
-    // Send GET request
-    const response = await axiosInstance.get(url);
-
+    const response = await axiosInstance.get(
+      "/PositionerController/setStageOffsetAxis",
+      { params }
+    );
     return response.data;
   } catch (error) {
     console.error("Error setting stage offset axis:", error);

@@ -14,6 +14,10 @@ import {
 } from "@mui/material";
 import { Camera, InfoOutlined } from "@mui/icons-material";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
+import {
+  SUPPORTED_GAIN_VALUES,
+  normalizeGainValue,
+} from "../constants/cameraGainValues.js";
 
 const AUTO_ONCE_RESET_DELAY_MS = 1500;
 const AUTO_ONCE_UI_HOLD_MS = AUTO_ONCE_RESET_DELAY_MS + 300;
@@ -64,7 +68,7 @@ export default function DetectorParameters({ hostIP, hostPort }) {
         const data = await resp.json();
         const newParams = {
           exposure: data.exposure ?? "",
-          gain: data.gain ?? "",
+          gain: normalizeGainValue(data.gain) ?? "",
           pixelSize: data.pixelSize ?? "",
           binning: data.binning ?? "",
           blacklevel: data.blacklevel ?? "",
@@ -103,7 +107,8 @@ export default function DetectorParameters({ hostIP, hostPort }) {
       detectorParams.gain !== undefined &&
       detectorParams.gain !== null
     ) {
-      setLocalGain(String(Math.round(Number(detectorParams.gain))));
+      const normalizedGain = normalizeGainValue(detectorParams.gain);
+      setLocalGain(normalizedGain !== null ? String(normalizedGain) : "");
     }
     if (
       !editingRef.current.blacklevel &&
@@ -117,8 +122,15 @@ export default function DetectorParameters({ hostIP, hostPort }) {
   // Update numeric field immediately on change
   const handleImmediateFieldChange = useCallback(
     async (field, rawValue) => {
-      const value = Number(rawValue);
+      let value = Number(rawValue);
       if (rawValue === "" || isNaN(value)) return;
+
+      if (field === "gain") {
+        const normalizedGain = normalizeGainValue(value);
+        if (normalizedGain === null) return;
+        value = normalizedGain;
+      }
+
       dispatch(detectorParametersSlice.updateParameter({ key: field, value }));
       try {
         switch (field) {
@@ -230,6 +242,16 @@ export default function DetectorParameters({ hostIP, hostPort }) {
     if (e.key === "Enter") {
       e.currentTarget.blur();
     }
+  };
+
+  const handleGainChange = (event) => {
+    const selectedGain = Number(event.target.value);
+    if (!Number.isFinite(selectedGain)) return;
+
+    beginEditing("gain");
+    setLocalGain(String(selectedGain));
+    handleImmediateFieldChange("gain", selectedGain);
+    endEditing("gain");
   };
 
   return (
@@ -402,52 +424,26 @@ export default function DetectorParameters({ hostIP, hostPort }) {
             mt: 0.25,
           }}
         >
-          <TextField
-            label="Gain"
-            type="text"
-            inputProps={{ inputMode: "decimal" }}
-            value={localGain}
-            onFocus={() => beginEditing("gain")}
-            onChange={handleNumericFieldChange("gain", setLocalGain)}
-            onBlur={() => endEditing("gain")}
-            onKeyDown={handleNumericFieldKeyDown}
-            size="small"
-            sx={{
-              "& .MuiInputBase-root": {
-                height: 40,
-              },
-            }}
-            InputProps={{
-              endAdornment: (
-                <Box sx={{ display: "flex", flexDirection: "column", ml: 0.5 }}>
-                  <IconButton
-                    size="small"
-                    sx={{ p: 0, height: 18 }}
-                    aria-label="Increment gain"
-                    onClick={() => {
-                      const next = Number(localGain || 0) + 1;
-                      setLocalGain(String(next));
-                      handleImmediateFieldChange("gain", next);
-                    }}
-                  >
-                    <span style={{ fontSize: 14, lineHeight: 1 }}>▲</span>
-                  </IconButton>
-                  <IconButton
-                    size="small"
-                    sx={{ p: 0, height: 18 }}
-                    aria-label="Decrement gain"
-                    onClick={() => {
-                      const next = Number(localGain || 0) - 1;
-                      setLocalGain(String(next));
-                      handleImmediateFieldChange("gain", next);
-                    }}
-                  >
-                    <span style={{ fontSize: 14, lineHeight: 1 }}>▼</span>
-                  </IconButton>
-                </Box>
-              ),
-            }}
-          />
+          <FormControl size="small" sx={{ minWidth: 160 }}>
+            <InputLabel id="detector-gain-label">Gain</InputLabel>
+            <Select
+              labelId="detector-gain-label"
+              label="Gain"
+              value={localGain === "" ? "" : Number(localGain)}
+              onChange={handleGainChange}
+              sx={{
+                "& .MuiInputBase-root": {
+                  height: 40,
+                },
+              }}
+            >
+              {SUPPORTED_GAIN_VALUES.map((val) => (
+                <MenuItem key={val} value={val}>
+                  {val}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
 
           <TextField
             label="Black Level"

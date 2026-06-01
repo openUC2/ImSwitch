@@ -34,6 +34,10 @@ import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsS
 import * as laserSlice from "../../state/slices/LaserSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 import fetchLaserControllerCurrentValues from "../../middleware/fetchLaserControllerCurrentValues";
+import {
+  SUPPORTED_GAIN_VALUES,
+  normalizeGainValue,
+} from "../../constants/cameraGainValues";
 
 /**
  * Single channel block - collapsible card for each illumination source
@@ -295,7 +299,7 @@ const ChannelBlock = ({
                   value={gain}
                   onChange={(e) => onGainChange(e.target.value)}
                 >
-                  {[0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 23].map((val) => (
+                  {SUPPORTED_GAIN_VALUES.map((val) => (
                     <MenuItem key={val} value={val}>
                       {val}
                     </MenuItem>
@@ -616,13 +620,13 @@ const ChannelsDimension = () => {
       if (!r.ok) return;
       const data = await r.json();
       const expVal = Number(data?.exposure);
-      const gainVal = Number(data?.gain);
+      const gainVal = normalizeGainValue(data?.gain);
       if (Number.isFinite(expVal) && illuSources.length > 0) {
         dispatch(
           experimentSlice.setExposureTimes(illuSources.map(() => expVal)),
         );
       }
-      if (Number.isFinite(gainVal) && illuSources.length > 0) {
+      if (gainVal !== null && illuSources.length > 0) {
         dispatch(experimentSlice.setGains(illuSources.map(() => gainVal)));
       }
     } catch (e) {

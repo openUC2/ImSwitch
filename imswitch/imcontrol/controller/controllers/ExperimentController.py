@@ -1780,7 +1780,7 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error setting detector parameter {parameter} to {value}: {e}")
 
-    def return_to_initial_position(self):
+    def return_to_initial_position(self, include_z_position: bool = False):
         """Return the stage to the position stored at experiment start."""
         try:
             if hasattr(self, "_initial_experiment_position") and self._initial_experiment_position:
@@ -1790,7 +1790,7 @@ class ExperimentController(ImConWidgetController):
                     pos["X"], pos["Y"], pos["Z"],
                 )
                 self.move_stage_xy(pos["X"], pos["Y"], relative=False)
-                self.move_stage_z(pos["Z"], relative=False)
+                if include_z_position: self.move_stage_z(pos["Z"], relative=False)
                 self._initial_experiment_position = None
             else:
                 self._logger.debug("No initial experiment position stored, skipping return.")

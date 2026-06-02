@@ -541,7 +541,7 @@ const CanOtaWizard = ({ open, onClose }) => {
               onChange={(e) => dispatch(canOtaSlice.setFirmwareServerUrl(e.target.value))}
               margin="normal"
               placeholder="http://host.docker.internal/firmware"
-              helperText={`Default: ${canOtaState.defaultFirmwareServerUrl || "http://host.docker.internal/firmware"}`}
+              helperText={`Default: ${canOtaState.defaultFirmwareServerUrl || "http://host.docker.internal/firmware"} or "http://localhost/firmware" if running on the same machine`}
             />
             <Tooltip title="Reload firmware files from server">
               <IconButton

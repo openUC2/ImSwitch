@@ -2805,7 +2805,7 @@ class UC2ConfigController(ImConWidgetController):
                             self._setupInfo.positioners[positionerName].managerProperties[key] = value
 
                     # Save the updated setupInfo to disk
-                    from imswitch.imcommon.model import configfiletools
+                    import imswitch.imcontrol.model.configfiletools as configfiletools
                     mOptions, _ = configfiletools.loadOptions()
                     configfiletools.saveSetupInfo(mOptions, self._setupInfo)
                     self.__logger.info(f"Saved motor settings for {positionerName}")

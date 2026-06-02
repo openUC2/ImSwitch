@@ -100,7 +100,14 @@ export default function DetectorParameters({ hostIP, hostPort }) {
       detectorParams.exposure !== undefined &&
       detectorParams.exposure !== null
     ) {
-      setLocalExposure(Number(detectorParams.exposure).toFixed(3));
+      const exposureValue =
+        typeof detectorParams.exposure === "string" &&
+        detectorParams.exposure.trim() === ""
+          ? Number.NaN
+          : Number(detectorParams.exposure);
+      setLocalExposure(
+        Number.isFinite(exposureValue) ? exposureValue.toFixed(3) : "",
+      );
     }
     if (
       !editingRef.current.gain &&
@@ -217,9 +224,20 @@ export default function DetectorParameters({ hostIP, hostPort }) {
     editingRef.current[field] = false;
   };
 
+  const isValidNumericInput = (field, value) => {
+    if (value === "") return true;
+    // Exposure allows decimals while typing (e.g. "10."), black level is integer-only.
+    if (field === "exposure") return /^\d*\.?\d*$/.test(value);
+    if (field === "blacklevel") return /^\d*$/.test(value);
+    return /^\d*\.?\d*$/.test(value);
+  };
+
   const handleNumericFieldChange = (field, setValue) => (e) => {
     beginEditing(field);
     const raw = e.target.value;
+    if (!isValidNumericInput(field, raw)) {
+      return;
+    }
     if (field === "blacklevel") {
       // Keep empty string while typing, but prevent committing negative values.
       if (raw === "") {

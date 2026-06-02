@@ -32,6 +32,7 @@ import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
 import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsSlice";
 import * as laserSlice from "../../state/slices/LaserSlice";
+import * as detectorParametersSlice from "../../state/slices/DetectorParametersSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 import fetchLaserControllerCurrentValues from "../../middleware/fetchLaserControllerCurrentValues";
 import {
@@ -40,6 +41,9 @@ import {
 } from "../../constants/cameraGainValues";
 import apiLEDMatrixControllerSetRing from "../../backendapi/apiLEDMatrixControllerSetRing";
 import apiLEDMatrixControllerSetHalves from "../../backendapi/apiLEDMatrixControllerSetHalves";
+
+const AUTO_ONCE_RESET_DELAY_MS = 1500;
+const AUTO_ONCE_UI_HOLD_MS = AUTO_ONCE_RESET_DELAY_MS + 300;
 
 /**
  * Single channel block - collapsible card for each illumination source.
@@ -81,8 +85,10 @@ const ChannelBlock = ({
   const isSynthetic = kind === "ring" || kind === "dpc";
 
   // Pick a chip colour per kind so the user can spot LED-matrix channels at a glance.
-  const kindChipColor = kind === "ring" ? "secondary" : kind === "dpc" ? "warning" : "primary";
-  const kindBadgeLabel = kind === "ring" ? "Ring" : kind === "dpc" ? "DPC" : null;
+  const kindChipColor =
+    kind === "ring" ? "secondary" : kind === "dpc" ? "warning" : "primary";
+  const kindBadgeLabel =
+    kind === "ring" ? "Ring" : kind === "dpc" ? "DPC" : null;
 
   // Local string state for exposure so the user can type partial values
   // (e.g. "100." or clear the field) without it snapping to 0.
@@ -157,13 +163,15 @@ const ChannelBlock = ({
             {kind === "ring" && (
               <>
                 r={kindParams.radius ?? 8} · RGB({kindParams.intensityR ?? 0},{" "}
-                {kindParams.intensityG ?? 0}, {kindParams.intensityB ?? 0}) · {exposure} ms · Gain {gain}
+                {kindParams.intensityG ?? 0}, {kindParams.intensityB ?? 0}) ·{" "}
+                {exposure} ms · Gain {gain}
               </>
             )}
             {kind === "dpc" && (
               <>
                 4× halves · RGB({kindParams.intensityR ?? 0},{" "}
-                {kindParams.intensityG ?? 255}, {kindParams.intensityB ?? 0}) · {exposure} ms · Gain {gain}
+                {kindParams.intensityG ?? 255}, {kindParams.intensityB ?? 0}) ·{" "}
+                {exposure} ms · Gain {gain}
               </>
             )}
             {kind === "default" && (
@@ -182,7 +190,10 @@ const ChannelBlock = ({
             stand-alone "on" state — the pattern is driven per-frame by the
             workflow, so the toggle would be misleading. */}
         {!isSynthetic && (
-          <Tooltip title="Toggle laser ON/OFF (physically enables the illumination source)" arrow>
+          <Tooltip
+            title="Toggle laser ON/OFF (physically enables the illumination source)"
+            arrow
+          >
             <Checkbox
               checked={isEnabled}
               onChange={(e) => {
@@ -191,8 +202,14 @@ const ChannelBlock = ({
               }}
               onClick={(e) => e.stopPropagation()}
               size="small"
-              icon={<PowerSettingsNewIcon sx={{ fontSize: 20, opacity: 0.4 }} />}
-              checkedIcon={<PowerSettingsNewIcon sx={{ fontSize: 20, color: theme.palette.success.main }} />}
+              icon={
+                <PowerSettingsNewIcon sx={{ fontSize: 20, opacity: 0.4 }} />
+              }
+              checkedIcon={
+                <PowerSettingsNewIcon
+                  sx={{ fontSize: 20, color: theme.palette.success.main }}
+                />
+              }
               sx={{ mr: 0 }}
             />
           </Tooltip>
@@ -241,8 +258,18 @@ const ChannelBlock = ({
                 <Typography variant="caption" sx={{ fontWeight: 500 }}>
                   Intensity
                 </Typography>
-                <Tooltip title="Illumination power in mW. Higher values give brighter images but may cause photobleaching." arrow>
-                  <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+                <Tooltip
+                  title="Illumination power in mW. Higher values give brighter images but may cause photobleaching."
+                  arrow
+                >
+                  <InfoOutlinedIcon
+                    sx={{
+                      fontSize: 14,
+                      ml: 0.5,
+                      color: "text.disabled",
+                      cursor: "help",
+                    }}
+                  />
                 </Tooltip>
               </Box>
               <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
@@ -277,12 +304,22 @@ const ChannelBlock = ({
                   title={`LED-matrix ring radius in LED units (0–${ringMaxRadius}, derived from the physical matrix size). Larger radius = more oblique illumination; r=0 = single centre LED.`}
                   arrow
                 >
-                  <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+                  <InfoOutlinedIcon
+                    sx={{
+                      fontSize: 14,
+                      ml: 0.5,
+                      color: "text.disabled",
+                      cursor: "help",
+                    }}
+                  />
                 </Tooltip>
               </Box>
               <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
                 <Slider
-                  value={Math.min(kindParams.radius ?? Math.min(2, ringMaxRadius), ringMaxRadius)}
+                  value={Math.min(
+                    kindParams.radius ?? Math.min(2, ringMaxRadius),
+                    ringMaxRadius,
+                  )}
                   min={0}
                   max={ringMaxRadius}
                   step={1}
@@ -294,7 +331,10 @@ const ChannelBlock = ({
                   variant="body2"
                   sx={{ minWidth: "60px", textAlign: "right", fontWeight: 500 }}
                 >
-                  {Math.min(kindParams.radius ?? Math.min(2, ringMaxRadius), ringMaxRadius)}
+                  {Math.min(
+                    kindParams.radius ?? Math.min(2, ringMaxRadius),
+                    ringMaxRadius,
+                  )}
                 </Typography>
               </Box>
             </Box>
@@ -318,16 +358,48 @@ const ChannelBlock = ({
                   }
                   arrow
                 >
-                  <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+                  <InfoOutlinedIcon
+                    sx={{
+                      fontSize: 14,
+                      ml: 0.5,
+                      color: "text.disabled",
+                      cursor: "help",
+                    }}
+                  />
                 </Tooltip>
               </Box>
               {[
-                { key: "intensityR", label: "R", color: theme.palette.error.main, defaultVal: kind === "dpc" ? 0 : 0 },
-                { key: "intensityG", label: "G", color: theme.palette.success.main, defaultVal: kind === "dpc" ? 255 : 0 },
-                { key: "intensityB", label: "B", color: theme.palette.info.main, defaultVal: kind === "dpc" ? 0 : 0 },
+                {
+                  key: "intensityR",
+                  label: "R",
+                  color: theme.palette.error.main,
+                  defaultVal: kind === "dpc" ? 0 : 0,
+                },
+                {
+                  key: "intensityG",
+                  label: "G",
+                  color: theme.palette.success.main,
+                  defaultVal: kind === "dpc" ? 255 : 0,
+                },
+                {
+                  key: "intensityB",
+                  label: "B",
+                  color: theme.palette.info.main,
+                  defaultVal: kind === "dpc" ? 0 : 0,
+                },
               ].map(({ key, label, color, defaultVal }) => (
-                <Box key={key} sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 0.5 }}>
-                  <Typography sx={{ width: 18, fontWeight: 700, color }}>{label}</Typography>
+                <Box
+                  key={key}
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1.5,
+                    mb: 0.5,
+                  }}
+                >
+                  <Typography sx={{ width: 18, fontWeight: 700, color }}>
+                    {label}
+                  </Typography>
                   <Slider
                     value={kindParams[key] ?? defaultVal}
                     min={0}
@@ -338,15 +410,27 @@ const ChannelBlock = ({
                   />
                   <Typography
                     variant="body2"
-                    sx={{ minWidth: "44px", textAlign: "right", fontWeight: 500 }}
+                    sx={{
+                      minWidth: "44px",
+                      textAlign: "right",
+                      fontWeight: 500,
+                    }}
                   >
                     {kindParams[key] ?? defaultVal}
                   </Typography>
                 </Box>
               ))}
               {kind === "dpc" && (
-                <Typography variant="caption" sx={{ color: theme.palette.text.disabled, display: "block", mt: 0.5 }}>
-                  DPC captures 4 frames per XY position (top / bottom / left / right halves) saved as channels
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: theme.palette.text.disabled,
+                    display: "block",
+                    mt: 0.5,
+                  }}
+                >
+                  DPC captures 4 frames per XY position (top / bottom / left /
+                  right halves) saved as channels
                   <code style={{ marginLeft: 4 }}>DPC_top</code>,
                   <code style={{ marginLeft: 4 }}>DPC_bottom</code>,
                   <code style={{ marginLeft: 4 }}>DPC_left</code>,
@@ -468,12 +552,16 @@ const ChannelsDimension = () => {
   const connectionSettings = useSelector(
     connectionSettingsSlice.getConnectionSettingsState,
   );
+  const detectorParams = useSelector(
+    detectorParametersSlice.getDetectorParameters,
+  );
   const experimentUI = useSelector(experimentUISlice.getExperimentUIState);
   const laserState = useSelector(laserSlice.getLaserState);
   const lasers = laserState.lasers;
 
   // Local state for expanded channels
   const [expandedChannels, setExpandedChannels] = useState({});
+  const [autoOncePending, setAutoOncePending] = useState(false);
 
   // Debounce refs for laser value updates to prevent serial overload
   const laserTimeoutRefs = useRef({});
@@ -490,17 +578,30 @@ const ChannelsDimension = () => {
     ? parameterValue.exposureTimes
     : [];
   const gains = Array.isArray(parameterValue.gains) ? parameterValue.gains : [];
-  const channelEnabledForExperiment = Array.isArray(parameterValue.channelEnabledForExperiment) ? parameterValue.channelEnabledForExperiment : [];
-  const illuSources = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
+  const channelEnabledForExperiment = Array.isArray(
+    parameterValue.channelEnabledForExperiment,
+  )
+    ? parameterValue.channelEnabledForExperiment
+    : [];
+  const illuSources = Array.isArray(parameterRange.illuSources)
+    ? parameterRange.illuSources
+    : [];
   // Per-source kind tag (parallel to illuSources).  Empty / shorter array →
   // missing entries default to "default" so legacy backends keep working.
-  const illuSourceKinds = Array.isArray(parameterRange.illuSourceKinds) ? parameterRange.illuSourceKinds : [];
-  const laserMinValues = Array.isArray(parameterRange.illuSourceMinIntensities) ? parameterRange.illuSourceMinIntensities : [];
-  const laserMaxValues = Array.isArray(parameterRange.illuSourceMaxIntensities) ? parameterRange.illuSourceMaxIntensities : [];
+  const illuSourceKinds = Array.isArray(parameterRange.illuSourceKinds)
+    ? parameterRange.illuSourceKinds
+    : [];
+  const laserMinValues = Array.isArray(parameterRange.illuSourceMinIntensities)
+    ? parameterRange.illuSourceMinIntensities
+    : [];
+  const laserMaxValues = Array.isArray(parameterRange.illuSourceMaxIntensities)
+    ? parameterRange.illuSourceMaxIntensities
+    : [];
   // Per-channel kind-specific params dict from the experiment slice.  Object
   // shape: { [channelName]: { radius?, intensityR?, intensityG?, intensityB? } }.
   const illuminationParams =
-    parameterValue.illuminationParams && typeof parameterValue.illuminationParams === "object"
+    parameterValue.illuminationParams &&
+    typeof parameterValue.illuminationParams === "object"
       ? parameterValue.illuminationParams
       : {};
   // LED matrix hardware bounds.  Backend exposes maxRingRadius from the
@@ -695,7 +796,7 @@ const ChannelsDimension = () => {
     const rgbMax = Math.max(
       Number(params.intensityR ?? 0),
       Number(params.intensityG ?? 0),
-      Number(params.intensityB ?? 0)
+      Number(params.intensityB ?? 0),
     );
     const newIntensity = willBeEnabled ? (rgbMax > 0 ? rgbMax : 0) : 0;
     if ((intensities[index] ?? 0) !== newIntensity) {
@@ -725,7 +826,7 @@ const ChannelsDimension = () => {
             intensity: Math.max(
               Number(params.intensityR ?? 0),
               Number(params.intensityG ?? 0),
-              Number(params.intensityB ?? 0)
+              Number(params.intensityB ?? 0),
             ),
             intensity_r: Number(params.intensityR ?? 0),
             intensity_g: Number(params.intensityG ?? 0),
@@ -739,7 +840,7 @@ const ChannelsDimension = () => {
             intensity: Math.max(
               Number(params.intensityR ?? 0),
               Number(params.intensityG ?? 255),
-              Number(params.intensityB ?? 0)
+              Number(params.intensityB ?? 0),
             ),
             direction: "top",
             intensity_r: Number(params.intensityR ?? 0),
@@ -776,7 +877,7 @@ const ChannelsDimension = () => {
         experimentSlice.setIlluminationParamsForChannel({
           channelName,
           params: { [key]: value },
-        })
+        }),
       );
       // Resolve the channel's kind to pick the right LED-matrix endpoint.
       const idx = illuSources.indexOf(channelName);
@@ -795,7 +896,7 @@ const ChannelsDimension = () => {
           const rgbMax = Math.max(
             Number(mergedParams.intensityR ?? 0),
             Number(mergedParams.intensityG ?? 0),
-            Number(mergedParams.intensityB ?? 0)
+            Number(mergedParams.intensityB ?? 0),
           );
           if ((intensities[idx] ?? 0) !== rgbMax) {
             const arr = [...intensities];
@@ -813,7 +914,7 @@ const ChannelsDimension = () => {
       previewLedMatrix,
       channelEnabledForExperiment,
       intensities,
-    ]
+    ],
   );
 
   // Handler for exposure change
@@ -867,6 +968,28 @@ const ChannelsDimension = () => {
     dispatch(experimentSlice.setGains(newGains));
   };
 
+  // Read detector parameters from backend and mirror exposure/gain to all channels.
+  const refreshDetectorFieldsFromCamera = async () => {
+    const hostIP = connectionSettings.ip;
+    const hostPort = connectionSettings.apiPort;
+    if (!hostIP || !hostPort || illuSources.length === 0) return;
+
+    const r = await fetch(
+      `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorParameters`,
+    );
+    if (!r.ok) return;
+    const data = await r.json();
+    const expVal = Number(data?.exposure);
+    const gainVal = normalizeGainValue(data?.gain);
+
+    if (Number.isFinite(expVal)) {
+      dispatch(experimentSlice.setExposureTimes(illuSources.map(() => expVal)));
+    }
+    if (gainVal !== null) {
+      dispatch(experimentSlice.setGains(illuSources.map(() => gainVal)));
+    }
+  };
+
   // Fetch the live exposure + gain from the detector and write them into the
   // experiment parameters for every channel. Also copy current LED intensities
   // from the live illumination state so channels mirror the live view setup.
@@ -890,23 +1013,26 @@ const ChannelsDimension = () => {
         dispatch(experimentSlice.setIlluminationIntensities(liveIntensities));
       }
 
-      const r = await fetch(
-        `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorParameters`,
-      );
-      if (!r.ok) return;
-      const data = await r.json();
-      const expVal = Number(data?.exposure);
-      const gainVal = normalizeGainValue(data?.gain);
-      if (Number.isFinite(expVal) && illuSources.length > 0) {
-        dispatch(
-          experimentSlice.setExposureTimes(illuSources.map(() => expVal)),
-        );
-      }
-      if (gainVal !== null && illuSources.length > 0) {
-        dispatch(experimentSlice.setGains(illuSources.map(() => gainVal)));
-      }
+      await refreshDetectorFieldsFromCamera();
     } catch (e) {
       console.warn("Failed to fetch current detector settings:", e);
+    }
+  };
+
+  const handleAutoExposureOnce = async () => {
+    if (detectorParams.mode !== "manual" || autoOncePending) return;
+    setAutoOncePending(true);
+    try {
+      const api = createAxiosInstance();
+      await api.get(
+        `/SettingsController/setDetectorExposureOnce?resetDelayMs=${AUTO_ONCE_RESET_DELAY_MS}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, AUTO_ONCE_UI_HOLD_MS));
+      await refreshDetectorFieldsFromCamera();
+    } catch (e) {
+      console.warn("Failed to run auto exposure once:", e);
+    } finally {
+      setAutoOncePending(false);
     }
   };
 
@@ -954,6 +1080,24 @@ const ChannelsDimension = () => {
         </Typography>
 
         <Box sx={{ display: "flex", gap: 1 }}>
+          <Tooltip
+            title={
+              detectorParams.mode !== "manual"
+                ? "Only available in manual detector mode"
+                : "Run a single auto-exposure pass and return to manual mode"
+            }
+          >
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={handleAutoExposureOnce}
+                disabled={detectorParams.mode !== "manual" || autoOncePending}
+              >
+                {autoOncePending ? "Auto once..." : "Auto once"}
+              </Button>
+            </span>
+          </Tooltip>
           <Tooltip title="Read current exposure & gain from detector and current LED intensities from live view, then apply to all channels">
             <span>
               <Button
@@ -1030,10 +1174,14 @@ const ChannelsDimension = () => {
               onExposureChange={(val) => handleExposureChange(idx, val)}
               onGainChange={(val) => handleGainChange(idx, val)}
               onEnabledChange={(enabled) => handleEnabledChange(idx, enabled)}
-              onIncludeInExperimentChange={(included) => handleIncludeInExperimentChange(idx, included)}
+              onIncludeInExperimentChange={(included) =>
+                handleIncludeInExperimentChange(idx, included)
+              }
               kind={channelKind}
               kindParams={channelKindParams}
-              onKindParamChange={(key, value) => handleKindParamChange(source, key, value)}
+              onKindParamChange={(key, value) =>
+                handleKindParamChange(source, key, value)
+              }
               ringMaxRadius={maxRingRadius}
             />
           );

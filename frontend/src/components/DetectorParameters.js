@@ -198,6 +198,29 @@ export default function DetectorParameters({ hostIP, hostPort }) {
     }
   };
 
+  const refreshDetectorParameters = useCallback(async () => {
+    try {
+      const resp = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorParameters`,
+      );
+      if (!resp.ok) return;
+      const data = await resp.json();
+      dispatch(
+        detectorParametersSlice.setParameters({
+          exposure: data.exposure ?? "",
+          gain: normalizeGainValue(data.gain) ?? "",
+          pixelSize: data.pixelSize ?? "",
+          binning: data.binning ?? "",
+          blacklevel: data.blacklevel ?? "",
+          isRGB: data.isRGB === 1,
+          mode: (data.mode ?? "manual").toLowerCase(),
+        }),
+      );
+    } catch (error) {
+      console.error("Error refreshing detector parameters:", error);
+    }
+  }, [hostIP, hostPort, dispatch]);
+
   const handleAutoExposureOnce = useCallback(async () => {
     setAutoOncePending(true);
     try {
@@ -209,12 +232,13 @@ export default function DetectorParameters({ hostIP, hostPort }) {
       }
       // Keep pending true until backend's once->manual reset window should be complete.
       await new Promise((resolve) => setTimeout(resolve, AUTO_ONCE_UI_HOLD_MS));
+      await refreshDetectorParameters();
     } catch (error) {
       console.error("Error running one-shot exposure auto:", error);
     } finally {
       setAutoOncePending(false);
     }
-  }, [hostIP, hostPort]);
+  }, [hostIP, hostPort, refreshDetectorParameters]);
 
   const beginEditing = (field) => {
     editingRef.current[field] = true;

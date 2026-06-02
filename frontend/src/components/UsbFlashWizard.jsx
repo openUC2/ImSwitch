@@ -61,6 +61,14 @@ import apiUC2ConfigControllerListAllFirmwareFiles from "../backendapi/apiUC2Conf
 import apiUC2ConfigControllerSendCanAddress from "../backendapi/apiUC2ConfigControllerSendCanAddress";
 import apiUC2ConfigControllerProbeDeviceState from "../backendapi/apiUC2ConfigControllerProbeDeviceState";
 import apiUC2ConfigControllerTestDeviceAction from "../backendapi/apiUC2ConfigControllerTestDeviceAction";
+import apiUC2ConfigControllerCancelUSBFlash from "../backendapi/apiUC2ConfigControllerCancelUSBFlash";
+
+// Firmware filenames that ship the *master* (CAN HAT) image. When the user
+// picks one of these we should disconnect ImSwitch first and reconnect after.
+// Slave images skip both.
+const MASTER_FIRMWARE_REGEX = /master|hat|^id_1_/i;
+const isMasterFirmwareName = (filename) =>
+  !!filename && MASTER_FIRMWARE_REGEX.test(filename);
 
 const steps = [
   "Firmware Server",
@@ -126,6 +134,18 @@ const UsbFlashWizard = ({ open, onClose }) => {
       setTestBaud(usbFlashState.canBaudRate);
     }
   }, [usbFlashState.canBaudRate]);
+
+  // Drive skipDisconnect / reconnectAfter defaults from the selected firmware
+  // filename. Master firmware needs ImSwitch to release the serial first and
+  // reopen it after; slave firmware doesn't share the port so both are off.
+  // The user can still override the checkboxes manually after this fires.
+  useEffect(() => {
+    const filename = usbFlashState.selectedFirmware?.filename;
+    if (!filename) return;
+    const isMaster = isMasterFirmwareName(filename);
+    dispatch(usbFlashSlice.setSkipDisconnect(!isMaster));
+    dispatch(usbFlashSlice.setReconnectAfter(isMaster));
+  }, [usbFlashState.selectedFirmware?.filename, dispatch]);
 
   // Load initial data when wizard opens
   useEffect(() => {
@@ -253,27 +273,40 @@ const UsbFlashWizard = ({ open, onClose }) => {
     dispatch(usbFlashSlice.setFlashResult({ status: "skipped", message: "Flashing skipped" }));
   };
 
-  // Auto-detect chip type when a port is selected
+  // Auto-detect chip type when a port is selected. skipDisconnect is *not*
+  // touched here — it's driven from the firmware filename above so the
+  // master/slave choice stays the single source of truth.
   const handlePortSelect = (portDevice) => {
     dispatch(usbFlashSlice.setSelectedPort(portDevice));
     if (portDevice && portDevice !== "auto") {
       const portObj = usbFlashState.availablePorts.find((p) => p.device === portDevice);
       const hint = portObj ? getDeviceHint(portObj) : null;
-      if (hint) {
-        dispatch(usbFlashSlice.setChipType(hint.chip));
-        // For XIAO, auto-enable skip disconnect
-        if (hint.chip === "esp32s3" || hint.chip === "esp32s2") {
-          dispatch(usbFlashSlice.setSkipDisconnect(true));
-        } else {
-          dispatch(usbFlashSlice.setSkipDisconnect(false));
-        }
-      } else {
-        dispatch(usbFlashSlice.setChipType("auto"));
-        dispatch(usbFlashSlice.setSkipDisconnect(false));
-      }
+      dispatch(usbFlashSlice.setChipType(hint ? hint.chip : "auto"));
     } else {
       dispatch(usbFlashSlice.setChipType("auto"));
-      dispatch(usbFlashSlice.setSkipDisconnect(false));
+    }
+  };
+
+  // Cancel a flash that's currently in progress. Updates UI optimistically
+  // so the user gets immediate feedback even before the backend emits
+  // sigUSBFlashStatusUpdate{status:"cancelled"}.
+  const handleCancelFlashing = async () => {
+    try {
+      dispatch(usbFlashSlice.setFlashMessage("Cancelling..."));
+      await apiUC2ConfigControllerCancelUSBFlash();
+    } catch (error) {
+      console.error("Cancel flash failed:", error);
+      // Still unblock the UI — the user wants out.
+      dispatch(usbFlashSlice.setError("Cancel request failed: " + error.message));
+    } finally {
+      dispatch(usbFlashSlice.setIsFlashing(false));
+      dispatch(usbFlashSlice.setFlashStatus("cancelled"));
+      dispatch(
+        usbFlashSlice.setFlashResult({
+          status: "cancelled",
+          message: "Flashing cancelled by user",
+        })
+      );
     }
   };
 
@@ -898,6 +931,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
             <CheckCircleIcon color="success" sx={{ fontSize: 40, mr: 2 }} />
           ) : usbFlashState.flashStatus === "failed" ? (
             <ErrorIcon color="error" sx={{ fontSize: 40, mr: 2 }} />
+          ) : usbFlashState.flashStatus === "cancelled" ? (
+            <WarningIcon color="warning" sx={{ fontSize: 40, mr: 2 }} />
           ) : (
             <CircularProgress size={40} sx={{ mr: 2 }} />
           )}
@@ -933,7 +968,23 @@ const UsbFlashWizard = ({ open, onClose }) => {
           </Alert>
         )}
 
-        {usbFlashState.flashStatus === "failed" && (
+        {usbFlashState.isFlashing && (
+          <Box sx={{ mt: 2, textAlign: "center" }}>
+            <Button
+              variant="outlined"
+              color="warning"
+              onClick={handleCancelFlashing}
+            >
+              Cancel Flashing
+            </Button>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+              Aborting mid-write can leave the chip in an inconsistent state — only cancel if the device is unreachable.
+            </Typography>
+          </Box>
+        )}
+
+        {(usbFlashState.flashStatus === "failed" ||
+          usbFlashState.flashStatus === "cancelled") && (
           <Box sx={{ mt: 2, textAlign: "center", display: "flex", gap: 2, justifyContent: "center" }}>
             <Button variant="outlined" color="primary" onClick={startFlashing}>
               Retry
@@ -1436,6 +1487,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
         return "Firmware update completed successfully!";
       case "failed":
         return "An error occurred during the update process.";
+      case "cancelled":
+        return "Flashing was cancelled.";
       default:
         return "Initializing...";
     }

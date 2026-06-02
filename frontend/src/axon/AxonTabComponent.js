@@ -24,6 +24,9 @@ import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView";
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
 import apiLiveViewControllerGetActiveStreams from "../backendapi/apiLiveViewControllerGetActiveStreams";
+import createAxiosInstance from "../backendapi/createAxiosInstance";
+import { setNotification } from "../state/slices/NotificationSlice";
+import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice";
 
 /**
  * DetectorToggle - Camera selector for switching between detectors
@@ -130,8 +133,53 @@ const DetectorToggle = () => {
 };
 
 const AxonTabComponent = () => {
+  const dispatch = useDispatch();
   // PiP (picture-in-picture) floating live preview
   const [pipVisible, setPipVisible] = useState(false);
+
+  // Ensure WellPlate starts with detector auto-exposure disabled.
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const api = createAxiosInstance();
+        await api.get(`/SettingsController/setDetectorMode?isAuto=false`);
+        if (cancelled) return;
+
+        // Keep frontend mode state in sync until the next WS update arrives.
+        dispatch(
+          detectorParametersSlice.updateParameter({
+            key: "mode",
+            value: "manual",
+          }),
+        );
+
+        dispatch(
+          setNotification({
+            message:
+              "WellPlate started: Live view auto-exposure has been disabled.",
+            type: "info",
+            autoHideDuration: 3500,
+          }),
+        );
+      } catch (error) {
+        if (cancelled) return;
+        dispatch(
+          setNotification({
+            message:
+              "WellPlate started, but live view auto-exposure could not be disabled.",
+            type: "warning",
+            autoHideDuration: 4500,
+          }),
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dispatch]);
 
   return (
     <div style={{ width: "100%" }}>

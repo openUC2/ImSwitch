@@ -966,7 +966,8 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             grid_shape=grid_shape,
             grid_geometry=grid_geometry,
             config=writer_config,
-            logger=self._logger
+            logger=self._logger,
+            isRGB=getattr(self.controller, 'isRGB', False),
         )
         file_writers.append(ome_writer)
 

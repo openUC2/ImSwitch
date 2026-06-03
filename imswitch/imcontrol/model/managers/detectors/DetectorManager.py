@@ -212,7 +212,7 @@ class DetectorManager(SignalInterface):
 
     @property
     def isRGB(self) -> bool:
-        return self.isRGB
+        return self._isRGB
 
     @property
     def model(self) -> str:

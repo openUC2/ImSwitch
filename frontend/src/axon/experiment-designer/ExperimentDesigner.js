@@ -17,6 +17,7 @@ import PauseIcon from "@mui/icons-material/Pause";
 import StopIcon from "@mui/icons-material/Stop";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import VisibilityIcon from "@mui/icons-material/Visibility";
+import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 
 // Dimension components
 import DimensionBar from "./DimensionBar";
@@ -53,6 +54,7 @@ import apiExperimentControllerPauseWorkflow from "../../backendapi/apiExperiment
 import apiExperimentControllerResumeExperiment from "../../backendapi/apiExperimentControllerResumeExperiment";
 import apiExperimentControllerInterruptFocusMap from "../../backendapi/apiExperimentControllerInterruptFocusMap";
 import apiExperimentControllerRunAshlarStitching from "../../backendapi/apiExperimentControllerRunAshlarStitching";
+import apiExperimentControllerGetOverviewAsyncStatus from "../../backendapi/apiExperimentControllerGetOverviewAsyncStatus";
 import fetchGetExperimentStatus from "../../middleware/fetchExperimentControllerGetExperimentStatus";
 
 // Status enum
@@ -91,6 +93,8 @@ const ExperimentDesigner = () => {
   const [cachedStepId, setCachedStepId] = useState(0);
   const [cachedTotalSteps, setCachedTotalSteps] = useState(undefined);
   const [cachedStepName, setCachedStepName] = useState("");
+  const [ashlarRunning, setAshlarRunning] = useState(false);
+  const [ashlarInterrupted, setAshlarInterrupted] = useState(false);
 
   // Periodic status fetch
   useEffect(() => {
@@ -101,34 +105,50 @@ const ExperimentDesigner = () => {
     return () => clearInterval(intervalId);
   }, [dispatch]);
 
-  // Trigger Ashlar stitching automatically when the experiment finishes
-  const prevStatusRef = useRef(Status.IDLE);
+  // Trigger Ashlar stitching automatically when the experiment finishes.
+  // Use a boolean ref so we catch any IDLE transition that follows a RUNNING
+  // phase — including RUNNING→STOPPING→IDLE flows.
+  const wasRunningRef = useRef(false);
   useEffect(() => {
-    const prev = prevStatusRef.current;
     const curr = experimentStatus.status;
-    prevStatusRef.current = curr;
+    if (curr === Status.RUNNING) {
+      wasRunningRef.current = true;
+    } else if (wasRunningRef.current && curr === Status.IDLE) {
+      wasRunningRef.current = false;
+      if (experimentState.parameterValue.ome_write_ashlar_stitch) {
+        // Backend auto-starts stitching once all tiles are written.
+        // Start polling so we can show progress as soon as it begins.
+        setAshlarRunning(true);
+      }
+    }
+  }, [
+    experimentStatus.status,
+    experimentState.parameterValue.ome_write_ashlar_stitch,
+    experimentState.parameterValue.ashlar_pixel_size,
+    experimentState.parameterValue.ashlar_maximum_shift,
+    experimentState.parameterValue.ashlar_align_channel,
+  ]);
 
-    if (
-      prev === Status.RUNNING &&
-      curr === Status.IDLE &&
-      experimentState.parameterValue.ome_write_ashlar_stitch
-    ) {
-      console.log("Experiment finished with Ashlar mode — starting stitching");
-      apiExperimentControllerRunAshlarStitching()
-        .then((data) => {
-          if (data?.started) {
-            infoPopupRef.current?.showMessage("Ashlar stitching started in background");
-          } else {
-            infoPopupRef.current?.showMessage(
-              `Ashlar stitching could not start: ${data?.error ?? "unknown error"}`
-            );
+  // Poll stitching progress until the background job finishes
+  useEffect(() => {
+    if (!ashlarRunning) return;
+    const intervalId = setInterval(() => {
+      apiExperimentControllerGetOverviewAsyncStatus()
+        .then((status) => {
+          if (status?.message)
+            infoPopupRef.current?.showMessage(`Stitching: ${status.message}`);
+          if (!status?.running) {
+            setAshlarRunning(false);
+            if (status?.error)
+              infoPopupRef.current?.showMessage(`Stitching failed: ${status.error.slice(0, 120)}`);
+            else
+              infoPopupRef.current?.showMessage("Ashlar stitching complete");
           }
         })
-        .catch(() => {
-          infoPopupRef.current?.showMessage("Failed to start Ashlar stitching");
-        });
-    }
-  }, [experimentStatus.status, experimentState.parameterValue.ome_write_ashlar_stitch]);
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(intervalId);
+  }, [ashlarRunning]);
 
   // Warn the user before leaving/refreshing the page while an experiment is running
   useEffect(() => {
@@ -257,6 +277,47 @@ const ExperimentDesigner = () => {
       });
   };
 
+  const handleStopStitch = () => {
+    const axiosInstance = createAxiosInstance();
+    axiosInstance.get("/ExperimentController/stopAshlarStitching")
+      .then((res) => {
+        if (res.data?.stopped) {
+          setAshlarRunning(false);
+          setAshlarInterrupted(true);
+          infoPopupRef.current?.showMessage("Ashlar stitching stopped");
+        } else {
+          infoPopupRef.current?.showMessage(res.data?.message ?? "No stitching process running");
+        }
+      })
+      .catch(() => {
+        infoPopupRef.current?.showMessage("Failed to stop Ashlar stitching");
+      });
+  };
+
+  const handleRestartStitch = () => {
+    setAshlarInterrupted(false);
+    apiExperimentControllerRunAshlarStitching({
+      pixelSize: experimentState.parameterValue.ashlar_pixel_size,
+      maximumShift: experimentState.parameterValue.ashlar_maximum_shift,
+      alignChannel: experimentState.parameterValue.ashlar_align_channel,
+    })
+      .then((data) => {
+        if (data?.started) {
+          setAshlarRunning(true);
+          infoPopupRef.current?.showMessage("Ashlar stitching restarted");
+        } else {
+          setAshlarInterrupted(true);
+          infoPopupRef.current?.showMessage(
+            `Could not restart stitching: ${data?.error ?? "unknown error"}`
+          );
+        }
+      })
+      .catch(() => {
+        setAshlarInterrupted(true);
+        infoPopupRef.current?.showMessage("Failed to restart Ashlar stitching");
+      });
+  };
+
   const handleStop = () => {
     dispatch(experimentStatusSlice.setStatus(Status.IDLE));
     // Interrupt focus map immediately (in case we are in focus map phase)
@@ -355,6 +416,34 @@ const ExperimentDesigner = () => {
             </span>
           </Tooltip>
         </ButtonGroup>
+
+        {/* Stitching control button — Stop while running, Restart after interrupted */}
+        {ashlarRunning && (
+          <Tooltip title="Kill the running Ashlar stitching process">
+            <Button
+              size="small"
+              variant="outlined"
+              color="warning"
+              startIcon={<AutoFixHighIcon />}
+              onClick={handleStopStitch}
+            >
+              Stop Stitching
+            </Button>
+          </Tooltip>
+        )}
+        {ashlarInterrupted && !ashlarRunning && (
+          <Tooltip title="Restart Ashlar stitching from the beginning">
+            <Button
+              size="small"
+              variant="outlined"
+              color="secondary"
+              startIcon={<AutoFixHighIcon />}
+              onClick={handleRestartStitch}
+            >
+              Restart Stitching
+            </Button>
+          </Tooltip>
+        )}
 
         {/* Status */}
         <Typography

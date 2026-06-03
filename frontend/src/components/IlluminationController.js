@@ -189,10 +189,13 @@ export default function IlluminationController({ hostIP, hostPort }) {
       <Grid container direction="column" spacing={2}>
         {laserSources.length ? (
           laserSources.map((laserName, idx) => {
-            // Get laser state from Redux (updated via WebSocket)
+            // Get laser state from Redux (updated via WebSocket).
+            // Guard against stale persisted state where values may be objects
+            // (e.g. {detail: "..."} from a backend error) if the laser no longer
+            // exists on the current backend session.
             const laserData = lasers[laserName] || { power: 0, enabled: false };
-            const currentValue = laserData.power;
-            const isActive = laserData.enabled;
+            const currentValue = typeof laserData.power === "number" ? laserData.power : 0;
+            const isActive = !!laserData.enabled;
             const minValue = laserMinValues[idx] || 0;
             const maxValue = laserMaxValues[idx] || 1023;
 

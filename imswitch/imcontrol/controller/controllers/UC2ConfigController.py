@@ -2147,6 +2147,27 @@ class UC2ConfigController(ImConWidgetController):
             self._emit_usb_flash_status("failed", 92, f"CAN address assignment failed: {e}")
             return {"status": "error", "message": str(e)}
 
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setSerialConfig(self, port: str = "", baud: int = 115200):
+        """
+        Set the serial port and baudrate for the master device.
+
+        This is used in the "Test/Assign CAN Address" step to configure the
+        correct port and baudrate before sending the CAN address assignment.
+
+        Parameters:
+          port: serial port device path (e.g. "/dev/ttyACM0").
+          baud: serial baudrate (default 115200).
+        """
+        if not port:
+            return {"status": "error", "message": "No serial port specified"}
+        try:
+            self._master.UC2ConfigManager.setSerialConfig(port, int(baud))
+            return {"status": "success", "message": f"Serial config set to {port} @ {baud} baud"}
+        except Exception as e:
+            self.__logger.error(f"Failed to set serial config: {e}")
+            return {"status": "error", "message": str(e)}
+        
     # Digital Input/Output API Methods
     @APIExport(runOnUIThread=False)
     def probeDeviceState(

@@ -22,6 +22,84 @@ class Position:
     y: int
     z: int
 
+
+# ---------------------------------------------------------------------------
+# Well-plate geometry loader
+# ---------------------------------------------------------------------------
+
+def _load_well_scan_config(labware_dir_name: str) -> dict:
+    """Load well geometry from an openuc2 labware JSON file.
+
+    Walks the openuc2 definitions directory, loads the first *.json found
+    in *labware_dir_name*, and returns a dict mapping well_id to
+    ``{center_x, center_y, width, height}`` **in µm**.
+
+    The loader handles the mm → µm conversion; this function merely reshapes
+    the resulting ``LabwareDefinition`` into the flat format expected by
+    ``runWellTileScan``.
+    """
+    from pathlib import Path
+    from imswitch.imcontrol.model.labware.loader import load_labware_from_file
+
+    definitions_root = (
+        Path(__file__).parent.parent.parent
+        / "model" / "labware" / "definitions" / "openuc2"
+    )
+    labware_dir = definitions_root / labware_dir_name
+    json_files = sorted(labware_dir.glob("*.json"))
+    if not json_files:
+        raise FileNotFoundError(f"No JSON file found in {labware_dir}")
+
+    definition = load_labware_from_file(json_files[0])
+
+    config: dict = {}
+    for well_id, well in definition.wells.items():
+        g = well.geometry
+        if g.shape == "circle":
+            w = h = 2.0 * g.radius
+        else:
+            w = g.width
+            h = g.height
+        config[well_id] = {
+            "center_x": well.x,
+            "center_y": well.y,
+            "width":    w,
+            "height":   h,
+        }
+    return config
+
+
+def _load_well_scan_config_safe(labware_dir_name: str, fallback: dict) -> dict:
+    """Like ``_load_well_scan_config`` but returns *fallback* on any error."""
+    try:
+        return _load_well_scan_config(labware_dir_name)
+    except Exception as exc:
+        import warnings
+        warnings.warn(
+            f"ArkitektController: could not load labware '{labware_dir_name}': {exc}. "
+            "Using built-in fallback.",
+            stacklevel=2,
+        )
+        return fallback
+
+
+# 96-well fallback (Corning convention: row A–H on X, col 1–12 on Y, 9 mm pitch)
+_96WELL_FALLBACK = {
+    f"{'ABCDEFGH'[ri]}{col}": {
+        "center_x": ri * 9000,
+        "center_y": (col - 1) * 9000,
+        "width": 6860,
+        "height": 6860,
+    }
+    for ri in range(8)
+    for col in range(1, 13)
+}
+
+_PLATE_WELL_CONFIGS: dict = {
+    "heidstar4": _load_well_scan_config_safe("slide_4x_histosample_heidstar", {}),
+    "96well":    _load_well_scan_config_safe("corning_96_wellplate_360ul_flat", _96WELL_FALLBACK),
+}
+
 # =========================
 # Controller
 # =========================
@@ -53,15 +131,19 @@ class ArkitektController(ImConWidgetController):
         if self.arkitekt_app is None:
             self._logger.warning("Arkitekt app unavailable; controller disabled.")
             return
+        self._active_focus_map = None  # set by runWellTileScan; read by runTileScan
+
         self.arkitekt_app.register(self.moveToSampleLoadingPosition)
         self.arkitekt_app.register(self.runTileScan)
+        self.arkitekt_app.register(self.previewWell)
+        self.arkitekt_app.register(self.runWellTileScan)
         self.arkitekt_app.register(self.goToPosition)
         self.arkitekt_app.register(self.acquireFrame)
         self.arkitekt_app.register(self.getStagePosition)
         self.arkitekt_app.register(self.homeStageAxis)
         self.arkitekt_app.register(self.setLaserState)
         self.arkitekt_app.register(self.moveStage)
-        
+
         self.arkitekt_app.run_detached()
 
     def moveToSampleLoadingPosition(
@@ -95,14 +177,20 @@ class ArkitektController(ImConWidgetController):
         mStage = self._master.positionersManager[positionerName]
         currentPositions = mStage.getPosition()
         return Position(
-            x=currentPositions["x"],
-            y=currentPositions["y"],
-            z=currentPositions["z"],
+            x=int(currentPositions["X"]),
+            y=int(currentPositions["Y"]),
+            z=int(currentPositions["Z"]),
         )
     
     @APIExport(runOnUIThread=False)
-    def homeStageAxis(self, positionerName: str | None = None, axis: str = "X", is_blocking: bool = False):
-        """Home stage axis."""
+    def homeStageAxis(self, positionerName: str | None = None, axis: str = "ZXY", is_blocking: bool = True):
+        """Home one or more stage axes in the order given by *axis*.
+
+        Each character in *axis* names one axis (X, Y, or Z).  The default
+        "ZXY" homes Z first, then X, then Y — the safe sequence for this
+        microscope.  Single-axis homing is still possible, e.g. axis="X".
+        Each step is blocking so the sequence is always respected.
+        """
         if positionerName is None:
             positionerNames = self._master.positionersManager.getAllDeviceNames()
             if len(positionerNames) == 0:
@@ -110,12 +198,18 @@ class ArkitektController(ImConWidgetController):
                 return None
             positionerName = positionerNames[0]
         mStage = self._master.positionersManager[positionerName]
-        if axis == "X":
-            mStage.home_x(is_blocking=is_blocking)
-        elif axis == "Y":
-            mStage.home_y(is_blocking=is_blocking)
-        elif axis == "Z":
-            mStage.home_z(is_blocking=is_blocking)
+        _home_dispatch = {
+            "X": mStage.home_x,
+            "Y": mStage.home_y,
+            "Z": mStage.home_z,
+        }
+        for ax in axis.upper():
+            home_fn = _home_dispatch.get(ax)
+            if home_fn is None:
+                self._logger.warning(f"Unknown axis '{ax}' – skipping")
+                continue
+            self._logger.debug(f"Homing axis {ax}")
+            home_fn(isBlocking=is_blocking)
 
         
     @APIExport(runOnUIThread=False) 
@@ -635,6 +729,16 @@ class ArkitektController(ImConWidgetController):
                 # Wait for settling
                 time.sleep(t_settle)
 
+                # Apply focus-map Z correction (set by runWellTileScan before delegating here)
+                if self._active_focus_map is not None and self._active_focus_map.is_fitted:
+                    try:
+                        z_target = self._active_focus_map.interpolate(actual_x, actual_y)
+                        mPositioner.move(value=z_target, axis="Z", is_absolute=True, is_blocking=True)
+                    except Exception as _fme:
+                        self._logger.warning(
+                            f"Focus map Z correction failed at ({actual_x:.1f}, {actual_y:.1f}): {_fme}"
+                        )
+
                 # Perform autofocus at this position if requested
                 if performAutofocus and autofocusController is not None:
                     try:
@@ -790,6 +894,352 @@ class ArkitektController(ImConWidgetController):
 
         self._logger.info(f"Tile scan completed: {tile_count} tiles captured")
 
+    # ------------------------------------------------------------------
+    # Well-scan helpers
+    # ------------------------------------------------------------------
+
+    def _read_current_imaging_settings(self):
+        """Return (illumination_channel, illumination_intensity, exposure_time, gain)
+        from the current live-view state.  Any value may be None if not readable."""
+        illumination_channel = None
+        illumination_intensity = None
+        try:
+            laser_manager = self._master.lasersManager
+            for name in laser_manager.getAllDeviceNames():
+                laser = laser_manager[name]
+                if laser.enabled:
+                    illumination_channel = name
+                    illumination_intensity = laser.power if hasattr(laser, "power") else None
+                    break
+        except Exception as e:
+            self._logger.warning(f"Could not read laser settings: {e}")
+
+        exposure_time = None
+        gain = None
+        try:
+            params = self.mDetector.parameters if hasattr(self.mDetector, "parameters") else {}
+            for key in ("Real exposure time", "Set exposure time", "Exposure time"):
+                if key in params:
+                    exposure_time = float(params[key].value)
+                    break
+            for key in ("Gain", "gain"):
+                if key in params:
+                    gain = float(params[key].value)
+                    break
+        except Exception as e:
+            self._logger.warning(f"Could not read detector settings: {e}")
+
+        return illumination_channel, illumination_intensity, exposure_time, gain
+
+    def _build_focus_map_for_well(
+        self,
+        autofocusController,
+        mPositioner,
+        well_bounds: dict,
+        grid_rows: int,
+        grid_cols: int,
+        autofocus_range: float,
+        autofocus_resolution: float,
+        speed: float,
+        t_settle: float,
+    ):
+        """Measure Z at a grid of positions within a well and return a fitted FocusMap.
+
+        Moves the stage in XY to each grid point, runs autofocus to find Z,
+        then fits a surface interpolator over all measured points.
+        Returns None if fitting fails.
+        """
+        from imswitch.imcontrol.model.focus_map import FocusMap
+
+        focus_map = FocusMap(group_id="well_scan", method="spline", logger=self._logger)
+        grid = FocusMap.generate_grid(bounds=well_bounds, rows=grid_rows, cols=grid_cols)
+
+        self._logger.info(
+            f"Focus mapping: {len(grid)} points over "
+            f"X=[{well_bounds['minX']:.0f}, {well_bounds['maxX']:.0f}] "
+            f"Y=[{well_bounds['minY']:.0f}, {well_bounds['maxY']:.0f}] µm"
+        )
+
+        for gx, gy in grid:
+            mPositioner.move(
+                value=(gx, gy), axis="XY",
+                is_absolute=True, is_blocking=True, speed=(speed, speed),
+            )
+            time.sleep(t_settle)
+
+            autofocusController.autoFocus(
+                rangez=autofocus_range,
+                resolutionz=autofocus_resolution,
+            )
+            # Poll until background thread finishes (max 60 s)
+            t0 = time.time()
+            while autofocusController.isAutofusRunning:
+                time.sleep(0.1)
+                if time.time() - t0 > 60:
+                    self._logger.warning("Autofocus timed out during focus mapping")
+                    break
+
+            pos = mPositioner.getPosition()
+            z = pos.get("Z", pos.get("z", 0.0))
+            focus_map.add_point(gx, gy, z)
+            self._logger.debug(f"Focus map: ({gx:.0f}, {gy:.0f}) → Z={z:.2f} µm")
+
+        if focus_map.n_points == 0:
+            self._logger.error("Focus map: no points collected")
+            return None
+
+        try:
+            focus_map.fit()
+            s = focus_map.fit_stats
+            self._logger.info(
+                f"Focus map fitted: method={s.method}, MAE={s.mean_abs_error:.2f} µm, "
+                f"n={s.n_points}"
+            )
+            return focus_map
+        except Exception as e:
+            self._logger.error(f"Focus map fitting failed: {e}")
+            return None
+
+    @APIExport(runOnUIThread=False)
+    def previewWell(
+        self,
+        well_id: str = "A1",
+        plate_type: str = "heidstar4",
+        perform_autofocus: bool = True,
+        autofocus_range: float = 100,
+        autofocus_resolution: float = 10,
+        speed: float = 10000,
+        t_settle: float = 0.2,
+        positionerName: str | None = None,
+    ) -> Generator[Image, None, None]:
+        """Move to a well center, run autofocus, and capture one frame.
+
+        Use this to verify the correct well is selected and images look
+        acceptable before starting a full tile scan with runWellTileScan.
+
+        Args:
+            well_id: Well label, e.g. "A1"–"A4" for heidstar4.
+            plate_type: Plate type. "heidstar4" (default) or "96well".
+            perform_autofocus: Run autofocus before capturing. Default True.
+            autofocus_range: Z scan half-range (µm). Default 100.
+            autofocus_resolution: Z step size for autofocus (µm). Default 10.
+            speed: Stage movement speed (µm/s). Default 10000.
+            t_settle: Settling time after stage move (s). Default 0.2.
+            positionerName: Positioner name, or None for first available.
+
+        Yields:
+            Image: Single frame captured at the well center.
+        """
+        plate_wells = _PLATE_WELL_CONFIGS.get(plate_type)
+        if plate_wells is None:
+            self._logger.error(
+                f"Unknown plate type '{plate_type}'. Supported: {list(_PLATE_WELL_CONFIGS)}"
+            )
+            return
+
+        well_geom = plate_wells.get(well_id.strip().upper())
+        if well_geom is None:
+            self._logger.error(
+                f"Unknown well '{well_id}' for plate '{plate_type}'. "
+                f"Valid wells: {list(plate_wells)}"
+            )
+            return
+
+        if positionerName is None:
+            names = self._master.positionersManager.getAllDeviceNames()
+            if not names:
+                self._logger.error("No positioners available for well preview")
+                return
+            positionerName = names[0]
+        mPositioner = self._master.positionersManager[positionerName]
+
+        center_x = well_geom["center_x"]
+        center_y = well_geom["center_y"]
+        self._logger.info(f"Preview: moving to well {well_id} center ({center_x}, {center_y}) µm")
+
+        mPositioner.move(
+            value=(center_x, center_y),
+            axis="XY",
+            is_absolute=True,
+            is_blocking=True,
+            speed=(speed, speed),
+        )
+        time.sleep(t_settle)
+
+        if perform_autofocus:
+            autofocusController = None
+            try:
+                autofocusController = self._master.getController("Autofocus")
+            except Exception:
+                pass
+
+            if autofocusController is not None:
+                self._logger.info(f"Preview: running autofocus at well {well_id}...")
+                autofocusController.autoFocus(
+                    rangez=autofocus_range,
+                    resolutionz=autofocus_resolution,
+                )
+                t0 = time.time()
+                while autofocusController.isAutofusRunning:
+                    time.sleep(0.1)
+                    if time.time() - t0 > 60:
+                        self._logger.warning("Autofocus timed out during well preview")
+                        break
+            else:
+                self._logger.warning("AutofocusController not available – skipping autofocus")
+
+        self._logger.info(f"Preview: capturing image at well {well_id}")
+        yield from self.acquireFrame()
+
+    @APIExport(runOnUIThread=False)
+    def runWellTileScan(
+        self,
+        well_id: str = "A1",
+        plate_type: str = "heidstar4",
+        illumination_channel: str | None = None,
+        illumination_intensity: float | None = None,
+        exposure_time: float | None = None,
+        gain: float | None = None,
+        overlap_percent: float = 10.0,
+        focus_map_grid_rows: int = 3,
+        focus_map_grid_cols: int = 3,
+        autofocus_range: float = 100,
+        autofocus_resolution: float = 10,
+        objective_id: int | None = None,
+        speed: float = 10000,
+        t_settle: float = 0.2,
+        positionerName: str | None = None,
+    ) -> Generator[Image, None, None]:
+        """Scan an entire well with predefined imaging settings and focus mapping.
+
+        Reads illumination, exposure time, and gain from the current live-view
+        state unless explicitly overridden.  Before acquiring tiles a focus map
+        is measured over the well (grid of autofocus points) and used to correct
+        Z at every tile position.
+
+        Args:
+            well_id: Well label, e.g. "A1"–"A4" for heidstar4, or "A1"–"H12" for 96well.
+            plate_type: Plate geometry. "heidstar4" (default) or "96well".
+            illumination_channel: Laser/LED name. None → first active channel in live view.
+            illumination_intensity: Source intensity. None → reads from live view.
+            exposure_time: Camera exposure in ms. None → reads from current detector setting.
+            gain: Camera gain. None → reads from current detector setting.
+            overlap_percent: Tile overlap (0–100). Default 10 %.
+            focus_map_grid_rows: Autofocus rows for focus map. Default 3.
+            focus_map_grid_cols: Autofocus columns for focus map. Default 3.
+            autofocus_range: Z scan half-range per autofocus step (µm). Default 100.
+            autofocus_resolution: Z step size for autofocus (µm). Default 10.
+            objective_id: Objective slot to activate before scanning, or None.
+            speed: Stage speed (µm/s). Default 10000.
+            t_settle: Settling time after each XY move (s). Default 0.2.
+            positionerName: Positioner name, or None for first available.
+
+        Yields:
+            Image: Tile images with affine transformation metadata for stitching.
+        """
+        # --- Validate well ID -----------------------------------------------
+        plate_wells = _PLATE_WELL_CONFIGS.get(plate_type)
+        if plate_wells is None:
+            self._logger.error(
+                f"Unknown plate type '{plate_type}'. Supported: {list(_PLATE_WELL_CONFIGS)}"
+            )
+            return
+
+        well_geom = plate_wells.get(well_id.strip().upper())
+        if well_geom is None:
+            self._logger.error(
+                f"Unknown well '{well_id}' for plate '{plate_type}'. "
+                f"Valid wells: {list(plate_wells)}"
+            )
+            return
+
+        center_x = well_geom["center_x"]
+        center_y = well_geom["center_y"]
+        width    = well_geom["width"]
+        height   = well_geom["height"]
+
+        # --- Resolve positioner ---------------------------------------------
+        if positionerName is None:
+            names = self._master.positionersManager.getAllDeviceNames()
+            if not names:
+                self._logger.error("No positioners available for well tile scan")
+                return
+            positionerName = names[0]
+        mPositioner = self._master.positionersManager[positionerName]
+
+        # --- Read live-view imaging settings where not supplied -------------
+        live_ch, live_intensity, live_exposure, live_gain = self._read_current_imaging_settings()
+        if illumination_channel is None:
+            illumination_channel = live_ch
+        if illumination_intensity is None:
+            illumination_intensity = live_intensity if live_intensity is not None else 1024.0
+        if exposure_time is None:
+            exposure_time = live_exposure
+        if gain is None:
+            gain = live_gain
+
+        self._logger.info(
+            f"Well tile scan: well={well_id}, plate={plate_type}, "
+            f"center=({center_x}, {center_y}) µm, scan={width}×{height} µm | "
+            f"illum={illumination_channel} @ {illumination_intensity}, "
+            f"exp={exposure_time} ms, gain={gain}"
+        )
+
+        # --- Build focus map ------------------------------------------------
+        self._active_focus_map = None
+        autofocusController = None
+        try:
+            autofocusController = self._master.getController("Autofocus")
+        except Exception:
+            pass
+
+        if autofocusController is not None:
+            well_bounds = {
+                "minX": center_x - width  / 2,
+                "maxX": center_x + width  / 2,
+                "minY": center_y - height / 2,
+                "maxY": center_y + height / 2,
+            }
+            self._logger.info(
+                f"Building focus map ({focus_map_grid_rows}×{focus_map_grid_cols} grid) "
+                f"for well {well_id}..."
+            )
+            self._active_focus_map = self._build_focus_map_for_well(
+                autofocusController=autofocusController,
+                mPositioner=mPositioner,
+                well_bounds=well_bounds,
+                grid_rows=focus_map_grid_rows,
+                grid_cols=focus_map_grid_cols,
+                autofocus_range=autofocus_range,
+                autofocus_resolution=autofocus_resolution,
+                speed=speed,
+                t_settle=t_settle,
+            )
+            if self._active_focus_map is None:
+                self._logger.warning("Focus map unavailable – continuing without Z correction")
+        else:
+            self._logger.warning("AutofocusController not available – scanning without focus map")
+
+        # --- Run tile scan (focus map Z correction applied inside) ----------
+        try:
+            yield from self.runTileScan(
+                center_x_micrometer=center_x,
+                center_y_micrometer=center_y,
+                range_x_micrometer=width,
+                range_y_micrometer=height,
+                overlap_percent=overlap_percent,
+                illumination_channel=illumination_channel,
+                illumination_intensity=illumination_intensity,
+                exposure_time=exposure_time,
+                gain=gain,
+                speed=speed,
+                positionerName=positionerName,
+                performAutofocus=False,
+                objective_id=objective_id,
+                t_settle=t_settle,
+            )
+        finally:
+            self._active_focus_map = None
 
     @APIExport(runOnUIThread=False)
     def deconvolve(self) -> int:

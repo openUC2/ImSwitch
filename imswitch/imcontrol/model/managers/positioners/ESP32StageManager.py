@@ -699,7 +699,9 @@ class ESP32StageManager(PositionerManager):
 
     def moveToSampleLoadingPosition(self, speed=10000, is_blocking=True):
         value = (self.sampleLoadingPositions["X"], self.sampleLoadingPositions["Y"], self.sampleLoadingPositions["Z"])
-        self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
+        speed_xyz = (speed, speed, speed) if not hasattr(speed, "__len__") else speed
+        acceleration_xyz = (self.acceleration["X"], self.acceleration["Y"], self.acceleration["Z"])
+        self._motor.move_xyz(value, speed_xyz, acceleration=acceleration_xyz, is_absolute=True, is_blocking=is_blocking)
 
 
     def frameHomingProcedure(self, is_blocking=False):

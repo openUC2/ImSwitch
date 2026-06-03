@@ -60,6 +60,15 @@ import apiUC2ConfigControllerSetOTAFirmwareServer from "../backendapi/apiUC2Conf
 import apiUC2ConfigControllerListAllFirmwareFiles from "../backendapi/apiUC2ConfigControllerListAllFirmwareFiles";
 import apiUC2ConfigControllerSendCanAddress from "../backendapi/apiUC2ConfigControllerSendCanAddress";
 import apiUC2ConfigControllerProbeDeviceState from "../backendapi/apiUC2ConfigControllerProbeDeviceState";
+import apiUC2ConfigControllerTestDeviceAction from "../backendapi/apiUC2ConfigControllerTestDeviceAction";
+import apiUC2ConfigControllerCancelUSBFlash from "../backendapi/apiUC2ConfigControllerCancelUSBFlash";
+
+// Firmware filenames that ship the *master* (CAN HAT) image. When the user
+// picks one of these we should disconnect ImSwitch first and reconnect after.
+// Slave images skip both.
+const MASTER_FIRMWARE_REGEX = /master|hat|^id_1_/i;
+const isMasterFirmwareName = (filename) =>
+  !!filename && MASTER_FIRMWARE_REGEX.test(filename);
 
 const steps = [
   "Firmware Server",
@@ -108,6 +117,35 @@ const getDeviceHint = (port) => {
 const UsbFlashWizard = ({ open, onClose }) => {
   const dispatch = useDispatch();
   const usbFlashState = useSelector(usbFlashSlice.getUsbFlashState);
+
+  // Local UI state for the device validation panel (completion step)
+  const [testBaud, setTestBaud] = React.useState(115200);
+  const [testBusy, setTestBusy] = React.useState(false);
+  const [testResult, setTestResult] = React.useState(null); // { kind, status, response, command }
+  const [motorPosition, setMotorPosition] = React.useState(1000);
+  const [motorSpeed, setMotorSpeed] = React.useState(2000);
+  const [motorStepperId, setMotorStepperId] = React.useState(1);
+  const [ledRgb, setLedRgb] = React.useState(25);
+  const [laserVal, setLaserVal] = React.useState(118);
+
+  // Keep testBaud in sync with the wizard's canBaudRate when entering the completion step
+  useEffect(() => {
+    if (usbFlashState.canBaudRate) {
+      setTestBaud(usbFlashState.canBaudRate);
+    }
+  }, [usbFlashState.canBaudRate]);
+
+  // Drive skipDisconnect / reconnectAfter defaults from the selected firmware
+  // filename. Master firmware needs ImSwitch to release the serial first and
+  // reopen it after; slave firmware doesn't share the port so both are off.
+  // The user can still override the checkboxes manually after this fires.
+  useEffect(() => {
+    const filename = usbFlashState.selectedFirmware?.filename;
+    if (!filename) return;
+    const isMaster = isMasterFirmwareName(filename);
+    dispatch(usbFlashSlice.setSkipDisconnect(!isMaster));
+    dispatch(usbFlashSlice.setReconnectAfter(isMaster));
+  }, [usbFlashState.selectedFirmware?.filename, dispatch]);
 
   // Load initial data when wizard opens
   useEffect(() => {
@@ -235,27 +273,40 @@ const UsbFlashWizard = ({ open, onClose }) => {
     dispatch(usbFlashSlice.setFlashResult({ status: "skipped", message: "Flashing skipped" }));
   };
 
-  // Auto-detect chip type when a port is selected
+  // Auto-detect chip type when a port is selected. skipDisconnect is *not*
+  // touched here — it's driven from the firmware filename above so the
+  // master/slave choice stays the single source of truth.
   const handlePortSelect = (portDevice) => {
     dispatch(usbFlashSlice.setSelectedPort(portDevice));
     if (portDevice && portDevice !== "auto") {
       const portObj = usbFlashState.availablePorts.find((p) => p.device === portDevice);
       const hint = portObj ? getDeviceHint(portObj) : null;
-      if (hint) {
-        dispatch(usbFlashSlice.setChipType(hint.chip));
-        // For XIAO, auto-enable skip disconnect
-        if (hint.chip === "esp32s3" || hint.chip === "esp32s2") {
-          dispatch(usbFlashSlice.setSkipDisconnect(true));
-        } else {
-          dispatch(usbFlashSlice.setSkipDisconnect(false));
-        }
-      } else {
-        dispatch(usbFlashSlice.setChipType("auto"));
-        dispatch(usbFlashSlice.setSkipDisconnect(false));
-      }
+      dispatch(usbFlashSlice.setChipType(hint ? hint.chip : "auto"));
     } else {
       dispatch(usbFlashSlice.setChipType("auto"));
-      dispatch(usbFlashSlice.setSkipDisconnect(false));
+    }
+  };
+
+  // Cancel a flash that's currently in progress. Updates UI optimistically
+  // so the user gets immediate feedback even before the backend emits
+  // sigUSBFlashStatusUpdate{status:"cancelled"}.
+  const handleCancelFlashing = async () => {
+    try {
+      dispatch(usbFlashSlice.setFlashMessage("Cancelling..."));
+      await apiUC2ConfigControllerCancelUSBFlash();
+    } catch (error) {
+      console.error("Cancel flash failed:", error);
+      // Still unblock the UI — the user wants out.
+      dispatch(usbFlashSlice.setError("Cancel request failed: " + error.message));
+    } finally {
+      dispatch(usbFlashSlice.setIsFlashing(false));
+      dispatch(usbFlashSlice.setFlashStatus("cancelled"));
+      dispatch(
+        usbFlashSlice.setFlashResult({
+          status: "cancelled",
+          message: "Flashing cancelled by user",
+        })
+      );
     }
   };
 
@@ -357,6 +408,39 @@ const UsbFlashWizard = ({ open, onClose }) => {
       dispatch(usbFlashSlice.setError("Failed to assign CAN address: " + error.message));
     } finally {
       dispatch(usbFlashSlice.setIsFlashing(false));
+    }
+  };
+
+  // --- Hardware validation: motor / ledarray / laser test commands ---
+  const runDeviceTest = async (kind, extraParams = {}) => {
+    const port = usbFlashState.selectedPort || usbFlashState.flashResult?.port;
+    if (!port) {
+      dispatch(usbFlashSlice.setError("No port available for device test"));
+      return;
+    }
+    try {
+      setTestBusy(true);
+      setTestResult(null);
+      dispatch(usbFlashSlice.clearMessages());
+      const result = await apiUC2ConfigControllerTestDeviceAction({
+        port,
+        deviceType: kind,
+        baud: testBaud,
+        ...extraParams,
+      });
+      setTestResult({ kind, ...result });
+      if (result.status === "error") {
+        dispatch(usbFlashSlice.setError(result.message || `${kind} test failed`));
+      } else if (result.status === "warning") {
+        dispatch(usbFlashSlice.setError(`${kind} test returned a warning - check response below.`));
+      } else {
+        dispatch(usbFlashSlice.setSuccessMessage(`${kind} test command sent successfully✓`));
+      }
+    } catch (error) {
+      console.error(`Device test (${kind}) failed:`, error);
+      dispatch(usbFlashSlice.setError(`${kind} test failed: ` + error.message));
+    } finally {
+      setTestBusy(false);
     }
   };
 
@@ -847,6 +931,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
             <CheckCircleIcon color="success" sx={{ fontSize: 40, mr: 2 }} />
           ) : usbFlashState.flashStatus === "failed" ? (
             <ErrorIcon color="error" sx={{ fontSize: 40, mr: 2 }} />
+          ) : usbFlashState.flashStatus === "cancelled" ? (
+            <WarningIcon color="warning" sx={{ fontSize: 40, mr: 2 }} />
           ) : (
             <CircularProgress size={40} sx={{ mr: 2 }} />
           )}
@@ -882,7 +968,23 @@ const UsbFlashWizard = ({ open, onClose }) => {
           </Alert>
         )}
 
-        {usbFlashState.flashStatus === "failed" && (
+        {usbFlashState.isFlashing && (
+          <Box sx={{ mt: 2, textAlign: "center" }}>
+            <Button
+              variant="outlined"
+              color="warning"
+              onClick={handleCancelFlashing}
+            >
+              Cancel Flashing
+            </Button>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+              Aborting mid-write can leave the chip in an inconsistent state — only cancel if the device is unreachable.
+            </Typography>
+          </Box>
+        )}
+
+        {(usbFlashState.flashStatus === "failed" ||
+          usbFlashState.flashStatus === "cancelled") && (
           <Box sx={{ mt: 2, textAlign: "center", display: "flex", gap: 2, justifyContent: "center" }}>
             <Button variant="outlined" color="primary" onClick={startFlashing}>
               Retry
@@ -997,7 +1099,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
             </FormControl>
 
             <Alert severity="info" sx={{ mt: 2 }}>
-              Will send <code>{`{"task":"/can_act","address":${usbFlashState.canAddress}}`}</code> to{" "}
+              Will send <code>{`{"task":"/can_act","address":${usbFlashState.canAddress}, "nodeId":${usbFlashState.canAddress}, "canMotorAxis":1}}`}</code> to{" "}
               {usbFlashState.selectedPort || usbFlashState.flashResult?.port || "auto-detected port"}
             </Alert>
           </Box>
@@ -1136,6 +1238,226 @@ const UsbFlashWizard = ({ open, onClose }) => {
         </Typography>
       </Paper>
 
+      {/* Hardware validation: send device-specific test commands */}
+      <Paper sx={{ p: 2, mt: 2, textAlign: "left" }}>
+        <Typography variant="subtitle2" gutterBottom>
+          <FlashOnIcon sx={{ mr: 1, verticalAlign: "middle", fontSize: 18 }} />
+          Hardware Validation
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 2 }}>
+          Send a real action to the slave to verify motor / LED array / laser firmware works.
+        </Typography>
+
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2, flexWrap: "wrap" }}>
+          <TextField
+            label="Baud Rate"
+            type="number"
+            size="small"
+            value={testBaud}
+            onChange={(e) => setTestBaud(parseInt(e.target.value, 10) || 115200)}
+            sx={{ width: 140 }}
+            helperText="Default 115200"
+          />
+        </Box>
+
+        {/* Motor test */}
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
+            Motor (/motor_act)
+          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", mb: 1 }}>
+            <TextField
+              label="Stepper ID"
+              type="number"
+              size="small"
+              value={motorStepperId}
+              onChange={(e) => setMotorStepperId(parseInt(e.target.value, 10) || 1)}
+              sx={{ width: 100 }}
+            />
+            <TextField
+              label="Speed"
+              type="number"
+              size="small"
+              value={motorSpeed}
+              onChange={(e) => setMotorSpeed(parseInt(e.target.value, 10) || 0)}
+              sx={{ width: 110 }}
+            />
+            <TextField
+              label="Position (steps)"
+              type="number"
+              size="small"
+              value={motorPosition}
+              onChange={(e) => setMotorPosition(parseInt(e.target.value, 10) || 0)}
+              sx={{ width: 140 }}
+            />
+            <Button
+              variant="outlined"
+              size="small"
+              disabled={testBusy}
+              onClick={() => runDeviceTest("motor", {
+                stepperid: motorStepperId,
+                speed: motorSpeed,
+                position: motorPosition,
+                isabs: 0,
+              })}
+            >
+              Move +
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              disabled={testBusy}
+              onClick={() => runDeviceTest("motor", {
+                stepperid: motorStepperId,
+                speed: motorSpeed,
+                position: -Math.abs(motorPosition),
+                isabs: 0,
+              })}
+            >
+              Move -
+            </Button>
+          </Box>
+        </Box>
+
+        <Divider sx={{ my: 1 }} />
+
+        {/* LED array test */}
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
+            LED Array (/ledarr_act)
+          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+            <TextField
+              label="R=G=B"
+              type="number"
+              size="small"
+              value={ledRgb}
+              onChange={(e) => setLedRgb(Math.max(0, Math.min(255, parseInt(e.target.value, 10) || 0)))}
+              sx={{ width: 100 }}
+              inputProps={{ min: 0, max: 255 }}
+            />
+            <Button
+              variant="outlined"
+              size="small"
+              disabled={testBusy}
+              onClick={() => runDeviceTest("ledarray", {
+                r: ledRgb, g: ledRgb, b: ledRgb, ledAction: "fill",
+              })}
+            >
+              Fill LEDs
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              disabled={testBusy}
+              onClick={() => runDeviceTest("ledarray", {
+                r: 0, g: 0, b: 0, ledAction: "fill",
+              })}
+            >
+              All Off
+            </Button>
+          </Box>
+        </Box>
+
+        <Divider sx={{ my: 1 }} />
+
+        {/* Laser test */}
+        <Box>
+          <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
+            Laser (/laser_act)
+          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", mb: 1 }}>
+            <TextField
+              label="LASERval"
+              type="number"
+              size="small"
+              value={laserVal}
+              onChange={(e) => setLaserVal(parseInt(e.target.value, 10) || 0)}
+              sx={{ width: 120 }}
+            />
+            {[0, 1, 2, 3, 4].map((lid) => (
+              <Button
+                key={lid}
+                variant="outlined"
+                size="small"
+                disabled={testBusy}
+                onClick={() => runDeviceTest("laser", { laserid: lid, laserval: laserVal })}
+              >
+                On L{lid}
+              </Button>
+            ))}
+            {[0, 1, 2, 3, 4].map((lid) => (
+              <Button
+                key={`off${lid}`}
+                variant="text"
+                size="small"
+                color="inherit"
+                disabled={testBusy}
+                onClick={() => runDeviceTest("laser", { laserid: lid, laserval: 0 })}
+              >
+                Off L{lid}
+              </Button>
+            ))}
+          </Box>
+        </Box>
+
+        {testBusy && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
+            <CircularProgress size={16} />
+            <Typography variant="caption">Sending command...</Typography>
+          </Box>
+        )}
+
+        {testResult && (
+          <Paper variant="outlined" sx={{ p: 1.5, mt: 2 }}>
+            <Typography variant="caption" sx={{ fontWeight: 500 }}>
+              Last {testResult.kind} test — status:{" "}
+              <span style={{
+                color: testResult.status === "success" ? "green"
+                  : testResult.status === "warning" ? "orange" : "red",
+              }}>
+                {testResult.status}
+              </span>
+            </Typography>
+            {testResult.command && (
+              <Typography
+                variant="body2"
+                component="pre"
+                sx={{
+                  whiteSpace: "pre-wrap",
+                  fontFamily: "monospace",
+                  fontSize: "0.75rem",
+                  mt: 0.5,
+                  color: "text.secondary",
+                }}
+              >
+                {">> "}{JSON.stringify(testResult.command)}
+              </Typography>
+            )}
+            {testResult.response !== undefined && (
+              <Typography
+                variant="body2"
+                component="pre"
+                sx={{
+                  whiteSpace: "pre-wrap",
+                  fontFamily: "monospace",
+                  fontSize: "0.75rem",
+                  mt: 0.5,
+                  overflowX: "auto",
+                }}
+              >
+                {testResult.response || "(no response)"}
+              </Typography>
+            )}
+            {testResult.message && (
+              <Typography variant="caption" color="error" sx={{ display: "block", mt: 0.5 }}>
+                {testResult.message}
+              </Typography>
+            )}
+          </Paper>
+        )}
+      </Paper>
+
       {/* Start Over button to flash another device */}
       <Box sx={{ mt: 3 }}>
         <Button
@@ -1165,6 +1487,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
         return "Firmware update completed successfully!";
       case "failed":
         return "An error occurred during the update process.";
+      case "cancelled":
+        return "Flashing was cancelled.";
       default:
         return "Initializing...";
     }

@@ -277,7 +277,7 @@ wheels = [
 
 [[package]]
 name = "arkitekt-next"
-version = "0.40.3"
+version = "0.40.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -294,9 +294,9 @@ dependencies = [
     { name = "turms" },
     { name = "watchfiles" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/47/c3/a0683b9b18fe6df17664b601060bb636371682df26962f30f3b54e85724a/arkitekt_next-0.40.3.tar.gz", hash = "sha256:814300694799374884441588fe847adf3ca98f8427296638ba9e384759d4217f", size = 570588, upload-time = "2026-04-23T20:23:35.949Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a5/18/9e0bcd5c49fd50f2648de1b0f008e2cbeb8e0e669de96e1603dee73b23dd/arkitekt_next-0.40.4.tar.gz", hash = "sha256:6610129f0599821e8e629bf96350e61ad7bfbfe4792bf3143771b6638c2d7b25", size = 570617, upload-time = "2026-05-27T12:06:58.305Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cd/5a/be64a3adf549b85b74e25dbe57f4c17adcc21b5f234dd0c3bf7fbe24968c/arkitekt_next-0.40.3-py3-none-any.whl", hash = "sha256:65708800ded533b1fb22abf8fc1ff2b9157f5d54525ad83bc4d21ffcef5ca991", size = 610401, upload-time = "2026-04-23T20:23:37.678Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/f3/0ce6a3bb6872a58c68e58f10eb09058fdc07dbbaf41ed99a7e014058254e/arkitekt_next-0.40.4-py3-none-any.whl", hash = "sha256:dec7e0268b4d48764959a6bfbe40635116a51a036690e0e4410b88c7737e2fee", size = 610470, upload-time = "2026-05-27T12:06:59.56Z" },
 ]
 
 [package.optional-dependencies]
@@ -1960,7 +1960,7 @@ pymmcore = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.4" },
     { name = "aiortc", specifier = ">=1.9.0" },
-    { name = "arkitekt-next", extras = ["all"], specifier = "==0.40.3" },
+    { name = "arkitekt-next", extras = ["all"], specifier = "==0.40.4" },
     { name = "ashlaruc2", marker = "extra == 'ashlar'" },
     { name = "av", specifier = "==13.1.0" },
     { name = "coloredlogs", specifier = ">=15" },
@@ -4491,7 +4491,7 @@ wheels = [
 
 [[package]]
 name = "rekuest-next"
-version = "1.4.6"
+version = "1.6.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docstring-parser" },
@@ -4504,9 +4504,9 @@ dependencies = [
     { name = "rath" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/44/27/978a917f39fb38788a9d251dfa0501de7fb1ce222af40b0386ae063029e7/rekuest_next-1.4.6.tar.gz", hash = "sha256:2678d2dea0451126afcdcb715ef7ae1470c51553d6e5a4d678b2cccbb441971e", size = 183857, upload-time = "2026-04-23T17:48:57.986Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/65/f3/ada0948c423e867a8278546b4e9bebe7790bb04e49ef533b98020c6e1b27/rekuest_next-1.6.2.tar.gz", hash = "sha256:38b403d8129c3d06bb5686f7b7bf5f0433716570df18497a1b25fda04b23493c", size = 202621, upload-time = "2026-05-27T10:05:16.588Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/de/fac9e83cc649555002fc910be9256fb672d11cbb6d9a89c3d3fdc357bb4d/rekuest_next-1.4.6-py3-none-any.whl", hash = "sha256:11c2a5fa69d63cde37120b81323f39f8baac9572f493a3cbdf797b9e123acdcb", size = 240616, upload-time = "2026-04-23T17:48:56.515Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/29/dd51cb80b9a1918d715a039b251c98f58d0323ee6e674c3a89c6e1ec2a14/rekuest_next-1.6.2-py3-none-any.whl", hash = "sha256:7b28ff00d82ac8c2062b58a2e8e87706a27692f12e61880f76e2617bc545b500", size = 262692, upload-time = "2026-05-27T10:05:17.856Z" },
 ]
 
 [[package]]

@@ -12,9 +12,18 @@ import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js"
 import * as wsUtils from "./WellSelectorUtils.js";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
 import apiPositionerControllerSetStageOffsetAxis from "../backendapi/apiPositionerControllerSetStageOffsetAxis.js";
+import apiPositionerControllerGetDevicePositionAxis from "../backendapi/apiPositionerControllerGetDevicePositionAxis.js";
 
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 
+import {
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Button,
+} from "@mui/material";
 import { X } from "@mui/icons-material";
 
 //##################################################################################
@@ -55,6 +64,13 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
   // Position history for trace drawing
   const [positionHistory, setPositionHistory] = useState([]);
+
+  // "We are here" calibration dialog state. Holds the layout coordinate the
+  // user right-clicked. Confirming overwrites the persisted stage offset so
+  // the current physical position reports as that layout coordinate.
+  const [calibConfirm, setCalibConfirm] = useState(null);
+  const [calibBusy, setCalibBusy] = useState(false);
+  const [calibError, setCalibError] = useState("");
 
   const [isCtrlKeyPressed, setIsCtrlKeyPressed] = useState(false);
   const [isShiftKeyPressed, setIsShiftKeyPressed] = useState(false);
@@ -1624,35 +1640,19 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
       }
     }
 
-    // Add "We are here" calibration option to set stage offset
-    // This uses the clicked position on the canvas/wellplate as the known position
-    // and transmits it to the backend to calibrate the stage offset
+    // "We are here" - confirm via dialog, then record the current physical
+    // position as the clicked layout coordinate. The actual offset write
+    // happens in confirmCalibration() once the user agrees; this avoids
+    // accidental destructive clicks.
     const clickedPhysicalPosition = calcPxPoint2PhyPoint(menuPositionLocal);
     actionList.push({
-      label: "📍 We are here (Calibrate Offset)",
-      action: async () => {
-        try {
-          // Set stage offset for X axis using clicked position as known position
-          await apiPositionerControllerSetStageOffsetAxis({
-            knownPosition: clickedPhysicalPosition.x,
-            axis: "X",
-          });
-          console.log(`Stage offset X calibrated to known position: ${clickedPhysicalPosition.x}`);
-
-          // Small delay between API calls to avoid race conditions on the backend
-          await new Promise(resolve => setTimeout(resolve, 100));
-
-          // Set stage offset for Y axis using clicked position as known position
-          await apiPositionerControllerSetStageOffsetAxis({
-            knownPosition: clickedPhysicalPosition.y,
-            axis: "Y",
-          });
-          console.log(`Stage offset Y calibrated to known position: ${clickedPhysicalPosition.y}`);
-
-          console.log(`Stage offset calibrated: X=${clickedPhysicalPosition.x}, Y=${clickedPhysicalPosition.y}`);
-        } catch (error) {
-          console.error("Error calibrating stage offset:", error);
-        }
+      label: "We are here (calibrate offset)",
+      action: () => {
+        setCalibError("");
+        setCalibConfirm({
+          x: clickedPhysicalPosition.x,
+          y: clickedPhysicalPosition.y,
+        });
         setShowMenu(false);
       },
     });
@@ -1720,6 +1720,72 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
         </div>
       )}
       {/* context menu end */}
+
+      {/* "We are here" confirmation dialog */}
+      <Dialog
+        open={!!calibConfirm}
+        onClose={() => !calibBusy && setCalibConfirm(null)}
+      >
+        <DialogTitle>Overwrite stored stage offset?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            About to record the current physical stage position as the layout
+            coordinate (
+            {calibConfirm ? calibConfirm.x.toFixed(1) : "?"},{" "}
+            {calibConfirm ? calibConfirm.y.toFixed(1) : "?"}
+            ) um. After this the stage will report exactly that coordinate at
+            this physical place. The previously persisted offset will be
+            overwritten.
+          </DialogContentText>
+          {calibError && (
+            <DialogContentText sx={{ color: "error.main", mt: 1 }}>
+              {calibError}
+            </DialogContentText>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setCalibConfirm(null)}
+            disabled={calibBusy}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={async () => {
+              if (!calibConfirm) return;
+              setCalibBusy(true);
+              setCalibError("");
+              try {
+                // Snapshot raw device positions atomically before writing.
+                const dxRaw = await apiPositionerControllerGetDevicePositionAxis({ axis: "X" });
+                const dyRaw = await apiPositionerControllerGetDevicePositionAxis({ axis: "Y" });
+                const currentDeviceX = Number(dxRaw);
+                const currentDeviceY = Number(dyRaw);
+                await apiPositionerControllerSetStageOffsetAxis({
+                  axis: "X",
+                  knownPosition: calibConfirm.x,
+                  currentDevicePosition: null,
+                });
+                await apiPositionerControllerSetStageOffsetAxis({
+                  axis: "Y",
+                  knownPosition: calibConfirm.y,
+                  currentDevicePosition: null,
+                });
+                setCalibConfirm(null);
+              } catch (e) {
+                setCalibError(`Failed: ${e.message || e}`);
+              } finally {
+                setCalibBusy(false);
+              }
+            }}
+            variant="contained"
+            color="success"
+            disabled={calibBusy}
+          >
+            {calibBusy ? "Storing…" : "Confirm & store"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </div>
   );
 });

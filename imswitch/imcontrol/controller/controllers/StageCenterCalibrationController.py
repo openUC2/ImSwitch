@@ -23,6 +23,7 @@ The legacy brightness-spiral worker is preserved (commented out) so it can
 be reactivated for the planned "stage 2" automatic refinement.
 """
 
+import json
 import os
 import threading
 import time
@@ -34,6 +35,14 @@ import numpy as np
 from imswitch.imcommon.framework import Signal, Mutex
 from imswitch.imcommon.model import initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
+
+
+# Single canonical location for the most recent heatmap. The CSV is
+# overwritten on every run so the frontend can load "the last scan" without
+# walking a tree of timestamped folders.
+_LATEST_HEATMAP_DIR = os.path.join(os.path.expanduser("~"), "imswitch_calibrations")
+_LATEST_HEATMAP_CSV = os.path.join(_LATEST_HEATMAP_DIR, "stage_center_latest.csv")
+_LATEST_HEATMAP_JSON = os.path.join(_LATEST_HEATMAP_DIR, "stage_center_latest.json")
 
 
 class StageCenterCalibrationController(ImConWidgetController):
@@ -55,6 +64,9 @@ class StageCenterCalibrationController(ImConWidgetController):
         self._samples: list[tuple[float, float, float]] = []
         self._scan_meta: dict = {}
         self._run_mutex = Mutex()
+        # Restore the last heatmap from disk so the tab repopulates after a
+        # frontend reload.
+        self._restoreLatestHeatmap()
 
     # ------------------------------ helpers ----------------------------------
 
@@ -117,12 +129,15 @@ class StageCenterCalibrationController(ImConWidgetController):
         max_radius_um: float = 5000.0,
         brightness_factor: float = 1.4,  # kept for backward-compat / stage-2
         require_pixel_calibration: bool = True,
+        move_to_brightest: bool = True,
     ) -> dict:
         """Run an XY raster scan and record (x, y, intensity) at each node.
 
         The scan covers a square of side ``2 * max_radius_um`` around
-        ``(start_x, start_y)`` with grid spacing ``step_um``. Returns the
-        sampled positions, the brightest position, and scan metadata.
+        ``(start_x, start_y)`` with grid spacing ``step_um``. When
+        ``move_to_brightest`` is true the stage parks on top of the brightest
+        sample at the end of the scan so the frontend can capture / confirm
+        before storing the offset.
         """
         if self._is_running:
             return self._currentResult()
@@ -143,17 +158,13 @@ class StageCenterCalibrationController(ImConWidgetController):
             "speed": int(speed),
             "exposure_time_us": int(exposure_time_us),
             "started_at": datetime.now().isoformat(timespec="seconds"),
+            "move_to_brightest": bool(move_to_brightest),
         }
-
-
-        
-        
-        
 
         self._task = threading.Thread(
             target=self._rasterWorker,
-            args=(start_x, start_y, speed, step_um, max_radius_um)
-            )
+            args=(start_x, start_y, speed, step_um, max_radius_um, move_to_brightest),
+        )
         self._task.start()
 
         return self._currentResult()
@@ -164,10 +175,22 @@ class StageCenterCalibrationController(ImConWidgetController):
 
     @APIExport()
     def stopCalibration(self) -> dict:
+        """Stop the raster scan and persist whatever samples were collected.
+
+        The user often stops a scan early after visually identifying the
+        bright spot - we should keep the partial result on disk so the
+        frontend can still accept the brightest sample (or reload it later).
+        """
         self._is_running = False
         if self._task is not None:
             self._task.join()
             self._task = None
+        # Persist whatever samples we have so a "stop early" workflow still
+        # leaves a usable heatmap behind.
+        try:
+            self._persistLatestHeatmap()
+        except Exception as e:
+            self._logger.warning(f"Persist on stop failed: {e}")
         self._logger.info("Calibration stopped.")
         return self._currentResult()
 
@@ -254,11 +277,11 @@ class StageCenterCalibrationController(ImConWidgetController):
     # --------------------------- raster worker -------------------------------
 
     def _rasterWorker(self, cx: float, cy: float, speed: int,
-                      step_um: float, max_r: float) -> None:
+                      step_um: float, max_r: float,
+                      move_to_brightest: bool = True) -> None:
         try:
             stage = self.getStage()
-            stage.move(axis="X", value=cx, is_absolute=True, is_blocking=True)
-            stage.move(axis="Y", value=cy, is_absolute=True, is_blocking=True)
+            stage.move(axis="XY", value=(cx,cy), is_absolute=True, is_blocking=True)
 
             # Build symmetric grid around the start position. Use float steps so
             # the scan matches ``max_r`` exactly when it is divisible by
@@ -292,7 +315,19 @@ class StageCenterCalibrationController(ImConWidgetController):
                     except Exception:
                         pass
 
-            self._saveSamplesCsv()
+            # Park the stage at the brightest sample so the user can validate
+            # the calibration target visually before persisting an offset.
+            if move_to_brightest and self._samples:
+                arr = np.asarray(self._samples, dtype=float)
+                idx = int(np.argmax(arr[:, 2]))
+                bx, by = float(arr[idx, 0]), float(arr[idx, 1])
+                try:
+                    stage.move(axis="XY", value=(bx,by), is_absolute=True, is_blocking=True)
+                    self._scan_meta["parked_at"] = {"x": bx, "y": by}
+                except Exception as e:
+                    self._logger.warning(f"move-to-brightest failed: {e}")
+
+            self._persistLatestHeatmap()
         finally:
             self._is_running = False
 
@@ -321,22 +356,66 @@ class StageCenterCalibrationController(ImConWidgetController):
             "meta": dict(self._scan_meta),
         }
 
-    def _saveSamplesCsv(self) -> None:
+    # ------------------------- persistence helpers ---------------------------
+
+    def _persistLatestHeatmap(self) -> None:
+        """Overwrite a single canonical CSV + JSON sidecar with the latest scan.
+
+        The CSV stays compatible with the legacy path (one timestamped copy
+        is also written for archival). The JSON sidecar is what the frontend
+        loads on mount - it contains the samples, the brightest spot, and the
+        scan metadata in the exact shape ``getCalibrationHeatmap`` returns.
+        """
         if not self._samples:
             return
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        dir_path = os.path.join(
-            os.path.expanduser("~"), "imswitch_calibrations", ts
-        )
-        os.makedirs(dir_path, exist_ok=True)
-        path = os.path.join(dir_path, "stage_center_raster.csv")
-        np.savetxt(
-            path,
-            np.asarray(self._samples, dtype=float),
-            delimiter=",",
-            header="X(um),Y(um),mean_intensity",
-        )
-        self._logger.info(f"Raster samples saved to {path}")
+        try:
+            os.makedirs(_LATEST_HEATMAP_DIR, exist_ok=True)
+            arr = np.asarray(self._samples, dtype=float)
+            np.savetxt(
+                _LATEST_HEATMAP_CSV,
+                arr,
+                delimiter=",",
+                header="X(um),Y(um),mean_intensity",
+            )
+            payload = self._currentResult()
+            with open(_LATEST_HEATMAP_JSON, "w") as f:
+                json.dump(payload, f, indent=2)
+            self._logger.info(
+                f"Heatmap saved to {_LATEST_HEATMAP_CSV} and {_LATEST_HEATMAP_JSON}"
+            )
+        except Exception as e:
+            self._logger.warning(f"Could not persist latest heatmap: {e}")
+
+    def _restoreLatestHeatmap(self) -> None:
+        """Load the latest heatmap from disk (if any) so the tab can repopulate."""
+        try:
+            if not os.path.isfile(_LATEST_HEATMAP_JSON):
+                return
+            with open(_LATEST_HEATMAP_JSON, "r") as f:
+                data = json.load(f)
+            samples = data.get("samples") or []
+            self._samples = [
+                (float(s["x"]), float(s["y"]), float(s["intensity"]))
+                for s in samples
+            ]
+            self._scan_meta = dict(data.get("meta") or {})
+        except Exception as e:
+            self._logger.warning(f"Could not restore latest heatmap: {e}")
+            self._samples = []
+            self._scan_meta = {}
+
+    @APIExport()
+    def getLatestHeatmap(self) -> dict:
+        """Return the most recent heatmap (loaded from disk if necessary).
+
+        Equivalent to ``getCalibrationHeatmap`` while the controller has live
+        samples in memory, but transparently restores from
+        ``stage_center_latest.json`` so the heatmap survives a frontend
+        reload.
+        """
+        if not self._samples:
+            self._restoreLatestHeatmap()
+        return self._currentResult()
 
 
 # ---------------------------------------------------------------------------

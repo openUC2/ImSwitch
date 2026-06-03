@@ -137,6 +137,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                     snake_tiles, illumination_intensities, experiment_params
                 )
 
+            protocol_saved = False  # Ensure protocol is written only once per experiment
             for snake_tile in snake_tiles:
                 # Calculate timeout based on scan parameters
                 scan_timeout = self._calculate_scan_timeout(snake_tile, illumination_intensities, experiment_params)
@@ -159,8 +160,11 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 zarr_url = self._execute_fast_stage_scan(scan_params, t_period, n_times, experiment_params)
                 self._logger.info(f"Performance mode scan completed. Data saved to: {zarr_url}")
                 
-                # Save experiment protocol to JSON
-                self._save_performance_protocol(scan_params, experiment_params, zarr_url)
+                # Save experiment protocol to JSON exactly once per experiment
+                # (guard prevents re-saving on subsequent tiles/wells).
+                if not protocol_saved:
+                    self._save_performance_protocol(scan_params, experiment_params, zarr_url)
+                    protocol_saved = True
 
             # Finalize OME writers if they were created
             if file_writers:

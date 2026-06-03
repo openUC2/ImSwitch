@@ -4,8 +4,8 @@ import { createSlice } from "@reduxjs/toolkit";
 // Define the initial state for autofocus
 const initialAutofocusState = {
   // Autofocus parameters
-  rangeZ: 10,
-  resolutionZ: 1,
+  rangeZ: 100,
+  resolutionZ: 10,
   defocusZ: 0,
   illuminationChannel: "", // Selected illumination channel for autofocus
   tSettle: 0.1, // Settling time between steps (seconds)

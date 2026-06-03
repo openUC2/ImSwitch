@@ -1,5 +1,8 @@
-import React, { useState } from "react";
-import { useSelector } from "react-redux";
+import React, { useEffect, useState } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { setNotification } from "../state/slices/NotificationSlice.js";
+import apiUC2ConfigControllerListSerialPorts from "../backendapi/apiUC2ConfigControllerListSerialPorts";
+import apiUC2ConfigControllerSetSerialConfig from "../backendapi/apiUC2ConfigControllerSetSerialConfig";
 import {
   Box,
   Typography,
@@ -21,6 +24,9 @@ import {
   MenuItem,
   InputLabel,
   FormControl,
+  TextField,
+  CircularProgress,
+  Divider,
 } from "@mui/material";
 import {
   Memory,
@@ -47,6 +53,7 @@ import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSl
  * status actions, including hardware control and LED matrix status updates.
  */
 const SystemUpdateController = () => {
+  const dispatch = useDispatch();
   const uc2State = useSelector(uc2Slice.getUc2State);
   const uc2Connected = uc2State.uc2Connected; // Hardware connected
   const isBackendConnected = uc2State.backendConnected; // API reachable
@@ -60,6 +67,69 @@ const SystemUpdateController = () => {
 
   // UC2 Hardware Control toggle
   const [enableHardwareControl, setEnableHardwareControl] = useState(false);
+
+  // --- USB serial override state (lives inside UC2 Hardware Control card) ---
+  const [serialPorts, setSerialPorts] = useState([]);
+  const [overridePort, setOverridePort] = useState("");
+  const [overrideBaudrate, setOverrideBaudrate] = useState(115200);
+  const [isLoadingPorts, setIsLoadingPorts] = useState(false);
+  const [isApplyingSerial, setIsApplyingSerial] = useState(false);
+
+  const loadSerialPorts = async () => {
+    if (!isBackendConnected) return;
+    try {
+      setIsLoadingPorts(true);
+      const ports = await apiUC2ConfigControllerListSerialPorts();
+      setSerialPorts(Array.isArray(ports) ? ports : []);
+    } catch (e) {
+      dispatch(
+        setNotification({
+          message: "Failed to list serial ports: " + (e.message || e),
+          type: "error",
+        }),
+      );
+    } finally {
+      setIsLoadingPorts(false);
+    }
+  };
+
+  // Auto-load the port list the first time hardware control gets enabled,
+  // so the user doesn't have to hunt for a refresh button.
+  useEffect(() => {
+    if (enableHardwareControl && isBackendConnected && serialPorts.length === 0) {
+      loadSerialPorts();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enableHardwareControl, isBackendConnected]);
+
+  const reconnectWithOverrides = async (persist) => {
+    try {
+      setIsApplyingSerial(true);
+      const result = await apiUC2ConfigControllerSetSerialConfig(
+        overridePort || null,
+        Number(overrideBaudrate) || null,
+        persist,
+      );
+      const ok = result?.status === "success";
+      dispatch(
+        setNotification({
+          message: ok
+            ? `ESP32 ${persist ? "saved & " : ""}reconnected (${result?.port || "auto-detected port"} @ ${result?.baudrate || "default"} baud)`
+            : `Reconnect finished with status=${result?.status}, connected=${String(result?.connected)} — check backend logs.`,
+          type: ok ? "success" : "warning",
+        }),
+      );
+    } catch (e) {
+      dispatch(
+        setNotification({
+          message: "setSerialConfig failed: " + (e.message || e),
+          type: "error",
+        }),
+      );
+    } finally {
+      setIsApplyingSerial(false);
+    }
+  };
 
   // LED status control
   const [ledStatus, setLedStatus] = useState("idle");
@@ -236,6 +306,117 @@ const SystemUpdateController = () => {
               onClick={() => callEndpoint(`${base}/btpairing`)}
             >
               Bluetooth Pairing
+            </Button>
+          </Box>
+
+          {/* USB connection override */}
+          <Divider sx={{ my: 3 }} />
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+            <UsbIcon color="action" fontSize="small" />
+            <Typography variant="subtitle2">
+              USB Connection Override
+            </Typography>
+          </Box>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Override the serial port and/or baudrate the backend uses to talk
+            to the ESP32. Leave the port empty to keep the value from the
+            setup JSON. <strong>Reconnect &amp; Save</strong> persists the
+            change; <strong>Reconnect (session only)</strong> applies it
+            without writing to disk.
+          </Typography>
+
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: { xs: "1fr", sm: "2fr 1fr" },
+              gap: 2,
+              alignItems: "start",
+              mb: 2,
+            }}
+          >
+            <TextField
+              select
+              size="small"
+              label="Serial Port"
+              value={overridePort}
+              onChange={(e) => setOverridePort(e.target.value)}
+              disabled={!enableHardwareControl || !isBackendConnected}
+              helperText={
+                serialPorts.length === 0
+                  ? "Click 'Refresh Ports' to populate"
+                  : `${serialPorts.length} port(s) detected`
+              }
+              fullWidth
+            >
+              <MenuItem value="">(keep current)</MenuItem>
+              {serialPorts.map((p) => (
+                <MenuItem key={p.device} value={p.device}>
+                  {p.device}
+                  {p.description ? ` — ${p.description}` : ""}
+                </MenuItem>
+              ))}
+            </TextField>
+
+            <TextField
+              select
+              size="small"
+              label="Baudrate"
+              value={overrideBaudrate}
+              onChange={(e) =>
+                setOverrideBaudrate(Number(e.target.value) || 115200)
+              }
+              disabled={!enableHardwareControl || !isBackendConnected}
+              fullWidth
+            >
+              <MenuItem value={115200}>115200 (default)</MenuItem>
+              <MenuItem value={230400}>230400</MenuItem>
+              <MenuItem value={460800}>460800</MenuItem>
+              <MenuItem value={921600}>921600</MenuItem>
+            </TextField>
+          </Box>
+
+          <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={
+                isLoadingPorts ? <CircularProgress size={16} /> : <Refresh />
+              }
+              onClick={loadSerialPorts}
+              disabled={
+                !enableHardwareControl ||
+                !isBackendConnected ||
+                isLoadingPorts
+              }
+            >
+              Refresh Ports
+            </Button>
+            <Button
+              variant="contained"
+              size="small"
+              onClick={() => reconnectWithOverrides(true)}
+              disabled={
+                !enableHardwareControl ||
+                !isBackendConnected ||
+                isApplyingSerial
+              }
+              startIcon={
+                isApplyingSerial ? <CircularProgress size={16} /> : undefined
+              }
+            >
+              Reconnect &amp; Save
+            </Button>
+            <Button
+              variant="text"
+              size="small"
+              onClick={() => reconnectWithOverrides(false)}
+              disabled={
+                !enableHardwareControl ||
+                !isBackendConnected ||
+                isApplyingSerial
+              }
+            >
+              Reconnect (session only)
             </Button>
           </Box>
         </CardContent>

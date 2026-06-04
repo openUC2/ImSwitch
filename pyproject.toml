@@ -78,6 +78,7 @@ dependencies = [
     "opencv-contrib-python-headless>=4.13.0.92",
     "opencv-contrib-python>=4.13.0.92",
     "opencv-python>=4.13.0.92",
+    "ashlarUC2 @ git+https://github.com/Franzili/ashlarUC2.git",
 ]
 
 [project.optional-dependencies]
@@ -91,7 +92,7 @@ Lepmon = [
     "luma.oled",
 ]
 Ashlar = [
-    "ashlarUC2",
+    "ashlarUC2 @ git+https://github.com/Franzili/ashlarUC2",
 ]
 imjoy = [
     "imjoy-rpc==0.5.59",

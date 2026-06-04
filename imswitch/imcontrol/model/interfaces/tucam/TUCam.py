@@ -14,8 +14,18 @@ from enum import Enum
 # 32bit
 #TUSDKdll = OleDLL("./lib/x86/TUCam.dll")
 # 64bit
-# TUSDKdll = cdll.LoadLibrary("/usr/lib/libTUCam.so")
-_lib_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "libTUCam.so")
+# Prefer the bundled SDK shipped with ImSwitch; fall back to system installs.
+_lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+_candidates = [
+    os.path.join(_lib_dir, "libTUCam.so"),
+    os.path.join(_lib_dir, "libTUCam.so.1"),
+    os.path.join(_lib_dir, "libTUCam.so.1.0"),
+    os.path.join(_lib_dir, "libTUCam.so.1.0.0"),
+    "/usr/lib/libTUCam.so",
+]
+_lib_path = next((p for p in _candidates if os.path.exists(p)), None)
+if _lib_path is None:
+    raise FileNotFoundError(f"TUCam shared library not found (looked in {_lib_dir} and /usr/lib)")
 TUSDKdll = cdll.LoadLibrary(_lib_path)
 #  class typedef enum TUCAM status:
 class TUCAMRET(Enum):

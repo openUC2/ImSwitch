@@ -373,6 +373,11 @@ const experimentSlice = createSlice({
         areaType: action.payload.areaType,
         groupId: action.payload.groupId,
         wellId: action.payload.wellId,
+        // Pre-computed scan positions for region-style points (e.g. a freehand
+        // polygon) so the whole region is ONE point-list entry / scan group.
+        neighborPointList: Array.isArray(action.payload.neighborPointList)
+          ? action.payload.neighborPointList
+          : [],
       };
       
       console.log("createPoint newPoint", newPoint);

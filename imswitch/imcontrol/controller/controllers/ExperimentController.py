@@ -788,9 +788,6 @@ class ExperimentController(ImConWidgetController):
         # OME channel sizing stay index-aligned.
         illuSources = list(p.illumination or [])
         illuminationIntensities = list(p.illuIntensities or [])
-        isDarkfield = p.darkfield  # TODO: Needs to be implemented
-        isBrightfield = p.brightfield
-        isDPC = p.differentialPhaseContrast
 
         # Conventional sources are all "default" kind.
         illuminationKinds = ["default"] * len(illuSources)
@@ -997,22 +994,12 @@ class ExperimentController(ImConWidgetController):
         workflowSteps = []
         file_writers = []  # Initialize outside the loop for context storage
 
-        # Tiling behaviour toggles (Wellplate "Tiling" tab).  Read once here so
-        # the normal-mode workflow builder can branch on them via self.controller.
-        #  - returnToOrigin: move back to the pre-scan XYZ when the scan ends.
-        #  - overrideZWithCurrentZ: ignore each group's stored Z and use the
-        #    current stage Z (initial_z_position) for every position – unless a
-        #    focus map is active, which always wins (and the UI greys it out).
+        # Tiling behaviour toggle (Wellplate "Tiling" tab): move the stage back
+        # to the pre-scan XYZ when the scan ends.  Read once here so the
+        # normal-mode finalization can branch on it via self.controller.
+        # ("Override per-group Z with current Z" is handled entirely on the
+        # frontend, which rewrites each position's Z before sending.)
         self._return_to_origin = bool(getattr(p, "returnToOrigin", False))
-        self._override_z_with_current_z = bool(getattr(p, "overrideZWithCurrentZ", False))
-        if self._override_z_with_current_z and self._focus_map_active:
-            # Focus map drives Z per-XY; the manual override would be ignored
-            # downstream anyway, so make the precedence explicit in the log.
-            self._logger.info(
-                "overrideZWithCurrentZ requested but a focus map is active – "
-                "focus-map Z takes precedence; ignoring the override."
-            )
-            self._override_z_with_current_z = False
 
         # OME writer-related (model defaults guarantee fields exist)
         self._ome_write_tiff = p.ome_write_tiff

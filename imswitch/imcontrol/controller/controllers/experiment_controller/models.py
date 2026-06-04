@@ -187,9 +187,6 @@ class SyntheticChannel(BaseModel):
 class ParameterValue(BaseModel):
     illumination: Union[List[str], str] = None
     illuIntensities: Union[List[Optional[int]], Optional[int]] = None
-    brightfield: bool = False
-    darkfield: bool = False
-    differentialPhaseContrast: bool = False
     timeLapsePeriod: float
     numberOfImages: int
     autoFocus: bool
@@ -213,23 +210,15 @@ class ParameterValue(BaseModel):
     gains: Union[List[float], float] = None
     speed: float = 20000.0
     z_speed: float = 5000.0
-    # Tiling behaviour toggles (exposed in the Wellplate "Tiling" tab).
+    # Tiling behaviour toggle (Wellplate "Tiling" tab): after the scan finishes,
+    # move the stage back to the XYZ it was at before the scan started. Default
+    # off (the stage stays at the last acquired tile).
+    # (The "override per-group Z with current Z" toggle is applied entirely on
+    # the frontend — it rewrites each position's Z before sending — so it is not
+    # part of this backend contract.)
     returnToOrigin: bool = Field(
         False,
-        description=(
-            "After the scan finishes, move the stage back to the XYZ position "
-            "it was at just before the scan started. Default off (the stage "
-            "stays at the last acquired tile)."
-        ),
-    )
-    overrideZWithCurrentZ: bool = Field(
-        False,
-        description=(
-            "Ignore each scan group's stored per-group Z and use the current "
-            "stage Z (captured at run start) for every position. Intended for "
-            "when the user re-focused after defining the areas. Ignored when a "
-            "focus map is active (the UI greys it out)."
-        ),
+        description="Move the stage back to the pre-scan XYZ position when the scan ends.",
     )
     performanceMode: bool = False
     performanceTriggerMode: TriggerMode = Field(
@@ -249,34 +238,6 @@ class ParameterValue(BaseModel):
     keepIlluminationOn: KeepIlluminationMode = Field(
         "auto",
         description="Illumination mode: 'auto' (single channel stays on), 'on' (always on), 'off' (per-frame toggle)",
-    )
-    # Per-channel kind-specific parameters. Keyed by the channel name as it
-    # appears in `illumination`. Used by the workflow builder to drive
-    # LED-matrix synthetic channels:
-    #   "ring": {"radius": int, "intensityR": int, "intensityG": int, "intensityB": int}
-    #   "dpc" : {"intensityR": int, "intensityG": int, "intensityB": int}
-    # For "default" channels the dict is ignored; the legacy
-    # illuIntensities/exposureTimes/gains lists drive the acquisition.
-    illuminationParams: Optional[Dict[str, Dict[str, Any]]] = Field(
-        default=None,
-        description=(
-            "Per-channel kind-specific params keyed by channel name "
-            "(e.g. radius + RGB for 'ring', RGB-only for 'dpc')."
-        ),
-    )
-    # Per-channel "include in this experiment" flag, parallel to `illumination`.
-    # Authoritative signal for whether a channel should run, separate from
-    # `illuIntensities` (which the user can't directly edit for synthetic
-    # channels — their slider is hidden, so intensity stays at 0 even when
-    # the channel is enabled).  Backend uses this to decide whether to
-    # auto-promote synthetic-channel RGB params to a non-zero illuIntensity.
-    channelEnabledForExperiment: Optional[List[bool]] = Field(
-        default=None,
-        description=(
-            "Per-channel inclusion flag (parallel to `illumination`).  When "
-            "False, the channel is excluded from the experiment regardless "
-            "of its illuminationParams or illuIntensities entry."
-        ),
     )
     # Synthetic LED-matrix channels (ring/DPC), kept SEPARATE from the
     # conventional `illumination` list above.  This is the single source of

@@ -606,17 +606,12 @@ class ExperimentNormalMode(ExperimentModeBase):
             # z=0.0 is the frontend default for sub-tiles that have no explicit
             # per-point Z – treat it the same as None so we always use the real
             # stage Z (initial_z_position) in that case.
-            #
-            # When the user enabled "Override per-group Z with current Z" in the
-            # Tiling tab, ignore the stored per-group Z entirely and use the
-            # current stage Z (captured at run start) for every position – this
-            # is the case where they re-focused after defining the areas.
-            if getattr(self.controller, "_override_z_with_current_z", False):
+            # (The "override per-group Z with current Z" Tiling toggle is applied
+            # entirely on the frontend, which rewrites each position's Z before
+            # sending; here we just consume the coordinates as-is.)
+            point_z_origin = m_point.get("z")
+            if point_z_origin is None or point_z_origin == 0.0:
                 point_z_origin = initial_z_position
-            else:
-                point_z_origin = m_point.get("z")
-                if point_z_origin is None or point_z_origin == 0.0:
-                    point_z_origin = initial_z_position
 
             # Move to XY position
             workflow_steps.append(WorkflowStep(

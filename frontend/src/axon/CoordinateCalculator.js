@@ -138,8 +138,31 @@ function processScanPoint(point, pointIndex, experimentState, objectiveState, we
 
   // Calculate positions based on point shape and mode
   let rawPositions = [];
-  
-  if (point.shape === "off" || !point.shape) {
+
+  // Region-style points (e.g. a freehand polygon) carry all their interior
+  // scan positions in `neighborPointList`, so the whole region is ONE scan
+  // area/group. These take priority over the shape-based generation below.
+  if (Array.isArray(point.neighborPointList) && point.neighborPointList.length > 0) {
+    rawPositions = point.neighborPointList.map((n) => ({
+      x: n.x,
+      y: n.y,
+      z: n.z ?? (point.z ?? 0),
+      iX: n.iX ?? 0,
+      iY: n.iY ?? 0,
+    }));
+    // Freehand neighbors carry iX=iY=0; derive grid indices from absolute X/Y
+    // so snake/raster ordering (which groups by iY, sorts by iX) works.
+    if (rawPositions.every((p) => (p.iX ?? 0) === 0 && (p.iY ?? 0) === 0)) {
+      const minX = Math.min(...rawPositions.map((p) => p.x));
+      const minY = Math.min(...rawPositions.map((p) => p.y));
+      const stepX = effectiveStepX > 0 ? effectiveStepX : 1;
+      const stepY = effectiveStepY > 0 ? effectiveStepY : 1;
+      rawPositions.forEach((p) => {
+        p.iX = Math.round((p.x - minX) / stepX);
+        p.iY = Math.round((p.y - minY) / stepY);
+      });
+    }
+  } else if (point.shape === "off" || !point.shape) {
     // Single position
     rawPositions = [{
       x: point.x,

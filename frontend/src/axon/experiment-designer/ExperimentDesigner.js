@@ -45,6 +45,7 @@ import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsS
 import * as vizarrViewerSlice from "../../state/slices/VizarrViewerSlice";
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
+import * as positionSlice from "../../state/slices/PositionSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 
 // API
@@ -88,6 +89,7 @@ const ExperimentDesigner = () => {
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const focusMapConfig = useSelector(focusMapSlice.getFocusMapConfig);
   const parameterRange = useSelector(parameterRangeSlice.getParameterRangeState);
+  const positionState = useSelector(positionSlice.getPositionState);
 
   // Progress tracking
   const [cachedStepId, setCachedStepId] = useState(0);
@@ -197,6 +199,18 @@ const ExperimentDesigner = () => {
       objectiveState,
       wellSelectorState
     );
+
+    // "Override per-group Z with current Z" (Tiling tab): rewrite every stored
+    // Z with the microscope's current stage Z. Done here on the frontend (the
+    // backend just consumes the coordinates). Skipped when a focus map is
+    // active, since the focus map drives Z per-XY.
+    if (experimentState.parameterValue.overrideZWithCurrentZ && !focusMapConfig.enabled) {
+      const currentZ = positionState?.z ?? 0;
+      (scanConfig.scanAreas || []).forEach((area) => {
+        if (area.centerPosition) area.centerPosition.z = currentZ;
+        (area.positions || []).forEach((pos) => { pos.z = currentZ; });
+      });
+    }
 
     console.log("Scan configuration:", scanConfig);
     console.log(`Total positions: ${scanConfig.metadata.totalPositions}`);

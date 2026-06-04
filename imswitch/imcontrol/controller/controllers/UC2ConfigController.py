@@ -2340,24 +2340,30 @@ class UC2ConfigController(ImConWidgetController):
             return {"status": "error", "message": str(e)}
 
     @APIExport(runOnUIThread=False, requestType="POST")
-    def setSerialConfig(self, port: str = "", baud: int = 115200):
-        """
-        Set the serial port and baudrate for the master device.
-
-        This is used in the "Test/Assign CAN Address" step to configure the
-        correct port and baudrate before sending the CAN address assignment.
+@APIExport(runOnUIThread=False, requestType="POST")
+    def setSerialConfig(self, port: str = "", baudrate: int = 115200, persist: bool = True):
+        """Apply (and optionally persist) the serial port / baudrate used to talk to the ESP32.
 
         Parameters:
-          port: serial port device path (e.g. "/dev/ttyACM0").
-          baud: serial baudrate (default 115200).
+          port: serial port device path (e.g. "/dev/ttyACM0"). Empty/"auto" keeps current.
+          baudrate: serial baudrate (default 115200). Pass 0/None to keep current.
+          persist: when True, write the change back to the setup JSON.
         """
-        if not port:
-            return {"status": "error", "message": "No serial port specified"}
+        # Normalize optional inputs coming from query params
+        port_arg = port.strip() if isinstance(port, str) else port
+        if not port_arg or str(port_arg).lower() == "auto":
+            port_arg = None
+        baud_arg = int(baudrate) if baudrate not in (None, 0, "", "null") else None
+
         try:
-            self._master.UC2ConfigManager.setSerialConfig(port, int(baud))
-            return {"status": "success", "message": f"Serial config set to {port} @ {baud} baud"}
+            result = self._master.UC2ConfigManager.setSerialConfig(
+                port=port_arg,
+                baudrate=baud_arg,
+                persist=bool(persist),
+            )
+            return {"status": "success", **result, "persisted": bool(persist)}
         except Exception as e:
-            self.__logger.error(f"Failed to set serial config: {e}")
+            self.__logger.error(f"Failed to set serial config: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
         
     # Digital Input/Output API Methods

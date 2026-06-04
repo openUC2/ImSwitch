@@ -230,7 +230,7 @@ class ObjectiveController(LiveUpdatedController):
                 axis="A",
                 is_absolute=True,
                 is_blocking=True,
-                speed=self._configManager.homeSpeed
+                speed=self._configManager.moveSpeed
             )
             return True
         except Exception as e:
@@ -551,6 +551,21 @@ class ObjectiveController(LiveUpdatedController):
         self._logger.info(f"Set objective {slot} position to {position} µm")
 
     @APIExport(runOnUIThread=True)
+    def setMoveSpeed(self, speed: int) -> dict:
+        """
+        Set the speed used when switching between objective slots and persist to config.
+        
+        Args:
+            speed: Motor speed in steps/s (default 20000 if not configured)
+            
+        Returns:
+            Dictionary with the updated moveSpeed value
+        """
+        self._configManager.setMoveSpeed(int(speed))
+        self._logger.info(f"Updated objective moveSpeed to {speed}")
+        return {"moveSpeed": self._configManager.moveSpeed}
+
+    @APIExport(runOnUIThread=True)
     def setObjectiveParameters(self, objectiveSlot: int, pixelsize: float = None,
                                objectiveName: str = None, NA: float = None,
                                magnification: int = None, position: float = None):
@@ -645,6 +660,7 @@ class ObjectiveController(LiveUpdatedController):
             "homePolarity": self._configManager.homePolarity,
             "homeSpeed": self._configManager.homeSpeed,
             "homeAcceleration": self._configManager.homeAcceleration,
+            "moveSpeed": self._configManager.moveSpeed,
 
             # Detector info
             "detectorWidth": self._detectorWidth,

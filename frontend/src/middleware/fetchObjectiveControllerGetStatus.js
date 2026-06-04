@@ -29,6 +29,8 @@ const fetchObjectiveControllerGetStatus = (dispatch) => {
       dispatch(objectiveSlice.setAvailableObjectivePixelSizes(config.availableObjectivePixelSizes || [0, 0]));
       if (config.slotConfigured) dispatch(objectiveSlice.setSlotConfigured(config.slotConfigured));
 
+      if (config.moveSpeed != null) dispatch(objectiveSlice.setMoveSpeed(config.moveSpeed));
+
       if (config.currentObjective != null) {
         dispatch(objectiveSlice.setCurrentObjective(config.currentObjective));
       }

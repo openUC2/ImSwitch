@@ -56,6 +56,10 @@ class UC2ConfigController(ImConWidgetController):
 
         # Prevent concurrent flashing attempts
         self._usb_flash_lock = threading.Lock()
+        # Reference to a running esptool subprocess so cancel can reach it.
+        self._usb_flash_proc = None
+        # Cooperative cancel flag honoured by _run_esptool's read loop.
+        self._usb_flash_cancel_event = threading.Event()
 
 
         # WiFi credentials for OTA (can be overridden via API)
@@ -591,8 +595,12 @@ class UC2ConfigController(ImConWidgetController):
         # Add your logic to unset auto-enable for the motors here.
         self.stages.enalbeMotors(enable=True, enableauto=False)
 
-    def reconnectThread(self, baudrate=None):
-        self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
+    def reconnectThread(self, baudrate=None, port=None):
+        try:
+            self._master.UC2ConfigManager.initSerial(port=port, baudrate=baudrate)
+        except TypeError:
+            # Older managers may not accept the port kwarg
+            self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
         self.__logger.debug("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
         self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
 
@@ -629,19 +637,88 @@ class UC2ConfigController(ImConWidgetController):
         return {"message": f"Data path set to {path}"}
 
     @APIExport(runOnUIThread=True)
-    def reconnect(self):
-        self._logger.debug('Reconnecting to ESP32 device.')
-        baudrate = None
-        mThread = threading.Thread(target=self.reconnectThread, args=(baudrate,))
+    def reconnect(self, port: str = None, baudrate: int = None):
+        """Reconnect to the ESP32 over serial.
+
+        Optionally override the port and/or baudrate. When both are omitted
+        the values from the setup JSON / current runtime are used.
+        """
+        self._logger.debug(
+            f'Reconnecting to ESP32 device (port={port}, baudrate={baudrate}).'
+        )
+        try:
+            baudrate_int = int(baudrate) if baudrate is not None else None
+        except (TypeError, ValueError):
+            baudrate_int = None
+        port_str = port if port else None
+        mThread = threading.Thread(
+            target=self.reconnectThread,
+            kwargs={"baudrate": baudrate_int, "port": port_str},
+        )
         mThread.start()
+        return {
+            "status": "started",
+            "port": port_str,
+            "baudrate": baudrate_int,
+        }
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setSerialConfig(self, port: str = None, baudrate: int = None, persist: bool = True):
+        """Apply (and optionally persist) the serial port / baudrate used to
+        talk to the ESP32.
+
+        - Calls UC2ConfigManager.setSerialConfig to reconnect.
+        - When ``persist`` is True, writes the values into the setup JSON via
+          configfiletools.saveSetupInfo so the change survives a restart.
+        """
+        try:
+            baudrate_int = int(baudrate) if baudrate is not None else None
+        except (TypeError, ValueError):
+            return {"status": "error", "message": f"Invalid baudrate: {baudrate!r}"}
+        port_str = port if port else None
+
+        try:
+            result = self._master.UC2ConfigManager.setSerialConfig(
+                port=port_str, baudrate=baudrate_int, persist=bool(persist)
+            )
+        except AttributeError:
+            return {
+                "status": "error",
+                "message": "UC2ConfigManager does not support setSerialConfig (old build).",
+            }
+        except Exception as e:
+            self.__logger.error(f"setSerialConfig failed: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
+
+        self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
+        return {
+            "status": "success" if result.get("connected") else "warning",
+            "connected": bool(result.get("connected")),
+            "port": result.get("port"),
+            "baudrate": result.get("baudrate"),
+            "persisted": bool(persist),
+        }
 
     @APIExport(runOnUIThread=True)
     def writeSerial(self, payload):
         return self._master.UC2ConfigManager.ESP32.serial.writeSerial(payload)
 
     @APIExport(runOnUIThread=True)
-    def uc2_board_is_connected(self):
-        return self._master.UC2ConfigManager.isConnected()
+    def uc2_board_is_connected(self, strict: bool = False):
+        """Check whether the ESP32 board is reachable.
+
+        - ``strict=False`` (default): cheap flag-only check used by the
+          polling loop in the frontend.
+        - ``strict=True``: actively pings the firmware (writes /state_get)
+          and reports True only if the device responds within ~0.5s.
+        """
+        if not strict:
+            return self._master.UC2ConfigManager.isConnected()
+        try:
+            return bool(self._master.UC2ConfigManager.ping(timeout=0.5))
+        except Exception as e:
+            self.__logger.debug(f"strict uc2_board_is_connected ping failed: {e}")
+            return False
 
     @APIExport(runOnUIThread=True)
     def btpairing(self):
@@ -1532,12 +1609,19 @@ class UC2ConfigController(ImConWidgetController):
         Run esptool via subprocess, streaming stdout/stderr lines through
         sigUSBFlashStatusUpdate so the frontend can display real-time progress
         (e.g. "Writing at 0x000f3000... (62%)").
+
+        Honours self._usb_flash_cancel_event – if it gets set while esptool
+        is running (e.g. via cancelUSBFlash), the subprocess is terminated and
+        the function returns (False, "cancelled by user").
+
         Returns (success, collected_output_string).
         """
         collected_lines = []
+        cancelled = False
 
         def _stream_subprocess(cmd_args):
             """Run esptool as subprocess and stream output line by line."""
+            nonlocal cancelled
             cmd = [sys.executable, "-m", "esptool"] + cmd_args
             proc = subprocess.Popen(
                 cmd,
@@ -1546,37 +1630,65 @@ class UC2ConfigController(ImConWidgetController):
                 text=True,
                 bufsize=1,
             )
-            for line in proc.stdout:
-                line = line.rstrip("\n\r")
-                if not line:
-                    continue
-                collected_lines.append(line)
-                self.__logger.debug(f"esptool: {line}")
+            # Publish so cancelUSBFlash can reach it.
+            self._usb_flash_proc = proc
 
-                # Parse "Writing at 0x000XXXXX... (NN%)" for progress
-                progress_match = None
-                if "Writing at" in line and "%" in line:
+            try:
+                for line in proc.stdout:
+                    if self._usb_flash_cancel_event.is_set():
+                        cancelled = True
+                        self.__logger.warning("Flash cancel requested — terminating esptool")
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+                        break
+                    line = line.rstrip("\n\r")
+                    if not line:
+                        continue
+                    collected_lines.append(line)
+                    self.__logger.debug(f"esptool: {line}")
+
+                    # Parse "Writing at 0x000XXXXX... (NN%)" for progress
+                    progress_match = None
+                    if "Writing at" in line and "%" in line:
+                        try:
+                            pct_str = line.split("(")[1].split("%")[0].strip()
+                            pct = int(pct_str)
+                            # Map esptool 0-100% into our 30-85% range
+                            mapped = 30 + int(pct * 0.55)
+                            progress_match = mapped
+                        except (IndexError, ValueError):
+                            pass
+
+                    self._emit_usb_flash_status(
+                        "flashing",
+                        progress_match if progress_match is not None else -1,
+                        line,
+                    )
+
+                if cancelled:
+                    # Give it a moment to react to terminate, then kill.
                     try:
-                        pct_str = line.split("(")[1].split("%")[0].strip()
-                        pct = int(pct_str)
-                        # Map esptool 0-100% into our 30-85% range
-                        mapped = 30 + int(pct * 0.55)
-                        progress_match = mapped
-                    except (IndexError, ValueError):
-                        pass
-
-                self._emit_usb_flash_status(
-                    "flashing",
-                    progress_match if progress_match is not None else -1,
-                    line,
-                )
-            proc.stdout.close()
-            proc.wait()
-            return proc.returncode
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        proc.wait()
+                else:
+                    proc.stdout.close()
+                    proc.wait()
+                return proc.returncode
+            finally:
+                self._usb_flash_proc = None
 
         # Prefer subprocess so we can stream output
         try:
             rc = _stream_subprocess(args)
+            if cancelled:
+                return False, "cancelled by user"
             ok = rc == 0
             return ok, "\n".join(collected_lines)
         except FileNotFoundError:
@@ -1659,7 +1771,28 @@ class UC2ConfigController(ImConWidgetController):
           erase_flash: if True, erase the entire flash before writing firmware.
           skip_disconnect: if True, skip disconnecting ImSwitch serial before flashing (useful for XIAO).
         """
-        with self._usb_flash_lock:
+        # If another flash is already running, cancel it before starting a
+        # new one. Otherwise we'd just block forever holding the lock.
+        if not self._usb_flash_lock.acquire(blocking=False):
+            self.__logger.warning(
+                "flashMasterFirmwareUSB called while a previous flash is still active "
+                "— cancelling the previous run and continuing."
+            )
+            self._cancel_running_flash(reason="superseded by new flash request")
+            # Wait up to 5s for the previous run to release the lock.
+            if not self._usb_flash_lock.acquire(timeout=5.0):
+                self._emit_usb_flash_status(
+                    "failed", 0,
+                    "A previous flash is still running and did not release in time."
+                )
+                return {
+                    "status": "error",
+                    "message": "Previous flash is still running — try again in a few seconds.",
+                }
+
+        try:
+            # Fresh cancel event for this run.
+            self._usb_flash_cancel_event.clear()
             try:
                 return self._do_flash(
                     port=port, match=match, baud=baud,
@@ -1672,6 +1805,49 @@ class UC2ConfigController(ImConWidgetController):
                 self.__logger.error(f"Unexpected flash error: {exc}", exc_info=True)
                 self._emit_usb_flash_status("failed", 0, f"Unexpected error: {exc}")
                 return {"status": "error", "message": str(exc)}
+        finally:
+            self._usb_flash_lock.release()
+
+    def _cancel_running_flash(self, reason: str = "cancelled by user"):
+        """Signal cancel + terminate the esptool subprocess if any.
+
+        Used both by the public cancelUSBFlash API and by re-entrant
+        flashMasterFirmwareUSB calls that want to supersede a stuck run.
+        Returns True if a process was running and got terminated.
+        """
+        self._usb_flash_cancel_event.set()
+        proc = self._usb_flash_proc
+        killed = False
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    killed = True
+                    self.__logger.info(f"esptool subprocess terminated ({reason})")
+            except Exception as e:
+                self.__logger.warning(f"Failed to terminate esptool: {e}")
+        # Surface a terminal status so the UI unblocks even if the read loop
+        # was already past its final line.
+        self._emit_usb_flash_status("cancelled", -1, reason)
+        return killed
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def cancelUSBFlash(self):
+        """Cancel a USB-flash run currently in progress.
+
+        Safe to call when nothing is running — returns ``{"status": "idle"}``.
+        """
+        if self._usb_flash_proc is None and not self._usb_flash_lock.locked():
+            return {"status": "idle", "message": "No flash in progress."}
+        killed = self._cancel_running_flash(reason="cancelled by user")
+        return {
+            "status": "cancelled",
+            "killed": killed,
+            "message": (
+                "Flash cancel requested — subprocess terminated." if killed
+                else "Flash cancel requested."
+            ),
+        }
 
     def _validate_firmware_binary(self, fw_path: Path, is_merged: bool, chip: str) -> dict:
         """
@@ -1925,6 +2101,13 @@ class UC2ConfigController(ImConWidgetController):
             ]
             ok, msg = self._run_esptool(erase_args)
             if not ok:
+                if self._usb_flash_cancel_event.is_set():
+                    # cancelled status already emitted by _cancel_running_flash
+                    return {
+                        "status": "cancelled",
+                        "message": "Erase cancelled by user",
+                        "port": flash_port,
+                    }
                 self._emit_usb_flash_status("failed", 29, "Flash erase failed", msg)
                 return {
                     "status": "error",
@@ -1966,6 +2149,15 @@ class UC2ConfigController(ImConWidgetController):
             ]
         ok, msg = self._run_esptool(write_args)
         if not ok:
+            if self._usb_flash_cancel_event.is_set():
+                # cancelled status already emitted by _cancel_running_flash
+                return {
+                    "status": "cancelled",
+                    "message": "Flash cancelled by user",
+                    "port": flash_port,
+                    "firmware": str(fw_path),
+                    "chip": resolved_chip,
+                }
             self._emit_usb_flash_status("failed", 50, "Firmware write failed", msg)
             return {
                 "status": "error",
@@ -2047,7 +2239,7 @@ class UC2ConfigController(ImConWidgetController):
                 # Wait for the device to finish booting.  Freshly-flashed ESP32s
                 # may print boot messages / SHA-256 lines for several seconds.
                 self.__logger.info(f"Waiting for device boot on {port}...")
-                boot_wait_s = 5  # generous wait for boot-loop detection
+                boot_wait_s = 2  # generous wait for boot-loop detection
                 boot_output = ""
                 deadline = time.time() + boot_wait_s
                 stable_count = 0

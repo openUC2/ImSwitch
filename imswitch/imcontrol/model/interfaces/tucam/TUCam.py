@@ -6,6 +6,7 @@ Created on 2023-12-12
 '''
 
 import ctypes
+import os
 from ctypes import *
 from enum import Enum
 
@@ -13,8 +14,9 @@ from enum import Enum
 # 32bit
 #TUSDKdll = OleDLL("./lib/x86/TUCam.dll")
 # 64bit
-TUSDKdll = cdll.LoadLibrary("/usr/lib/libTUCam.so")
-
+# TUSDKdll = cdll.LoadLibrary("/usr/lib/libTUCam.so")
+_lib_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "libTUCam.so")
+TUSDKdll = cdll.LoadLibrary(_lib_path)
 #  class typedef enum TUCAM status:
 class TUCAMRET(Enum):
     TUCAMRET_SUCCESS          = 0x00000001

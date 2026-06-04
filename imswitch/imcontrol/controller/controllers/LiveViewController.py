@@ -243,6 +243,23 @@ class StreamWorker(Worker):
         self._u8_buf: Optional[np.ndarray] = None
         self._u16_tmp: Optional[np.ndarray] = None
 
+        # §4.C.17 — two-stage preview pipeline.
+        #
+        # When the detector supports ``enablePreviewStream`` (currently
+        # CameraHIK; CameraTucsen follows) AND the subclass opts in via
+        # ``_use_preview = True``, the StreamWorker requests a u8 +
+        # subsampled "preview" stream from the camera and uses that as
+        # the input to ``_captureAndEmit``. The cast/subsample then
+        # happens on the camera's dedicated preview thread instead of
+        # this thread, freeing the StreamWorker to focus on encoding.
+        #
+        # Binary streaming (full bit-depth) explicitly opts OUT — it
+        # keeps reading raw u16 from the detector via
+        # ``getLatestFrame``.
+        self._use_preview: bool = False        # subclass overrides
+        self._preview_active: bool = False     # True while preview is running
+        self._active_preview_sub: int = -1     # subsample factor we asked for
+
     def _u16_to_u8_no_alloc(self, src: np.ndarray) -> np.ndarray:
         """Convert ``src`` (uint16) → uint8 via ``>> 4`` without allocating.
 
@@ -276,6 +293,14 @@ class StreamWorker(Worker):
         self._logger.info(f"StreamWorker started with update period {self._updatePeriod}s")
         frameReadAttempts = 0
         last_detector_frame_number = -1
+
+        # §4.C.17 — request the camera-side preview pipeline if we're
+        # configured to use it AND the detector knows about it. The
+        # preview thread inside the camera then takes care of
+        # cast+subsample, and ``getLatestPreviewFrame()`` hands us a
+        # u8/subsampled frame ready for the encoder.
+        self._maybe_enable_preview()
+
         while self._running:
             try:
                 self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it
@@ -283,30 +308,48 @@ class StreamWorker(Worker):
                 if (time.time() - self._last_frame_time) >= self._updatePeriod:  # TODO: and  imswitch.__is_stream_ready_for_sending__
                     # Capture and emit frame
 
-                    # Get frame with actual detector frame number
+                    # Get RAW frame (zero-copy view into SDK buffer). This
+                    # is what we broadcast to other controllers
+                    # (Histogram/FFT/Holo expect full bit-depth), and the
+                    # fallback for the encoder if the preview pipeline
+                    # isn't active.
                     result = self._detector.getLatestFrame(returnFrameNumber=True)
                     if isinstance(result, tuple) and len(result) == 2:
-                        frame, detector_frame_number = result
+                        raw_frame, detector_frame_number = result
                     else:
-                        frame = result
+                        raw_frame = result
                         detector_frame_number = None
 
-                    # Broadcast frame to other controllers (HistogrammController, InLineHoloController, etc.)
-                    # This is DISABLED by default for performance - enable via enableFrameBroadcast()
-                    # Controllers that need frames should use getCachedFrame() or subscribe explicitly
-                    if frame is not None and self._broadcast_frames:
-                        self.sigUpdateFrame.emit(self._detector.name, frame, False, False, self._detector.pixelSizeUm, True) # (str, np.ndarray, bool, bool, float, bool)
+                    # Broadcast RAW frame to other controllers
+                    # (HistogrammController, InLineHoloController, …).
+                    # Gated by ``_broadcast_frames`` (per-detector via
+                    # ``defaultStreamSettings.broadcast_frames``).
+                    if raw_frame is not None and self._broadcast_frames:
+                        self.sigUpdateFrame.emit(self._detector.name, raw_frame, False, False, self._detector.pixelSizeUm, True)
 
-                    if (frame is None and last_detector_frame_number == detector_frame_number) and frameReadAttempts > 3:
+                    if (raw_frame is None and last_detector_frame_number == detector_frame_number) and frameReadAttempts > 3:
                         self._logger.warning("Frame capture failed, stopping worker (Frame none or no new frame: {})".format(detector_frame_number==last_detector_frame_number))
                         self._running = False
                         break  # No frame available, but not an error - keep running
                     else:
                         frameReadAttempts = 0  # Reset attempts on successful read
-                    
+
                     last_detector_frame_number = detector_frame_number
 
-                    frameResult = self._captureAndEmit(frame, detector_frame_number)
+                    # Pick the frame to encode. Preview path (if active)
+                    # gives us a u8 + subsampled frame; otherwise we
+                    # encode the raw u16 directly and the subclass does
+                    # the cast itself.
+                    frame_to_encode = self._fetch_encode_frame(raw_frame)
+
+                    # Keep the in-camera preview thread's subsample
+                    # factor in sync with the live ``StreamParams`` (the
+                    # frontend changes ``subsampling_factor`` on the
+                    # fly via setStreamParameters).
+                    if self._preview_active:
+                        self._sync_preview_sub()
+
+                    frameResult = self._captureAndEmit(frame_to_encode, detector_frame_number)
                     self._last_frame_time = time.time()
 
                     # Only stop on explicit failure, not on None frames
@@ -327,7 +370,76 @@ class StreamWorker(Worker):
                 time.sleep(0.1)  # Brief pause on error
                 # Continue running unless explicitly stopped
 
+        # §4.C.17 — release the in-camera preview thread on shutdown
+        # so it doesn't keep churning u8 frames no one is reading.
+        self._maybe_disable_preview()
         self._logger.info("StreamWorker run loop exited")
+
+    # ------------------------------------------------------------------
+    # §4.C.17 — preview-pipeline helpers (used by ``run`` only)
+    # ------------------------------------------------------------------
+    def _maybe_enable_preview(self) -> None:
+        """Turn on the camera-side preview pipeline if available."""
+        if not self._use_preview:
+            return
+        if not hasattr(self._detector, 'enablePreviewStream'):
+            return
+        sub = max(1, int(getattr(self._params, 'subsampling_factor', 1)))
+        try:
+            self._detector.enablePreviewStream(True, subsample=sub)
+            self._preview_active = True
+            self._active_preview_sub = sub
+            self._logger.info(
+                f"Two-stage preview pipeline enabled (subsample={sub})"
+            )
+        except Exception as e:
+            self._logger.warning(
+                f"enablePreviewStream failed: {e!r}; using raw frame path"
+            )
+            self._preview_active = False
+
+    def _maybe_disable_preview(self) -> None:
+        if not self._preview_active:
+            return
+        if not hasattr(self._detector, 'enablePreviewStream'):
+            return
+        try:
+            self._detector.enablePreviewStream(False)
+        except Exception as e:
+            self._logger.debug(f"enablePreviewStream(False) failed: {e!r}")
+        self._preview_active = False
+        self._active_preview_sub = -1
+
+    def _sync_preview_sub(self) -> None:
+        """Reconfigure the preview subsample if the user changed it."""
+        sub = max(1, int(getattr(self._params, 'subsampling_factor', 1)))
+        if sub == self._active_preview_sub:
+            return
+        try:
+            self._detector.enablePreviewStream(True, subsample=sub)
+            self._active_preview_sub = sub
+            # Subsample changed → preallocated buffers are now the wrong
+            # shape. Drop them so the next pass reallocates.
+            self._u8_buf = None
+            self._u16_tmp = None
+        except Exception as e:
+            self._logger.debug(f"enablePreviewStream resize failed: {e!r}")
+
+    def _fetch_encode_frame(self, raw_frame):
+        """Return the frame to hand to ``_captureAndEmit``.
+
+        Preview path (if active) gives us a u8 + already-subsampled
+        frame from the camera's preview thread. If preview hasn't
+        produced a frame yet (rare race on startup) we fall back to the
+        raw frame so the encoder doesn't stall.
+        """
+        if not self._preview_active:
+            return raw_frame
+        try:
+            preview = self._detector.getLatestPreviewFrame(returnFrameNumber=False)
+        except Exception:
+            preview = None
+        return preview if preview is not None else raw_frame
 
     def stop(self):
         """Stop polling frames."""
@@ -452,6 +564,10 @@ class JPEGStreamWorker(StreamWorker):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._frame_id = 0  # Unified frame counter (will sync with detector frame number)
+        # §4.C.17 — opt into the camera-side preview pipeline: cast +
+        # subsample run on the camera's preview thread instead of this
+        # one, so this worker only has to encode.
+        self._use_preview = True
         try:
             import cv2
             self._cv2 = cv2
@@ -494,18 +610,29 @@ class JPEGStreamWorker(StreamWorker):
             # not the full sensor. ``crop_size`` is interpreted in sensor
             # pixels (unchanged semantics from the previous implementation).
             #
+            # §4.C.17: when ``self._preview_active`` is True the camera's
+            # preview thread has *already* done the subsample + u8 cast on
+            # a separate thread, so we only crop and encode here. The
+            # ``crop_size`` parameter stays in sensor pixels for API
+            # stability — we just scale it to preview-pixel space.
+            sub = max(1, int(self._params.subsampling_factor))
+            preview_active = self._preview_active
+
             # 1) Crop (slice view, no copy).
             if self._params.crop_size > 0:
-                frame = apply_center_crop(frame, self._params.crop_size)
+                crop = self._params.crop_size
+                if preview_active and sub > 1:
+                    # Preview pixels are 1/sub the size of sensor pixels.
+                    crop = max(2, crop // sub)
+                frame = apply_center_crop(frame, crop)
 
-            # 2) Subsample (stride view, no copy).
-            if self._params.subsampling_factor > 1:
-                frame = frame[::self._params.subsampling_factor, ::self._params.subsampling_factor]
+            # 2) Subsample (stride view, no copy). Skip if preview did it.
+            if not preview_active and sub > 1:
+                frame = frame[::sub, ::sub]
 
             # 3) Convert uint16 → uint8 via right-shift, into a preallocated
-            # buffer (see StreamWorker._u16_to_u8_no_alloc). Avoids both the
-            # float64 intermediate the old ``frame / 16`` produced AND the
-            # per-frame alloc that ``(frame >> 4).astype(np.uint8)`` does.
+            # buffer (see StreamWorker._u16_to_u8_no_alloc). Skip if preview
+            # already produced u8.
             if frame.dtype == np.uint16:
                 frame = self._u16_to_u8_no_alloc(frame)
 
@@ -589,6 +716,8 @@ class MJPEGStreamWorker(StreamWorker):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._frame_queue = queue.Queue(maxsize=10)
+        # §4.C.17 — opt into the camera-side preview pipeline.
+        self._use_preview = True
         try:
             import cv2
             self._cv2 = cv2
@@ -612,24 +741,23 @@ class MJPEGStreamWorker(StreamWorker):
                 self._logger.warning("Received None frame, skipping")
                 return None
 
-            # Same ordering as JPEGStreamWorker: shrink first, then convert
-            # dtype, so the cast runs on the small frame. The previous
-            # ``np.min / np.max → float → cast`` did 4+ full-frame passes in
-            # float64 — the worst case for large sensors. We use the same
-            # fixed right-shift as JPEGStreamWorker for consistency. This
-            # trades per-frame auto-stretch for ~10x lower CPU; if
-            # auto-stretch is needed in MJPEG specifically, compute
-            # vmin/vmax on the already-subsampled thumbnail (step 2 below).
+            # Same ordering as JPEGStreamWorker. With §4.C.17, the
+            # subsample + u8 cast already happened on the camera's
+            # preview thread, so this worker only crops and encodes.
+
+            sub = max(1, int(self._params.subsampling_factor))
+            preview_active = self._preview_active
 
             # 1) Crop (view).
             if self._params.crop_size > 0:
-                frame = apply_center_crop(frame, self._params.crop_size)
+                crop = self._params.crop_size
+                if preview_active and sub > 1:
+                    crop = max(2, crop // sub)
+                frame = apply_center_crop(frame, crop)
 
-            # 2) Subsample (view). The MJPEG worker previously skipped this
-            # entirely, encoding the full sensor every frame — single biggest
-            # win on this path.
-            if self._params.subsampling_factor > 1:
-                frame = frame[::self._params.subsampling_factor, ::self._params.subsampling_factor]
+            # 2) Subsample (view). Skip when preview did it.
+            if not preview_active and sub > 1:
+                frame = frame[::sub, ::sub]
 
             # 3) Convert to uint8.
             if frame.dtype == np.uint16:
@@ -708,6 +836,8 @@ class WebRTCStreamWorker(StreamWorker):
         super().__init__(*args, **kwargs)
         self._video_track = None
         self._frame_queue = queue.Queue(maxsize=2)  # Small queue for latest frames
+        # §4.C.17 — opt into the camera-side preview pipeline.
+        self._use_preview = True
 
         try:
             from aiortc import VideoStreamTrack
@@ -736,18 +866,25 @@ class WebRTCStreamWorker(StreamWorker):
             if frame is None:
                 return None
 
-            # 1) Crop (view).
-            if self._params.crop_size > 0:
-                frame = apply_center_crop(frame, self._params.crop_size)
-
-            # 2) Subsample via stride slice (view; cheap).
             sub = max(1, int(getattr(self._params, "subsampling_factor", 1)))
-            if sub > 1:
+            preview_active = self._preview_active
+
+            # 1) Crop (view). Scale crop_size to preview pixels if
+            # the camera's preview thread already subsampled.
+            if self._params.crop_size > 0:
+                crop = self._params.crop_size
+                if preview_active and sub > 1:
+                    crop = max(2, crop // sub)
+                frame = apply_center_crop(frame, crop)
+
+            # 2) Subsample via stride slice (view; cheap). Skip if
+            # preview already did it.
+            if not preview_active and sub > 1:
                 frame = frame[::sub, ::sub]
 
             # 3) uint16 → uint8. Preallocated-buffer right-shift; matches
-            # JPEG/MJPEG workers. (For genuinely 16-bit data this
-            # discards 4 low bits — fine for a lossy WebRTC codec.)
+            # JPEG/MJPEG workers. Skipped automatically if preview already
+            # produced u8.
             if frame.dtype == np.uint16:
                 frame = self._u16_to_u8_no_alloc(frame)
             elif frame.dtype != np.uint8:
@@ -1390,24 +1527,29 @@ class LiveViewController(LiveUpdatedController):
                 if hasattr(stream_params, key):
                     setattr(stream_params, key, value)
                     print(f"Set {protocol} param {key} to {value}")
-            # Restart active streams that use the updated protocol
-            detectors_to_restart = []
-            for detector_name, (active_protocol, worker) in self._activeStreams.items():
-                if active_protocol == protocol:
-                    detectors_to_restart.append(detector_name)
 
-            # Restart streams with updated parameters
-            restarted_streams = []
-            for detector_name in detectors_to_restart:
-                self._logger.info(f"Restarting {protocol} stream for {detector_name} with updated parameters")
-                # Stop the current stream
-                self.stopLiveView(detectorName=detector_name, stopCamera=False)
-
-                # Start with new parameters
-                result = self.startLiveView(detector_name, protocol, params)
-                if result['status'] == 'success':
-                    restarted_streams.append(detector_name)
-
+            # Push the same updates into every running worker of this
+            # protocol. The worker reads ``self._params.<field>`` on every
+            # iteration (e.g. ``throttle_ms``, ``subsampling_factor``,
+            # ``crop_size``, ``max_width``) so a simple attribute mutation
+            # under the GIL is enough — no restart needed. This used to
+            # ``stopLiveView`` + ``startLiveView`` for every change, which
+            # for WebRTC tore down the RTC peer connection and forced the
+            # frontend to re-offer (the "apply twice" symptom). For
+            # non-WebRTC protocols the restart was wasteful but harmless.
+            updated_detectors = []
+            for detector_name, (active_protocol, worker) in list(self._activeStreams.items()):
+                if active_protocol != protocol:
+                    continue
+                # Also persist on the per-detector params so the next
+                # startLiveView starts where we left off.
+                saved = self._detectorParams.get(detector_name)
+                for key, value in params.items():
+                    if hasattr(worker._params, key):
+                        setattr(worker._params, key, value)
+                    if saved is not None and hasattr(saved, key):
+                        setattr(saved, key, value)
+                updated_detectors.append(detector_name)
 
             response = {
                 "status": "success",
@@ -1415,11 +1557,14 @@ class LiveViewController(LiveUpdatedController):
                 "params": stream_params.to_dict()
             }
 
-            if restarted_streams:
-                response["restarted_detectors"] = restarted_streams
-                response["message"] = f"Parameters updated and {len(restarted_streams)} stream(s) restarted"
+            if updated_detectors:
+                response["updated_detectors"] = updated_detectors
+                response["message"] = (
+                    f"Parameters updated live on {len(updated_detectors)} "
+                    f"stream(s); no restart required."
+                )
             else:
-                response["message"] = "Parameters updated (no active streams to restart)"
+                response["message"] = "Parameters updated (no active streams)"
 
             return response
 

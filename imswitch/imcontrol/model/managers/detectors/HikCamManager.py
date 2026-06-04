@@ -136,6 +136,20 @@ class HikCamManager(DetectorManager):
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         return self._camera.getLast(returnFrameNumber=returnFrameNumber)
 
+    # ------------------------------------------------------------------
+    # §4.C.17 — two-stage preview pipeline.
+    # Pass-through to the underlying CameraHIK; the streaming workers
+    # (LiveViewController.StreamWorker._maybe_enable_preview) call these
+    # via duck-typing, so we only need to expose them when the camera
+    # actually supports them. CameraHIK always does, so the wrappers
+    # below unconditionally delegate.
+    # ------------------------------------------------------------------
+    def enablePreviewStream(self, enable: bool = True, subsample: int = 1):
+        return self._camera.enablePreviewStream(enable, subsample=subsample)
+
+    def getLatestPreviewFrame(self, returnFrameNumber: bool = False):
+        return self._camera.getLatestPreviewFrame(returnFrameNumber=returnFrameNumber)
+
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
         If the parameter doesn't exist, i.e. the parameters field doesn't
@@ -221,11 +235,20 @@ class HikCamManager(DetectorManager):
         """
         Set flip settings for the camera during runtime.
 
+        Tries to push the flip onto the camera SDK (ReverseY/ReverseX) so
+        the callback doesn't have to allocate a non-contiguous view via
+        ``np.flip``. On SDK rejection the callback's software ``np.flip``
+        path still applies ``self._camera.flipImage`` as a fallback.
+
         Args:
             flipY: Whether to flip vertically
             flipX: Whether to flip horizontally
         """
         self._camera.flipImage = (flipY, flipX)
+        try:
+            self._camera._trySetSdkFlip(flipY, flipX)
+        except Exception as e:
+            self.__logger.debug(f"_trySetSdkFlip not available: {e}")
         self.__logger.info(f"Updated flip settings: flipY={flipY}, flipX={flipX}")
 
     def crop(self, hpos, vpos, hsize, vsize):

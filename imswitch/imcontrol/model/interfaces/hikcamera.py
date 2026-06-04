@@ -2,10 +2,11 @@ import numpy as np
 import time
 from imswitch.imcommon.model import initLogger
 from skimage.filters import gaussian, median
-from typing import List
+from typing import List, Optional
 import sys
 from ctypes import *
 import collections
+import threading
 
 from sys import platform
 try:
@@ -103,6 +104,38 @@ class CameraHIK:
         self.camera = None
         self.DEBUG = False
         self.binning = binning
+        # When True, the camera SDK is doing the flip via ReverseX/ReverseY
+        # and the callback skips its software np.flip. Updated by
+        # _trySetSdkFlip(); defaults to False so any non-zero flip set
+        # before opening the camera still works as a software fallback.
+        self._sdk_flip_active = False
+
+        # §4.C.17 — two-stage preview pipeline.
+        #
+        # The streaming workers (JPEG/MJPEG/WebRTC in LiveViewController)
+        # used to do the uint16→uint8 cast and stride-subsample inline,
+        # on the StreamWorker thread, every frame. At 9–60 MP that adds
+        # 3–10 ms per frame to the encoder's critical path.
+        #
+        # We now run a dedicated background thread that:
+        #   1. waits for ``_preview_event`` from the SDK callback,
+        #   2. pulls the latest raw u16 frame from ``frame_buffer``,
+        #   3. applies the configured subsample + cast,
+        #   4. stores the resulting u8 frame in ``_preview_buffer``.
+        #
+        # ``getLatestPreviewFrame()`` then returns a ready-to-encode
+        # frame, so the StreamWorker thread only has to do the
+        # protocol-specific encoding (JPEG/cv2/turbojpeg, av.VideoFrame
+        # wrap, msgpack pack). The recording path still uses
+        # ``frame_buffer`` (raw u16) via ``getLatestFrame()``.
+        self._preview_buffer: collections.deque = collections.deque(maxlen=2)
+        self._preview_lock = threading.Lock()
+        self._preview_event = threading.Event()
+        self._preview_stop = threading.Event()
+        self._preview_thread: Optional[threading.Thread] = None
+        self._preview_enabled = False
+        self._preview_subsample = 1
+        self._preview_frame_id = -1
 
         self.SensorHeight = 0
         self.SensorWidth = 0
@@ -390,8 +423,137 @@ class CameraHIK:
         self.frameid_buffer.append(fid)
         self.frameNumber = fid
         self.timestamp   = ts
+        # §4.C.17 — wake the preview worker. ``Event.set()`` is a
+        # single mutex/cond pair; <1 µs, safe to call from the SDK
+        # callback thread.
+        if self._preview_enabled:
+            self._preview_event.set()
         if self.DEBUG:
             print("frame received:", fid, "timestamp:", ts, "mean:", np.mean(frame), "from camera name: ", self.mParameters.get("model_name", "Unknown"))
+
+    # ------------------------------------------------------------------
+    # §4.C.17 — Preview pipeline
+    # ------------------------------------------------------------------
+    def enablePreviewStream(self, enable: bool = True, subsample: int = 1) -> None:
+        """Enable/disable the background preview pipeline.
+
+        When enabled, a background thread maintains an up-to-date
+        ``uint8`` (optionally subsampled) copy of the latest raw frame.
+        Streaming workers (JPEG/MJPEG/WebRTC) should call
+        ``getLatestPreviewFrame()`` instead of ``getLatestFrame()`` to
+        skip the cast/subsample step.
+
+        Args:
+            enable: turn the pipeline on (True) or off (False).
+            subsample: stride factor applied along both axes before the
+                u8 cast (1 = no subsample, 4 = 1/16 area).
+        """
+        self._preview_subsample = max(1, int(subsample))
+        if enable and not self._preview_enabled:
+            self._preview_stop.clear()
+            self._preview_enabled = True
+            self._preview_thread = threading.Thread(
+                target=self._preview_loop,
+                name=f"HikPreview-{self.cameraNo}",
+                daemon=True,
+            )
+            self._preview_thread.start()
+            self.__logger.info(
+                f"Preview stream enabled (subsample={self._preview_subsample})"
+            )
+        elif not enable and self._preview_enabled:
+            self._preview_enabled = False
+            self._preview_stop.set()
+            self._preview_event.set()  # unblock wait()
+            if self._preview_thread is not None and self._preview_thread.is_alive():
+                self._preview_thread.join(timeout=2.0)
+            self._preview_thread = None
+            with self._preview_lock:
+                self._preview_buffer.clear()
+                self._preview_frame_id = -1
+            self.__logger.info("Preview stream disabled")
+        elif enable and self._preview_enabled:
+            # Already running, but the subsample factor may have
+            # changed. The loop re-reads it every iteration.
+            self.__logger.debug(
+                f"Preview stream subsample updated to {self._preview_subsample}"
+            )
+
+    def _preview_loop(self) -> None:
+        """Background worker: cast + subsample the latest raw frame."""
+        # Per-thread preallocated scratch buffers — same trick as
+        # ``StreamWorker._u16_to_u8_no_alloc`` but scoped to this thread
+        # so we don't fight for the cache lines.
+        u8_buf: Optional[np.ndarray] = None
+        u16_tmp: Optional[np.ndarray] = None
+        last_fid = -1
+
+        while not self._preview_stop.is_set():
+            # Wait at most 100 ms so shutdown is responsive.
+            triggered = self._preview_event.wait(timeout=0.1)
+            if self._preview_stop.is_set():
+                break
+            if not triggered:
+                continue
+            self._preview_event.clear()
+
+            # Snapshot latest raw frame and its id.
+            if not self.frame_buffer:
+                continue
+            try:
+                raw = self.frame_buffer[-1]
+                fid = self.frameNumber
+            except IndexError:
+                continue
+            if raw is None or fid == last_fid:
+                continue
+
+            # 1) Subsample via stride slice (view, zero copy).
+            sub = self._preview_subsample
+            view = raw[::sub, ::sub] if sub > 1 else raw
+
+            # 2) uint16 → uint8 via right-shift (12-bit → 8-bit). For
+            # camera modes that already deliver uint8 (Bayer*/RGB8/
+            # Mono8) we just take the view as-is.
+            if view.dtype == np.uint16:
+                if u8_buf is None or u8_buf.shape != view.shape:
+                    u8_buf = np.empty(view.shape, dtype=np.uint8)
+                    u16_tmp = np.empty(view.shape, dtype=np.uint16)
+                # ``out=`` requires matching dtype, hence the u16 scratch
+                # buffer + casting='unsafe' to truncate to u8.
+                np.right_shift(view, 4, out=u16_tmp)
+                np.copyto(u8_buf, u16_tmp, casting='unsafe')
+                preview = u8_buf
+            elif view.dtype == np.uint8:
+                # Make a contiguous copy: the stride view would alias
+                # back into the SDK ring buffer that the next callback
+                # is about to overwrite.
+                preview = np.ascontiguousarray(view)
+            else:
+                # Float / int32 / other: just cast without allocating
+                # a new buffer if possible.
+                preview = view.astype(np.uint8, copy=False)
+
+            with self._preview_lock:
+                self._preview_buffer.append(preview)
+                self._preview_frame_id = fid
+            last_fid = fid
+
+    def getLatestPreviewFrame(self, returnFrameNumber: bool = False):
+        """Return the latest u8 preview frame (cast + subsampled).
+
+        Mirrors ``getLatestFrame``'s API. Returns ``None`` (or
+        ``(None, -1)``) until at least one frame has been prepared.
+        Cheap — just a lock-and-peek.
+        """
+        with self._preview_lock:
+            if not self._preview_buffer:
+                return (None, -1) if returnFrameNumber else None
+            preview = self._preview_buffer[-1]
+            fid = self._preview_frame_id
+        if returnFrameNumber:
+            return preview, fid
+        return preview
 
     def _wrap_cb(self, user_cb):
         '''
@@ -522,11 +684,17 @@ class CameraHIK:
                 self.__logger.error(f"Unsupported pixel type 0x{pix:x}")
                 return
 
-            # Apply flip if needed (zero-CPU operation using numpy)
-            if self.flipImage[0]:  # flipY
-                frame = np.flip(frame, axis=0)
-            if self.flipImage[1]:  # flipX
-                frame = np.flip(frame, axis=1)
+            # Apply flip if needed. np.flip is "zero-CPU" but returns a view
+            # with negative strides; any downstream code that needs a
+            # contiguous buffer (cv2, tifffile) silently copies, which for a
+            # 9 MP frame costs ~30-40 ms on a Pi 5. Prefer the SDK-side
+            # ReverseX/ReverseY (set via _trySetSdkFlip) which the camera
+            # firmware does for free.
+            if not self._sdk_flip_active:
+                if self.flipImage[0]:  # flipY
+                    frame = np.flip(frame, axis=0)
+                if self.flipImage[1]:  # flipX
+                    frame = np.flip(frame, axis=1)
 
 
             # pass to user callback
@@ -680,6 +848,14 @@ class CameraHIK:
         if self.is_streaming:
             self.stop_live()
 
+        # §4.C.17 — stop the preview thread before SDK teardown so the
+        # loop can't try to view a buffer that's about to be freed.
+        if self._preview_enabled:
+            try:
+                self.enablePreviewStream(False)
+            except Exception as e:
+                self.__logger.debug(f"Preview shutdown failed: {e}")
+
         # Ensure callback is deregistered before closing
         if hasattr(self, '_callback_registered') and self._callback_registered:
             self.camera.MV_CC_RegisterImageCallBackEx(None, None)
@@ -733,18 +909,160 @@ class CameraHIK:
         else:
             self.__logger.warning(f"Failed to set pixel format 0x{format:x}, ret=0x{ret:x}")
 
-    def setBinning(self, binning=1):
-        try:
-            ret = self.camera.MV_CC_SetIntValue("BinningX", binning)
-            if ret != 0:
-                self.__logger.warning(f"BinningX set failed ret=0x{ret:x}")
-            ret = self.camera.MV_CC_SetIntValue("BinningY", binning)
-            if ret != 0:
-                self.__logger.warning(f"BinningY set failed ret=0x{ret:x}")
+    def _trySetSdkFlip(self, flipY: bool, flipX: bool) -> bool:
+        """Push the flip onto the SDK via ReverseY/ReverseX.
 
-            # Changing binning shifts WidthMax/HeightMax to the binned resolution.
-            # The camera keeps the old (now out-of-range) Width/Height values and
-            # silently reverts binning unless they are explicitly updated.
+        On success the callback skips its software ``np.flip``; on failure
+        we leave ``_sdk_flip_active = False`` so the callback's
+        ``np.flip`` continues to apply ``self.flipImage`` (preserves the
+        previous behaviour as a fallback).
+
+        ReverseX/ReverseY are GenICam SFNC standard boolean features; most
+        Hik USB3/GigE models support them. Like binning, they typically
+        cannot be set while grabbing.
+        """
+        try:
+            flipY = bool(flipY)
+            flipX = bool(flipX)
+            if self.camera is None:
+                self._sdk_flip_active = False
+                return False
+
+            was_streaming = self.is_streaming
+            if was_streaming:
+                self.stop_live()
+
+            ret_y = self.camera.MV_CC_SetBoolValue("ReverseY", c_bool(flipY))
+            ret_x = self.camera.MV_CC_SetBoolValue("ReverseX", c_bool(flipX))
+
+            if was_streaming:
+                self.start_live()
+
+            ok = (ret_y == 0 and ret_x == 0)
+            self._sdk_flip_active = ok
+            if ok:
+                self.__logger.info(
+                    f"SDK flip set (ReverseY={flipY}, ReverseX={flipX}); "
+                    f"software np.flip skipped in callback."
+                )
+            else:
+                self.__logger.debug(
+                    f"SDK flip not accepted "
+                    f"(ReverseY ret=0x{ret_y:x}, ReverseX ret=0x{ret_x:x}); "
+                    f"falling back to software np.flip."
+                )
+            return ok
+        except Exception as e:
+            self.__logger.debug(f"_trySetSdkFlip exception: {e}")
+            self._sdk_flip_active = False
+            return False
+
+    def setBinning(self, binning=1):
+        """Set hardware binning on the camera.
+
+        Previously called ``MV_CC_SetIntValue("BinningX"/"BinningY", ...)``
+        directly, which fails on newer Hik models with ret=0x80000100
+        (MV_E_GC_GENERIC) because those models follow the GenICam SFNC and
+        expose ``BinningHorizontal``/``BinningVertical`` instead. Some
+        models also gate these behind ``BinningSelector`` and require a
+        ``BinningHorizontalMode``/``BinningVerticalMode`` to be set.
+
+        This implementation tries the GenICam-standard names first and
+        falls back to the legacy ``BinningX``/``BinningY`` names for older
+        firmware. Binning cannot be changed while grabbing on most models,
+        so we suspend/resume the stream around the change.
+        """
+        try:
+            binning = int(binning)
+            was_streaming = self.is_streaming
+            if was_streaming:
+                self.stop_live()
+
+            # 1) BinningSelector: many models gate binning behind a region
+            # selector (e.g. "Sensor"). Older models don't expose this and
+            # will reject the call — that's fine, BinningHorizontal/Vertical
+            # still work directly afterwards.
+            if hasattr(self.camera, "MV_CC_SetEnumValueByString"):
+                ret = self.camera.MV_CC_SetEnumValueByString(
+                    "BinningSelector", "Sensor"
+                )
+                if ret == 0:
+                    self.__logger.debug("BinningSelector='Sensor' OK")
+                else:
+                    self.__logger.debug(
+                        f"BinningSelector='Sensor' not accepted "
+                        f"(ret=0x{ret:x}); continuing without it."
+                    )
+
+            # 2) Binning mode: "Sum" matches GenICam default (more
+            # sensitivity than "Average" but can saturate). Models that
+            # don't expose this just reject the call silently.
+            if hasattr(self.camera, "MV_CC_SetEnumValueByString"):
+                for mode_feature in (
+                    "BinningHorizontalMode",
+                    "BinningVerticalMode",
+                ):
+                    ret = self.camera.MV_CC_SetEnumValueByString(
+                        mode_feature, "Sum"
+                    )
+                    if ret != 0:
+                        self.__logger.debug(
+                            f"{mode_feature}='Sum' not accepted "
+                            f"(ret=0x{ret:x})."
+                        )
+
+            # 3) Apply the binning factor. Try the GenICam-standard
+            # ``BinningHorizontal``/``BinningVertical`` first (works on the
+            # MV-CS200-10UC and similar), fall back to the legacy
+            # ``BinningX``/``BinningY`` for older firmware.
+            ok_h = self.camera.MV_CC_SetIntValue("BinningHorizontal", binning)
+            if ok_h != 0:
+                self.__logger.debug(
+                    f"BinningHorizontal={binning} failed (ret=0x{ok_h:x}); "
+                    f"trying legacy 'BinningX'."
+                )
+                ok_h = self.camera.MV_CC_SetIntValue("BinningX", binning)
+
+            ok_v = self.camera.MV_CC_SetIntValue("BinningVertical", binning)
+            if ok_v != 0:
+                self.__logger.debug(
+                    f"BinningVertical={binning} failed (ret=0x{ok_v:x}); "
+                    f"trying legacy 'BinningY'."
+                )
+                ok_v = self.camera.MV_CC_SetIntValue("BinningY", binning)
+
+            # 4) Verify by readback. The Hik SDK is inconsistent about ret
+            # codes: some camera/firmware combos (incl. the MV-CS200-10UC)
+            # return non-zero (``0x80000100`` MV_E_GC_GENERIC) *even when
+            # the value is applied successfully*. Trust the readback, not
+            # the ret code.
+            actual_h = self._read_int_safe("BinningHorizontal")
+            if actual_h is None:
+                actual_h = self._read_int_safe("BinningX")
+            actual_v = self._read_int_safe("BinningVertical")
+            if actual_v is None:
+                actual_v = self._read_int_safe("BinningY")
+
+            applied = (actual_h == binning and actual_v == binning)
+            partial = (
+                not applied
+                and (actual_h == binning or actual_v == binning)
+            )
+
+            if not applied and (ok_h != 0 and ok_v != 0):
+                # SDK rejected the call AND the readback confirms no
+                # change — this is the real failure case.
+                self.__logger.warning(
+                    f"Binning set failed (H ret=0x{ok_h:x}, V ret=0x{ok_v:x}; "
+                    f"readback H={actual_h}, V={actual_v}); camera may not "
+                    f"support {binning}x{binning} or any hardware binning. "
+                    f"Falling back to no binning."
+                )
+
+            # 5) Changing binning shifts WidthMax/HeightMax to the binned
+            # resolution. The camera keeps the old (now out-of-range)
+            # Width/Height values and silently reverts binning unless they
+            # are explicitly updated.
             mWidth = MVCC_INTVALUE()
             mHeight = MVCC_INTVALUE()
             self.camera.MV_CC_GetIntValue("WidthMax", mWidth)
@@ -754,13 +1072,47 @@ class CameraHIK:
             self.SensorWidth = mWidth.nCurValue
             self.SensorHeight = mHeight.nCurValue
 
-            self.binning = binning
-            self.__logger.debug(
-                f"Binning set to {binning}x{binning}, "
-                f"sensor size {self.SensorWidth}x{self.SensorHeight}"
-            )
+            # Source of truth: the readback values.
+            effective_h = actual_h if actual_h else 1
+            effective_v = actual_v if actual_v else 1
+            self.binning = effective_h  # one-axis convention (square binning)
+
+            if applied:
+                self.__logger.info(
+                    f"Binning set to {effective_h}x{effective_v}, "
+                    f"sensor size now {self.SensorWidth}x{self.SensorHeight}"
+                )
+            elif partial:
+                self.__logger.warning(
+                    f"Binning partially applied: requested {binning}x{binning}, "
+                    f"camera reports {effective_h}x{effective_v}. "
+                    f"Sensor size now {self.SensorWidth}x{self.SensorHeight}."
+                )
+            else:
+                self.__logger.info(
+                    f"Binning unchanged ({effective_h}x{effective_v}); "
+                    f"sensor size {self.SensorWidth}x{self.SensorHeight}."
+                )
+
+            if was_streaming:
+                self.start_live()
         except Exception as e:
-            self.__logger.error(e)
+            self.__logger.error(f"setBinning failed: {e}")
+
+    def _read_int_safe(self, feature: str) -> Optional[int]:
+        """Read a GenICam integer feature; return ``None`` on failure.
+
+        Used by ``setBinning`` to verify the actual binning level via
+        readback rather than trusting the SDK's inconsistent ret codes.
+        """
+        try:
+            val = MVCC_INTVALUE()
+            ret = self.camera.MV_CC_GetIntValue(feature, val)
+            if ret == 0:
+                return int(val.nCurValue)
+        except Exception:
+            pass
+        return None
 
     def getLast(self,
                 returnFrameNumber: bool = False,

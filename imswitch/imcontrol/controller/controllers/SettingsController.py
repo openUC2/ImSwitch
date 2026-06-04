@@ -51,7 +51,7 @@ class SettingsController(ImConWidgetController):
 
         # Connect CommunicationChannel signals
         self._commChannel.sigDetectorSwitched.connect(self.detectorSwitched)
-
+        
         # Connect our signal with CommunicationChannel for WebSocket broadcasting
         self.sigDetectorParametersUpdated.connect(self._commChannel.sigDetectorParametersUpdated.emit)
 
@@ -123,7 +123,7 @@ class SettingsController(ImConWidgetController):
             self.closeEvent()
         except Exception:
             pass
-
+        
     def addROI(self):
         """ Adds the ROI to ImageWidget viewbox through the CommunicationChannel. """
         if not self.roiAdded:

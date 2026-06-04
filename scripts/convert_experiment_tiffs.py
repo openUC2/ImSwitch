@@ -436,6 +436,36 @@ def _imwrite_auto(fpath: str, arr: np.ndarray, **kwargs):
     tif.imwrite(fpath, arr, **kwargs)
 
 
+def _save_rgb_from_multichannel(src_path: str, out_path: str, percentile=(1.0, 99.9)) -> bool:
+    """
+    If src_path is a 3-channel stitched TIFF (C, H, W), normalize each channel
+    to 8-bit and write a (H, W, 3) RGB TIFF.  Returns True if an RGB file was
+    written, False if the source was single-channel (nothing to merge).
+    """
+    img = tif.imread(src_path)
+    # Flatten any leading axes — we want (C, H, W) or (H, W).
+    while img.ndim > 3:
+        img = img[0]
+    if img.ndim == 2:
+        return False  # grayscale
+    if img.ndim == 3 and img.shape[0] not in (3, 4):
+        return False  # unexpected layout
+    n_ch = min(img.shape[0], 3)
+    channels = []
+    for c in range(n_ch):
+        ch = img[c].astype(np.float32)
+        lo = float(np.percentile(ch, percentile[0]))
+        hi = float(np.percentile(ch, percentile[1]))
+        if hi > lo:
+            ch = np.clip((ch - lo) / (hi - lo), 0.0, 1.0)
+        else:
+            ch = np.zeros_like(ch)
+        channels.append((ch * 255).astype(np.uint8))
+    rgb = np.stack(channels, axis=-1)   # (H, W, 3)
+    tif.imwrite(out_path, rgb, photometric="rgb", compression="zlib")
+    return True
+
+
 def _focus_measure(frame: np.ndarray) -> float:
     """
     Return normalized Laplacian variance as a focus measure score.
@@ -959,7 +989,8 @@ class _NumpyMetadata:
     """Minimal ashlar Metadata backed by numpy arrays derived from TileInfo objects."""
 
     def __init__(self, positions_px, tile_size, pixel_size_um, num_channels, dtype):
-        # positions_px: list of (y_px, x_px) tuples in pixel units — ashlar requires this
+        # positions_px: list of (y_px, x_px) tuples in pixel coordinates.
+        # Ashlar uses positions directly in pixel space (same units as tile size).
         self._positions = np.asarray(positions_px, dtype=np.float64)
         self._size = np.array(tile_size)        # (height, width) as numpy array — ashlar calls .max() on it
         self._pixel_size = float(pixel_size_um)
@@ -1037,9 +1068,9 @@ def _build_numpy_reader(
     """
     Build a _NumpyReader for one timepoint directly from the ExperimentGrid.
 
-    Positions are returned in PIXELS (not µm) because ashlar's neighbors_graph
-    and intersection() both use positions and size in the same unit (pixels).
-    Conversion: TileInfo.x/y are µm×1000 integers → divide by (1000 × pixel_size_um).
+    Positions are stored in pixel coordinates (same unit as tile size), matching the
+    convention used by ashlarUC2's own ImSwitchTiffMetadata.  TileInfo.x/y are
+    µm×1000 integers; dividing by (1000 * pixel_size_um) converts to pixels.
 
     Returns None when no tiles are available for the requested timepoint.
     """
@@ -1056,16 +1087,16 @@ def _build_numpy_reader(
             if not has_any:
                 continue
 
-            # TileInfo x/y are µm×1000 integers; convert to pixels.
-            # pixel_size_um is µm/pixel, so: pixels = (raw / 1000) / pixel_size_um
             ref_tile = None
             for ci in c_indices:
                 z_tiles = grid.get_tiles(tp, ix, iy, ci)
                 if z_tiles:
                     ref_tile = z_tiles[0]
                     break
-            y_px = ref_tile.y / (1000.0 * pixel_size_um)
-            x_px = ref_tile.x / (1000.0 * pixel_size_um)
+            # TileInfo x/y are µm×1000 integers → divide by (1000 * pixel_size) → pixels
+            scale = 1.0 / (1000.0 * pixel_size_um)
+            y_px = ref_tile.y * scale
+            x_px = ref_tile.x * scale
             positions_px.append((y_px, x_px))
 
             for c_local, ci in enumerate(c_indices):
@@ -1086,10 +1117,11 @@ def _build_numpy_reader(
     if not positions_px:
         return None
 
-    # RGB tiles are split into R/G/B planes and exposed as 3× the channel count
-    # so ashlar stitches each colour plane independently (same alignment applied
-    # to all).  The output OME-TIFF will have channels [R0,G0,B0, R1,G1,B1, …]
-    # which viewers recombine as RGB.
+    # Shift so the minimum position is at (0, 0).
+    min_y = min(p[0] for p in positions_px)
+    min_x = min(p[1] for p in positions_px)
+    positions_px = [(y - min_y, x - min_x) for y, x in positions_px]
+
     num_channels = len(c_indices) * (3 if is_rgb else 1)
     meta = _NumpyMetadata(
         positions_px=positions_px,
@@ -1157,7 +1189,7 @@ def build_ashlar_stitched(
     maximum_shift: float – max per-tile corrective shift in µm (ashlar -m)
     align_channel: int   – channel index used for alignment (ashlar -c)
     """
-    # Import process_images first — required by both backends.
+    # Import process_images and build_imswitch_reader from ashlarUC2.
     process_images = None
     build_imswitch_reader = None
 
@@ -1167,59 +1199,6 @@ def build_ashlar_stitched(
             process_images = getattr(_mod, "process_images", None)
             build_imswitch_reader = getattr(_mod, "build_imswitch_reader", None)
             if process_images is not None:
-                # process_single always calls build_reader(filepaths[0]) even when we pass
-                # a pre-built reader object.  Patch build_reader to short-circuit in that case
-                # so it never tries to instantiate BioformatsReader (which requires Java).
-                _orig_build_reader = getattr(_mod, "build_reader", None)
-                if _orig_build_reader is not None:
-                    def _patched_build_reader(path, *args, _orig=_orig_build_reader, **kwargs):
-                        if hasattr(path, "metadata") and hasattr(path, "read"):
-                            return path  # already a reader — pass through unchanged
-                        return _orig(path, *args, **kwargs)
-                    _mod.build_reader = _patched_build_reader
-
-                # scikit-image ≥ 0.22 removed the return_error keyword from
-                # phase_cross_correlation.  ashlarUC2.utils calls it via the module
-                # path skimage.registration.phase_cross_correlation(..., return_error=False).
-                # Patching the function on the skimage.registration module fixes it for
-                # every caller regardless of how they imported the symbol.
-                # scikit-image ≥ 0.22: return_error removed from phase_cross_correlation.
-                try:
-                    import skimage.registration as _skreg
-                    import inspect as _inspect
-                    _orig_pcc = _skreg.phase_cross_correlation
-                    if "return_error" not in _inspect.signature(_orig_pcc).parameters:
-                        def _compat_pcc(*args, return_error=None, **kwargs):
-                            result = _orig_pcc(*args, **kwargs)
-                            if return_error is False:
-                                return result[0] if hasattr(result, "__getitem__") else result
-                            return result
-                        _skreg.phase_cross_correlation = _compat_pcc
-                        print("  Patched skimage.registration.phase_cross_correlation "
-                              "for return_error compatibility")
-                except Exception as _patch_exc:
-                    print(f"  Note: could not patch phase_cross_correlation: {_patch_exc}")
-
-                # tifffile ≥ 2022.7.28: passing a unit as the 3rd element of the
-                # resolution tuple is deprecated/removed; use resolutionunit= instead.
-                try:
-                    import tifffile as _tifffile
-                    _orig_tw_write = _tifffile.TiffWriter.write
-                    def _compat_tw_write(self_tw, data, *args, resolution=None, **kwargs):
-                        if isinstance(resolution, (tuple, list)) and len(resolution) == 3:
-                            unit = resolution[2]
-                            resolution = (resolution[0], resolution[1])
-                            if "resolutionunit" not in kwargs:
-                                # Map common old-style unit strings to TIFF integer codes
-                                if isinstance(unit, str):
-                                    unit = 3 if "cent" in unit.lower() else (2 if "inch" in unit.lower() else unit)
-                                kwargs["resolutionunit"] = unit
-                        return _orig_tw_write(self_tw, data, *args, resolution=resolution, **kwargs)
-                    _tifffile.TiffWriter.write = _compat_tw_write
-                    print("  Patched tifffile.TiffWriter.write for resolution unit compatibility")
-                except Exception as _patch_exc:
-                    print(f"  Note: could not patch tifffile.TiffWriter.write: {_patch_exc}")
-
                 print(f"  Using {_pkg} (build_imswitch_reader={'yes' if build_imswitch_reader else 'no'})")
                 break
         except Exception as _exc:
@@ -1295,6 +1274,48 @@ def build_ashlar_stitched(
             filepaths_arg = [reader]
 
         # ------------------------------------------------------------------
+        # Pre-flight overlap check — positions and size are both in pixels.
+        # ------------------------------------------------------------------
+        _meta = reader.metadata
+        _pos = np.asarray(_meta.positions, dtype=float)
+        _sz  = np.asarray(_meta.size, dtype=float)
+        _ps  = float(_meta.pixel_size)
+        print(f"  Tile size: {tuple(int(v) for v in _sz)} px  "
+              f"pixel_size: {_ps} µm/px  FOV: {_sz * _ps} µm")
+        if len(_pos) > 1:
+            # Only consider pairs whose tile footprints actually share pixel area:
+            # diff[axis] < sz[axis] for BOTH axes.  This is the correct overlap test.
+            # The old cityblock criterion was too permissive: for small Y steps (large
+            # Y overlap), Y-separated-by-2-rows tiles can be within the cityblock
+            # threshold (2*step < max_size+1) yet still have no actual pixel overlap
+            # (2*step > tile_height), producing false-negative overlap values.
+            _min_ov = np.inf
+            _n_overlapping = 0
+            for _ii in range(len(_pos)):
+                for _jj in range(_ii + 1, len(_pos)):
+                    _diff_px = np.abs(_pos[_jj] - _pos[_ii])
+                    if _diff_px.sum() > 0 and np.all(_diff_px < _sz):   # actual pixel overlap
+                        _ov = float(np.min(_sz - _diff_px))
+                        _min_ov = min(_min_ov, _ov)
+                        _n_overlapping += 1
+            if _min_ov == np.inf:
+                print(
+                    f"  ERROR: No tile pairs share any pixel overlap — ashlar requires "
+                    f"overlapping tiles for edge registration.\n"
+                    f"  Re-scan with tile overlap enabled, or use '--mode stitch' / "
+                    f"'--mode mip' for grid-based stitching without registration."
+                )
+                continue
+            else:
+                print(f"  Min expected tile overlap: {_min_ov:.1f} px  ({_n_overlapping} overlapping pair(s))")
+                if _min_ov < 50:
+                    print(
+                        f"  WARNING: Very small tile overlap ({_min_ov:.0f} px). "
+                        f"Ashlar may struggle with accurate edge registration "
+                        f"(ideally ≥10% of tile size = {0.1*_sz[0]:.0f}+ px)."
+                    )
+
+        # ------------------------------------------------------------------
         # Run ASHLAR.
         # ------------------------------------------------------------------
         try:
@@ -1319,8 +1340,14 @@ def build_ashlar_stitched(
                 plates=False,
                 quiet=False,
             )
-        except Exception as exc:
-            print(f"  ERROR during ashlar processing for tp={tp}: {exc}")
+        except (ValueError, Exception) as exc:
+            _emsg = str(exc)
+            if "high <= 0" in _emsg or "low >= high" in _emsg:
+                print(
+                    f"  ERROR: Ashlar edge-registration failed ('{_emsg}') — possible overlap issue."
+                )
+            else:
+                print(f"  ERROR during ashlar processing for tp={tp}: {exc}")
             import traceback
             traceback.print_exc()
             continue
@@ -1330,6 +1357,13 @@ def build_ashlar_stitched(
         elif os.path.isfile(out_file):
             print(f"  Written: {out_file}")
             files_written.append(out_file)
+            # If the stitched TIFF has 3 channels (RGB input tiles), merge to RGB.
+            rgb_path = out_file[:-8] + "_rgb.tif" if out_file.endswith(".ome.tif") else out_file + "_rgb.tif"
+            try:
+                if _save_rgb_from_multichannel(out_file, rgb_path):
+                    print(f"  RGB: {os.path.basename(rgb_path)}")
+            except Exception as _rgb_exc:
+                print(f"  WARNING: RGB merge failed: {_rgb_exc}")
         else:
             print(f"  WARNING: ashlar reported success but output file is missing: {out_file}")
 
@@ -1337,7 +1371,6 @@ def build_ashlar_stitched(
 
     if not files_written:
         print("  ERROR: No output files were written by ashlar.")
-        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -1447,9 +1480,10 @@ def main():
     parser.add_argument(
         "--pixel-size",
         type=float,
-        default=1.0,
+        default=None,
         metavar="MICRONS",
-        help="Physical pixel size in microns (used by ashlar mode, default: 1.0)",
+        help="Physical pixel size in microns (used by ashlar mode). "
+             "Defaults to the value set during pixel calibration; falls back to 1.0 if not found.",
     )
     parser.add_argument(
         "--maximum-shift",
@@ -1526,40 +1560,15 @@ def main():
         build_timelapse(grid, os.path.join(out_dir, "timelapse_mip"), use_mip=True)
         
     if "ashlar" in modes:
-        # --pixel-size from the CLI takes precedence; fall back to protocol JSON
-        # only when the caller left it at the default (1.0) and a JSON is found.
-        pixel_size = args.pixel_size
+        # Priority: explicit --pixel-size CLI arg > 1.0 fallback
+        cli_pixel_size = args.pixel_size  # None when not supplied by the caller
 
-        json_file = None
-        for search_dir in [tiles_dir, os.path.dirname(tiles_dir)]:
-            try:
-                for f in os.listdir(search_dir):
-                    if f.endswith("_protocol.json"):
-                        json_file = os.path.join(search_dir, f)
-                        break
-            except OSError:
-                pass
-            if json_file:
-                break
-
-        if json_file:
-            print(f"Found protocol JSON file: {json_file}")
-            try:
-                with open(json_file, "r") as f:
-                    protocolDict = json.load(f)
-                json_pixel_size = next(
-                    (step["post_params"]["pixel_size"]
-                     for step in protocolDict.get("workflow_steps", [])
-                     if "pixel_size" in step.get("post_params", {})),
-                    None,
-                )
-                if json_pixel_size is not None and pixel_size == 1.0:
-                    pixel_size = json_pixel_size
-                    print(f"Using pixel size from protocol JSON: {pixel_size} µm")
-            except Exception as exc:
-                print(f"  WARNING: Could not read pixel size from protocol JSON: {exc}")
+        if cli_pixel_size is not None:
+            pixel_size = cli_pixel_size
+            print(f"  Using pixel size from --pixel-size flag: {pixel_size} µm")
         else:
-            print(f"  No protocol JSON found — using pixel size from --pixel-size: {pixel_size} µm")
+            pixel_size = 1.0
+            print(f"  WARNING: pixel size not supplied via --pixel-size; defaulting to {pixel_size} µm")
 
         build_ashlar_stitched(
             grid,

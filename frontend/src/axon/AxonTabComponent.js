@@ -6,20 +6,14 @@ import {
   Typography,
   Box,
 } from "@mui/material";
-import {
-  Videocam as VideocamIcon,
-} from "@mui/icons-material";
+import { Videocam as VideocamIcon } from "@mui/icons-material";
 import LiveViewControlWrapper from "./LiveViewControlWrapper";
-import TileViewComponent from "./TileViewComponent";
-import ZarrTileViewController from "./ZarrTileView";
 import GenericTabBar from "./GenericTabBar";
 import WellSelectorComponent from "./WellSelectorComponent";
 import PointListEditorComponent from "./PointListEditorComponent";
 import WebSocketComponent from "./WebSocketComponent";
 import PositionViewComponent from "./PositionViewComponent";
 import ParameterEditorWrapper from "./ParameterEditorWrapper";
-import ExperimentComponent from "./ExperimentComponent";
-import ResizablePanel from "./ResizablePanel"; //<ResizablePanel></ResizablePanel> performace issues :/
 import FocusLockMiniController from "../components/FocusLockMiniController";
 import Frame3DViewerPanel from "./Frame3DViewerPanel.jsx";
 import PictureInPicture, { PiPToggleButton } from "./PictureInPicture";
@@ -30,6 +24,9 @@ import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView";
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
 import apiLiveViewControllerGetActiveStreams from "../backendapi/apiLiveViewControllerGetActiveStreams";
+import createAxiosInstance from "../backendapi/createAxiosInstance";
+import { setNotification } from "../state/slices/NotificationSlice";
+import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice";
 
 /**
  * DetectorToggle - Camera selector for switching between detectors
@@ -59,9 +56,13 @@ const DetectorToggle = () => {
         if (idx >= 0 && idx !== activeTab) {
           dispatch(liveViewSlice.setActiveTab(idx));
         }
-      } catch (_err) { /* ignore */ }
+      } catch (_err) {
+        /* ignore */
+      }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detectors.length]);
 
@@ -79,7 +80,8 @@ const DetectorToggle = () => {
         const protocol = liveStreamState.imageFormat || "jpeg";
         const newDetectorName = detectors[newIdx] || null;
         const savedParams =
-          newDetectorName && liveStreamState.perDetectorSettings?.[newDetectorName];
+          newDetectorName &&
+          liveStreamState.perDetectorSettings?.[newDetectorName];
         const overrideParams =
           savedParams && savedParams.protocol === protocol ? savedParams : null;
         const result = await apiLiveViewControllerStartLiveView(
@@ -104,13 +106,21 @@ const DetectorToggle = () => {
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
       <VideocamIcon fontSize="small" color="action" />
-      <Typography variant="caption" color="text.secondary">Camera:</Typography>
+      <Typography variant="caption" color="text.secondary">
+        Camera:
+      </Typography>
       <ToggleButtonGroup
         value={activeTab}
         exclusive
         onChange={handleSwitch}
         size="small"
-        sx={{ '& .MuiToggleButton-root': { textTransform: 'none', py: 0.25, px: 1.5 } }}
+        sx={{
+          "& .MuiToggleButton-root": {
+            textTransform: "none",
+            py: 0.25,
+            px: 1.5,
+          },
+        }}
       >
         {detectors.map((name, idx) => (
           <ToggleButton key={name} value={idx}>
@@ -123,13 +133,64 @@ const DetectorToggle = () => {
 };
 
 const AxonTabComponent = () => {
+  const dispatch = useDispatch();
   // PiP (picture-in-picture) floating live preview
   const [pipVisible, setPipVisible] = useState(false);
+
+  // Ensure WellPlate starts with detector auto-exposure disabled.
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const api = createAxiosInstance();
+        await api.get(`/SettingsController/setDetectorMode?isAuto=false`);
+        if (cancelled) return;
+
+        // Keep frontend mode state in sync until the next WS update arrives.
+        dispatch(
+          detectorParametersSlice.updateParameter({
+            key: "mode",
+            value: "manual",
+          }),
+        );
+
+        dispatch(
+          setNotification({
+            message:
+              "WellPlate started: Live view auto-exposure has been disabled.",
+            type: "info",
+            autoHideDuration: 3500,
+          }),
+        );
+      } catch (error) {
+        if (cancelled) return;
+        dispatch(
+          setNotification({
+            message:
+              "WellPlate started, but live view auto-exposure could not be disabled.",
+            type: "warning",
+            autoHideDuration: 4500,
+          }),
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dispatch]);
 
   return (
     <div style={{ width: "100%" }}>
       {/* PiP toggle button – always visible in the top-right corner */}
-      <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 8px 0 0" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          padding: "2px 8px 0 0",
+        }}
+      >
         <PiPToggleButton
           active={pipVisible}
           onClick={() => setPipVisible((v) => !v)}
@@ -175,11 +236,11 @@ const AxonTabComponent = () => {
             id="2"
             tabNames={[
               "Live View",
-//              "Tile View",
+              //              "Tile View",
               "Points",
               "Parameter",
               "Focus Lock",
-              "Overview Scan"
+              "Overview Scan",
             ]}
           >
             <div>

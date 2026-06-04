@@ -258,6 +258,7 @@ class ExperimentController(ImConWidgetController):
             "result": None,
             "error": None,
         }
+        self._ashlar_proc = None  # subprocess.Popen handle for the running ashlar process
         # Overview camera is resolved through the DetectorManager, using the
         # detector name configured in setup (experiment.overviewCameraName).
         # Falls back to a detector literally named "overviewcamera" if any.
@@ -309,7 +310,28 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="GET")
     def getHardwareParameters(self):
+        try:
+            det_px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+            self.ExperimentParams.pixel_size_um = float(det_px[1]) if len(det_px) > 1 else 1.0
+        except Exception:
+            pass
         return self.ExperimentParams
+
+    @APIExport(requestType="GET")
+    def getDetectorPixelSize(self) -> dict:
+        """Return the calibrated pixel size (µm/px) for the primary acquisition detector.
+
+        PixelCalibrationController injects the per-objective value from
+        PixelCalibration.affineCalibrations into the detector at startup and
+        whenever the objective changes, so this always reflects the current
+        calibration.
+        """
+        try:
+            px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+            value = float(px[1]) if len(px) > 1 else 1.0
+        except Exception:
+            value = 1.0
+        return {"pixel_size_um": value}
 
     # ------------------------------------------------------------------
     # Wellplate / labware endpoints
@@ -1120,6 +1142,30 @@ class ExperimentController(ImConWidgetController):
             # Start the workflow
             self.workflow_manager.start_workflow(wf, context)
 
+            # Auto-trigger Ashlar stitching once the workflow thread finishes,
+            # guaranteeing all individual TIFFs are on disk before stitching starts.
+            if p.ome_write_ashlar_stitch:
+                _wf_thread = self.workflow_manager.current_thread
+                _pixel_size = getattr(p, 'ashlar_pixel_size', 1.0)
+                _max_shift = getattr(p, 'ashlar_maximum_shift', 50.0)
+                _align_ch = getattr(p, 'ashlar_align_channel', 0)
+                _exp_dir = dirPath
+
+                def _auto_stitch():
+                    if _wf_thread is not None:
+                        _wf_thread.join()
+                    self._logger.info("Experiment complete — auto-starting Ashlar stitching")
+                    self.runAshlarStitching(
+                        pixelSize=_pixel_size,
+                        maximumShift=_max_shift,
+                        alignChannel=_align_ch,
+                        experimentDir=_exp_dir,
+                    )
+
+                threading.Thread(
+                    target=_auto_stitch, daemon=True, name="AshlarAutoTrigger"
+                ).start()
+
         return {"status": "running"}
 
     def computeScanRanges(self, snake_tiles):
@@ -1505,9 +1551,11 @@ class ExperimentController(ImConWidgetController):
             self._logger.debug("No image found in metadata!")
             return
 
-        # RGB cameras produce (H, W, 3) arrays; convert to grayscale so the
-        # OME canvas (which has no colour axis) can accept the tile.
-        if img.ndim == 3 and img.shape[2] == 3:
+        # Colour (RGB) detectors deliver (H, W, 3) arrays. Preserve the colour
+        # for RGB cameras (the OME writer now carries a trailing samples axis);
+        # only collapse to grayscale for non-RGB detectors that nonetheless
+        # hand us a 3-channel frame.
+        if img.ndim == 3 and img.shape[2] == 3 and not getattr(self, 'isRGB', False):
             img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype)
 
         # Get tile index to identify the correct OME writer
@@ -1967,9 +2015,25 @@ class ExperimentController(ImConWidgetController):
                 "status": self._overview_async_status,
             }
 
+        # Resolve pixel size: when the UI still shows the default (1.0) read the
+        # calibrated value that PixelCalibrationController pushed into the detector
+        # from PixelCalibration.affineCalibrations in the ImSwitchConfig file.
+        resolved_pixel_size = pixelSize
+        if pixelSize == 1.0:
+            try:
+                det_px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+                cal_px = float(det_px[1]) if len(det_px) > 1 else 1.0
+                if cal_px > 0 and cal_px != 1.0:
+                    resolved_pixel_size = cal_px
+                    self._logger.info(
+                        f"Ashlar: using calibrated pixel size from detector: {cal_px:.4f} µm/px"
+                    )
+            except Exception as exc:
+                self._logger.warning(f"Could not read detector pixel size: {exc}")
+
         thread = threading.Thread(
             target=self._runAshlarStitchingWorker,
-            args=(target_dir, pixelSize, maximumShift, alignChannel),
+            args=(target_dir, resolved_pixel_size, maximumShift, alignChannel),
             daemon=True,
             name="runAshlarStitching",
         )
@@ -2014,9 +2078,9 @@ class ExperimentController(ImConWidgetController):
             sys.executable, script,
             target_dir,
             "--mode", "ashlar",
-            "--pixel-size", str(pixelSize),
             "--maximum-shift", str(maximumShift),
             "--align-channel", str(alignChannel),
+            "--pixel-size", str(pixelSize),
         ]
         self._logger.info(f"Ashlar command: {' '.join(cmd)}")
 
@@ -2030,6 +2094,8 @@ class ExperimentController(ImConWidgetController):
                 stderr=subprocess.STDOUT,
                 text=True,
             )
+            with self._overview_async_lock:
+                self._ashlar_proc = proc
 
             stderr_lines: list[str] = []
 
@@ -2057,6 +2123,8 @@ class ExperimentController(ImConWidgetController):
                 time.sleep(1)
 
             reader_thread.join(timeout=10)
+            with self._overview_async_lock:
+                self._ashlar_proc = None
             rc = proc.returncode
 
             if rc == 0:
@@ -2319,7 +2387,8 @@ class ExperimentController(ImConWidgetController):
             grid_shape=grid_shape,
             grid_geometry=grid_geometry,
             config=writer_config,
-            logger=self._logger
+            logger=self._logger,
+            isRGB=getattr(self, 'isRGB', False),
         )
 
         # ------------------------------------------------------------- main loop
@@ -3764,6 +3833,18 @@ class ExperimentController(ImConWidgetController):
         """Return the current background-overview-task state for polling."""
         with self._overview_async_lock:
             return dict(self._overview_async_status)
+
+    @APIExport(requestType="GET")
+    def stopAshlarStitching(self) -> dict:
+        """Kill the running Ashlar stitching subprocess, if any."""
+        with self._overview_async_lock:
+            proc = self._ashlar_proc
+        if proc is None or proc.poll() is not None:
+            return {"stopped": False, "message": "No stitching process is running"}
+        proc.kill()
+        self._logger.info("Ashlar stitching process killed by user request")
+        self._finishOverviewAsync(error="Stitching stopped by user")
+        return {"stopped": True}
 
     # ------------------------------------------------------------------
     # Known calibration reference points per layout

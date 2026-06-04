@@ -326,17 +326,33 @@ class OMEWriter:
         self.store = str(self.file_paths.zarr_dir)
         self.root = zarr.open_group(store=self.store, mode="w")
         
+        # Colour (RGB) detectors deliver (H, W, 3) tiles. Add a trailing
+        # "samples" axis so the canvas can physically store them, and keep the
+        # native 8-bit range (Picamera2/Hik RGB are uint8) so viewers render
+        # true colour instead of a near-black 16-bit image. Mono detectors keep
+        # the original 5-D uint16 layout unchanged.
+        base_shape = (
+            int(self.config.n_time_points),
+            int(self.config.n_channels),
+            int(self.config.n_z_planes),
+            int(self.ny * self.tile_h),
+            int(self.nx * self.tile_w),
+        )
+        base_chunks = (1, 1, 1, int(self.tile_h), int(self.tile_w))
+        if self.isRGB:
+            canvas_shape = base_shape + (3,)
+            canvas_chunks = base_chunks + (3,)
+            canvas_dtype = "uint8"
+        else:
+            canvas_shape = base_shape
+            canvas_chunks = base_chunks
+            canvas_dtype = "uint16"
+
         self.canvas = self.root.create_array(
             name="0",
-            shape=(
-                int(self.config.n_time_points),
-                int(self.config.n_channels),
-                int(self.config.n_z_planes),
-                int(self.ny * self.tile_h),
-                int(self.nx * self.tile_w)
-            ),  # t c z y x
-            chunks=(1, 1, 1, int(self.tile_h), int(self.tile_w)),
-            dtype="uint16",
+            shape=canvas_shape,   # t c z y x (s)
+            chunks=canvas_chunks,
+            dtype=canvas_dtype,
             compressor=self.config.zarr_compressor
         )
 
@@ -356,6 +372,25 @@ class OMEWriter:
         pixel_size_z = self.config.pixel_size_z
         time_interval = self.config.time_interval
 
+        # 8-bit display range for RGB (uint8) canvases, 16-bit for mono.
+        display_max = 255 if self.isRGB else 65535
+
+        # Axes / scales. RGB canvases carry a trailing "samples" axis; mono
+        # canvases keep the classic 5-D TCZYX layout.
+        axes = [
+            {"name": "t", "type": "time", "unit": "second"},
+            {"name": "c", "type": "channel"},
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"},
+        ]
+        scale = [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]
+        translation = [0, 0, self.config.z_start, self.y_start, self.x_start]
+        if self.isRGB:
+            axes.append({"name": "s", "type": "channel"})
+            scale = scale + [1]
+            translation = translation + [0]
+
         # Set multiscales metadata with physical coordinate transformations
         self.root.attrs["multiscales"] = [{
             "version": "0.4",
@@ -364,20 +399,14 @@ class OMEWriter:
                 {
                     "path": "0",
                     "coordinateTransformations": [
-                        {"type": "scale", "scale": [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]},
-                        {"type": "translation", "translation": [0, 0, self.config.z_start, self.y_start, self.x_start]}
+                        {"type": "scale", "scale": list(scale)},
+                        {"type": "translation", "translation": list(translation)}
                     ]
                 }
             ],
-            "axes": [
-                {"name": "t", "type": "time", "unit": "second"},
-                {"name": "c", "type": "channel"},
-                {"name": "z", "type": "space", "unit": "micrometer"},
-                {"name": "y", "type": "space", "unit": "micrometer"},
-                {"name": "x", "type": "space", "unit": "micrometer"},
-            ],
+            "axes": axes,
             "coordinateTransformations": [
-                {"type": "scale", "scale": [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]}
+                {"type": "scale", "scale": list(scale)}
             ]
         }]
 
@@ -395,9 +424,9 @@ class OMEWriter:
                 "inverted": False,
                 "window": {
                     "start": 0,
-                    "end": 65535,  # 16-bit max
+                    "end": display_max,
                     "min": 0,
-                    "max": 65535
+                    "max": display_max
                 }
             })
 
@@ -446,7 +475,7 @@ class OMEWriter:
         # before the single-TIFF writer opens its output file inside it.
         os.makedirs(self.file_paths.base_dir, exist_ok=True)
         single_tiff_path = os.path.join(self.file_paths.base_dir, "single_tiles.ome.tif")
-        self.single_tiff_writer = SingleTiffWriter(single_tiff_path, bigtiff=True)
+        self.single_tiff_writer = SingleTiffWriter(single_tiff_path, bigtiff=True, isRGB=self.isRGB)
         if self.logger:
             self.logger.debug(f"Single TIFF writer initialized: {single_tiff_path}")
 
@@ -598,8 +627,17 @@ class OMEWriter:
         y0, y1 = iy * self.tile_h, (iy + 1) * self.tile_h
         x0, x1 = ix * self.tile_w, (ix + 1) * self.tile_w
 
-        # Write to canvas with proper indexing
-        self.canvas[t_idx, c_idx, z_idx, y0:y1, x0:x1] = frame
+        # Write to canvas with proper indexing. RGB canvases carry a trailing
+        # samples axis; a stray 2-D frame is broadcast across the 3 samples,
+        # and a stray 3-D frame on a mono canvas is collapsed to luminance.
+        if self.isRGB:
+            if frame.ndim == 2:
+                frame = np.stack([frame] * 3, axis=-1)
+            self.canvas[t_idx, c_idx, z_idx, y0:y1, x0:x1, :] = frame
+        else:
+            if frame.ndim == 3:
+                frame = np.dot(frame[..., :3], [0.299, 0.587, 0.114]).astype(self.canvas.dtype)
+            self.canvas[t_idx, c_idx, z_idx, y0:y1, x0:x1] = frame
 
         # Return chunk information for frontend updates
         rel_chunk = f"0/{iy}.{ix}"  # NGFF v0.4 layout
@@ -662,10 +700,15 @@ class OMEWriter:
         filename = f"t{current_time}_x{x_microns}_y{y_microns}_z{z_microns}_c{c_idx}_{channel}_i{iterator:04d}_p{laser_power}.tif"
         filepath = os.path.join(timepoint_dir, filename)
 
+        # RGB tiles (H, W, 3) must be tagged photometric="rgb" or tifffile would
+        # store them as a 3-plane grayscale stack, which is why colour tiles were
+        # being saved as grayscale. Grayscale tiles keep photometric=None (auto).
+        photometric = "rgb" if (self.isRGB and frame.ndim == 3) else None
+
         # Build OME-XML metadata for this individual TIFF
         try:
             from .ome_tiff_metadata import build_ome_metadata_from_dict, OME_TYPES_AVAILABLE
-            
+
             if OME_TYPES_AVAILABLE:
                 # Prepare metadata dict with image dimensions and pixel info
                 ome_metadata = metadata.copy()
@@ -674,19 +717,19 @@ class OMEWriter:
                 ome_metadata["dtype"] = str(frame.dtype)
                 ome_metadata["pixel_size"] = self.config.pixel_size
                 ome_metadata["channel_name"] = channel
-                
+
                 # Build OME-XML string
                 ome_xml = build_ome_metadata_from_dict(ome_metadata)
                 if ome_xml:
-                    tif.imwrite(filepath, frame, compression=self.config.compression, description=ome_xml)
+                    tif.imwrite(filepath, frame, compression=self.config.compression, description=ome_xml, photometric=photometric)
                 else:
-                    tif.imwrite(filepath, frame, compression=self.config.compression)
+                    tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
             else:
-                tif.imwrite(filepath, frame, compression=self.config.compression)
+                tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
         except Exception as e:
             if self.logger:
                 self.logger.warning(f"Failed to write OME metadata to individual TIFF: {e}")
-            tif.imwrite(filepath, frame, compression=self.config.compression)
+            tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
 
     def _write_omero_tile(self, frame, metadata: Dict[str, Any]):
         """
@@ -705,6 +748,21 @@ class OMEWriter:
         t_idx = metadata.get("time_index", 0)
         c_idx = metadata.get("channel_index", 0)
         z_idx = metadata.get("z_index", 0)
+
+        # The OMERO uploader is built for the mono plane model (uint16, no
+        # samples axis) and is not RGB-aware. For colour experiments, downgrade
+        # the OMERO tile to grayscale so the upload stays functional instead of
+        # crashing/corrupting mid-run. The OME-Zarr and TIFF outputs still keep
+        # full colour. (Mono frames are 2-D and skip this branch unchanged.)
+        if self.isRGB and getattr(frame, "ndim", 0) == 3:
+            if not getattr(self, "_warned_omero_rgb", False):
+                if self.logger:
+                    self.logger.warning(
+                        "OMERO upload is not RGB-capable; uploading grayscale "
+                        "tiles to OMERO (OME-Zarr/TIFF outputs keep colour)."
+                    )
+                self._warned_omero_rgb = True
+            frame = np.dot(frame[..., :3], [0.299, 0.587, 0.114]).astype(np.uint16)
 
         # Create tile metadata
         tile_meta = TileMetadata(
@@ -788,7 +846,8 @@ class OMEWriter:
         """Synchronous pyramid generation with memory-efficient processing."""
         full_shape = self.canvas.shape
         n_t, n_c, n_z = full_shape[0], full_shape[1], full_shape[2]
-        spatial_shape = full_shape[-2:]
+        # RGB canvases are 6-D (…, Y, X, 3); mono are 5-D (…, Y, X).
+        spatial_shape = full_shape[3:5] if self.isRGB else full_shape[-2:]
 
         max_levels = 4
 
@@ -812,11 +871,19 @@ class OMEWriter:
                         self.logger.warning(f"Could not delete existing pyramid level {level}: {e}")
                     continue
 
+            if self.isRGB:
+                level_shape = (n_t, n_c, n_z, int(new_y), int(new_x), 3)
+                level_chunks = (1, 1, 1, int(min(self.tile_h, new_y)), int(min(self.tile_w, new_x)), 3)
+                level_dtype = "uint8"
+            else:
+                level_shape = (n_t, n_c, n_z, int(new_y), int(new_x))
+                level_chunks = (1, 1, 1, int(min(self.tile_h, new_y)), int(min(self.tile_w, new_x)))
+                level_dtype = "uint16"
             level_canvas = self.root.create_array(
                 name=level_name,
-                shape=(n_t, n_c, n_z, int(new_y), int(new_x)),
-                chunks=(1, 1, 1, int(min(self.tile_h, new_y)), int(min(self.tile_w, new_x))),
-                dtype="uint16",
+                shape=level_shape,
+                chunks=level_chunks,
+                dtype=level_dtype,
                 compressor=self.config.zarr_compressor
             )
 
@@ -835,9 +902,14 @@ class OMEWriter:
             for c_idx in range(n_c):
                 for z_idx in range(n_z):
                     try:
-                        source_data = np.array(source_canvas[t_idx, c_idx, z_idx, :, :])
-                        downsampled = source_data[::downsample_factor, ::downsample_factor]
-                        target_canvas[t_idx, c_idx, z_idx, :, :] = downsampled
+                        if self.isRGB:
+                            source_data = np.array(source_canvas[t_idx, c_idx, z_idx, :, :, :])
+                            downsampled = source_data[::downsample_factor, ::downsample_factor, :]
+                            target_canvas[t_idx, c_idx, z_idx, :, :, :] = downsampled
+                        else:
+                            source_data = np.array(source_canvas[t_idx, c_idx, z_idx, :, :])
+                            downsampled = source_data[::downsample_factor, ::downsample_factor]
+                            target_canvas[t_idx, c_idx, z_idx, :, :] = downsampled
                     except Exception as e:
                         if self.logger:
                             self.logger.warning(f"Failed to downsample t={t_idx}, c={c_idx}, z={z_idx}: {e}")
@@ -849,37 +921,49 @@ class OMEWriter:
         pixel_size_z = self.config.pixel_size_z
         time_interval = self.config.time_interval
 
+        rgb = self.isRGB
+        display_max = 255 if rgb else 65535
+
         datasets = []
         for level_name in sorted([k for k in self.root.keys() if k.isdigit()], key=int):
             level_int = int(level_name)
             scale_factor = 2 ** level_int
+            ds_scale = [
+                time_interval, 1, pixel_size_z,
+                pixel_size_y * scale_factor,
+                pixel_size_x * scale_factor,
+            ]
+            ds_translation = [0, 0, self.config.z_start, self.y_start, self.x_start]
+            if rgb:
+                ds_scale = ds_scale + [1]
+                ds_translation = ds_translation + [0]
             datasets.append({
                 "path": level_name,
                 "coordinateTransformations": [
-                    {"type": "scale", "scale": [
-                        time_interval, 1, pixel_size_z,
-                        pixel_size_y * scale_factor,
-                        pixel_size_x * scale_factor
-                    ]},
-                    {"type": "translation", "translation": [
-                        0, 0, self.config.z_start, self.y_start, self.x_start
-                    ]}
+                    {"type": "scale", "scale": ds_scale},
+                    {"type": "translation", "translation": ds_translation}
                 ]
             })
+
+        axes = [
+            {"name": "t", "type": "time", "unit": "second"},
+            {"name": "c", "type": "channel"},
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"},
+        ]
+        top_scale = [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]
+        if rgb:
+            axes.append({"name": "s", "type": "channel"})
+            top_scale = top_scale + [1]
 
         self.root.attrs["multiscales"] = [{
             "version": "0.4",
             "name": "experiment",
             "datasets": datasets,
-            "axes": [
-                {"name": "t", "type": "time", "unit": "second"},
-                {"name": "c", "type": "channel"},
-                {"name": "z", "type": "space", "unit": "micrometer"},
-                {"name": "y", "type": "space", "unit": "micrometer"},
-                {"name": "x", "type": "space", "unit": "micrometer"},
-            ],
+            "axes": axes,
             "coordinateTransformations": [
-                {"type": "scale", "scale": [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]}
+                {"type": "scale", "scale": top_scale}
             ]
         }]
 
@@ -896,7 +980,7 @@ class OMEWriter:
                     "coefficient": 1.0,
                     "family": "linear",
                     "inverted": False,
-                    "window": {"start": 0, "end": 65535, "min": 0, "max": 65535}
+                    "window": {"start": 0, "end": display_max, "min": 0, "max": display_max}
                 })
 
             self.root.attrs["omero"] = {

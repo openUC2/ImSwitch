@@ -75,7 +75,8 @@ setup(
         "omero-py",
         "uc2-rest>=0.2.0.33", 
         "unitelabs-sila", 
-        "unitelabs-cdk"
+        "unitelabs-cdk",
+        "ashlarUC2 @ git+https://github.com/Franzili/ashlarUC2",
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
@@ -89,7 +90,7 @@ setup(
                     "numba>=0.61.2"
         ],
         'Ashlar': [
-            "ashlarUC2"
+            "ashlarUC2 @ git+https://github.com/Franzili/ashlarUC2",
         ],
         'arkitekt':
             [

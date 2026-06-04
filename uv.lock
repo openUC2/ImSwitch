@@ -320,7 +320,7 @@ wheels = [
 [[package]]
 name = "ashlaruc2"
 version = "1.18.4"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/Franzili/ashlarUC2#7135e18eadd438bf76a6017b858ffdcb7c4fb5d4" }
 dependencies = [
     { name = "blessed" },
     { name = "matplotlib" },
@@ -331,10 +331,6 @@ dependencies = [
     { name = "scipy" },
     { name = "tifffile" },
     { name = "zarr" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a9/f5/25cdc7ae3e9a4108da0c7d35f22053f2bb177b44f912928f1101e393d43b/ashlaruc2-1.18.4.tar.gz", hash = "sha256:378628cc99cf7bbf168cbc6400bfc94776c894106898a6bbe6e79828ef5331dd", size = 58631, upload-time = "2025-06-18T13:56:07.417Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d9/45/e600d266d3ed0828563665b1c66c2a8fac588de2ed9a06c63a02fe80e6e2/ashlaruc2-1.18.4-py3-none-any.whl", hash = "sha256:c3ad99c31e22a895d86e68121417f523ad08ae3eabd4223bcbc040d1c05aeb45", size = 44817, upload-time = "2025-06-18T13:56:06.262Z" },
 ]
 
 [[package]]
@@ -1871,6 +1867,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "aiortc" },
     { name = "arkitekt-next", extra = ["all"] },
+    { name = "ashlaruc2" },
     { name = "av" },
     { name = "coloredlogs" },
     { name = "colour-science" },
@@ -1949,7 +1946,8 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.4" },
     { name = "aiortc", specifier = ">=1.9.0" },
     { name = "arkitekt-next", extras = ["all"], specifier = "==0.40.4" },
-    { name = "ashlaruc2", marker = "extra == 'ashlar'" },
+    { name = "ashlaruc2", git = "https://github.com/Franzili/ashlarUC2.git" },
+    { name = "ashlaruc2", marker = "extra == 'ashlar'", git = "https://github.com/Franzili/ashlarUC2" },
     { name = "av", specifier = "==13.1.0" },
     { name = "coloredlogs", specifier = ">=15" },
     { name = "colour-science", specifier = ">=0.3" },

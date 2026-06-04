@@ -73,7 +73,7 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     try {
       const response = await fetch(
         `${hostIP}:${hostPort}/imswitch/api/AutofocusController/getAutofocusStatus`, // add timeout 
-        setTimeout({ method: "GET" }, 5000)
+        //setTimeout({ method: "GET" }, 5000)
       );
       if (response.ok) {
         const status = await response.json();

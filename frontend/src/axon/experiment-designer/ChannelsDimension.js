@@ -450,12 +450,27 @@ const ChannelsDimension = () => {
   const exposures = Array.isArray(parameterValue.exposureTimes) ? parameterValue.exposureTimes : [];
   const gains = Array.isArray(parameterValue.gains) ? parameterValue.gains : [];
   const channelEnabledForExperiment = Array.isArray(parameterValue.channelEnabledForExperiment) ? parameterValue.channelEnabledForExperiment : [];
-  const illuSources = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
-  // Per-source kind tag (parallel to illuSources).  Empty / shorter array →
-  // missing entries default to "default" so legacy backends keep working.
-  const illuSourceKinds = Array.isArray(parameterRange.illuSourceKinds) ? parameterRange.illuSourceKinds : [];
-  const laserMinValues = Array.isArray(parameterRange.illuSourceMinIntensities) ? parameterRange.illuSourceMinIntensities : [];
-  const laserMaxValues = Array.isArray(parameterRange.illuSourceMaxIntensities) ? parameterRange.illuSourceMaxIntensities : [];
+  // Conventional (default) sources advertised by the backend.
+  const defaultSources = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
+  const defaultKinds = Array.isArray(parameterRange.illuSourceKinds) ? parameterRange.illuSourceKinds : [];
+  const defaultMin = Array.isArray(parameterRange.illuSourceMinIntensities) ? parameterRange.illuSourceMinIntensities : [];
+  const defaultMax = Array.isArray(parameterRange.illuSourceMaxIntensities) ? parameterRange.illuSourceMaxIntensities : [];
+  // Synthetic LED-matrix channels (ring/DPC) advertised in their own list.
+  const syntheticChannelDefs = Array.isArray(parameterRange.syntheticChannels) ? parameterRange.syntheticChannels : [];
+
+  // Merge synthetic channels AFTER the conventional sources into one flat list
+  // so the render loop and all index-based handlers below stay unchanged. The
+  // submit payload is split back into `illumination` (default) + a dedicated
+  // `syntheticChannels` list in ExperimentDesigner.handleStart — synthetic
+  // channels are never mixed into illuIntensities. The default-source count
+  // (defaultSources.length) is the split boundary.
+  const illuSources = [...defaultSources, ...syntheticChannelDefs.map((s) => s.name)];
+  const illuSourceKinds = [
+    ...defaultSources.map((_, i) => defaultKinds[i] || "default"),
+    ...syntheticChannelDefs.map((s) => s.kind || "default"),
+  ];
+  const laserMinValues = [...defaultMin, ...syntheticChannelDefs.map(() => 0)];
+  const laserMaxValues = [...defaultMax, ...syntheticChannelDefs.map(() => 255)];
   // Per-channel kind-specific params dict from the experiment slice.  Object
   // shape: { [channelName]: { radius?, intensityR?, intensityG?, intensityB? } }.
   const illuminationParams =

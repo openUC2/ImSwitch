@@ -159,7 +159,17 @@ class OMEFileStorePaths:
         self.tiff_dir = os.path.join(base_dir, "tiles")
         self.zarr_dir = os.path.join(base_dir + ".ome.zarr")
 
+        # NOTE: directories are created lazily (only when a TIFF is actually
+        # written – see ``ensure_tiff_dir`` / ``get_timepoint_dir``).  Creating
+        # ``tiff_dir`` eagerly here produced an empty ``<area>/tiles`` folder for
+        # every scan-area writer even when individual-TIFF output is disabled
+        # (the default), littering each multi-area / multi-position acquisition
+        # with dozens of empty directories.
+
+    def ensure_tiff_dir(self) -> str:
+        """Create and return the TIFF output directory on first use."""
         os.makedirs(self.tiff_dir, exist_ok=True)
+        return self.tiff_dir
 
     def get_timepoint_dir(self, timepoint_index: int) -> str:
         """
@@ -421,6 +431,9 @@ class OMEWriter:
 
     def _setup_tiff_stitcher(self):
         """Set up the TIFF stitcher for creating stitched OME-TIFF files."""
+        # base_dir is created lazily (see OMEFileStorePaths); ensure it exists
+        # before the stitcher opens its output file inside it.
+        os.makedirs(self.file_paths.base_dir, exist_ok=True)
         stitched_tiff_path = os.path.join(self.file_paths.base_dir, "stitched.ome.tif")
         self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True, isRGB=self.isRGB)
         self.tiff_stitcher.start()
@@ -429,6 +442,9 @@ class OMEWriter:
 
     def _setup_single_tiff_writer(self):
         """Set up the single TIFF writer for appending tiles with metadata."""
+        # base_dir is created lazily (see OMEFileStorePaths); ensure it exists
+        # before the single-TIFF writer opens its output file inside it.
+        os.makedirs(self.file_paths.base_dir, exist_ok=True)
         single_tiff_path = os.path.join(self.file_paths.base_dir, "single_tiles.ome.tif")
         self.single_tiff_writer = SingleTiffWriter(single_tiff_path, bigtiff=True)
         if self.logger:
@@ -559,7 +575,7 @@ class OMEWriter:
             f"{metadata.get('illuminationChannel', 'unknown')}_"
             f"{metadata.get('illuminationValue', 0)}.ome.tif"
         )
-        tiff_path = os.path.join(self.file_paths.tiff_dir, tiff_name)
+        tiff_path = os.path.join(self.file_paths.ensure_tiff_dir(), tiff_name)
         tif.imwrite(tiff_path, frame, compression=self.config.compression)
 
     def _write_zarr_tile(self, frame, metadata: Dict[str, Any]) -> Dict[str, Any]:

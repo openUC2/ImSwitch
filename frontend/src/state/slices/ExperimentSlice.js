@@ -76,6 +76,9 @@ const initialExperimentState = {
     zStackStepSize: 0.1,
     speed: 20000,
     z_speed: 5000,
+    // Tiling behaviour toggles (Tiling tab). Default off.
+    returnToOrigin: false,        // move stage back to pre-scan XYZ when the scan ends
+    overrideZWithCurrentZ: false, // use current stage Z for every position (ignored if focus map active)
     gains: 0,
     exposureTimes: 0,
     performanceMode: false,
@@ -317,6 +320,12 @@ const experimentSlice = createSlice({
       console.log("setIsSnakescan", action.payload);
       state.parameterValue.is_snakescan = action.payload;
     },
+    setReturnToOrigin: (state, action) => {
+      state.parameterValue.returnToOrigin = action.payload;
+    },
+    setOverrideZWithCurrentZ: (state, action) => {
+      state.parameterValue.overrideZWithCurrentZ = action.payload;
+    },
     setKeepIlluminationOn: (state, action) => {
       console.log("setKeepIlluminationOn", action.payload);
       state.parameterValue.keepIlluminationOn = action.payload;
@@ -532,6 +541,8 @@ export const {
   setOverlapWidth,
   setOverlapHeight,
   setIsSnakescan,
+  setReturnToOrigin,
+  setOverrideZWithCurrentZ,
   setKeepIlluminationOn,
   setIlluminationParams,
   setIlluminationParamsForChannel,

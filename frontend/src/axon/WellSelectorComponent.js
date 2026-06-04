@@ -302,6 +302,12 @@ const WellSelectorComponent = () => {
   //##################################################################################
   const handleMoveCameraSpeedXYChange = (event) => {
     dispatch(wellSelectorSlice.setMoveCameraSpeedXY(event.target.value));
+    // Keep the experiment scan speed in sync so "Move Camera Speed" drives the
+    // XY scan too (single source of truth shared with the Tiling tab control).
+    const v = parseFloat(event.target.value);
+    if (!isNaN(v) && v > 0) {
+      dispatch(experimentSlice.setSpeed(v));
+    }
   };
 
   //##################################################################################

@@ -148,6 +148,40 @@ class ScanMetadata(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Synthetic (LED-matrix) illumination channels
+# ---------------------------------------------------------------------------
+SyntheticKind = Literal["ring", "dpc"]
+
+
+class SyntheticChannel(BaseModel):
+    """A synthetic LED-matrix illumination channel (ring or DPC).
+
+    These are kept in a **separate list** from the conventional ``illumination``
+    sources, both in the hardware-capabilities response
+    (:class:`ExperimentWorkflowParams`) and in the experiment request
+    (:class:`ParameterValue`).  Their "intensity" is the per-colour byte triple
+    (R/G/B, 0..255) rather than a single scalar, so mixing them into
+    ``illuIntensities`` previously required an RGB→intensity promotion hack.
+    Carrying them separately removes that ambiguity entirely – the workflow
+    builder merges them into its internal arrays in one well-defined place.
+    """
+    name: str
+    kind: SyntheticKind
+    enabled: bool = False
+    intensityR: int = 0
+    intensityG: int = 0
+    intensityB: int = 0
+    radius: Optional[int] = None      # ring only (LED units)
+    exposure: Optional[float] = None  # optional per-channel camera exposure (ms)
+    gain: Optional[float] = None      # optional per-channel camera gain
+
+    @property
+    def rgb_max(self) -> int:
+        """Max of the R/G/B bytes – used as the >0 active-channel gate."""
+        return max(int(self.intensityR or 0), int(self.intensityG or 0), int(self.intensityB or 0))
+
+
+# ---------------------------------------------------------------------------
 # Parameter / experiment models
 # ---------------------------------------------------------------------------
 class ParameterValue(BaseModel):
@@ -179,6 +213,24 @@ class ParameterValue(BaseModel):
     gains: Union[List[float], float] = None
     speed: float = 20000.0
     z_speed: float = 5000.0
+    # Tiling behaviour toggles (exposed in the Wellplate "Tiling" tab).
+    returnToOrigin: bool = Field(
+        False,
+        description=(
+            "After the scan finishes, move the stage back to the XYZ position "
+            "it was at just before the scan started. Default off (the stage "
+            "stays at the last acquired tile)."
+        ),
+    )
+    overrideZWithCurrentZ: bool = Field(
+        False,
+        description=(
+            "Ignore each scan group's stored per-group Z and use the current "
+            "stage Z (captured at run start) for every position. Intended for "
+            "when the user re-focused after defining the areas. Ignored when a "
+            "focus map is active (the UI greys it out)."
+        ),
+    )
     performanceMode: bool = False
     performanceTriggerMode: TriggerMode = Field(
         "hardware",
@@ -225,6 +277,15 @@ class ParameterValue(BaseModel):
             "False, the channel is excluded from the experiment regardless "
             "of its illuminationParams or illuIntensities entry."
         ),
+    )
+    # Synthetic LED-matrix channels (ring/DPC), kept SEPARATE from the
+    # conventional `illumination` list above.  This is the single source of
+    # truth for ring/DPC acquisition – the backend merges enabled entries into
+    # its internal workflow arrays, so there is no RGB→intensity promotion and
+    # no risk of a synthetic channel being mistaken for a real laser.
+    syntheticChannels: List[SyntheticChannel] = Field(
+        default_factory=list,
+        description="Synthetic LED-matrix channels (ring/DPC) for this experiment.",
     )
 
     # ------------------------------------------------------------------
@@ -404,7 +465,14 @@ class ExperimentWorkflowParams(BaseModel):
     # all sources are treated as "default" for backward compatibility.
     illuSourceKinds: List[str] = Field(
         default_factory=list,
-        description="Per-source kind tag (parallel to illuSources): 'default' | 'ring' | 'dpc'",
+        description="Per-source kind tag (parallel to illuSources): always 'default' now that synthetic channels live in `syntheticChannels`.",
+    )
+    # Synthetic LED-matrix channels available on this hardware (ring/DPC),
+    # advertised separately from the conventional illuSources so the frontend
+    # renders them from their own list rather than disentangling kinds.
+    syntheticChannels: List[SyntheticChannel] = Field(
+        default_factory=list,
+        description="Available synthetic LED-matrix channels (ring/DPC) with their default RGB/radius.",
     )
 
     # Camera parameters
@@ -479,6 +547,8 @@ __all__ = [
     "CenterPosition",
     "ScanArea",
     "ScanMetadata",
+    "SyntheticKind",
+    "SyntheticChannel",
     "ParameterValue",
     "FocusMapConfig",
     "Experiment",

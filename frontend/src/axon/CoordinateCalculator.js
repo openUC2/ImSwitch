@@ -60,18 +60,37 @@ export function calculateScanCoordinates(experimentState, objectiveState, wellSe
     );
   }
 
-  // Process each unique point in the point list
-  uniquePoints.forEach((point, pointIndex) => {
-    const scanArea = processScanPoint(
-      point, 
-      pointIndex, 
-      experimentState, 
-      objectiveState, 
-      wellSelectorState,
-      effectiveStepX,
-      effectiveStepY
-    );
-    
+  // Group points that share a ``groupId`` into a single logical scan area.
+  // The freehand-paint tool (and per-well labware selection) emit many points
+  // that all carry the same ``groupId`` precisely so the scan treats them as
+  // ONE area – like an area-select rectangle – instead of dozens of separate
+  // single-tile groups (which also spawned dozens of writers/folders).
+  // Points without a ``groupId`` keep the legacy one-area-per-point behaviour.
+  const groups = [];
+  const groupIndexByKey = new Map();
+  uniquePoints.forEach((point, idx) => {
+    const hasGroup = point.groupId != null && point.groupId !== "";
+    const key = hasGroup ? `gid:${point.groupId}` : `single:${idx}`;
+    let gi = groupIndexByKey.get(key);
+    if (gi === undefined) {
+      gi = groups.length;
+      groupIndexByKey.set(key, gi);
+      groups.push({ groupId: hasGroup ? point.groupId : null, points: [] });
+    }
+    groups[gi].points.push(point);
+  });
+
+  groups.forEach((group, groupIndex) => {
+    const scanArea = group.points.length > 1
+      ? buildMergedScanArea(
+          group, groupIndex, experimentState, objectiveState,
+          wellSelectorState, effectiveStepX, effectiveStepY, isSnakeScan
+        )
+      : processScanPoint(
+          group.points[0], groupIndex, experimentState, objectiveState,
+          wellSelectorState, effectiveStepX, effectiveStepY
+        );
+
     if (scanArea && scanArea.positions.length > 0) {
       scanConfig.scanAreas.push(scanArea);
       scanConfig.metadata.totalPositions += scanArea.positions.length;
@@ -196,6 +215,76 @@ function processScanPoint(point, pointIndex, experimentState, objectiveState, we
       iX: pos.iX,
       iY: pos.iY
     }))
+  };
+}
+
+/**
+ * Merge several points that share a ``groupId`` into a single scan area.
+ *
+ * Each member point is expanded through {@link processScanPoint} (so shaped
+ * members still produce all their sub-positions); the resulting positions are
+ * concatenated, ordered with the chosen scan pattern, and wrapped in one
+ * ScanArea whose ``areaId`` is the shared ``groupId``. This is what makes a
+ * freehand-painted region (or a multi-FOV well) behave like a single area.
+ *
+ * @returns {Object|null} A merged scan-area object, or null if it is empty.
+ */
+function buildMergedScanArea(group, areaIndex, experimentState, objectiveState, wellSelectorState, effectiveStepX, effectiveStepY, isSnakeScan) {
+  let merged = [];
+  group.points.forEach((point, idx) => {
+    const sub = processScanPoint(
+      point, idx, experimentState, objectiveState,
+      wellSelectorState, effectiveStepX, effectiveStepY
+    );
+    if (sub && sub.positions && sub.positions.length > 0) {
+      merged = merged.concat(sub.positions);
+    }
+  });
+
+  if (merged.length === 0) return null;
+
+  // Freehand members are individual single positions that all carry iX=iY=0,
+  // which would collapse them into one "row" and scramble the scan order.
+  // When every merged position lacks a real grid index, re-derive iX/iY from
+  // the absolute X/Y using the FOV step so snake/raster ordering works.
+  const needsGridIndex = merged.every((p) => (p.iX ?? 0) === 0 && (p.iY ?? 0) === 0);
+  if (needsGridIndex) {
+    const minX = Math.min(...merged.map((p) => p.x));
+    const minY = Math.min(...merged.map((p) => p.y));
+    const stepX = effectiveStepX > 0 ? effectiveStepX : 1;
+    const stepY = effectiveStepY > 0 ? effectiveStepY : 1;
+    merged.forEach((p) => {
+      p.iX = Math.round((p.x - minX) / stepX);
+      p.iY = Math.round((p.y - minY) / stepY);
+    });
+  }
+
+  const orderedPositions = applyScanPattern(merged, isSnakeScan);
+  const bounds = calculateBounds(orderedPositions);
+  const first = group.points[0];
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+
+  return {
+    areaId: group.groupId || `area_${areaIndex}`,
+    areaName: first.name || `Area_${areaIndex + 1}`,
+    areaType: first.areaType || "free_scan",
+    wellId: first.wellId || null,
+    centerPosition: {
+      x: centerX,
+      y: centerY,
+      z: first.z ?? 0,
+    },
+    bounds: bounds,
+    scanPattern: isSnakeScan ? "snake" : "raster",
+    positions: orderedPositions.map((pos, idx) => ({
+      index: idx,
+      x: pos.x,
+      y: pos.y,
+      z: pos.z ?? (first.z ?? 0),
+      iX: pos.iX,
+      iY: pos.iY,
+    })),
   };
 }
 

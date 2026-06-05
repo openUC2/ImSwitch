@@ -24,6 +24,9 @@ const DrawerEntry = ({
   tooltip = "",
   color,
 
+  // Optional data-tour anchor for the onboarding tour (intro.js)
+  dataTour,
+
   // Layout props
   collapsed = false,
   nested = false,
@@ -59,6 +62,7 @@ const DrawerEntry = ({
       <ListItemButton
         selected={selected}
         onClick={onClick}
+        {...(dataTour ? { "data-tour": dataTour } : {})}
         sx={{
           justifyContent: collapsed ? "center" : "flex-start",
           minHeight: 48,

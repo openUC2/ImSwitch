@@ -60,6 +60,19 @@ const ParameterField = React.memo(function ParameterField({ param, onChange, dis
   const { name, type, value, editable, options, units } = param;
   const isDisabled = disabled || !editable;
 
+  // For list/boolean (explicit menu selections) we commit immediately. For
+  // number/text inputs we keep a local editing state and only call the API
+  // on blur or Enter — committing per-keystroke wedged the UI on long-haul
+  // POST round-trips, and the user wants explicit "Apply" semantics.
+  const [draft, setDraft] = useState(value ?? "");
+  const [dirty, setDirty] = useState(false);
+
+  // Sync incoming server state into the input only when the user is NOT
+  // mid-edit, so a refresh after a snap doesn't blow away their typing.
+  useEffect(() => {
+    if (!dirty) setDraft(value ?? "");
+  }, [value, dirty]);
+
   if (type === "list") {
     return (
       <FormControl size="small" fullWidth disabled={isDisabled}>
@@ -95,18 +108,46 @@ const ParameterField = React.memo(function ParameterField({ param, onChange, dis
     );
   }
 
-  // number / unknown — render as text field
+  const commit = async () => {
+    if (!dirty) return;
+    let toSend = draft;
+    if (type === "number") {
+      const num = parseFloat(draft);
+      if (!Number.isFinite(num)) {
+        setDraft(value ?? "");
+        setDirty(false);
+        return;
+      }
+      toSend = num;
+    }
+    setDirty(false);
+    await onChange(name, toSend);
+  };
+
+  // number / unknown — render as text field with apply-on-blur
   return (
     <TextField
       size="small"
       fullWidth
       label={name + (units ? ` (${units})` : "")}
       type={type === "number" ? "number" : "text"}
-      value={value ?? ""}
+      value={draft}
       disabled={isDisabled}
+      helperText={dirty ? "Press Enter or click outside to apply" : " "}
+      FormHelperTextProps={{ sx: { minHeight: "1.2em", m: 0 } }}
       onChange={(e) => {
-        const v = type === "number" ? parseFloat(e.target.value) : e.target.value;
-        onChange(name, Number.isNaN(v) ? e.target.value : v);
+        setDraft(e.target.value);
+        setDirty(true);
+      }}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commit();
+        } else if (e.key === "Escape") {
+          setDraft(value ?? "");
+          setDirty(false);
+        }
       }}
     />
   );
@@ -255,6 +296,22 @@ const MMCoreController = () => {
 
   useEffect(() => () => stopPolling(), []);
 
+  const onApplyExposure = async () => {
+    if (!detectorName) return;
+    const expSecParsed = parseFloat(exposureSec);
+    if (!Number.isFinite(expSecParsed) || expSecParsed <= 0) return;
+    try {
+      const updated = await apiMMCoreControllerSetMMCoreParameter({
+        detectorName,
+        name: "Exposure",
+        value: expSecParsed * 1000,
+      });
+      setTree(updated);
+    } catch (e) {
+      setLoadError(`Failed to set exposure: ${e?.message || e}`);
+    }
+  };
+
   const onSnap = async () => {
     if (!detectorName) return;
     const expSecParsed = parseFloat(exposureSec);
@@ -306,6 +363,23 @@ const MMCoreController = () => {
       jobId: activeJob.jobId,
       cacheBust: activeJob.finishedAt || Date.now(),
     });
+  }, [activeJob, hostIP, apiPort]);
+
+  // Download link for the full-resolution TIFF, served via the FileManager
+  // download endpoint (which is what the rest of the app uses).
+  const downloadUrl = useMemo(() => {
+    if (
+      !activeJob ||
+      activeJob.state !== "done" ||
+      !activeJob.relativeFilePath ||
+      !hostIP ||
+      !apiPort
+    ) {
+      return null;
+    }
+    // relativeFilePath starts with "/" — strip it for the path-param route.
+    const cleanPath = activeJob.relativeFilePath.replace(/^\/+/, "");
+    return `${hostIP}:${apiPort}/imswitch/api/FileManager/download/${cleanPath}`;
   }, [activeJob, hostIP, apiPort]);
 
   return (
@@ -432,17 +506,37 @@ const MMCoreController = () => {
                 live view first for long exposures (&gt; ~10 s).
               </Typography>
               <Grid container spacing={2} alignItems="center">
-                <Grid item xs={12} sm={4}>
-                  <TextField
-                    size="small"
-                    fullWidth
-                    type="number"
-                    label="Exposure (s)"
-                    value={exposureSec}
-                    onChange={(e) => setExposureSec(e.target.value)}
-                    inputProps={{ min: 0, step: 0.1 }}
-                    helperText="Leave blank to use current device setting"
-                  />
+                <Grid item xs={12} sm={5}>
+                  <Stack direction="row" spacing={1} alignItems="flex-start">
+                    <TextField
+                      size="small"
+                      fullWidth
+                      type="number"
+                      label="Exposure (s)"
+                      value={exposureSec}
+                      onChange={(e) => setExposureSec(e.target.value)}
+                      inputProps={{ min: 0, step: 0.1 }}
+                      helperText="Apply writes it to the camera now; Snap uses this value too"
+                    />
+                    <Tooltip title="Apply this exposure to the camera now (without snapping)">
+                      <span>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={onApplyExposure}
+                          disabled={
+                            isJobRunning ||
+                            !detectorName ||
+                            !exposureSec ||
+                            !Number.isFinite(parseFloat(exposureSec))
+                          }
+                          sx={{ mt: "2px", minWidth: 80, height: 40 }}
+                        >
+                          Apply
+                        </Button>
+                      </span>
+                    </Tooltip>
+                  </Stack>
                 </Grid>
                 <Grid item xs={12} sm={4}>
                   <TextField
@@ -453,15 +547,16 @@ const MMCoreController = () => {
                     onChange={(e) => setSnapName(e.target.value)}
                   />
                 </Grid>
-                <Grid item xs={12} sm={4}>
+                <Grid item xs={12} sm={3}>
                   <Button
                     fullWidth
                     variant="contained"
                     startIcon={<PhotoCameraIcon />}
                     onClick={onSnap}
                     disabled={isJobRunning || !detectorName}
+                    sx={{ height: 40 }}
                   >
-                    Snap to disk
+                    Snap
                   </Button>
                 </Grid>
               </Grid>
@@ -524,12 +619,45 @@ const MMCoreController = () => {
               {previewUrl && (
                 <Box sx={{ mt: 2 }}>
                   <Divider sx={{ mb: 1 }} />
-                  <Typography variant="caption" color="text.secondary">
-                    Captured frame (contrast-stretched preview)
-                  </Typography>
+                  <Stack
+                    direction={{ xs: "column", sm: "row" }}
+                    spacing={1}
+                    alignItems={{ xs: "flex-start", sm: "center" }}
+                    sx={{ mb: 1 }}
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      Captured frame
+                    </Typography>
+                    {downloadUrl && (
+                      <Button
+                        variant="text"
+                        size="small"
+                        component="a"
+                        href={downloadUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        download
+                      >
+                        Download TIFF
+                      </Button>
+                    )}
+                  </Stack>
+                  {activeJob?.filePath && (
+                    <Typography
+                      variant="caption"
+                      display="block"
+                      color="text.secondary"
+                      sx={{
+                        fontFamily: "monospace",
+                        wordBreak: "break-all",
+                        mb: 1,
+                      }}
+                    >
+                      {activeJob.filePath}
+                    </Typography>
+                  )}
                   <Box
                     sx={{
-                      mt: 1,
                       display: "flex",
                       justifyContent: "center",
                       alignItems: "center",

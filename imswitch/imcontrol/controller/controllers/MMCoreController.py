@@ -373,9 +373,20 @@ class MMCoreController(ImConWidgetController):
 
             self._updateJob(jobId, exposureMs=currentExposure)
 
+            # Drop any leftover frames from the circular buffer (e.g. residue
+            # from a live stream we just stopped) so the snap reads a clean
+            # exposure rather than a stale frame.
+            try:
+                core.clearCircularBuffer()
+            except Exception:
+                pass
+
             # Blocking snap — this is the long part.
-            core.snap()
-            image = np.asarray(core.getImage())
+            # NB: CMMCorePlus.snap() returns the numpy array directly
+            # (snapImage() + getImage() under the hood). Calling getImage()
+            # again on top fails on the Andor adapter with
+            # "Camera image buffer read failed".
+            image = np.asarray(core.snap())
 
             # Save to disk using the same convention as RecordingController.snap
             data_root = dirtools.UserFileDirs.getValidatedDataPath()

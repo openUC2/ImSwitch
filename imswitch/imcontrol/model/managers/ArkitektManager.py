@@ -12,13 +12,7 @@ from imswitch.imcommon.model import initLogger
 from imswitch.imcommon.model import dirtools
 import os
 # Import this to make sure that mikro_next is available when ArkitektManager is used
-try: # TODO: TAKES Loong
-    # Import here to avoid issues if arkitekt_next is not installed
-    from arkitekt_next import easy
-    from koil import Koil    
-    from mikro_next.api.schema import Image
-except ImportError:
-    Image = None
+
 
 
 def ensure_context_in_thread(context: Context):
@@ -62,6 +56,13 @@ class ArkitektManager:
             setupInfo: Setup information containing Arkitekt configuration
             masterController: Reference to the master controller
         """
+        try: # TODO: TAKES Loong
+            # Import here to avoid issues if arkitekt_next is not installed
+            from arkitekt_next import easy
+            from koil import Koil    
+            from mikro_next.api.schema import Image
+        except ImportError:
+            Image = None
         self.__logger = initLogger(self)
 
         self._setupInfo = setupInfo

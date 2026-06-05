@@ -159,7 +159,7 @@ class SignalInstance(psygnal.SignalInstance):
                 Implements rollover-safe backpressure check.
                 """
                 FRAME_ID_MODULO = 256  # Small value to test rollover frequently
-                MAX_FRAME_LAG = 1  # Allow client to be 1 frame behind
+                MAX_FRAME_LAG = 3# 1  # Allow client to be 1 frame behind
 
                 next_id = {}
                 for sid, sent_id in last_sent.items():

@@ -452,6 +452,31 @@ class ServerThread(threading.Thread):
     def __init__(self):
         super().__init__()
         self.server = None
+        # On Windows, force the SelectorEventLoopPolicy *before* the
+        # loop is constructed.
+        #
+        # Python 3.8+ defaults to ``ProactorEventLoop`` on Windows. That
+        # loop is mostly fine for HTTP, but the python-socketio +
+        # uvicorn + websockets stack has a long tail of issues with it
+        # (slow websocket upgrades, occasional drop-back to long-poll,
+        # buffered frame writes that translate into hundreds of ms
+        # latency at high frame rates). Symptom: live stream from a Pi
+        # 5 to a Chrome browser running on Windows hits 3–4 FPS while
+        # the same backend feeding a Chrome on macOS/Linux runs at
+        # 20–30 FPS, and even loopback (frontend + backend on the same
+        # Windows host) shows >1 s latency.
+        #
+        # ``WindowsSelectorEventLoopPolicy`` is the recommended fix and
+        # carries no downsides for our workload (no Unix-domain sockets
+        # or named pipes are used).
+        import sys
+        if sys.platform == "win32":
+            try:
+                asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+                print("Set asyncio policy: WindowsSelectorEventLoopPolicy "
+                      "(fixes socket.io ws latency on Windows)")
+            except Exception as e:
+                print(f"Could not set WindowsSelectorEventLoopPolicy: {e}")
         # Create a new asyncio event loop for the server
         self._asyncio_loop = asyncio.new_event_loop()
         # Store reference in imswitch module for global access
@@ -466,7 +491,15 @@ class ServerThread(threading.Thread):
             set_shared_event_loop(self._asyncio_loop)
             print("Shared event loop configured for Socket.IO and FastAPI")
 
-            # Create Uvicorn config with the shared event loop
+            # Create Uvicorn config with the shared event loop.
+            #
+            # ``ws="websockets"`` forces the C-accelerated ``websockets``
+            # library if it's installed (defaults to ``auto`` which can
+            # silently fall back to the pure-Python ``wsproto``). On
+            # Windows that fallback combined with ProactorEventLoop
+            # (until we set Selector above) is what tanks the streaming
+            # FPS. ``websockets`` is a hard dependency of python-socketio
+            # so it's available.
             config = uvicorn.Config(
                 app,
                 host="0.0.0.0",
@@ -474,6 +507,7 @@ class ServerThread(threading.Thread):
                 ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if IS_SSL else None,
                 ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None,
                 loop=self._asyncio_loop,  #loop="none",  # Use "none" to let us manage the loop # TODO: This is not yet complete
+                ws="websockets",
                 log_level="info" # no debugging for now "error"
             )
 

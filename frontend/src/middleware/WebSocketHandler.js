@@ -32,6 +32,7 @@ import { decode as msgpackDecode } from "@msgpack/msgpack";
 // Import API to check livestream status
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive.js";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout";
+import fetchLaserRuntimeState from "./fetchLaserRuntimeState.js";
 
 const isWebSocketDebugEnabled = () =>
   typeof window !== "undefined" && Boolean(window.__IMSWITCH_DEBUG_WEBSOCKET__);
@@ -45,6 +46,7 @@ const WebSocketHandler = () => {
   const connectionCheckRef = useRef(null);
   const lastEspReconnectAttemptRef = useRef(0);
   const espReconnectInFlightRef = useRef(false);
+  const illuminationSyncInFlightRef = useRef(false);
 
   // Per-instance server capabilities (each tab has its own)
   const serverCapabilitiesRef = useRef({
@@ -170,6 +172,62 @@ const WebSocketHandler = () => {
       return false;
     }
   }, [dispatch]);
+
+  // Sync laser power/enabled state with backend on every reconnect.
+  // This keeps illumination controls in sync after backend restarts.
+  const syncIlluminationState = useCallback(async () => {
+    if (!hostIP || !hostPort) {
+      return;
+    }
+
+    if (illuminationSyncInFlightRef.current) {
+      return;
+    }
+
+    const parameterRangeState = store.getState().parameterRangeState;
+    const sources = Array.isArray(parameterRangeState?.illuSources)
+      ? parameterRangeState.illuSources
+      : [];
+    const kinds = Array.isArray(parameterRangeState?.illuSourceKinds)
+      ? parameterRangeState.illuSourceKinds
+      : [];
+
+    if (sources.length === 0) {
+      return;
+    }
+
+    illuminationSyncInFlightRef.current = true;
+
+    try {
+      const runtimeStates = await fetchLaserRuntimeState({
+        hostIP,
+        hostPort,
+        sources,
+        kinds,
+      });
+
+      runtimeStates.forEach(({ laserName, power, enabled, ok, error }) => {
+        if (!ok && error) {
+          console.warn(
+            `[WebSocket] Failed to sync laser state for ${laserName}:`,
+            error,
+          );
+        }
+
+        dispatch(
+          laserSlice.setLaserState({
+            laserName,
+            power,
+            enabled,
+          }),
+        );
+      });
+
+      console.log("[WebSocket] Illumination state synced on reconnect.");
+    } finally {
+      illuminationSyncInFlightRef.current = false;
+    }
+  }, [dispatch, hostIP, hostPort]);
 
   // WebSocket connection test
   const testWebSocketConnection = useCallback(
@@ -353,6 +411,8 @@ const WebSocketHandler = () => {
       syncLivestreamStatus().then((isActive) => {
         console.log(`[WebSocket] Livestream status synced: ${isActive}`);
       });
+
+      syncIlluminationState();
     });
 
     // Listen for server capabilities
@@ -1291,7 +1351,7 @@ const WebSocketHandler = () => {
       socket.disconnect();
       socket.close();
     };
-  }, [dispatch, connectionSettingsState, syncLivestreamStatus]);
+  }, [dispatch, connectionSettingsState, syncLivestreamStatus, syncIlluminationState]);
 
   // Global UC2 connection monitoring (periodic checks with pause functionality)
   useEffect(() => {

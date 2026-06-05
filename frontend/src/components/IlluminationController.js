@@ -6,7 +6,7 @@ import * as parameterRangeSlice from "../state/slices/ParameterRangeSlice.js";
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice.js";
 import * as laserSlice from "../state/slices/LaserSlice.js";
 import fetchExperimentControllerGetCurrentExperimentParams from "../middleware/fetchExperimentControllerGetCurrentExperimentParams.js";
-import apiLaserControllerGetLaserChannelIndex from "../backendapi/apiLaserControllerGetLaserChannelIndex.js";
+import fetchLaserRuntimeState from "../middleware/fetchLaserRuntimeState.js";
 
 export default function IlluminationController({ hostIP, hostPort }) {
   const dispatch = useDispatch();
@@ -47,9 +47,11 @@ export default function IlluminationController({ hostIP, hostPort }) {
 
   // Cleanup timeout refs on unmount
   useEffect(() => {
+    const timeoutRefs = laserTimeoutRefs.current;
+
     return () => {
       // Clear all pending timeouts
-      Object.values(laserTimeoutRefs.current).forEach((timeoutRef) => {
+      Object.values(timeoutRefs).forEach((timeoutRef) => {
         if (timeoutRef) {
           clearTimeout(timeoutRef);
         }
@@ -71,40 +73,37 @@ export default function IlluminationController({ hostIP, hostPort }) {
   // real-laser entries (kind === "default") — synthetic LED-matrix channels
   // have no LaserController endpoints to hit, so we skip them.
   useEffect(() => {
-    async function fetchLaserRuntimeState() {
+    async function syncLaserRuntimeState() {
       const sources = parameterRangeState.illuSources || [];
       const kinds = parameterRangeState.illuSourceKinds || [];
       if (sources.length === 0) return;
-      for (let idx = 0; idx < sources.length; idx++) {
-        const name = sources[idx];
-        const kind = kinds[idx] || "default";
-        if (kind !== "default") {
-          // Synthetic LED-matrix channels (ring/dpc) have no LaserController
-          // endpoint — seed the slice with neutral defaults so the UI has a
-          // consistent shape, then move on.
-          dispatch(laserSlice.setLaserState({ laserName: name, power: 0, enabled: false }));
-          continue;
-        }
-        const encodedName = encodeURIComponent(name);
-        try {
-          const valueRes = await fetch(
-            `${hostIP}:${hostPort}/imswitch/api/LaserController/getLaserValue?laserName=${encodedName}`,
+      const runtimeStates = await fetchLaserRuntimeState({
+        hostIP,
+        hostPort,
+        sources,
+        kinds,
+      });
+
+      runtimeStates.forEach(({ laserName, power, enabled, ok, error }) => {
+        if (!ok && error) {
+          console.warn(
+            `Failed to fetch initial state for laser ${laserName}:`,
+            error,
           );
-          const power = await valueRes.json();
-          const activeRes = await fetch(
-            `${hostIP}:${hostPort}/imswitch/api/LaserController/getLaserActive?laserName=${encodedName}`,
-          );
-          const enabled = await activeRes.json();
-          dispatch(laserSlice.setLaserState({ laserName: name, power, enabled }));
-        } catch (err) {
-          console.warn(`Failed to fetch initial state for laser ${name}:`, err);
-          dispatch(laserSlice.setLaserState({ laserName: name, power: 0, enabled: false }));
         }
-      }
+
+        dispatch(laserSlice.setLaserState({ laserName, power, enabled }));
+      });
     }
-    fetchLaserRuntimeState();
+    syncLaserRuntimeState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hostIP, hostPort, dispatch, parameterRangeState.illuSources, parameterRangeState.illuSourceKinds]);
+  }, [
+    hostIP,
+    hostPort,
+    dispatch,
+    parameterRangeState.illuSources,
+    parameterRangeState.illuSourceKinds,
+  ]);
 
   // Debounced laser value update to prevent serial overload
   const debouncedSetLaserValue = useCallback(

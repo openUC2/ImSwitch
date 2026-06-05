@@ -48,6 +48,7 @@ import ShitScopeComponent from "./components/ShitScopeComponent.js";
 // ImSwitch Navigation Drawer
 import { NavigationDrawer, TopBar } from "./components/navigation";
 import AppManagerPage from "./components/AppManagerPage.jsx";
+import OnboardingTour from "./components/OnboardingTour.jsx";
 
 //axon
 import AxonTabComponent from "./axon/AxonTabComponent.js";
@@ -455,6 +456,7 @@ function App() {
       <SnackbarProvider maxSnack={6} dense>
         <ReduxNotificationBridge />
         <WebSocketHandler />
+        <OnboardingTour selectedPlugin={selectedPlugin} />
         <CssBaseline />
 
         <Box sx={{ display: "flex" }}>

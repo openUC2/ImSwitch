@@ -22,6 +22,7 @@ import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import LiveViewComponent from "./LiveViewComponent";
 import LiveViewerGL from "../components/LiveViewerGL";
 import WebRTCViewer from "./WebRTCViewer";
+import MJPEGViewer from "./MJPEGViewer";
 import PositionControllerComponent from "./PositionControllerComponent";
 import HistogramOverlay from "../components/HistogramOverlay";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner";
@@ -79,11 +80,18 @@ const LiveViewControlWrapper = ({
 
   // Determine which viewer to use based on stream format
   // - WebRTC: Use WebRTCViewer for real-time low-latency streaming
-  // - Binary: Use LiveViewerGL for high-performance WebGL rendering
-  // - JPEG: Use LiveViewComponent (legacy) for JPEG streaming
+  //   (currently hidden from the dropdown — the code path is kept
+  //    intact for when we revisit the aiortc setup).
+  // - MJPEG: Use MJPEGViewer (direct HTTP multipart, no socket.io).
+  //          Recommended on Windows where the socket.io ws upgrade is
+  //          flaky and the JPEG-over-ws path runs at 3–4× lower FPS.
+  // - Binary: Use LiveViewerGL for high-performance WebGL rendering.
+  // - JPEG: Use LiveViewComponent (legacy) for JPEG-over-socket.io.
   const useWebRTC = liveStreamState.imageFormat === "webrtc";
+  const useMJPEG = liveStreamState.imageFormat === "mjpeg";
   const useWebGL =
     !useWebRTC &&
+    !useMJPEG &&
     liveStreamState.backendCapabilities.webglSupported &&
     !liveStreamState.isLegacyBackend &&
     liveStreamState.imageFormat !== "jpeg";
@@ -206,6 +214,18 @@ const LiveViewControlWrapper = ({
           onClick={onClick}
           onDoubleClick={handleImageDoubleClick}
           onImageLoad={handleImageLoadInternal}
+        />
+      );
+    }
+
+    if (useMJPEG && liveViewState.isStreamRunning) {
+      return (
+        <MJPEGViewer
+          key="mjpeg-viewer"
+          onClick={onClick}
+          onDoubleClick={handleImageDoubleClick}
+          onImageLoad={handleImageLoadInternal}
+          overlayContent={overlayContent}
         />
       );
     }

@@ -27,6 +27,7 @@ import {
   Storage,
   Build,
   Article,
+  School,
 } from "@mui/icons-material";
 import { useDeveloperMode } from "../../utils/useDeveloperMode";
 
@@ -35,6 +36,7 @@ import { toggleTheme, getThemeState } from "../../state/slices/ThemeSlice.js";
 import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsSlice.js";
 import * as uc2Slice from "../../state/slices/UC2Slice.js";
 import { getStorageState } from "../../state/slices/StorageSlice";
+import { startTour } from "../../state/slices/OnboardingSlice.js";
 
 /**
  * ImSwitch Settings Menu Component
@@ -95,6 +97,16 @@ const SettingsMenu = ({ onNavigate }) => {
     dispatch(toggleTheme());
   };
 
+  // Replay the first-run guided tour. The tour lives on the Live View, so we
+  // navigate there first and then signal the OnboardingTour component to start.
+  const handleStartTour = () => {
+    handleClose();
+    if (onNavigate) {
+      onNavigate("LiveView");
+    }
+    dispatch(startTour());
+  };
+
   // Check if connection settings are configured
   const hasConnectionSettings =
     connectionSettings.ip && connectionSettings.apiPort;
@@ -121,6 +133,7 @@ const SettingsMenu = ({ onNavigate }) => {
         <IconButton
           color="inherit"
           onClick={handleClick}
+          data-tour="settings-menu"
           sx={{
             ml: 1,
             // Developer mode glow effect
@@ -493,6 +506,17 @@ const SettingsMenu = ({ onNavigate }) => {
         )}
 
         {isDeveloperMode && <Divider />}
+
+        {/* Start Intro Tour - Frontend-only guided tour (always available) */}
+        <MenuItem onClick={handleStartTour}>
+          <ListItemIcon>
+            <School fontSize="small" />
+          </ListItemIcon>
+          <ListItemText
+            primary="Start Intro Tour"
+            secondary="Replay the guided first-run tour"
+          />
+        </MenuItem>
 
         {/* About - Always available (static information) */}
         <MenuItem onClick={() => handleNavigationClick("About")}>

@@ -1390,24 +1390,37 @@ class LiveViewController(LiveUpdatedController):
                 if hasattr(stream_params, key):
                     setattr(stream_params, key, value)
                     print(f"Set {protocol} param {key} to {value}")
-            # Restart active streams that use the updated protocol
-            detectors_to_restart = []
-            for detector_name, (active_protocol, worker) in self._activeStreams.items():
-                if active_protocol == protocol:
-                    detectors_to_restart.append(detector_name)
 
-            # Restart streams with updated parameters
-            restarted_streams = []
-            for detector_name in detectors_to_restart:
-                self._logger.info(f"Restarting {protocol} stream for {detector_name} with updated parameters")
-                # Stop the current stream
-                self.stopLiveView(detectorName=detector_name, stopCamera=False)
-
-                # Start with new parameters
-                result = self.startLiveView(detector_name, protocol, params)
-                if result['status'] == 'success':
-                    restarted_streams.append(detector_name)
-
+            # Push the same updates into every running worker of this
+            # protocol — no restart needed. The worker reads
+            # ``self._params.<field>`` on every iteration (``throttle_ms``,
+            # ``subsampling_factor``, ``crop_size``, ``max_width``,
+            # ``jpeg_quality``), so a plain attribute mutation under the
+            # GIL is enough.
+            #
+            # Why this matters: the old behaviour was stopLiveView +
+            # startLiveView per change. The frontend's submit handler
+            # also stops/starts on a *format change* (jpeg → mjpeg), so
+            # any submit produced 2–3 nested restarts and a thrashing
+            # log. The same teardown also dropped any in-flight WebRTC
+            # peer connection (the "had to apply twice" symptom). With
+            # in-place mutation, a format change does exactly one
+            # explicit stop+start from the frontend (required — the
+            # worker class is different), while same-protocol param
+            # changes just propagate live.
+            updated_detectors = []
+            for detector_name, (active_protocol, worker) in list(self._activeStreams.items()):
+                if active_protocol != protocol:
+                    continue
+                # Mirror onto the per-detector saved params too so the
+                # next startLiveView starts where we left off.
+                saved = self._detectorParams.get(detector_name)
+                for key, value in params.items():
+                    if hasattr(worker._params, key):
+                        setattr(worker._params, key, value)
+                    if saved is not None and hasattr(saved, key):
+                        setattr(saved, key, value)
+                updated_detectors.append(detector_name)
 
             response = {
                 "status": "success",
@@ -1415,11 +1428,14 @@ class LiveViewController(LiveUpdatedController):
                 "params": stream_params.to_dict()
             }
 
-            if restarted_streams:
-                response["restarted_detectors"] = restarted_streams
-                response["message"] = f"Parameters updated and {len(restarted_streams)} stream(s) restarted"
+            if updated_detectors:
+                response["updated_detectors"] = updated_detectors
+                response["message"] = (
+                    f"Parameters updated live on {len(updated_detectors)} "
+                    f"stream(s); no restart required."
+                )
             else:
-                response["message"] = "Parameters updated (no active streams to restart)"
+                response["message"] = "Parameters updated (no active streams)"
 
             return response
 
@@ -1526,17 +1542,26 @@ class LiveViewController(LiveUpdatedController):
                     setattr(saved, key, value)
             self._detectorParams[detectorName] = saved
 
-            # Restart if currently active
+            # If currently active, mutate the running worker's params
+            # in place instead of stopping and restarting. Same rationale
+            # as setStreamParameters: the worker re-reads its params on
+            # every loop iteration, so a plain attribute set under the
+            # GIL is enough. Restarting here was causing the second
+            # cycle of stop/start in the cascade the frontend triggers
+            # on a submit (setStreamParameters → maybe-restart → optional
+            # stop+start on format-change → setDetectorStreamParameters
+            # → second restart).
             if detectorName in self._activeStreams:
-                protocol, _ = self._activeStreams[detectorName]
-                self.stopLiveView(detectorName=detectorName, stopCamera=False)
-                result = self.startLiveView(detectorName, protocol, params)
+                _protocol, worker = self._activeStreams[detectorName]
+                for key, value in params.items():
+                    if hasattr(worker._params, key):
+                        setattr(worker._params, key, value)
                 return {
                     "status": "success",
                     "detector": detectorName,
                     "params": saved.to_dict(),
-                    "restarted": True,
-                    "start_result": result
+                    "restarted": False,
+                    "updated_live": True,
                 }
 
             return {

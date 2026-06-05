@@ -58,7 +58,7 @@ dependencies = [
     # circular dependency and an av==17 conflict with our aiortc-compatible av==13.
     "imswitchclient>=0.1.7",
     "psygnal",
-    "python-socketio[asyncio]==5.11.4",
+    "python-socketio[asyncio]>=5.11,<6", # Used to be: "python-socketio[asyncio]==5.11.4",
     "jupyterlab==4.2.5",
     "python-dateutil >= 2.8.1",
     "zarr>=3.0.0a0",

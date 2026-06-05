@@ -490,6 +490,16 @@ class ServerThread(threading.Thread):
             # Configure the shared event loop for signal emission
             set_shared_event_loop(self._asyncio_loop)
             print("Shared event loop configured for Socket.IO and FastAPI")
+            # Confirm that the WindowsSelectorEventLoopPolicy we set in
+            # __init__ is actually still in effect by the time we run.
+            # uvicorn >=0.36 has been known to override this — if you
+            # see ``ProactorEventLoop`` in this line on Windows your
+            # streaming will be slow regardless of how big MAX_FRAME_LAG
+            # is, and the fix is to either downgrade uvicorn or pass
+            # ``loop="asyncio"`` here. (We pass an event-loop instance
+            # below, which should sidestep uvicorn's selection — this
+            # print is the proof.)
+            print(f"Server event loop: {type(self._asyncio_loop).__name__}")
 
             # Create Uvicorn config with the shared event loop.
             #

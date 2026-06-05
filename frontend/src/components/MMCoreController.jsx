@@ -7,6 +7,7 @@
 // via /MMCoreController/snapMMCoreToDisk with a polled progress chip.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSelector } from "react-redux";
 import {
   Alert,
   Box,
@@ -35,6 +36,10 @@ import apiMMCoreControllerGetMMCoreParameters from "../backendapi/apiMMCoreContr
 import apiMMCoreControllerSetMMCoreParameter from "../backendapi/apiMMCoreControllerSetMMCoreParameter";
 import apiMMCoreControllerSnapMMCoreToDisk from "../backendapi/apiMMCoreControllerSnapMMCoreToDisk";
 import apiMMCoreControllerGetMMCoreSnapStatus from "../backendapi/apiMMCoreControllerGetMMCoreSnapStatus";
+import apiMMCoreControllerGetLastSnapPreviewUrl from "../backendapi/apiMMCoreControllerGetLastSnapPreview";
+import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
+import LiveViewControlWrapper from "../axon/LiveViewControlWrapper";
+import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
 
 // Names that mean the same as "Exposure" so we hide the duplicate field in the
 // generic editor (we render a friendlier Exposure-in-seconds box separately).
@@ -108,6 +113,8 @@ const ParameterField = React.memo(function ParameterField({ param, onChange, dis
 });
 
 const MMCoreController = () => {
+  const { ip: hostIP, apiPort } = useSelector(getConnectionSettingsState);
+
   const [detectors, setDetectors] = useState([]);
   const [detectorName, setDetectorName] = useState("");
   const [tree, setTree] = useState(null);
@@ -121,6 +128,26 @@ const MMCoreController = () => {
   const [activeJob, setActiveJob] = useState(null);
   const [recentJobs, setRecentJobs] = useState([]);
   const pollRef = useRef(null);
+
+  // Passive live view — only shown if a stream is already running elsewhere.
+  const [liveActive, setLiveActive] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const active = await apiViewControllerGetLiveViewActive();
+        if (!cancelled) setLiveActive(Boolean(active));
+      } catch {
+        if (!cancelled) setLiveActive(false);
+      }
+    };
+    check();
+    const id = setInterval(check, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
   // ----------------------------------------------------------------------
   // Data loading
@@ -269,6 +296,18 @@ const MMCoreController = () => {
   const isJobRunning =
     activeJob && (activeJob.state === "running" || activeJob.state === "pending");
 
+  // The preview URL is keyed on the job's finishedAt so the browser refetches
+  // when a new snap completes for what would otherwise be the same id.
+  const previewUrl = useMemo(() => {
+    if (!activeJob || activeJob.state !== "done" || !activeJob.jobId) return null;
+    return apiMMCoreControllerGetLastSnapPreviewUrl({
+      hostIP,
+      apiPort,
+      jobId: activeJob.jobId,
+      cacheBust: activeJob.finishedAt || Date.now(),
+    });
+  }, [activeJob, hostIP, apiPort]);
+
   return (
     <Box sx={{ width: "100%", p: 1 }}>
       <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2 }}>
@@ -342,6 +381,42 @@ const MMCoreController = () => {
                   </Tooltip>
                 </Grid>
               </Grid>
+            </CardContent>
+          </Card>
+
+          {/* Passive live preview — only shows frames if a stream was
+              started elsewhere (e.g. the LiveView tab). We intentionally do
+              NOT start or stop streams here. */}
+          <Card>
+            <CardContent>
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={1}
+                sx={{ mb: 1 }}
+              >
+                <Typography variant="h6">Live preview</Typography>
+                <Chip
+                  size="small"
+                  label={liveActive ? "streaming" : "off"}
+                  color={liveActive ? "success" : "default"}
+                />
+              </Stack>
+              {liveActive ? (
+                <Box sx={{ width: "100%", minHeight: 480 }}>
+                  {/* Standard wrapper used across the app — auto-picks
+                      WebRTC / WebGL / JPEG, shows LIVE/PAUSED chip and zoom
+                      controls. We intentionally do not start/stop the stream
+                      here; that's the Live View tab's job. */}
+                  <LiveViewControlWrapper enableStageMovement={false} />
+                </Box>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  No live stream is running. Start it from the Live View tab
+                  before long-exposure work if you want to see live frames
+                  here.
+                </Typography>
+              )}
             </CardContent>
           </Card>
 
@@ -443,6 +518,38 @@ const MMCoreController = () => {
                       {j.relativeFilePath || j.error || j.filePath || ""}
                     </Typography>
                   ))}
+                </Box>
+              )}
+
+              {previewUrl && (
+                <Box sx={{ mt: 2 }}>
+                  <Divider sx={{ mb: 1 }} />
+                  <Typography variant="caption" color="text.secondary">
+                    Captured frame (contrast-stretched preview)
+                  </Typography>
+                  <Box
+                    sx={{
+                      mt: 1,
+                      display: "flex",
+                      justifyContent: "center",
+                      alignItems: "center",
+                      background: "#000",
+                      borderRadius: 1,
+                      minHeight: 200,
+                      maxHeight: "60vh",
+                      overflow: "auto",
+                    }}
+                  >
+                    <img
+                      src={previewUrl}
+                      alt="Captured snap"
+                      style={{
+                        maxWidth: "100%",
+                        maxHeight: "60vh",
+                        display: "block",
+                      }}
+                    />
+                  </Box>
                 </Box>
               )}
             </CardContent>

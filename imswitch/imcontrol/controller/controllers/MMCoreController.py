@@ -4,18 +4,20 @@ Exposes the full property tree of any MMCoreDetectorManager detector through a
 small REST API and supports long-exposure software-triggered snaps that run in
 a background thread so the request doesn't block on multi-minute exposures.
 """
-from __future__ import annotations
-
 import datetime
+import io
 import os
 import threading
 import time
-import traceback
 import uuid
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import tifffile
+from fastapi import HTTPException
+from fastapi.responses import Response
+from PIL import Image
+from pydantic import BaseModel
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
@@ -23,6 +25,27 @@ from ..basecontrollers import ImConWidgetController
 
 
 _MMCORE_MANAGER_NAME = "MMCoreDetectorManager"
+
+# Cap preview size so the PNG conversion is cheap even for 4k+ frames.
+_PREVIEW_MAX_DIM = 1024
+
+
+class SetParameterRequest(BaseModel):
+    detectorName: Optional[str] = None
+    name: str
+    value: Any
+
+
+class SetParametersRequest(BaseModel):
+    detectorName: Optional[str] = None
+    values: Dict[str, Any]
+
+
+class SnapRequest(BaseModel):
+    detectorName: Optional[str] = None
+    exposureMs: Optional[float] = None
+    fileName: Optional[str] = None
+    saveFormat: str = "tiff"
 
 
 def _is_mmcore_detector(detector) -> bool:
@@ -40,6 +63,11 @@ class MMCoreController(ImConWidgetController):
 
         self._jobs: Dict[str, Dict[str, Any]] = {}
         self._jobsLock = threading.Lock()
+        # Cache the captured numpy arrays per job for preview rendering.
+        # Bounded to the most recent few jobs to avoid leaking large frames.
+        self._snapImages: Dict[str, np.ndarray] = {}
+        self._snapImageOrder: List[str] = []
+        self._maxCachedSnaps = 4
 
     # ------------------------------------------------------------------
     # Helpers
@@ -122,37 +150,35 @@ class MMCoreController(ImConWidgetController):
         return self._serialize_parameters(detector)
 
     @APIExport(requestType="POST")
-    def setMMCoreParameter(
-        self,
-        detectorName: Optional[str] = None,
-        name: str = None,
-        value: Any = None,
-    ) -> Dict[str, Any]:
+    def setMMCoreParameter(self, body: SetParameterRequest) -> Dict[str, Any]:
         """Set a single MMCore parameter and return the updated parameter tree.
+
+        Body schema (JSON): ``{"detectorName": str|null, "name": str, "value": any}``.
 
         The returned tree contains the device's view of the value, which may
         have been clamped to an allowed range or list entry by MMCore.
         """
-        if not name:
-            raise ValueError("'name' is required")
-        if value is None:
-            raise ValueError("'value' is required")
+        if not body.name:
+            raise HTTPException(status_code=400, detail="'name' is required")
+        if body.value is None:
+            raise HTTPException(status_code=400, detail="'value' is required")
 
-        resolvedName, detector = self._getDetector(detectorName)
-        detector.setParameter(name, value)
+        _, detector = self._getDetector(body.detectorName)
+        detector.setParameter(body.name, body.value)
         return self._serialize_parameters(detector)
 
     @APIExport(requestType="POST")
-    def setMMCoreParameters(
-        self,
-        detectorName: Optional[str] = None,
-        values: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Batch-set MMCore parameters. Stops on first failure."""
-        if not values:
-            raise ValueError("'values' must be a non-empty mapping")
-        _, detector = self._getDetector(detectorName)
-        for name, value in values.items():
+    def setMMCoreParameters(self, body: SetParametersRequest) -> Dict[str, Any]:
+        """Batch-set MMCore parameters. Stops on first failure.
+
+        Body schema (JSON): ``{"detectorName": str|null, "values": {name: value, ...}}``.
+        """
+        if not body.values:
+            raise HTTPException(
+                status_code=400, detail="'values' must be a non-empty mapping"
+            )
+        _, detector = self._getDetector(body.detectorName)
+        for name, value in body.values.items():
             detector.setParameter(name, value)
         return self._serialize_parameters(detector)
 
@@ -160,39 +186,32 @@ class MMCoreController(ImConWidgetController):
     # Long-exposure snap
     # ------------------------------------------------------------------
     @APIExport(requestType="POST")
-    def snapMMCoreToDisk(
-        self,
-        detectorName: Optional[str] = None,
-        exposureMs: Optional[float] = None,
-        fileName: Optional[str] = None,
-        saveFormat: str = "tiff",
-    ) -> Dict[str, Any]:
+    def snapMMCoreToDisk(self, body: SnapRequest) -> Dict[str, Any]:
         """Run a single software-triggered snap and write it to the recordings folder.
+
+        Body schema (JSON):
+            ``{"detectorName": str|null, "exposureMs": float|null,
+                "fileName": str|null, "saveFormat": "tiff"}``
 
         Returns immediately with a job id; the actual MMCore snap runs in a
         background thread. The frontend can poll :py:meth:`getMMCoreSnapStatus`
-        for progress and the final file path.
-
-        Args:
-            detectorName: MMCore detector name. Defaults to the first one.
-            exposureMs: Exposure time in milliseconds. ``None`` keeps the
-                current device setting.
-            fileName: Optional description suffix for the saved filename.
-            saveFormat: ``"tiff"`` (default). Other formats not yet implemented.
+        for progress and the final file path, and fetch the captured frame
+        via :py:meth:`getLastSnapPreview` once the job is done.
         """
-        resolvedName, detector = self._getDetector(detectorName)
+        resolvedName, detector = self._getDetector(body.detectorName)
 
-        if saveFormat and saveFormat.lower() != "tiff":
-            raise NotImplementedError(
-                f"saveFormat='{saveFormat}' not implemented; only 'tiff' is supported"
+        if body.saveFormat and body.saveFormat.lower() != "tiff":
+            raise HTTPException(
+                status_code=400,
+                detail=f"saveFormat='{body.saveFormat}' not implemented; only 'tiff' is supported",
             )
 
         # Resolve the effective exposure (used for the status display and the
         # MMCore TimeOut bump).
         try:
             effectiveExposureMs = (
-                float(exposureMs)
-                if exposureMs is not None
+                float(body.exposureMs)
+                if body.exposureMs is not None
                 else float(detector._core.getExposure())
             )
         except Exception:
@@ -209,15 +228,16 @@ class MMCoreController(ImConWidgetController):
             "elapsedMs": 0,
             "filePath": None,
             "relativeFilePath": None,
+            "hasPreview": False,
             "error": None,
-            "fileName": fileName,
+            "fileName": body.fileName,
         }
         with self._jobsLock:
             self._jobs[jobId] = job
 
         thread = threading.Thread(
             target=self._runSnapJob,
-            args=(jobId, detector, exposureMs, fileName),
+            args=(jobId, detector, body.exposureMs, body.fileName),
             daemon=True,
             name=f"MMCoreSnap-{jobId[:8]}",
         )
@@ -243,6 +263,52 @@ class MMCoreController(ImConWidgetController):
         """Return all snap jobs (running + recent)."""
         with self._jobsLock:
             return [dict(j) for j in self._jobs.values()]
+
+    @APIExport()
+    def getLastSnapPreview(self, jobId: str) -> Response:
+        """Return the captured frame for ``jobId`` as a PNG image.
+
+        The PNG is contrast-stretched (1st–99th percentile) and downsampled
+        to ``_PREVIEW_MAX_DIM`` on the long edge to stay snappy for big
+        sensors. The full-resolution data is on disk at
+        ``getMMCoreSnapStatus(jobId)['filePath']``.
+        """
+        with self._jobsLock:
+            image = self._snapImages.get(jobId)
+        if image is None:
+            raise HTTPException(status_code=404, detail="No preview for this job")
+
+        try:
+            img = np.asarray(image)
+            if img.ndim != 2:
+                img = img.squeeze()
+            # Percentile contrast stretch — long exposures often have a long
+            # tail of cosmic-ray hot pixels that wipe out a min/max stretch.
+            lo, hi = np.percentile(img, (1, 99))
+            if hi <= lo:
+                hi = lo + 1
+            scaled = np.clip((img.astype(np.float32) - lo) * 255.0 / (hi - lo), 0, 255)
+            scaled = scaled.astype(np.uint8)
+
+            # Downsample for the browser
+            h, w = scaled.shape[:2]
+            longest = max(h, w)
+            if longest > _PREVIEW_MAX_DIM:
+                stride = int(np.ceil(longest / _PREVIEW_MAX_DIM))
+                scaled = scaled[::stride, ::stride]
+
+            buf = io.BytesIO()
+            Image.fromarray(scaled, mode="L").save(buf, format="PNG")
+            return Response(
+                content=buf.getvalue(),
+                media_type="image/png",
+                headers={"Cache-Control": "no-store"},
+            )
+        except Exception as exc:
+            self._logger.error("Failed to render snap preview", exc_info=True)
+            raise HTTPException(
+                status_code=500, detail=f"Preview render failed: {exc}"
+            ) from exc
 
     # ------------------------------------------------------------------
     # Background worker
@@ -348,6 +414,14 @@ class MMCoreController(ImConWidgetController):
             except Exception:
                 self._logger.debug("Could not emit sigImageUpdated", exc_info=True)
 
+            # Cache the captured frame for the preview endpoint.
+            with self._jobsLock:
+                self._snapImages[jobId] = image
+                self._snapImageOrder.append(jobId)
+                while len(self._snapImageOrder) > self._maxCachedSnaps:
+                    oldest = self._snapImageOrder.pop(0)
+                    self._snapImages.pop(oldest, None)
+
             finished = time.time()
             self._updateJob(
                 jobId,
@@ -356,6 +430,7 @@ class MMCoreController(ImConWidgetController):
                 elapsedMs=int((finished - started) * 1000),
                 filePath=fullPath,
                 relativeFilePath=relativePath,
+                hasPreview=True,
             )
 
         except Exception as exc:

@@ -142,7 +142,7 @@
             "resetOnClose": true,
             "stageOffsets": {
                 "stageOffsetPositionX": -103067.86983366935,
-                "stageOffsetPositionY": -82526.94745463709,
+                "stageOffsetPositionY": -52049.03414818548,
                 "stageOffsetPositionZ": 0.0,
                 "stageOffsetPositionA": 0.0
             }
@@ -247,9 +247,7 @@
         "LiveView",
         "LEDMatrix",
         "StageCenterCalibration",
-        "MMCore", 
-        "Experiment",
-        "Objective"
+        "MMCore"
     ],
     "mct": null,
     "Flatfield": null,

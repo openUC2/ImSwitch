@@ -76,6 +76,9 @@ const initialExperimentState = {
     zStackStepSize: 0.1,
     speed: 20000,
     z_speed: 5000,
+    // Tiling behaviour toggles (Tiling tab). Default off.
+    returnToOrigin: false,        // move stage back to pre-scan XYZ when the scan ends
+    overrideZWithCurrentZ: false, // use current stage Z for every position (ignored if focus map active)
     gains: 0,
     exposureTimes: 0,
     performanceMode: false,
@@ -88,6 +91,10 @@ const initialExperimentState = {
     ome_write_stitched_tiff: true,
     ome_write_individual_tiffs: false,
     ome_write_ashlar_stitch: false,
+    ashlar_pixel_size: 1.0,           // µm/pixel — physical pixel size for Ashlar alignment
+    ashlar_pixel_size_user_set: false, // true once the user has manually edited the field
+    ashlar_maximum_shift: 50.0,   // µm — max per-tile corrective shift allowed by Ashlar
+    ashlar_align_channel: 0,      // zero-based channel index used for tile alignment
     // Tile overlap parameters (moved from WellSelectorSlice)
     overlapWidth: 0.0,  // 0.0 = no overlap (100% spacing), 0.1 = 10% overlap (90% spacing)
     overlapHeight: 0.0,  // 0.0 = no overlap (100% spacing), 0.1 = 10% overlap (90% spacing)
@@ -304,6 +311,21 @@ const experimentSlice = createSlice({
       console.log("setOmeWriteAshlarStitch", action.payload);
       state.parameterValue.ome_write_ashlar_stitch = action.payload;
     },
+    setAshlarPixelSize: (state, action) => {
+      state.parameterValue.ashlar_pixel_size = action.payload;
+      state.parameterValue.ashlar_pixel_size_user_set = true;
+    },
+    setAshlarPixelSizeCalibrated: (state, action) => {
+      if (!state.parameterValue.ashlar_pixel_size_user_set) {
+        state.parameterValue.ashlar_pixel_size = action.payload;
+      }
+    },
+    setAshlarMaximumShift: (state, action) => {
+      state.parameterValue.ashlar_maximum_shift = action.payload;
+    },
+    setAshlarAlignChannel: (state, action) => {
+      state.parameterValue.ashlar_align_channel = action.payload;
+    },
     //------------------------ overlap parameters
     setOverlapWidth: (state, action) => {
       console.log("setOverlapWidth", action.payload);
@@ -316,6 +338,12 @@ const experimentSlice = createSlice({
     setIsSnakescan: (state, action) => {
       console.log("setIsSnakescan", action.payload);
       state.parameterValue.is_snakescan = action.payload;
+    },
+    setReturnToOrigin: (state, action) => {
+      state.parameterValue.returnToOrigin = action.payload;
+    },
+    setOverrideZWithCurrentZ: (state, action) => {
+      state.parameterValue.overrideZWithCurrentZ = action.payload;
     },
     setKeepIlluminationOn: (state, action) => {
       console.log("setKeepIlluminationOn", action.payload);
@@ -364,6 +392,11 @@ const experimentSlice = createSlice({
         areaType: action.payload.areaType,
         groupId: action.payload.groupId,
         wellId: action.payload.wellId,
+        // Pre-computed scan positions for region-style points (e.g. a freehand
+        // polygon) so the whole region is ONE point-list entry / scan group.
+        neighborPointList: Array.isArray(action.payload.neighborPointList)
+          ? action.payload.neighborPointList
+          : [],
       };
       
       console.log("createPoint newPoint", newPoint);
@@ -529,9 +562,15 @@ export const {
   setOmeWriteStitchedTiff,
   setOmeWriteIndividualTiffs,
   setOmeWriteAshlarStitch,
+  setAshlarPixelSize,
+  setAshlarPixelSizeCalibrated,
+  setAshlarMaximumShift,
+  setAshlarAlignChannel,
   setOverlapWidth,
   setOverlapHeight,
   setIsSnakescan,
+  setReturnToOrigin,
+  setOverrideZWithCurrentZ,
   setKeepIlluminationOn,
   setIlluminationParams,
   setIlluminationParamsForChannel,

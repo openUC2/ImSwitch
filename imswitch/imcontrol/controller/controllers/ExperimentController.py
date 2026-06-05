@@ -51,6 +51,7 @@ from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ScanMetadata,
     ScanPosition,
     StartExperimentResponse,
+    SyntheticChannel,
 )
 from imswitch.imcontrol.model.focus_map import FocusMap, FocusMapManager, FocusMapResult
 from imswitch.imcontrol.model.overview_registration import OverviewRegistrationService, PixelPoint, StagePoint, SlotDefinition
@@ -181,21 +182,26 @@ class ExperimentController(ImConWidgetController):
                 "nLedsY": _ny,
                 "maxRingRadius": _max_ring_radius,
             }
-            self.ExperimentParams.illuSources.append(self.LED_MATRIX_RING_CHANNEL)
-            self.ExperimentParams.illuSourceKinds.append("ring")
-            self.ExperimentParams.illuSourceMinIntensities.append(0)
-            self.ExperimentParams.illuSourceMaxIntensities.append(255)
-            self.ExperimentParams.illuIntensities.append(0)
-            self.ExperimentParams.exposureTimes.append(0)
-            self.ExperimentParams.gains.append(0)
-
-            self.ExperimentParams.illuSources.append(self.LED_MATRIX_DPC_CHANNEL)
-            self.ExperimentParams.illuSourceKinds.append("dpc")
-            self.ExperimentParams.illuSourceMinIntensities.append(0)
-            self.ExperimentParams.illuSourceMaxIntensities.append(255)
-            self.ExperimentParams.illuIntensities.append(0)
-            self.ExperimentParams.exposureTimes.append(0)
-            self.ExperimentParams.gains.append(0)
+            # Synthetic LED-matrix channels are advertised in their OWN list
+            # (illuSources stays conventional/default-only).  The frontend
+            # renders ring/DPC controls from this list and sends back enabled
+            # entries in ParameterValue.syntheticChannels.
+            self.ExperimentParams.syntheticChannels = [
+                SyntheticChannel(
+                    name=self.LED_MATRIX_RING_CHANNEL,
+                    kind="ring",
+                    enabled=False,
+                    intensityR=0, intensityG=0, intensityB=0,
+                    radius=_max_ring_radius,
+                ),
+                SyntheticChannel(
+                    name=self.LED_MATRIX_DPC_CHANNEL,
+                    kind="dpc",
+                    enabled=False,
+                    # DPC conventionally lights one colour; default to green.
+                    intensityR=0, intensityG=255, intensityB=0,
+                ),
+            ]
             # Surface DPC capability separately so existing UI bits that
             # only look at isDPCpossible can still gate features.
             self.ExperimentParams.isDPCpossible = True
@@ -252,6 +258,7 @@ class ExperimentController(ImConWidgetController):
             "result": None,
             "error": None,
         }
+        self._ashlar_proc = None  # subprocess.Popen handle for the running ashlar process
         # Overview camera is resolved through the DetectorManager, using the
         # detector name configured in setup (experiment.overviewCameraName).
         # Falls back to a detector literally named "overviewcamera" if any.
@@ -303,7 +310,28 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="GET")
     def getHardwareParameters(self):
+        try:
+            det_px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+            self.ExperimentParams.pixel_size_um = float(det_px[1]) if len(det_px) > 1 else 1.0
+        except Exception:
+            pass
         return self.ExperimentParams
+
+    @APIExport(requestType="GET")
+    def getDetectorPixelSize(self) -> dict:
+        """Return the calibrated pixel size (µm/px) for the primary acquisition detector.
+
+        PixelCalibrationController injects the per-objective value from
+        PixelCalibration.affineCalibrations into the detector at startup and
+        whenever the objective changes, so this always reflects the current
+        calibration.
+        """
+        try:
+            px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+            value = float(px[1]) if len(px) > 1 else 1.0
+        except Exception:
+            value = 1.0
+        return {"pixel_size_um": value}
 
     # ------------------------------------------------------------------
     # Wellplate / labware endpoints
@@ -773,79 +801,66 @@ class ExperimentController(ImConWidgetController):
 
         # Illumination-related (validators on the model guarantee these are
         # lists – or None for `illumination`/`illuIntensities` when not set).
-        illuSources = p.illumination or []
-        illuminationIntensities = p.illuIntensities or []
-        isDarkfield = p.darkfield  # TODO: Needs to be implemented
-        isBrightfield = p.brightfield
-        isDPC = p.differentialPhaseContrast
-
-        # Resolve a per-source "kind" tag parallel to illuSources.  Sources
-        # are looked up by name in self.ExperimentParams.illuSources; anything
-        # not found falls back to "default" so legacy clients keep working.
-        _kind_by_name = {
-            name: kind
-            for name, kind in zip(
-                self.ExperimentParams.illuSources,
-                self.ExperimentParams.illuSourceKinds,
-            )
-        }
-        illuminationKinds = [
-            _kind_by_name.get(name, "default") for name in illuSources
-        ]
-        # Per-channel kind-specific params (radius, RGB).  May be None on
-        # legacy payloads — normalise to empty dict so workflow builder
-        # doesn't need to None-check.
-        illuminationParams = dict(p.illuminationParams or {})
-
-        # Promote RGB max → illuIntensities for synthetic (ring/dpc) channels.
-        # Synthetic channels carry their "intensity" in illuminationParams
-        # (R/G/B 0..255), so illuIntensities[i] is always 0 for them.  The
-        # workflow loop uses `illu_intensity > 0` as the active-channel gate;
-        # without this promotion, synthetic channels are silently treated as
-        # "off" (and worse: collapse passthrough mode below, which then mis-
-        # aligns illuminationKinds vs. the post-passthrough illuSources).
         #
-        # IMPORTANT: only promote when the channel is actually enabled by
-        # the user.  `illuminationParams` is a sticky cache on the frontend
-        # — toggling a synthetic channel off does NOT clear its last-edited
-        # radius/RGB, so a naïve "has non-zero RGB → activate" rule would
-        # re-enable channels the user explicitly deselected.  We gate on
-        # `channelEnabledForExperiment` (sent by the frontend) when present.
-        # Pad illuminationIntensities to match illuSources first so the indexed
-        # update below is safe.
+        # `illumination` now carries ONLY conventional (default) sources.
+        # Synthetic LED-matrix channels (ring/DPC) arrive in their own
+        # `syntheticChannels` list and are merged into the parallel workflow
+        # arrays below.  Every parallel array (sources / kinds / intensities /
+        # exposures / gains) grows in lockstep so the downstream workflow and
+        # OME channel sizing stay index-aligned.
+        illuSources = list(p.illumination or [])
+        illuminationIntensities = list(p.illuIntensities or [])
+
+        # Conventional sources are all "default" kind.
+        illuminationKinds = ["default"] * len(illuSources)
+        # Per-channel kind-specific params (radius/RGB), keyed by channel name.
+        # Built solely from syntheticChannels below – not from any sticky
+        # frontend cache, so a deselected channel can never leak stale RGB.
+        illuminationParams: Dict[str, Dict[str, Any]] = {}
+
+        # Default-channel camera settings, normalised to parallel illuSources.
+        gains = list(p.gains or [])
+        exposures = list(p.exposureTimes or [])
+        if len(gains) != len(illuSources):
+            gains = [-1] * len(illuSources)
+        if len(exposures) != len(illuSources):
+            _first_exposure = exposures[0] if exposures else 0
+            exposures = [_first_exposure] * len(illuSources)
         if len(illuminationIntensities) < len(illuSources):
-            illuminationIntensities = list(illuminationIntensities) + (
+            illuminationIntensities = illuminationIntensities + (
                 [0] * (len(illuSources) - len(illuminationIntensities))
             )
         else:
-            illuminationIntensities = list(illuminationIntensities)
-        _channel_enabled = p.channelEnabledForExperiment  # Optional[List[bool]]
-        for _i, (_name, _kind) in enumerate(zip(illuSources, illuminationKinds)):
-            if _kind not in ("ring", "dpc"):
+            illuminationIntensities = illuminationIntensities[: len(illuSources)]
+
+        # ── Merge synthetic (ring/DPC) channels from their dedicated list ──
+        # Each enabled synthetic channel with a non-zero colour appends one
+        # entry to every parallel array.  Its scalar "intensity" is max(R,G,B)
+        # (the >0 active-channel gate the workflow loop uses); the real pattern
+        # (radius + RGB) lives in illuminationParams[name] for the LED-matrix
+        # driver.  This single, explicit merge replaces the old RGB→intensity
+        # promotion hack and its channelEnabledForExperiment gymnastics.
+        for _sc in (p.syntheticChannels or []):
+            if not _sc.enabled or _sc.rgb_max <= 0:
                 continue
-            # Authoritative "is this channel enabled in the experiment" check.
-            # When the frontend sends channelEnabledForExperiment, honour it
-            # exactly; if absent (legacy clients), fall back to the previous
-            # permissive behaviour (treat any synthetic channel with RGB
-            # params as enabled).
-            if _channel_enabled is not None:
-                if _i >= len(_channel_enabled) or not _channel_enabled[_i]:
-                    # Make sure stale intensity doesn't sneak through either.
-                    illuminationIntensities[_i] = 0
-                    continue
-            if illuminationIntensities[_i] and illuminationIntensities[_i] > 0:
-                continue  # frontend already supplied a concrete intensity
-            _kp = illuminationParams.get(_name) or {}
-            _rgb_max = max(
-                int(_kp.get("intensityR", 0) or 0),
-                int(_kp.get("intensityG", 0) or 0),
-                int(_kp.get("intensityB", 0) or 0),
+            illuSources.append(_sc.name)
+            illuminationKinds.append(_sc.kind)
+            illuminationIntensities.append(_sc.rgb_max)
+            illuminationParams[_sc.name] = {
+                "radius": int(_sc.radius) if _sc.radius is not None else 0,
+                "intensityR": int(_sc.intensityR or 0),
+                "intensityG": int(_sc.intensityG or 0),
+                "intensityB": int(_sc.intensityB or 0),
+            }
+            gains.append(float(_sc.gain) if _sc.gain is not None else -1)
+            exposures.append(
+                float(_sc.exposure) if _sc.exposure is not None
+                else (exposures[0] if exposures else 0)
             )
-            if _rgb_max > 0:
-                illuminationIntensities[_i] = _rgb_max
-        # Push back so any subsequent reads of p.* see the promoted values
-        # (passthrough_illumination, n_active_channels, resolve_keep_illumination_on
-        # are all properties that read self.illuIntensities).
+
+        # Push the merged intensities back so the model convenience properties
+        # (passthrough_illumination, n_active_channels, resolve_keep_illumination_on)
+        # account for synthetic channels too.
         try:
             p.illuIntensities = illuminationIntensities
         except Exception:
@@ -885,9 +900,8 @@ class ExperimentController(ImConWidgetController):
         self.ExperimentParams.performanceMode = p.performanceMode
         performanceMode = p.performanceMode
 
-        # camera-related (validators ensure list shape)
-        gains = list(p.gains or [])
-        exposures = list(p.exposureTimes or [])
+        # Scan speed (XY/Z) from the frontend; falls back to the __init__
+        # defaults when the request leaves them unset (<= 0).
         if p.speed <= 0:
             self.SPEED_X = self.SPEED_X_default
             self.SPEED_Y = self.SPEED_Y_default
@@ -901,13 +915,8 @@ class ExperimentController(ImConWidgetController):
 
         # Autofocus and timepoint values are read from `p` (ParameterValue)
         # directly via ExecutionContext.to_kwargs(); no local aliases needed.
-
-        # Pad gains/exposures to match the number of illumination sources.
-        if len(gains) != len(illuSources):
-            gains = [-1] * len(illuSources)
-        if len(exposures) != len(illuSources):
-            first_exposure = exposures[0] if exposures else 0
-            exposures = [first_exposure] * len(illuSources)
+        # gains/exposures were already built parallel to illuSources (including
+        # the merged synthetic channels) in the illumination block above.
 
         # Passthrough-mode overrides: use a single sentinel channel so the
         # acquisition loop runs exactly once per position without modifying
@@ -915,13 +924,9 @@ class ExperimentController(ImConWidgetController):
         if _passthrough_illumination:
             illuSources = [illuSources[0]] if illuSources else ["default"]
             illuminationIntensities = [1]  # sentinel: passes >0 gate; never sent to device
-            # Keep illuminationKinds parallel to the collapsed illuSources –
-            # the rest of the pipeline indexes into kinds by source position,
-            # so a length mismatch here used to make the workflow look up the
-            # wrong kind (e.g. mis-treating a ring source as a default laser).
-            illuminationKinds = [
-                _kind_by_name.get(illuSources[0], "default")
-            ] if illuSources else ["default"]
+            # Passthrough only ever happens when no channel (default OR
+            # synthetic) is active, so the collapsed sentinel is conventional.
+            illuminationKinds = ["default"]
             gains = [-1]   # set_exposure_time_gain skips when gain < 0
             exposures = [0]  # set_exposure_time_gain skips when exposure_time <= 0
             keepIlluminationOn = True  # never send set_laser_power commands
@@ -945,6 +950,12 @@ class ExperimentController(ImConWidgetController):
         self._last_scan_areas = None
         self._focus_map_fit_by_region = True
         self._focus_map_settle_ms = 0
+        # Whether THIS experiment should drive Z from a focus map.  Reset every
+        # run so that a map left over in focus_map_manager from a previous
+        # acquisition is NOT silently re-applied to an experiment that did not
+        # request focus mapping (e.g. after the user hit "Clear All").  The
+        # acquisition loop gates focus-map Z moves on this flag.
+        self._focus_map_active = False
         if mExperiment.scanAreas:
             self._last_scan_areas = [
                 {
@@ -968,6 +979,10 @@ class ExperimentController(ImConWidgetController):
             self._logger.info("Focus mapping enabled – computing Z surface per scan group")
             self._focus_map_fit_by_region = focusMapConfig.fit_by_region
             self._focus_map_settle_ms = focusMapConfig.settle_ms
+            # Only drive Z from the map during the scan when the config asks for
+            # it (apply_during_scan, default True).  This is the single gate the
+            # acquisition loop checks before applying any focus-map Z.
+            self._focus_map_active = bool(getattr(focusMapConfig, "apply_during_scan", True))
             self._run_focus_map_phase(mExperiment, focusMapConfig)
         # Turn off illumination again after focus mapping so the
         # acquisition loop starts from a clean state.
@@ -1000,6 +1015,13 @@ class ExperimentController(ImConWidgetController):
 
         workflowSteps = []
         file_writers = []  # Initialize outside the loop for context storage
+
+        # Tiling behaviour toggle (Wellplate "Tiling" tab): move the stage back
+        # to the pre-scan XYZ when the scan ends.  Read once here so the
+        # normal-mode finalization can branch on it via self.controller.
+        # ("Override per-group Z with current Z" is handled entirely on the
+        # frontend, which rewrites each position's Z before sending.)
+        self._return_to_origin = bool(getattr(p, "returnToOrigin", False))
 
         # OME writer-related (model defaults guarantee fields exist)
         self._ome_write_tiff = p.ome_write_tiff
@@ -1119,6 +1141,30 @@ class ExperimentController(ImConWidgetController):
 
             # Start the workflow
             self.workflow_manager.start_workflow(wf, context)
+
+            # Auto-trigger Ashlar stitching once the workflow thread finishes,
+            # guaranteeing all individual TIFFs are on disk before stitching starts.
+            if p.ome_write_ashlar_stitch:
+                _wf_thread = self.workflow_manager.current_thread
+                _pixel_size = getattr(p, 'ashlar_pixel_size', 1.0)
+                _max_shift = getattr(p, 'ashlar_maximum_shift', 50.0)
+                _align_ch = getattr(p, 'ashlar_align_channel', 0)
+                _exp_dir = dirPath
+
+                def _auto_stitch():
+                    if _wf_thread is not None:
+                        _wf_thread.join()
+                    self._logger.info("Experiment complete — auto-starting Ashlar stitching")
+                    self.runAshlarStitching(
+                        pixelSize=_pixel_size,
+                        maximumShift=_max_shift,
+                        alignChannel=_align_ch,
+                        experimentDir=_exp_dir,
+                    )
+
+                threading.Thread(
+                    target=_auto_stitch, daemon=True, name="AshlarAutoTrigger"
+                ).start()
 
         return {"status": "running"}
 
@@ -1505,9 +1551,11 @@ class ExperimentController(ImConWidgetController):
             self._logger.debug("No image found in metadata!")
             return
 
-        # RGB cameras produce (H, W, 3) arrays; convert to grayscale so the
-        # OME canvas (which has no colour axis) can accept the tile.
-        if img.ndim == 3 and img.shape[2] == 3:
+        # Colour (RGB) detectors deliver (H, W, 3) arrays. Preserve the colour
+        # for RGB cameras (the OME writer now carries a trailing samples axis);
+        # only collapse to grayscale for non-RGB detectors that nonetheless
+        # hand us a 3-channel frame.
+        if img.ndim == 3 and img.shape[2] == 3 and not getattr(self, 'isRGB', False):
             img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype)
 
         # Get tile index to identify the correct OME writer
@@ -1756,7 +1804,10 @@ class ExperimentController(ImConWidgetController):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
         self._logger.info(f"Moving stage to X={posX}, Y={posY}")
         #if posY and posX is None:
-        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X_default, self.SPEED_Y_default), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
+        # Use the experiment-configured scan speed (set from the frontend in
+        # startWellplateExperiment); falls back to the defaults in __init__ when
+        # no experiment has overridden it.
+        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()
         #self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
         return (posX, posY) # TODO: Need to adjust in case of relative move
@@ -1964,9 +2015,25 @@ class ExperimentController(ImConWidgetController):
                 "status": self._overview_async_status,
             }
 
+        # Resolve pixel size: when the UI still shows the default (1.0) read the
+        # calibrated value that PixelCalibrationController pushed into the detector
+        # from PixelCalibration.affineCalibrations in the ImSwitchConfig file.
+        resolved_pixel_size = pixelSize
+        if pixelSize == 1.0:
+            try:
+                det_px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+                cal_px = float(det_px[1]) if len(det_px) > 1 else 1.0
+                if cal_px > 0 and cal_px != 1.0:
+                    resolved_pixel_size = cal_px
+                    self._logger.info(
+                        f"Ashlar: using calibrated pixel size from detector: {cal_px:.4f} µm/px"
+                    )
+            except Exception as exc:
+                self._logger.warning(f"Could not read detector pixel size: {exc}")
+
         thread = threading.Thread(
             target=self._runAshlarStitchingWorker,
-            args=(target_dir, pixelSize, maximumShift, alignChannel),
+            args=(target_dir, resolved_pixel_size, maximumShift, alignChannel),
             daemon=True,
             name="runAshlarStitching",
         )
@@ -2011,9 +2078,9 @@ class ExperimentController(ImConWidgetController):
             sys.executable, script,
             target_dir,
             "--mode", "ashlar",
-            "--pixel-size", str(pixelSize),
             "--maximum-shift", str(maximumShift),
             "--align-channel", str(alignChannel),
+            "--pixel-size", str(pixelSize),
         ]
         self._logger.info(f"Ashlar command: {' '.join(cmd)}")
 
@@ -2027,6 +2094,8 @@ class ExperimentController(ImConWidgetController):
                 stderr=subprocess.STDOUT,
                 text=True,
             )
+            with self._overview_async_lock:
+                self._ashlar_proc = proc
 
             stderr_lines: list[str] = []
 
@@ -2054,6 +2123,8 @@ class ExperimentController(ImConWidgetController):
                 time.sleep(1)
 
             reader_thread.join(timeout=10)
+            with self._overview_async_lock:
+                self._ashlar_proc = None
             rc = proc.returncode
 
             if rc == 0:
@@ -2316,7 +2387,8 @@ class ExperimentController(ImConWidgetController):
             grid_shape=grid_shape,
             grid_geometry=grid_geometry,
             config=writer_config,
-            logger=self._logger
+            logger=self._logger,
+            isRGB=getattr(self, 'isRGB', False),
         )
 
         # ------------------------------------------------------------- main loop
@@ -3761,6 +3833,18 @@ class ExperimentController(ImConWidgetController):
         """Return the current background-overview-task state for polling."""
         with self._overview_async_lock:
             return dict(self._overview_async_status)
+
+    @APIExport(requestType="GET")
+    def stopAshlarStitching(self) -> dict:
+        """Kill the running Ashlar stitching subprocess, if any."""
+        with self._overview_async_lock:
+            proc = self._ashlar_proc
+        if proc is None or proc.poll() is not None:
+            return {"stopped": False, "message": "No stitching process is running"}
+        proc.kill()
+        self._logger.info("Ashlar stitching process killed by user request")
+        self._finishOverviewAsync(error="Stitching stopped by user")
+        return {"stopped": True}
 
     # ------------------------------------------------------------------
     # Known calibration reference points per layout

@@ -11,8 +11,9 @@ const initialParameterRangeState = {
     zStack: { min: -10, max: 20 },
     zStackStepSize: { min: 0.1, max: 10 },
     speed: [1,5,10,50,100,500,1000,10000,20000,100000],
-    illuSources: [], // Array of illumination sources
-    illuSourceKinds: [], // Per-source kind tag parallel to illuSources: "default" | "ring" | "dpc"
+    illuSources: [], // Array of conventional (default) illumination sources
+    illuSourceKinds: [], // Per-source kind tag parallel to illuSources (all "default" now)
+    syntheticChannels: [], // Synthetic LED-matrix channels (ring/DPC), advertised separately
     // LED-matrix hardware metadata.  Populated only when an LED matrix is
     // configured.  Used to clamp the ring-radius slider in the Wellplate
     // designer to physically meaningful values.  Shape:
@@ -98,6 +99,11 @@ const parameterRangeSlice = createSlice({
       setIlluSourceKinds: (state, action) => {
         state.illuSourceKinds = Array.isArray(action.payload) ? action.payload : [];
       },
+      // Synthetic LED-matrix channels (ring/DPC), advertised separately from
+      // illuSources. Shape: [{ name, kind, enabled, intensityR/G/B, radius? }]
+      setSyntheticChannels: (state, action) => {
+        state.syntheticChannels = Array.isArray(action.payload) ? action.payload : [];
+      },
       // LED matrix hardware metadata { nLedsX, nLedsY, maxRingRadius }, or null.
       setLedMatrixInfo: (state, action) => {
         const p = action.payload;
@@ -150,6 +156,7 @@ export const {
     setSpeed, 
     setIlluSources,
     setIlluSourceKinds,
+    setSyntheticChannels,
     setLedMatrixInfo,
     setIlluSourceMinIntensities,
     setIlluSourceMaxIntensities,

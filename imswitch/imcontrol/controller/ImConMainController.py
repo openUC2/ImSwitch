@@ -64,7 +64,7 @@ class ImConMainController(MainController):
                 continue
             # ensure that PixelCalibrationController is always created last, as it is required for the 
             # correct functioning of other controllers => sort list of widgets so that PixelCalibration is last
-            if widgetKey == "PixelCalibration":
+            if widgetKey == "PixelCalibration" or widgetKey == "StageCenter" or widgetKey == "LiveView":
                 # delay creation of PixelCalibrationController until the end, as it is required for the correct functioning of other controllers
                 continue
             if widgetKey == "Arkitekt" and not hasattr(
@@ -166,7 +166,26 @@ class ImConMainController(MainController):
             self.__logger.warning(
                 f"Could not dynamically import {controller_name}: {e}"
             )
-        
+        # Add StageCenterController for stage centering functionality (if StageCenter widget is present)
+        try:
+            self.__logger.info("Creating controller for StageCenter ")
+            controller_name = "StageCenterController"
+            module = importlib.import_module(
+                "imswitch.imcontrol.controller.controllers.StageCenterController" 
+            )
+            controller_class = getattr(module, controller_name)
+            if controller_class is not None:
+                self.controllers["StageCenter"] = self.__factory.createController(
+                    controller_class, self.__mainView.widgets["StageCenter"]
+                )
+                # Register StageCenterController
+                self.__masterController.registerController(
+                    "StageCenter", self.controllers["StageCenter"]
+                )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not dynamically import {controller_name}: {e}"
+            )   
         # Add LiveViewController for live streaming (if LiveView widget is present)
         try:
             self.__logger.info("Creating controller for LiveView ")

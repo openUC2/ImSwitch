@@ -56,7 +56,7 @@ dependencies = [
     "NanoImagingPack==2.1.5",
     # Pin below 0.1.7: that PyPI release added imswitchuc2 as a dep, creating a
     # circular dependency and an av==17 conflict with our aiortc-compatible av==13.
-    "imswitchclient>=0.1.2",
+    "imswitchclient>=0.1.7",
     "psygnal",
     "python-socketio[asyncio]==5.11.4",
     "jupyterlab==4.2.5",
@@ -78,6 +78,8 @@ dependencies = [
     "opencv-contrib-python-headless>=4.13.0.92",
     "opencv-contrib-python>=4.13.0.92",
     "opencv-python>=4.13.0.92",
+    "ipympl>=0.9.2",
+    "ashlarUC2 @ git+https://github.com/Franzili/ashlarUC2.git"
 ]
 
 [project.optional-dependencies]
@@ -91,7 +93,7 @@ Lepmon = [
     "luma.oled",
 ]
 Ashlar = [
-    "ashlarUC2",
+    "ashlarUC2 @ git+https://github.com/Franzili/ashlarUC2",
 ]
 imjoy = [
     "imjoy-rpc==0.5.59",

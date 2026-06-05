@@ -607,6 +607,9 @@ class ExperimentNormalMode(ExperimentModeBase):
             # z=0.0 is the frontend default for sub-tiles that have no explicit
             # per-point Z – treat it the same as None so we always use the real
             # stage Z (initial_z_position) in that case.
+            # (The "override per-group Z with current Z" Tiling toggle is applied
+            # entirely on the frontend, which rewrites each position's Z before
+            # sending; here we just consume the coordinates as-is.)
             point_z_origin = m_point.get("z")
             if point_z_origin is None or point_z_origin == 0.0:
                 point_z_origin = initial_z_position
@@ -621,10 +624,13 @@ class ExperimentNormalMode(ExperimentModeBase):
             step_id += 1
 
             # Focus map Z lookup (happens after XY move to know the coordinate).
-            # Only attempt when the manager has fitted maps so experiments without
-            # focus mapping never produce spurious Z moves.
+            # Gate on `_focus_map_active` (set per-experiment from
+            # focusMap.enabled + apply_during_scan) so a map left over in the
+            # manager from a PREVIOUS run is never silently re-applied to an
+            # experiment that did not request focus mapping – e.g. after the
+            # user cleared the focus map.  Also require fitted maps to exist.
             focus_map_z = None
-            if self.controller.focus_map_manager.get_all():
+            if getattr(self.controller, "_focus_map_active", False) and self.controller.focus_map_manager.get_all():
                 # Resolve the group_id used when storing the focus map.
                 # _run_focus_map_phase stores under sa.areaId (e.g. "area_0").
                 focus_map_group_id = (
@@ -1086,13 +1092,17 @@ class ExperimentNormalMode(ExperimentModeBase):
             ))
             step_id += 1
 
-        # On the very last timepoint, return the stage to the initial XYZ position
-        if is_last_timepoint:
+        # On the very last timepoint, optionally return the stage to the
+        # pre-scan XYZ position.  Gated on the "Return to origin" Tiling toggle
+        # (default off → the stage stays at the last acquired tile).  When on,
+        # restore the full XYZ (including Z) the microscope was at before the
+        # scan started.
+        if is_last_timepoint and getattr(self.controller, "_return_to_origin", False):
             workflow_steps.append(WorkflowStep(
                 name="Return to initial XYZ position",
                 step_id=step_id,
                 main_func=self.controller.return_to_initial_position,
-                main_params={},
+                main_params={"include_z_position": True},
             ))
             step_id += 1
 

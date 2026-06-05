@@ -282,39 +282,124 @@ const LiveViewComponent = ({
     ],
   );
 
-  // Load and process image when it changes
+  // Load and process image when it changes.
+  // Uses createImageBitmap when available (Chrome/Firefox) so JPEG decode
+  // runs off the main thread, reducing per-frame jank at high frame rates.
+  // Falls back to the classic HTMLImageElement path for older browsers.
   useEffect(() => {
-    if (liveStreamState.liveViewImage) {
+    const src = liveStreamState.liveViewImage;
+    if (!src) {
+      setImageLoaded(false);
+      setCanvasStyle({});
+      return;
+    }
+
+    // Allow in-flight async work to be cancelled if the image changes again
+    // before the decode finishes (rapid-fire frames at high FPS).
+    let cancelled = false;
+
+    // Build the data-URL for both paths.  liveViewImage is always a base64
+    // string (normalised in WebSocketHandler for the msgpack path).
+    const dataUrl = `data:image/jpeg;base64,${src}`;
+
+    if (typeof createImageBitmap !== 'undefined') {
+      // ── Fast path: off-thread JPEG decode via createImageBitmap ──────────
+      // atob + Uint8Array copy is ~0.5 ms for 500 KB; cheaper than the old
+      // synchronous main-thread decode that the img.src path used to trigger.
+      try {
+        const binaryStr = atob(src);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+        const blob = new Blob([bytes], { type: 'image/jpeg' });
+
+        createImageBitmap(blob)
+          .then((bitmap) => {
+            if (cancelled) { bitmap.close(); return; }
+            try {
+              const canvas = canvasRef.current;
+              if (canvas) {
+                canvas.width = bitmap.width;
+                canvas.height = bitmap.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(bitmap, 0, 0);
+              }
+              // applyResponsiveSizing accepts any object with .width/.height
+              // that drawImage() can consume — ImageBitmap qualifies.
+              applyResponsiveSizing(bitmap);
+              setImageLoaded(true);
+            } catch (error) {
+              console.error('Error processing image (createImageBitmap):', error);
+              setImageLoaded(false);
+              setCanvasStyle({});
+            } finally {
+              bitmap.close();
+            }
+          })
+          .catch((err) => {
+            if (cancelled) return;
+            console.error('createImageBitmap failed, falling back to img:', err);
+            // ── Fallback inside the fast path ──────────────────────────────
+            const img = new Image();
+            img.onload = () => {
+              if (cancelled) return;
+              try {
+                const canvas = canvasRef.current;
+                if (canvas) {
+                  canvas.width = img.width;
+                  canvas.height = img.height;
+                  const ctx = canvas.getContext('2d');
+                  ctx.drawImage(img, 0, 0);
+                }
+                applyResponsiveSizing(img);
+                setImageLoaded(true);
+              } catch (error) {
+                console.error('Error processing image:', error);
+                setImageLoaded(false);
+                setCanvasStyle({});
+              }
+            };
+            img.onerror = () => { if (!cancelled) { setImageLoaded(false); setCanvasStyle({}); } };
+            img.src = dataUrl;
+          });
+      } catch (atobError) {
+        // src was not valid base64 (e.g. a blob URL from a future optimisation)
+        console.error('atob failed:', atobError);
+        setImageLoaded(false);
+        setCanvasStyle({});
+      }
+    } else {
+      // ── Slow path: HTMLImageElement (legacy browsers) ──────────────────
       const img = new Image();
       img.onload = () => {
+        if (cancelled) return;
         try {
-          // Set canvas to image's natural size
           const canvas = canvasRef.current;
           if (canvas) {
             canvas.width = img.width;
             canvas.height = img.height;
-            const ctx = canvas.getContext("2d");
+            const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0);
           }
           applyResponsiveSizing(img);
           setImageLoaded(true);
         } catch (error) {
-          console.error("Error processing image:", error);
+          console.error('Error processing image:', error);
           setImageLoaded(false);
-          setCanvasStyle({}); // Reset canvas style on error
+          setCanvasStyle({});
         }
       };
       img.onerror = () => {
-        console.error("Error loading image");
-        setImageLoaded(false);
-        setCanvasStyle({}); // Reset canvas style on error
+        if (!cancelled) {
+          console.error('Error loading image');
+          setImageLoaded(false);
+          setCanvasStyle({});
+        }
       };
-      img.src = `data:image/jpeg;base64,${liveStreamState.liveViewImage}`; // TODO: We could consider rendering the fraame into a canvas
-    } else {
-      setImageLoaded(false);
-      setCanvasStyle({}); // Reset canvas style when no image
+      img.src = dataUrl;
     }
-  }, [liveStreamState.liveViewImage, applyResponsiveSizing]); // TODO: @gokugiant => let's check if this re-renders/repaints the whole page with every frame
+
+    return () => { cancelled = true; };
+  }, [liveStreamState.liveViewImage, applyResponsiveSizing]);
 
   // Reapply sizing when container size changes
   useEffect(() => {

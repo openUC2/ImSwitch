@@ -2340,7 +2340,6 @@ class UC2ConfigController(ImConWidgetController):
             return {"status": "error", "message": str(e)}
 
     @APIExport(runOnUIThread=False, requestType="POST")
-@APIExport(runOnUIThread=False, requestType="POST")
     def setSerialConfig(self, port: str = "", baudrate: int = 115200, persist: bool = True):
         """Apply (and optionally persist) the serial port / baudrate used to talk to the ESP32.
 

@@ -159,7 +159,19 @@ class SignalInstance(psygnal.SignalInstance):
                 Implements rollover-safe backpressure check.
                 """
                 FRAME_ID_MODULO = 256  # Small value to test rollover frequently
-                MAX_FRAME_LAG = 3# 1  # Allow client to be 1 frame behind
+                # MAX_FRAME_LAG — how many frames may be "in flight"
+                # (sent but not yet acked). Higher = more pipelining;
+                # lower = lower latency but throughput gated by the
+                # ACK round-trip.
+                #
+                # The previous value of 1 ("send N+1 only after ACK
+                # for N") made Windows ~3–4× slower than Mac/Linux:
+                # ACK RTT is ~80–100 ms on Windows (vs. ~5 ms on
+                # Linux/Mac) so at an 80 ms throttle the effective
+                # cadence was ~5 fps regardless of CPU. Bumping to 3
+                # lets up to 4 frames pipeline; cost is at most 3
+                # extra in-flight JPEGs per client (~1.5 MB peak).
+                MAX_FRAME_LAG = 3
 
                 next_id = {}
                 for sid, sent_id in last_sent.items():

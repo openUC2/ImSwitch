@@ -262,201 +262,121 @@ const StreamControlOverlay = ({
     }
   };
 
-  // Settings handlers
+  // Build the protocol-specific param object that goes to the backend
+  // AND the per-detector save blob, from a single draft. Centralising
+  // the shape here so the rest of handleSubmitSettings can be flat.
+  const paramsForDraft = (d) => {
+    const crop_size = d.crop_size || 0;
+    if (d.mjpeg?.enabled) {
+      const p = {
+        jpeg_quality: d.mjpeg?.quality || d.jpeg?.quality || 85,
+        subsampling_factor:
+          d.mjpeg?.subsampling?.factor ||
+          d.jpeg?.subsampling?.factor ||
+          1,
+        throttle_ms:
+          d.mjpeg?.throttle_ms || d.jpeg?.throttle_ms || 100,
+        crop_size,
+      };
+      return { format: "mjpeg", params: p, detector: { protocol: "mjpeg", ...p } };
+    }
+    if (d.webrtc?.enabled) {
+      const p = {
+        max_width: d.webrtc?.max_width || 1280,
+        throttle_ms: d.webrtc?.throttle_ms || 33,
+        subsampling_factor: d.webrtc?.subsampling_factor || 1,
+        crop_size,
+      };
+      return { format: "webrtc", params: p, detector: { protocol: "webrtc", ...p } };
+    }
+    if (d.jpeg?.enabled) {
+      const p = {
+        jpeg_quality: d.jpeg?.quality || 85,
+        subsampling_factor: d.jpeg?.subsampling?.factor || 1,
+        throttle_ms: d.jpeg?.throttle_ms || 100,
+        crop_size,
+      };
+      return { format: "jpeg", params: p, detector: { protocol: "jpeg", ...p } };
+    }
+    const p = {
+      compression_algorithm: d.binary?.compression?.algorithm || "lz4",
+      compression_level: d.binary?.compression?.level || 0,
+      subsampling_factor: d.binary?.subsampling?.factor || 4,
+      throttle_ms: d.binary?.throttle_ms || 100,
+      crop_size,
+    };
+    return { format: "binary", params: p, detector: { protocol: "binary", ...p } };
+  };
+
   const handleSubmitSettings = async () => {
     setIsSubmitting(true);
 
-    // Capture current Redux format BEFORE making any changes
     const previousFormat = liveStreamState.imageFormat || "binary";
+    const { format, params, detector } = paramsForDraft(draftSettings);
+    const formatChanged = previousFormat !== format;
+    const activeDetectorName =
+      liveViewState.detectors?.[liveViewState.activeTab] || null;
 
     try {
-      // Determine the format and prepare parameters
-      const isJpegMode = draftSettings.jpeg?.enabled === true;
-      const isMJPEGMode = draftSettings.mjpeg?.enabled === true;
-      const isWebRTCMode = draftSettings.webrtc?.enabled === true;
-      const newFormat = isMJPEGMode
-        ? "mjpeg"
-        : isWebRTCMode
-          ? "webrtc"
-          : isJpegMode
-            ? "jpeg"
-            : "binary";
+      // 1) Push protocol defaults to the backend. With in-place mutation
+      //    (see LiveViewController.setStreamParameters) this updates
+      //    StreamParams in place and propagates live to any running
+      //    worker of the same protocol — no restart.
+      await apiLiveViewControllerSetStreamParameters(format, params);
 
-      console.log(
-        "Submitting settings for format:",
-        newFormat,
-        "Draft settings:",
-        draftSettings,
-      );
-
-      // Submit to backend FIRST using new LiveViewController API
-      if (isWebRTCMode) {
-        // Set WebRTC stream parameters
-        await apiLiveViewControllerSetStreamParameters("webrtc", {
-          max_width: draftSettings.webrtc?.max_width || 1280,
-          throttle_ms: draftSettings.webrtc?.throttle_ms || 33,
-          subsampling_factor: draftSettings.webrtc?.subsampling_factor || 1,
-          crop_size: draftSettings.crop_size || 0,
-        });
-      } else if (isMJPEGMode) {
-        // Set MJPEG stream parameters (same shape as JPEG; the worker
-        // class is different on the backend but the params overlap).
-        await apiLiveViewControllerSetStreamParameters("mjpeg", {
-          jpeg_quality:
-            draftSettings.mjpeg?.quality || draftSettings.jpeg?.quality || 85,
-          subsampling_factor:
-            draftSettings.mjpeg?.subsampling?.factor ||
-            draftSettings.jpeg?.subsampling?.factor ||
-            1,
-          throttle_ms:
-            draftSettings.mjpeg?.throttle_ms ||
-            draftSettings.jpeg?.throttle_ms ||
-            100,
-          crop_size: draftSettings.crop_size || 0,
-        });
-      } else if (isJpegMode) {
-        // Set JPEG stream parameters
-        await apiLiveViewControllerSetStreamParameters("jpeg", {
-          jpeg_quality: draftSettings.jpeg?.quality || 85,
-          subsampling_factor: draftSettings.jpeg?.subsampling?.factor || 1,
-          throttle_ms: draftSettings.jpeg?.throttle_ms || 100,
-          crop_size: draftSettings.crop_size || 0,
-        });
-      } else {
-        // Set binary stream parameters
-        await apiLiveViewControllerSetStreamParameters("binary", {
-          compression_algorithm:
-            draftSettings.binary?.compression?.algorithm || "lz4",
-          compression_level: draftSettings.binary?.compression?.level || 0,
-          subsampling_factor: draftSettings.binary?.subsampling?.factor || 4,
-          throttle_ms: draftSettings.binary?.throttle_ms || 100,
-          crop_size: draftSettings.crop_size || 0,
-        });
-      }
-
-      console.log(
-        "Stream parameters updated successfully for protocol:",
-        newFormat,
-      );
-
-      // Check if format changed by comparing with previousFormat (captured at start of function)
-      const formatChanged = previousFormat !== newFormat;
-
-      // Update Redux FIRST before starting stream so frontend knows the correct format
-      dispatch(setImageFormat(newFormat));
-      dispatch(setStreamSettings(draftSettings));
-
-      // Restart stream if format changed
+      // 2) Swap workers on the backend *before* flipping Redux. If we
+      //    flip imageFormat first the MJPEGViewer/WebRTCViewer mounts
+      //    and immediately requests the new endpoint, but the worker
+      //    of the new class doesn't exist yet — the backend hands the
+      //    request back as a JSON error and the <img> silently fails.
+      //    Stop+start synchronously here so by the time Redux says
+      //    "we're on MJPEG" the backend really is.
       if (formatChanged) {
-        console.log(
-          `Format changed from ${previousFormat} to ${newFormat}, restarting stream...`,
-        );
-
-        // Stop current stream
         await apiLiveViewControllerStopLiveView(null, false);
-
-        // Wait a bit for cleanup
-        await new Promise((resolve) => setTimeout(resolve, 100));
-
-        // Start new stream with NEW protocol (not default binary!)
-        await apiLiveViewControllerStartLiveView(null, newFormat);
-
-        console.log(`Stream restarted with protocol: ${newFormat}`);
+        await new Promise((r) => setTimeout(r, 100));
+        await apiLiveViewControllerStartLiveView(null, format);
       }
 
-      // Update min/max values based on format
-      if (isJpegMode || isMJPEGMode) {
-        // 8-bit JPEG (either over socket.io or over HTTP multipart) is
-        // already mapped to 0..255 server-side.
+      // 3) Mirror the new truth in Redux now that the backend agrees.
+      dispatch(setImageFormat(format));
+      dispatch(setStreamSettings(draftSettings));
+      dispatch(setCropSize(draftSettings.crop_size || 0));
+
+      // 8-bit transports (JPEG/MJPEG/WebRTC) live in 0..255; binary is
+      // the only one that needs the wide 16-bit window — and even then
+      // we only reset if the current window looks like a leftover from
+      // a previous 8-bit session.
+      const is8bit = format === "jpeg" || format === "mjpeg" || format === "webrtc";
+      if (is8bit) {
         dispatch(setMinVal(0));
         dispatch(setMaxVal(255));
-      } else if (isWebRTCMode) {
-        // WebRTC mode: no intensity control needed (handled by camera)
+      } else if (
+        liveStreamState.maxVal > 65535 ||
+        liveStreamState.maxVal === 255
+      ) {
         dispatch(setMinVal(0));
-        dispatch(setMaxVal(255));
-      } else {
-        // Binary mode: keep current values or reset to max range
-        if (liveStreamState.maxVal > 65535 || liveStreamState.maxVal === 255) {
-          dispatch(setMinVal(0));
-          dispatch(setMaxVal(65535));
-        }
+        dispatch(setMaxVal(65535));
       }
 
-      // Update backend capabilities based on mode. Binary/WebGL is the
-      // only path that needs the WebGL renderer; JPEG/MJPEG/WebRTC all
-      // paint via a regular <img>/<video>.
       dispatch({
         type: "liveStreamState/setBackendCapabilities",
         payload: {
-          binaryStreaming: !isJpegMode && !isMJPEGMode && !isWebRTCMode,
-          webglSupported: !isJpegMode && !isMJPEGMode && !isWebRTCMode,
+          binaryStreaming: format === "binary",
+          webglSupported: format === "binary",
         },
       });
 
-      // Update Redux with new crop_size
-      dispatch(setCropSize(draftSettings.crop_size || 0));
-
-      // Also save as per-detector settings for the currently active detector
-      const activeDetectorName =
-        liveViewState.detectors?.[liveViewState.activeTab] || null;
+      // 4) Per-detector save. Local first, then fire-and-forget POST.
       if (activeDetectorName) {
-        const detectorParams = isWebRTCMode
-          ? {
-              protocol: "webrtc",
-              max_width: draftSettings.webrtc?.max_width || 1280,
-              throttle_ms: draftSettings.webrtc?.throttle_ms || 33,
-              subsampling_factor: draftSettings.webrtc?.subsampling_factor || 1,
-              crop_size: draftSettings.crop_size || 0,
-            }
-          : isMJPEGMode
-            ? {
-                protocol: "mjpeg",
-                jpeg_quality:
-                  draftSettings.mjpeg?.quality ||
-                  draftSettings.jpeg?.quality ||
-                  85,
-                subsampling_factor:
-                  draftSettings.mjpeg?.subsampling?.factor ||
-                  draftSettings.jpeg?.subsampling?.factor ||
-                  1,
-                throttle_ms:
-                  draftSettings.mjpeg?.throttle_ms ||
-                  draftSettings.jpeg?.throttle_ms ||
-                  100,
-                crop_size: draftSettings.crop_size || 0,
-              }
-            : isJpegMode
-              ? {
-                  protocol: "jpeg",
-                  jpeg_quality: draftSettings.jpeg?.quality || 85,
-                  subsampling_factor:
-                    draftSettings.jpeg?.subsampling?.factor || 1,
-                  throttle_ms: draftSettings.jpeg?.throttle_ms || 100,
-                  crop_size: draftSettings.crop_size || 0,
-                }
-              : {
-                  protocol: "binary",
-                  compression_algorithm:
-                    draftSettings.binary?.compression?.algorithm || "lz4",
-                  compression_level:
-                    draftSettings.binary?.compression?.level || 0,
-                  subsampling_factor:
-                    draftSettings.binary?.subsampling?.factor || 4,
-                  throttle_ms: draftSettings.binary?.throttle_ms || 100,
-                  crop_size: draftSettings.crop_size || 0,
-                };
-
         dispatch(
           updateDetectorSettings({
             detectorName: activeDetectorName,
-            settings: detectorParams,
+            settings: detector,
           }),
         );
-
-        // Fire-and-forget to backend
         apiLiveViewControllerSetDetectorStreamParameters(
           activeDetectorName,
-          detectorParams,
+          detector,
         ).catch((err) => {
           console.warn("Failed to save per-detector params:", err);
           dispatch(
@@ -477,10 +397,9 @@ const StreamControlOverlay = ({
       );
     } catch (error) {
       console.error("Error submitting stream settings:", error);
-      const errorMessage = error?.message || "Failed to submit settings";
       dispatch(
         setNotification({
-          message: `Stream settings submit failed: ${errorMessage}`,
+          message: `Stream settings submit failed: ${error?.message || "Failed to submit settings"}`,
           type: "error",
         }),
       );

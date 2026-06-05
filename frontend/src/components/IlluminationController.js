@@ -1,6 +1,14 @@
 import React, { useEffect, useRef, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { Box, Checkbox, Slider, Typography, Paper, Grid } from "@mui/material";
+import {
+  Box,
+  Switch,
+  Slider,
+  Typography,
+  Paper,
+  Grid,
+  Input,
+} from "@mui/material";
 
 import * as parameterRangeSlice from "../state/slices/ParameterRangeSlice.js";
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice.js";
@@ -185,7 +193,7 @@ export default function IlluminationController({ hostIP, hostPort }) {
 
   return (
     <Paper sx={{ p: 2 }}>
-      <Grid container direction="column" spacing={2}>
+      <Grid container direction="column" spacing={1.25}>
         {laserSources.length ? (
           laserSources.map((laserName, idx) => {
             // Get laser state from Redux (updated via WebSocket)
@@ -194,50 +202,103 @@ export default function IlluminationController({ hostIP, hostPort }) {
             const isActive = laserData.enabled;
             const minValue = laserMinValues[idx] || 0;
             const maxValue = laserMaxValues[idx] || 1023;
+            const marks = [
+              { value: minValue, label: `${minValue}` },
+              { value: maxValue, label: `${maxValue}` },
+            ];
 
             return (
               <Grid
                 item
                 key={laserName}
-                sx={{ display: "flex", alignItems: "center", gap: 2 }}
+                sx={{ display: "flex", alignItems: "center", gap: 1.25 }}
               >
                 {/* Laser name */}
-                <Typography sx={{ minWidth: 120 }}>{laserName}</Typography>
+                <Typography sx={{ minWidth: 96 }}>{laserName}</Typography>
 
                 {/* Slider with dynamic min and max */}
-                <Box sx={{ flex: 1, px: 1 }}>
-                  <Slider
-                    value={currentValue}
-                    min={minValue}
-                    max={maxValue}
-                    onChange={(e) =>
-                      debouncedSetLaserValue(laserName, e.target.value)
-                    }
-                    sx={{ width: "100%" }}
-                    valueLabelDisplay="auto"
-                  />
-                  <Box
-                    sx={{ display: "flex", justifyContent: "space-between" }}
-                  >
-                    <Typography variant="caption" color="textSecondary">
-                      {minValue}
-                    </Typography>
-                    <Typography variant="caption" color="textSecondary">
-                      {maxValue}
-                    </Typography>
+                <Box sx={{ flex: 1 }}>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <Slider
+                      value={currentValue}
+                      min={minValue}
+                      max={maxValue}
+                      marks={marks}
+                      onChange={(e) =>
+                        debouncedSetLaserValue(
+                          laserName,
+                          Number(e.target.value),
+                        )
+                      }
+                      sx={{
+                        flex: 1,
+                        "& .MuiSlider-markLabel[data-index='0']": {
+                          transform: "translateX(0%)",
+                        },
+                        "& .MuiSlider-markLabel[data-index='1']": {
+                          transform: "translateX(-100%)",
+                        },
+                      }}
+                    />
+                    <Input
+                      value={currentValue}
+                      size="small"
+                      onChange={(e) => {
+                        if (e.target.value === "") {
+                          debouncedSetLaserValue(laserName, minValue);
+                          return;
+                        }
+                        const parsed = Number(e.target.value);
+                        if (!Number.isFinite(parsed)) return;
+                        const clamped = Math.max(
+                          minValue,
+                          Math.min(maxValue, parsed),
+                        );
+                        debouncedSetLaserValue(laserName, clamped);
+                      }}
+                      inputProps={{
+                        step: 1,
+                        min: minValue,
+                        max: maxValue,
+                        type: "number",
+                        "aria-label": `${laserName} intensity`,
+                      }}
+                      sx={{ width: 72, fontWeight: 600 }}
+                    />
                   </Box>
                 </Box>
 
-                {/* Current slider value */}
-                <Typography sx={{ minWidth: 60, textAlign: "center" }}>
-                  {currentValue}
-                </Typography>
-
-                {/* Active checkbox */}
-                <Checkbox
-                  checked={isActive}
-                  onChange={(e) => setLaserActive(laserName, e.target.checked)}
-                />
+                {/* Active switch with explicit status */}
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0.5,
+                    minWidth: 112,
+                    justifyContent: "flex-end",
+                  }}
+                >
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      fontWeight: 700,
+                      color: isActive ? "success.main" : "text.secondary",
+                      minWidth: 26,
+                      textAlign: "right",
+                    }}
+                  >
+                    {isActive ? "ON" : "OFF"}
+                  </Typography>
+                  <Switch
+                    checked={isActive}
+                    onChange={(e) =>
+                      setLaserActive(laserName, e.target.checked)
+                    }
+                    inputProps={{
+                      "aria-label": `${laserName} illumination enabled`,
+                    }}
+                  />
+                </Box>
               </Grid>
             );
           })

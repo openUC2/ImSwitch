@@ -27,6 +27,7 @@ except Exception:
 
 # Import OME writers from new io location
 from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths
+from imswitch.imcontrol.model.io.frame_save_worker import FrameSaveWorker
 from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ExperimentPerformanceMode,
     ExperimentNormalMode,
@@ -73,6 +74,20 @@ class ExperimentController(ImConWidgetController):
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
         self.mda_manager = MDASequenceManager()
+
+        # Background frame-save worker. ``save_frame_ome`` and the
+        # individual-TIFF path it dispatches to used to call into
+        # ``ome_writer.write_frame`` / ``tifffile.imwrite`` *on the
+        # workflow thread*, which blocked the next stage step for
+        # 20–100 ms per frame at 9 MP (more for stitched/individual
+        # TIFFs, much more for a slow SD/USB target). Now we just
+        # queue the write here and the worker thread does the I/O.
+        # The queue is bounded so a slow disk back-pressures the
+        # acquisition loop instead of silently consuming RAM.
+        self._frame_saver = FrameSaveWorker(
+            name="ExperimentFrameSaver",
+            maxsize=32,
+        )
 
         # set default values
         self.SPEED_Y = self.SPEED_Y_default = 20000
@@ -1556,7 +1571,7 @@ class ExperimentController(ImConWidgetController):
         # only collapse to grayscale for non-RGB detectors that nonetheless
         # hand us a 3-channel frame.
         if img.ndim == 3 and img.shape[2] == 3 and not getattr(self, 'isRGB', False):
-            img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype)
+            img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype) # TODO: Is this common sense @Franzili?
 
         # Get tile index to identify the correct OME writer
         position_center_index = kwargs.get("position_center_index")
@@ -1607,38 +1622,74 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.debug(f"Could not enrich OME metadata from MetadataHub: {e}")
 
-        try:
-            # Get file_writers list from context
-            file_writers = context.get_object("file_writers")
-            if file_writers is None or position_center_index >= len(file_writers):
-                self._logger.error(f"No OME writer found for tile index {position_center_index}")
-                metadata["frame_saved"] = False
-                return
+        # Resolve the writer for this tile *before* we hand work to
+        # the background saver — pulling from ``context`` on the
+        # worker thread would be a lifetime hazard.
+        file_writers = context.get_object("file_writers")
+        if file_writers is None or position_center_index >= len(file_writers):
+            self._logger.error(
+                f"No OME writer found for tile index {position_center_index}"
+            )
+            metadata["frame_saved"] = False
+            metadata.pop("result", None)
+            return
+        ome_writer = file_writers[position_center_index]
 
-            # Write frame using the specific OME writer from the list
-            ome_writer = file_writers[position_center_index]
-            chunk_info = ome_writer.write_frame(img, ome_metadata)
+        # Copy the frame so the camera SDK ring buffer can be reused
+        # while the background thread writes. Skipping this is the
+        # textbook way to end up with torn frames in the output stack.
+        # ~5–10 ms for 9 MP on a Pi 5 — much cheaper than the inline
+        # write it replaces.
+        try:
+            img_copy = img.copy()
+        except Exception as copy_err:
+            self._logger.error(f"Frame copy failed: {copy_err}")
+            metadata["frame_saved"] = False
+            metadata.pop("result", None)
+            return
+
+        # The on_success callback runs on the saver thread. Keep it
+        # cheap — signal emission is already thread-safe (see
+        # noqt.SignalInstance.emit which run_coroutine_threadsafe's
+        # the broadcast onto the shared event loop).
+        def _on_success(chunk_info):
             if ome_writer.store:
                 data_path = dirtools.UserFileDirs.getValidatedDataPath()
-                self.setOmeZarrUrl(ome_writer.store.split(data_path)[-1])  # Update OME-Zarr URL in context
-            # Emit signal for frontend updates if Zarr chunk was written
+                self.setOmeZarrUrl(
+                    ome_writer.store.split(data_path)[-1]
+                )
             if chunk_info and "rel_chunk" in chunk_info:
-                sigZarrDict = {
+                self.sigUpdateOMEZarrStore.emit({
                     "event": "zarr_chunk",
                     "path": chunk_info["rel_chunk"],
-                    "zarr": str(self.getOmeZarrUrl())
-                }
-                self.sigUpdateOMEZarrStore.emit(sigZarrDict)
+                    "zarr": str(self.getOmeZarrUrl()),
+                })
 
-            metadata["frame_saved"] = True
-        except Exception as e:
-            self._logger.error(f"Error saving OME frame: {e}")
-            metadata["frame_saved"] = False
+        def _on_error(err):
+            self._logger.error(f"Error saving OME frame: {err}")
 
-        # Release the frame reference now that it has been saved (or failed).
-        # Without this, the numpy array stays alive in the metadata dict which
-        # is stored in WorkflowContext.data for every step, causing unbounded
-        # RAM growth during long wellplate experiments.
+        # Queue the write. ``submit`` BLOCKS when the queue is full,
+        # which is intentional: it lets a slow disk back-pressure the
+        # acquisition loop rather than silently dropping frames.
+        # maxsize=32 (see __init__) caps peak RAM at ~32 × frame_size.
+        self._frame_saver.submit(
+            ome_writer.write_frame,
+            img_copy,
+            ome_metadata,
+            on_success=_on_success,
+            on_error=_on_error,
+        )
+
+        # The frame is in the saver's queue or already on disk by the
+        # time this method returns; either way it's "saved" from the
+        # workflow's perspective. (If the actual disk write later
+        # fails, ``_on_error`` logs it.)
+        metadata["frame_saved"] = True
+
+        # Release the workflow's reference to the frame. We already
+        # made our own copy above; without this pop the array stays
+        # alive in WorkflowContext.data for every step, causing
+        # unbounded RAM growth during long wellplate experiments.
         metadata.pop("result", None)
 
         '''
@@ -1922,6 +1973,29 @@ class ExperimentController(ImConWidgetController):
 
         # Set LED status to idle
         self.set_led_status("idle")
+
+        # Drain any frame writes that are still queued on the
+        # background saver — the workflow has stopped producing new
+        # frames, so this should normally be a brief wait. Bounded so
+        # that a stuck disk doesn't hang stopExperiment forever; if
+        # the timeout fires, the saver thread keeps running in the
+        # background and the writes still eventually land on disk.
+        try:
+            if getattr(self, "_frame_saver", None) is not None:
+                pending = self._frame_saver.pending()
+                if pending:
+                    self._logger.info(
+                        f"Draining {pending} pending frame write(s)…"
+                    )
+                drained = self._frame_saver.flush(timeout=30.0)
+                if not drained:
+                    self._logger.warning(
+                        f"Frame saver still has "
+                        f"{self._frame_saver.pending()} pending write(s) "
+                        f"after 30 s — they will complete in the background."
+                    )
+        except Exception as e:
+            self._logger.debug(f"Frame saver flush failed: {e}")
 
         # If nothing was running, return appropriate message
         if not results:

@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Wait for frontend to build
         id: wait-build-frontend
@@ -50,7 +50,7 @@ jobs:
           sha: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Download built frontend
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: frontend
           path: ./frontend/build/ui

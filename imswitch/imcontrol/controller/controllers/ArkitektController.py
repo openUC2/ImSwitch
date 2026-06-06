@@ -23,6 +23,12 @@ class Position:
     z: int
 
 
+@model
+class Point2D:
+    x: float
+    y: float
+
+
 # ---------------------------------------------------------------------------
 # Well-plate geometry loader
 # ---------------------------------------------------------------------------
@@ -76,28 +82,16 @@ def _load_well_scan_config_safe(labware_dir_name: str, fallback: dict) -> dict:
     except Exception as exc:
         import warnings
         warnings.warn(
-            f"ArkitektController: could not load labware '{labware_dir_name}': {exc}. "
-            "Using built-in fallback.",
+            f"Could not load labware '{labware_dir_name}': {exc}. "
+            "Using built-in fallback?",
             stacklevel=2,
         )
         return fallback
 
 
-# 96-well fallback (Corning convention: row A–H on X, col 1–12 on Y, 9 mm pitch)
-_96WELL_FALLBACK = {
-    f"{'ABCDEFGH'[ri]}{col}": {
-        "center_x": ri * 9000,
-        "center_y": (col - 1) * 9000,
-        "width": 6860,
-        "height": 6860,
-    }
-    for ri in range(8)
-    for col in range(1, 13)
-}
-
 _PLATE_WELL_CONFIGS: dict = {
     "heidstar4": _load_well_scan_config_safe("slide_4x_histosample_heidstar", {}),
-    "96well":    _load_well_scan_config_safe("corning_96_wellplate_360ul_flat", _96WELL_FALLBACK),
+    "96well":    _load_well_scan_config_safe("corning_96_wellplate_360ul_flat", {}),
 }
 
 # =========================
@@ -132,9 +126,18 @@ class ArkitektController(ImConWidgetController):
             self._logger.warning("Arkitekt app unavailable; controller disabled.")
             return
         self._active_focus_map = None  # set by runWellTileScan; read by runTileScan
+        self._pending_well_corner: tuple[float, float] | None = None  # first corner for two-step well definition
 
-        self.arkitekt_app.register(self.moveToSampleLoadingPosition)
+        # Per-instance plate config — starts as a copy of module defaults so
+        # user-defined bounds don't bleed between sessions or controller instances.
+        import copy
+        self._plate_well_configs = copy.deepcopy(_PLATE_WELL_CONFIGS)
+        self._load_well_overrides()
+
         self.arkitekt_app.register(self.runTileScan)
+        self.arkitekt_app.register(self.defineWellBounds)
+        self.arkitekt_app.register(self.saveFirstWellCorner)
+        self.arkitekt_app.register(self.saveSecondWellCorner)
         self.arkitekt_app.register(self.previewWell)
         self.arkitekt_app.register(self.runWellTileScan)
         self.arkitekt_app.register(self.goToPosition)
@@ -184,12 +187,7 @@ class ArkitektController(ImConWidgetController):
     
     @APIExport(runOnUIThread=False)
     def homeStageAxis(self, positionerName: str | None = None, axis: str = "ZXY", is_blocking: bool = True):
-        """Home one or more stage axes in the order given by *axis*.
-
-        Each character in *axis* names one axis (X, Y, or Z).  The default
-        "ZXY" homes Z first, then X, then Y — the safe sequence for this
-        microscope.  Single-axis homing is still possible, e.g. axis="X".
-        Each step is blocking so the sequence is always respected.
+        """Home one or more stage axes in given order.
         """
         if positionerName is None:
             positionerNames = self._master.positionersManager.getAllDeviceNames()
@@ -237,7 +235,7 @@ class ArkitektController(ImConWidgetController):
     
     @APIExport(runOnUIThread=False)
     def acquireFrame(self, frameSync: int = 3) -> Generator[Image, None, None]:
-        """Acquire a single frame from the detector.
+        """Acquire a single frame
 
         Args:
             frameSync (int): Number of frames to skip to ensure a fresh frame is acquired.
@@ -245,36 +243,40 @@ class ArkitektController(ImConWidgetController):
         Returns:
             numpy.ndarray: Acquired image frame as a NumPy array.
         """
-        # ensure we get a fresh frame
-        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        # Start acquisition if the detector is not already running
+        if not self.mDetector._running:
+            self.mDetector.startAcquisition()
+            time.sleep(0.3)  # give the camera a moment to deliver its first frame
+
+        timeoutFrameRequest = 3  # seconds
         cTime = time.time()
-        lastFrameNumber=-1
-        while(1):
-            # get frame and frame number to get one that is newer than the one with illumination off eventually
+        lastFrameNumber = -1
+        mFrame = None
+        currentFrameNumber = -1
+        while True:
             mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
-            if lastFrameNumber==-1:
-                # first round
+            if lastFrameNumber == -1:
                 lastFrameNumber = currentFrameNumber
-            if time.time()-cTime> timeoutFrameRequest:
-                # in case exposure time is too long we need break at one point
+            if time.time() - cTime > timeoutFrameRequest:
                 if mFrame is None:
                     mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
                 break
-            if currentFrameNumber <= lastFrameNumber+frameSync:
-                time.sleep(0.01) # off-load CPU
+            if currentFrameNumber <= lastFrameNumber + frameSync:
+                time.sleep(0.01)
             else:
                 break
-        # in order to be compatible with the from_array_like function we need to ensure we have a channel axis
+
+        if mFrame is None:
+            self._logger.error("acquireFrame: detector returned no frame within timeout")
+            return
+
         if len(mFrame.shape) == 2:
             mFrame = np.expand_dims(mFrame, axis=-1)
-        # now convert it to arkitekt format 
         image = from_array_like(
             xr.DataArray(
                 mFrame,
                 dims=["y", "x", "c"],
-                attrs={
-                    "frame_number": currentFrameNumber,
-                }
+                attrs={"frame_number": currentFrameNumber},
             ),
             name=f"Frame_{currentFrameNumber}",
         )
@@ -292,9 +294,6 @@ class ArkitektController(ImConWidgetController):
         t_settle: float = 0.2,
     ) -> None:
         """Move the stage to the specified X,Y position.
-
-        Moves the specified positioner (or the first available one) to the given
-        X and Y coordinates in micrometers.
 
         Args:
             x_micrometer (float): Target X position in micrometers.
@@ -519,50 +518,48 @@ class ArkitektController(ImConWidgetController):
             ... ):
             ...     pass
         """
-        # Get objective manager for FOV calculation
-        objective_manager = None
-        if hasattr(self._master, 'objectiveManager'):
-            objective_manager = self._master.objectiveManager
+        # Get objective controller (used for FOV, magnification, and optional switching)
+        objective_controller = None
+        try:
+            objective_controller = self._master.getController('Objective')
+        except Exception:
+            pass
 
         # Handle objective switching if specified
         objective_magnification = None
         if objective_id is not None:
-            # Get objective controller for moving the objective
-            objective_controller = None
-            try:
-                objective_controller = self._master.getController('Objective')
-                if objective_controller is not None:
+            if objective_controller is not None:
+                try:
                     self._logger.debug(f"Moving to objective ID: {objective_id}")
-                    objective_controller.moveToObjective(objective_id)  # This is a blocking operation
+                    objective_controller.moveToObjective(objective_id)
                     self._logger.debug(f"Successfully moved to objective ID: {objective_id}")
-                else:
-                    self._logger.warning("ObjectiveController not available, cannot switch objective")
-            except Exception as e:
-                self._logger.error(f"Failed to move to objective ID {objective_id}: {e}")
+                except Exception as e:
+                    self._logger.error(f"Failed to move to objective ID {objective_id}: {e}")
+            else:
+                self._logger.warning("ObjectiveController not available, cannot switch objective")
 
         # Calculate step sizes based on objective FOV if not provided
         if step_x_micrometer is None or step_y_micrometer is None:
-            if objective_manager is not None:
-                fov = objective_manager.getCurrentFOV()
+            if objective_controller is not None:
+                try:
+                    fov = objective_controller._getCurrentFOV()
+                except Exception:
+                    fov = None
                 if fov is not None:
                     fov_x, fov_y = fov
-                    # Calculate step size with overlap
-                    # step = FOV * (1 - overlap/100)
                     overlap_factor = 1.0 - (overlap_percent / 100.0)
-
                     if step_x_micrometer is None:
                         step_x_micrometer = fov_x * overlap_factor
                         self._logger.debug(f"Calculated step_x from FOV: {step_x_micrometer:.2f} µm "
                                          f"(FOV: {fov_x:.2f} µm, overlap: {overlap_percent}%)")
-
                     if step_y_micrometer is None:
                         step_y_micrometer = fov_y * overlap_factor
                         self._logger.debug(f"Calculated step_y from FOV: {step_y_micrometer:.2f} µm "
                                          f"(FOV: {fov_y:.2f} µm, overlap: {overlap_percent}%)")
                 else:
-                    self._logger.warning("Could not get FOV from ObjectiveManager - no detector dimensions set?")
+                    self._logger.warning("Could not get FOV from ObjectiveController - no detector dimensions set?")
             else:
-                self._logger.warning("ObjectiveManager not available for automatic step size calculation")
+                self._logger.warning("ObjectiveController not available for automatic step size calculation")
 
             # Fallback to default values if still None
             if step_x_micrometer is None:
@@ -572,12 +569,18 @@ class ArkitektController(ImConWidgetController):
                 step_y_micrometer = 100.0
                 self._logger.warning(f"Using default step_y_micrometer: {step_y_micrometer} µm")
 
-        # Get objective magnification from manager after potential switch
-        if objective_manager is not None:
-            objective_magnification = objective_manager.getCurrentMagnification()
-            if objective_magnification is not None:
-                current_objective_slot = objective_manager.getCurrentObjective()
-                self._logger.debug(f"Using objective slot {current_objective_slot} with magnification: {objective_magnification}x")
+        # Get objective magnification after potential switch
+        if objective_controller is not None:
+            try:
+                objective_magnification = objective_controller._getCurrentMagnification()
+                if objective_magnification is not None:
+                    current_objective_slot = objective_controller.getCurrentObjective()
+                    self._logger.debug(
+                        f"Using objective slot {current_objective_slot} "
+                        f"with magnification: {objective_magnification}x"
+                    )
+            except Exception:
+                pass
 
         # Get positioner
         if positionerName is None:
@@ -895,6 +898,158 @@ class ArkitektController(ImConWidgetController):
         self._logger.info(f"Tile scan completed: {tile_count} tiles captured")
 
     # ------------------------------------------------------------------
+    # Well-boundary definition and persistence
+    # ------------------------------------------------------------------
+
+    def _get_well_overrides_path(self):
+        from pathlib import Path
+        data_path = dirtools.UserFileDirs.getValidatedDataPath()
+        return Path(data_path) / "well_plate_overrides.json"
+
+    def _load_well_overrides(self):
+        import json
+        path = self._get_well_overrides_path()
+        if not path.exists():
+            return
+        try:
+            with open(path) as f:
+                overrides = json.load(f)
+            for plate_type, wells in overrides.items():
+                if plate_type not in self._plate_well_configs:
+                    self._plate_well_configs[plate_type] = {}
+                for well_id, geom in wells.items():
+                    self._plate_well_configs[plate_type][well_id] = geom
+            self._logger.info(f"Loaded well overrides from {path}")
+        except Exception as e:
+            self._logger.warning(f"Could not load well overrides: {e}")
+
+    def _save_well_overrides(self):
+        import json
+        # Save only wells that differ from the module-level defaults.
+        overrides: dict = {}
+        for plate_type, wells in self._plate_well_configs.items():
+            default_wells = _PLATE_WELL_CONFIGS.get(plate_type, {})
+            for well_id, geom in wells.items():
+                if geom != default_wells.get(well_id):
+                    overrides.setdefault(plate_type, {})[well_id] = geom
+        path = self._get_well_overrides_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(overrides, f, indent=2)
+            self._logger.info(f"Saved well overrides to {path}")
+        except Exception as e:
+            self._logger.warning(f"Could not save well overrides: {e}")
+
+    @APIExport(runOnUIThread=False)
+    def saveFirstWellCorner(self, positionerName: str | None = None) -> Position:
+        """Save current stage XY position as first corner of a well rectangle.
+
+        Returns:
+            Position: The saved first corner position.
+        """
+        if positionerName is None:
+            names = self._master.positionersManager.getAllDeviceNames()
+            if not names:
+                self._logger.error("No positioners available to save first well corner.")
+                return None
+            positionerName = names[0]
+
+        pos = self._master.positionersManager[positionerName].getPosition()
+        x, y = pos["X"], pos["Y"]
+        self._pending_well_corner = (x, y)
+        self._logger.info(f"saveFirstWellCorner: stored ({x:.1f}, {y:.1f}) µm — now move to the opposite corner")
+        return Position(x=int(x), y=int(y), z=int(pos.get("Z", 0)))
+
+    @APIExport(runOnUIThread=False)
+    def saveSecondWellCorner(
+        self,
+        well_id: str,
+        plate_type: str = "heidstar4",
+        positionerName: str | None = None,
+    ) -> None:
+        """Save current stage XY position as second corner and commit the well bounds.
+
+        Args:
+            well_id: Well label to define, e.g. "A1".
+            plate_type: Plate type to update. Default "heidstar4".
+            positionerName: Positioner name, or None for first available.
+        """
+        if self._pending_well_corner is None:
+            self._logger.error(
+                "saveSecondWellCorner: no first corner saved — call saveFirstWellCorner first."
+            )
+            return
+
+        if positionerName is None:
+            names = self._master.positionersManager.getAllDeviceNames()
+            if not names:
+                self._logger.error("No positioners available to save second well corner.")
+                return
+            positionerName = names[0]
+
+        pos = self._master.positionersManager[positionerName].getPosition()
+        x2, y2 = pos["X"], pos["Y"]
+        x1, y1 = self._pending_well_corner
+        self._pending_well_corner = None
+
+        min_corner = Point2D(x=min(x1, x2), y=min(y1, y2))
+        max_corner = Point2D(x=max(x1, x2), y=max(y1, y2))
+
+        self._logger.info(
+            f"saveSecondWellCorner: committing {plate_type}/{well_id} "
+            f"corners ({x1:.1f}, {y1:.1f}) → ({x2:.1f}, {y2:.1f}) µm"
+        )
+        self.defineWellBounds(
+            well_id=well_id,
+            min_corner=min_corner,
+            max_corner=max_corner,
+            plate_type=plate_type,
+        )
+
+    @APIExport(runOnUIThread=False)
+    def defineWellBounds(
+        self,
+        well_id: str,
+        min_corner: Point2D,
+        max_corner: Point2D,
+        plate_type: str = "heidstar4",
+    ) -> None:
+        """Define a custom rectangular boundary for a well.
+
+        Args:
+            well_id: Well label to override, e.g. "A1".
+            min_corner: Lower-left corner of the rectangle (x, y in µm).
+            max_corner: Upper-right corner of the rectangle (x, y in µm).
+            plate_type: Plate type to update. Default "heidstar4".
+        """
+        if plate_type not in self._plate_well_configs:
+            self._logger.error(
+                f"Unknown plate type '{plate_type}'. "
+                f"Supported: {list(self._plate_well_configs)}"
+            )
+            return
+
+        well_id_upper = well_id.strip().upper()
+        center_x = (min_corner.x + max_corner.x) / 2.0
+        center_y = (min_corner.y + max_corner.y) / 2.0
+        width    = abs(max_corner.x - min_corner.x)
+        height   = abs(max_corner.y - min_corner.y)
+
+        self._plate_well_configs[plate_type][well_id_upper] = {
+            "center_x": center_x,
+            "center_y": center_y,
+            "width":    width,
+            "height":   height,
+        }
+        self._logger.info(
+            f"defineWellBounds: {plate_type}/{well_id_upper} → "
+            f"center=({center_x:.1f}, {center_y:.1f}) µm, "
+            f"size={width:.1f}x{height:.1f} µm"
+        )
+        self._save_well_overrides()
+
+    # ------------------------------------------------------------------
     # Well-scan helpers
     # ------------------------------------------------------------------
 
@@ -1014,9 +1169,6 @@ class ArkitektController(ImConWidgetController):
     ) -> Generator[Image, None, None]:
         """Move to a well center, run autofocus, and capture one frame.
 
-        Use this to verify the correct well is selected and images look
-        acceptable before starting a full tile scan with runWellTileScan.
-
         Args:
             well_id: Well label, e.g. "A1"–"A4" for heidstar4.
             plate_type: Plate type. "heidstar4" (default) or "96well".
@@ -1030,7 +1182,7 @@ class ArkitektController(ImConWidgetController):
         Yields:
             Image: Single frame captured at the well center.
         """
-        plate_wells = _PLATE_WELL_CONFIGS.get(plate_type)
+        plate_wells = self._plate_well_configs.get(plate_type)
         if plate_wells is None:
             self._logger.error(
                 f"Unknown plate type '{plate_type}'. Supported: {list(_PLATE_WELL_CONFIGS)}"
@@ -1100,37 +1252,32 @@ class ArkitektController(ImConWidgetController):
         illumination_intensity: float | None = None,
         exposure_time: float | None = None,
         gain: float | None = None,
-        overlap_percent: float = 10.0,
+        overlap_percent: float = 20.0,
         focus_map_grid_rows: int = 3,
         focus_map_grid_cols: int = 3,
         autofocus_range: float = 100,
-        autofocus_resolution: float = 10,
+        autofocus_resolution: float = 5,
         objective_id: int | None = None,
-        speed: float = 10000,
+        speed: float = 40000,
         t_settle: float = 0.2,
         positionerName: str | None = None,
     ) -> Generator[Image, None, None]:
-        """Scan an entire well with predefined imaging settings and focus mapping.
-
-        Reads illumination, exposure time, and gain from the current live-view
-        state unless explicitly overridden.  Before acquiring tiles a focus map
-        is measured over the well (grid of autofocus points) and used to correct
-        Z at every tile position.
+        """Scan an entire well with focus mapping.
 
         Args:
-            well_id: Well label, e.g. "A1"–"A4" for heidstar4, or "A1"–"H12" for 96well.
+            well_id: Well label, e.g. "A1"-"A4" for heidstar4, or "A1"-"H12" for 96well.
             plate_type: Plate geometry. "heidstar4" (default) or "96well".
             illumination_channel: Laser/LED name. None → first active channel in live view.
             illumination_intensity: Source intensity. None → reads from live view.
             exposure_time: Camera exposure in ms. None → reads from current detector setting.
             gain: Camera gain. None → reads from current detector setting.
-            overlap_percent: Tile overlap (0–100). Default 10 %.
+            overlap_percent: Tile overlap (0-100). Default 20 %.
             focus_map_grid_rows: Autofocus rows for focus map. Default 3.
             focus_map_grid_cols: Autofocus columns for focus map. Default 3.
             autofocus_range: Z scan half-range per autofocus step (µm). Default 100.
-            autofocus_resolution: Z step size for autofocus (µm). Default 10.
+            autofocus_resolution: Z step size for autofocus (µm). Default 5.
             objective_id: Objective slot to activate before scanning, or None.
-            speed: Stage speed (µm/s). Default 10000.
+            speed: Stage speed (µm/s). Default 40000.
             t_settle: Settling time after each XY move (s). Default 0.2.
             positionerName: Positioner name, or None for first available.
 
@@ -1138,7 +1285,7 @@ class ArkitektController(ImConWidgetController):
             Image: Tile images with affine transformation metadata for stitching.
         """
         # --- Validate well ID -----------------------------------------------
-        plate_wells = _PLATE_WELL_CONFIGS.get(plate_type)
+        plate_wells = self._plate_well_configs.get(plate_type)
         if plate_wells is None:
             self._logger.error(
                 f"Unknown plate type '{plate_type}'. Supported: {list(_PLATE_WELL_CONFIGS)}"
@@ -1172,7 +1319,7 @@ class ArkitektController(ImConWidgetController):
         if illumination_channel is None:
             illumination_channel = live_ch
         if illumination_intensity is None:
-            illumination_intensity = live_intensity if live_intensity is not None else 1024.0
+            illumination_intensity = live_intensity if live_intensity is not None else 1023.0
         if exposure_time is None:
             exposure_time = live_exposure
         if gain is None:

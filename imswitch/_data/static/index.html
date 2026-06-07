@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ImSwitch Static Control</title>
+<link rel="icon" href="data:," />
+<style>
+  :root {
+    --bg: #0e1116;
+    --bg-2: #161b22;
+    --bg-3: #1c2330;
+    --border: #2b3340;
+    --text: #d7dee8;
+    --muted: #8b97a7;
+    --accent: #2dd4bf;
+    --accent-2: #38bdf8;
+    --danger: #f87171;
+    --warn: #fbbf24;
+    --ok: #4ade80;
+    --radius: 10px;
+    --shadow: 0 2px 14px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.4;
+    padding-bottom: 230px; /* room for log dock */
+  }
+  h1, h2, h3 { margin: 0; font-weight: 600; }
+  a { color: var(--accent-2); }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  /* ---- top bar ---- */
+  header {
+    position: sticky; top: 0; z-index: 30;
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 18px;
+    background: linear-gradient(180deg, #11161d, #0e1116);
+    border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    flex-wrap: wrap;
+  }
+  header .title { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 700; }
+  .logo { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display:grid; place-items:center; color:#04121a; font-weight:800; }
+  .status-dot { width: 11px; height: 11px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 3px rgba(255,255,255,.04); }
+  .status-dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .status-dot.bad { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+  .status-dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+  .spacer { flex: 1; }
+
+  /* ---- connection bar ---- */
+  .conn {
+    display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
+    padding: 12px 18px; background: var(--bg-2); border-bottom: 1px solid var(--border);
+  }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  input, select, textarea {
+    background: var(--bg-3); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 7px 9px; font-size: 13px; outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  input[type="number"] { width: 92px; }
+  .conn input.host { width: 150px; }
+  .conn input.port { width: 80px; }
+  textarea { resize: vertical; font-family: ui-monospace, monospace; }
+
+  button {
+    background: var(--bg-3); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 7px 12px; font-size: 13px; cursor: pointer;
+    transition: background .12s, border-color .12s, transform .05s;
+    user-select: none;
+  }
+  button:hover { background: #232c3a; border-color: #3a4656; }
+  button:active { transform: translateY(1px); }
+  button.primary { background: var(--accent); color: #04121a; border-color: transparent; font-weight: 600; }
+  button.primary:hover { background: #34e7d2; }
+  button.accent { background: var(--accent-2); color: #04121a; border-color: transparent; font-weight: 600; }
+  button.danger { background: transparent; color: var(--danger); border-color: #4a2a2a; }
+  button.danger:hover { background: #2a1818; }
+  button.ghost { background: transparent; }
+  button.sm { padding: 4px 9px; font-size: 12px; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* ---- grid + cards ---- */
+  main { padding: 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; align-items: start; }
+  .card { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .card.wide { grid-column: 1 / -1; }
+  .card > .card-head { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--border); background: #141a22; }
+  .card > .card-head h2 { font-size: 14px; }
+  .card > .card-head .badge { font-size: 11px; color: var(--muted); }
+  .card > .card-body { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row.tight { gap: 6px; }
+  .grow { flex: 1; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .divider { height: 1px; background: var(--border); margin: 2px 0; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg-3); border: 1px solid var(--border); color: var(--muted); }
+  .pill.on { color: #04121a; background: var(--ok); border-color: transparent; }
+  .kv { display:flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-family: ui-monospace, monospace; }
+
+  /* ---- livestream ---- */
+  .stream-wrap { position: relative; background: #05080c; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; min-height: 240px; display: grid; place-items: center; }
+  .stream-wrap img { width: 100%; display: block; }
+  .stream-placeholder { color: var(--muted); padding: 40px; text-align: center; }
+
+  /* ---- stage pad ---- */
+  .pad { display: grid; grid-template-columns: repeat(3, 56px); grid-template-rows: repeat(3, 40px); gap: 6px; justify-content: center; }
+  .pad button { width: 56px; height: 40px; padding: 0; font-weight: 700; }
+  .zbar { display: grid; grid-template-rows: repeat(3, 40px); gap: 6px; }
+  .zbar button { height: 40px; width: 52px; font-weight: 700; }
+  .stage-layout { display: flex; gap: 18px; justify-content: center; align-items: center; flex-wrap: wrap; }
+
+  /* ---- led matrix ---- */
+  .led-grid { display: grid; gap: 3px; justify-content: center; }
+  .led-cell { width: 16px; height: 16px; border-radius: 3px; background: #1a2028; border: 1px solid #2a3340; cursor: pointer; }
+  .led-cell.on { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 6px var(--accent); }
+
+  /* ---- channels ---- */
+  .channel { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg-3); }
+  .channel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .slider-row { display: flex; align-items: center; gap: 10px; }
+  .slider-row input[type="number"] { width: 80px; }
+
+  /* toggle */
+  .switch { position: relative; display: inline-block; width: 40px; height: 22px; }
+  .switch input { display: none; }
+  .switch .sl { position: absolute; inset: 0; background: #39424f; border-radius: 999px; transition: .15s; }
+  .switch .sl:before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #cfd8e3; border-radius: 50%; transition: .15s; }
+  .switch input:checked + .sl { background: var(--accent); }
+  .switch input:checked + .sl:before { transform: translateX(18px); background: #04121a; }
+
+  /* config viewer */
+  pre.json { background: #0a0e13; border: 1px solid var(--border); border-radius: 8px; padding: 12px; max-height: 420px; overflow: auto; font-size: 12px; margin: 0; white-space: pre; }
+
+  /* ---- log dock ---- */
+  .logdock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; background: #0a0d12; border-top: 1px solid var(--border); box-shadow: 0 -4px 18px rgba(0,0,0,.4); transition: transform .2s; }
+  .logdock.collapsed { transform: translateY(calc(100% - 38px)); }
+  .logdock .log-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px; cursor: pointer; border-bottom: 1px solid var(--border); }
+  .logdock .log-body { height: 190px; overflow: auto; padding: 8px 14px; font-family: ui-monospace, monospace; font-size: 12px; }
+  .logline { padding: 2px 0; border-bottom: 1px solid #11161d; display: flex; gap: 8px; }
+  .logline .t { color: #54607080; white-space: nowrap; }
+  .logline.req .m { color: var(--accent-2); }
+  .logline.ok .m { color: var(--ok); }
+  .logline.err .m { color: var(--danger); }
+  .logline.info .m { color: var(--muted); }
+  .logline .m { word-break: break-all; }
+
+  .hint { font-size: 12px; color: var(--muted); background: #12181f; border: 1px solid var(--border); border-left: 3px solid var(--accent-2); border-radius: 6px; padding: 8px 10px; }
+  .err-text { color: var(--danger); font-size: 12px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title"><div class="logo">µ</div> ImSwitch <span class="muted" style="font-weight:400">Static Control</span></div>
+  <span id="statusDot" class="status-dot"></span>
+  <span id="statusText" class="muted small">disconnected</span>
+  <div class="spacer"></div>
+  <span id="versionText" class="muted small mono"></span>
+  <button class="sm ghost" onclick="toggleConn()">⚙ connection</button>
+</header>
+
+<!-- Connection settings -->
+<div class="conn" id="connBar">
+  <div class="field">
+    <label>Protocol</label>
+    <select id="proto"><option value="http">http</option><option value="https">https</option></select>
+  </div>
+  <div class="field">
+    <label>Host / IP</label>
+    <input class="host" id="host" placeholder="192.168.4.1" value="localhost" />
+  </div>
+  <div class="field">
+    <label>HTTP port</label>
+    <input class="port" id="httpPort" type="text" value="8001" />
+  </div>
+  <div class="field">
+    <label>Socket port</label>
+    <input class="port" id="socketPort" type="text" value="8001" />
+  </div>
+  <button class="primary" onclick="testConnection()">Connect / Test</button>
+  <button class="sm" onclick="loadEverything()">↻ Refresh all</button>
+  <div class="grow"></div>
+  <div class="field" style="min-width:280px">
+    <label>Base URL</label>
+    <input id="baseUrlPreview" readonly class="mono" style="width:100%" />
+  </div>
+</div>
+
+<main>
+
+  <!-- LIVESTREAM -->
+  <section class="card">
+    <div class="card-head"><h2>📷 Livestream (MJPEG)</h2><span class="badge" id="streamState">stopped</span></div>
+    <div class="card-body">
+      <div class="row tight">
+        <div class="field grow">
+          <label>Detector</label>
+          <select id="streamDetector"><option value="">(default)</option></select>
+        </div>
+        <button class="primary" id="btnStreamStart" onclick="startStream()">▶ Start</button>
+        <button class="danger" id="btnStreamStop" onclick="stopStream()">■ Stop</button>
+      </div>
+      <div class="stream-wrap">
+        <img id="streamImg" alt="" style="display:none" />
+        <div class="stream-placeholder" id="streamPlaceholder">Stream stopped.<br/>Press Start to begin the MJPEG feed.</div>
+      </div>
+      <div class="divider"></div>
+      <div class="row">
+        <button class="accent" onclick="snapDownload()">⤓ Snap &amp; Download</button>
+        <div class="grow"></div>
+        <input id="snapToDiskName" placeholder="filename (optional)" style="width:150px" />
+        <select id="snapFormat" title="Save format">
+          <option value="">default</option>
+          <option value="1">TIFF</option>
+          <option value="5">PNG</option>
+          <option value="6">JPG</option>
+          <option value="7">OME-TIFF</option>
+          <option value="3">ZARR</option>
+          <option value="8">OME-ZARR</option>
+        </select>
+        <button onclick="snapToDisk()">💾 Snap to disk</button>
+      </div>
+      <div class="stream-wrap" id="snapWrap" style="display:none; min-height:0">
+        <img id="snapImg" alt="last snapshot" />
+      </div>
+    </div>
+  </section>
+
+  <!-- STAGE -->
+  <section class="card">
+    <div class="card-head"><h2>🎯 Stage</h2><span class="badge" id="stageName">—</span></div>
+    <div class="card-body">
+      <div class="row tight">
+        <div class="field grow">
+          <label>Positioner</label>
+          <select id="positionerSelect" onchange="onPositionerChange()"></select>
+        </div>
+        <div class="field"><label>Step</label><input id="stageStep" type="number" value="100" step="any" /></div>
+        <div class="field"><label>Speed</label><input id="stageSpeed" type="number" value="10000" step="any" /></div>
+      </div>
+
+      <div class="stage-layout">
+        <div>
+          <div class="muted small" style="text-align:center;margin-bottom:4px">X / Y</div>
+          <div class="pad">
+            <div></div>
+            <button onclick="jog('Y', +1)">Y+</button>
+            <div></div>
+            <button onclick="jog('X', -1)">X−</button>
+            <button class="danger" onclick="stopAxis()" title="Stop all">■</button>
+            <button onclick="jog('X', +1)">X+</button>
+            <div></div>
+            <button onclick="jog('Y', -1)">Y−</button>
+            <div></div>
+          </div>
+        </div>
+        <div>
+          <div class="muted small" style="text-align:center;margin-bottom:4px">Z</div>
+          <div class="zbar">
+            <button onclick="jog('Z', +1)">Z+</button>
+            <button class="ghost sm" onclick="homeAxis('Z')">⌂</button>
+            <button onclick="jog('Z', -1)">Z−</button>
+          </div>
+        </div>
+        <div>
+          <div class="muted small" style="text-align:center;margin-bottom:4px">A</div>
+          <div class="zbar">
+            <button onclick="jog('A', +1)">A+</button>
+            <button class="ghost sm" onclick="homeAxis('A')">⌂</button>
+            <button onclick="jog('A', -1)">A−</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="row tight">
+        <span class="small muted">Absolute move:</span>
+        <select id="absAxis"><option>X</option><option>Y</option><option>Z</option><option>A</option></select>
+        <input id="absTarget" type="number" placeholder="position" step="any" style="width:110px" />
+        <button onclick="moveAbsolute()">Go →</button>
+        <button class="ghost sm" onclick="homeAxis('X');homeAxis('Y')">Home XY</button>
+        <button class="sm" onclick="refreshPositions()">↻ positions</button>
+      </div>
+      <div id="positionsBox" class="small"></div>
+    </div>
+  </section>
+
+  <!-- ILLUMINATION -->
+  <section class="card">
+    <div class="card-head"><h2>💡 Illumination</h2><span class="badge" id="laserCount"></span>
+      <div class="spacer"></div><button class="sm" onclick="loadLasers()">↻</button></div>
+    <div class="card-body" id="laserBody">
+      <div class="muted small">Connect and refresh to query available channels.</div>
+    </div>
+  </section>
+
+  <!-- LED MATRIX -->
+  <section class="card">
+    <div class="card-head"><h2>🔆 LED Matrix</h2><span class="badge" id="ledBadge"></span></div>
+    <div class="card-body">
+      <div class="row tight">
+        <button class="accent" onclick="ledAllOn()">All On</button>
+        <button onclick="ledAllOff()">All Off</button>
+        <div class="grow"></div>
+        <span class="small muted">Intensity</span>
+        <input id="ledIntensity" type="number" min="0" max="255" value="128" style="width:80px" />
+        <button class="sm" onclick="ledSetIntensity()">set</button>
+      </div>
+      <input type="range" id="ledIntensityRange" min="0" max="255" value="128"
+             oninput="document.getElementById('ledIntensity').value=this.value" onchange="ledSetIntensity()" />
+      <div class="divider"></div>
+      <div class="row tight">
+        <span class="small muted">Ring</span>
+        <input id="ledRing" type="number" min="0" value="2" style="width:70px" />
+        <button class="sm" onclick="ledRing()">set ring</button>
+        <span class="small muted">Halves</span>
+        <select id="ledHalf"><option>top</option><option>bottom</option><option>left</option><option>right</option></select>
+        <button class="sm" onclick="ledHalves()">set</button>
+      </div>
+      <div class="divider"></div>
+      <div class="row tight small muted">Single LEDs — click to toggle (grid <input id="ledNx" type="number" value="8" style="width:54px"/>×<input id="ledNy" type="number" value="8" style="width:54px"/>) <button class="sm" onclick="buildLedGrid()">build</button></div>
+      <div id="ledGrid" class="led-grid"></div>
+    </div>
+  </section>
+
+  <!-- AUTOFOCUS -->
+  <section class="card">
+    <div class="card-head"><h2>🔬 Autofocus</h2><span class="badge" id="afStatus">idle</span></div>
+    <div class="card-body">
+      <div class="row tight">
+        <div class="field"><label>Range Z</label><input id="afRange" type="number" value="200" /></div>
+        <div class="field"><label>Resolution Z</label><input id="afRes" type="number" value="10" /></div>
+        <div class="field"><label>Defocus Z</label><input id="afDefocus" type="number" value="0" /></div>
+      </div>
+      <div class="row tight">
+        <div class="field"><label>Algorithm</label>
+          <select id="afAlgo"><option value="">default</option><option>laplacian</option><option>gaussian</option><option>tenengrad</option></select>
+        </div>
+        <div class="grow"></div>
+        <button class="primary" onclick="runAutofocus()">Run Autofocus</button>
+        <button class="danger" onclick="stopAutofocus()">Stop</button>
+      </div>
+      <button class="sm ghost" onclick="refreshAutofocusStatus()">↻ status</button>
+      <div id="afResult" class="small muted"></div>
+    </div>
+  </section>
+
+  <!-- OBJECTIVES -->
+  <section class="card">
+    <div class="card-head"><h2>🔭 Objectives</h2><span class="badge" id="objCurrent">—</span></div>
+    <div class="card-body">
+      <div class="row">
+        <button class="primary" onclick="moveToObjective(1)">Slot 1</button>
+        <button class="primary" onclick="moveToObjective(2)">Slot 2</button>
+        <div class="grow"></div>
+        <button class="sm" onclick="refreshObjective()">↻ status</button>
+      </div>
+      <div class="row tight">
+        <span class="small muted">Move speed</span>
+        <input id="objSpeed" type="number" value="10000" style="width:100px" />
+        <button class="sm" onclick="setObjectiveSpeed()">set</button>
+        <div class="grow"></div>
+        <button class="ghost sm" onclick="calibrateObjective()">Calibrate</button>
+      </div>
+      <div id="objStatusBox" class="small"></div>
+    </div>
+  </section>
+
+  <!-- ESP32 / DEVICE -->
+  <section class="card">
+    <div class="card-head"><h2>🔌 ESP32 / Device</h2><span class="badge" id="espBadge">unknown</span></div>
+    <div class="card-body">
+      <div class="row tight">
+        <div class="field"><label>Serial port</label><input id="espPort" placeholder="(auto)" style="width:130px" /></div>
+        <div class="field"><label>Baudrate</label><input id="espBaud" placeholder="115200" style="width:100px" /></div>
+        <button class="primary" onclick="espReconnect()">Reconnect</button>
+        <button class="danger" onclick="espRestart()">Restart ESP</button>
+        <button class="sm" onclick="espCheck()">Check ●</button>
+      </div>
+      <div class="divider"></div>
+      <div class="small muted">Connect ESP32 to the PS controller (sent to firmware via <span class="mono">writeSerial</span>). Edit the JSON if your firmware expects a different schema.</div>
+      <textarea id="psActPayload" rows="2" class="mono">{"task": "/ps_act", "active": 1}</textarea>
+      <div class="row">
+        <button class="accent" onclick="sendPsAct()">🎮 Connect PS controller (ps_act)</button>
+        <button class="ghost sm" onclick="document.getElementById('psActPayload').value='{\"task\": \"/ps_act\", \"active\": 0}'">disable preset</button>
+      </div>
+      <details>
+        <summary>Raw serial command (writeSerial)</summary>
+        <div style="margin-top:8px" class="row tight">
+          <input id="rawSerial" class="mono grow" value='{"task": "/state_get"}' />
+          <button class="sm" onclick="sendRawSerial()">Send</button>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <!-- CONFIG -->
+  <section class="card wide">
+    <div class="card-head"><h2>🗂 Configuration (setup JSON)</h2><span class="badge mono" id="cfgName">—</span></div>
+    <div class="card-body">
+      <div class="row tight">
+        <div class="field grow">
+          <label>Available setups</label>
+          <select id="cfgSelect"></select>
+        </div>
+        <button onclick="loadConfig()">Load &amp; Display</button>
+        <button class="sm" onclick="loadSetupList()">↻ list</button>
+        <button class="accent sm" onclick="downloadConfig()">⤓ Download JSON</button>
+      </div>
+      <pre class="json" id="cfgView">No configuration loaded.</pre>
+    </div>
+  </section>
+
+</main>
+
+<!-- LOG DOCK -->
+<div class="logdock collapsed" id="logdock">
+  <div class="log-head" onclick="toggleLog()">
+    <span id="logChevron">▲</span>
+    <strong>Activity log</strong>
+    <span class="muted small" id="logCount">0</span>
+    <div class="spacer" style="flex:1"></div>
+    <button class="sm ghost" onclick="event.stopPropagation(); clearLog()">clear</button>
+  </div>
+  <div class="log-body" id="logBody"></div>
+</div>
+
+<script>
+/* ============================================================
+   ImSwitch Static Control — vanilla JS, no build step.
+   Base URL convention matches the React app:
+     {protocol}://{host}:{httpPort}/imswitch/api
+   ============================================================ */
+
+const LS_KEY = "imswitch-static-conn";
+const $ = (id) => document.getElementById(id);
+
+/* ---------- connection state ---------- */
+function conn() {
+  return {
+    proto: $("proto").value,
+    host: $("host").value.trim(),
+    httpPort: $("httpPort").value.trim(),
+    socketPort: $("socketPort").value.trim(),
+  };
+}
+function apiBase() {
+  const c = conn();
+  const portPart = c.httpPort ? `:${c.httpPort}` : "";
+  return `${c.proto}://${c.host}${portPart}/imswitch/api`;
+}
+function saveConn() {
+  localStorage.setItem(LS_KEY, JSON.stringify(conn()));
+  $("baseUrlPreview").value = apiBase();
+}
+function loadConn() {
+  try {
+    const s = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
+    if (s.proto) $("proto").value = s.proto;
+    if (s.host) $("host").value = s.host;
+    if (s.httpPort) $("httpPort").value = s.httpPort;
+    if (s.socketPort) $("socketPort").value = s.socketPort;
+  } catch (e) {}
+  $("baseUrlPreview").value = apiBase();
+}
+["proto", "host", "httpPort", "socketPort"].forEach((id) =>
+  document.addEventListener("DOMContentLoaded", () => $(id).addEventListener("input", saveConn))
+);
+
+/* ---------- URL + fetch helpers ---------- */
+function buildUrl(path, params) {
+  let url = apiBase() + path;
+  const qs = [];
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v === undefined || v === null || v === "") continue;
+      qs.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+    }
+  }
+  if (qs.length) url += "?" + qs.join("&");
+  return url;
+}
+
+const DEFAULT_TIMEOUT = 20000; // ms — keeps a wrong host/port from hanging forever
+async function fetchWithTimeout(url, opts = {}, timeoutMs = DEFAULT_TIMEOUT) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+async function apiGet(path, params, { timeoutMs } = {}) {
+  const url = buildUrl(path, params);
+  log("GET " + path + (url.includes("?") ? url.slice(url.indexOf("?")) : ""), "req");
+  let res;
+  try {
+    res = await fetchWithTimeout(url, { method: "GET" }, timeoutMs);
+  } catch (e) {
+    netError(e);
+    throw e;
+  }
+  return handleResponse(res, path);
+}
+
+async function apiPost(path, params, body, { timeoutMs } = {}) {
+  const url = buildUrl(path, params);
+  log("POST " + path, "req");
+  let res;
+  try {
+    res = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    }, timeoutMs);
+  } catch (e) {
+    netError(e);
+    throw e;
+  }
+  return handleResponse(res, path);
+}
+
+async function handleResponse(res, path) {
+  const ct = res.headers.get("content-type") || "";
+  let data;
+  if (ct.includes("application/json")) data = await res.json();
+  else data = await res.text();
+  if (!res.ok) {
+    log(`✗ ${res.status} ${path} — ${typeof data === "string" ? data.slice(0, 200) : JSON.stringify(data).slice(0, 200)}`, "err");
+    throw new Error(`HTTP ${res.status}`);
+  }
+  log(`✓ ${path} → ${typeof data === "string" ? data.slice(0, 120) : JSON.stringify(data).slice(0, 160)}`, "ok");
+  return data;
+}
+
+function netError(e) {
+  if (e && e.name === "AbortError") {
+    log(`✗ request timed out — no response from ${apiBase()}. Check host/port and that ImSwitch is running.`, "err");
+  } else {
+    log(`✗ network error: ${e.message}. If using https with a self-signed cert, open ${apiBase()}/version in a new tab and accept it. Check host/port and that ImSwitch is running.`, "err");
+  }
+  setStatus("bad", "connection error");
+}
+
+/* ---------- status + log ---------- */
+function setStatus(kind, text) {
+  $("statusDot").className = "status-dot " + (kind || "");
+  $("statusText").textContent = text;
+}
+let logCount = 0;
+function log(msg, kind = "info") {
+  const body = $("logBody");
+  const line = document.createElement("div");
+  line.className = "logline " + kind;
+  const t = new Date().toLocaleTimeString();
+  line.innerHTML = `<span class="t">${t}</span><span class="m"></span>`;
+  line.querySelector(".m").textContent = msg;
+  body.appendChild(line);
+  body.scrollTop = body.scrollHeight;
+  logCount++;
+  $("logCount").textContent = logCount;
+  while (body.children.length > 400) body.removeChild(body.firstChild);
+}
+function clearLog() { $("logBody").innerHTML = ""; logCount = 0; $("logCount").textContent = 0; }
+function toggleLog() { $("logdock").classList.toggle("collapsed"); $("logChevron").textContent = $("logdock").classList.contains("collapsed") ? "▲" : "▼"; }
+function toggleConn() { const b = $("connBar"); b.style.display = b.style.display === "none" ? "flex" : "none"; }
+
+/* ---------- connection test ---------- */
+async function testConnection() {
+  saveConn();
+  setStatus("warn", "connecting…");
+  try {
+    const v = await apiGet("/version", null, { timeoutMs: 8000 });
+    setStatus("ok", "connected");
+    $("versionText").textContent = typeof v === "object" ? JSON.stringify(v) : String(v);
+    loadEverything();
+  } catch (e) {
+    setStatus("bad", "failed");
+  }
+}
+
+async function loadEverything() {
+  // fire independent loaders; ignore individual failures
+  loadDetectors();
+  loadPositioners();
+  loadLasers();
+  refreshObjective();
+  loadSetupList();
+  espCheck();
+}
+
+/* ============================================================
+   LIVESTREAM
+   ============================================================ */
+let streaming = false;
+async function loadDetectors() {
+  try {
+    const names = await apiGet("/PositionerController/getPositionerNames").catch(() => null); // warm-up, ignored
+  } catch (e) {}
+  // detectors: try the recording/liveview helpers if present
+  try {
+    const sel = $("streamDetector");
+    // keep default option; we don't strictly need names for default stream
+  } catch (e) {}
+}
+
+function startStream() {
+  const det = $("streamDetector").value;
+  const url = buildUrl("/LiveViewController/mjpeg_stream", { startStream: "true", detectorName: det || undefined }) + "&_t=" + Date.now();
+  const img = $("streamImg");
+  img.onerror = () => { log("✗ stream image failed to load — is a detector active?", "err"); $("streamState").textContent = "error"; };
+  img.onload = () => { $("streamState").textContent = "live"; };
+  img.src = url;
+  img.style.display = "block";
+  $("streamPlaceholder").style.display = "none";
+  streaming = true;
+  $("streamState").textContent = "connecting…";
+  log("stream started: " + url, "info");
+}
+
+async function stopStream() {
+  const img = $("streamImg");
+  img.src = "";
+  img.style.display = "none";
+  $("streamPlaceholder").style.display = "block";
+  $("streamState").textContent = "stopped";
+  streaming = false;
+  const det = $("streamDetector").value;
+  try { await apiGet("/LiveViewController/stopLiveView", { detectorName: det || undefined, stopCamera: "false" }); } catch (e) {}
+}
+
+async function snapDownload() {
+  const det = $("streamDetector").value;
+  const url = buildUrl("/RecordingController/snapNumpyToFastAPI", { detectorName: det || undefined, resizeFactor: 1 });
+  log("GET /RecordingController/snapNumpyToFastAPI (image)", "req");
+  try {
+    const res = await fetchWithTimeout(url, {}, 60000);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    $("snapImg").src = objUrl;
+    $("snapWrap").style.display = "block";
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = `snap_${Date.now()}.png`;
+    a.click();
+    log("✓ snapshot downloaded", "ok");
+  } catch (e) {
+    netError(e);
+  }
+}
+
+async function snapToDisk() {
+  const fileName = $("snapToDiskName").value.trim();
+  const fmt = $("snapFormat").value;
+  try {
+    const r = await apiGet("/RecordingController/snapImageToPath", { fileName: fileName || undefined, saveFormat: fmt || undefined });
+    log("✓ snap to disk: " + JSON.stringify(r), "ok");
+  } catch (e) {}
+}
+
+/* ============================================================
+   STAGE
+   ============================================================ */
+let positionerName = "";
+async function loadPositioners() {
+  try {
+    const names = await apiGet("/PositionerController/getPositionerNames");
+    const sel = $("positionerSelect");
+    sel.innerHTML = "";
+    (Array.isArray(names) ? names : Object.values(names || {})).forEach((n) => {
+      const o = document.createElement("option"); o.value = n; o.textContent = n; sel.appendChild(o);
+    });
+    positionerName = sel.value || "";
+    $("stageName").textContent = positionerName || "—";
+    refreshPositions();
+  } catch (e) {}
+}
+function onPositionerChange() { positionerName = $("positionerSelect").value; $("stageName").textContent = positionerName; refreshPositions(); }
+
+async function jog(axis, sign) {
+  const step = parseFloat($("stageStep").value) || 0;
+  const speed = parseFloat($("stageSpeed").value) || undefined;
+  try {
+    await apiGet("/PositionerController/movePositioner", {
+      positionerName: positionerName || undefined, axis, dist: sign * step,
+      isAbsolute: "false", isBlocking: "false", speed,
+    });
+    setTimeout(refreshPositions, 350);
+  } catch (e) {}
+}
+async function moveAbsolute() {
+  const axis = $("absAxis").value;
+  const target = parseFloat($("absTarget").value);
+  if (isNaN(target)) { log("enter a target position", "err"); return; }
+  const speed = parseFloat($("stageSpeed").value) || undefined;
+  try {
+    await apiGet("/PositionerController/movePositioner", {
+      positionerName: positionerName || undefined, axis, dist: target,
+      isAbsolute: "true", isBlocking: "false", speed,
+    });
+    setTimeout(refreshPositions, 350);
+  } catch (e) {}
+}
+async function homeAxis(axis) {
+  try { await apiGet("/PositionerController/homeAxis", { positionerName: positionerName || undefined, axis, isBlocking: "false" }); setTimeout(refreshPositions, 800); } catch (e) {}
+}
+async function stopAxis() {
+  try { await apiGet("/PositionerController/stopAxis", { positionerName: positionerName || undefined }); } catch (e) {}
+}
+async function refreshPositions() {
+  try {
+    const pos = await apiGet("/PositionerController/getPositionerPositions");
+    const box = $("positionsBox");
+    box.innerHTML = "";
+    // pos is typically { "<name>": {X:..,Y:..,Z:..,A:..} }
+    const render = (obj) => {
+      for (const [k, v] of Object.entries(obj)) {
+        const row = document.createElement("div"); row.className = "kv";
+        row.innerHTML = `<span class="k">${k}</span><span class="v">${typeof v === "number" ? v.toFixed(2) : v}</span>`;
+        box.appendChild(row);
+      }
+    };
+    if (pos && typeof pos === "object") {
+      const first = pos[positionerName] || Object.values(pos)[0];
+      if (first && typeof first === "object") render(first);
+      else render(pos);
+    }
+  } catch (e) {}
+}
+
+/* ============================================================
+   ILLUMINATION (dynamic channels)
+   ============================================================ */
+async function loadLasers() {
+  const body = $("laserBody");
+  try {
+    const names = await apiGet("/LaserController/getLaserNames");
+    const list = Array.isArray(names) ? names : Object.values(names || {});
+    $("laserCount").textContent = list.length + " ch";
+    body.innerHTML = "";
+    if (!list.length) { body.innerHTML = '<div class="muted small">No illumination channels reported.</div>'; return; }
+    for (const name of list) {
+      const range = await apiGet("/LaserController/getLaserValueRanges", { laserName: name }).catch(() => null);
+      let value = 0, active = false;
+      try { value = await apiGet("/LaserController/getLaserValue", { laserName: name }); } catch (e) {}
+      try { active = await apiGet("/LaserController/getLaserActive", { laserName: name }); } catch (e) {}
+      body.appendChild(buildChannel(name, range, value, active));
+    }
+  } catch (e) {
+    body.innerHTML = '<div class="err-text">Could not load channels. Check connection.</div>';
+  }
+}
+
+function buildChannel(name, range, value, active) {
+  const wrap = document.createElement("div");
+  wrap.className = "channel";
+  const hasRange = Array.isArray(range) && range.length === 2 && range[1] != null;
+  const min = hasRange ? range[0] : 0;
+  const max = hasRange ? range[1] : 1023;
+  const val = typeof value === "number" ? value : Number(value) || 0;
+  wrap.innerHTML = `
+    <div class="channel-head">
+      <strong>${name}</strong>
+      <label class="switch"><input type="checkbox" ${active ? "checked" : ""} data-laser="${name}" onchange="setLaserActive('${name}', this.checked)"><span class="sl"></span></label>
+    </div>
+    ${hasRange ? `
+    <div class="slider-row">
+      <input type="range" min="${min}" max="${max}" value="${val}" id="laser-range-${cssId(name)}"
+        oninput="document.getElementById('laser-num-${cssId(name)}').value=this.value"
+        onchange="setLaserValue('${name}', this.value)">
+      <input type="number" min="${min}" max="${max}" value="${val}" id="laser-num-${cssId(name)}"
+        onchange="document.getElementById('laser-range-${cssId(name)}').value=this.value; setLaserValue('${name}', this.value)">
+    </div>
+    <div class="muted small">range ${min} – ${max}</div>
+    ` : `<div class="muted small">on/off only (binary)</div>`}
+  `;
+  return wrap;
+}
+function cssId(s) { return s.replace(/[^a-zA-Z0-9_-]/g, "_"); }
+
+async function setLaserActive(name, on) {
+  try { await apiGet("/LaserController/setLaserActive", { laserName: name, active: on ? "true" : "false" }); } catch (e) {}
+}
+async function setLaserValue(name, value) {
+  try { await apiGet("/LaserController/setLaserValue", { laserName: name, value }); } catch (e) {}
+}
+
+/* ============================================================
+   LED MATRIX
+   ============================================================ */
+async function ledAllOn() { try { await apiGet("/LEDMatrixController/setAllLED", { state: 1, intensity: ledInt() }); $("ledBadge").textContent = "on"; } catch (e) { ledUnavailable(); } }
+async function ledAllOff() { try { await apiGet("/LEDMatrixController/setAllLEDOff"); $("ledBadge").textContent = "off"; } catch (e) { ledUnavailable(); } }
+function ledInt() { return parseInt($("ledIntensity").value) || 0; }
+async function ledSetIntensity() { $("ledIntensityRange").value = $("ledIntensity").value; try { await apiGet("/LEDMatrixController/setIntensity", { intensity: ledInt() }); } catch (e) { ledUnavailable(); } }
+async function ledRing() { try { await apiGet("/LEDMatrixController/setRing", { ringRadius: parseInt($("ledRing").value) || 0, intensity: ledInt() }); } catch (e) { ledUnavailable(); } }
+async function ledHalves() { try { await apiGet("/LEDMatrixController/setHalves", { direction: $("ledHalf").value, intensity: ledInt() }); } catch (e) { ledUnavailable(); } }
+function ledUnavailable() { $("ledBadge").textContent = "unavailable"; log("LED matrix endpoint not available (no LED matrix configured?)", "err"); }
+
+function buildLedGrid() {
+  const nx = parseInt($("ledNx").value) || 8;
+  const ny = parseInt($("ledNy").value) || 8;
+  const grid = $("ledGrid");
+  grid.style.gridTemplateColumns = `repeat(${nx}, 16px)`;
+  grid.innerHTML = "";
+  for (let i = 0; i < nx * ny; i++) {
+    const cell = document.createElement("div");
+    cell.className = "led-cell";
+    cell.dataset.id = i;
+    cell.onclick = () => toggleLed(cell);
+    grid.appendChild(cell);
+  }
+}
+async function toggleLed(cell) {
+  const on = !cell.classList.contains("on");
+  cell.classList.toggle("on", on);
+  try { await apiGet("/LEDMatrixController/setLED", { LEDid: cell.dataset.id, state: on ? 1 : 0 }); } catch (e) { ledUnavailable(); }
+}
+
+/* ============================================================
+   AUTOFOCUS
+   ============================================================ */
+async function runAutofocus() {
+  $("afStatus").textContent = "running…";
+  try {
+    const r = await apiGet("/AutofocusController/autoFocus", {
+      rangez: parseInt($("afRange").value) || undefined,
+      resolutionz: parseInt($("afRes").value) || undefined,
+      defocusz: parseInt($("afDefocus").value) || undefined,
+      focusAlgorithm: $("afAlgo").value || undefined,
+    }, { timeoutMs: 180000 });
+    $("afStatus").textContent = "done";
+    $("afResult").textContent = "Result: " + (typeof r === "object" ? JSON.stringify(r) : r);
+    setTimeout(refreshPositions, 300);
+  } catch (e) { $("afStatus").textContent = "error"; }
+}
+async function stopAutofocus() { try { await apiGet("/AutofocusController/stopAutofocus"); $("afStatus").textContent = "stopped"; } catch (e) {} }
+async function refreshAutofocusStatus() {
+  try { const s = await apiGet("/AutofocusController/getAutofocusStatus"); $("afStatus").textContent = typeof s === "object" ? JSON.stringify(s) : s; } catch (e) {}
+}
+
+/* ============================================================
+   OBJECTIVES
+   ============================================================ */
+async function moveToObjective(slot) {
+  try { const r = await apiGet("/ObjectiveController/moveToObjective", { slot }); refreshObjective(); } catch (e) {}
+}
+async function refreshObjective() {
+  try {
+    const cur = await apiGet("/ObjectiveController/getCurrentObjective");
+    $("objCurrent").textContent = "slot " + (typeof cur === "object" ? JSON.stringify(cur) : cur);
+  } catch (e) {}
+  try {
+    const st = await apiGet("/ObjectiveController/getstatus");
+    const box = $("objStatusBox"); box.innerHTML = "";
+    if (st && typeof st === "object") {
+      for (const [k, v] of Object.entries(st)) {
+        const row = document.createElement("div"); row.className = "kv";
+        row.innerHTML = `<span class="k">${k}</span><span class="v">${typeof v === "object" ? JSON.stringify(v) : v}</span>`;
+        box.appendChild(row);
+      }
+    }
+  } catch (e) {}
+}
+async function setObjectiveSpeed() { try { await apiGet("/ObjectiveController/setMoveSpeed", { speed: parseInt($("objSpeed").value) || undefined }); } catch (e) {} }
+async function calibrateObjective() { try { await apiGet("/ObjectiveController/calibrateObjective"); refreshObjective(); } catch (e) {} }
+
+/* ============================================================
+   ESP32 / DEVICE
+   ============================================================ */
+async function espReconnect() {
+  $("espBadge").textContent = "reconnecting…";
+  try { await apiGet("/UC2ConfigController/reconnect", { port: $("espPort").value || undefined, baudrate: $("espBaud").value || undefined }); setTimeout(espCheck, 1500); } catch (e) { $("espBadge").textContent = "error"; }
+}
+async function espRestart() { try { await apiGet("/UC2ConfigController/espRestart"); $("espBadge").textContent = "restarting…"; setTimeout(espCheck, 2500); } catch (e) {} }
+async function espCheck() {
+  try {
+    const c = await apiGet("/UC2ConfigController/uc2_board_is_connected", { strict: "true" });
+    const connected = c === true || c === "true" || (c && c.connected);
+    $("espBadge").textContent = connected ? "connected" : "disconnected";
+  } catch (e) { $("espBadge").textContent = "unknown"; }
+}
+async function sendPsAct() {
+  let payload = $("psActPayload").value.trim();
+  try { JSON.parse(payload); } catch (e) { log("✗ ps_act payload is not valid JSON", "err"); return; }
+  try { const r = await apiGet("/UC2ConfigController/writeSerial", { payload }); log("✓ ps_act sent → " + JSON.stringify(r), "ok"); } catch (e) {}
+}
+async function sendRawSerial() {
+  let payload = $("rawSerial").value.trim();
+  try { JSON.parse(payload); } catch (e) { log("✗ serial payload is not valid JSON", "err"); return; }
+  try { await apiGet("/UC2ConfigController/writeSerial", { payload }); } catch (e) {}
+}
+
+/* ============================================================
+   CONFIG
+   ============================================================ */
+async function loadSetupList() {
+  try {
+    const setups = await apiGet("/UC2ConfigController/returnAvailableSetups");
+    const list = Array.isArray(setups) ? setups : (setups && setups.available ? setups.available : Object.values(setups || {}));
+    const sel = $("cfgSelect"); sel.innerHTML = "";
+    list.flat().forEach((s) => { const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o); });
+  } catch (e) {}
+  try {
+    const cur = await apiGet("/UC2ConfigController/getCurrentSetupFilename");
+    const name = typeof cur === "object" ? (cur.filename || cur.name || JSON.stringify(cur)) : cur;
+    $("cfgName").textContent = name;
+    if (name && $("cfgSelect").querySelector(`option[value="${name}"]`)) $("cfgSelect").value = name;
+  } catch (e) {}
+}
+let lastConfig = null;
+async function loadConfig() {
+  const name = $("cfgSelect").value;
+  try {
+    const data = await apiGet("/UC2ConfigController/readSetupFile", { setupFileName: name || undefined });
+    lastConfig = data;
+    $("cfgView").textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  } catch (e) { $("cfgView").textContent = "Failed to load configuration."; }
+}
+function downloadConfig() {
+  if (!lastConfig) { log("load a configuration first", "err"); return; }
+  const text = typeof lastConfig === "string" ? lastConfig : JSON.stringify(lastConfig, null, 2);
+  const blob = new Blob([text], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = ($("cfgName").textContent || "setup") + ".json";
+  a.click();
+}
+
+/* ---------- init ---------- */
+window.addEventListener("DOMContentLoaded", () => {
+  loadConn();
+  buildLedGrid();
+  setStatus("", "disconnected");
+  log("Ready. Enter host/port and press Connect / Test.", "info");
+});
+</script>
+</body>
+</html>

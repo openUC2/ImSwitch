@@ -20,6 +20,7 @@ import apiObjectiveControllerMoveToObjective from "../backendapi/apiObjectiveCon
 export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const dispatch = useDispatch();
   const [currentSlot, setCurrentSlot] = useState(null); // Let's say local state, or read from Redux
+  const [pendingSlot, setPendingSlot] = useState(null);
   const [isSwitching, setIsSwitching] = useState(false); // Show spinner while switching
   const [zLevelingEnabled, setZLevelingEnabled] = useState(true);
 
@@ -37,10 +38,11 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   }, [dispatch]);
 
   // Track Redux state changes (e.g. from socket updates) and update
-  // local state + clear spinner when the objective has changed.
+  // local state once the objective has actually changed.
   useEffect(() => {
     if (objectiveState.currentObjective != null) {
       setCurrentSlot(objectiveState.currentObjective);
+      setPendingSlot(null);
       setIsSwitching(false); // Objective update received => done switching
     }
   }, [objectiveState.currentObjective]);
@@ -50,21 +52,19 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
     fetchObjectiveControllerGetStatus(dispatch);
   }, [hostIP, hostPort, dispatch]); // on host ip/port change
 
-  // Switch to a different objective, show spinner until we get update from the socket
+  // Switch to a different objective, keep the selection neutral until the
+  // backend reports the final objective again.
   const switchTo = async (slot) => {
     try {
       setIsSwitching(true);
+      setPendingSlot(slot);
+      setCurrentSlot(null);
       const skipZ = !zLevelingEnabled;
       await apiObjectiveControllerMoveToObjective(slot, skipZ);
-      // Move completed – update slot and clear spinner immediately; no need to wait for
-      // a socket event that may never arrive.
-      dispatch(objectiveSlice.setCurrentObjective(slot));
-      setCurrentSlot(slot);
-      setIsSwitching(false);
-      // Also refresh full status to sync pixelsize / FOV etc.
-      fetchObjectiveControllerGetStatus(dispatch);
     } catch (e) {
       console.error(`Error switching to objective ${slot}`, e);
+      setPendingSlot(null);
+      setCurrentSlot(objectiveState.currentObjective);
       setIsSwitching(false);
     }
   };
@@ -100,10 +100,13 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
               >
                 <ButtonGroup variant="outlined" size="small" color="primary">
                   <Button
-                    variant={currentSlot === 0 ? "contained" : "outlined"}
+                    variant={
+                      !isSwitching && currentSlot === 0
+                        ? "contained"
+                        : "outlined"
+                    }
                     color="primary"
                     onClick={() => switchTo(0)}
-                    disabled={isSwitching}
                   >
                     <Box
                       sx={{
@@ -112,7 +115,7 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                         gap: 0.75,
                       }}
                     >
-                      {isSwitching && currentSlot !== 0 ? (
+                      {isSwitching && pendingSlot === 0 ? (
                         <CircularProgress size={14} sx={{ color: "#fff" }} />
                       ) : null}
                       {label0}
@@ -120,10 +123,13 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                   </Button>
 
                   <Button
-                    variant={currentSlot === 1 ? "contained" : "outlined"}
+                    variant={
+                      !isSwitching && currentSlot === 1
+                        ? "contained"
+                        : "outlined"
+                    }
                     color="primary"
                     onClick={() => switchTo(1)}
-                    disabled={isSwitching}
                   >
                     <Box
                       sx={{
@@ -132,7 +138,7 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                         gap: 0.75,
                       }}
                     >
-                      {isSwitching && currentSlot !== 1 ? (
+                      {isSwitching && pendingSlot === 1 ? (
                         <CircularProgress size={14} sx={{ color: "#fff" }} />
                       ) : null}
                       {label1}

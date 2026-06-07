@@ -243,12 +243,12 @@ export default function IlluminationController({ hostIP, hostPort }) {
                         min={minValue}
                         max={maxValue}
                         marks={marks}
-                        onChange={(e) =>
-                          debouncedSetLaserValue(
-                            laserName,
-                            Number(e.target.value),
-                          )
-                        }
+                        onChange={(_event, value) => {
+                          const nextValue = Array.isArray(value)
+                            ? value[0]
+                            : value;
+                          debouncedSetLaserValue(laserName, Number(nextValue));
+                        }}
                         sx={{
                           flex: 1,
                           "& .MuiSlider-markLabel[data-index='0']": {

@@ -107,6 +107,8 @@ class ImConMainController(MainController):
                         widgetKey, self.controllers[widgetKey]
                     )
                 except Exception as e:
+                    # print full stacktrace: 
+                    self.__logger.error(e, exc_info=True)
                     self.__logger.error(
                         f"Could not create controller for {controller_name}: {e}"
                     )

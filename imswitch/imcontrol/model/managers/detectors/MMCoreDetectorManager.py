@@ -208,17 +208,54 @@ class MMCoreDetectorManager(DetectorManager):
     # Frame access
     # ------------------------------------------------------------------
     def getLatestFrame(self, returnFrameNumber=False) -> np.ndarray:
+        # Two cases:
+        #   1) A continuous sequence acquisition is running (live mode). We
+        #      MUST NOT call snap() — MMCore raises "This operation can not
+        #      be executed while sequence acquisition is running". Read from
+        #      the circular buffer instead.
+        #   2) No sequence is running (idle, or just after stopAcquisition).
+        #      Take a one-shot snap.
+        try:
+            sequence_running = bool(self._core.isSequenceRunning())
+        except Exception:
+            sequence_running = False
+
+        if sequence_running:
+            try:
+                if self._core.getRemainingImageCount() > 0:
+                    frame = np.asarray(self._core.getLastImage())
+                    self._frameNunber += 1
+                    if returnFrameNumber:
+                        return frame, self._frameNunber
+                    return frame
+            except Exception:
+                self._logger.debug(
+                    "Failed to read latest image from sequence buffer",
+                    exc_info=True,
+                )
+            # No frame in the buffer yet — return a placeholder rather than
+            # blocking the live-view loop.
+            if returnFrameNumber:
+                return np.zeros(self._shape, dtype=np.uint16), -1
+            return np.zeros(self._shape, dtype=np.uint16)
+
+        # No sequence: try the most recent buffered frame, then fall back to
+        # a one-shot snap.
         try:
             if self._core.getRemainingImageCount() > 0:
-                return self._core.getLastImage()
+                return np.asarray(self._core.getLastImage())
         except Exception:
             pass
         try:
-            self._core.snap()
+            # CMMCorePlus.snap() returns the numpy array directly (it does
+            # snapImage() + getImage() under the hood). Calling getImage()
+            # again on top fails on the Andor adapter with
+            # "Camera image buffer read failed".
+            image = np.asarray(self._core.snap())
             self._frameNunber += 1
             if returnFrameNumber:
-                return self._core.getImage(), self._frameNunber
-            return self._core.getImage()
+                return image, self._frameNunber
+            return image
         except Exception:
             self._logger.error("Failed to snap a frame from MMCore", exc_info=True)
             if returnFrameNumber:

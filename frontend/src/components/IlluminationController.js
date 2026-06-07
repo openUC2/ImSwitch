@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from "react";
+import React, { useEffect, useRef, useCallback, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Box,
@@ -191,8 +191,26 @@ export default function IlluminationController({ hostIP, hostPort }) {
   const laserMinValues = _laserIndices.map((i) => allMinValues[i]);
   const laserMaxValues = _laserIndices.map((i) => allMaxValues[i]);
 
+  // Track container width to hide slider when too narrow
+  const containerRef = useRef(null);
+  const [containerWidth, setContainerWidth] = useState(null);
+  const SLIDER_MIN_WIDTH = 320;
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      setContainerWidth(entries[0].contentRect.width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const showSlider =
+    containerWidth === null || containerWidth >= SLIDER_MIN_WIDTH;
+
   return (
-    <Paper sx={{ p: 2 }}>
+    <Paper sx={{ p: 2 }} ref={containerRef}>
       <Grid container direction="column" spacing={1.25}>
         {laserSources.length ? (
           laserSources.map((laserName, idx) => {
@@ -214,32 +232,34 @@ export default function IlluminationController({ hostIP, hostPort }) {
                 sx={{ display: "flex", alignItems: "center", gap: 1.25 }}
               >
                 {/* Laser name */}
-                <Typography sx={{ minWidth: 96 }}>{laserName}</Typography>
+                <Typography sx={{ minWidth: 60 }}>{laserName}</Typography>
 
                 {/* Slider with dynamic min and max */}
                 <Box sx={{ flex: 1 }}>
                   <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                    <Slider
-                      value={currentValue}
-                      min={minValue}
-                      max={maxValue}
-                      marks={marks}
-                      onChange={(e) =>
-                        debouncedSetLaserValue(
-                          laserName,
-                          Number(e.target.value),
-                        )
-                      }
-                      sx={{
-                        flex: 1,
-                        "& .MuiSlider-markLabel[data-index='0']": {
-                          transform: "translateX(0%)",
-                        },
-                        "& .MuiSlider-markLabel[data-index='1']": {
-                          transform: "translateX(-100%)",
-                        },
-                      }}
-                    />
+                    {showSlider && (
+                      <Slider
+                        value={currentValue}
+                        min={minValue}
+                        max={maxValue}
+                        marks={marks}
+                        onChange={(e) =>
+                          debouncedSetLaserValue(
+                            laserName,
+                            Number(e.target.value),
+                          )
+                        }
+                        sx={{
+                          flex: 1,
+                          "& .MuiSlider-markLabel[data-index='0']": {
+                            transform: "translateX(0%)",
+                          },
+                          "& .MuiSlider-markLabel[data-index='1']": {
+                            transform: "translateX(-100%)",
+                          },
+                        }}
+                      />
+                    )}
                     <Input
                       value={currentValue}
                       size="small"

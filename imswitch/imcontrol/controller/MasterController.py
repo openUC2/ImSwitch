@@ -5,42 +5,6 @@ try:
 except ImportError:
     entry_points = None
 
-# TODO: Import managers dynamically - similar to the controllers - to save time
-from imswitch.imcontrol.model import (
-    DetectorsManager,
-    LasersManager,
-    MultiManager,
-    PositionersManager,
-    #RecordingManager,  # DEPRECATED - kept for backwards compatibility
-    RS232sManager,
-    SLMManager,
-    SIMManager,
-    DPCManager,
-    LEDMatrixsManager,
-    ROIScanManager,
-    WebRTCManager,
-    HyphaManager,
-    UC2ConfigManager,
-    AutofocusManager,
-    HistoScanManager,
-    StresstestManager,
-    PixelCalibrationManager,
-    LightsheetManager,
-    NidaqManager,
-    FOVLockManager,
-    RotatorsManager,
-    LEDsManager,
-    FlowStopManager,
-    WorkflowManager,
-    TimelapseManager,
-    LepmonManager,
-    ExperimentManager,
-    ObjectiveManager,
-    ArkitektManager,
-    SiLA2Manager,
-    InstrumentMetadataManager,
-)
-
 # New unified I/O service
 from imswitch.imcontrol.model.io import RecordingService
 
@@ -53,6 +17,42 @@ class MasterController:
 
     def __init__(self, setupInfo, commChannel, moduleCommChannel):
         self.__logger = initLogger(self)
+        # Import managers here (not at module level) so their heavy dependencies
+        # are only loaded when a MasterController is actually instantiated.
+        from imswitch.imcontrol.model import (
+            DetectorsManager,
+            LasersManager,
+            MultiManager,
+            PositionersManager,
+            RS232sManager,
+            SLMManager,
+            SIMManager,
+            DPCManager,
+            LEDMatrixsManager,
+            ROIScanManager,
+            WebRTCManager,
+            HyphaManager,
+            UC2ConfigManager,
+            AutofocusManager,
+            HistoScanManager,
+            StresstestManager,
+            PixelCalibrationManager,
+            LightsheetManager,
+            NidaqManager,
+            FOVLockManager,
+            RotatorsManager,
+            LEDsManager,
+            FlowStopManager,
+            WorkflowManager,
+            TimelapseManager,
+            LepmonManager,
+            ExperimentManager,
+            ObjectiveManager,
+            ArkitektManager,
+            SiLA2Manager,
+            InstrumentMetadataManager,
+            GalvoScannersManager,
+        )
         self.__setupInfo = setupInfo
         self.__commChannel = commChannel
         self.__moduleCommChannel = moduleCommChannel
@@ -95,7 +95,6 @@ class MasterController:
         )
         
         # Initialize galvo scanners manager
-        from imswitch.imcontrol.model import GalvoScannersManager
         self.galvoScannersManager = GalvoScannersManager(
             self.__setupInfo.galvoScanners, **lowLevelManagers
         )

@@ -13,7 +13,6 @@ from imswitch.imcommon.model import (
     generateShortcuts,
     SharedAttributes,
 )
-from .server import ImSwitchServer
 from imswitch.imcontrol.model import configfiletools
 from imswitch.imcontrol.view import guitools
 
@@ -275,6 +274,7 @@ class ImConMainController(MainController):
 
 
         self.__logger.debug("Start ImSwitch Server")
+        from .server import ImSwitchServer  # deferred: pulls in fastapi/uvicorn/socket.io
         self._serverWorker = ImSwitchServer(self.__api, self.__apiui, setupInfo)
         self._thread = threading.Thread(target=self._serverWorker.run)
         self._thread.start()

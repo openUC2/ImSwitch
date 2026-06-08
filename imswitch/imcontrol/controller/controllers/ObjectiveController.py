@@ -1,6 +1,4 @@
 
-import threading
-
 from imswitch.imcommon.model import APIExport
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
@@ -42,11 +40,6 @@ class ObjectiveController(LiveUpdatedController):
 
         # === State variables (Single Source of Truth) ===
         self._currentObjective: Optional[int] = None  # 0 or 1, or None if not initialized
-        self._objectiveMoveStateLock = threading.Lock()
-        self._objectiveMoveRequestId = 0
-        self._objectiveMoveWorkerActive = False
-        self._objectiveMoveRequestedSlot: Optional[int] = None
-        self._objectiveMoveRequestedSkipZ: bool = False
         self._isHomed: bool = False
         self._detectorWidth: Optional[int] = None
         self._detectorHeight: Optional[int] = None
@@ -279,44 +272,11 @@ class ObjectiveController(LiveUpdatedController):
             skipZ: If True, only move axis A (objective turret) without Z focus adjustment.
                    If False (default), also apply Z delta based on z0/z1 config.
         """
-        with self._objectiveMoveStateLock:
-            self._objectiveMoveRequestId += 1
-            self._objectiveMoveRequestedSlot = slot
-            self._objectiveMoveRequestedSkipZ = skipZ
+        import threading
+        mThread = threading.Thread(target=self.moveToObjectiveThread, args=(slot, skipZ))
+        mThread.start()
 
-            if self._objectiveMoveWorkerActive:
-                self._logger.debug(
-                    f"Updated pending objective move request to slot {slot}, skipZ={skipZ}"
-                )
-                return
-
-            self._objectiveMoveWorkerActive = True
-
-        worker = threading.Thread(target=self._processObjectiveMoveRequests, daemon=True)
-        worker.start()
-
-    def _processObjectiveMoveRequests(self):
-        try:
-            while True:
-                with self._objectiveMoveStateLock:
-                    slot = self._objectiveMoveRequestedSlot
-                    skipZ = self._objectiveMoveRequestedSkipZ
-                    requestId = self._objectiveMoveRequestId
-
-                if slot is None:
-                    return
-
-                self.moveToObjectiveThread(slot, skipZ, requestId)
-
-                with self._objectiveMoveStateLock:
-                    if requestId == self._objectiveMoveRequestId:
-                        self._objectiveMoveWorkerActive = False
-                        return
-        finally:
-            with self._objectiveMoveStateLock:
-                self._objectiveMoveWorkerActive = False
-
-    def moveToObjectiveThread(self, slot: int, skipZ: bool = False, requestId: Optional[int] = None):
+    def moveToObjectiveThread(self, slot: int, skipZ: bool = False):
         if slot not in [0, 1]:
             self._logger.error(f"Invalid objective slot: {slot} (must be 0 or 1)")
             return
@@ -357,15 +317,6 @@ class ObjectiveController(LiveUpdatedController):
 
         # Move the axis A motor (objective turret)
         success = self._moveMotorToSlot(slot)
-
-        with self._objectiveMoveStateLock:
-            latestRequestId = self._objectiveMoveRequestId
-
-        if requestId is not None and requestId != latestRequestId:
-            self._logger.debug(
-                f"Skipping stale objective update for slot {slot} (request {requestId}, latest {latestRequestId})"
-            )
-            return
 
         if success or not self._hasMotor:
             self._currentObjective = slot
@@ -719,98 +670,53 @@ class ObjectiveController(LiveUpdatedController):
             except Exception as e:
                 self._logger.debug(f"Could not get motor position: {e}")
 
-                with self._objectiveMoveStateLock:
-                    self._objectiveMoveRequestId += 1
-                    requestId = self._objectiveMoveRequestId
+        return status
 
-                    if self._objectiveMoveWorkerActive:
-                        self._logger.debug(
-                            f"Queued objective move request {requestId} for slot {slot}"
-                        )
-                        return
-
-                    self._objectiveMoveWorkerActive = True
-
-                mThread = threading.Thread(target=self._processObjectiveMoveRequests, daemon=True)
-                mThread.start()
-
-            def _processObjectiveMoveRequests(self):
-                try:
-                    while True:
-                        with self._objectiveMoveStateLock:
-                            requestId = self._objectiveMoveRequestId
-
-                        self.moveToObjectiveThread(requestId)
-
-                        with self._objectiveMoveStateLock:
-                            if requestId == self._objectiveMoveRequestId:
-                                self._objectiveMoveWorkerActive = False
-                                return
-                finally:
-                    with self._objectiveMoveStateLock:
-                        self._objectiveMoveWorkerActive = False
+    # === SharedAttributes for metadata tracking ===
     
-            def moveToObjectiveThread(self, requestId: int):
-                with self._objectiveMoveStateLock:
-                    if requestId != self._objectiveMoveRequestId:
-                        return
+    def setSharedAttr(self, attr, value):
+        """Set a shared attribute for metadata tracking."""
+        self._commChannel.sharedAttrs[(_attrCategory, attr)] = value
 
-                    slot = self._objectiveMoveRequestId and None
-                    # Read the latest requested slot/skipZ from the current request id.
-                    # The request id is only used to detect stale completions.
-                    slot = getattr(self, "_objectiveMoveRequestedSlot", None)
-                    skipZ = getattr(self, "_objectiveMoveRequestedSkipZ", False)
+    def _updateSharedAttrs(self):
+        """Update all shared attributes with current objective state."""
+        if self._currentObjective is None:
+            return
+        
+        # Update objective metadata for the metadata hub
+        self.setSharedAttr(_nameAttr, self._getCurrentObjectiveName())
+        self.setSharedAttr(_magnificationAttr, self._getCurrentMagnification())
+        self.setSharedAttr(_naAttr, self._getCurrentNA())
+        self.setSharedAttr(_pixelSizeAttr, self._getCurrentPixelSize())
+        self.setSharedAttr(_slotAttr, self._currentObjective)
+        
+        fov = self._getCurrentFOV()
+        if fov:
+            self.setSharedAttr(_fovUmAttr, fov)
 
-                if slot not in [0, 1]:
-                    self._logger.error(f"Invalid objective slot: {slot} (must be 0 or 1)")
-                    return
 
-                if not self._isSlotConfigured[slot]:
-                    self._logger.warning(
-                        f"Objective slot {slot} is not configured (empty name or magnification=0); "
-                        "refusing to issue axis-A motion."
-                    )
-                    return
+# Metadata key constants for SharedAttributes
+_attrCategory = 'Objective'
+_nameAttr = 'Name'
+_magnificationAttr = 'Magnification'
+_naAttr = 'NA'
+_pixelSizeAttr = 'PixelSizeUm'
+_slotAttr = 'TurretIndex'
+_fovUmAttr = 'FOVUm'
 
-                if False and slot == self._currentObjective:
-                    self._logger.debug(f"Already at objective slot {slot}, no movement needed")
-                    return
 
-                self._logger.info(f"Moving to objective slot {slot} ({self._objectiveNames[slot]}), skipZ={skipZ}")
-
-                # Calculate Z delta if needed (before changing slot)
-                z_delta = 0
-                if not skipZ and self._currentObjective is not None and self._currentObjective in [0, 1]:
-                    # Calculate Z delta: difference between target z position and current z position
-                    current_z = self._zPositions[self._currentObjective] if self._currentObjective < len(self._zPositions) else 0
-                    target_z = self._zPositions[slot] if slot < len(self._zPositions) else 0
-                    z_delta = target_z - current_z
-                    self._logger.debug(f"Z delta: {z_delta} µm (from z{self._currentObjective}={current_z} to z{slot}={target_z})")
-                    # Apply Z focus adjustment if needed
-                    if  z_delta != 0 and self._positioner is not None:
-                        try:
-                            self._logger.info(f"Applying Z focus adjustment: {z_delta} µm")
-                            self._positioner.move(
-                                value=z_delta,
-                                axis="Z",
-                                is_absolute=False,  # Relative movement for Z
-                                is_blocking=False
-                            )
-                        except Exception as e:
-                            self._logger.error(f"Failed to apply Z focus adjustment: {e}", exc_info=True)
-
-                # Move the axis A motor (objective turret)
-                success = self._moveMotorToSlot(slot)
-
-                with self._objectiveMoveStateLock:
-                    latestRequestId = self._objectiveMoveRequestId
-
-                if requestId != latestRequestId:
-                    self._logger.debug(
-                        f"Skipping stale objective update for slot {slot} (request {requestId}, latest {latestRequestId})"
-                    )
-                    return
-
-                if success or not self._hasMotor:
-                    self._currentObjective = slot
-                    self._updatePixelSize()
+# Copyright (C) 2020-2024 ImSwitch developers
+# This file is part of ImSwitch.
+#
+# ImSwitch is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# ImSwitch is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.

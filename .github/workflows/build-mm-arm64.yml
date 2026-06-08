@@ -86,22 +86,43 @@ jobs:
           install: |
             apt-get update -qq
             DEBIAN_FRONTEND=noninteractive apt-get install -qq -y \
-              git build-essential autoconf automake libtool pkg-config \
-              swig python3-dev libboost-all-dev curl ca-certificates
+              git build-essential autoconf automake libtool autoconf-archive \
+              pkg-config swig python3-dev libboost-all-dev \
+              libusb-1.0-0-dev libudev-dev curl ca-certificates
           run: |
             set -euxo pipefail
             cd /work
+            # mmCoreAndDevices itself is a CMake-only submodule with no
+            # autotools entry point. The classic ./autogen.sh + ./configure
+            # build path lives in the *parent* micro-manager repo, which
+            # references mmCoreAndDevices as a submodule.
             git clone --depth 1 --branch ${{ steps.mm.outputs.ref }} \
-              https://github.com/micro-manager/mmCoreAndDevices.git mm-src
+              https://github.com/micro-manager/micro-manager.git mm-src
             cd mm-src
+            git submodule update --init --recursive --depth 1
             ./autogen.sh
-            ./configure --prefix=/work/mm-out --without-java
+            # --without-java skips the Java SWIG bindings; --disable-java-app
+            # skips the Java AcqEngine/MMStudio build. Headless ImSwitch only
+            # needs the C++ MMCore + device adapters.
+            ./configure --prefix=/work/mm-out --without-java --disable-java-app
             make -j"$(nproc)"
             make install
             cd /work
+            # Record the device interface version so consumers can pin pymmcore-plus
+            # to a compatible release.
+            grep "MODULE_INTERFACE_VERSION" \
+              mm-src/mmCoreAndDevices/MMDevice/MMDeviceConstants.h \
+              > /work/DEVICE_INTERFACE_VERSION.txt || true
             mkdir -p artifact/micro-manager/lib/micro-manager
             cp -a /work/mm-out/lib/micro-manager/. artifact/micro-manager/lib/micro-manager/
-            tar -C artifact -czf micro-manager-arm64.tar.gz micro-manager
+            cp -f /work/DEVICE_INTERFACE_VERSION.txt artifact/ 2>/dev/null || true
+            # List the adapters we managed to build (vendor-locked ones
+            # without arm64 SDKs are silently skipped by the build).
+            find artifact/micro-manager/lib/micro-manager -name "*.so" \
+              | sed 's|.*/libmmgr_dal_||; s|\.so.*||' | sort \
+              > artifact/ADAPTERS_BUILT.txt || true
+            cat artifact/ADAPTERS_BUILT.txt || true
+            tar -C artifact -czf micro-manager-arm64.tar.gz .
             ls -lh micro-manager-arm64.tar.gz
 
       - name: Upload artifact

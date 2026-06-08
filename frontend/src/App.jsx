@@ -274,6 +274,10 @@ function App() {
   };
 
   const handleStartHomingFromDialog = async () => {
+    if (homingDialogBusy) {
+      return;
+    }
+
     setHomingDialogBusy(true);
 
     try {

@@ -59,6 +59,7 @@ import CompositeComponent from "./axon/CompositeComponent";
 //redux
 import { useDispatch, useSelector } from "react-redux";
 import * as connectionSettingsSlice from "./state/slices/ConnectionSettingsSlice.js";
+import * as webSocketSlice from "./state/slices/WebSocketSlice.js";
 import * as vizarrViewerSlice from "./state/slices/VizarrViewerSlice.js";
 import {
   clearNotification,
@@ -68,6 +69,10 @@ import {
 import { getThemeState } from "./state/slices/ThemeSlice.js";
 import { SnackbarProvider, useSnackbar } from "notistack";
 import useBackendControllerCapabilities from "./hooks/useBackendControllerCapabilities";
+import apiPositionerControllerHomeAxis from "./backendapi/apiPositionerControllerHomeAxis";
+import apiPositionerControllerGetHomingStatus from "./backendapi/apiPositionerControllerGetHomingStatus";
+import apiPositionerControllerDismissHomingRecommendation from "./backendapi/apiPositionerControllerDismissHomingRecommendation";
+import apiPositionerControllerGetPositions from "./backendapi/apiPositionerControllerGetPositions";
 
 // Filemanager
 import { api } from "./FileManager/api/api.js";
@@ -80,7 +85,16 @@ import { renameAPI } from "./FileManager/api/renameAPI.js";
 import "./FileManager/App.scss";
 import FileManager from "./FileManager/FileManager/FileManager.jsx";
 
-import { Box, CssBaseline } from "@mui/material";
+import {
+  Box,
+  Button,
+  CssBaseline,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+} from "@mui/material";
 import IconButton from "@mui/material/IconButton";
 import CloseIcon from "@mui/icons-material/Close";
 import { ThemeProvider } from "@mui/material/styles";
@@ -154,6 +168,7 @@ function App() {
   const connectionSettingsState = useSelector(
     connectionSettingsSlice.getConnectionSettingsState,
   );
+  const webSocketState = useSelector(webSocketSlice.getWebSocketState);
   const { isDarkMode } = useSelector(getThemeState);
 
   // Hook to detect mobile screens
@@ -197,6 +212,8 @@ function App() {
   const [storageRefreshKey, setStorageRefreshKey] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [files, setFiles] = useState([]);
+  const [homingDialogOpen, setHomingDialogOpen] = useState(false);
+  const [homingDialogBusy, setHomingDialogBusy] = useState(false);
 
   useBackendControllerCapabilities({
     hostIP,
@@ -204,6 +221,106 @@ function App() {
     selectedPlugin,
     setSelectedPlugin,
   });
+
+  useEffect(() => {
+    if (!webSocketState.connected) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const checkHomingStatus = async () => {
+      try {
+        const homingStatus = await apiPositionerControllerGetHomingStatus();
+        if (
+          !cancelled &&
+          !homingStatus?.hasHomedSinceStartup &&
+          !homingStatus?.homingRecommendationDismissed
+        ) {
+          setHomingDialogOpen(true);
+        }
+      } catch (error) {
+        console.warn("Failed to fetch homing status on connect", error);
+      }
+    };
+
+    checkHomingStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [webSocketState.connected, hostIP, apiPort]);
+
+  const handleDismissHomingDialog = async () => {
+    if (homingDialogBusy) {
+      return;
+    }
+
+    setHomingDialogBusy(true);
+    try {
+      await apiPositionerControllerDismissHomingRecommendation();
+      setHomingDialogOpen(false);
+    } catch (error) {
+      dispatch(
+        setNotification({
+          message:
+            "Could not store homing prompt decision. The prompt may appear again after reload.",
+          type: "error",
+        }),
+      );
+    } finally {
+      setHomingDialogBusy(false);
+    }
+  };
+
+  const handleStartHomingFromDialog = async () => {
+    if (homingDialogBusy) {
+      return;
+    }
+
+    setHomingDialogBusy(true);
+
+    try {
+      const positions = await apiPositionerControllerGetPositions();
+      const firstPositionerName = Object.keys(positions || {})[0];
+      const availableAxes = firstPositionerName
+        ? Object.keys(positions[firstPositionerName] || {})
+        : [];
+
+      const preferredAxes = ["X", "Y"];
+      const axesToHome = preferredAxes.filter((axis) =>
+        availableAxes.includes(axis),
+      );
+
+      if (axesToHome.length === 0) {
+        throw new Error("No X/Y axes available for homing");
+      }
+
+      for (const axis of axesToHome) {
+        await apiPositionerControllerHomeAxis({
+          axis,
+          isBlocking: false,
+        });
+      }
+
+      dispatch(
+        setNotification({
+          message: `Homing started for axis ${axesToHome.join(", ")}.`,
+          type: "success",
+        }),
+      );
+      setHomingDialogOpen(false);
+    } catch (error) {
+      dispatch(
+        setNotification({
+          message: "Failed to start homing from startup prompt.",
+          type: "error",
+        }),
+      );
+    } finally {
+      setHomingDialogBusy(false);
+    }
+  };
 
   /*
   FileManager
@@ -457,6 +574,35 @@ function App() {
         <WebSocketHandler />
         <OnboardingTour selectedPlugin={selectedPlugin} />
         <CssBaseline />
+
+        <Dialog
+          open={homingDialogOpen}
+          onClose={handleDismissHomingDialog}
+          disableEscapeKeyDown={homingDialogBusy}
+        >
+          <DialogTitle>Homing Recommended</DialogTitle>
+          <DialogContent>
+            <DialogContentText>
+              The machine has not been homed since backend startup. Homing is
+              recommended before moving the stage.
+            </DialogContentText>
+          </DialogContent>
+          <DialogActions>
+            <Button
+              onClick={handleDismissHomingDialog}
+              disabled={homingDialogBusy}
+            >
+              Continue without homing
+            </Button>
+            <Button
+              variant="contained"
+              onClick={handleStartHomingFromDialog}
+              disabled={homingDialogBusy}
+            >
+              Start homing (X/Y)
+            </Button>
+          </DialogActions>
+        </Dialog>
 
         <Box sx={{ display: "flex" }}>
           <NavigationDrawer

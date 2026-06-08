@@ -64,10 +64,6 @@ jobs:
           github-token: ${{github.token}}
           run-id: ${{ steps.wait-build-frontend.outputs.run-id }}
 
-      - name: Remove source map files from built frontend
-        run: |
-          rm ./frontend/build/static/*/*.map
-
       # Work around a bug where capital letters in the GitHub username (e.g. "PlanktoScope") make it
       # impossible to push to GHCR. See https://github.com/macbre/push-to-ghcr/issues/12
       - name: Lowercase image registry and owner

@@ -88,7 +88,9 @@ rm -rf /opt/VimbaX/doc
 
 # Install picamera2
 
-gpg --homedir "$(mktemp -d)" --no-default-keyring --keyring /etc/apt/keyrings/raspi.gpg --keyserver keyserver.ubuntu.com --recv-keys 82B129927FA3303E
+tmpdir="$(mktemp -d)"
+gpg --homedir "$tmpdir" --keyserver keyserver.ubuntu.com --recv-keys 82B129927FA3303E
+gpg --homedir "$tmpdir" --export 82B129927FA3303E >/etc/apt/keyrings/raspi.gpg
 echo "deb [signed-by=/etc/apt/keyrings/raspi.gpg] http://archive.raspberrypi.org/debian/ trixie main" >/etc/apt/sources.list.d/raspi.list
 apt-get update
 apt install -y --no-install-recommends python3-picamera2

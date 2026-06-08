@@ -15,6 +15,7 @@ class PositionerController(ImConWidgetController):
 
         self.settingAttr = False
         self._hasHomedSinceStartup = False
+        self._homingRecommendationDismissed = False
 
         self.__logger = initLogger(self, tryInheritParent=True)
 
@@ -160,13 +161,23 @@ class PositionerController(ImConWidgetController):
                                                                homeEndposRelease=homeEndposRelease, 
                                                                homeTimeout=homeTimeout)
         self._hasHomedSinceStartup = True
+        self._homingRecommendationDismissed = False
         #self.updatePosition(positionerName, axis)
         #self._commChannel.sigUpdateMotorPosition.emit(self.getPos()) # Not needed as it will be pushed asynchronously from the esp via signal
 
     @APIExport(runOnUIThread=False)
     def getHomingStatus(self):
         return {
-            "hasHomedSinceStartup": self._hasHomedSinceStartup
+            "hasHomedSinceStartup": self._hasHomedSinceStartup,
+            "homingRecommendationDismissed": self._homingRecommendationDismissed
+        }
+
+    @APIExport(runOnUIThread=False)
+    def dismissHomingRecommendation(self):
+        self._homingRecommendationDismissed = True
+        return {
+            "success": True,
+            "homingRecommendationDismissed": self._homingRecommendationDismissed
         }
 
     @APIExport()

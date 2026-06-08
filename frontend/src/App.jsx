@@ -71,6 +71,7 @@ import { SnackbarProvider, useSnackbar } from "notistack";
 import useBackendControllerCapabilities from "./hooks/useBackendControllerCapabilities";
 import apiPositionerControllerHomeAxis from "./backendapi/apiPositionerControllerHomeAxis";
 import apiPositionerControllerGetHomingStatus from "./backendapi/apiPositionerControllerGetHomingStatus";
+import apiPositionerControllerDismissHomingRecommendation from "./backendapi/apiPositionerControllerDismissHomingRecommendation";
 import apiPositionerControllerGetPositions from "./backendapi/apiPositionerControllerGetPositions";
 
 // Filemanager
@@ -231,7 +232,11 @@ function App() {
     const checkHomingStatus = async () => {
       try {
         const homingStatus = await apiPositionerControllerGetHomingStatus();
-        if (!cancelled && !homingStatus?.hasHomedSinceStartup) {
+        if (
+          !cancelled &&
+          !homingStatus?.hasHomedSinceStartup &&
+          !homingStatus?.homingRecommendationDismissed
+        ) {
           setHomingDialogOpen(true);
         }
       } catch (error) {
@@ -246,11 +251,26 @@ function App() {
     };
   }, [webSocketState.connected, hostIP, apiPort]);
 
-  const handleDismissHomingDialog = () => {
+  const handleDismissHomingDialog = async () => {
     if (homingDialogBusy) {
       return;
     }
-    setHomingDialogOpen(false);
+
+    setHomingDialogBusy(true);
+    try {
+      await apiPositionerControllerDismissHomingRecommendation();
+      setHomingDialogOpen(false);
+    } catch (error) {
+      dispatch(
+        setNotification({
+          message:
+            "Could not store homing prompt decision. The prompt may appear again after reload.",
+          type: "error",
+        }),
+      );
+    } finally {
+      setHomingDialogBusy(false);
+    }
   };
 
   const handleStartHomingFromDialog = async () => {

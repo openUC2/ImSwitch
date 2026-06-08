@@ -10,7 +10,19 @@ const apiObjectiveControllerMoveToObjective = async (slot, skipZ = false) => {
       axiosInstance.defaults.baseURL + `/ObjectiveController/moveToObjective?slot=${slot}&skipZ=${skipZ}`
     );
     const response = await axiosInstance.get(`/ObjectiveController/moveToObjective?slot=${slot}&skipZ=${skipZ}`); // Send GET request with the slot parameter
-    return response.data; // Return the data from the response
+    const ack = response.data;
+
+    // Explicit ACK contract: avoid treating empty/ambiguous responses as success.
+    if (!ack || typeof ack !== "object" || typeof ack.accepted !== "boolean") {
+      throw new Error("Objective move did not return a valid ACK object");
+    }
+
+    if (!ack.accepted) {
+      const reason = ack.reason ? ` (${ack.reason})` : "";
+      throw new Error(`Objective move rejected${reason}`);
+    }
+
+    return ack;
   } catch (error) {
     console.error(`Error moving to objective with slot ${slot}:`, error);
     throw error; // Throw error to be handled by the caller

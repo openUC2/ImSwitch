@@ -89,8 +89,8 @@ RUN \
   --mount=type=cache,sharing=locked,target=/var/cache/apt \
   --mount=type=cache,sharing=locked,target=/var/lib/apt \
   --mount=type=cache,target=/root/.cache/uv \
-  --mount=type=bind,source=docker/build-drivers.sh,target=/mnt/build/build-drivers.sh \
-  /mnt/build/build-drivers.sh
+  --mount=type=bind,source=docker/install-drivers.sh,target=/mnt/build/install-drivers.sh \
+  /mnt/build/install-drivers.sh
 ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib
 # LD_LIBRARY_PATH is set separately; expanding $LD_LIBRARY_PATH before it is defined causes a
 # Dockerfile linter warning and is a no-op at build time anyway.
@@ -103,10 +103,10 @@ RUN \
   --mount=type=cache,sharing=locked,target=/var/cache/apt \
   --mount=type=cache,sharing=locked,target=/var/lib/apt \
   --mount=type=cache,target=/root/.cache/uv \
-  --mount=type=bind,source=docker/build-imswitch-deps.sh,target=/mnt/build/build-imswitch-deps.sh \
+  --mount=type=bind,source=docker/install-imswitch-deps.sh,target=/mnt/build/install-imswitch-deps.sh \
   --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
   --mount=type=bind,source=uv.lock,target=uv.lock \
-  /mnt/build/build-imswitch-deps.sh
+  /mnt/build/install-imswitch-deps.sh
 
 # Install Imswitch itself:
 COPY . /opt/imswitch

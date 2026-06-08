@@ -172,7 +172,7 @@ class PositionerController(ImConWidgetController):
             "homingRecommendationDismissed": self._homingRecommendationDismissed
         }
 
-    @APIExport(runOnUIThread=False)
+    @APIExport(runOnUIThread=False, requestType="POST")
     def dismissHomingRecommendation(self):
         self._homingRecommendationDismissed = True
         return {

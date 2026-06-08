@@ -16,12 +16,11 @@ apt-get install -y \
 
 # Install system picamera2 which pulls in compatible libcamera dependencies
 # Note: python3-picamera2 will automatically install the correct libcamera version
-apt-get update && apt install -y --no-install-recommends \
-         python3-picamera2 \
-     && apt-get clean \
-     && apt-get autoremove \
-     && rm -rf /var/cache/apt/archives/* \
-     && rm -rf /var/lib/apt/lists/*
+apt install -y --no-install-recommends python3-picamera2
+
+# Install simplejpeg in UV environment to avoid NumPy ABI compatibility issues
+# The system python3-simplejpeg is compiled against system NumPy, but we need it for UV venv NumPy
+sudo -i -u pi uv pip install --no-cache-dir simplejpeg --force-reinstall --python /opt/imswitch/.venv/bin/python
 
 # Activate UV environment and install dependencies
 export PATH="/root/.local/bin:$PATH"
@@ -37,10 +36,10 @@ cd /opt/imswitch
 # Install all deps from the lockfile without installing ImSwitch itself.
 # Using --frozen ensures the lockfile is used as-is (no resolver conflicts).
 # The venv was already created by build-uv.sh so we don't pass --python here.
-uv sync --no-install-project --frozen
+sudo -i -u pi uv sync --no-install-project --frozen
 
 # Reinstall psygnal from source to work around binary-wheel ABI issues
-uv pip install psygnal --no-binary :all:
+sudo -i -u pi uv pip install psygnal --no-binary :all:
 
 # Clean up build-only tools
 
@@ -53,6 +52,6 @@ apt-get remove -y \
 apt -y autoremove
 apt-get clean
 rm -rf /var/lib/apt/lists/*
-rm -rf /root/.cache/uv
-rm -rf /root/.cache/pip
+rm -rf /home/pi/.cache/uv
+rm -rf /home/pi/.cache/pip
 rm -rf /tmp/*

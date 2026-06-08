@@ -53,7 +53,7 @@ cd /tmp/Galaxy_Linux_Python_2.0.2106.9041/api
 # Activate UV venv and install setuptools for building Python bindings
 export PATH="/root/.local/bin:$PATH"
 source /opt/imswitch/.venv/bin/activate
-uv pip install setuptools wheel
+sudo -i -u pi uv pip install setuptools wheel
 python3 setup.py build
 python3 setup.py install
 
@@ -80,7 +80,7 @@ if [ "$TARGETPLATFORM" = "linux/arm64" ]; then
   # Install VmbPy using UV pip
   export PATH="/root/.local/bin:$PATH"
   source /opt/imswitch/.venv/bin/activate
-  uv pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl
+  sudo -i -u pi uv pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl
   export GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 fi
 rm -rf /opt/VimbaX/doc
@@ -91,15 +91,12 @@ apt-get remove -y \
   wget \
   unzip \
   g++ \
-  g++-11 \
-# Clean up all the package managers at the end
+  g++-11
 
 apt -y autoremove
 apt-get clean
 rm -rf /var/lib/apt/lists/*
-rm -rf /root/.cache/uv
-rm -rf /root/.cache/pip
-rm -rf /tmp/*onda/pkgs/*
+rm -rf /home/pi/.cache/uv
 pip3 cache purge || true
-rm -rf /root/.cache/pip
+rm -rf /home/pi/.cache/pip
 rm -rf /tmp/*

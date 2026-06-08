@@ -61,6 +61,9 @@ ARG TARGETPLATFORM
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
+# Set up unprivileged user
+RUN groupadd -g 1000 pi && useradd -m -u 1000 -g pi pi
+
 # Note(ethanjli): we have RUN steps calling build scripts which each create and delete many files,
 # in order to prevent junk from being baked into the final container image. This also gives us more
 # helpful error messages when a particular command fails.
@@ -98,5 +101,4 @@ RUN chmod +x /entrypoint.sh /venv-shell.sh
 ENTRYPOINT ["/entrypoint.sh"]
 
 # Run as unprivileged user
-RUN groupadd -g 1000 pi && useradd -m -u 1000 -g pi pi
 USER pi

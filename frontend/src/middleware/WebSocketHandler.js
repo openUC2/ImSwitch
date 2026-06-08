@@ -467,8 +467,28 @@ const WebSocketHandler = () => {
               return;
             }
           } else if (decoded.image) {
-            // JPEG frame
-            frameData = decoded.image;
+            // JPEG frame.  The backend sends raw bytes (msgpack 'bin' type)
+            // since §4.A.  All existing UI consumers expect a base64 string,
+            // so we re-encode here.  Cost: < 1 ms for a 500 KB JPEG on a
+            // laptop; net win because the Pi 5 saves ~0.5 ms by not running
+            // Python's base64.b64encode on every frame.
+            if (typeof decoded.image === 'string') {
+              // Legacy / mixed backend already supplied a base64 string.
+              frameData = decoded.image;
+            } else {
+              const raw = decoded.image instanceof Uint8Array
+                ? decoded.image
+                : new Uint8Array(decoded.image);
+              // Build the binary string in 32 KB chunks to stay well within
+              // the JS call-stack limit for Function.apply argument lists.
+              const CHUNK = 0x8000;
+              let binary = '';
+              for (let i = 0; i < raw.length; i += CHUNK) {
+                binary += String.fromCharCode.apply(
+                  null, raw.subarray(i, Math.min(i + CHUNK, raw.length)));
+              }
+              frameData = btoa(binary);
+            }
           }
         } else if (Array.isArray(payload) && payload.length === 2) {
           // Legacy format: [packed_metadata, frameData]
@@ -944,8 +964,10 @@ const WebSocketHandler = () => {
               }),
             );
 
-            // Auto-advance to completion step on terminal states
-            const terminalStates = ["success", "failed", "warning"];
+            // Auto-advance to completion step on terminal states.
+            // "cancelled" is treated as terminal so the UI unblocks even
+            // when the user aborted a stuck flash via cancelUSBFlash.
+            const terminalStates = ["success", "failed", "warning", "cancelled"];
             if (terminalStates.includes(flashStatus.status)) {
               if (
                 flashStatus.status === "success" ||
@@ -955,6 +977,13 @@ const WebSocketHandler = () => {
                   usbFlashSlice.setFlashResult({
                     status: flashStatus.status,
                     message: flashStatus.message,
+                  }),
+                );
+              } else if (flashStatus.status === "cancelled") {
+                dispatch(
+                  usbFlashSlice.setFlashResult({
+                    status: "cancelled",
+                    message: flashStatus.message || "Flashing cancelled",
                   }),
                 );
               }

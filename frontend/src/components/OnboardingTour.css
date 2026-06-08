@@ -1,0 +1,117 @@
+/*
+ * Styling for the intro.js first-run tour (see OnboardingTour.jsx).
+ * The base look comes from intro.js/introjs.css; here we only add:
+ *   - the small "group" chip shown at the top of each tooltip,
+ *   - a dark-mode skin scoped to `body.imswitch-tour-dark` so the tour matches
+ *     the MUI light/dark theme.
+ * (The "Skip section" affordance is a separate MUI button, styled inline.)
+ */
+
+/* ----------------------------------------------------------- layout tweaks */
+.imswitch-introjs-tooltip {
+  min-width: 280px;
+  max-width: 360px;
+  border-radius: 8px;
+}
+
+.imswitch-introjs-tooltip .introjs-tooltip-title {
+  font-size: 1.05rem;
+}
+
+/* Group chip at the top of every tooltip body */
+.imswitch-tour-group {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #1565c0;
+  background: rgba(21, 101, 192, 0.12);
+}
+
+/* ----------------------------------------------------------------- dark UI */
+body.imswitch-tour-dark .introjs-tooltip,
+body.imswitch-tour-dark .imswitch-introjs-tooltip {
+  background-color: #2a2d31;
+  color: #e6e6e6;
+}
+
+body.imswitch-tour-dark .introjs-tooltip-title {
+  color: #ffffff;
+}
+
+body.imswitch-tour-dark .introjs-tooltiptext {
+  color: #d6d6d6;
+}
+
+/* Tooltip arrow must match the dark tooltip background */
+body.imswitch-tour-dark .introjs-arrow.top,
+body.imswitch-tour-dark .introjs-arrow.top-right,
+body.imswitch-tour-dark .introjs-arrow.top-middle {
+  border-bottom-color: #2a2d31;
+}
+body.imswitch-tour-dark .introjs-arrow.bottom,
+body.imswitch-tour-dark .introjs-arrow.bottom-right,
+body.imswitch-tour-dark .introjs-arrow.bottom-middle {
+  border-top-color: #2a2d31;
+}
+body.imswitch-tour-dark .introjs-arrow.left,
+body.imswitch-tour-dark .introjs-arrow.left-bottom {
+  border-right-color: #2a2d31;
+}
+body.imswitch-tour-dark .introjs-arrow.right,
+body.imswitch-tour-dark .introjs-arrow.right-bottom {
+  border-left-color: #2a2d31;
+}
+
+body.imswitch-tour-dark .imswitch-tour-group {
+  color: #90caf9;
+  background: rgba(144, 202, 249, 0.16);
+}
+
+body.imswitch-tour-dark .introjs-button {
+  background-color: #3a3f44;
+  background-image: none;
+  border: 1px solid #55595e;
+  color: #e6e6e6;
+  text-shadow: none;
+}
+
+body.imswitch-tour-dark .introjs-button:hover,
+body.imswitch-tour-dark .introjs-button:focus {
+  background-color: #4a4f54;
+  border-color: #6a6f74;
+  color: #ffffff;
+}
+
+body.imswitch-tour-dark .introjs-button.introjs-disabled,
+body.imswitch-tour-dark .introjs-button.introjs-disabled:hover {
+  color: #8a8f94;
+  background-color: #2f3338;
+  border-color: #44484d;
+}
+
+body.imswitch-tour-dark .introjs-progressbar {
+  background-color: #2196f3;
+}
+
+body.imswitch-tour-dark .introjs-progress {
+  background-color: #44484d;
+}
+
+body.imswitch-tour-dark .introjs-bullets ul li a {
+  background-color: #55595e;
+}
+body.imswitch-tour-dark .introjs-bullets ul li a.active {
+  background-color: #2196f3;
+}
+
+body.imswitch-tour-dark .introjs-skipbutton {
+  color: #b0b4b8;
+}
+body.imswitch-tour-dark .introjs-skipbutton:hover {
+  color: #ffffff;
+}

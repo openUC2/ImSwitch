@@ -1,0 +1,257 @@
+{
+    "detectors": {
+        "Andor": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "MMCoreDetectorManager",
+            "managerProperties": {
+                "adapterName": "Andor",
+                "deviceName": "Andor",
+                "deviceLabel": "Andor"
+            },
+            "forAcquisition": true,
+            "forFocusLock": false,
+            "defaultStreamSettings": {}
+        },
+        "ObservationCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "OpenCVCamManager",
+            "managerProperties": {
+                "cameraListIndex": 0,
+                "cameraListIndexWIN": 0,
+                "isRGB": true,
+                "cameraEffPixelsize": 12.2,
+                "opencvcam": {
+                    "exposure": 0,
+                    "gain": 0,
+                    "blacklevel": 100,
+                    "image_width": 1000,
+                    "image_height": 1000,
+                    "pixel_format": "Mono12"
+                }
+            },
+            "forAcquisition": false,
+            "forFocusLock": false,
+            "defaultStreamSettings": {}
+        }
+    },
+    "lasers": {
+        "LED": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDLaserManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "channel_index": 4
+            },
+            "valueRangeMin": 0,
+            "valueRangeMax": 1023,
+            "wavelength": 1024,
+            "freqRangeMin": 0,
+            "freqRangeMax": 0,
+            "freqRangeInit": 0,
+            "valueRangeStep": 1.0
+        }
+    },
+    "LEDs": {},
+    "LEDMatrixs": {
+        "ESP32 LEDMatrix": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDMatrixManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "Nx": 4,
+                "Ny": 4,
+                "wavelength": 488,
+                "valueRangeMin": 0,
+                "valueRangeMax": 32768
+            }
+        }
+    },
+    "positioners": {
+        "ESP32Stage": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32StageManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "isEnable": true,
+                "enableauto": false,
+                "stepsizeXDocu": "200*16 per revolution at 1 pitch",
+                "stepsizeX": 0.3125,
+                "stepsizeY": 0.3125,
+                "stepsizeA": 0.3125,
+                "stepsizeZ": 0.3125,
+                "homeSpeedX": 20000,
+                "homeSpeedY": 20000,
+                "homeSpeedZ": 10000,
+                "homeSpeedA": 20000,
+                "isDualaxis": false,
+                "backlashXOld": 15,
+                "backlashYOld": 40,
+                "backlashX": 0,
+                "backlashY": 0,
+                "homeEndstoppolarityA": 1,
+                "homeEndstoppolarityX": 1,
+                "homeEndstoppolarityY": 1,
+                "homeEndstoppolarityZ": 1,
+                "homeDirectionA": -1,
+                "homeDirectionX": -1,
+                "homeDirectionY": -1,
+                "homeDirectionZ": 1,
+                "homeXenabled": 1,
+                "homeYenabled": 1,
+                "homeZenabled": 1,
+                "homeAenabled": 1,
+                "homeOnStartX": 0,
+                "homeOnStartY": 0,
+                "homeOnStartZ": 0,
+                "homeOnStartA": 0,
+                "safePositionZHoming": -5000,
+                "initialSpeedX": 20000,
+                "initialSpeedY": 20000,
+                "initialSpeedZ": 20000.0,
+                "initialSpeedA": 20000.0,
+                "frameHomeOnStart": 0,
+                "maxSpeedX": 10000,
+                "maxSpeedY": 10000,
+                "maxSpeedZ": 10000,
+                "maxSpeedA": 10000,
+                "backlashZ": 0,
+                "backlashA": 0,
+                "homeEndposReleaseX": 0,
+                "homeTimeoutX": 20000,
+                "homeEndposReleaseY": 0,
+                "homeTimeoutY": 20000,
+                "homeEndposReleaseZ": -10000,
+                "homeTimeoutZ": 20000,
+                "homeEndposReleaseA": 0,
+                "homeTimeoutA": 20000
+            },
+            "axes": [
+                "X",
+                "Y",
+                "Z",
+                "A"
+            ],
+            "isPositiveDirection": true,
+            "forPositioning": true,
+            "forScanning": true,
+            "resetOnClose": true,
+            "stageOffsets": {
+                "stageOffsetPositionX": -103067.86983366935,
+                "stageOffsetPositionY": -52049.03414818548,
+                "stageOffsetPositionZ": 0.0,
+                "stageOffsetPositionA": 0.0
+            }
+        }
+    },
+    "galvoScanners": {},
+    "rs232devices": {
+        "ESP32": {
+            "managerName": "ESP32Manager",
+            "managerProperties": {
+                "host_": "192.168.43.129",
+                "serialport": "/dev/cu.usbmodem101",
+                "baudrate_": 115200,
+                "baudrate": 921600,
+                "debug": true
+            }
+        }
+    },
+    "slm": null,
+    "sim": null,
+    "dpc": null,
+    "objective": {
+        "pixelsizes": [
+            0.53,
+            0.265
+        ],
+        "NAs": [
+            0.1,
+            0.75
+        ],
+        "magnifications": [
+            10,
+            20
+        ],
+        "objectiveNames": [
+            "4x",
+            "20x"
+        ],
+        "objectivePositions": [
+            1000.0,
+            31300.0
+        ],
+        "homeDirection": 1,
+        "homePolarity": 0,
+        "homeSpeed": 20000,
+        "homeAcceleration": 200000,
+        "calibrateOnStart": false,
+        "active": true
+    },
+    "nidaq": {
+        "timerCounterChannel": null,
+        "startTrigger": false
+    },
+    "roiscan": null,
+    "lightsheet": null,
+    "webrtc": null,
+    "hypha": null,
+    "mockxx": null,
+    "jetsonnano": null,
+    "Stresstest": {},
+    "HistoScan": null,
+    "Workflow": null,
+    "FlowStop": null,
+    "Lepmon": null,
+    "PixelCalibration": null,
+    "experiment": null,
+    "uc2Config": null,
+    "ism": null,
+    "focusLock": null,
+    "arkitekt": null,
+    "sila2": null,
+    "fovLock": null,
+    "autofocus": null,
+    "scan": null,
+    "etSTED": null,
+    "rotators": null,
+    "microscopeStand": null,
+    "storage": null,
+    "instrument": null,
+    "overviewRegistration": null,
+    "pulseStreamer": {
+        "ipAddress": null
+    },
+    "rois": {},
+    "ledPresets": {},
+    "defaultLEDPresetForScan": null,
+    "laserPresets": {},
+    "stageOffsets": {},
+    "defaultLaserPresetForScan": null,
+    "availableWidgets": [
+        "Settings",
+        "View",
+        "Recording",
+        "Image",
+        "Laser",
+        "Positioner",
+        "Autofocus",
+        "UC2Config",
+        "PixelCalibration",
+        "Objective",
+        "Experiment",
+        "LiveView",
+        "LEDMatrix",
+        "StageCenterCalibration",
+        "MMCore"
+    ],
+    "mct": null,
+    "Flatfield": null,
+    "pyroServerInfo": null,
+    "nonAvailableWidgets": [],
+    "designerId": null
+}

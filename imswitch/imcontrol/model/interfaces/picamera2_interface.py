@@ -106,16 +106,18 @@ class CameraPicamera2:
         self.SensorHeight = resolution[1]
         self.frame = np.zeros((self.SensorHeight, self.SensorWidth, 3 if isRGB else 1), dtype=np.uint8)
 
-        # Auto exposure/white balance
+        # Auto exposure/white balance.
+        #
+        # Default to manual AWB with neutral gains. AWB assumes a roughly
+        # white scene; under monochromatic illumination (e.g. a 488 nm or
+        # 638 nm laser) it pushes the opposite-channel gains to compensate
+        # for missing colour, which can make a red laser look magenta or
+        # blue. Scientific use almost always wants predictable, fixed gains.
+        # Set ``awb_mode='auto'`` via the manager parameter to re-enable it.
         self.exposure_auto = False
-        if 1:
-            self.awb_auto = True
-            # White balance mode and manual colour gains
-            self.awb_mode = "auto"  # auto | manual | once
-        else:
-            self.awb_auto = False   
-            self.awb_mode = "manual"
-        self.colour_gains = (1.2, 1.2)  # (red_gain, blue_gain)
+        self.awb_auto = False
+        self.awb_mode = "manual"
+        self.colour_gains = (1.0, 1.0)  # (red_gain, blue_gain) — neutral
 
         # Tuning file support
         self.tuning_file = tuning_file
@@ -425,20 +427,28 @@ class CameraPicamera2:
 
     def _process_frame(self, array: np.ndarray) -> np.ndarray:
         """
-        Process captured frame (apply flipping, flatfielding).
-        
-        Picamera2 outputs RGB888 (R, G, B order).  Frames are kept in RGB
-        throughout the ImSwitch pipeline.  Conversion to BGR is done locally
-        only where needed (e.g. before cv2.imencode in stream workers).
-        
+        Process captured frame (apply flipping, channel ordering).
+
+        Picamera2's confusingly-named ``RGB888`` configuration actually stores
+        pixels as ``[B, G, R]`` in memory (see picamera2 manual §4.2.1.2.5).
+        ImSwitch downstream code (LiveView JPEG encoder, hologram channel
+        extraction, etc.) assumes the first channel is red — so we swap byte
+        order once here. Without this swap, a red laser shows up as blue in
+        the live view and the "red" channel selector in the hologram
+        controller actually returns the blue channel.
+
         Args:
-            array: Raw frame from camera (RGB888)
-            
+            array: Raw frame from camera (Picamera2 "RGB888" → BGR memory)
+
         Returns:
-            Processed frame in RGB order (or single-channel grayscale)
+            Processed frame in true RGB order (or single-channel grayscale)
         """
-        # NOTE: We intentionally do NOT convert RGB → BGR here.
-        # The pipeline keeps frames in RGB; only stream encoders convert as needed.
+        # Picamera2 RGB888 → BGR-in-memory. Convert to true RGB once at the
+        # source so all downstream consumers can rely on channel 0 == red.
+        if self.isRGB and len(array.shape) == 3 and array.shape[2] == 3:
+            # cv2.cvtColor allocates a new contiguous buffer, which also
+            # decouples us from the libcamera-owned source buffer.
+            array = cv2.cvtColor(array, cv2.COLOR_BGR2RGB)
 
         # Convert to mono if needed
         if not self.isRGB and len(array.shape) == 3:

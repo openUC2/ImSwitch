@@ -25,8 +25,10 @@ Design
 import math
 import threading
 import time
+from typing import Annotated, Optional
 
 import numpy as np
+from fastapi import Body
 import NanoImagingPack as nip
 
 from imswitch.imcommon.framework import Signal
@@ -528,9 +530,9 @@ class PixelCalibrationController(LiveUpdatedController):
     def setCalibrationData(
         self,
         detectorName: str,
-        affineMatrix: list,
+        affineMatrix: Annotated[list, Body()],
         objectiveId: str = None,
-        metrics: dict = None,
+        metrics: Annotated[Optional[dict], Body()] = None,
     ):
         """Directly set and apply a calibration (e.g. from a manual workflow)."""
         objectiveId = self._resolveObjectiveId(objectiveId)

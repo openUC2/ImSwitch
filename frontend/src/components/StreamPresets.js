@@ -387,6 +387,22 @@ const StreamPresets = () => {
             });
           } catch (_e) { /* non-fatal */ }
         }
+        // MJPEG defaults use the same knobs as JPEG; the worker class
+        // is different on the backend but the StreamParams overlap.
+        const mjp = preset.streamSettings.mjpeg;
+        if (mjp?.enabled) {
+          try {
+            await apiLiveViewControllerSetStreamParameters("mjpeg", {
+              jpeg_quality: mjp.quality ?? jpg?.quality ?? 85,
+              subsampling_factor:
+                mjp.subsampling?.factor ??
+                mjp.subsampling_factor ??
+                jpg?.subsampling?.factor ??
+                1,
+              throttle_ms: mjp.throttle_ms ?? jpg?.throttle_ms ?? 100,
+            });
+          } catch (_e) { /* non-fatal */ }
+        }
       }
 
       // 2) Snap / record format

@@ -570,6 +570,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
               color="primary"
               size="small"
               aria-label="Detector selection"
+              data-tour="detector-tabs"
               sx={{
                 flexWrap: "wrap",
                 "& .MuiButtonGroup-grouped": {
@@ -618,6 +619,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
         {/* Live View Container */}
         <Box
+          data-tour="live-view"
           sx={{
             flex: "0 0 auto",
             mb: 2,
@@ -643,7 +645,9 @@ export default function LiveView({ setFileManagerInitialPath }) {
             lastCapturePath={lastCapturePath}
           />
 
-          <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
+          <Box data-tour="camera-controls">
+            <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
+          </Box>
         </Box>
       </Box>
 
@@ -743,7 +747,7 @@ function RightPanelContent({
 }) {
   return (
     <>
-      <Box mb={3}>
+      <Box mb={3} data-tour="stage-control">
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <ControlCameraIcon fontSize="small" color="action" />
           <Typography variant="h6">Stage Control</Typography>
@@ -778,7 +782,7 @@ function RightPanelContent({
         )}
       </Box>
 
-      <Box mb={3}>
+      <Box mb={3} data-tour="autofocus">
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <CenterFocusStrongIcon fontSize="small" color="action" />
           <Typography variant="h6">Autofocus</Typography>
@@ -786,7 +790,7 @@ function RightPanelContent({
         <AutofocusController hostIP={hostIP} hostPort={hostPort} />
       </Box>
 
-      <Box mb={3}>
+      <Box mb={3} data-tour="illumination">
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <LightModeIcon fontSize="small" color="action" />
           <Typography variant="h6">Illumination</Typography>
@@ -803,7 +807,7 @@ function RightPanelContent({
       </Box>
 
       {hasObjectiveController && (
-        <Box mb={3}>
+        <Box mb={3} data-tour="objective">
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <VisibilityIcon fontSize="small" color="action" />
             <Typography variant="h6">Objective</Typography>

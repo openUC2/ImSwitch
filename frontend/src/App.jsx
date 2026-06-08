@@ -21,6 +21,7 @@ import LepMonController from "./components/LepmonController.js";
 import LightsheetController from "./components/LightsheetController.jsx";
 import LiveView from "./components/LiveView.js";
 import MazeGameController from "./components/MazeGameController.js";
+import MMCoreController from "./components/MMCoreController.jsx";
 import MotorSettingsController from "./components/MotorSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
 import LargeFovScanController from "./components/OpenLayers.js";
@@ -47,6 +48,7 @@ import ShitScopeComponent from "./components/ShitScopeComponent.js";
 // ImSwitch Navigation Drawer
 import { NavigationDrawer, TopBar } from "./components/navigation";
 import AppManagerPage from "./components/AppManagerPage.jsx";
+import OnboardingTour from "./components/OnboardingTour.jsx";
 
 //axon
 import AxonTabComponent from "./axon/AxonTabComponent.js";
@@ -454,6 +456,7 @@ function App() {
       <SnackbarProvider maxSnack={6} dense>
         <ReduxNotificationBridge />
         <WebSocketHandler />
+        <OnboardingTour selectedPlugin={selectedPlugin} />
         <CssBaseline />
 
         <Box sx={{ display: "flex" }}>
@@ -601,6 +604,7 @@ function App() {
               <AppManagerPage onNavigateToApp={handlePluginChange} />
             )}
             {selectedPlugin === "LightSheet" && <LightsheetController />}
+            {selectedPlugin === "MMCore" && <MMCoreController />}
             {selectedPlugin === "Timelapse" && <TimelapseController />}
             {selectedPlugin === "WiFi" && <WiFiController />}
             {plugins.map(

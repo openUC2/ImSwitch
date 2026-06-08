@@ -159,7 +159,19 @@ class SignalInstance(psygnal.SignalInstance):
                 Implements rollover-safe backpressure check.
                 """
                 FRAME_ID_MODULO = 256  # Small value to test rollover frequently
-                MAX_FRAME_LAG = 1  # Allow client to be 1 frame behind
+                # MAX_FRAME_LAG — how many frames may be "in flight"
+                # (sent but not yet acked). Higher = more pipelining;
+                # lower = lower latency but throughput gated by the
+                # ACK round-trip.
+                #
+                # The previous value of 1 ("send N+1 only after ACK
+                # for N") made Windows ~3–4× slower than Mac/Linux:
+                # ACK RTT is ~80–100 ms on Windows (vs. ~5 ms on
+                # Linux/Mac) so at an 80 ms throttle the effective
+                # cadence was ~5 fps regardless of CPU. Bumping to 3
+                # lets up to 4 frames pipeline; cost is at most 3
+                # extra in-flight JPEGs per client (~1.5 MB peak).
+                MAX_FRAME_LAG = 3
 
                 next_id = {}
                 for sid, sent_id in last_sent.items():
@@ -195,46 +207,52 @@ class SignalInstance(psygnal.SignalInstance):
                     print("Warning: Event loop not available for frame emission")
                     return
 
-                # Unified frame emission for both binary and JPEG using MessagePack
+                # Unified frame emission for both binary and JPEG using MessagePack.
+                #
+                # NOTE on per-client packing cost: msgpack.packb has to copy
+                # the payload bytes into the output buffer once per client,
+                # which for a 500 KB JPEG is the dominant per-client cost.
+                # The metadata dict on the other hand is tiny. To minimise
+                # CPU we hoist the per-client mutations to the smallest
+                # possible scope: we mutate ``frame_id`` directly on the
+                # shared metadata dict (this loop is the only writer and
+                # runs serially per frame), avoiding the ``.copy()`` that
+                # used to happen per client. The image/data payload is
+                # passed by reference into packb — msgpack does the
+                # single necessary copy into its output buffer.
+                #
+                # Further win available (deferred — needs frontend change):
+                # send the heavy payload bytes as a small ``[4B frame_id
+                # LE][msgpack header][image bytes]`` envelope. The header
+                # could then be packed once and only the 4-byte frame_id
+                # would vary per client. Skipped for now to keep the wire
+                # format stable for the React frontend.
                 if msg_type == 'binary_frame':
-                    # Binary frame: Send complete payload as MessagePack
+                    # Binary frame: Send complete payload as MessagePack.
                     for sid, next_frame_id in ready_clients.items():
-                        # Create a copy of metadata for each client to avoid race conditions
-                        client_metadata = metadata.copy()
-                        client_metadata['frame_id'] = next_frame_id
-
-                        # Pack entire frame (metadata + data) with MessagePack
+                        metadata['frame_id'] = next_frame_id
                         frame_payload = msgpack.packb({
-                            'metadata': client_metadata,
+                            'metadata': metadata,
                             'data': data
                         }, use_bin_type=True)
-
-                        # print(f"Sending binary frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
                         _client_sent_frame_id[sid] = next_frame_id
-
-                        # Emit using socket.io's native binary support
                         asyncio.run_coroutine_threadsafe(
                             sio.emit(event, frame_payload, to=sid),
                             _shared_event_loop
                         )
 
                 elif msg_type == 'jpeg_frame':
-                    # JPEG frame: Send complete payload as MessagePack
-                    # Note: For JPEG, metadata is in data['metadata'], image is in data['image']
+                    # JPEG frame: same shape as binary, but image lives in
+                    # ``data['image']`` and metadata in ``data['metadata']``.
+                    jpeg_metadata = data.get('metadata', {})
+                    jpeg_image = data['image']
                     for sid, next_frame_id in ready_clients.items():
-                        # Create a copy of metadata for each client to avoid race conditions
-                        client_metadata = data.get('metadata', {}).copy()
-                        client_metadata['frame_id'] = next_frame_id
-
-                        # Pack entire frame (metadata + image) with MessagePack
+                        jpeg_metadata['frame_id'] = next_frame_id
                         frame_payload = msgpack.packb({
-                            'metadata': client_metadata,
-                            'image': data['image']
+                            'metadata': jpeg_metadata,
+                            'image': jpeg_image
                         }, use_bin_type=True)
-
                         _client_sent_frame_id[sid] = next_frame_id
-
-                        # Emit on same 'frame' event as binary for unified frontend handling
                         asyncio.run_coroutine_threadsafe(
                             sio.emit(event, frame_payload, to=sid),
                             _shared_event_loop

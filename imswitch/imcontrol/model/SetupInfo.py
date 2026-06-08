@@ -258,6 +258,7 @@ class ObjectiveInfo:
     homePolarity: int = 1
     homeSpeed: int = 20000
     homeAcceleration: int = 20000
+    moveSpeed: int = 20000  # Speed used when switching between objective slots
     calibrateOnStart: bool = True
     active: bool = True
 

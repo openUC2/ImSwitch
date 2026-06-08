@@ -17,6 +17,7 @@ import apiObjectiveControllerGetStatus from "../backendapi/apiObjectiveControlle
 import apiPositionerControllerGetPositions from "../backendapi/apiPositionerControllerGetPositions.js";
 import apiSettingsControllerGetDetectorNames from "../backendapi/apiSettingsControllerGetDetectorNames.js";
 import apiObjectiveControllerSetObjectiveParameters from "../backendapi/apiObjectiveControllerSetObjectiveParameters.js";
+import apiObjectiveControllerSetMoveSpeed from "../backendapi/apiObjectiveControllerSetMoveSpeed.js";
 
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 import fetchObjectiveControllerGetCurrentObjective from "../middleware/fetchObjectiveControllerGetCurrentObjective.js";
@@ -42,9 +43,13 @@ const ExtendedObjectiveController = () => {
   const manualZ0 = objectiveState.manualZ0;
   const manualZ1 = objectiveState.manualZ1;
   const slot1Configured = objectiveState.slotConfigured?.[1] ?? true;
+  const moveSpeed = objectiveState.moveSpeed ?? 20000;
 
   // Local state for wizard
   const [wizardOpen, setWizardOpen] = useState(false);
+
+  // Local state for editable move speed
+  const [manualMoveSpeed, setManualMoveSpeed] = useState("");
 
   // Local state for editable objective metadata
   const [editMeta, setEditMeta] = useState({ 0: {}, 1: {} });
@@ -159,6 +164,22 @@ const ExtendedObjectiveController = () => {
     handleSetPosition("x1", value, "Position 2 (X1)");
   const handleSetZ0 = (value) => handleSetPosition("z0", value, "Focus 1 (Z0)");
   const handleSetZ1 = (value) => handleSetPosition("z1", value, "Focus 2 (Z1)");
+
+  const handleSaveMoveSpeed = () => {
+    const numericValue = Number(manualMoveSpeed);
+    if (isNaN(numericValue) || numericValue <= 0) {
+      console.error("Move speed must be a positive number");
+      return;
+    }
+    if (!window.confirm(`Set objective switch speed to ${numericValue}?`)) return;
+    apiObjectiveControllerSetMoveSpeed(numericValue)
+      .then(() => {
+        dispatch(objectiveSlice.setMoveSpeed(numericValue));
+        setManualMoveSpeed("");
+      })
+      .catch((err) => console.error("Error setting move speed:", err));
+  };
+
 
   const handleSetCurrentAs = async (which) => {
     apiPositionerControllerGetPositions()
@@ -433,6 +454,44 @@ const ExtendedObjectiveController = () => {
               </Button>
             </Grid>
           </Grid>
+        </Grid>
+
+        {/* Objective Switch Speed */}
+        <Grid item xs={12}>
+          <Box
+            sx={{
+              border: "1px solid #eee",
+              borderRadius: 2,
+              p: 2,
+              display: "flex",
+              alignItems: "center",
+              gap: 2,
+              flexWrap: "wrap",
+            }}
+          >
+            <Typography variant="subtitle1" sx={{ minWidth: 200 }}>
+              Objective Switch Speed
+            </Typography>
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              Current: <b>{moveSpeed}</b> steps/s
+            </Typography>
+            <TextField
+              label="New Speed (steps/s)"
+              size="small"
+              type="number"
+              value={manualMoveSpeed}
+              onChange={(e) => setManualMoveSpeed(e.target.value)}
+              placeholder={String(moveSpeed)}
+              sx={{ width: 180 }}
+            />
+            <Button
+              variant="contained"
+              size="small"
+              onClick={handleSaveMoveSpeed}
+            >
+              Save Speed
+            </Button>
+          </Box>
         </Grid>
 
         {/* Objective Lens Movement */}

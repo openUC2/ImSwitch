@@ -227,7 +227,7 @@ class LaserController(ImConWidgetController):
         try:
             lManager = self._master.lasersManager[laserName]
             if lManager.isBinary:
-                return None
+                return [0, 1]
             else:
                 return (lManager.valueRangeMin, lManager.valueRangeMax)
         except KeyError:

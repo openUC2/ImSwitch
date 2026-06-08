@@ -231,6 +231,7 @@ export default function StreamControls({
       {/* Stream Control Section */}
       <Box
         component="fieldset"
+        data-tour="stream-controls"
         sx={{
           border: 1,
           borderColor: "divider",
@@ -300,6 +301,7 @@ export default function StreamControls({
           onClick={() => setOverlayOpen(true)}
           sx={{ ml: "auto" }}
           startIcon={<Settings />}
+          data-tour="stream-settings-button"
         >
           Settings
         </Button>
@@ -312,6 +314,7 @@ export default function StreamControls({
       {/* Recording Controls Section */}
       <Box
         component="fieldset"
+        data-tour="capture-controls"
         sx={{
           border: 1,
           borderColor: "divider",

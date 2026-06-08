@@ -1764,12 +1764,12 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
                 await apiPositionerControllerSetStageOffsetAxis({
                   axis: "X",
                   knownPosition: calibConfirm.x,
-                  currentDevicePosition: currentDeviceX,
+                  currentDevicePosition: null,
                 });
                 await apiPositionerControllerSetStageOffsetAxis({
                   axis: "Y",
                   knownPosition: calibConfirm.y,
-                  currentDevicePosition: currentDeviceY,
+                  currentDevicePosition: null,
                 });
                 setCalibConfirm(null);
               } catch (e) {

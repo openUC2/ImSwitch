@@ -57,6 +57,7 @@ import storageReducer from "./slices/StorageSlice";
 import goniometerReducer from "./slices/GoniometerSlice";
 import detectorParametersReducer from "./slices/DetectorParametersSlice";
 import backendCapabilitiesReducer from "./slices/BackendCapabilitiesSlice";
+import onboardingReducer from "./slices/OnboardingSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -173,6 +174,7 @@ const rootReducer = combineReducers({
   goniometerState: goniometerReducer,
   detectorParametersState: detectorParametersReducer,
   backendCapabilities: backendCapabilitiesReducer,
+  onboardingState: onboardingReducer,
 });
 
 //#####################################################################################
@@ -192,6 +194,7 @@ const persistConfig = {
     "mazeGameState",
     "appManager", // Persist user's app preferences
     "liveViewState", // Persist position controller visibility
+    "onboardingState", // Persist the "intro tour was done" flag (first-run UX)
     // liveStreamState uses nested persist config above
   ],
   //blacklist: ['webSocketState'],  // Do not persist these

@@ -189,6 +189,72 @@ def example_with_hooks():
     print()
 
 
+class _ImageAnalyzer:
+    """Tiny stand-in analyzer for the frameReady example."""
+
+    def run(self, img):
+        """Return some derived result from the image (mean intensity here)."""
+        if img is None:
+            return None
+        return {"mean": float(img.mean()), "max": float(img.max())}
+
+
+def example_event_driven_frameReady():
+    """
+    Example 3b: Event-driven acquisition using the ``frameReady`` callback.
+
+    This mirrors the pymmcore-plus event-driven acquisition guide
+    (https://pymmcore-plus.github.io/pymmcore-plus/guides/event_driven_acquisition/).
+
+    In pymmcore-plus you connect a callback to ``mmc.mda.events.frameReady``::
+
+        mmc.mda.events.frameReady.connect(self._on_frame_ready)
+
+        def _on_frame_ready(self, img: np.ndarray, event: MDAEvent) -> None:
+            self._results = self._analyzer.run(img)
+
+    ImSwitch's ``MDASequenceManager`` exposes the exact same API via
+    ``engine.events.frameReady``.  The callback receives the freshly acquired
+    image AND the originating ``MDAEvent`` (carrying its index/metadata) as soon
+    as the frame was acquired.
+    """
+    print("=== Example 3b: Event-driven frameReady callback ===\n")
+
+    mda = MDASequence(
+        metadata={"experiment": "event_driven"},
+        channels=[Channel(config="DAPI", exposure=50.0)],
+        z_plan=ZRangeAround(range=4.0, step=1.0),
+        axis_order="tpcz",
+    )
+
+    print("This is how you would wire it up against the ImSwitch engine:\n")
+    print("    from imswitch.imcontrol.model.managers.MDASequenceManager import MDASequenceManager")
+    print("    engine = MDASequenceManager()")
+    print("    engine.register(detector_mgr, pos_mgr, laser_mgr)")
+    print("    engine.events.frameReady.connect(on_frame_ready)")
+    print("    engine.run_mda(mda)\n")
+
+    # Demonstrate the callback signature with a tiny analyzer.
+    analyzer = _ImageAnalyzer()
+    collected_results = []
+
+    def on_frame_ready(img, event):
+        """Connected to engine.events.frameReady; runs as soon as a frame arrives."""
+        results = analyzer.run(img)
+        collected_results.append((dict(event.index), results))
+        print(f"  frameReady -> index={dict(event.index)} results={results}")
+
+    # In a real run the engine emits frameReady(img, event); here we simulate
+    # one emission so the example is runnable without hardware.
+    import numpy as np
+    fake_event = next(iter(mda))
+    fake_image = np.random.randint(0, 4096, size=(64, 64), dtype=np.uint16)
+    on_frame_ready(fake_image, fake_event)
+
+    print(f"\nCollected {len(collected_results)} analysis result(s) via frameReady.\n")
+    return mda
+
+
 def example_grid_positions():
     """
     Example showing grid-based multi-position acquisition.
@@ -302,6 +368,7 @@ def main():
     example_raman_style_protocol()
     example_imswitch_execution()
     example_with_hooks()
+    example_event_driven_frameReady()
     example_grid_positions()
     example_protocol_sharing()
 

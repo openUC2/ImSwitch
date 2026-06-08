@@ -123,7 +123,7 @@ class MasterController:
         if "SLM" in self.__setupInfo.availableWidgets:
             self.slmManager = SLMManager(self.__setupInfo.slm)
         self.UC2ConfigManager = UC2ConfigManager(
-            self.__setupInfo.uc2Config, lowLevelManagers
+            self.__setupInfo.uc2Config, lowLevelManagers, setupInfo=self.__setupInfo
         )
         
         # Initialize InstrumentMetadataManager for OME instrument metadata

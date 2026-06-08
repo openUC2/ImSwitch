@@ -20,27 +20,38 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install ImSwitch (no heavy extras) + pymmcore-plus
+      - name: Install system libs needed by ImSwitch runtime deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0
+
+      - name: Install ImSwitch + pymmcore-plus
+        # The test path goes through imswitch/imcontrol/_test/__init__.py which
+        # eagerly imports Options/ViewSetupInfo, dragging in dataclasses-json,
+        # psygnal, h5py, etc. Mirroring test.yml: install with full deps.
         run: |
           python -m pip install --upgrade pip
-          # Install only what the MMCore tests touch – avoids pulling the full
-          # ImSwitch dependency chain on CI.
-          pip install pytest numpy "pymmcore-plus[cli]>=0.10"
+          # The arkitekt-next[all] extra in dependencies pulls a pytest plugin
+          # that needs a running arkitekt server; disable it with -p no:arkitekt_next at runtime.
+          pip install .
+          # Force pure-Python psygnal (compiled flavour forbids subclassing —
+          # see comment in test.yml).
+          pip uninstall -y psygnal || true
+          pip install "psygnal==0.11.1"
+          python -c "import psygnal.utils; psygnal.utils.decompile()"
+          pip install pytest "pymmcore-plus[cli]>=0.10"
 
       - name: Download Micro-Manager DemoCamera adapter
         run: |
           mmcore install
           mmcore list
 
-      - name: Make repo importable as a package
-        run: |
-          pip install -e . --no-deps || true
-
       - name: Run MMCore manager tests
-        env:
-          MICROMANAGER_PATH: ""
         run: |
-          pytest imswitch/imcontrol/_test/unit/test_mmcore_managers.py -v
+          pytest imswitch/imcontrol/_test/unit/test_mmcore_managers.py \
+            -p no:arkitekt_next -v --tb=short
 
   # ---------------------------------------------------------------------
   # Build mmCoreAndDevices for arm64 in an emulated container, then

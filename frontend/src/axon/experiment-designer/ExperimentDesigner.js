@@ -45,6 +45,8 @@ import * as objectiveSlice from "../../state/slices/ObjectiveSlice";
 import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsSlice";
 import * as vizarrViewerSlice from "../../state/slices/VizarrViewerSlice";
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
+import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
+import * as positionSlice from "../../state/slices/PositionSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 
 // API
@@ -88,6 +90,8 @@ const ExperimentDesigner = () => {
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const focusMapConfig = useSelector(focusMapSlice.getFocusMapConfig);
+  const parameterRange = useSelector(parameterRangeSlice.getParameterRangeState);
+  const positionState = useSelector(positionSlice.getPositionState);
 
   // Progress tracking
   const [cachedStepId, setCachedStepId] = useState(0);
@@ -216,28 +220,74 @@ const ExperimentDesigner = () => {
       wellSelectorState
     );
 
+    // "Override per-group Z with current Z" (Tiling tab): rewrite every stored
+    // Z with the microscope's current stage Z. Done here on the frontend (the
+    // backend just consumes the coordinates). Skipped when a focus map is
+    // active, since the focus map drives Z per-XY.
+    if (experimentState.parameterValue.overrideZWithCurrentZ && !focusMapConfig.enabled) {
+      const currentZ = positionState?.z ?? 0;
+      (scanConfig.scanAreas || []).forEach((area) => {
+        if (area.centerPosition) area.centerPosition.z = currentZ;
+        (area.positions || []).forEach((pos) => { pos.z = currentZ; });
+      });
+    }
+
     console.log("Scan configuration:", scanConfig);
     console.log(`Total positions: ${scanConfig.metadata.totalPositions}`);
 
     // Zero out intensities for channels that are not enabled for experiment acquisition
-    const channelEnabled = experimentState.parameterValue.channelEnabledForExperiment || [];
-    const rawIntensities = experimentState.parameterValue.illuIntensities || [];
+    const pv = experimentState.parameterValue;
+    const channelEnabled = pv.channelEnabledForExperiment || [];
+    const rawIntensities = pv.illuIntensities || [];
+    const exposureTimes = pv.exposureTimes || [];
+    const gains = pv.gains || [];
+    const illuminationParamsState = pv.illuminationParams || {};
     const filteredIntensities = rawIntensities.map((val, idx) =>
       channelEnabled[idx] === true ? val : 0    );
+
+    // Split the flat channel list into conventional sources + a dedicated
+    // synthetic (ring/DPC) list. The Channels dimension renders one merged
+    // list [default..., synthetic...]; here we cut it back at the default-source
+    // boundary so the REST payload keeps `illumination` conventional-only and
+    // carries ring/DPC in `syntheticChannels` (single source of truth, no
+    // RGB→intensity promotion on the backend).
+    const defaultSourceNames = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
+    const syntheticDefs = Array.isArray(parameterRange.syntheticChannels) ? parameterRange.syntheticChannels : [];
+    const nDefault = defaultSourceNames.length;
+    const syntheticChannelsPayload = syntheticDefs.map((s, j) => {
+      const idx = nDefault + j;
+      const params = illuminationParamsState[s.name] || {};
+      return {
+        name: s.name,
+        kind: s.kind,
+        enabled: channelEnabled[idx] === true,
+        intensityR: params.intensityR ?? s.intensityR ?? 0,
+        intensityG: params.intensityG ?? s.intensityG ?? 0,
+        intensityB: params.intensityB ?? s.intensityB ?? 0,
+        radius: params.radius ?? s.radius ?? null,
+        exposure: exposureTimes[idx] ?? null,
+        gain: gains[idx] ?? null,
+      };
+    });
 
     const experimentRequest = {
       name: experimentState.name,
       parameterValue: {
-        ...experimentState.parameterValue,
-        illuIntensities: filteredIntensities,
+        ...pv,
+        // Conventional channels only; synthetic channels travel separately.
+        illumination: defaultSourceNames,
+        illuIntensities: filteredIntensities.slice(0, nDefault),
+        exposureTimes: exposureTimes.slice(0, nDefault),
+        gains: gains.slice(0, nDefault),
+        syntheticChannels: syntheticChannelsPayload,
         resortPointListToSnakeCoordinates: false,
         is_snakescan: wellSelectorState.areaSelectSnakescan,
-        overlapWidth: wellSelectorState.mode === "area" 
-          ? wellSelectorState.areaSelectOverlap 
-          : experimentState.parameterValue.overlapWidth,
-        overlapHeight: wellSelectorState.mode === "area" 
-          ? wellSelectorState.areaSelectOverlap 
-          : experimentState.parameterValue.overlapHeight,
+        overlapWidth: wellSelectorState.mode === "area"
+          ? wellSelectorState.areaSelectOverlap
+          : pv.overlapWidth,
+        overlapHeight: wellSelectorState.mode === "area"
+          ? wellSelectorState.areaSelectOverlap
+          : pv.overlapHeight,
       },
       scanAreas: scanConfig.scanAreas,
       scanMetadata: scanConfig.metadata,

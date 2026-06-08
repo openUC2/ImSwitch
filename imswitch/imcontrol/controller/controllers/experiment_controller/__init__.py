@@ -47,6 +47,8 @@ from .models import (
     ScanPattern,
     ScanPosition,
     StartExperimentResponse,
+    SyntheticChannel,
+    SyntheticKind,
     TriggerMode,
 )
 from .execution_context import ExecutionContext

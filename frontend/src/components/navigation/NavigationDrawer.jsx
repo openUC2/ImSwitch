@@ -159,6 +159,7 @@ const NavigationDrawer = ({
       />
 
       <List
+        data-tour="sidebar"
         sx={{
           width: "100%",
           boxSizing: "border-box",
@@ -235,6 +236,7 @@ const NavigationDrawer = ({
             color={SIDEBAR_COLORS.essentials}
             collapsed={!sidebarVisible}
             nested={true}
+            dataTour="app-manager"
           />
         </DrawerEntry>
 

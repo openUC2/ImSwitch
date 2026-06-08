@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import createAxiosInstance from "../../backendapi/createAxiosInstance";
 import {
@@ -578,25 +578,41 @@ const ChannelsDimension = () => {
     ? parameterValue.exposureTimes
     : [];
   const gains = Array.isArray(parameterValue.gains) ? parameterValue.gains : [];
-  const channelEnabledForExperiment = Array.isArray(
-    parameterValue.channelEnabledForExperiment,
-  )
-    ? parameterValue.channelEnabledForExperiment
-    : [];
-  const illuSources = Array.isArray(parameterRange.illuSources)
-    ? parameterRange.illuSources
-    : [];
-  // Per-source kind tag (parallel to illuSources).  Empty / shorter array →
-  // missing entries default to "default" so legacy backends keep working.
-  const illuSourceKinds = Array.isArray(parameterRange.illuSourceKinds)
-    ? parameterRange.illuSourceKinds
-    : [];
-  const laserMinValues = Array.isArray(parameterRange.illuSourceMinIntensities)
-    ? parameterRange.illuSourceMinIntensities
-    : [];
-  const laserMaxValues = Array.isArray(parameterRange.illuSourceMaxIntensities)
-    ? parameterRange.illuSourceMaxIntensities
-    : [];
+  const channelEnabledForExperiment = Array.isArray(parameterValue.channelEnabledForExperiment) ? parameterValue.channelEnabledForExperiment : [];
+
+  // Merge synthetic channels AFTER the conventional sources into one flat list
+  // so the render loop and all index-based handlers below stay unchanged. The
+  // submit payload is split back into `illumination` (default) + a dedicated
+  // `syntheticChannels` list in ExperimentDesigner.handleStart — synthetic
+  // channels are never mixed into illuIntensities. The default-source count
+  // is the split boundary.
+  //
+  // IMPORTANT: memoize so these are STABLE array references across renders.
+  // Otherwise the init effect below (deps: [illuSources]) sees a new array
+  // every render and re-dispatches setIllumination on a loop → React
+  // "Maximum update depth exceeded".
+  const { illuSources, illuSourceKinds, laserMinValues, laserMaxValues } = useMemo(() => {
+    const dSources = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
+    const dKinds = Array.isArray(parameterRange.illuSourceKinds) ? parameterRange.illuSourceKinds : [];
+    const dMin = Array.isArray(parameterRange.illuSourceMinIntensities) ? parameterRange.illuSourceMinIntensities : [];
+    const dMax = Array.isArray(parameterRange.illuSourceMaxIntensities) ? parameterRange.illuSourceMaxIntensities : [];
+    const synth = Array.isArray(parameterRange.syntheticChannels) ? parameterRange.syntheticChannels : [];
+    return {
+      illuSources: [...dSources, ...synth.map((s) => s.name)],
+      illuSourceKinds: [
+        ...dSources.map((_, i) => dKinds[i] || "default"),
+        ...synth.map((s) => s.kind || "default"),
+      ],
+      laserMinValues: [...dMin, ...synth.map(() => 0)],
+      laserMaxValues: [...dMax, ...synth.map(() => 255)],
+    };
+  }, [
+    parameterRange.illuSources,
+    parameterRange.illuSourceKinds,
+    parameterRange.illuSourceMinIntensities,
+    parameterRange.illuSourceMaxIntensities,
+    parameterRange.syntheticChannels,
+  ]);
   // Per-channel kind-specific params dict from the experiment slice.  Object
   // shape: { [channelName]: { radius?, intensityR?, intensityG?, intensityB? } }.
   const illuminationParams =

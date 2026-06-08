@@ -62,6 +62,21 @@ const LiveViewComponent = ({
   }, [liveStreamState.liveViewImage, dispatch]);
   const prevDimensionsRef = useRef({ width: 0, height: 0 }); // Track dimensions to avoid redundant callbacks
   const histogramCounterRef = useRef(0); // Counter for throttling histogram computation
+  // Monotonic counters that gate the JPEG-frame paint pipeline. Each
+  // arriving frame gets a unique ``decodeIdRef`` value; the bitmap's
+  // ``paint()`` then only writes the canvas if no newer frame has
+  // already painted (``lastPaintedIdRef``). Replaces the older "cancel
+  // every in-flight decode on next arrival" behaviour, which made
+  // every paint lose to its successor on platforms where decode is
+  // slower than the inter-frame interval (Chrome on Windows without
+  // GPU acceleration) — symptom: solid black canvas while the backend
+  // is happily emitting frames.
+  const decodeIdRef = useRef(0);
+  const lastPaintedIdRef = useRef(0);
+  // Track mount state so async callbacks don't poke setState on an
+  // unmounted component.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [containerSize, setContainerSize] = useState({
     width: 800,
@@ -283,9 +298,22 @@ const LiveViewComponent = ({
   );
 
   // Load and process image when it changes.
-  // Uses createImageBitmap when available (Chrome/Firefox) so JPEG decode
-  // runs off the main thread, reducing per-frame jank at high frame rates.
-  // Falls back to the classic HTMLImageElement path for older browsers.
+  // Uses createImageBitmap when available (Chrome/Firefox) so JPEG
+  // decode runs off the main thread. Falls back to <img> for older
+  // browsers and when createImageBitmap throws on the blob.
+  //
+  // Why we do NOT cancel in-flight decodes on the next frame: on
+  // platforms where the decode is slower than the inter-frame
+  // interval (Windows Chrome without GPU acceleration tends to take
+  // ~80–150 ms per createImageBitmap for a 3.75 MP JPEG, well over
+  // the 80 ms throttle), a cancel-on-next-frame policy means every
+  // single decode gets cancelled by the next arrival and nothing
+  // ever paints — the user sees a black canvas. Instead we let every
+  // decode finish; ordering is preserved by a monotonic counter, so
+  // the latest finished decode wins and earlier ones only paint if
+  // no newer frame has painted yet. Result: the canvas always shows
+  // a recent frame, never goes black, and the latency is bounded by
+  // the slowest decode rather than runaway-cancelled.
   useEffect(() => {
     const src = liveStreamState.liveViewImage;
     if (!src) {
@@ -294,111 +322,68 @@ const LiveViewComponent = ({
       return;
     }
 
-    // Allow in-flight async work to be cancelled if the image changes again
-    // before the decode finishes (rapid-fire frames at high FPS).
-    let cancelled = false;
+    const myId = ++decodeIdRef.current;
 
-    // Build the data-URL for both paths.  liveViewImage is always a base64
-    // string (normalised in WebSocketHandler for the msgpack path).
-    const dataUrl = `data:image/jpeg;base64,${src}`;
-
-    if (typeof createImageBitmap !== 'undefined') {
-      // ── Fast path: off-thread JPEG decode via createImageBitmap ──────────
-      // atob + Uint8Array copy is ~0.5 ms for 500 KB; cheaper than the old
-      // synchronous main-thread decode that the img.src path used to trigger.
+    const paint = (drawable) => {
+      if (!mountedRef.current) return;
+      // Skip only if a newer frame has already painted — otherwise
+      // we'd overwrite fresh pixels with stale ones.
+      if (myId < lastPaintedIdRef.current) return;
       try {
-        const binaryStr = atob(src);
-        const bytes = new Uint8Array(binaryStr.length);
-        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-        const blob = new Blob([bytes], { type: 'image/jpeg' });
-
-        createImageBitmap(blob)
-          .then((bitmap) => {
-            if (cancelled) { bitmap.close(); return; }
-            try {
-              const canvas = canvasRef.current;
-              if (canvas) {
-                canvas.width = bitmap.width;
-                canvas.height = bitmap.height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(bitmap, 0, 0);
-              }
-              // applyResponsiveSizing accepts any object with .width/.height
-              // that drawImage() can consume — ImageBitmap qualifies.
-              applyResponsiveSizing(bitmap);
-              setImageLoaded(true);
-            } catch (error) {
-              console.error('Error processing image (createImageBitmap):', error);
-              setImageLoaded(false);
-              setCanvasStyle({});
-            } finally {
-              bitmap.close();
-            }
-          })
-          .catch((err) => {
-            if (cancelled) return;
-            console.error('createImageBitmap failed, falling back to img:', err);
-            // ── Fallback inside the fast path ──────────────────────────────
-            const img = new Image();
-            img.onload = () => {
-              if (cancelled) return;
-              try {
-                const canvas = canvasRef.current;
-                if (canvas) {
-                  canvas.width = img.width;
-                  canvas.height = img.height;
-                  const ctx = canvas.getContext('2d');
-                  ctx.drawImage(img, 0, 0);
-                }
-                applyResponsiveSizing(img);
-                setImageLoaded(true);
-              } catch (error) {
-                console.error('Error processing image:', error);
-                setImageLoaded(false);
-                setCanvasStyle({});
-              }
-            };
-            img.onerror = () => { if (!cancelled) { setImageLoaded(false); setCanvasStyle({}); } };
-            img.src = dataUrl;
-          });
-      } catch (atobError) {
-        // src was not valid base64 (e.g. a blob URL from a future optimisation)
-        console.error('atob failed:', atobError);
+        const canvas = canvasRef.current;
+        if (canvas) {
+          canvas.width = drawable.width;
+          canvas.height = drawable.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(drawable, 0, 0);
+        }
+        // applyResponsiveSizing accepts anything drawImage accepts.
+        applyResponsiveSizing(drawable);
+        lastPaintedIdRef.current = myId;
+        setImageLoaded(true);
+      } catch (error) {
+        console.error('Error processing image:', error);
         setImageLoaded(false);
         setCanvasStyle({});
       }
-    } else {
-      // ── Slow path: HTMLImageElement (legacy browsers) ──────────────────
+    };
+
+    const paintViaImg = () => {
       const img = new Image();
-      img.onload = () => {
-        if (cancelled) return;
-        try {
-          const canvas = canvasRef.current;
-          if (canvas) {
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0);
-          }
-          applyResponsiveSizing(img);
-          setImageLoaded(true);
-        } catch (error) {
-          console.error('Error processing image:', error);
-          setImageLoaded(false);
-          setCanvasStyle({});
-        }
-      };
+      img.onload = () => paint(img);
       img.onerror = () => {
-        if (!cancelled) {
-          console.error('Error loading image');
-          setImageLoaded(false);
-          setCanvasStyle({});
-        }
+        if (!mountedRef.current) return;
+        if (myId < lastPaintedIdRef.current) return;
+        setImageLoaded(false);
+        setCanvasStyle({});
       };
-      img.src = dataUrl;
+      img.src = `data:image/jpeg;base64,${src}`;
+    };
+
+    if (typeof createImageBitmap === 'undefined') {
+      paintViaImg();
+      return;
     }
 
-    return () => { cancelled = true; };
+    // Fast path: off-thread JPEG decode via createImageBitmap.
+    try {
+      const binaryStr = atob(src);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'image/jpeg' });
+      createImageBitmap(blob)
+        .then((bitmap) => {
+          try { paint(bitmap); } finally { bitmap.close(); }
+        })
+        .catch((err) => {
+          console.error('createImageBitmap failed, falling back to <img>:', err);
+          paintViaImg();
+        });
+    } catch (atobError) {
+      console.error('atob failed:', atobError);
+      setImageLoaded(false);
+      setCanvasStyle({});
+    }
   }, [liveStreamState.liveViewImage, applyResponsiveSizing]);
 
   // Reapply sizing when container size changes

@@ -88,9 +88,8 @@ rm -rf /opt/VimbaX/doc
 
 # Install picamera2
 
-tmpdir="$(mktemp -d)"
-wget -qO - https://archive.raspberrypi.org/debian/raspberrypi.gpg.key | gpg --dearmor -o /etc/apt/keyrings/raspi.gpg
-echo "deb [signed-by=/etc/apt/keyrings/raspi.gpg] http://archive.raspberrypi.org/debian/ trixie main" >/etc/apt/sources.list.d/raspi.list
+cp /mnt/build/raspberrypi.gpg /etc/apt/keyrings/raspberrypi.gpg
+echo "deb [signed-by=/etc/apt/keyrings/raspberrypi.gpg] http://archive.raspberrypi.org/debian/ trixie main" >/etc/apt/sources.list.d/raspberrypi.list
 apt-get update
 apt install -y --no-install-recommends python3-picamera2
 # Install simplejpeg in UV environment to avoid NumPy ABI compatibility issues

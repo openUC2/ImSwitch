@@ -92,6 +92,7 @@ RUN \
   --mount=type=cache,sharing=locked,target=/var/cache/apt \
   --mount=type=cache,sharing=locked,target=/var/lib/apt \
   --mount=type=cache,target=/root/.cache/uv \
+  --mount=type=bind,source=docker/raspberrypi.gpg,target=/mnt/build/raspberrypi.gpg \
   --mount=type=bind,source=docker/install-drivers.sh,target=/mnt/build/install-drivers.sh \
   /mnt/build/install-drivers.sh
 ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib

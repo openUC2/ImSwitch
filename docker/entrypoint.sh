@@ -199,4 +199,4 @@ log "uv run python3 -m imswitch $params"
 # Run via uv so the project's locked virtual environment is used; --no-sync avoids
 # a redundant dependency check on every container start.
 cd /opt/imswitch
-exec uv run --no-sync python3 -m imswitch $params
+exec /root/.local/bin/uv run --no-sync python3 -m imswitch "$params"

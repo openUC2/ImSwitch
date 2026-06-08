@@ -11,6 +11,7 @@ import {
   Typography,
 } from "@mui/material";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
+import { setNotification } from "../state/slices/NotificationSlice.js";
 import { useDispatch, useSelector } from "react-redux";
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 import apiObjectiveControllerMoveToObjective from "../backendapi/apiObjectiveControllerMoveToObjective.js";
@@ -49,6 +50,16 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
 
   const switchTo = async (slot) => {
     if (isObjectiveSwitchBlocked) {
+      return;
+    }
+
+    if (objectiveState.currentObjective === slot) {
+      dispatch(
+        setNotification({
+          message: "This objective is already selected.",
+          type: "info",
+        }),
+      );
       return;
     }
 

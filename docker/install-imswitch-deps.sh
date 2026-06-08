@@ -12,11 +12,6 @@ apt-get install -y \
   usbutils \
   libglib2.0-0
 
-# Set up virtual environment
-
-uv venv
-source /opt/imswitch/.venv/bin/activate
-
 # Only install dependencies; this creates a separately-cached Docker image layer from the rapidly-changing source.
 
 uv sync --locked --no-install-project

@@ -6,6 +6,7 @@
 
 apt-get update
 apt-get install -y \
+  git \
   build-essential \
   mesa-utils \
   libhdf5-dev \
@@ -23,5 +24,6 @@ uv pip install psygnal --no-binary :all:
 
 apt-get remove -y \
   build-essential \
+  git \
   libhdf5-dev
 apt -y autoremove

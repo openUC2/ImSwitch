@@ -1,11 +1,17 @@
 #!/usr/bin/env -S bash -eux
 
-# Install the Hik driver
-
 apt-get update
 apt-get install -y \
   wget \
-  unzip
+  unzip \
+  gnupg
+
+# Set up virtual environment
+
+uv venv
+source /opt/imswitch/.venv/bin/activate
+
+# Install the Hik driver
 
 case "$TARGETPLATFORM" in
 "linux/arm64")
@@ -50,10 +56,7 @@ unzip "$archive.zip"
 cd "/tmp/$archive"
 chmod +x Galaxy_camera.run
 cd /tmp/Galaxy_Linux_Python_2.0.2106.9041/api
-# Activate UV venv and install setuptools for building Python bindings
-export PATH="/root/.local/bin:$PATH"
-source /opt/imswitch/.venv/bin/activate
-sudo -i -u pi uv pip install setuptools wheel
+uv pip install setuptools wheel # for building Python bindings
 python3 setup.py build
 python3 setup.py install
 
@@ -78,12 +81,24 @@ if [ "$TARGETPLATFORM" = "linux/arm64" ]; then
   cd /opt/VimbaX/cti
   ./Install_GenTL_Path.sh
   # Install VmbPy using UV pip
-  export PATH="/root/.local/bin:$PATH"
-  source /opt/imswitch/.venv/bin/activate
-  sudo -i -u pi uv pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl
+  uv pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl
   export GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 fi
 rm -rf /opt/VimbaX/doc
+
+# Install picamera2
+
+echo "deb http://archive.raspberrypi.org/debian/ trixie main" >/etc/apt/sources.list.d/raspi.list &&
+  apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 82B129927FA3303E
+apt-get update
+apt install -y --no-install-recommends python3-picamera2
+# Install simplejpeg in UV environment to avoid NumPy ABI compatibility issues
+# The system python3-simplejpeg is compiled against system NumPy, but we need it for UV venv NumPy
+uv pip install --no-cache-dir simplejpeg --force-reinstall --python /opt/imswitch/.venv/bin/python
+# Link system picamera2 and required modules to UV venv; this ensures that the UV venv Python uses the system's picamera2 with proper libcamera bindings
+UV_SITE_PACKAGES=$(python -c 'import site; print(site.getsitepackages()[0])')
+echo '/usr/lib/python3/dist-packages' >"$UV_SITE_PACKAGES"/system-packages.pth
+python -c 'import sys; print("Python paths:"); [print(p) for p in sys.path]'
 
 # Clean up build-only tools
 
@@ -92,11 +107,7 @@ apt-get remove -y \
   unzip \
   g++ \
   g++-11
-
 apt -y autoremove
-apt-get clean
-rm -rf /var/lib/apt/lists/*
-rm -rf /home/pi/.cache/uv
-pip3 cache purge || true
-rm -rf /home/pi/.cache/pip
+
+# Clean up /tmp
 rm -rf /tmp/*

@@ -10,48 +10,23 @@ apt-get install -y \
   mesa-utils \
   libhdf5-dev \
   usbutils \
-  libglib2.0-0 \
-  git
-# TODO(ethanjli): find a way to not rely on git inside a container image
+  libglib2.0-0
 
-# Install system picamera2 which pulls in compatible libcamera dependencies
-# Note: python3-picamera2 will automatically install the correct libcamera version
-apt install -y --no-install-recommends python3-picamera2
+# Set up virtual environment
 
-# Install simplejpeg in UV environment to avoid NumPy ABI compatibility issues
-# The system python3-simplejpeg is compiled against system NumPy, but we need it for UV venv NumPy
-sudo -i -u pi uv pip install --no-cache-dir simplejpeg --force-reinstall --python /opt/imswitch/.venv/bin/python
+uv venv
+source /opt/imswitch/.venv/bin/activate
 
-# Activate UV environment and install dependencies
-export PATH="/root/.local/bin:$PATH"
+# Only install dependencies; this creates a separately-cached Docker image layer from the rapidly-changing source.
 
-# Set up the project directory with build metadata so uv sync can pre-install all
-# slow-changing dependencies without installing ImSwitch itself yet.
-# This creates a separately-cached Docker image layer from the rapidly-changing source.
-mkdir -p /opt/imswitch/imswitch
-cp /mnt/ImSwitch/pyproject.toml /opt/imswitch/pyproject.toml
-cp /mnt/ImSwitch/uv.lock /opt/imswitch/uv.lock
-cd /opt/imswitch
-
-# Install all deps from the lockfile without installing ImSwitch itself.
-# Using --frozen ensures the lockfile is used as-is (no resolver conflicts).
-# The venv was already created by build-uv.sh so we don't pass --python here.
-sudo -i -u pi uv sync --no-install-project --frozen
+uv sync --locked --no-install-project
 
 # Reinstall psygnal from source to work around binary-wheel ABI issues
-sudo -i -u pi uv pip install psygnal --no-binary :all:
+uv pip install psygnal --no-binary :all:
 
 # Clean up build-only tools
 
 apt-get remove -y \
   build-essential \
   libhdf5-dev
-
-# Clean up all the package managers at the end
-
 apt -y autoremove
-apt-get clean
-rm -rf /var/lib/apt/lists/*
-rm -rf /home/pi/.cache/uv
-rm -rf /home/pi/.cache/pip
-rm -rf /tmp/*

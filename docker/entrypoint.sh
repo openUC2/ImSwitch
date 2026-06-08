@@ -14,10 +14,6 @@
 #   SCAN_EXT_DATA_PATH - Enable external storage scanning: "true"/"1" or "false" (default)
 #   EXT_DATA_PATH      - Mount point directory for external drives (e.g., /media, /Volumes)
 #
-# Interactive Shell:
-#   For an interactive shell with ImSwitch environment activated, use:
-#   docker run --entrypoint=venv-shell.sh <image-name>
-#
 # Storage Management:
 #   The new storage management system automatically handles:
 #   - Detection of external drives when SCAN_EXT_DATA_PATH=true
@@ -199,4 +195,4 @@ log "uv run python3 -m imswitch $params"
 # Run via uv so the project's locked virtual environment is used; --no-sync avoids
 # a redundant dependency check on every container start.
 cd /opt/imswitch
-exec /root/.local/bin/uv run --no-sync python3 -m imswitch "$params"
+exec uv run --no-sync python3 -m imswitch "$params"

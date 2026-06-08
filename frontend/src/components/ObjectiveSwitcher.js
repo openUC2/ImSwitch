@@ -5,7 +5,7 @@ import {
   Box,
   Button,
   ButtonGroup,
-  FormControlLabel,
+  Chip,
   Switch,
   CircularProgress,
   Typography,
@@ -13,15 +13,13 @@ import {
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import { useDispatch, useSelector } from "react-redux";
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
-
-// Hypothetical backend helpers (adjust import paths if different)
 import apiObjectiveControllerMoveToObjective from "../backendapi/apiObjectiveControllerMoveToObjective.js";
 
 export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const dispatch = useDispatch();
-  const [currentSlot, setCurrentSlot] = useState(null); // Let's say local state, or read from Redux
+  const [currentSlot, setCurrentSlot] = useState(null);
   const [pendingSlot, setPendingSlot] = useState(null);
-  const [isSwitching, setIsSwitching] = useState(false); // Show spinner while switching
+  const [isSwitching, setIsSwitching] = useState(false);
   const [zLevelingEnabled, setZLevelingEnabled] = useState(true);
 
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
@@ -31,30 +29,29 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const mag1 = objectiveState.availableObjectiveMagnifications?.[1];
   const label0 = mag0 ? `${name0} (${mag0}×)` : name0;
   const label1 = mag1 ? `${name1} (${mag1}×)` : name1;
-  const slot1Configured = objectiveState.slotConfigured?.[1] ?? true;
-  // Fetch objective status on mount
+  const isObjectiveSwitchBlocked = isSwitching;
+
   useEffect(() => {
     fetchObjectiveControllerGetStatus(dispatch);
   }, [dispatch]);
 
-  // Track Redux state changes (e.g. from socket updates) and update
-  // local state once the objective has actually changed.
   useEffect(() => {
     if (objectiveState.currentObjective != null) {
       setCurrentSlot(objectiveState.currentObjective);
       setPendingSlot(null);
-      setIsSwitching(false); // Objective update received => done switching
+      setIsSwitching(false);
     }
   }, [objectiveState.currentObjective]);
 
   useEffect(() => {
-    //refresh status
     fetchObjectiveControllerGetStatus(dispatch);
-  }, [hostIP, hostPort, dispatch]); // on host ip/port change
+  }, [hostIP, hostPort, dispatch]);
 
-  // Switch to a different objective, keep the selection neutral until the
-  // backend reports the final objective again.
   const switchTo = async (slot) => {
+    if (isObjectiveSwitchBlocked) {
+      return;
+    }
+
     try {
       setIsSwitching(true);
       setPendingSlot(slot);
@@ -72,21 +69,52 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   return (
     <Paper sx={{ p: 2 }}>
       <Grid container spacing={2} alignItems="center">
-        {/* Info row about the current objective */}
         <Grid item xs={12}>
-          <Typography>
-            {/* Show numeric slot + name from Redux */}
-            Current:{" "}
-            {objectiveState.objectivName && `(${objectiveState.objectivName})`}
-            {objectiveState.magnification != null &&
-              ` Mag: ${objectiveState.magnification}×  • `}
-            {objectiveState.NA != null && `NA ${objectiveState.NA}  • `}
-            {objectiveState.pixelsize != null &&
-              `Pixel ${objectiveState.pixelsize} µm`}
-          </Typography>
+          {isObjectiveSwitchBlocked ? (
+            <Typography color="text.secondary">
+              The objective is switching right now... please wait.
+            </Typography>
+          ) : (
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1,
+                flexWrap: "wrap",
+              }}
+            >
+              <Typography>Current objective:</Typography>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={
+                  <Box
+                    sx={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 0.75,
+                    }}
+                  >
+                    <span>
+                      {objectiveState.objectivName &&
+                        `(${objectiveState.objectivName})`}
+                    </span>
+                    {objectiveState.magnification != null && (
+                      <span>Mag: {objectiveState.magnification}×</span>
+                    )}
+                    {objectiveState.NA != null && (
+                      <span>NA {objectiveState.NA}</span>
+                    )}
+                    {objectiveState.pixelsize != null && (
+                      <span>Pixel {objectiveState.pixelsize} µm</span>
+                    )}
+                  </Box>
+                }
+              />
+            </Box>
+          )}
         </Grid>
 
-        {/* Objective selection + Z leveling option */}
         <Grid item xs={12}>
           <Grid container spacing={1.5} alignItems="center">
             <Grid item xs={12}>
@@ -96,15 +124,21 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                   alignItems: "center",
                   gap: 2,
                   flexWrap: "wrap",
+                  width: "100%",
                 }}
               >
-                <ButtonGroup variant="outlined" size="small" color="primary">
+                <Typography variant="subtitle1" sx={{ whiteSpace: "nowrap" }}>
+                  Objective Switcher
+                </Typography>
+
+                <ButtonGroup
+                  variant="outlined"
+                  size="small"
+                  color="primary"
+                  disabled={isObjectiveSwitchBlocked}
+                >
                   <Button
-                    variant={
-                      !isSwitching && currentSlot === 0
-                        ? "contained"
-                        : "outlined"
-                    }
+                    variant={currentSlot === 0 ? "contained" : "outlined"}
                     color="primary"
                     onClick={() => switchTo(0)}
                   >
@@ -123,11 +157,7 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                   </Button>
 
                   <Button
-                    variant={
-                      !isSwitching && currentSlot === 1
-                        ? "contained"
-                        : "outlined"
-                    }
+                    variant={currentSlot === 1 ? "contained" : "outlined"}
                     color="primary"
                     onClick={() => switchTo(1)}
                   >
@@ -145,25 +175,36 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                     </Box>
                   </Button>
                 </ButtonGroup>
-
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={zLevelingEnabled}
-                      onChange={(e) => setZLevelingEnabled(e.target.checked)}
-                      size="small"
-                    />
-                  }
-                  label="Z leveling"
-                  sx={{ ml: 0 }}
-                />
               </Box>
             </Grid>
+
             <Grid item xs={12}>
-              <Typography variant="caption" color="text.secondary">
-                Switching will apply{" "}
-                {zLevelingEnabled ? "with Z leveling" : "without Z leveling"}.
-              </Typography>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 2,
+                  flexWrap: "wrap",
+                  width: "100%",
+                }}
+              >
+                <Switch
+                  checked={zLevelingEnabled}
+                  onChange={(e) => setZLevelingEnabled(e.target.checked)}
+                  size="small"
+                />
+                <Typography
+                  variant="body2"
+                  component="span"
+                  sx={{ whiteSpace: "nowrap" }}
+                >
+                  Z leveling
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Switching will apply{" "}
+                  {zLevelingEnabled ? "with Z leveling" : "without Z leveling"}.
+                </Typography>
+              </Box>
             </Grid>
           </Grid>
         </Grid>

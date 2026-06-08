@@ -88,8 +88,8 @@ rm -rf /opt/VimbaX/doc
 
 # Install picamera2
 
-gpg --homedir /tmp --no-default-keyring --keyring /usr/share/keyrings/raspi.gpg --keyserver keyserver.ubuntu.com --recv-keys 82B129927FA3303E
-echo "deb [signed-by=/usr/share/keyrings/raspi.gpg] http://archive.raspberrypi.org/debian/ trixie main" >/etc/apt/sources.list.d/raspi.list
+gpg --homedir "$(mktemp -d)" --no-default-keyring --keyring /etc/apt/keyrings/raspi.gpg --keyserver keyserver.ubuntu.com --recv-keys 82B129927FA3303E
+echo "deb [signed-by=/etc/apt/keyrings/raspi.gpg] http://archive.raspberrypi.org/debian/ trixie main" >/etc/apt/sources.list.d/raspi.list
 apt-get update
 apt install -y --no-install-recommends python3-picamera2
 # Install simplejpeg in UV environment to avoid NumPy ABI compatibility issues

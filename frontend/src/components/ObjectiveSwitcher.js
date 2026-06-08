@@ -31,7 +31,6 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const mag1 = objectiveState.availableObjectiveMagnifications?.[1];
   const label0 = mag0 ? `${name0} (${mag0}×)` : name0;
   const label1 = mag1 ? `${name1} (${mag1}×)` : name1;
-  const slot1Configured = objectiveState.slotConfigured?.[1] ?? true;
   // Fetch objective status on mount
   useEffect(() => {
     fetchObjectiveControllerGetStatus(dispatch);
@@ -55,6 +54,12 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   // Switch to a different objective, keep the selection neutral until the
   // backend reports the final objective again.
   const switchTo = async (slot) => {
+    if (!isSwitching && objectiveState.currentObjective === slot) {
+      setCurrentSlot(slot);
+      setPendingSlot(null);
+      return;
+    }
+
     try {
       setIsSwitching(true);
       setPendingSlot(slot);
@@ -74,16 +79,23 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
       <Grid container spacing={2} alignItems="center">
         {/* Info row about the current objective */}
         <Grid item xs={12}>
-          <Typography>
-            {/* Show numeric slot + name from Redux */}
-            Current:{" "}
-            {objectiveState.objectivName && `(${objectiveState.objectivName})`}
-            {objectiveState.magnification != null &&
-              ` Mag: ${objectiveState.magnification}×  • `}
-            {objectiveState.NA != null && `NA ${objectiveState.NA}  • `}
-            {objectiveState.pixelsize != null &&
-              `Pixel ${objectiveState.pixelsize} µm`}
-          </Typography>
+          {isSwitching ? (
+            <Typography color="text.secondary">
+              The objective is switching right now... please wait.
+            </Typography>
+          ) : (
+            <Typography>
+              {/* Show numeric slot + name from Redux */}
+              Current:{" "}
+              {objectiveState.objectivName &&
+                `(${objectiveState.objectivName})`}
+              {objectiveState.magnification != null &&
+                ` Mag: ${objectiveState.magnification}×  • `}
+              {objectiveState.NA != null && `NA ${objectiveState.NA}  • `}
+              {objectiveState.pixelsize != null &&
+                `Pixel ${objectiveState.pixelsize} µm`}
+            </Typography>
+          )}
         </Grid>
 
         {/* Objective selection + Z leveling option */}

@@ -96,3 +96,7 @@ COPY docker/venv-shell.sh /venv-shell.sh
 RUN chmod +x /entrypoint.sh /venv-shell.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
+
+# Run as unprivileged user
+RUN groupadd -g 1000 pi && useradd -m -u 1000 -g pi pi
+USER pi

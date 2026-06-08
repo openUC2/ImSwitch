@@ -91,7 +91,6 @@ rm -rf /opt/VimbaX/doc
 echo "deb http://archive.raspberrypi.org/debian/ trixie main" >/etc/apt/sources.list.d/raspi.list &&
   apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 82B129927FA3303E
 apt-get update
-apt -y upgrade # needed to satisfy dependencies
 apt install -y --no-install-recommends python3-picamera2
 # Install simplejpeg in UV environment to avoid NumPy ABI compatibility issues
 # The system python3-simplejpeg is compiled against system NumPy, but we need it for UV venv NumPy

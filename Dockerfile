@@ -54,7 +54,7 @@
 
 
 # Use an appropriate base image for multi-arch support
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim
 
 # Needed for platform detection in install-drivers.sh:
 ARG TARGETPLATFORM

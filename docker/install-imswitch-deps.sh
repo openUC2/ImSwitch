@@ -27,3 +27,6 @@ apt-get remove -y \
   git \
   libhdf5-dev
 apt -y autoremove
+
+# Clean up /tmp
+rm -rf /tmp/*

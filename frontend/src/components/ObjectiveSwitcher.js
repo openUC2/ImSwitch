@@ -116,8 +116,17 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
     } catch (e) {
       console.error(`Error switching to objective ${slot}`, e);
       clearSwitchTimeout();
+      dispatch(
+        setNotification({
+          message: `Objective switch failed: ${e?.message || e}`,
+          type: "error",
+        }),
+      );
+      fetchObjectiveControllerGetStatus(dispatch);
       setPendingSlot(null);
-      setCurrentSlot(objectiveState.currentObjective);
+      setCurrentSlot(
+        latestObjectiveRef.current ?? objectiveState.currentObjective,
+      );
       setIsSwitching(false);
     }
   };

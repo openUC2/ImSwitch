@@ -698,6 +698,19 @@ class ObjectiveController(LiveUpdatedController):
         """
         per_slot_pixelsizes = self._getPerSlotPixelSizes()
 
+        # Snapshot move lifecycle state atomically to avoid mixed values while
+        # the move thread updates these fields.
+        with self._moveStateLock:
+            is_moving_objective = self._isMovingObjective
+            pending_objective_request_id = self._pendingMoveRequestId
+            pending_objective_target_slot = self._pendingTargetSlot
+            last_objective_request_id = self._latestMoveRequestId
+            last_completed_objective_request_id = self._lastCompletedRequestId
+            last_completed_objective_slot = self._lastCompletedSlot
+            last_objective_move_error = self._lastMoveError
+            last_objective_move_started_at = self._lastMoveStartedAt
+            last_objective_move_completed_at = self._lastMoveCompletedAt
+
         status = {
             "currentObjective": self._currentObjective,
             "isHomed": self._isHomed,
@@ -738,15 +751,15 @@ class ObjectiveController(LiveUpdatedController):
             "isActive": self._configManager.isActive,
 
             # Move request lifecycle
-            "isMovingObjective": self._isMovingObjective,
-            "pendingObjectiveRequestId": self._pendingMoveRequestId,
-            "pendingObjectiveTargetSlot": self._pendingTargetSlot,
-            "lastObjectiveRequestId": self._latestMoveRequestId,
-            "lastCompletedObjectiveRequestId": self._lastCompletedRequestId,
-            "lastCompletedObjectiveSlot": self._lastCompletedSlot,
-            "lastObjectiveMoveError": self._lastMoveError,
-            "lastObjectiveMoveStartedAt": self._lastMoveStartedAt,
-            "lastObjectiveMoveCompletedAt": self._lastMoveCompletedAt,
+            "isMovingObjective": is_moving_objective,
+            "pendingObjectiveRequestId": pending_objective_request_id,
+            "pendingObjectiveTargetSlot": pending_objective_target_slot,
+            "lastObjectiveRequestId": last_objective_request_id,
+            "lastCompletedObjectiveRequestId": last_completed_objective_request_id,
+            "lastCompletedObjectiveSlot": last_completed_objective_slot,
+            "lastObjectiveMoveError": last_objective_move_error,
+            "lastObjectiveMoveStartedAt": last_objective_move_started_at,
+            "lastObjectiveMoveCompletedAt": last_objective_move_completed_at,
 
             # Current motor position (if available)
             "motorPosition": None,

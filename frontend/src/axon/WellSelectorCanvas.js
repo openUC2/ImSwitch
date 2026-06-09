@@ -480,9 +480,22 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
       //calc neighbors
       let neighborPointList = [];
-      
+
+      // Pre-computed scan positions (e.g. a freehand region converted to scan
+      // points) ride along on the point itself in physical µm. Draw each one as
+      // a full-FOV tile so the individual scan points inside the group are
+      // visible — otherwise the shape/wellMode branches below find nothing to
+      // render and the converted region shows up as empty.
+      if (Array.isArray(itPoint.neighborPointList) && itPoint.neighborPointList.length > 0) {
+        neighborPointList = itPoint.neighborPointList.map((pos) => ({
+          x: calcPhy2Px(pos.x),
+          y: calcPhy2Px(pos.y),
+          iX: pos.iX,
+          iY: pos.iY,
+        }));
+
       // Check for new well-based patterns first
-      if (itPoint.wellMode === "center_only") {
+      } else if (itPoint.wellMode === "center_only") {
         // Find wells that intersect with this point and return their centers
         const intersectingWells = wsUtils.findWellsAtPosition(itPoint, experimentState.wellLayout);
         const centerPositions = wsUtils.generateWellCenterPositions(intersectingWells, experimentState.wellLayout);

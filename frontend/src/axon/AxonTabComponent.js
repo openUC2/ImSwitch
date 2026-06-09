@@ -27,6 +27,7 @@ import apiLiveViewControllerGetActiveStreams from "../backendapi/apiLiveViewCont
 import createAxiosInstance from "../backendapi/createAxiosInstance";
 import { setNotification } from "../state/slices/NotificationSlice";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice";
+import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 
 /**
  * DetectorToggle - Camera selector for switching between detectors
@@ -136,6 +137,16 @@ const AxonTabComponent = () => {
   const dispatch = useDispatch();
   // PiP (picture-in-picture) floating live preview
   const [pipVisible, setPipVisible] = useState(false);
+
+  // Opening the WellPlate view must always refresh the objective state so the
+  // current pixel size / FOV is applied to the tiling, overlap and freehand
+  // step-size maths. This lives on the container (not the Well Selector tab)
+  // because GenericTabBar only mounts the active tab — if the user last left
+  // the view on "Points" or "Parameter", the Well Selector's own mount fetch
+  // would never run and the objective would go un-queried.
+  useEffect(() => {
+    fetchObjectiveControllerGetStatus(dispatch);
+  }, [dispatch]);
 
   // Ensure WellPlate starts with detector auto-exposure disabled.
   useEffect(() => {

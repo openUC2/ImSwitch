@@ -7,6 +7,8 @@ from imswitch.imcontrol.controller.basecontrollers import LiveUpdatedController
 
 
 from typing import Tuple, Optional
+import threading
+import time
 
 
 class ObjectiveController(LiveUpdatedController):
@@ -43,6 +45,19 @@ class ObjectiveController(LiveUpdatedController):
         self._isHomed: bool = False
         self._detectorWidth: Optional[int] = None
         self._detectorHeight: Optional[int] = None
+
+        # Track objective move request lifecycle for explicit API acknowledgements.
+        self._moveStateLock = threading.Lock()
+        self._moveRequestCounter: int = 0
+        self._latestMoveRequestId: Optional[int] = None
+        self._pendingMoveRequestId: Optional[int] = None
+        self._pendingTargetSlot: Optional[int] = None
+        self._isMovingObjective: bool = False
+        self._lastMoveError: Optional[str] = None
+        self._lastMoveStartedAt: Optional[float] = None
+        self._lastMoveCompletedAt: Optional[float] = None
+        self._lastCompletedRequestId: Optional[int] = None
+        self._lastCompletedSlot: Optional[int] = None
 
         # Cache configuration values for quick access
         self._objectivePositions = list(self._configManager.objectivePositions)  # [x0, x1] in µm
@@ -272,55 +287,123 @@ class ObjectiveController(LiveUpdatedController):
             skipZ: If True, only move axis A (objective turret) without Z focus adjustment.
                    If False (default), also apply Z delta based on z0/z1 config.
         """
-        import threading
-        mThread = threading.Thread(target=self.moveToObjectiveThread, args=(slot, skipZ))
-        mThread.start()
-
-    def moveToObjectiveThread(self, slot: int, skipZ: bool = False):
         if slot not in [0, 1]:
-            self._logger.error(f"Invalid objective slot: {slot} (must be 0 or 1)")
-            return
+            return {
+                "accepted": False,
+                "reason": "invalid_slot",
+                "targetSlot": slot,
+                "skipZ": bool(skipZ)
+            }
 
         if not self._isSlotConfigured[slot]:
-            self._logger.warning(
+            return {
+                "accepted": False,
+                "reason": "slot_not_configured",
+                "targetSlot": slot,
+                "skipZ": bool(skipZ)
+            }
+
+        with self._moveStateLock:
+            if self._isMovingObjective:
+                return {
+                    "accepted": False,
+                    "reason": "busy",
+                    "targetSlot": slot,
+                    "skipZ": bool(skipZ),
+                    "pendingRequestId": self._pendingMoveRequestId,
+                    "pendingTargetSlot": self._pendingTargetSlot
+                }
+
+            self._moveRequestCounter += 1
+            request_id = self._moveRequestCounter
+            started_at = time.time()
+
+            self._latestMoveRequestId = request_id
+            self._pendingMoveRequestId = request_id
+            self._pendingTargetSlot = slot
+            self._isMovingObjective = True
+            self._lastMoveError = None
+            self._lastMoveStartedAt = started_at
+
+        mThread = threading.Thread(
+            target=self.moveToObjectiveThread,
+            args=(slot, skipZ, request_id),
+            daemon=True,
+        )
+        mThread.start()
+
+        return {
+            "accepted": True,
+            "requestId": request_id,
+            "targetSlot": slot,
+            "skipZ": bool(skipZ),
+            "startedAt": started_at,
+            "status": "started"
+        }
+
+    def moveToObjectiveThread(self, slot: int, skipZ: bool = False, request_id: Optional[int] = None):
+        completed_at = None
+        success = False
+        last_error = None
+        if slot not in [0, 1]:
+            last_error = f"Invalid objective slot: {slot} (must be 0 or 1)"
+            self._logger.error(last_error)
+        elif not self._isSlotConfigured[slot]:
+            last_error = (
                 f"Objective slot {slot} is not configured (empty name or magnification=0); "
                 "refusing to issue axis-A motion."
             )
-            return
+            self._logger.warning(last_error)
+        else:
+            if slot == self._currentObjective:
+                self._logger.debug(f"Already at objective slot {slot}, no movement needed")
+                success = True
+            else:
+                self._logger.info(f"Moving to objective slot {slot} ({self._objectiveNames[slot]}), skipZ={skipZ}")
 
-        if False and slot == self._currentObjective:
-            self._logger.debug(f"Already at objective slot {slot}, no movement needed")
-            return
+                # Calculate Z delta if needed (before changing slot)
+                z_delta = 0
+                if not skipZ and self._currentObjective is not None and self._currentObjective in [0, 1]:
+                    # Calculate Z delta: difference between target z position and current z position
+                    current_z = self._zPositions[self._currentObjective] if self._currentObjective < len(self._zPositions) else 0
+                    target_z = self._zPositions[slot] if slot < len(self._zPositions) else 0
+                    z_delta = target_z - current_z
+                    self._logger.debug(f"Z delta: {z_delta} µm (from z{self._currentObjective}={current_z} to z{slot}={target_z})")
+                    # Apply Z focus adjustment if needed
+                    if  z_delta != 0 and self._positioner is not None:
+                        try:
+                            self._logger.info(f"Applying Z focus adjustment: {z_delta} µm")
+                            self._positioner.move(
+                                value=z_delta,
+                                axis="Z",
+                                is_absolute=False,  # Relative movement for Z
+                                is_blocking=False
+                            )
+                        except Exception as e:
+                            self._logger.error(f"Failed to apply Z focus adjustment: {e}", exc_info=True)
 
-        self._logger.info(f"Moving to objective slot {slot} ({self._objectiveNames[slot]}), skipZ={skipZ}")
-
-        # Calculate Z delta if needed (before changing slot)
-        z_delta = 0
-        if not skipZ and self._currentObjective is not None and self._currentObjective in [0, 1]:
-            # Calculate Z delta: difference between target z position and current z position
-            current_z = self._zPositions[self._currentObjective] if self._currentObjective < len(self._zPositions) else 0
-            target_z = self._zPositions[slot] if slot < len(self._zPositions) else 0
-            z_delta = target_z - current_z
-            self._logger.debug(f"Z delta: {z_delta} µm (from z{self._currentObjective}={current_z} to z{slot}={target_z})")
-            # Apply Z focus adjustment if needed
-            if  z_delta != 0 and self._positioner is not None:
-                try:
-                    self._logger.info(f"Applying Z focus adjustment: {z_delta} µm")
-                    self._positioner.move(
-                        value=z_delta,
-                        axis="Z",
-                        is_absolute=False,  # Relative movement for Z
-                        is_blocking=False
-                    )
-                except Exception as e:
-                    self._logger.error(f"Failed to apply Z focus adjustment: {e}", exc_info=True)
-
-        # Move the axis A motor (objective turret)
-        success = self._moveMotorToSlot(slot)
+                # Move the axis A motor (objective turret)
+                success = self._moveMotorToSlot(slot)
+                if not success and self._hasMotor:
+                    last_error = f"Failed to move objective motor to slot {slot}"
 
         if success or not self._hasMotor:
             self._currentObjective = slot
             self._updatePixelSize()
+
+        completed_at = time.time()
+        with self._moveStateLock:
+            if request_id is None or self._pendingMoveRequestId == request_id:
+                self._isMovingObjective = False
+                self._pendingMoveRequestId = None
+                self._pendingTargetSlot = None
+                self._lastMoveCompletedAt = completed_at
+                if success:
+                    self._lastMoveError = None
+                    self._lastCompletedRequestId = request_id
+                    self._lastCompletedSlot = slot
+                else:
+                    self._lastMoveError = last_error or "objective_move_failed"
 
     @APIExport(runOnUIThread=True)
     def getCurrentObjective(self):
@@ -630,6 +713,19 @@ class ObjectiveController(LiveUpdatedController):
         """
         per_slot_pixelsizes = self._getPerSlotPixelSizes()
 
+        # Snapshot move lifecycle state atomically to avoid mixed values while
+        # the move thread updates these fields.
+        with self._moveStateLock:
+            is_moving_objective = self._isMovingObjective
+            pending_objective_request_id = self._pendingMoveRequestId
+            pending_objective_target_slot = self._pendingTargetSlot
+            last_objective_request_id = self._latestMoveRequestId
+            last_completed_objective_request_id = self._lastCompletedRequestId
+            last_completed_objective_slot = self._lastCompletedSlot
+            last_objective_move_error = self._lastMoveError
+            last_objective_move_started_at = self._lastMoveStartedAt
+            last_objective_move_completed_at = self._lastMoveCompletedAt
+
         status = {
             "currentObjective": self._currentObjective,
             "isHomed": self._isHomed,
@@ -669,6 +765,17 @@ class ObjectiveController(LiveUpdatedController):
             # Motor availability
             "hasMotor": self._hasMotor,
             "isActive": self._configManager.isActive,
+
+            # Move request lifecycle
+            "isMovingObjective": is_moving_objective,
+            "pendingObjectiveRequestId": pending_objective_request_id,
+            "pendingObjectiveTargetSlot": pending_objective_target_slot,
+            "lastObjectiveRequestId": last_objective_request_id,
+            "lastCompletedObjectiveRequestId": last_completed_objective_request_id,
+            "lastCompletedObjectiveSlot": last_completed_objective_slot,
+            "lastObjectiveMoveError": last_objective_move_error,
+            "lastObjectiveMoveStartedAt": last_objective_move_started_at,
+            "lastObjectiveMoveCompletedAt": last_objective_move_completed_at,
 
             # Current motor position (if available)
             "motorPosition": None,

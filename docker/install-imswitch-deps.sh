@@ -15,7 +15,7 @@ apt-get install -y \
 
 # Only install dependencies; this creates a separately-cached Docker image layer from the rapidly-changing source.
 
-uv sync --locked --no-install-project
+uv sync --frozen --no-install-project
 
 # Reinstall psygnal from source to work around binary-wheel ABI issues
 uv pip install psygnal --no-binary :all:

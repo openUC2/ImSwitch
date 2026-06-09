@@ -15,6 +15,7 @@ import * as overviewRegSlice from '../state/slices/OverviewRegistrationSlice.js'
 
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
+import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 import LabwareSelectionPanel from "../components/LabwareSelectionPanel.jsx";
 
 import {
@@ -60,8 +61,16 @@ const WellSelectorComponent = () => {
   // Access global Redux state
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const experimentState = useSelector(experimentSlice.getExperimentState);
-  const positionState = useSelector(positionSlice.getPositionState); 
+  const positionState = useSelector(positionSlice.getPositionState);
   const overviewRegState = useSelector(overviewRegSlice.getOverviewRegistrationState);
+
+  // Opening the wellplate view should refresh the objective state so the
+  // current pixel size / FOV (which drives tiling, overlap and freehand step
+  // sizes) is applied. The tab bar mounts this component fresh on open, so a
+  // mount effect is enough.
+  useEffect(() => {
+    fetchObjectiveControllerGetStatus(dispatch);
+  }, [dispatch]);
 
 
   //##################################################################################
@@ -88,28 +97,36 @@ const WellSelectorComponent = () => {
       }
       return;
     }
-    // All points generated from a single freehand polygon belong to one
-    // logical scan area, so they share the same ``areaId`` (mirrors the
-    // grouping that area-select / labware sub-positions use). Downstream
-    // writers will store these tiles in a common zarr/tif folder.
+    // A freehand polygon is ONE logical scan area (like an area-select
+    // rectangle), so it becomes a SINGLE point-list entry whose interior scan
+    // positions ride along in ``neighborPointList``.  This is what makes the
+    // scan treat it as one group (one zarr/tif folder) instead of dozens of
+    // separate single-tile points.
     const areaId = `freehand_${Date.now()}`;
-    positions.forEach((p, idx) => {
-      dispatch(
-        experimentSlice.createPoint({
+    const cx = positions.reduce((s, p) => s + p.x, 0) / positions.length;
+    const cy = positions.reduce((s, p) => s + p.y, 0) / positions.length;
+    dispatch(
+      experimentSlice.createPoint({
+        x: cx,
+        y: cy,
+        name: "Freehand",
+        shape: "",
+        areaType: "free_scan",
+        areaId,
+        groupId: areaId,
+        neighborPointList: positions.map((p) => ({
           x: p.x,
           y: p.y,
-          name: `Freehand_${idx + 1}`,
-          shape: "",
-          areaType: "free_scan",
-          areaId,
-          groupId: areaId,
-        })
-      );
-    });
+          z: p.z ?? 0,
+          iX: 0,
+          iY: 0,
+        })),
+      })
+    );
     childRef.current.clearFreehand && childRef.current.clearFreehand();
     if (infoPopupRef.current) {
       infoPopupRef.current.showMessage(
-        `Created ${positions.length} freehand scan point(s).`
+        `Created 1 freehand region with ${positions.length} scan position(s).`
       );
     }
   };
@@ -302,6 +319,12 @@ const WellSelectorComponent = () => {
   //##################################################################################
   const handleMoveCameraSpeedXYChange = (event) => {
     dispatch(wellSelectorSlice.setMoveCameraSpeedXY(event.target.value));
+    // Keep the experiment scan speed in sync so "Move Camera Speed" drives the
+    // XY scan too (single source of truth shared with the Tiling tab control).
+    const v = parseFloat(event.target.value);
+    if (!isNaN(v) && v > 0) {
+      dispatch(experimentSlice.setSpeed(v));
+    }
   };
 
   //##################################################################################
@@ -488,7 +511,13 @@ const WellSelectorComponent = () => {
             value={wellSelectorState.moveCameraSpeedXY ?? 20000}
             onChange={handleMoveCameraSpeedXYChange}
             inputProps={{ min: 1, step: 1000 }}
-            sx={{ width: 160 }}
+            error={(parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000}
+            helperText={
+              (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000
+                ? "⚠ >20000 µm/s is highly unreliable (may lose steps/accuracy)"
+                : " "
+            }
+            sx={{ width: 230 }}
           />
           <TextField
             label="Z Speed (µm/s)"

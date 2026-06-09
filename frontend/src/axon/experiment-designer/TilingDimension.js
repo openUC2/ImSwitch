@@ -24,6 +24,7 @@ import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import * as wellSelectorSlice from "../../state/slices/WellSelectorSlice";
+import * as focusMapSlice from "../../state/slices/FocusMapSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 import apiExperimentControllerGetCurrentExperimentParams from "../../backendapi/apiExperimentControllerGetCurrentExperimentParams";
 
@@ -42,7 +43,11 @@ const TilingDimension = () => {
   // Redux state
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
+  const focusMapConfig = useSelector(focusMapSlice.getFocusMapConfig);
   const parameterValue = experimentState.parameterValue;
+  // When a focus map is active it drives Z per-XY, so the manual Z override is
+  // meaningless – grey it out (the backend also ignores it in that case).
+  const focusMapEnabled = !!focusMapConfig?.enabled;
 
   // Fetch calibrated pixel size from the backend once on mount and pre-fill
   // the Ashlar pixel size field if the user hasn't manually set it yet.
@@ -222,6 +227,59 @@ const TilingDimension = () => {
             </Typography>
           </Box>
         </Box>
+      </Box>
+
+      {/* Stage & Z behaviour */}
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+          Stage & Z Behaviour
+        </Typography>
+
+        <FormControlLabel
+          control={
+            <Switch
+              checked={!!parameterValue.returnToOrigin}
+              onChange={(e) =>
+                dispatch(experimentSlice.setReturnToOrigin(e.target.checked))
+              }
+            />
+          }
+          label={
+            <Box>
+              <Typography variant="body2">Return to origin after scan</Typography>
+              <Typography variant="caption" color="textSecondary">
+                When the scan finishes, move the stage back to the XYZ position it
+                was at before the scan started.
+              </Typography>
+            </Box>
+          }
+          sx={{ alignItems: "flex-start", mb: 1, ml: 0 }}
+        />
+
+        <FormControlLabel
+          disabled={focusMapEnabled}
+          control={
+            <Switch
+              checked={!!parameterValue.overrideZWithCurrentZ}
+              onChange={(e) =>
+                dispatch(experimentSlice.setOverrideZWithCurrentZ(e.target.checked))
+              }
+            />
+          }
+          label={
+            <Box>
+              <Typography variant="body2">
+                Override per-group Z with current Z
+              </Typography>
+              <Typography variant="caption" color="textSecondary">
+                {focusMapEnabled
+                  ? "Disabled while a focus map is active – the focus map drives Z."
+                  : "Ignore each area's stored Z and use the microscope's current Z for every position (e.g. after re-focusing)."}
+              </Typography>
+            </Box>
+          }
+          sx={{ alignItems: "flex-start", ml: 0 }}
+        />
       </Box>
 
       {/* Stitching Intent */}
@@ -414,15 +472,31 @@ const TilingDimension = () => {
               <FormControl size="small" fullWidth sx={{ mt: 0.5 }}>
                 <Select
                   value={parameterValue.speed || 20000}
-                  onChange={(e) => dispatch(experimentSlice.setSpeed(Number(e.target.value)))}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    dispatch(experimentSlice.setSpeed(v));
+                    // Keep the wellplate "Move Camera Speed" in sync so both
+                    // controls always agree on the XY scan speed.
+                    dispatch(wellSelectorSlice.setMoveCameraSpeedXY(v));
+                  }}
                 >
-                  {[5000, 10000, 15000, 20000, 25000, 30000].map((speed) => (
+                  {[10000, 20000, 30000, 40000, 50000, 60000, 70000, 80000].map((speed) => (
                     <MenuItem key={speed} value={speed}>
                       {speed} µm/s
                     </MenuItem>
                   ))}
                 </Select>
               </FormControl>
+              {(parameterValue.speed || 20000) > 20000 && (
+                <Typography
+                  variant="caption"
+                  color="error"
+                  sx={{ display: "block", mt: 0.5 }}
+                >
+                  ⚠ Speeds above 20000 µm/s are highly unreliable — the stage may
+                  lose steps and positioning accuracy.
+                </Typography>
+              )}
             </Box>
 
             {/* Z speed */}

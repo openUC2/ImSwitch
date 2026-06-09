@@ -25,6 +25,7 @@
     "date-fns": "^4.1.0",
     "deck.gl": "^9.2.1",
     "eslint-config-react-app": "^7.0.1",
+    "intro.js": "^8.3.2",
     "json-edit-react": "^1.23.1",
     "lz4js": "^0.2.0",
     "notistack": "^3.0.2",
@@ -70,7 +71,7 @@
   },
   "scripts": {
     "start": "craco start",
-    "build": "craco build",
+    "build": "GENERATE_SOURCEMAP=false craco build",
     "test": "craco test"
   },
   "scripts_old": {

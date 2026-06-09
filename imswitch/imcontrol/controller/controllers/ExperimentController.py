@@ -27,6 +27,7 @@ except Exception:
 
 # Import OME writers from new io location
 from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths
+from imswitch.imcontrol.model.io.frame_save_worker import FrameSaveWorker
 from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ExperimentPerformanceMode,
     ExperimentNormalMode,
@@ -51,6 +52,7 @@ from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ScanMetadata,
     ScanPosition,
     StartExperimentResponse,
+    SyntheticChannel,
 )
 from imswitch.imcontrol.model.focus_map import FocusMap, FocusMapManager, FocusMapResult
 from imswitch.imcontrol.model.overview_registration import OverviewRegistrationService, PixelPoint, StagePoint, SlotDefinition
@@ -72,6 +74,20 @@ class ExperimentController(ImConWidgetController):
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
         self.mda_manager = MDASequenceManager()
+
+        # Background frame-save worker. ``save_frame_ome`` and the
+        # individual-TIFF path it dispatches to used to call into
+        # ``ome_writer.write_frame`` / ``tifffile.imwrite`` *on the
+        # workflow thread*, which blocked the next stage step for
+        # 20–100 ms per frame at 9 MP (more for stitched/individual
+        # TIFFs, much more for a slow SD/USB target). Now we just
+        # queue the write here and the worker thread does the I/O.
+        # The queue is bounded so a slow disk back-pressures the
+        # acquisition loop instead of silently consuming RAM.
+        self._frame_saver = FrameSaveWorker(
+            name="ExperimentFrameSaver",
+            maxsize=32,
+        )
 
         # set default values
         self.SPEED_Y = self.SPEED_Y_default = 20000
@@ -181,21 +197,26 @@ class ExperimentController(ImConWidgetController):
                 "nLedsY": _ny,
                 "maxRingRadius": _max_ring_radius,
             }
-            self.ExperimentParams.illuSources.append(self.LED_MATRIX_RING_CHANNEL)
-            self.ExperimentParams.illuSourceKinds.append("ring")
-            self.ExperimentParams.illuSourceMinIntensities.append(0)
-            self.ExperimentParams.illuSourceMaxIntensities.append(255)
-            self.ExperimentParams.illuIntensities.append(0)
-            self.ExperimentParams.exposureTimes.append(0)
-            self.ExperimentParams.gains.append(0)
-
-            self.ExperimentParams.illuSources.append(self.LED_MATRIX_DPC_CHANNEL)
-            self.ExperimentParams.illuSourceKinds.append("dpc")
-            self.ExperimentParams.illuSourceMinIntensities.append(0)
-            self.ExperimentParams.illuSourceMaxIntensities.append(255)
-            self.ExperimentParams.illuIntensities.append(0)
-            self.ExperimentParams.exposureTimes.append(0)
-            self.ExperimentParams.gains.append(0)
+            # Synthetic LED-matrix channels are advertised in their OWN list
+            # (illuSources stays conventional/default-only).  The frontend
+            # renders ring/DPC controls from this list and sends back enabled
+            # entries in ParameterValue.syntheticChannels.
+            self.ExperimentParams.syntheticChannels = [
+                SyntheticChannel(
+                    name=self.LED_MATRIX_RING_CHANNEL,
+                    kind="ring",
+                    enabled=False,
+                    intensityR=0, intensityG=0, intensityB=0,
+                    radius=_max_ring_radius,
+                ),
+                SyntheticChannel(
+                    name=self.LED_MATRIX_DPC_CHANNEL,
+                    kind="dpc",
+                    enabled=False,
+                    # DPC conventionally lights one colour; default to green.
+                    intensityR=0, intensityG=255, intensityB=0,
+                ),
+            ]
             # Surface DPC capability separately so existing UI bits that
             # only look at isDPCpossible can still gate features.
             self.ExperimentParams.isDPCpossible = True
@@ -795,79 +816,66 @@ class ExperimentController(ImConWidgetController):
 
         # Illumination-related (validators on the model guarantee these are
         # lists – or None for `illumination`/`illuIntensities` when not set).
-        illuSources = p.illumination or []
-        illuminationIntensities = p.illuIntensities or []
-        isDarkfield = p.darkfield  # TODO: Needs to be implemented
-        isBrightfield = p.brightfield
-        isDPC = p.differentialPhaseContrast
-
-        # Resolve a per-source "kind" tag parallel to illuSources.  Sources
-        # are looked up by name in self.ExperimentParams.illuSources; anything
-        # not found falls back to "default" so legacy clients keep working.
-        _kind_by_name = {
-            name: kind
-            for name, kind in zip(
-                self.ExperimentParams.illuSources,
-                self.ExperimentParams.illuSourceKinds,
-            )
-        }
-        illuminationKinds = [
-            _kind_by_name.get(name, "default") for name in illuSources
-        ]
-        # Per-channel kind-specific params (radius, RGB).  May be None on
-        # legacy payloads — normalise to empty dict so workflow builder
-        # doesn't need to None-check.
-        illuminationParams = dict(p.illuminationParams or {})
-
-        # Promote RGB max → illuIntensities for synthetic (ring/dpc) channels.
-        # Synthetic channels carry their "intensity" in illuminationParams
-        # (R/G/B 0..255), so illuIntensities[i] is always 0 for them.  The
-        # workflow loop uses `illu_intensity > 0` as the active-channel gate;
-        # without this promotion, synthetic channels are silently treated as
-        # "off" (and worse: collapse passthrough mode below, which then mis-
-        # aligns illuminationKinds vs. the post-passthrough illuSources).
         #
-        # IMPORTANT: only promote when the channel is actually enabled by
-        # the user.  `illuminationParams` is a sticky cache on the frontend
-        # — toggling a synthetic channel off does NOT clear its last-edited
-        # radius/RGB, so a naïve "has non-zero RGB → activate" rule would
-        # re-enable channels the user explicitly deselected.  We gate on
-        # `channelEnabledForExperiment` (sent by the frontend) when present.
-        # Pad illuminationIntensities to match illuSources first so the indexed
-        # update below is safe.
+        # `illumination` now carries ONLY conventional (default) sources.
+        # Synthetic LED-matrix channels (ring/DPC) arrive in their own
+        # `syntheticChannels` list and are merged into the parallel workflow
+        # arrays below.  Every parallel array (sources / kinds / intensities /
+        # exposures / gains) grows in lockstep so the downstream workflow and
+        # OME channel sizing stay index-aligned.
+        illuSources = list(p.illumination or [])
+        illuminationIntensities = list(p.illuIntensities or [])
+
+        # Conventional sources are all "default" kind.
+        illuminationKinds = ["default"] * len(illuSources)
+        # Per-channel kind-specific params (radius/RGB), keyed by channel name.
+        # Built solely from syntheticChannels below – not from any sticky
+        # frontend cache, so a deselected channel can never leak stale RGB.
+        illuminationParams: Dict[str, Dict[str, Any]] = {}
+
+        # Default-channel camera settings, normalised to parallel illuSources.
+        gains = list(p.gains or [])
+        exposures = list(p.exposureTimes or [])
+        if len(gains) != len(illuSources):
+            gains = [-1] * len(illuSources)
+        if len(exposures) != len(illuSources):
+            _first_exposure = exposures[0] if exposures else 0
+            exposures = [_first_exposure] * len(illuSources)
         if len(illuminationIntensities) < len(illuSources):
-            illuminationIntensities = list(illuminationIntensities) + (
+            illuminationIntensities = illuminationIntensities + (
                 [0] * (len(illuSources) - len(illuminationIntensities))
             )
         else:
-            illuminationIntensities = list(illuminationIntensities)
-        _channel_enabled = p.channelEnabledForExperiment  # Optional[List[bool]]
-        for _i, (_name, _kind) in enumerate(zip(illuSources, illuminationKinds)):
-            if _kind not in ("ring", "dpc"):
+            illuminationIntensities = illuminationIntensities[: len(illuSources)]
+
+        # ── Merge synthetic (ring/DPC) channels from their dedicated list ──
+        # Each enabled synthetic channel with a non-zero colour appends one
+        # entry to every parallel array.  Its scalar "intensity" is max(R,G,B)
+        # (the >0 active-channel gate the workflow loop uses); the real pattern
+        # (radius + RGB) lives in illuminationParams[name] for the LED-matrix
+        # driver.  This single, explicit merge replaces the old RGB→intensity
+        # promotion hack and its channelEnabledForExperiment gymnastics.
+        for _sc in (p.syntheticChannels or []):
+            if not _sc.enabled or _sc.rgb_max <= 0:
                 continue
-            # Authoritative "is this channel enabled in the experiment" check.
-            # When the frontend sends channelEnabledForExperiment, honour it
-            # exactly; if absent (legacy clients), fall back to the previous
-            # permissive behaviour (treat any synthetic channel with RGB
-            # params as enabled).
-            if _channel_enabled is not None:
-                if _i >= len(_channel_enabled) or not _channel_enabled[_i]:
-                    # Make sure stale intensity doesn't sneak through either.
-                    illuminationIntensities[_i] = 0
-                    continue
-            if illuminationIntensities[_i] and illuminationIntensities[_i] > 0:
-                continue  # frontend already supplied a concrete intensity
-            _kp = illuminationParams.get(_name) or {}
-            _rgb_max = max(
-                int(_kp.get("intensityR", 0) or 0),
-                int(_kp.get("intensityG", 0) or 0),
-                int(_kp.get("intensityB", 0) or 0),
+            illuSources.append(_sc.name)
+            illuminationKinds.append(_sc.kind)
+            illuminationIntensities.append(_sc.rgb_max)
+            illuminationParams[_sc.name] = {
+                "radius": int(_sc.radius) if _sc.radius is not None else 0,
+                "intensityR": int(_sc.intensityR or 0),
+                "intensityG": int(_sc.intensityG or 0),
+                "intensityB": int(_sc.intensityB or 0),
+            }
+            gains.append(float(_sc.gain) if _sc.gain is not None else -1)
+            exposures.append(
+                float(_sc.exposure) if _sc.exposure is not None
+                else (exposures[0] if exposures else 0)
             )
-            if _rgb_max > 0:
-                illuminationIntensities[_i] = _rgb_max
-        # Push back so any subsequent reads of p.* see the promoted values
-        # (passthrough_illumination, n_active_channels, resolve_keep_illumination_on
-        # are all properties that read self.illuIntensities).
+
+        # Push the merged intensities back so the model convenience properties
+        # (passthrough_illumination, n_active_channels, resolve_keep_illumination_on)
+        # account for synthetic channels too.
         try:
             p.illuIntensities = illuminationIntensities
         except Exception:
@@ -907,9 +915,8 @@ class ExperimentController(ImConWidgetController):
         self.ExperimentParams.performanceMode = p.performanceMode
         performanceMode = p.performanceMode
 
-        # camera-related (validators ensure list shape)
-        gains = list(p.gains or [])
-        exposures = list(p.exposureTimes or [])
+        # Scan speed (XY/Z) from the frontend; falls back to the __init__
+        # defaults when the request leaves them unset (<= 0).
         if p.speed <= 0:
             self.SPEED_X = self.SPEED_X_default
             self.SPEED_Y = self.SPEED_Y_default
@@ -923,13 +930,8 @@ class ExperimentController(ImConWidgetController):
 
         # Autofocus and timepoint values are read from `p` (ParameterValue)
         # directly via ExecutionContext.to_kwargs(); no local aliases needed.
-
-        # Pad gains/exposures to match the number of illumination sources.
-        if len(gains) != len(illuSources):
-            gains = [-1] * len(illuSources)
-        if len(exposures) != len(illuSources):
-            first_exposure = exposures[0] if exposures else 0
-            exposures = [first_exposure] * len(illuSources)
+        # gains/exposures were already built parallel to illuSources (including
+        # the merged synthetic channels) in the illumination block above.
 
         # Passthrough-mode overrides: use a single sentinel channel so the
         # acquisition loop runs exactly once per position without modifying
@@ -937,13 +939,9 @@ class ExperimentController(ImConWidgetController):
         if _passthrough_illumination:
             illuSources = [illuSources[0]] if illuSources else ["default"]
             illuminationIntensities = [1]  # sentinel: passes >0 gate; never sent to device
-            # Keep illuminationKinds parallel to the collapsed illuSources –
-            # the rest of the pipeline indexes into kinds by source position,
-            # so a length mismatch here used to make the workflow look up the
-            # wrong kind (e.g. mis-treating a ring source as a default laser).
-            illuminationKinds = [
-                _kind_by_name.get(illuSources[0], "default")
-            ] if illuSources else ["default"]
+            # Passthrough only ever happens when no channel (default OR
+            # synthetic) is active, so the collapsed sentinel is conventional.
+            illuminationKinds = ["default"]
             gains = [-1]   # set_exposure_time_gain skips when gain < 0
             exposures = [0]  # set_exposure_time_gain skips when exposure_time <= 0
             keepIlluminationOn = True  # never send set_laser_power commands
@@ -967,6 +965,12 @@ class ExperimentController(ImConWidgetController):
         self._last_scan_areas = None
         self._focus_map_fit_by_region = True
         self._focus_map_settle_ms = 0
+        # Whether THIS experiment should drive Z from a focus map.  Reset every
+        # run so that a map left over in focus_map_manager from a previous
+        # acquisition is NOT silently re-applied to an experiment that did not
+        # request focus mapping (e.g. after the user hit "Clear All").  The
+        # acquisition loop gates focus-map Z moves on this flag.
+        self._focus_map_active = False
         if mExperiment.scanAreas:
             self._last_scan_areas = [
                 {
@@ -990,6 +994,10 @@ class ExperimentController(ImConWidgetController):
             self._logger.info("Focus mapping enabled – computing Z surface per scan group")
             self._focus_map_fit_by_region = focusMapConfig.fit_by_region
             self._focus_map_settle_ms = focusMapConfig.settle_ms
+            # Only drive Z from the map during the scan when the config asks for
+            # it (apply_during_scan, default True).  This is the single gate the
+            # acquisition loop checks before applying any focus-map Z.
+            self._focus_map_active = bool(getattr(focusMapConfig, "apply_during_scan", True))
             self._run_focus_map_phase(mExperiment, focusMapConfig)
         # Turn off illumination again after focus mapping so the
         # acquisition loop starts from a clean state.
@@ -1022,6 +1030,13 @@ class ExperimentController(ImConWidgetController):
 
         workflowSteps = []
         file_writers = []  # Initialize outside the loop for context storage
+
+        # Tiling behaviour toggle (Wellplate "Tiling" tab): move the stage back
+        # to the pre-scan XYZ when the scan ends.  Read once here so the
+        # normal-mode finalization can branch on it via self.controller.
+        # ("Override per-group Z with current Z" is handled entirely on the
+        # frontend, which rewrites each position's Z before sending.)
+        self._return_to_origin = bool(getattr(p, "returnToOrigin", False))
 
         # OME writer-related (model defaults guarantee fields exist)
         self._ome_write_tiff = p.ome_write_tiff
@@ -1556,7 +1571,7 @@ class ExperimentController(ImConWidgetController):
         # only collapse to grayscale for non-RGB detectors that nonetheless
         # hand us a 3-channel frame.
         if img.ndim == 3 and img.shape[2] == 3 and not getattr(self, 'isRGB', False):
-            img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype)
+            img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype) # TODO: Is this common sense @Franzili?
 
         # Get tile index to identify the correct OME writer
         position_center_index = kwargs.get("position_center_index")
@@ -1607,38 +1622,74 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.debug(f"Could not enrich OME metadata from MetadataHub: {e}")
 
-        try:
-            # Get file_writers list from context
-            file_writers = context.get_object("file_writers")
-            if file_writers is None or position_center_index >= len(file_writers):
-                self._logger.error(f"No OME writer found for tile index {position_center_index}")
-                metadata["frame_saved"] = False
-                return
+        # Resolve the writer for this tile *before* we hand work to
+        # the background saver — pulling from ``context`` on the
+        # worker thread would be a lifetime hazard.
+        file_writers = context.get_object("file_writers")
+        if file_writers is None or position_center_index >= len(file_writers):
+            self._logger.error(
+                f"No OME writer found for tile index {position_center_index}"
+            )
+            metadata["frame_saved"] = False
+            metadata.pop("result", None)
+            return
+        ome_writer = file_writers[position_center_index]
 
-            # Write frame using the specific OME writer from the list
-            ome_writer = file_writers[position_center_index]
-            chunk_info = ome_writer.write_frame(img, ome_metadata)
+        # Copy the frame so the camera SDK ring buffer can be reused
+        # while the background thread writes. Skipping this is the
+        # textbook way to end up with torn frames in the output stack.
+        # ~5–10 ms for 9 MP on a Pi 5 — much cheaper than the inline
+        # write it replaces.
+        try:
+            img_copy = img.copy()
+        except Exception as copy_err:
+            self._logger.error(f"Frame copy failed: {copy_err}")
+            metadata["frame_saved"] = False
+            metadata.pop("result", None)
+            return
+
+        # The on_success callback runs on the saver thread. Keep it
+        # cheap — signal emission is already thread-safe (see
+        # noqt.SignalInstance.emit which run_coroutine_threadsafe's
+        # the broadcast onto the shared event loop).
+        def _on_success(chunk_info):
             if ome_writer.store:
                 data_path = dirtools.UserFileDirs.getValidatedDataPath()
-                self.setOmeZarrUrl(ome_writer.store.split(data_path)[-1])  # Update OME-Zarr URL in context
-            # Emit signal for frontend updates if Zarr chunk was written
+                self.setOmeZarrUrl(
+                    ome_writer.store.split(data_path)[-1]
+                )
             if chunk_info and "rel_chunk" in chunk_info:
-                sigZarrDict = {
+                self.sigUpdateOMEZarrStore.emit({
                     "event": "zarr_chunk",
                     "path": chunk_info["rel_chunk"],
-                    "zarr": str(self.getOmeZarrUrl())
-                }
-                self.sigUpdateOMEZarrStore.emit(sigZarrDict)
+                    "zarr": str(self.getOmeZarrUrl()),
+                })
 
-            metadata["frame_saved"] = True
-        except Exception as e:
-            self._logger.error(f"Error saving OME frame: {e}")
-            metadata["frame_saved"] = False
+        def _on_error(err):
+            self._logger.error(f"Error saving OME frame: {err}")
 
-        # Release the frame reference now that it has been saved (or failed).
-        # Without this, the numpy array stays alive in the metadata dict which
-        # is stored in WorkflowContext.data for every step, causing unbounded
-        # RAM growth during long wellplate experiments.
+        # Queue the write. ``submit`` BLOCKS when the queue is full,
+        # which is intentional: it lets a slow disk back-pressure the
+        # acquisition loop rather than silently dropping frames.
+        # maxsize=32 (see __init__) caps peak RAM at ~32 × frame_size.
+        self._frame_saver.submit(
+            ome_writer.write_frame,
+            img_copy,
+            ome_metadata,
+            on_success=_on_success,
+            on_error=_on_error,
+        )
+
+        # The frame is in the saver's queue or already on disk by the
+        # time this method returns; either way it's "saved" from the
+        # workflow's perspective. (If the actual disk write later
+        # fails, ``_on_error`` logs it.)
+        metadata["frame_saved"] = True
+
+        # Release the workflow's reference to the frame. We already
+        # made our own copy above; without this pop the array stays
+        # alive in WorkflowContext.data for every step, causing
+        # unbounded RAM growth during long wellplate experiments.
         metadata.pop("result", None)
 
         '''
@@ -1804,7 +1855,10 @@ class ExperimentController(ImConWidgetController):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
         self._logger.info(f"Moving stage to X={posX}, Y={posY}")
         #if posY and posX is None:
-        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X_default, self.SPEED_Y_default), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
+        # Use the experiment-configured scan speed (set from the frontend in
+        # startWellplateExperiment); falls back to the defaults in __init__ when
+        # no experiment has overridden it.
+        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()
         #self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
         return (posX, posY) # TODO: Need to adjust in case of relative move
@@ -1828,7 +1882,7 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error setting detector parameter {parameter} to {value}: {e}")
 
-    def return_to_initial_position(self):
+    def return_to_initial_position(self, include_z_position: bool = False):
         """Return the stage to the position stored at experiment start."""
         try:
             if hasattr(self, "_initial_experiment_position") and self._initial_experiment_position:
@@ -1838,7 +1892,7 @@ class ExperimentController(ImConWidgetController):
                     pos["X"], pos["Y"], pos["Z"],
                 )
                 self.move_stage_xy(pos["X"], pos["Y"], relative=False)
-                self.move_stage_z(pos["Z"], relative=False)
+                if include_z_position: self.move_stage_z(pos["Z"], relative=False)
                 self._initial_experiment_position = None
             else:
                 self._logger.debug("No initial experiment position stored, skipping return.")
@@ -1919,6 +1973,29 @@ class ExperimentController(ImConWidgetController):
 
         # Set LED status to idle
         self.set_led_status("idle")
+
+        # Drain any frame writes that are still queued on the
+        # background saver — the workflow has stopped producing new
+        # frames, so this should normally be a brief wait. Bounded so
+        # that a stuck disk doesn't hang stopExperiment forever; if
+        # the timeout fires, the saver thread keeps running in the
+        # background and the writes still eventually land on disk.
+        try:
+            if getattr(self, "_frame_saver", None) is not None:
+                pending = self._frame_saver.pending()
+                if pending:
+                    self._logger.info(
+                        f"Draining {pending} pending frame write(s)…"
+                    )
+                drained = self._frame_saver.flush(timeout=30.0)
+                if not drained:
+                    self._logger.warning(
+                        f"Frame saver still has "
+                        f"{self._frame_saver.pending()} pending write(s) "
+                        f"after 30 s — they will complete in the background."
+                    )
+        except Exception as e:
+            self._logger.debug(f"Frame saver flush failed: {e}")
 
         # If nothing was running, return appropriate message
         if not results:

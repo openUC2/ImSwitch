@@ -33,6 +33,7 @@ const initialObjectiveState = {
   manualX1: "",
   manualZ0: "",
   manualZ1: "",
+  moveSpeed: 20000,
 };
 
 // Create slice
@@ -118,6 +119,9 @@ const objectiveSlice = createSlice({
     setManualZ1: (state, action) => {
       state.manualZ1 = action.payload;
     },
+    setMoveSpeed: (state, action) => {
+      state.moveSpeed = action.payload;
+    },
     setAvailableObjectivesNames: (state, action) => {
       state.availableObjectivesNames = action.payload;
     },
@@ -164,6 +168,7 @@ export const {
   setManualX1,
   setManualZ0,
   setManualZ1,
+  setMoveSpeed,
   setAvailableObjectivesNames,
   setAvailableObjectiveMagnifications,
   setAvailableObjectiveNAs,

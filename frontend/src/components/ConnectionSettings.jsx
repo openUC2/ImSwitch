@@ -43,6 +43,8 @@ import {
 } from "@mui/icons-material";
 
 import ConnectionGraphHorizontal from "./ConnectionSettings_ConnectionGraphHorizontal";
+import apiUC2ConfigControllerListSerialPorts from "../backendapi/apiUC2ConfigControllerListSerialPorts";
+import apiUC2ConfigControllerSetSerialConfig from "../backendapi/apiUC2ConfigControllerSetSerialConfig";
 
 /**
  * ImSwitch Connection Settings Component
@@ -109,6 +111,15 @@ function ConnectionSettings() {
   // Connection test state
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // ESP32 serial override state (separate from the backend connection above).
+  // These map to UC2ConfigController.setSerialConfig and let the user override
+  // the auto-detected serial port / baudrate from the setup JSON.
+  const [serialPorts, setSerialPorts] = useState([]);
+  const [serialPort, setSerialPort] = useState("");
+  const [serialBaudrate, setSerialBaudrate] = useState(115200);
+  const [isLoadingSerialPorts, setIsLoadingSerialPorts] = useState(false);
+  const [isApplyingSerial, setIsApplyingSerial] = useState(false);
 
   // Advanced settings accordion state
   const [advancedSettingsExpanded, setAdvancedSettingsExpanded] =
@@ -250,6 +261,62 @@ function ConnectionSettings() {
     `${hostProtocol}${hostIP}` !== (connectionSettings.ip || "") ||
     websocketPort !== (connectionSettings.websocketPort || "") ||
     apiPort !== (connectionSettings.apiPort || "");
+
+  // --- ESP32 serial overrides ---
+  const handleLoadSerialPorts = async () => {
+    if (!isBackendConnected) {
+      dispatch(
+        setNotification({
+          message: "Backend not reachable — cannot list serial ports.",
+          type: "warning",
+        }),
+      );
+      return;
+    }
+    try {
+      setIsLoadingSerialPorts(true);
+      const ports = await apiUC2ConfigControllerListSerialPorts();
+      setSerialPorts(Array.isArray(ports) ? ports : []);
+    } catch (e) {
+      dispatch(
+        setNotification({
+          message: "Failed to list serial ports: " + (e.message || e),
+          type: "error",
+        }),
+      );
+    } finally {
+      setIsLoadingSerialPorts(false);
+    }
+  };
+
+  const handleApplySerial = async (persist) => {
+    try {
+      setIsApplyingSerial(true);
+      const result = await apiUC2ConfigControllerSetSerialConfig(
+        serialPort || null,
+        Number(serialBaudrate) || null,
+        persist,
+      );
+      const ok = result?.status === "success";
+      dispatch(
+        setNotification({
+          message: ok
+            ? `ESP32 ${persist ? "saved & " : ""}reconnected on ${result?.port || "auto-detected port"} @ ${result?.baudrate || "default"} baud`
+            : `Reconnect attempt finished with status=${result?.status} (connected=${result?.connected}). Check the backend logs.`,
+          type: ok ? "success" : "warning",
+        }),
+      );
+    } catch (e) {
+      dispatch(
+        setNotification({
+          message: "setSerialConfig failed: " + (e.message || e),
+          type: "error",
+        }),
+      );
+    } finally {
+      setIsApplyingSerial(false);
+    }
+  };
 
   const getWebSocketStatusColor = (status) => {
     switch (status) {
@@ -460,6 +527,116 @@ function ConnectionSettings() {
                   placeholder="e.g., 80"
                   helperText="Override auto-detected port"
                 />
+              </Box>
+            </AccordionDetails>
+          </Accordion>
+
+          {/* ESP32 Serial Override */}
+          <Accordion sx={{ mb: 3 }}>
+            <AccordionSummary
+              expandIcon={<ExpandMore />}
+              aria-controls="esp32-serial-content"
+              id="esp32-serial-header"
+              onClick={() => {
+                if (serialPorts.length === 0) handleLoadSerialPorts();
+              }}
+            >
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <Settings color="action" />
+                <Typography variant="subtitle1">
+                  ESP32 Serial (override)
+                </Typography>
+              </Box>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Override the serial port / baudrate the backend uses to talk to
+                the ESP32. Leave port empty to keep the value from the setup
+                JSON. <strong>Apply &amp; Save</strong> persists the change to
+                the setup file; <strong>Apply (session only)</strong> reconnects
+                without writing to disk.
+              </Typography>
+
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "2fr 1fr",
+                  gap: 2,
+                  alignItems: "start",
+                }}
+              >
+                <TextField
+                  select
+                  id="esp32-serial-port"
+                  label="Serial Port"
+                  value={serialPort}
+                  onChange={(e) => setSerialPort(e.target.value)}
+                  fullWidth
+                  helperText={
+                    serialPorts.length === 0
+                      ? "Click refresh to load available ports"
+                      : `${serialPorts.length} port(s) detected`
+                  }
+                >
+                  <MenuItem value="">(keep current)</MenuItem>
+                  {serialPorts.map((p) => (
+                    <MenuItem key={p.device} value={p.device}>
+                      {p.device}
+                      {p.description ? ` — ${p.description}` : ""}
+                    </MenuItem>
+                  ))}
+                </TextField>
+
+                <TextField
+                  select
+                  id="esp32-serial-baud"
+                  label="Baudrate"
+                  value={serialBaudrate}
+                  onChange={(e) =>
+                    setSerialBaudrate(Number(e.target.value) || 115200)
+                  }
+                  fullWidth
+                >
+                  <MenuItem value={115200}>115200 (default)</MenuItem>
+                  <MenuItem value={230400}>230400</MenuItem>
+                  <MenuItem value={460800}>460800</MenuItem>
+                  <MenuItem value={921600}>921600</MenuItem>
+                </TextField>
+              </Box>
+
+              <Box sx={{ mt: 2, display: "flex", gap: 1, flexWrap: "wrap" }}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={handleLoadSerialPorts}
+                  disabled={isLoadingSerialPorts || !isBackendConnected}
+                  startIcon={
+                    isLoadingSerialPorts ? (
+                      <CircularProgress size={16} />
+                    ) : undefined
+                  }
+                >
+                  Refresh Ports
+                </Button>
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={() => handleApplySerial(true)}
+                  disabled={isApplyingSerial || !isBackendConnected}
+                  startIcon={
+                    isApplyingSerial ? <CircularProgress size={16} /> : undefined
+                  }
+                >
+                  Apply &amp; Save
+                </Button>
+                <Button
+                  variant="text"
+                  size="small"
+                  onClick={() => handleApplySerial(false)}
+                  disabled={isApplyingSerial || !isBackendConnected}
+                >
+                  Apply (session only)
+                </Button>
               </Box>
             </AccordionDetails>
           </Accordion>

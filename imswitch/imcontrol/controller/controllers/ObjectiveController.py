@@ -355,7 +355,7 @@ class ObjectiveController(LiveUpdatedController):
             )
             self._logger.warning(last_error)
         else:
-            if False and slot == self._currentObjective:
+            if slot == self._currentObjective:
                 self._logger.debug(f"Already at objective slot {slot}, no movement needed")
                 success = True
             else:

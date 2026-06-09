@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Paper,
   Grid,
@@ -16,12 +16,17 @@ import { useDispatch, useSelector } from "react-redux";
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 import apiObjectiveControllerMoveToObjective from "../backendapi/apiObjectiveControllerMoveToObjective.js";
 
+const OBJECTIVE_SWITCH_TIMEOUT_MS = 15000;
+
 export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const dispatch = useDispatch();
   const [currentSlot, setCurrentSlot] = useState(null);
   const [pendingSlot, setPendingSlot] = useState(null);
   const [isSwitching, setIsSwitching] = useState(false);
   const [zLevelingEnabled, setZLevelingEnabled] = useState(true);
+  const switchTimeoutRef = useRef(null);
+  const latestObjectiveRef = useRef(null);
+  const isSwitchingRef = useRef(false);
 
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const name0 = objectiveState.availableObjectivesNames?.[0] || "Obj 1";
@@ -32,17 +37,37 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const label1 = mag1 ? `${name1} (${mag1}×)` : name1;
   const isObjectiveSwitchBlocked = isSwitching;
 
+  const clearSwitchTimeout = () => {
+    if (switchTimeoutRef.current) {
+      clearTimeout(switchTimeoutRef.current);
+      switchTimeoutRef.current = null;
+    }
+  };
+
   useEffect(() => {
     fetchObjectiveControllerGetStatus(dispatch);
   }, [dispatch]);
 
   useEffect(() => {
+    latestObjectiveRef.current = objectiveState.currentObjective;
+
     if (objectiveState.currentObjective != null) {
+      clearSwitchTimeout();
       setCurrentSlot(objectiveState.currentObjective);
       setPendingSlot(null);
       setIsSwitching(false);
     }
   }, [objectiveState.currentObjective]);
+
+  useEffect(() => {
+    isSwitchingRef.current = isSwitching;
+  }, [isSwitching]);
+
+  useEffect(() => {
+    return () => {
+      clearSwitchTimeout();
+    };
+  }, []);
 
   useEffect(() => {
     fetchObjectiveControllerGetStatus(dispatch);
@@ -69,8 +94,28 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
       setCurrentSlot(null);
       const skipZ = !zLevelingEnabled;
       await apiObjectiveControllerMoveToObjective(slot, skipZ);
+
+      clearSwitchTimeout();
+      switchTimeoutRef.current = setTimeout(() => {
+        switchTimeoutRef.current = null;
+        if (!isSwitchingRef.current) {
+          return;
+        }
+
+        setPendingSlot(null);
+        setCurrentSlot(latestObjectiveRef.current ?? null);
+        setIsSwitching(false);
+        dispatch(
+          setNotification({
+            message:
+              "Objective switch timed out. Please check hardware connection and try again.",
+            type: "error",
+          }),
+        );
+      }, OBJECTIVE_SWITCH_TIMEOUT_MS);
     } catch (e) {
       console.error(`Error switching to objective ${slot}`, e);
+      clearSwitchTimeout();
       setPendingSlot(null);
       setCurrentSlot(objectiveState.currentObjective);
       setIsSwitching(false);

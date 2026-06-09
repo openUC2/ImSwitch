@@ -511,7 +511,13 @@ const WellSelectorComponent = () => {
             value={wellSelectorState.moveCameraSpeedXY ?? 20000}
             onChange={handleMoveCameraSpeedXYChange}
             inputProps={{ min: 1, step: 1000 }}
-            sx={{ width: 160 }}
+            error={(parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000}
+            helperText={
+              (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000
+                ? "⚠ >20000 µm/s is highly unreliable (may lose steps/accuracy)"
+                : " "
+            }
+            sx={{ width: 230 }}
           />
           <TextField
             label="Z Speed (µm/s)"

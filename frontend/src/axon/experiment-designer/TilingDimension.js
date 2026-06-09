@@ -487,6 +487,16 @@ const TilingDimension = () => {
                   ))}
                 </Select>
               </FormControl>
+              {(parameterValue.speed || 20000) > 20000 && (
+                <Typography
+                  variant="caption"
+                  color="error"
+                  sx={{ display: "block", mt: 0.5 }}
+                >
+                  ⚠ Speeds above 20000 µm/s are highly unreliable — the stage may
+                  lose steps and positioning accuracy.
+                </Typography>
+              )}
             </Box>
 
             {/* Z speed */}

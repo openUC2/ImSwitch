@@ -160,18 +160,30 @@ class SignalInstance(psygnal.SignalInstance):
                 """
                 FRAME_ID_MODULO = 256  # Small value to test rollover frequently
                 # MAX_FRAME_LAG — how many frames may be "in flight"
-                # (sent but not yet acked). Higher = more pipelining;
-                # lower = lower latency but throughput gated by the
-                # ACK round-trip.
+                # (sent but not yet acked). Trade-off:
                 #
-                # The previous value of 1 ("send N+1 only after ACK
-                # for N") made Windows ~3–4× slower than Mac/Linux:
-                # ACK RTT is ~80–100 ms on Windows (vs. ~5 ms on
-                # Linux/Mac) so at an 80 ms throttle the effective
-                # cadence was ~5 fps regardless of CPU. Bumping to 3
-                # lets up to 4 frames pipeline; cost is at most 3
-                # extra in-flight JPEGs per client (~1.5 MB peak).
-                MAX_FRAME_LAG = 3
+                #   lag=1: lowest latency. Server waits for ACK(N)
+                #          before sending N+1. On a slow client the
+                #          effective FPS drops to 1/RTT. On a fast
+                #          client (e.g. Mac/Linux with ~5 ms RTT) the
+                #          throttle dominates anyway, so there's no
+                #          throughput cost.
+                #   lag>1: higher FPS on slow clients, at the cost of
+                #          stale frames in the pipeline. With lag=3
+                #          you can be looking at a frame that's
+                #          ~3× throttle behind real time, which is
+                #          bad for live microscopy where the operator
+                #          uses the preview to drive the stage.
+                #
+                # We briefly ran lag=3 to recover Windows FPS, but
+                # the added latency was perceptible on all platforms.
+                # Back to lag=1: prefer low-latency over throughput.
+                # If Windows JPEG-over-WS is still slow after the
+                # WindowsSelectorEventLoopPolicy / ``ws="websockets"``
+                # fixes in ImSwitchServer.run, prefer the MJPEG
+                # transport (no socket.io, no ack loop) over raising
+                # this number.
+                MAX_FRAME_LAG = 1
 
                 next_id = {}
                 for sid, sent_id in last_sent.items():

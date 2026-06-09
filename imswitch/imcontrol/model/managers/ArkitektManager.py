@@ -143,7 +143,7 @@ class ArkitektManager:
             self.__arkitekt = easy(
                 identifier=self._config.get("app_name", "imswitch"),
                 redeem_token=redeem_token,
-                url=self._config.get("url", "go.arkitekt.live"),
+                url=self._config.get("url", "go.arkitekt.live")
                 #device_code_hook=self._store_device_code_hook,
             )
             self.__logger.info(

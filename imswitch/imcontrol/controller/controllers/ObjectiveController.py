@@ -341,7 +341,7 @@ class ObjectiveController(LiveUpdatedController):
             "status": "started"
         }
 
-    def moveToObjectiveThread(self, slot: int, skipZ: bool = False, request_id: int = None):
+    def moveToObjectiveThread(self, slot: int, skipZ: bool = False, request_id: Optional[int] = None):
         completed_at = None
         success = False
         last_error = None

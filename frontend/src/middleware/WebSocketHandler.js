@@ -994,6 +994,18 @@ const WebSocketHandler = () => {
           console.error("Error in sigUSBFlashStatusUpdate handler:", error);
         }
         //----------------------------------------------
+      } else if (dataJson.name === "sigBusStatusUpdate") {
+        // Handle CAN-bus power / emergency-stop (E-stop) status changes
+        console.log("sigBusStatusUpdate received:", dataJson);
+        try {
+          const busStatus = dataJson.args?.p0;
+          if (busStatus) {
+            dispatch(uc2Slice.setBusStatus(busStatus));
+          }
+        } catch (error) {
+          console.error("Error in sigBusStatusUpdate handler:", error);
+        }
+        //----------------------------------------------
       } else if (dataJson.name === "sigStorageStatusUpdate") {
         if (isWebSocketDebugEnabled()) {
           console.log(

@@ -41,6 +41,7 @@ class UC2ConfigController(ImConWidgetController):
     sigOTAStatusUpdate = Signal(object)  # Emits OTA status updates
     sigUSBFlashStatusUpdate = Signal(object)  # Emits USB flash status updates
     sigCameraTrigger = Signal(object)  # Emits camera trigger events from hardware
+    sigBusStatusUpdate = Signal(object)  # Emits CAN-bus power / emergency-stop status changes
 
 
     def __init__(self, *args, **kwargs):
@@ -84,6 +85,9 @@ class UC2ConfigController(ImConWidgetController):
 
         # register camera trigger callback for performance mode
         self.registerCameraTriggerCallback()
+
+        # register emergency-stop callback (CAN-bus power / E-stop button)
+        self.registerEmergencyCallback()
 
         # register the callbacks for emitting serial-related signals
         if hasattr(self._master.UC2ConfigManager, "ESP32"):
@@ -307,6 +311,130 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Could not register camera trigger callback: {e}")
 
+    def registerEmergencyCallback(self):
+        """
+        Register a callback for emergency-stop (E-stop) events.
+
+        The CANopen master firmware pushes an unsolicited block when the
+        hardware E-stop is pressed/released:
+            {"emergency":{"active":1,"reason":"estop","msg":"..."}}
+        We forward it to the frontend via sigBusStatusUpdate so the UI can
+        warn the user and reflect that the CAN-bus is no longer available.
+        """
+        def emergency_callback(em):
+            try:
+                emergency_active = bool(em.get("active", 0))
+                status = {
+                    "emergencyActive": emergency_active,
+                    # The high-current bus is unavailable while the E-stop is asserted.
+                    "available": not emergency_active,
+                    "reason": em.get("reason"),
+                    "msg": em.get("msg"),
+                    "timestamp": datetime.datetime.now().isoformat(),
+                }
+                self.sigBusStatusUpdate.emit(status)
+            except Exception as e:
+                self.__logger.error(f"Error in emergency_callback: {e}")
+
+        try:
+            registered = self._master.UC2ConfigManager.registerEmergencyCallback(emergency_callback)
+            if registered:
+                self.__logger.debug("Emergency-stop callback registered successfully")
+            else:
+                self.__logger.debug("Emergency-stop callback not registered (state module unavailable)")
+        except Exception as e:
+            self.__logger.error(f"Could not register emergency callback: {e}")
+
+    ''' CAN-bus power & emergency-stop (safety) '''
+
+    @APIExport(runOnUIThread=False)
+    def setBusPower(self, enable: bool = True):
+        """
+        Enable/disable the high-current CAN-bus power that feeds the slaves.
+
+        :param enable: True to power the bus, False to cut power.
+        :return: Status dict with the requested power state.
+        """
+        try:
+            self._master.UC2ConfigManager.setBusPower(enable)
+            return {"status": "success", "power": int(bool(enable))}
+        except Exception as e:
+            self.__logger.error(f"setBusPower failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getBusStatus(self):
+        """
+        Query CAN-bus power and emergency-stop status.
+
+        :return: {
+            "power": 1|0|None,           # high-current bus power state
+            "emergencyActive": bool,     # E-stop currently asserted
+            "available": bool,           # bus usable (powered and not in E-stop)
+            "estop": {...}               # raw E-stop diagnostics (best-effort)
+        }
+        """
+        try:
+            power = self._master.UC2ConfigManager.getBusPower()
+            emergency_active = self._master.UC2ConfigManager.isEmergencyActive()
+            estop = self._master.UC2ConfigManager.getEstop()
+            return {
+                "power": power,
+                "emergencyActive": bool(emergency_active),
+                "available": (power == 1) and not emergency_active,
+                "estop": estop,
+            }
+        except Exception as e:
+            self.__logger.error(f"getBusStatus failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    ''' Fan & board temperature '''
+
+    @APIExport(runOnUIThread=False)
+    def getFanState(self):
+        """
+        Read the current fan state from the firmware.
+
+        :return: {mode, wiper, manual, rpm, stalled, kick, tempC, curve}
+        """
+        try:
+            return self._master.UC2ConfigManager.getFan()
+        except Exception as e:
+            self.__logger.error(f"getFanState failed: {e}")
+            return {}
+
+    @APIExport(runOnUIThread=False)
+    def setFanMode(self, mode: str = "auto", wiper: int = None):
+        """
+        Set the fan operating mode.
+
+        :param mode: 'auto' (curve-driven), 'manual' (fixed wiper) or 'off'.
+        :param wiper: 0-127 PWM wiper, required/used for 'manual' mode.
+        :return: Status dict.
+        """
+        try:
+            w = int(wiper) if wiper is not None else None
+        except (TypeError, ValueError):
+            w = None
+        try:
+            self._master.UC2ConfigManager.setFanMode(mode=mode, wiper=w)
+            return {"status": "success", "mode": mode, "wiper": w}
+        except Exception as e:
+            self.__logger.error(f"setFanMode failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getBoardTemperature(self):
+        """
+        Read board/air temperatures from the firmware.
+
+        :return: {pcb, air, esp, pcb_ok, air_ok}
+        """
+        try:
+            return self._master.UC2ConfigManager.getTemperature()
+        except Exception as e:
+            self.__logger.error(f"getBoardTemperature failed: {e}")
+            return {}
 
     @APIExport(runOnUIThread=False)
     def scan_canbus(self, timeout:int=5) -> dict:

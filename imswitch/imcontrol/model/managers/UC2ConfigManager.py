@@ -136,6 +136,68 @@ class UC2ConfigManager(SignalInterface):
         """
         self.ESP32.can.reboot_remote(can_address=device_id, isBlocking=True, timeout=1)
 
+    # ──────────────────────────────────────────────────────────────────────
+    # CAN-bus power & emergency-stop (safety)
+    # ──────────────────────────────────────────────────────────────────────
+    def setBusPower(self, enable=True):
+        """Enable (default) / disable the high-current CAN-bus power that feeds
+        the slaves. Maps to ESP32.state.set_power."""
+        return self.ESP32.state.set_power(int(bool(enable)))
+
+    def getBusPower(self):
+        """Current CAN-bus power state: 1=ON, 0=OFF, or None if unavailable."""
+        try:
+            return int(self.ESP32.state.get_power())
+        except Exception:
+            return None
+
+    def getEstop(self):
+        """E-stop diagnostics dict {estopPolarity, estopRaw, estopActive}."""
+        try:
+            return self.ESP32.state.get_estop()
+        except Exception:
+            return {}
+
+    def isEmergencyActive(self):
+        """Last known emergency-stop state as reported by the firmware (cached,
+        no serial round-trip)."""
+        try:
+            return bool(self.ESP32.state.is_emergency_active())
+        except Exception:
+            return False
+
+    def registerEmergencyCallback(self, callbackfct):
+        """Register a callback invoked on emergency (E-stop) events. The callback
+        receives the firmware "emergency" dict, e.g.
+        {"active":1,"reason":"estop","msg":"..."}."""
+        try:
+            self.ESP32.state.register_emergency_callback(callbackfct)
+            return True
+        except Exception as e:
+            self.__logger.error(f"Could not register emergency callback: {e}")
+            return False
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Fan & board temperature
+    # ──────────────────────────────────────────────────────────────────────
+    def getFan(self, blocking=True):
+        """Fan state dict {mode,wiper,manual,rpm,stalled,kick,tempC,curve}."""
+        try:
+            return self.ESP32.fan.get_fan(blocking=blocking)
+        except Exception:
+            return {}
+
+    def setFanMode(self, mode="auto", wiper=None):
+        """Set fan mode 'auto'|'manual'|'off'. wiper 0-127 used for 'manual'."""
+        return self.ESP32.fan.set_mode(mode=mode, wiper=wiper)
+
+    def getTemperature(self):
+        """Board/air temperatures {pcb,air,esp,pcb_ok,air_ok}."""
+        try:
+            return self.ESP32.fan.get_temp()
+        except Exception:
+            return {}
+
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

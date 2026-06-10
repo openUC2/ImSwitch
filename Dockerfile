@@ -76,11 +76,6 @@ ENV UV_NO_DEV=1
 # Ensure installed tools can be executed out of the box
 ENV UV_TOOL_BIN_DIR=/usr/local/bin
 
-# Set up unprivileged user
-RUN \
-  groupadd --system --gid 1000 pi && \
-  useradd --system --gid 1000 --uid 1000 --create-home pi
-
 # Note(ethanjli): we have RUN steps calling build scripts which each create and delete many files,
 # in order to prevent junk from being baked into the final container image. This also gives us more
 # helpful error messages when a particular command fails.
@@ -130,4 +125,13 @@ RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 
 # Run as unprivileged user
+RUN \
+  groupadd --system --gid 1000 pi && \
+  groupadd --system --gid 20 dialout && \
+  groupadd --system --gid 44 video && \
+  groupadd --system --gid 46 plugdev && \
+  groupadd --system --gid 989 spi && \
+  groupadd --system --gid 988 i2c && \
+  groupadd --system --gid 986 gpio && \
+  useradd --system --gid 1000 --uid 1000 --groups pi,dialout,video,plugdev,spi,i2c,gpio --create-home pi
 USER pi

@@ -130,6 +130,5 @@ RUN \
   groupadd --system --gid 989 spi && \
   groupadd --system --gid 988 i2c && \
   groupadd --system --gid 986 gpio && \
-  groupadd --system --gid 5 tty && \
-  useradd --system --gid 1000 --uid 1000 --groups pi,dialout,video,plugdev,spi,i2c,gpio,tty --create-home pi
+  useradd --system --gid 1000 --uid 1000 --groups pi,dialout,video,plugdev,spi,i2c,gpio --create-home pi
 USER pi

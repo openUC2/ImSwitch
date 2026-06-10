@@ -3,6 +3,7 @@ from imswitch.imcommon.model import dirtools, initLogger, APIExport
 import xarray as xr
 from mikro_next.api.schema import (
     Image,
+    Stage,
     from_array_like,
     create_stage,
     PartialAffineTransformationViewInput,
@@ -444,7 +445,7 @@ class ArkitektController(ImConWidgetController):
         autofocus_illumination_channel: str | None = None,
         objective_id: int | None = None,
         t_settle: float = 0.2,
-    ) -> Generator[Image, None, None]:
+    ) -> Stage:
         """Run a tile scan with enhanced control over imaging parameters.
 
         Runs a tile scan by moving the specified positioner in a grid pattern centered
@@ -487,6 +488,8 @@ class ArkitektController(ImConWidgetController):
 
         Yields:
             Image: Captured image with affine transformation for stitching.
+
+        
 
         Example:
             >>> # Scan with automatic step size and specific objective
@@ -667,23 +670,11 @@ class ArkitektController(ImConWidgetController):
             self.mDetector.startAcquisition()
 
         # Create stage for stitching metadata
-        try:
-            stage = create_stage(name=f"Tile Scan Stage - {center_x_micrometer},{center_y_micrometer}")
-        except Exception as e:
-            self._logger.error(f"Failed to create stage for tile scan: {e}")
-            stage = None
+        stage = create_stage(name=f"Tile Scan Stage - {center_x_micrometer},{center_y_micrometer}")
 
         # Create directory for saving tiles if stage creation failed
         save_dir = None
         metadata_list = []
-        if stage is None:
-            # Get data storage path from ImSwitch config
-            data_path = dirtools.UserFileDirs.getValidatedDataPath()
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            scan_name = f"tilescan_{timestamp}_cx{center_x_micrometer:.0f}_cy{center_y_micrometer:.0f}"
-            save_dir = os.path.join(data_path, scan_name)
-            os.makedirs(save_dir, exist_ok=True)
-            self._logger.info(f"Saving tiles to: {save_dir}")
 
         # Get positioner (moved earlier to access before calculating center)
         # Already retrieved above when checking center positions
@@ -781,17 +772,6 @@ class ArkitektController(ImConWidgetController):
                         xr.DataArray(
                             numpy_array,
                             dims=["y", "x", "c"],
-                            attrs={
-                                "tile_x": actual_ix,
-                                "tile_y": iy,
-                                "position_x_um": actual_x,
-                                "position_y_um": actual_y,
-                                "illumination_channel": illumination_channel or "unknown",
-                                "illumination_intensity": illumination_intensity,
-                                "exposure_time_ms": exposure_time,
-                                "gain": gain,
-                                "objective_magnification": objective_magnification,
-                            }
                         ),
                         transformation_views=[
                             PartialAffineTransformationViewInput(
@@ -837,9 +817,6 @@ class ArkitektController(ImConWidgetController):
 
                 tile_count += 1
                 self._logger.debug(f"Captured tile {tile_count}/{total_tiles} at ({actual_x}, {actual_y})")
-
-                if stage is not None and image is not None:
-                    yield image
 
         # Save metadata JSON file if we were saving individual TIFs
         if save_dir is not None and metadata_list:
@@ -896,6 +873,8 @@ class ArkitektController(ImConWidgetController):
                 self._logger.warning(f"Failed to restore illumination state: {e}")
 
         self._logger.info(f"Tile scan completed: {tile_count} tiles captured")
+
+        return stage
 
     # ------------------------------------------------------------------
     # Well-boundary definition and persistence
@@ -1369,7 +1348,7 @@ class ArkitektController(ImConWidgetController):
 
         # --- Run tile scan (focus map Z correction applied inside) ----------
         try:
-            yield from self.runTileScan(
+            stage = self.runTileScan(
                 center_x_micrometer=center_x,
                 center_y_micrometer=center_y,
                 range_x_micrometer=width,
@@ -1387,6 +1366,8 @@ class ArkitektController(ImConWidgetController):
             )
         finally:
             self._active_focus_map = None
+        
+        return stage
 
     @APIExport(runOnUIThread=False)
     def deconvolve(self) -> int:

@@ -125,6 +125,7 @@ class ImConMainController(MainController):
                 except Exception as e:
                     self.__logger.debug(e)
 
+            
         # Add AcceptanceTestController in any case
         try:
             self.__logger.info("Creating controller for AcceptanceTest ")

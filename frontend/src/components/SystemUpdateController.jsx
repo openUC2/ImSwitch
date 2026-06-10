@@ -3,6 +3,11 @@ import { useDispatch, useSelector } from "react-redux";
 import { setNotification } from "../state/slices/NotificationSlice.js";
 import apiUC2ConfigControllerListSerialPorts from "../backendapi/apiUC2ConfigControllerListSerialPorts";
 import apiUC2ConfigControllerSetSerialConfig from "../backendapi/apiUC2ConfigControllerSetSerialConfig";
+import apiUC2ConfigControllerGetBusStatus from "../backendapi/apiUC2ConfigControllerGetBusStatus";
+import apiUC2ConfigControllerSetBusPower from "../backendapi/apiUC2ConfigControllerSetBusPower";
+import apiUC2ConfigControllerGetFanState from "../backendapi/apiUC2ConfigControllerGetFanState";
+import apiUC2ConfigControllerSetFanMode from "../backendapi/apiUC2ConfigControllerSetFanMode";
+import apiUC2ConfigControllerGetBoardTemperature from "../backendapi/apiUC2ConfigControllerGetBoardTemperature";
 import {
   Box,
   Typography,
@@ -27,6 +32,9 @@ import {
   TextField,
   CircularProgress,
   Divider,
+  Slider,
+  ToggleButton,
+  ToggleButtonGroup,
 } from "@mui/material";
 import {
   Memory,
@@ -38,6 +46,10 @@ import {
   Usb as UsbIcon,
   Bluetooth as BluetoothIcon,
   LightbulbOutlined as LedIcon,
+  Bolt as BoltIcon,
+  Air as AirIcon,
+  Thermostat as ThermostatIcon,
+  ReportProblem as ReportProblemIcon,
 } from "@mui/icons-material";
 
 import CanOtaWizard from "./CanOtaWizard";
@@ -52,6 +64,15 @@ import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSl
  * Handles firmware flashing as well as related UC2 device control and
  * status actions, including hardware control and LED matrix status updates.
  */
+// Format a °C temperature value for display.
+const fmtTemp = (v) =>
+  v === null || v === undefined || Number.isNaN(Number(v))
+    ? "—"
+    : `${Number(v).toFixed(1)} °C`;
+
+// Map an "ok" flag (bool or 0/1) to a Chip color; unknown -> default.
+const tempOkColor = (ok) => (ok === false || ok === 0 ? "error" : "default");
+
 const SystemUpdateController = () => {
   const dispatch = useDispatch();
   const uc2State = useSelector(uc2Slice.getUc2State);
@@ -130,6 +151,143 @@ const SystemUpdateController = () => {
       setIsApplyingSerial(false);
     }
   };
+
+  // --- CAN-bus power & emergency-stop -------------------------------------
+  // Bus/emergency status is signal-driven (sigBusStatusUpdate -> UC2Slice),
+  // with an initial fetch on mount via getBusStatus.
+  const busPower = uc2State.busPower; // 1=on, 0=off, null=unknown
+  const busAvailable = uc2State.busAvailable;
+  const emergencyActive = uc2State.emergencyActive;
+  const emergencyInfo = uc2State.emergencyInfo;
+  const [isSettingBusPower, setIsSettingBusPower] = useState(false);
+
+  const refreshBusStatus = async () => {
+    if (!isBackendConnected) return;
+    try {
+      const status = await apiUC2ConfigControllerGetBusStatus();
+      if (status && typeof status === "object") {
+        dispatch(uc2Slice.setBusStatus(status));
+      }
+    } catch (e) {
+      // non-fatal: status simply stays unknown
+      console.error("getBusStatus failed:", e);
+    }
+  };
+
+  const handleToggleBusPower = async (enable) => {
+    setIsSettingBusPower(true);
+    try {
+      const res = await apiUC2ConfigControllerSetBusPower(enable);
+      if (res?.status === "success") {
+        dispatch(uc2Slice.setBusPower(res.power));
+        dispatch(
+          setNotification({
+            message: `CAN-bus power turned ${enable ? "ON" : "OFF"}`,
+            type: "success",
+          }),
+        );
+      } else {
+        dispatch(
+          setNotification({
+            message: `Failed to set bus power: ${res?.message || "unknown error"}`,
+            type: "error",
+          }),
+        );
+      }
+      // Re-read availability (E-stop may keep the bus down even when powered).
+      refreshBusStatus();
+    } catch (e) {
+      dispatch(
+        setNotification({
+          message: "setBusPower failed: " + (e.message || e),
+          type: "error",
+        }),
+      );
+    } finally {
+      setIsSettingBusPower(false);
+    }
+  };
+
+  // --- Fan control --------------------------------------------------------
+  const [fanMode, setFanMode] = useState("auto"); // 'auto' | 'manual' | 'off'
+  const [fanWiper, setFanWiper] = useState(64); // 0-127 PWM wiper (manual mode)
+  const [fanRpm, setFanRpm] = useState(null);
+  const [fanTempC, setFanTempC] = useState(null);
+  const [isSettingFan, setIsSettingFan] = useState(false);
+
+  const refreshFanState = async () => {
+    if (!isBackendConnected) return;
+    try {
+      const fan = await apiUC2ConfigControllerGetFanState();
+      if (fan && typeof fan === "object") {
+        if (fan.mode) setFanMode(fan.mode);
+        if (fan.wiper !== undefined && fan.wiper !== null)
+          setFanWiper(fan.wiper);
+        setFanRpm(fan.rpm ?? null);
+        setFanTempC(fan.tempC ?? null);
+      }
+    } catch (e) {
+      console.error("getFanState failed:", e);
+    }
+  };
+
+  const applyFanMode = async (mode, wiper) => {
+    setIsSettingFan(true);
+    try {
+      await apiUC2ConfigControllerSetFanMode(
+        mode,
+        mode === "manual" ? wiper : null,
+      );
+      setFanMode(mode);
+      // Give the firmware a moment to apply, then read back rpm/wiper.
+      setTimeout(refreshFanState, 500);
+    } catch (e) {
+      dispatch(
+        setNotification({
+          message: "setFanMode failed: " + (e.message || e),
+          type: "error",
+        }),
+      );
+    } finally {
+      setIsSettingFan(false);
+    }
+  };
+
+  const handleFanModeChange = (event, newMode) => {
+    if (!newMode) return; // ignore deselect
+    applyFanMode(newMode, fanWiper);
+  };
+
+  // --- Board temperature polling (every 10s while enabled) ----------------
+  const [tempPollingEnabled, setTempPollingEnabled] = useState(false);
+  const [temperature, setTemperature] = useState(null);
+
+  const fetchTemperature = async () => {
+    try {
+      const t = await apiUC2ConfigControllerGetBoardTemperature();
+      if (t && typeof t === "object") setTemperature(t);
+    } catch (e) {
+      console.error("getBoardTemperature failed:", e);
+    }
+  };
+
+  // Fetch bus + fan state once whenever the backend becomes reachable.
+  useEffect(() => {
+    if (isBackendConnected) {
+      refreshBusStatus();
+      refreshFanState();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBackendConnected]);
+
+  // Poll the board temperature every 10s while the user keeps it enabled.
+  useEffect(() => {
+    if (!tempPollingEnabled || !isBackendConnected) return undefined;
+    fetchTemperature(); // immediate first read
+    const id = setInterval(fetchTemperature, 10000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tempPollingEnabled, isBackendConnected]);
 
   // LED status control
   const [ledStatus, setLedStatus] = useState("idle");
@@ -419,6 +577,201 @@ const SystemUpdateController = () => {
               Reconnect (session only)
             </Button>
           </Box>
+        </CardContent>
+      </Card>
+
+      {/* CAN-Bus Power & Emergency Stop Card */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
+            <BoltIcon color="primary" />
+            <Typography variant="h6">
+              CAN-Bus Power &amp; Emergency Stop
+            </Typography>
+            <Chip
+              label={
+                busPower === 1
+                  ? "Power ON"
+                  : busPower === 0
+                    ? "Power OFF"
+                    : "Power ?"
+              }
+              color={
+                busPower === 1
+                  ? "success"
+                  : busPower === 0
+                    ? "default"
+                    : "warning"
+              }
+              size="small"
+              variant="outlined"
+            />
+            <Chip
+              label={busAvailable ? "Bus Available" : "Bus Unavailable"}
+              color={busAvailable ? "success" : "error"}
+              size="small"
+              variant="outlined"
+            />
+          </Box>
+
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Control the high-current power that feeds the CAN-bus slave boards
+            (motors, lasers, LEDs). When the hardware emergency-stop button is
+            pressed the bus is cut and reported as unavailable.
+          </Typography>
+
+          {emergencyActive && (
+            <Alert
+              severity="error"
+              icon={<ReportProblemIcon />}
+              sx={{ mb: 2 }}
+            >
+              <Typography variant="body2">
+                <strong>Emergency stop active.</strong>{" "}
+                {emergencyInfo?.msg ||
+                  "Release the E-stop button to restore bus power."}
+              </Typography>
+            </Alert>
+          )}
+
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 2,
+              flexWrap: "wrap",
+            }}
+          >
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={busPower === 1}
+                  onChange={(e) => handleToggleBusPower(e.target.checked)}
+                  disabled={!isBackendConnected || isSettingBusPower}
+                />
+              }
+              label={busPower === 1 ? "Bus power ON" : "Bus power OFF"}
+            />
+            {isSettingBusPower && <CircularProgress size={18} />}
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<Refresh />}
+              onClick={refreshBusStatus}
+              disabled={!isBackendConnected}
+            >
+              Refresh Status
+            </Button>
+          </Box>
+        </CardContent>
+      </Card>
+
+      {/* Fan & Temperature Card */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
+            <AirIcon color="primary" />
+            <Typography variant="h6">Fan &amp; Temperature</Typography>
+            {fanRpm !== null && fanRpm !== undefined && (
+              <Chip label={`${fanRpm} rpm`} size="small" variant="outlined" />
+            )}
+            {fanTempC !== null && fanTempC !== undefined && (
+              <Chip
+                label={`Fan sensor: ${fmtTemp(fanTempC)}`}
+                size="small"
+                variant="outlined"
+              />
+            )}
+          </Box>
+
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Control the cooling fan. <strong>Auto</strong> drives the fan from
+            the onboard temperature curve, <strong>Manual</strong> holds a
+            fixed speed, and <strong>Off</strong> disables it.
+          </Typography>
+
+          <ToggleButtonGroup
+            value={fanMode}
+            exclusive
+            onChange={handleFanModeChange}
+            size="small"
+            disabled={!isBackendConnected || isSettingFan}
+            sx={{ mb: 2 }}
+          >
+            <ToggleButton value="auto">Auto</ToggleButton>
+            <ToggleButton value="manual">Manual</ToggleButton>
+            <ToggleButton value="off">Off</ToggleButton>
+          </ToggleButtonGroup>
+
+          {fanMode === "manual" && (
+            <Box sx={{ px: 1, mb: 1, maxWidth: 360 }}>
+              <Typography variant="body2" gutterBottom>
+                Fan speed (wiper): {fanWiper} / 127
+              </Typography>
+              <Slider
+                value={fanWiper}
+                min={0}
+                max={127}
+                step={1}
+                valueLabelDisplay="auto"
+                onChange={(e, v) => setFanWiper(v)}
+                onChangeCommitted={(e, v) => applyFanMode("manual", v)}
+                disabled={!isBackendConnected || isSettingFan}
+              />
+            </Box>
+          )}
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* Board temperature polling */}
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+            <ThermostatIcon color="action" fontSize="small" />
+            <Typography variant="subtitle2">Board Temperature</Typography>
+          </Box>
+
+          <FormControlLabel
+            control={
+              <Switch
+                checked={tempPollingEnabled}
+                onChange={(e) => setTempPollingEnabled(e.target.checked)}
+                disabled={!isBackendConnected}
+              />
+            }
+            label="Poll temperature every 10 s"
+          />
+
+          {tempPollingEnabled && (
+            <Paper sx={{ p: 2, mt: 1, bgcolor: "background.default" }}>
+              {temperature ? (
+                <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                  <Chip
+                    label={`PCB: ${fmtTemp(temperature.pcb)}`}
+                    color={tempOkColor(temperature.pcb_ok)}
+                    size="small"
+                    variant="outlined"
+                  />
+                  <Chip
+                    label={`Air: ${fmtTemp(temperature.air)}`}
+                    color={tempOkColor(temperature.air_ok)}
+                    size="small"
+                    variant="outlined"
+                  />
+                  <Chip
+                    label={`ESP: ${fmtTemp(temperature.esp)}`}
+                    size="small"
+                    variant="outlined"
+                  />
+                </Box>
+              ) : (
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                  <CircularProgress size={16} />
+                  <Typography variant="body2" color="text.secondary">
+                    Reading temperature…
+                  </Typography>
+                </Box>
+              )}
+            </Paper>
+          )}
         </CardContent>
       </Card>
 

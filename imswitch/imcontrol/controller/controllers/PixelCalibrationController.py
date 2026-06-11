@@ -33,7 +33,7 @@ import NanoImagingPack as nip
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport, initLogger
-from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import compute_affine_matrix, measure_pixel_shift
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import compute_affine_matrix, measure_pixel_shift, validate_calibration
 
 from ..basecontrollers import LiveUpdatedController
 
@@ -62,6 +62,10 @@ def _convert_to_native(obj):
     return obj
 
 
+class _CalibrationAborted(Exception):
+    """Raised inside the calibration loop when the user requests a stop."""
+
+
 class PixelCalibrationController(LiveUpdatedController):
     """Controller exposing per-detector affine calibration as a DetectorManager addon."""
 
@@ -82,6 +86,18 @@ class PixelCalibrationController(LiveUpdatedController):
         # Pending (not yet applied) calibrations awaiting frontend approval.
         # Also keyed by the composite key so multiple objectives can be in flight.
         self._pendingCalibration: dict = {}
+
+        # Cooperative abort for the automatic calibration loop + pollable progress
+        # so the frontend can show a progress bar and a working Stop button.
+        self._calibrationAbort = threading.Event()
+        self._calibrationProgress: dict = {
+            "running": False,
+            "step": 0,
+            "total": 0,
+            "message": "",
+            "detectorName": None,
+            "objectiveId": None,
+        }
 
         # Currently selected objective (string key).
         self.currentObjective = self._getCurrentObjectiveId()
@@ -208,6 +224,63 @@ class PixelCalibrationController(LiveUpdatedController):
             except Exception as exc:
                 self._logger.warning(f"[{detector_name}] setPixelSizeUm failed: {exc}")
 
+    def _resetDetectorFlip(self, detector_name: str):
+        """Force a detector's image flip to (False, False).
+
+        Calibration must be *measured* on the raw, unflipped sensor. If a flip
+        from a previous calibration (or a manual toggle) is still active, the
+        measured pixel-shift direction is already mirrored, and the freshly
+        computed calibration would compensate a second time — inverting the
+        axes. Resetting first makes the computed flip an absolute property of
+        the camera/stage geometry rather than a delta on top of the old one.
+        """
+        try:
+            detector = self._master.detectorsManager[detector_name]
+        except Exception:
+            self._logger.warning(f"Detector '{detector_name}' not found - cannot reset flip")
+            return
+        if hasattr(detector, "setFlipImage"):
+            try:
+                detector.setFlipImage(False, False)
+                self._logger.info(f"[{detector_name}] flip reset to (False, False) for calibration")
+            except Exception as exc:
+                self._logger.warning(f"[{detector_name}] flip reset failed: {exc}")
+
+    def _restoreAppliedFlip(self, detector_name: str):
+        """Re-apply the flip/pixel-size of the detector's *currently active* calibration.
+
+        Used after an automatic run measured on the reset (unflipped) sensor, so
+        the live view returns to its prior state until the user applies the new
+        pending calibration. Falls back to leaving the sensor unflipped when no
+        calibration is stored for the active objective.
+        """
+        calib = self.affineCalibrations.get(
+            self._makeKey(detector_name, self.currentObjective)
+        ) or self.affineCalibrations.get(detector_name)
+        if calib is not None:
+            self._applyCalibrationToDetector(detector_name, calib)
+        else:
+            self._resetDetectorFlip(detector_name)
+
+    @APIExport(requestType="POST")
+    def resetDetectorFlip(self, detectorName: str = None):
+        """Reset a detector's image flip to off.
+
+        Called by the manual calibration workflow before the user marks feature
+        points, so the points are captured on the raw (unflipped) sensor and the
+        computed flip is absolute — see ``_resetDetectorFlip``.
+        """
+        if detectorName is None or detectorName == "":
+            detectorName = self._defaultDetectorName()
+        if detectorName not in self._master.detectorsManager.getAllDeviceNames():
+            return {"success": False, "error": f"Unknown detector '{detectorName}'"}
+        self._resetDetectorFlip(detectorName)
+        return {
+            "success": True,
+            "detectorName": detectorName,
+            "message": "Image flip reset to off for calibration.",
+        }
+
     # ------------------------------------------------------------------ #
     # Lookup helpers (used by other controllers)                          #
     # ------------------------------------------------------------------ #
@@ -303,14 +376,33 @@ class PixelCalibrationController(LiveUpdatedController):
                 "error": f"Unknown detector '{detectorName}'",
             }
 
-        if not self._validateCameraIntensity(detectorName):
+        if self._calibrationProgress.get("running"):
+            return {
+                "success": False,
+                "error": "A calibration is already running. Stop it first.",
+            }
+
+        intensity_ok, intensity_reason = self._validateCameraIntensity(detectorName)
+        if not intensity_ok:
             return {
                 "success": False,
                 "error": (
-                    "Camera intensity out of range (saturated or too dark). "
+                    f"Camera intensity problem: {intensity_reason}. "
                     "Adjust exposure or lighting before calibration."
                 ),
             }
+
+        # Arm the abort flag and progress state before the worker starts.
+        self._calibrationAbort.clear()
+        self._pendingCalibration.pop(self._makeKey(detectorName, objectiveId), None)
+        self._calibrationProgress = {
+            "running": True,
+            "step": 0,
+            "total": 0,
+            "message": "Starting…",
+            "detectorName": detectorName,
+            "objectiveId": objectiveId,
+        }
 
         thread = threading.Thread(
             target=self._calibrateStageAffineInThread,
@@ -323,8 +415,23 @@ class PixelCalibrationController(LiveUpdatedController):
             "pending": False,
             "detectorName": detectorName,
             "objectiveId": objectiveId,
-            "message": "Calibration started in background thread. Poll getPendingCalibration for results.",
+            "message": "Calibration started in background thread. Poll getCalibrationProgress / getPendingCalibration for results.",
         }
+
+    @APIExport(requestType="POST")
+    def stopPixelCalibration(self):
+        """Request the running automatic calibration to abort at the next step."""
+        if not self._calibrationProgress.get("running"):
+            return {"success": False, "message": "No calibration is running."}
+        self._calibrationAbort.set()
+        self._calibrationProgress["message"] = "Stopping…"
+        self._logger.info("Stop requested for automatic calibration")
+        return {"success": True, "message": "Stop requested; calibration will abort shortly."}
+
+    @APIExport()
+    def getCalibrationProgress(self):
+        """Return the live progress of the automatic calibration for polling."""
+        return _convert_to_native({"success": True, **self._calibrationProgress})
 
     def _calibrateStageAffineInThread(
         self,
@@ -339,6 +446,8 @@ class PixelCalibrationController(LiveUpdatedController):
     ):
         key = self._makeKey(detectorName, objectiveId)
         try:
+            # Measure on the raw, unflipped sensor so the computed flip is absolute.
+            self._resetDetectorFlip(detectorName)
             helper = PixelCalibrationClass(self, detectorName=detectorName)
             result = helper.calibrate_affine(
                 backlash_um=backlashUm,
@@ -358,10 +467,16 @@ class PixelCalibrationController(LiveUpdatedController):
                 "detector_name": detectorName,
                 "objective_id": objectiveId,
             }
+            self._calibrationProgress["message"] = "Complete – review and apply."
             self._logger.info(
                 f"Calibration pending approval for '{detectorName}' @ objective '{objectiveId}'"
             )
             return self._pendingCalibration[key]
+        except _CalibrationAborted:
+            self._logger.info(f"Calibration aborted by user for '{key}'")
+            self._pendingCalibration.pop(key, None)
+            self._calibrationProgress["message"] = "Aborted by user."
+            return None
         except Exception as exc:
             self._logger.error(
                 f"Calibration thread failed for '{key}': {exc}", exc_info=True
@@ -372,7 +487,14 @@ class PixelCalibrationController(LiveUpdatedController):
                 "objective_id": objectiveId,
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             }
+            self._calibrationProgress["message"] = f"Failed: {exc}"
             return None
+        finally:
+            self._calibrationProgress["running"] = False
+            # The new flip is only applied once the user accepts the pending
+            # result; until then, restore the previously-active calibration so
+            # the live view does not stay stuck on the raw (unflipped) sensor.
+            self._restoreAppliedFlip(detectorName)
 
     @APIExport()
     def getPendingCalibration(self, detectorName: str = None, objectiveId: str = None):
@@ -871,35 +993,55 @@ class PixelCalibrationController(LiveUpdatedController):
     # Internal helpers                                                    #
     # ------------------------------------------------------------------ #
 
-    def _validateCameraIntensity(self, detectorName: str) -> bool:
-        """Reject calibrations when the detector frame is saturated or too dark."""
+    def _validateCameraIntensity(self, detectorName: str):
+        """Check that a detector frame is usable for calibration.
+
+        Returns ``(ok, reason)``. ``ok`` is False when the frame is too dark
+        *or* too saturated (clipped) — both starve phase correlation of the
+        texture it needs to find a reliable shift. RGB frames are reduced to
+        grayscale (matching the calibration grab) but thresholds are keyed off
+        the original dtype.
+        """
         try:
             detector = self._master.detectorsManager[detectorName]
             if not hasattr(detector, "getLatestFrame"):
-                return True
+                return True, "ok"
             frame = detector.getLatestFrame()
             if frame is None:
-                return True
+                return True, "ok"
+            orig_dtype = frame.dtype
+            if frame.ndim > 2:  # RGB -> grayscale, matching the calibration grab
+                frame = np.mean(frame, axis=2)
             max_val = float(np.max(frame))
             mean_val = float(np.mean(frame))
-            if frame.dtype == np.uint8:
+            if orig_dtype == np.uint8:
                 min_threshold = 10
-            elif frame.dtype == np.uint16:
+                sat_level = 255.0
+            elif orig_dtype == np.uint16:
                 min_threshold = 50 if max_val < 4096 else 500
+                sat_level = 4095.0 if max_val < 4096 else 65535.0
             else:
                 min_threshold = 0.02
+                sat_level = max(max_val, 1.0)
             if mean_val <= min_threshold:
                 self._logger.warning(
                     f"[{detectorName}] frame too dark (mean={mean_val:.1f}, threshold={min_threshold})"
                 )
-                return False
+                return False, f"frame too dark (mean intensity {mean_val:.1f})"
+            sat_fraction = float(np.mean(frame >= 0.98 * sat_level))
+            if sat_fraction > 0.20:
+                self._logger.warning(
+                    f"[{detectorName}] frame saturated ({sat_fraction * 100:.0f}% of pixels clipped)"
+                )
+                return False, f"frame saturated ({sat_fraction * 100:.0f}% of pixels clipped)"
             self._logger.info(
-                f"[{detectorName}] intensity OK: mean={mean_val:.1f}, max={max_val:.1f}"
+                f"[{detectorName}] intensity OK: mean={mean_val:.1f}, max={max_val:.1f}, "
+                f"saturated={sat_fraction * 100:.1f}%"
             )
-            return True
+            return True, "ok"
         except Exception as exc:
             self._logger.warning(f"Intensity validation failed: {exc}")
-            return True
+            return True, "ok"
 
 
 class PixelCalibrationClass:
@@ -914,8 +1056,32 @@ class PixelCalibrationClass:
     def _detector(self):
         return self._parent._master.detectorsManager[self._detectorName]
 
+    def _grab_timeout_s(self, frameSync: int) -> float:
+        """Frame-grab timeout that scales with exposure.
+
+        The grab waits for the frame counter to advance by ``frameSync``. On a
+        slow camera (e.g. RGB / long exposure) a fixed 1 s timeout fires before
+        a genuinely new frame arrives, so the loop returns a *stale* frame —
+        identical to the reference — giving ~0 displacement and an absurd pixel
+        size. Scaling the timeout with exposure keeps the grab honest.
+        """
+        exposure_s = None
+        try:
+            params = getattr(self._detector, "parameters", {}) or {}
+            for k in ("exposure", "ExposureTime", "exposure_time", "Exposure"):
+                if k in params and params[k] is not None:
+                    val = float(getattr(params[k], "value", params[k]))
+                    # Heuristic: values over 30 are almost certainly milliseconds.
+                    exposure_s = val / 1000.0 if val > 30 else val
+                    break
+        except Exception:
+            exposure_s = None
+        if not exposure_s or exposure_s <= 0:
+            return 2.0
+        return max(2.0, (frameSync + 2) * exposure_s + 1.0)
+
     def _grab_image(self, crop_size: int = 1024, frameSync: int = 3, returnFrameNumber: bool = False):
-        timeout_s = 1.0  # TODO: scale with exposure
+        timeout_s = self._grab_timeout_s(frameSync)
         t0 = time.time()
         last_fn = -1
         cur_fn = None
@@ -1011,8 +1177,15 @@ class PixelCalibrationClass:
         pixel_shifts = []
         stage_shifts = []
         correlations = []
+        self._parent._calibrationProgress["total"] = len(offsets)
         try:
             for idx, (dx, dy) in enumerate(offsets):
+                # Cooperative abort point (Stop button) between steps.
+                if self._parent._calibrationAbort.is_set():
+                    raise _CalibrationAborted()
+                self._parent._calibrationProgress.update(
+                    {"step": idx, "message": f"Measuring step {idx + 1}/{len(offsets)}…"}
+                )
                 target = start_position + np.array([dx, dy, 0])
                 self._move_stage(target)
                 time.sleep(settle_time)
@@ -1021,6 +1194,7 @@ class PixelCalibrationClass:
                 pixel_shifts.append(shift)
                 stage_shifts.append([dx, dy])
                 correlations.append(corr)
+                self._parent._calibrationProgress["step"] = idx + 1
                 self._parent._logger.debug(
                     f"Step {idx + 1}/{len(offsets)}: stage=({dx:.1f},{dy:.1f}) "
                     f"px=({shift[0]:.2f},{shift[1]:.2f}) corr={corr:.3f}"
@@ -1041,6 +1215,29 @@ class PixelCalibrationClass:
         affine_matrix, inlier_mask, metrics = compute_affine_matrix(pixel_shifts, stage_shifts)
         metrics["mean_correlation"] = float(np.mean(correlations))
         metrics["min_correlation"] = float(np.min(correlations))
+
+        # Degenerate-measurement guard: if commanded moves produced essentially no
+        # image displacement, the frames were stale/identical (slow camera, no
+        # texture) and the pixel size would be meaningless — fail loudly instead
+        # of storing an "arbitrary" calibration.
+        nonzero = np.linalg.norm(stage_shifts, axis=1) > 1e-6
+        if np.any(nonzero):
+            measured_disp = np.linalg.norm(pixel_shifts[nonzero], axis=1)
+            if float(np.max(measured_disp)) < 1.0:
+                raise RuntimeError(
+                    "Calibration failed: commanded stage moves produced < 1 px image "
+                    "displacement (stale frames or no visible texture). Increase exposure, "
+                    "add contrast/texture to the sample, or increase the step size."
+                )
+
+        # Attach a quality verdict so the frontend can warn before applying.
+        try:
+            ok, msg = validate_calibration(np.array(affine_matrix), metrics, self._parent._logger)
+            metrics["validation_ok"] = bool(ok)
+            metrics["validation_message"] = str(msg)
+        except Exception as exc:  # pragma: no cover - validation must never crash a run
+            metrics["validation_ok"] = None
+            metrics["validation_message"] = f"validation skipped: {exc}"
 
         self._parent._logger.info(
             f"Calibration done: quality={metrics.get('quality', 'n/a')} "

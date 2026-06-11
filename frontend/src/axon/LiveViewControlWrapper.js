@@ -50,6 +50,10 @@ const pulse = keyframes`
  * @param {function} onImageLoad - Callback when image dimensions change: (width, height)
  * @param {React.ReactNode} overlayContent - Optional overlay content to render on top of the viewer
  * @param {boolean} enableStageMovement - Enable default double-click stage movement behavior (default: true)
+ * @param {boolean} enableZoomPan - Wrap the viewer in the zoom/pan shell (default: true).
+ *   Set to false for precise single-click workflows (e.g. pixel calibration marking):
+ *   the react-zoom-pan-pinch panning layer otherwise intercepts pointer events and
+ *   swallows the click, so the viewer is rendered directly and clicks reach the canvas.
  */
 const LiveViewControlWrapper = ({
   useFastMode = true,
@@ -57,6 +61,7 @@ const LiveViewControlWrapper = ({
   onImageLoad,
   overlayContent,
   enableStageMovement = true,
+  enableZoomPan = true,
 }) => {
   const dispatch = useDispatch();
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
@@ -446,7 +451,7 @@ const LiveViewControlWrapper = ({
           }}
         />
 
-        {liveViewState.isStreamRunning ? (
+        {liveViewState.isStreamRunning && enableZoomPan ? (
           <TransformWrapper
             key={`zoom-shell-${liveStreamState.imageFormat}-${liveViewState.isStreamRunning}`}
             initialScale={1}

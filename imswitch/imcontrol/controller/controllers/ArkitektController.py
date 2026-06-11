@@ -407,8 +407,13 @@ class ArkitektController(ImConWidgetController):
 
     def acquire_frame(self, frameSync: int = 3):
 
-        # ensure we get a fresh frame
-        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        # ensure we get a fresh frame; scale timeout to exposure so long
+        # exposures do not prematurely abort
+        try:
+            exposure_s = self.mDetector.getLatestFrame.__self__._camera.exposure_time / 1e6
+        except Exception:
+            exposure_s = 0.1
+        timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
         cTime = time.time()
 
         lastFrameNumber=-1
@@ -1083,6 +1088,9 @@ class ArkitektController(ImConWidgetController):
         autofocus_resolution: float,
         speed: float,
         t_settle: float,
+        autofocus_cropsize: int = 512,
+        autofocus_algorithm: str = "LAPE",
+        autofocus_settle_time: float = 0.1,
     ):
         """Measure Z at a grid of positions within a well and return a fitted FocusMap.
 
@@ -1112,18 +1120,31 @@ class ArkitektController(ImConWidgetController):
             autofocusController.autoFocus(
                 rangez=autofocus_range,
                 resolutionz=autofocus_resolution,
+                defocusz=0,
+                tSettle=autofocus_settle_time,
+                isDebug=False,
+                nCropsize=autofocus_cropsize,
+                focusAlgorithm=autofocus_algorithm,
             )
-            # Poll until background thread finishes (max 60 s)
-            t0 = time.time()
-            while autofocusController.isAutofusRunning:
-                check_cancelled()
-                time.sleep(0.1)
-                if time.time() - t0 > 60:
-                    self._logger.warning("Autofocus timed out during focus mapping")
-                    break
+            # Wait for the autofocus thread to finish (more reliable than polling)
+            af_thread = getattr(autofocusController, '_AutofocusThead', None)
+            if af_thread is not None and af_thread.is_alive():
+                af_thread.join(timeout=120)
+            else:
+                # Fallback poll if thread attribute is unavailable
+                t0 = time.time()
+                while getattr(autofocusController, 'isAutofusRunning', False):
+                    check_cancelled()
+                    time.sleep(0.1)
+                    if time.time() - t0 > 60:
+                        self._logger.warning("Autofocus timed out during focus mapping")
+                        break
 
             pos = mPositioner.getPosition()
-            z = pos.get("Z", pos.get("z", 0.0))
+            z = pos.get("Z", pos.get("z", None))
+            if z is None:
+                self._logger.warning(f"Focus map: could not read Z at ({gx:.0f}, {gy:.0f}), using 0")
+                z = 0.0
             focus_map.add_point(gx, gy, z)
             self._logger.debug(f"Focus map: ({gx:.0f}, {gy:.0f}) → Z={z:.2f} µm")
 
@@ -1218,14 +1239,21 @@ class ArkitektController(ImConWidgetController):
                 autofocusController.autoFocus(
                     rangez=autofocus_range,
                     resolutionz=autofocus_resolution,
+                    defocusz=0,
+                    tSettle=t_settle,
+                    isDebug=False,
                 )
-                t0 = time.time()
-                while autofocusController.isAutofusRunning:
-                    check_cancelled()
-                    time.sleep(0.1)
-                    if time.time() - t0 > 60:
-                        self._logger.warning("Autofocus timed out during well preview")
-                        break
+                af_thread = getattr(autofocusController, '_AutofocusThead', None)
+                if af_thread is not None and af_thread.is_alive():
+                    af_thread.join(timeout=120)
+                else:
+                    t0 = time.time()
+                    while getattr(autofocusController, 'isAutofusRunning', False):
+                        check_cancelled()
+                        time.sleep(0.1)
+                        if time.time() - t0 > 60:
+                            self._logger.warning("Autofocus timed out during well preview")
+                            break
             else:
                 self._logger.warning("AutofocusController not available – skipping autofocus")
 
@@ -1246,6 +1274,9 @@ class ArkitektController(ImConWidgetController):
         focus_map_grid_cols: int = 3,
         autofocus_range: float = 100,
         autofocus_resolution: float = 5,
+        autofocus_cropsize: int = 512,
+        autofocus_algorithm: str = "LAPE",
+        autofocus_settle_time: float = 0.1,
         objective_id: int | None = None,
         speed: float = 40000,
         t_settle: float = 0.2,
@@ -1265,6 +1296,9 @@ class ArkitektController(ImConWidgetController):
             focus_map_grid_cols: Autofocus columns for focus map. Default 3.
             autofocus_range: Z scan half-range per autofocus step (µm). Default 100.
             autofocus_resolution: Z step size for autofocus (µm). Default 5.
+            autofocus_cropsize: Crop size (px) for the focus quality metric. Default 512.
+            autofocus_algorithm: Focus metric algorithm ("LAPE", "GLVA", "JPEG"). Default "LAPE".
+            autofocus_settle_time: Settle time (s) between Z steps during autofocus. Default 0.1.
             objective_id: Objective slot to activate before scanning, or None.
             speed: Stage speed (µm/s). Default 40000.
             t_settle: Settling time after each XY move (s). Default 0.2.
@@ -1350,6 +1384,9 @@ class ArkitektController(ImConWidgetController):
                 autofocus_resolution=autofocus_resolution,
                 speed=speed,
                 t_settle=t_settle,
+                autofocus_cropsize=autofocus_cropsize,
+                autofocus_algorithm=autofocus_algorithm,
+                autofocus_settle_time=autofocus_settle_time,
             )
             if self._active_focus_map is None:
                 self._logger.warning("Focus map unavailable – continuing without Z correction")

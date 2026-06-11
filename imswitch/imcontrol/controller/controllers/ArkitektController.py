@@ -1278,7 +1278,7 @@ class ArkitektController(ImConWidgetController):
         autofocus_algorithm: str = "LAPE",
         autofocus_settle_time: float = 0.1,
         objective_id: int | None = None,
-        speed: float = 40000,
+        speed: float = 20000,
         t_settle: float = 0.2,
         positionerName: str | None = None,
     ) -> Generator[Image, None, None]:

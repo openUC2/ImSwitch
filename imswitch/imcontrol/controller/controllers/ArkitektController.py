@@ -10,6 +10,12 @@ from mikro_next.api.schema import (
 )
 from arkitekt_next import model
 from typing import Generator
+
+try:
+    from rekuest_next.agents.context import check_cancelled
+except ImportError:
+    def check_cancelled():
+        pass
 import os
 import datetime
 import tifffile as tif
@@ -700,6 +706,7 @@ class ArkitektController(ImConWidgetController):
 
         for iy in range(num_tiles_y):
             for ix in range(num_tiles_x):
+                check_cancelled()
                 # Snake pattern: reverse x direction on odd rows
                 if iy % 2 == 1:
                     # Odd row: scan right to left
@@ -1095,6 +1102,7 @@ class ArkitektController(ImConWidgetController):
         )
 
         for gx, gy in grid:
+            check_cancelled()
             mPositioner.move(
                 value=(gx, gy), axis="XY",
                 is_absolute=True, is_blocking=True, speed=(speed, speed),
@@ -1108,6 +1116,7 @@ class ArkitektController(ImConWidgetController):
             # Poll until background thread finishes (max 60 s)
             t0 = time.time()
             while autofocusController.isAutofusRunning:
+                check_cancelled()
                 time.sleep(0.1)
                 if time.time() - t0 > 60:
                     self._logger.warning("Autofocus timed out during focus mapping")
@@ -1212,6 +1221,7 @@ class ArkitektController(ImConWidgetController):
                 )
                 t0 = time.time()
                 while autofocusController.isAutofusRunning:
+                    check_cancelled()
                     time.sleep(0.1)
                     if time.time() - t0 > 60:
                         self._logger.warning("Autofocus timed out during well preview")

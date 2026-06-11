@@ -1261,7 +1261,7 @@ class ArkitektController(ImConWidgetController):
         yield from self.acquireFrame()
 
     @APIExport(runOnUIThread=False)
-    def runWellTileScan(
+    def run_well_tile_scan(
         self,
         well_id: str = "A1",
         plate_type: str = "heidstar4",
@@ -1300,7 +1300,7 @@ class ArkitektController(ImConWidgetController):
             autofocus_algorithm: Focus metric algorithm ("LAPE", "GLVA", "JPEG"). Default "LAPE".
             autofocus_settle_time: Settle time (s) between Z steps during autofocus. Default 0.1.
             objective_id: Objective slot to activate before scanning, or None.
-            speed: Stage speed (µm/s). Default 40000.
+            speed: Stage speed (µm/s). Default 20000.
             t_settle: Settling time after each XY move (s). Default 0.2.
             positionerName: Positioner name, or None for first available.
 

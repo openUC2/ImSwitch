@@ -320,7 +320,7 @@ wheels = [
 [[package]]
 name = "ashlaruc2"
 version = "1.18.4"
-source = { git = "https://github.com/Franzili/ashlarUC2#7135e18eadd438bf76a6017b858ffdcb7c4fb5d4" }
+source = { git = "https://github.com/Franzili/ashlarUC2.git?rev=7135e18eadd438bf76a6017b858ffdcb7c4fb5d4#7135e18eadd438bf76a6017b858ffdcb7c4fb5d4" }
 dependencies = [
     { name = "blessed" },
     { name = "matplotlib" },
@@ -1956,8 +1956,8 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.4" },
     { name = "aiortc", specifier = ">=1.9.0" },
     { name = "arkitekt-next", extras = ["all"], specifier = "==0.40.4" },
-    { name = "ashlaruc2", git = "https://github.com/Franzili/ashlarUC2.git" },
-    { name = "ashlaruc2", marker = "extra == 'ashlar'", git = "https://github.com/Franzili/ashlarUC2" },
+    { name = "ashlaruc2", git = "https://github.com/Franzili/ashlarUC2.git?rev=7135e18eadd438bf76a6017b858ffdcb7c4fb5d4" },
+    { name = "ashlaruc2", marker = "extra == 'ashlar'", git = "https://github.com/Franzili/ashlarUC2.git?rev=7135e18eadd438bf76a6017b858ffdcb7c4fb5d4" },
     { name = "av", specifier = "==13.1.0" },
     { name = "coloredlogs", specifier = ">=15" },
     { name = "colour-science", specifier = ">=0.3" },

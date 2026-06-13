@@ -51,9 +51,18 @@ nano .env              # at minimum: set IMSWITCH_DATA_DIR and change OMERO_ROOT
 docker compose up -d
 docker compose logs -f server    # wait until you see the server is accepting connections
 
-# 2) Start the importer (foreground, easy to watch). Pure stdlib — no venv needed.
+# 2) See what it WILL import (instant, no server needed) — great first sanity check:
+python3 watcher.py --list
+
+# 3) Start the importer (foreground, easy to watch). Pure stdlib — no venv needed.
 python3 watcher.py
 ```
+
+`--list` prints every importable unit it found (plus an extension histogram of your
+data tree, so if it finds nothing you can see what's actually on disk) and exits. Each
+poll of the running watcher also logs a one-line summary, e.g.
+`scan: 247 unit(s) | 247 ready, 0 settling | 0 imported, 0 gave up`, so you can always
+tell it's alive.
 
 Then open `http://<pi-ip>:4080`, log in as **root / `<OMERO_ROOT_PASS>`**, and your
 acquisitions appear under the **ImSwitch** project (one dataset per acquisition folder).
@@ -85,10 +94,20 @@ chunk files over time). `watcher.py` therefore:
 - scans the data tree **recursively**;
 - treats each `*.zarr` folder as **one** import unit (it does not import individual
   chunks);
-- considers a unit ready only after it has **stopped changing for
-  `OMERO_IMPORT_STABLE_SECONDS`** (default 20s) — robust for slow multi-GB writes;
+- considers a unit ready once its data has **not changed for
+  `OMERO_IMPORT_STABLE_SECONDS`** (default 20s), measured from the file/store's own
+  mtime — so a freshly-written acquisition waits out the quiet period, but a
+  **pre-existing backlog imports on the very first scan** instead of waiting;
+- in a folder that has a "primary" output (`*.ome.tif`/`*.ome.tiff`/`*.h5` or a
+  `*.zarr` store), skips the loose per-tile `*.tif` files so OMERO isn't flooded
+  (`OMERO_IMPORT_SKIP_TILE_TIFFS=false` to import every tile);
 - remembers what it imported in `.omero_watcher_state.json`, so restarts don't
   re-import and a crash mid-run is safe.
+
+> First run imports your **entire existing backlog** (every old acquisition is "older
+> than 20s"), which can be a lot of `omero import` calls back-to-back. That's intended
+> — it's how the months of data already in `/home/pi/Datasets` get into OMERO. Delete
+> `.omero_watcher_state.json` to force a re-import later.
 
 ## Transfer mode: `ln_s` vs `cp`
 

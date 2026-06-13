@@ -229,7 +229,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
         const numY = Math.max(1, Math.round(tilesY));
         const sX = stepSizeX > 0 ? stepSizeX : fovX;
         const sY = stepSizeY > 0 ? stepSizeY : fovY;
-
+        if (sX <= 0 || sY <= 0) throw new Error('Tile Editor requires a positive step size (set Step X/Y or ensure FOV is available).');
         const snakePositions = buildTileEditorSnakePositions(
           positionState.x,
           positionState.y,

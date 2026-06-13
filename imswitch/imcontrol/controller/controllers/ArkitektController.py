@@ -36,6 +36,13 @@ class Point2D:
     y: float
 
 
+@model
+class Point3D:
+    x: float
+    y: float
+    z: float
+
+
 # ---------------------------------------------------------------------------
 # Well-plate geometry loader
 # ---------------------------------------------------------------------------
@@ -76,6 +83,7 @@ def _load_well_scan_config(labware_dir_name: str) -> dict:
         config[well_id] = {
             "center_x": well.x,
             "center_y": well.y,
+            "center_z": 0.0,
             "width":    w,
             "height":   h,
         }
@@ -133,7 +141,7 @@ class ArkitektController(ImConWidgetController):
             self._logger.warning("Arkitekt app unavailable; controller disabled.")
             return
         self._active_focus_map = None  # set by runWellTileScan; read by runTileScan
-        self._pending_well_corner: tuple[float, float] | None = None  # first corner for two-step well definition
+        self._pending_well_corner: tuple[float, float, float] | None = None  # first corner for two-step well definition
 
         # Per-instance plate config — starts as a copy of module defaults so
         # user-defined bounds don't bleed between sessions or controller instances.
@@ -146,7 +154,7 @@ class ArkitektController(ImConWidgetController):
         self.arkitekt_app.register(self.saveFirstWellCorner)
         self.arkitekt_app.register(self.saveSecondWellCorner)
         self.arkitekt_app.register(self.previewWell)
-        self.arkitekt_app.register(self.runWellTileScan)
+        self.arkitekt_app.register(self.run_well_tile_scan)
         self.arkitekt_app.register(self.goToPosition)
         self.arkitekt_app.register(self.acquireFrame)
         self.arkitekt_app.register(self.getStagePosition)
@@ -214,7 +222,7 @@ class ArkitektController(ImConWidgetController):
                 self._logger.warning(f"Unknown axis '{ax}' – skipping")
                 continue
             self._logger.debug(f"Homing axis {ax}")
-            home_fn(isBlocking=is_blocking)
+            home_fn(isBlocking=True)
 
         
     @APIExport(runOnUIThread=False) 
@@ -778,93 +786,23 @@ class ArkitektController(ImConWidgetController):
                 if len(numpy_array.shape) == 2:
                     numpy_array = np.expand_dims(numpy_array, axis=-1)
 
-                if stage is not None:
-                    print("Image has the following properties: ", numpy_array.shape)
-                    image = from_array_like(
-                        xr.DataArray(
-                            numpy_array,
-                            dims=["y", "x", "c"],
-                        ),
-                        transformation_views=[
-                            PartialAffineTransformationViewInput(
-                                affineMatrix=affine_matrix_four_d,
-                                stage=stage
-                            )
-                        ],
-                        name=image_name,
-                    )
-                else:
-                    # Save as individual TIF files with JSON metadata
-
-                    # Create metadata dictionary
-                    tile_metadata = {
-                        "tile_index_x": actual_ix,
-                        "tile_index_y": iy,
-                        "position_x_um": actual_x,
-                        "position_y_um": actual_y,
-                        "center_x_um": center_x_micrometer,
-                        "center_y_um": center_y_micrometer,
-                        "illumination_channel": illumination_channel or "unknown",
-                        "illumination_intensity": illumination_intensity,
-                        "exposure_time_ms": exposure_time,
-                        "gain": gain,
-                        "objective_magnification": objective_magnification,
-                        "affine_matrix": affine_matrix_four_d,
-                        "image_shape": list(numpy_array.shape),
-                        "dtype": str(numpy_array.dtype),
-                    }
-
-                    # Add to metadata list
-                    metadata_list.append(tile_metadata)
-
-                    # Save TIF file
-                    tif_filename = f"{image_name}.tif"
-                    tif_path = os.path.join(save_dir, tif_filename)
-                    tif.imwrite(tif_path, numpy_array)
-
-                    self._logger.debug(f"Saved tile to {tif_path}")
-
-                    # Create a dummy image object for consistency (won't be yielded)
-                    image = None
+                print("Image has the following properties: ", numpy_array.shape)
+                image = from_array_like(
+                    xr.DataArray(
+                        numpy_array,
+                        dims=["y", "x", "c"],
+                    ),
+                    transformation_views=[
+                        PartialAffineTransformationViewInput(
+                            affineMatrix=affine_matrix_four_d,
+                            stage=stage
+                        )
+                    ],
+                    name=image_name,
+                )
 
                 tile_count += 1
                 self._logger.debug(f"Captured tile {tile_count}/{total_tiles} at ({actual_x}, {actual_y})")
-
-        # Save metadata JSON file if we were saving individual TIFs
-        if save_dir is not None and metadata_list:
-            import json
-
-            # Create comprehensive scan metadata
-            scan_metadata = {
-                "scan_info": {
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "center_x_um": center_x_micrometer,
-                    "center_y_um": center_y_micrometer,
-                    "range_x_um": range_x_micrometer,
-                    "range_y_um": range_y_micrometer,
-                    "step_x_um": step_x_micrometer,
-                    "step_y_um": step_y_micrometer,
-                    "overlap_percent": overlap_percent,
-                    "num_tiles_x": num_tiles_x,
-                    "num_tiles_y": num_tiles_y,
-                    "total_tiles": total_tiles,
-                    "positioner": positionerName,
-                    "illumination_channel": illumination_channel,
-                    "illumination_intensity": illumination_intensity,
-                    "exposure_time_ms": exposure_time,
-                    "gain": gain,
-                    "objective_magnification": objective_magnification,
-                    "autofocus_enabled": performAutofocus,
-                },
-                "tiles": metadata_list
-            }
-
-            # Save metadata JSON
-            metadata_path = os.path.join(save_dir, "scan_metadata.json")
-            with open(metadata_path, 'w') as f:
-                json.dump(scan_metadata, f, indent=2)
-
-            self._logger.info(f"Saved scan metadata to {metadata_path}")
 
         # move back to starting position
         mPositioner.move(
@@ -947,10 +885,10 @@ class ArkitektController(ImConWidgetController):
             positionerName = names[0]
 
         pos = self._master.positionersManager[positionerName].getPosition()
-        x, y = pos["X"], pos["Y"]
-        self._pending_well_corner = (x, y)
-        self._logger.info(f"saveFirstWellCorner: stored ({x:.1f}, {y:.1f}) µm — now move to the opposite corner")
-        return Position(x=int(x), y=int(y), z=int(pos.get("Z", 0)))
+        x, y, z = pos["X"], pos["Y"], pos.get("Z", 0.0)
+        self._pending_well_corner = (x, y, z)
+        self._logger.info(f"saveFirstWellCorner: stored ({x:.1f}, {y:.1f}, {z:.1f}) µm — now move to the opposite corner")
+        return Position(x=int(x), y=int(y), z=int(z))
 
     @APIExport(runOnUIThread=False)
     def saveSecondWellCorner(
@@ -980,16 +918,16 @@ class ArkitektController(ImConWidgetController):
             positionerName = names[0]
 
         pos = self._master.positionersManager[positionerName].getPosition()
-        x2, y2 = pos["X"], pos["Y"]
-        x1, y1 = self._pending_well_corner
+        x2, y2, z2 = pos["X"], pos["Y"], pos.get("Z", 0.0)
+        x1, y1, z1 = self._pending_well_corner
         self._pending_well_corner = None
 
-        min_corner = Point2D(x=min(x1, x2), y=min(y1, y2))
-        max_corner = Point2D(x=max(x1, x2), y=max(y1, y2))
+        min_corner = Point3D(x=min(x1, x2), y=min(y1, y2), z=min(z1, z2))
+        max_corner = Point3D(x=max(x1, x2), y=max(y1, y2), z=max(z1, z2))
 
         self._logger.info(
             f"saveSecondWellCorner: committing {plate_type}/{well_id} "
-            f"corners ({x1:.1f}, {y1:.1f}) → ({x2:.1f}, {y2:.1f}) µm"
+            f"corners ({x1:.1f}, {y1:.1f}, {z1:.1f}) → ({x2:.1f}, {y2:.1f}, {z2:.1f}) µm"
         )
         self.defineWellBounds(
             well_id=well_id,
@@ -1002,16 +940,16 @@ class ArkitektController(ImConWidgetController):
     def defineWellBounds(
         self,
         well_id: str,
-        min_corner: Point2D,
-        max_corner: Point2D,
+        min_corner: Point3D,
+        max_corner: Point3D,
         plate_type: str = "heidstar4",
     ) -> None:
         """Define a custom rectangular boundary for a well.
 
         Args:
             well_id: Well label to override, e.g. "A1".
-            min_corner: Lower-left corner of the rectangle (x, y in µm).
-            max_corner: Upper-right corner of the rectangle (x, y in µm).
+            min_corner: Lower-left corner of the rectangle (x, y, z in µm).
+            max_corner: Upper-right corner of the rectangle (x, y, z in µm).
             plate_type: Plate type to update. Default "heidstar4".
         """
         if plate_type not in self._plate_well_configs:
@@ -1024,18 +962,20 @@ class ArkitektController(ImConWidgetController):
         well_id_upper = well_id.strip().upper()
         center_x = (min_corner.x + max_corner.x) / 2.0
         center_y = (min_corner.y + max_corner.y) / 2.0
+        center_z = (min_corner.z + max_corner.z) / 2.0
         width    = abs(max_corner.x - min_corner.x)
         height   = abs(max_corner.y - min_corner.y)
 
         self._plate_well_configs[plate_type][well_id_upper] = {
             "center_x": center_x,
             "center_y": center_y,
+            "center_z": center_z,
             "width":    width,
             "height":   height,
         }
         self._logger.info(
             f"defineWellBounds: {plate_type}/{well_id_upper} → "
-            f"center=({center_x:.1f}, {center_y:.1f}) µm, "
+            f"center=({center_x:.1f}, {center_y:.1f}, {center_z:.1f}) µm, "
             f"size={width:.1f}x{height:.1f} µm"
         )
         self._save_well_overrides()
@@ -1163,6 +1103,7 @@ class ArkitektController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Focus map fitting failed: {e}")
             return None
+        
 
     @APIExport(runOnUIThread=False)
     def previewWell(
@@ -1216,7 +1157,8 @@ class ArkitektController(ImConWidgetController):
 
         center_x = well_geom["center_x"]
         center_y = well_geom["center_y"]
-        self._logger.info(f"Preview: moving to well {well_id} center ({center_x}, {center_y}) µm")
+        center_z = well_geom.get("center_z", 0.0)
+        self._logger.info(f"Preview: moving to well {well_id} center ({center_x}, {center_y}, {center_z}) µm")
 
         mPositioner.move(
             value=(center_x, center_y),
@@ -1225,6 +1167,14 @@ class ArkitektController(ImConWidgetController):
             is_blocking=True,
             speed=(speed, speed),
         )
+        if center_z != 0.0:
+            mPositioner.move(
+                value=center_z,
+                axis="Z",
+                is_absolute=True,
+                is_blocking=True,
+                speed=speed,
+            )
         time.sleep(t_settle)
 
         if perform_autofocus:
@@ -1281,7 +1231,7 @@ class ArkitektController(ImConWidgetController):
         speed: float = 20000,
         t_settle: float = 0.2,
         positionerName: str | None = None,
-    ) -> Generator[Image, None, None]:
+    ) -> Stage:
         """Scan an entire well with focus mapping.
 
         Args:
@@ -1325,6 +1275,7 @@ class ArkitektController(ImConWidgetController):
 
         center_x = well_geom["center_x"]
         center_y = well_geom["center_y"]
+        center_z = well_geom.get("center_z", 0.0)
         width    = well_geom["width"]
         height   = well_geom["height"]
 
@@ -1339,10 +1290,14 @@ class ArkitektController(ImConWidgetController):
 
         # --- Read live-view imaging settings where not supplied -------------
         live_ch, live_intensity, live_exposure, live_gain = self._read_current_imaging_settings()
+        self._logger.info(
+            f"Live view settings: illumination={live_ch} @ {live_intensity}, "
+            f"exposure={live_exposure} ms, gain={live_gain}"
+        )
         if illumination_channel is None:
             illumination_channel = live_ch
         if illumination_intensity is None:
-            illumination_intensity = live_intensity if live_intensity is not None else 1023.0
+            illumination_intensity = live_intensity if live_intensity is not None else 1023
         if exposure_time is None:
             exposure_time = live_exposure
         if gain is None:
@@ -1350,10 +1305,36 @@ class ArkitektController(ImConWidgetController):
 
         self._logger.info(
             f"Well tile scan: well={well_id}, plate={plate_type}, "
-            f"center=({center_x}, {center_y}) µm, scan={width}×{height} µm | "
+            f"center=({center_x}, {center_y}, {center_z}) µm, scan={width}×{height} µm | "
             f"illum={illumination_channel} @ {illumination_intensity}, "
             f"exp={exposure_time} ms, gain={gain}"
         )
+
+        if center_z != 0.0:
+            mPositioner.move(
+                value=center_z,
+                axis="Z",
+                is_absolute=True,
+                is_blocking=True,
+                speed=speed,
+            )
+
+        # Set up illumination if specified
+        original_illumination_state = None
+        try:
+            # Store original state to restore later
+            laser_manager = self._master.lasersManager
+            if illumination_channel is None and illumination_intensity is not None:
+                # If intensity specified without channel, try to apply to first active channel in live view
+                all_channels = laser_manager.getAllDeviceNames()
+                laser = all_channels[0] if all_channels else None
+                if laser:
+                    laser = laser_manager[laser]
+                    laser.setValue(illumination_intensity)
+                    laser.setEnabled(1)
+                self._logger.debug(f"Set illumination {illumination_channel} to {illumination_intensity}")
+        except Exception as e:
+            self._logger.warning(f"Failed to set illumination channel {illumination_channel}: {e}")
 
         # --- Build focus map ------------------------------------------------
         self._active_focus_map = None

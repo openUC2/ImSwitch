@@ -51,6 +51,17 @@ FILE_EXTENSIONS = (".ome.tif", ".ome.tiff", ".tif", ".tiff", ".h5", ".hdf5")
 PRIMARY_FILE_EXTENSIONS = (".ome.tif", ".ome.tiff", ".h5", ".hdf5")
 # Directory stores: any folder whose name ends with one of these is ONE import unit.
 DIR_SUFFIXES = (".zarr",)  # covers ".ome.zarr" too
+# Folder names that hold raw per-tile dumps; plain *.tif inside them are never imported.
+TILE_DIR_NAMES = ("tiles",)
+# Where the OMERO CLI typically lives inside the manics/ome server image (the venv is
+# not on docker-exec's default PATH, so we probe these if auto-detection fails).
+OMERO_BIN_CANDIDATES = (
+    "/opt/omero/server/OMERO.server/bin/omero",  # confirmed in ghcr.io/manics/omero-server-docker
+    "/opt/omero/server/venv3/bin/omero",
+    "/opt/omero/web/venv3/bin/omero",
+    "/usr/local/bin/omero",
+    "/usr/bin/omero",
+)
 # Things that are clearly not importable image data.
 SKIP_SUFFIXES = (".tmp", ".part", ".lock", ".log", ".json", ".txt", ".csv", ".zip",
                  ".png", ".jpg", ".jpeg", ".yaml", ".yml", ".xml", ".npy", "~")
@@ -85,6 +96,8 @@ class Config:
         self.import_zarr = _truthy(os.environ.get("OMERO_IMPORT_ZARR", "true"))
         self.skip_tile_tiffs = _truthy(os.environ.get("OMERO_IMPORT_SKIP_TILE_TIFFS", "true"))
         self.max_retries = int(os.environ.get("OMERO_IMPORT_MAX_RETRIES", "3"))
+        # Path to the `omero` CLI inside the container. Empty -> auto-detect at runtime.
+        self.omero_bin = os.environ.get("OMERO_BIN", "") or None
 
 
 def _truthy(val: str) -> bool:
@@ -116,19 +129,31 @@ def save_state(state: dict) -> None:
 # --------------------------------------------------------------------------- #
 # Discovery + stability.
 # --------------------------------------------------------------------------- #
-def discover_units(watch_dir: Path, done: set[str], skip_tile_tiffs: bool = True) -> list[Path]:
-    """Return import units (files and .zarr dirs), skipping anything already handled.
+def discover_units(watch_dir: Path, done: set[str],
+                   skip_tile_tiffs: bool = True) -> tuple[list[Path], int]:
+    """Return (import units, count of skipped raw-tile tiffs).
 
-    .zarr directories are treated as single units and are not descended into. When a
-    folder contains a "primary" output (*.ome.tif/*.ome.tiff/*.h5 or a *.zarr store),
-    the loose per-tile *.tif files in that same folder are skipped (configurable).
+    Files (*.ome.tif/*.ome.tiff, *.tif, *.h5) and *.zarr directories are units; a
+    *.zarr store is ONE unit (its chunks are not imported). Loose per-tile *.tif files
+    are skipped when ``skip_tile_tiffs`` is set and either:
+      (a) they live under a ``tiles/`` folder, or
+      (b) a "primary" output (*.ome.tif/*.ome.tiff/*.h5 or a *.zarr store) exists in the
+          same folder OR any ancestor folder.
+    ImSwitch writes the stitched/zarr primary in an acquisition's base dir while the raw
+    tiles sit in a nested ``tiles/`` subfolder, so a same-folder check alone misses them.
     """
     units: list[Path] = []
+    n_skipped = 0
     if not watch_dir.is_dir():
-        return units
+        return units, n_skipped
+
+    primary_dirs: list[str] = []  # dirs known to contain a primary output (top-down)
+
+    def under_primary(dp: str) -> bool:
+        return any(dp == p or dp.startswith(p + os.sep) for p in primary_dirs)
 
     for dirpath, dirnames, filenames in os.walk(watch_dir):
-        has_primary = False
+        local_primary = False
 
         # Treat *.zarr folders as units; prune so we don't walk their chunk files.
         keep = []
@@ -137,7 +162,7 @@ def discover_units(watch_dir: Path, done: set[str], skip_tile_tiffs: bool = True
                 continue
             full = Path(dirpath) / d
             if d.lower().endswith(DIR_SUFFIXES):
-                has_primary = True
+                local_primary = True
                 if str(full) not in done:
                     units.append(full)
                 # don't descend into a zarr store
@@ -154,18 +179,29 @@ def discover_units(watch_dir: Path, done: set[str], skip_tile_tiffs: bool = True
             if not fl.endswith(FILE_EXTENSIONS):
                 continue
             if fl.endswith(PRIMARY_FILE_EXTENSIONS):
-                has_primary = True
+                local_primary = True
             matched.append(Path(dirpath) / f)
+
+        # os.walk is top-down, so a base dir is recorded before its tiles/ children.
+        if local_primary:
+            primary_dirs.append(dirpath)
+
+        try:
+            rel_parts = Path(dirpath).relative_to(watch_dir).parts
+        except ValueError:
+            rel_parts = Path(dirpath).parts
+        in_tiles_dir = any(p.lower() in TILE_DIR_NAMES for p in rel_parts)
 
         for full in matched:
             fl = full.name.lower()
             is_plain_tile = (fl.endswith((".tif", ".tiff"))
                              and not fl.endswith((".ome.tif", ".ome.tiff")))
-            if skip_tile_tiffs and has_primary and is_plain_tile:
+            if skip_tile_tiffs and is_plain_tile and (in_tiles_dir or under_primary(dirpath)):
+                n_skipped += 1
                 continue
             if str(full) not in done:
                 units.append(full)
-    return units
+    return units, n_skipped
 
 
 def newest_mtime(unit: Path) -> float:
@@ -221,7 +257,7 @@ def import_target(cfg: Config, unit: Path) -> str:
 def run_import(cfg: Config, unit: Path, target: str | None) -> tuple[bool, str]:
     cmd = [
         "docker", "exec", cfg.container,
-        "omero", "import",
+        (cfg.omero_bin or "omero"), "import",
         "-s", "localhost", "-p", "4064",
         "-u", "root", "-w", cfg.root_pass,
         f"--transfer={cfg.transfer}",
@@ -276,12 +312,40 @@ def server_ready(cfg: Config) -> bool:
         return False
 
 
+def resolve_omero_bin(cfg: Config) -> str | None:
+    """Locate the `omero` CLI inside the container.
+
+    In the manics/ome images OMERO lives in a venv that is NOT on docker-exec's default
+    PATH (`docker exec ... omero` -> "executable file not found"). We first ask a login
+    shell (which may activate the venv), then fall back to known install paths.
+    """
+    for shell in ("bash", "sh"):
+        try:
+            p = subprocess.run(
+                ["docker", "exec", cfg.container, shell, "-lc", "command -v omero"],
+                capture_output=True, text=True, timeout=20,
+            )
+            hits = [ln.strip() for ln in p.stdout.splitlines() if ln.strip().startswith("/")]
+            if p.returncode == 0 and hits:
+                return hits[-1]
+        except Exception:  # noqa: BLE001
+            pass
+    for path in OMERO_BIN_CANDIDATES:
+        try:
+            if subprocess.run(["docker", "exec", cfg.container, "test", "-x", path],
+                              timeout=15).returncode == 0:
+                return path
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
+
 def run_once(cfg: Config, state: dict, seen: dict, announce_new: bool) -> None:
     done = set(state["imported"]) | set(state["gave_up"])
     failures: dict = state["failures"]
     now = time.time()
 
-    units = discover_units(cfg.watch_dir, done, cfg.skip_tile_tiffs)
+    units, n_skipped = discover_units(cfg.watch_dir, done, cfg.skip_tile_tiffs)
     ready, settling = [], 0
     for unit in units:
         key = str(unit)
@@ -296,12 +360,24 @@ def run_once(cfg: Config, state: dict, seen: dict, announce_new: bool) -> None:
             settling += 1
 
     log(f"scan: {len(units)} unit(s) | {len(ready)} ready, {settling} settling | "
-        f"{len(state['imported'])} imported, {len(state['gave_up'])} gave up")
+        f"{len(state['imported'])} imported, {len(state['gave_up'])} gave up"
+        + (f" | {n_skipped} tile(s) skipped" if n_skipped else ""))
+
+    if not ready:
+        return
+    # Resolve prerequisites ONCE before churning through the (possibly large) backlog.
+    if not server_ready(cfg):
+        log(f"omero-server '{cfg.container}' not running yet; will retry next scan")
+        return
+    if cfg.omero_bin is None:
+        cfg.omero_bin = resolve_omero_bin(cfg)
+        if cfg.omero_bin is None:
+            log(f"ERROR: could not find the 'omero' CLI inside '{cfg.container}'. "
+                f"Set OMERO_BIN=<path> in .env; will retry next scan.")
+            return
+        log(f"using omero CLI inside container: {cfg.omero_bin}")
 
     for unit in ready:
-        if not server_ready(cfg):
-            log(f"omero-server '{cfg.container}' not running yet; will retry next scan")
-            return  # no point trying the rest until the server is up
         key = str(unit)
         if import_unit(cfg, unit):
             state["imported"].append(key)
@@ -320,10 +396,10 @@ def cmd_list(cfg: Config) -> int:
         log(f"watch dir does NOT exist: {cfg.watch_dir}")
         return 1
 
-    units = discover_units(cfg.watch_dir, set(), cfg.skip_tile_tiffs)
+    units, n_skipped = discover_units(cfg.watch_dir, set(), cfg.skip_tile_tiffs)
     now = time.time()
     print(f"\nWatch dir : {cfg.watch_dir}")
-    print(f"Importable units found: {len(units)}\n")
+    print(f"Importable units found: {len(units)}   (skipped {n_skipped} raw tile tiff(s))\n")
     for u in units[:80]:
         kind = "zarr" if u.is_dir() else "file"
         age = now - newest_mtime(u)

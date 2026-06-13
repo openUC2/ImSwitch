@@ -121,6 +121,18 @@ copy bytes into OMERO's managed repository (fully detached, but double the stora
 
 ## Caveats & troubleshooting
 
+- **`omero: executable file not found in $PATH`** during import: the OMERO CLI lives in
+  a venv that isn't on `docker exec`'s default PATH. The watcher auto-detects it on
+  first import (and logs `using omero CLI inside container: …`). If detection ever fails,
+  find the path with `docker exec omero-server bash -lc 'command -v omero'` and set
+  `OMERO_BIN=` in `.env`.
+- **Too many images / raw tiles showing up:** ImSwitch writes raw per-tile `*.tif` into a
+  nested `tiles/` folder next to the stitched `*.ome.tif`/`*.ome.zarr` primary. The
+  watcher skips those tiles (`OMERO_IMPORT_SKIP_TILE_TIFFS=true`, the default) and reports
+  the count in each scan line. Run `python3 watcher.py --list` to preview exactly what
+  will and won't be imported. Set the flag `false` if you actually want every tile.
+
+
 - **OME-TIFF is the reliable path.** OME-Zarr/NGFF import is best-effort and depends on
   the Bio-Formats version inside the server image (`OMERO_IMPORT_ZARR=true` by default;
   set `false` to skip). If zarr import fails repeatedly the watcher gives up after

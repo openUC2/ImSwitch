@@ -1,11 +1,15 @@
 from imswitch.imcommon.model import initLogger
 from .PositionerManager import PositionerManager
 import time
+import threading
 import numpy as np
 
 MAX_ACCEL = 1000000
 PHYS_FACTOR = 1
 gTIMEOUT = 100
+# Minimum distance (µm) Z is lifted out of the bottom before XY are homed, so the
+# stage cannot knock the objective into the sample during the homing sweep.
+MIN_SAFE_Z_LIFT_HOMING = 3000
 class ESP32StageManager(PositionerManager):
     def __init__(self, positionerInfo, name, **lowLevelManagers):
         super().__init__(positionerInfo, name, initialPosition={axis: 0 for axis in positionerInfo.axes}, initialSpeed={axis: 0 for axis in positionerInfo.axes})
@@ -70,8 +74,30 @@ class ESP32StageManager(PositionerManager):
         self.sampleLoadingPositions["Y"] = positionerInfo.managerProperties.get('sampleLoadingPositionY', 0)
         self.sampleLoadingPositions["Z"] = positionerInfo.managerProperties.get('sampleLoadingPositionZ', 0)
 
-        # move z before homing?
-        self._safeDistanceZHoming = positionerInfo.managerProperties.get('safeDistanceZHoming',0)
+        # transportation position (A/X/Y/Z) - stage is moved here so the locking
+        # blocks can be bolted on before shipping. Loaded from the setup JSON and
+        # persisted back via PositionerController.setTransportPosition.
+        self.transportPositions = {}
+        self.transportPositions["A"] = positionerInfo.managerProperties.get('transportPositionA', 0)
+        self.transportPositions["X"] = positionerInfo.managerProperties.get('transportPositionX', 0)
+        self.transportPositions["Y"] = positionerInfo.managerProperties.get('transportPositionY', 0)
+        self.transportPositions["Z"] = positionerInfo.managerProperties.get('transportPositionZ', 0)
+
+        # move z before homing? Sign encodes the safe (away-from-sample) direction.
+        # The frame-homing procedure always lifts Z by at least MIN_SAFE_Z_LIFT_HOMING
+        # before homing XY so the stage cannot drive the objective into the sample.
+        self._safeDistanceZHoming = positionerInfo.managerProperties.get('safeDistanceZHoming', 0)
+
+        # frame-homing runtime state (cancellable + observable by the frontend)
+        self._frameHomingCancel = threading.Event()
+        self._frameHomingThread = None
+        self._frameHomingState = {
+            "active": False,
+            "cancelled": False,
+            "phase": "idle",
+            "axes": {"Z": "idle", "X": "idle", "Y": "idle", "A": "idle"},
+            "message": "",
+        }
 
         # Setup homing coordinates and speed
         # X
@@ -702,44 +728,198 @@ class ESP32StageManager(PositionerManager):
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
 
 
+    def _emitHomingState(self, phase=None, axis=None, axisStatus=None, message=None,
+                         active=None, cancelled=None):
+        """Update the frame-homing state dict and broadcast it to the frontend."""
+        if phase is not None:
+            self._frameHomingState["phase"] = phase
+        if axis is not None and axisStatus is not None:
+            self._frameHomingState["axes"][axis] = axisStatus
+        if message is not None:
+            self._frameHomingState["message"] = message
+        if active is not None:
+            self._frameHomingState["active"] = active
+        if cancelled is not None:
+            self._frameHomingState["cancelled"] = cancelled
+        try:
+            self._commChannel.sigHomingState.emit(dict(self._frameHomingState))
+        except Exception as e:
+            self.__logger.error(f"Could not emit homing state: {e}")
+
+    def isFrameHomingActive(self):
+        return self._frameHomingState.get("active", False)
+
+    def getFrameHomingState(self):
+        return dict(self._frameHomingState)
+
+    def cancelFrameHoming(self):
+        """Request cancellation of an in-progress frame-homing run."""
+        if not self._frameHomingState.get("active", False):
+            return
+        self.__logger.info("Frame homing cancellation requested.")
+        self._frameHomingCancel.set()
+        try:
+            self.stopAll()
+        except Exception as e:
+            self.__logger.error(f"stopAll during cancel failed: {e}")
+
     def frameHomingProcedure(self, is_blocking=False):
         '''
-        1. Store Z-position
-        2. Home Z 
-        3. Move Z to Safe position 
-        4. Home X 
-        5. Home Y 
-        6. Move Z to previous position (safeposition + previous position
-        7. Ready 
-        
-        Optionally: in a thread
+        Collision-safe global homing:
+          1. Store current Z
+          2. Home Z (establish the bottom reference)
+          3. Lift Z by a safe distance (>= MIN_SAFE_Z_LIFT_HOMING) out of the bottom
+          4. Home X
+          5. Home Y
+          6. Restore Z to the previous height (never below the safe lift)
+
+        The run is cancellable via cancelFrameHoming() and emits per-axis progress
+        through self._commChannel.sigHomingState. Runs in a background thread unless
+        is_blocking=True.
         '''
+        if self._frameHomingState.get("active", False):
+            self.__logger.warning("Frame homing already in progress; ignoring start request.")
+            return
+
+        # Safe lift distance after homing Z. After Z hits its home endstop the
+        # device position is 0 and the only valid travel is *away* from the
+        # endstop (i.e. opposite to homeDirectionZ). We retract by at least
+        # MIN_SAFE_Z_LIFT_HOMING so XY never sweep with the objective near the
+        # sample. A non-zero configured safeDistanceZHoming overrides the
+        # direction (the operator knows their geometry) but is still floored to
+        # the 3 mm minimum magnitude.
+        configuredLift = self._safeDistanceZHoming
+        if configuredLift != 0:
+            liftDirection = 1 if configuredLift > 0 else -1
+            safeLift = liftDirection * max(abs(configuredLift), MIN_SAFE_Z_LIFT_HOMING)
+        else:
+            liftDirection = -1 if self.homeDirectionZ > 0 else 1
+            safeLift = liftDirection * MIN_SAFE_Z_LIFT_HOMING
 
         def homingThreadFunction(self):
-            # Step 1: Store Z-position
-            self._zPositionPriorHoming = self.getPosition()["Z"]
-            # Step 2: Home Z
-            self.home_z(isBlocking=True)
-            # Step 3: Move Z to Safe position # Assuming Z will be 0 now!
-            if self._safeDistanceZHoming !=0:
-                self.move(value=self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
-            # Step 4: Home X
-            self.home_x(isBlocking=True)
-            self.move(value=1000, speed=self.homeSpeedX, axis="X", is_absolute=True, is_blocking=False)
-            # Step 5: Home Y
-            self.home_y(isBlocking=True)
-            self.move(value=1000, speed=self.homeSpeedY, axis="Y", is_absolute=True, is_blocking=False)
-            # Step 6: Move Z to previous position (safeposition + previous position
-            self.move(value=self._zPositionPriorHoming-self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
-            # Step 7: Ready
-            self.__logger.info("Frame homing procedure completed.")
+            self._frameHomingCancel.clear()
+            self._frameHomingState = {
+                "active": True,
+                "cancelled": False,
+                "phase": "starting",
+                "axes": {"Z": "pending", "X": "pending", "Y": "pending", "A": "idle"},
+                "message": "Starting frame homing",
+            }
+            self._emitHomingState()
+
+            def aborted():
+                if self._frameHomingCancel.is_set():
+                    self._emitHomingState(phase="cancelled", active=False, cancelled=True,
+                                          message="Frame homing cancelled")
+                    self.__logger.info("Frame homing cancelled.")
+                    return True
+                return False
+
+            try:
+                # Step 1: store current Z so we can return to it afterwards
+                self._zPositionPriorHoming = self.getPosition()["Z"]
+                if aborted():
+                    return
+
+                # Step 2: home Z first (so the objective retracts before XY move)
+                self._emitHomingState(phase="homing_z", axis="Z", axisStatus="homing",
+                                      message="Homing Z axis")
+                self.home_z(isBlocking=True)
+                self._emitHomingState(axis="Z", axisStatus="done")
+                if aborted():
+                    return
+
+                # Step 3: lift Z out of the bottom by the safe distance (Z ~ 0 now)
+                self._emitHomingState(phase="lifting_z", message="Lifting Z to safe height")
+                self.move(value=safeLift, speed=self.homeSpeedZ, axis="Z",
+                          is_absolute=True, is_blocking=True)
+                if aborted():
+                    return
+
+                # Step 4: home X
+                self._emitHomingState(phase="homing_x", axis="X", axisStatus="homing",
+                                      message="Homing X axis")
+                self.home_x(isBlocking=True)
+                self.move(value=1000, speed=self.homeSpeedX, axis="X", is_absolute=True, is_blocking=False)
+                self._emitHomingState(axis="X", axisStatus="done")
+                if aborted():
+                    return
+
+                # Step 5: home Y
+                self._emitHomingState(phase="homing_y", axis="Y", axisStatus="homing",
+                                      message="Homing Y axis")
+                self.home_y(isBlocking=True)
+                self.move(value=1000, speed=self.homeSpeedY, axis="Y", is_absolute=True, is_blocking=False)
+                self._emitHomingState(axis="Y", axisStatus="done")
+                if aborted():
+                    return
+
+                # Step 6: restore Z to its previous height, but never drop it below
+                # the safe lift (avoids re-introducing the collision risk at the new XY).
+                self._emitHomingState(phase="restoring_z", message="Restoring Z position")
+                restoreZ = self._zPositionPriorHoming
+                if abs(restoreZ) < abs(safeLift):
+                    restoreZ = safeLift
+                self.move(value=restoreZ, speed=self.homeSpeedZ, axis="Z",
+                          is_absolute=True, is_blocking=True)
+
+                self._emitHomingState(phase="done", active=False, message="Frame homing complete")
+                self.__logger.info("Frame homing procedure completed.")
+            except Exception as e:
+                self.__logger.error(f"Frame homing failed: {e}")
+                self._emitHomingState(phase="error", active=False,
+                                      message=f"Frame homing failed: {e}")
 
         if is_blocking:
             homingThreadFunction(self)
         else:
-            import threading
-            homingThread = threading.Thread(target=homingThreadFunction, args=(self,))
-            homingThread.start()
+            self._frameHomingThread = threading.Thread(target=homingThreadFunction, args=(self,))
+            self._frameHomingThread.start()
+
+    def register_homing_callback(self, on_homing_state_fct):
+        """Register a callback fired on firmware home-status messages.
+
+        The uc2rest Home module maintains an isHomed[] array (indexed A,X,Y,Z) and
+        calls the registered function with it whenever a "home" message arrives.
+        This is best-effort enrichment; frameHomingProcedure remains the source of
+        truth for UI progress.
+        """
+        try:
+            self._homeModule.register_callback(0, on_homing_state_fct)
+        except Exception as e:
+            self.__logger.error(f"Could not register homing callback: {e}")
+
+    def moveToTransportPosition(self, speed=10000, is_blocking=True):
+        """Move A/X/Y/Z to the stored transportation (locking) position."""
+        value = (self.transportPositions["X"], self.transportPositions["Y"], self.transportPositions["Z"])
+        self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
+        try:
+            self.move(value=self.transportPositions["A"], speed=speed, axis="A",
+                      is_absolute=True, is_blocking=is_blocking)
+        except Exception as e:
+            self.__logger.error(f"Could not move A to transport position: {e}")
+
+    def getTransportPositions(self):
+        """Return the stored transportation position as an A/X/Y/Z dict."""
+        return dict(self.transportPositions)
+
+    def setTransportPositions(self, positions=None):
+        """Set the transport position.
+
+        If ``positions`` is None the current stage pose is snapshotted; otherwise
+        the provided A/X/Y/Z values are used (missing axes are left unchanged).
+        Returns the updated transport position dict.
+        """
+        if positions is None:
+            current = self.getPosition()
+            for ax in ("A", "X", "Y", "Z"):
+                self.transportPositions[ax] = float(current.get(ax, self.transportPositions.get(ax, 0)))
+        else:
+            for ax in ("A", "X", "Y", "Z"):
+                if positions.get(ax) is not None:
+                    self.transportPositions[ax] = float(positions[ax])
+        self.__logger.info(f"Transport position set to {self.transportPositions}")
+        return dict(self.transportPositions)
 
     def register_stagescan_callback(self, on_stagescan_complete_fct):
         self._motor.register_stagescan_callback(on_stagescan_complete_fct)

@@ -7,6 +7,7 @@ import * as experimentStateSlice from "../state/slices/ExperimentStateSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as tileStreamSlice from "../state/slices/TileStreamSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
+import * as homingSlice from "../state/slices/HomingSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
 import * as focusLockSlice from "../state/slices/FocusLockSlice.js";
@@ -817,6 +818,17 @@ const WebSocketHandler = () => {
           }
         } catch (error) {
           console.error("Error in sigUpdateMotorPosition handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigHomingState") {
+        // Per-axis frame-homing progress: {active, cancelled, phase, axes, message}
+        try {
+          const homingState = dataJson.args?.p0;
+          if (homingState) {
+            dispatch(homingSlice.setHomingState(homingState));
+          }
+        } catch (error) {
+          console.error("Error in sigHomingState handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateLaserPower") {

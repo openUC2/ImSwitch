@@ -50,6 +50,8 @@ const useFileList = (onRefresh, enableFilePreview, triggerAction, onFileOpen, on
       setCurrentPath(lastSelectedFile.path);
       setSelectedFileIndexes([]);
       setSelectedFiles([]);
+    } else if (lastSelectedFile.isImage) {
+      triggerAction.show("imagePreview");
     } else {
       enableFilePreview && triggerAction.show("previewFile");
     }

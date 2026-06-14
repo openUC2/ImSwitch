@@ -96,7 +96,16 @@ svg {
       background-color: $surface-color;
       padding-right: 0;
       padding-left: 0;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .metadata-pane-container {
+      width: 280px;
+      min-width: 280px;
+      z-index: 2;
       border-bottom-right-radius: 8px;
+      overflow: hidden;
     }
   }
 }

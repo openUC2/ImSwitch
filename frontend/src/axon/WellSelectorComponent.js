@@ -250,11 +250,12 @@ const WellSelectorComponent = () => {
     // Get current position from Redux state
     const currentX = positionState.x;
     const currentY = positionState.y;
-    
+    const currentZ = positionState.z;
     // Create a new point with current position
     dispatch(experimentSlice.createPoint({
       x: currentX,
       y: currentY,
+      z: currentZ,
       name: `Position ${experimentState.pointList.length + 1}`,
       shape: ""
     }));

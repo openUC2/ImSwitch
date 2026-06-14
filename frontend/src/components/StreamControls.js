@@ -11,7 +11,10 @@ import {
   Select,
   MenuItem,
   Dialog,
+  DialogTitle,
   DialogContent,
+  DialogContentText,
+  DialogActions,
   Tooltip,
   Switch,
   FormControlLabel,
@@ -58,6 +61,20 @@ export default function StreamControls({
   // Default is empty - detector name is now automatically included in timestamp-based filename
   const [snapFileName, setSnapFileName] = useState("");
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const [fijiInfoOpen, setFijiInfoOpen] = useState(false);
+
+  // Wrap snap & download to show a one-time Fiji hint for TIFF files
+  const handleSnapAndDownload = useCallback(
+    (fileName, format) => {
+      // Show the hint only on the very first TIFF snap & download
+      if (format === 1 && !localStorage.getItem("fijiHintShown")) {
+        setFijiInfoOpen(true);
+        localStorage.setItem("fijiHintShown", "1");
+      }
+      onSnapAndDownload(fileName, format);
+    },
+    [onSnapAndDownload],
+  );
 
   // Separate format options for snap and record
   const snapFormatOptions = [
@@ -416,7 +433,7 @@ export default function StreamControls({
             variant="contained"
             color="primary"
             size="small"
-            onClick={() => onSnapAndDownload(snapFileName, snapFormat)}
+            onClick={() => handleSnapAndDownload(snapFileName, snapFormat)}
             startIcon={<GetApp />}
             disabled={!isLiveViewActive}
             sx={{ whiteSpace: "nowrap", width: 160, height: 40, minHeight: 40 }}
@@ -540,6 +557,37 @@ export default function StreamControls({
       </Box>
 
       {/* Stream Control Overlay as Dialog */}
+      {/* One-time Fiji info dialog shown on first TIFF snap & download */}
+      <Dialog open={fijiInfoOpen} onClose={() => setFijiInfoOpen(false)}>
+        <DialogTitle>Open TIFF files with Fiji / ImageJ</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            The downloaded TIFF image is 16-bit. Most operating system viewers
+            will display it as a black or washed-out image because they cannot
+            scale 16-bit data correctly.
+            <br />
+            <br />
+            Please open the file with{" "}
+            <strong>
+              <a
+                href="https://fiji.sc"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Fiji / ImageJ
+              </a>
+            </strong>{" "}
+            — it handles 16-bit images properly and applies the correct
+            brightness/contrast scaling automatically.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setFijiInfoOpen(false)} variant="contained">
+            Got it
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog
         open={overlayOpen}
         onClose={() => setOverlayOpen(false)}

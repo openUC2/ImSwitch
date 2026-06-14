@@ -2047,28 +2047,31 @@ class UC2ConfigController(ImConWidgetController):
         result["flash_size"] = size
 
         if is_merged:
-            # For merged binaries the magic MUST be at 0x0
-            if magic_offset != 0:
+            # The bootloader magic must sit at the chip's boot address. For
+            # ESP32-S3 / S2 / C3 that is 0x0; for the classic ESP32 the
+            # bootloader lives at 0x1000, so a merged image legitimately starts
+            # with 0x1000 bytes of 0xFF padding (magic at 0x1000). Both layouts
+            # are flashed at 0x0 — esptool/the ROM handle the leading padding.
+            #
+            # NOTE: flash mode/freq (e.g. DIO/40m) are intentionally NOT flagged
+            # here. They are whatever the firmware's sdkconfig compiled and match
+            # the bundled bootloader, which is exactly what PlatformIO flashes.
+            expected_offsets = {
+                "esp32":   (0x0, 0x1000),
+                "esp32s2": (0x0,),
+                "esp32s3": (0x0,),
+                "esp32c3": (0x0,),
+            }.get(chip, (0x0, 0x1000))
+
+            if magic_offset not in expected_offsets:
+                pretty = " or ".join(f"0x{o:x}" for o in expected_offsets)
                 result["errors"].append(
-                    f"Merged binary has bootloader at 0x{magic_offset:x} instead of 0x0. "
-                    f"The binary was built with wrong BOOT_ADDR (likely 0x{magic_offset:x} "
-                    f"instead of 0x0000 for {chip}). "
-                    f"Flashing this at 0x0 will ALWAYS produce 'invalid header: 0xffffffff'. "
-                    f"→ Rebuild using the corrected CI YAML with BOOT_ADDR=0x0000."
+                    f"Merged binary has bootloader at 0x{magic_offset:x} instead of {pretty} "
+                    f"(expected for {chip}). The binary was built with a wrong boot address. "
+                    f"Flashing this at 0x0 will produce 'invalid header: 0xffffffff'. "
+                    f"→ Rebuild with the correct BOOT_ADDR for {chip}."
                 )
                 result["valid"] = False
-
-            # Warn about suboptimal flash mode for S3
-            if chip == "esp32s3" and fm == "DIO":
-                result["warnings"].append(
-                    f"Flash mode in binary is DIO but QIO is recommended for ESP32-S3. "
-                    f"Rebuild with --flash_mode qio in merge_bin."
-                )
-            if chip == "esp32s3" and freq == "40m":
-                result["warnings"].append(
-                    f"Flash frequency in binary is 40m but 80m is recommended for ESP32-S3. "
-                    f"Rebuild with --flash_freq 80m in merge_bin."
-                )
 
         self.__logger.info(
             f"Firmware validation: magic@0x{magic_offset:x}, "
@@ -2269,9 +2272,13 @@ class UC2ConfigController(ImConWidgetController):
                 "--baud", str(baud),
                 "--chip", resolved_chip,
                 "write-flash",
-                "--flash-mode", flash_params["flash-mode"],
-                "--flash-freq", flash_params["flash-freq"],
-                "--flash-size", flash_params["flash-size"],
+                # Preserve the flash mode/freq/size baked into the compiled app
+                # image header (mirrors `pio run --target upload`). Overriding
+                # them here would patch the app header to e.g. qio/80m while the
+                # on-device bootloader stays dio/40m -> header mismatch on boot.
+                "--flash-mode", "keep",
+                "--flash-freq", "keep",
+                "--flash-size", "keep",
                 flash_params["offset"],
                 str(fw_path),
             ]

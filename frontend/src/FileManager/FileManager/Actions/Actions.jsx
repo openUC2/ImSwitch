@@ -3,6 +3,7 @@ import Modal from "../../components/Modal/Modal";
 import DeleteAction from "./Delete/Delete.action";
 import UploadFileAction from "./UploadFile/UploadFile.action";
 import PreviewFileAction from "./PreviewFile/PreviewFile.action";
+import ImagePreviewAction from "./ImagePreview/ImagePreview.action";
 import { useSelection } from "../../contexts/SelectionContext";
 import { useShortcutHandler } from "../../hooks/useShortcutHandler";
 
@@ -46,6 +47,11 @@ const Actions = ({
       title: "Preview",
       component: <PreviewFileAction filePreviewPath={filePreviewPath} />,
       width: "50%",
+    },
+    imagePreview: {
+      title: selectedFiles[0]?.name ?? "Image Preview",
+      component: <ImagePreviewAction />,
+      width: "60%",
     },
   };
 

@@ -5,6 +5,7 @@ import SetLasersTab from "./FRAMESettings/SetLasersTab";
 import TestHomingTab from "./FRAMESettings/TestHomingTab";
 import PixelCalibrationTab from "./FRAMESettings/PixelCalibrationTab";
 import ManualPixelCalibrationTab from "./FRAMESettings/ManualPixelCalibrationTab";
+import VerifyCalibrationTab from "./FRAMESettings/VerifyCalibrationTab";
 import ExtendedObjectiveController from "./ObjectiveController";
 import StageOffsetCalibrationTab from "./FRAMESettings/StageOffsetCalibrationTab";
 import OpticalFlowTab from "./FRAMESettings/OpticalFlowTab";
@@ -48,6 +49,7 @@ const FRAMESettings = () => {
       >
         <Tab value="autoPixel" label="Automatic Pixel Calibration" />
         <Tab value="manualPixel" label="Manual Pixel Calibration" />
+        <Tab value="verifyCalibration" label="Verify Calibration" />
         <Tab value="setLasers" label="Set Lasers" />
         <Tab value="testHoming" label="Test Homing" />
         {hasObjectiveController && (
@@ -60,6 +62,7 @@ const FRAMESettings = () => {
       <Box sx={{ mt: 2 }}>
         {selectedTab === "autoPixel" && <PixelCalibrationTab />}
         {selectedTab === "manualPixel" && <ManualPixelCalibrationTab />}
+        {selectedTab === "verifyCalibration" && <VerifyCalibrationTab />}
         {selectedTab === "setLasers" && <SetLasersTab />}
         {selectedTab === "testHoming" && <TestHomingTab />}
         {hasObjectiveController && selectedTab === "objective" && (

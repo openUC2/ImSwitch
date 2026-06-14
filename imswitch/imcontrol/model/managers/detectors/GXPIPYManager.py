@@ -77,8 +77,9 @@ class GXPIPYManager(DetectorManager):
                                     editable=True),
             'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),
             'binning': DetectorNumberParameter(group="Misc", value=1, valueUnits="arb.u.", editable=True),
-            'flipX': DetectorBooleanParameter(group="Misc", value=self.flipX, editable=True),
-            'flipY': DetectorBooleanParameter(group="Misc", value=self.flipY, editable=True),
+            # Flip is owned by PixelCalibration (set via setFlipImage), not the user.
+            'flipX': DetectorBooleanParameter(group="Misc", value=self.flipX, editable=False),
+            'flipY': DetectorBooleanParameter(group="Misc", value=self.flipY, editable=False),
             'trigger_source': DetectorListParameter(group='Acquisition mode',
                             value='Continuous',
                             options=['Continuous',

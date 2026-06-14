@@ -19,6 +19,9 @@ import {
   Chip,
   Divider,
   CircularProgress,
+  Switch,
+  FormControlLabel,
+  Tooltip,
 } from '@mui/material';
 import {
   MyLocation as CrosshairIcon,
@@ -36,6 +39,7 @@ import apiPixelCalibrationControllerManualFourPointCalibration from '../../backe
 import apiPixelCalibrationControllerGetAvailableDetectors from '../../backendapi/apiPixelCalibrationControllerGetAvailableDetectors';
 import apiPixelCalibrationControllerGetCalibrationData from '../../backendapi/apiPixelCalibrationControllerGetCalibrationData';
 import apiPixelCalibrationControllerSetCalibrationData from '../../backendapi/apiPixelCalibrationControllerSetCalibrationData';
+import apiPixelCalibrationControllerResetDetectorFlip from '../../backendapi/apiPixelCalibrationControllerResetDetectorFlip';
 import apiObjectiveControllerGetStatus from '../../backendapi/apiObjectiveControllerGetStatus';
 import apiLiveViewControllerGetStreamParameters from '../../backendapi/apiLiveViewControllerGetStreamParameters';
 
@@ -90,7 +94,10 @@ const ManualPixelCalibrationTab = () => {
   const [backlashDistanceUm, setBacklashDistanceUm] = useState(50);
   const [detectorName, setDetectorName] = useState('');
   const [availableDetectors, setAvailableDetectors] = useState([]);
-  const [objectiveId, setObjectiveId] = useState('');
+  const [objectiveId, setObjectiveId] = useState('current');
+  // When on, the stage moves automatically after marking the first point of an
+  // axis so the user can immediately mark the second point (no separate "Move").
+  const [autoMove, setAutoMove] = useState(true);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
@@ -198,11 +205,22 @@ const ManualPixelCalibrationTab = () => {
     setError('');
   };
 
+  // Flip must be off while marking, otherwise the four-point math compensates a
+  // second time on an already-flipped live view and inverts the axes (#10).
+  // Reset it as the user enters the marking phase so points are captured on the
+  // raw sensor; the correct flip is re-applied when the calibration is accepted.
+  const resetFlipForCalibration = useCallback(async () => {
+    try {
+      await apiPixelCalibrationControllerResetDetectorFlip(detectorName || undefined);
+    } catch (_e) { /* non-fatal: leave flip as-is */ }
+  }, [detectorName]);
+
   // ---- step 0: backlash compensation ----
   const handleBacklashMove = async () => {
     try {
       setLoading(true);
       setError('');
+      await resetFlipForCalibration();
       setStatus(`Backlash pre-move: ${backlashDistanceUm} µm along X…`);
       await apiPositionerControllerMovePositioner({
         axis: 'X',
@@ -217,6 +235,13 @@ const ManualPixelCalibrationTab = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Skip backlash but still reset flip before the first mark.
+  const handleSkipBacklashX = async () => {
+    await resetFlipForCalibration();
+    setStatus('Flip reset. Click a recognisable feature in the image.');
+    setActiveStep(1);
   };
 
   const handleBacklashMoveY = async () => {
@@ -307,6 +332,22 @@ const ManualPixelCalibrationTab = () => {
       setLoading(false);
     }
   };
+
+  // ---- auto-advance: move the stage automatically after the first point ----
+  // When enabled, marking P1 (step 1 -> 2) or P3 (step 5 -> 6) kicks off the
+  // matching stage move so the user can immediately mark the second point.
+  // Deps are intentionally limited to [activeStep, autoMove] so the move fires
+  // exactly once per transition; a failed move leaves the manual button as a
+  // fallback. eslint-disable-next-line keeps the move handlers out of deps.
+  useEffect(() => {
+    if (!autoMove || loading) return;
+    if (activeStep === 2 && pointA1) {
+      handleMoveStageX();
+    } else if (activeStep === 6 && pointB1) {
+      handleMoveStageY();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStep, autoMove]);
 
   // ---- step 8: compute calibration (does NOT save yet) ----
   const handleCalculate = async () => {
@@ -476,8 +517,9 @@ const ManualPixelCalibrationTab = () => {
   return (
     <Box>
       <Grid container spacing={3}>
-        {/* ---- Left: Live View ---- */}
+        {/* ---- Left: Live View (sticky so it stays visible while the workflow scrolls) ---- */}
         <Grid item xs={12} md={7}>
+          <Box sx={{ position: { xs: 'static', md: 'sticky' }, top: { md: 16 } }}>
           <Paper sx={{ p: 2 }}>
             <Typography variant="h6" gutterBottom>
               Detector Camera
@@ -497,6 +539,7 @@ const ManualPixelCalibrationTab = () => {
                 onImageLoad={(w, h) => setImageDims({ width: w, height: h })}
                 overlayContent={renderOverlay()}
                 enableStageMovement={false}
+                enableZoomPan={false}
               />
             </Box>
 
@@ -517,6 +560,7 @@ const ManualPixelCalibrationTab = () => {
               {subsamplingFactor > 1 && <Chip label={`Subsampling ×${subsamplingFactor}`} variant="outlined" size="small" />}
             </Box>
           </Paper>
+          </Box>
         </Grid>
 
         {/* ---- Right: Controls ---- */}
@@ -547,7 +591,7 @@ const ManualPixelCalibrationTab = () => {
             <FormControl fullWidth sx={{ mb: 1 }}>
               <InputLabel>Objective</InputLabel>
               <Select value={objectiveId} label="Objective" onChange={(e) => setObjectiveId(e.target.value)}>
-                <MenuItem value="">Current</MenuItem>
+                <MenuItem value="current">Current</MenuItem>
                 <MenuItem value="0">Objective 0</MenuItem>
                 <MenuItem value="1">Objective 1</MenuItem>
               </Select>
@@ -593,11 +637,15 @@ const ManualPixelCalibrationTab = () => {
                 const px = parseFloat(editPixelSizeUm);
                 if (!isFinite(px) || px <= 0) { setError('Pixel size must be positive'); return; }
                 setEditLoading(true); setError('');
+                // Preserve the calibration-owned flip: a pixel-size tweak must not
+                // silently un-flip the image (that is the #11 reset annoyance).
+                const sgnX = Number(existingCalib?.metrics?.scale_x_um_per_pixel ?? 1) < 0 ? -1 : 1;
+                const sgnY = Number(existingCalib?.metrics?.scale_y_um_per_pixel ?? 1) < 0 ? -1 : 1;
                 try {
                   const resp = await apiPixelCalibrationControllerSetCalibrationData({
                     detectorName, objectiveId: objectiveId || undefined,
-                    affineMatrix: [[px, 0.0, 0.0], [0.0, px, 0.0]],
-                    metrics: { scale_x_um_per_pixel: px, scale_y_um_per_pixel: px, rotation_deg: 0.0, method: 'manual_edit', quality: 'manual' },
+                    affineMatrix: [[px * sgnX, 0.0, 0.0], [0.0, px * sgnY, 0.0]],
+                    metrics: { scale_x_um_per_pixel: px * sgnX, scale_y_um_per_pixel: px * sgnY, rotation_deg: 0.0, method: 'manual_edit', quality: 'manual' },
                   });
                   if (resp?.success) {
                     setStatus(resp.message || 'Calibration saved');
@@ -610,7 +658,16 @@ const ManualPixelCalibrationTab = () => {
 
           {/* Stepper workflow */}
           <Paper sx={{ p: 2, mb: 2 }}>
-            <Typography variant="h6" gutterBottom>Four-Point Calibration Workflow</Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+              <Typography variant="h6" gutterBottom>Four-Point Calibration Workflow</Typography>
+              <Tooltip title="After you mark the first point of an axis, the stage moves automatically by the configured distance so you can immediately mark the same feature again. Turn off to move the stage manually.">
+                <FormControlLabel
+                  control={<Switch size="small" checked={autoMove} onChange={(e) => setAutoMove(e.target.checked)} />}
+                  label="Auto-move stage"
+                  sx={{ mr: 0 }}
+                />
+              </Tooltip>
+            </Box>
 
             <Stepper activeStep={activeStep} orientation="vertical">
               {/* Step 0 – backlash */}
@@ -630,7 +687,7 @@ const ManualPixelCalibrationTab = () => {
                       onClick={handleBacklashMove} disabled={loading}>
                       {loading ? 'Moving…' : 'Move'}
                     </Button>
-                    <Button variant="outlined" size="small" onClick={() => setActiveStep(1)}>Skip</Button>
+                    <Button variant="outlined" size="small" onClick={handleSkipBacklashX}>Skip</Button>
                   </Box>
                 </StepContent>
               </Step>

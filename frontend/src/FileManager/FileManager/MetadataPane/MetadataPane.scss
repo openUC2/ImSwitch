@@ -135,5 +135,61 @@
       color: #ddd;
       word-break: break-word;
     }
+
+    &.compact {
+      font-size: 0.95em;
+
+      td {
+        padding: 3px 4px;
+      }
+    }
+  }
+
+  .description-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .collapsible-section {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    overflow: hidden;
+
+    .collapsible-header {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      width: 100%;
+      padding: 5px 8px;
+      background: rgba(255, 255, 255, 0.04);
+      border: none;
+      color: #ccc;
+      font-size: 0.82em;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: left;
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.08);
+      }
+    }
+
+    .collapsible-body {
+      padding: 4px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .collapsible-section {
+      border-color: rgba(255, 255, 255, 0.05);
+
+      .collapsible-header {
+        font-weight: 500;
+        color: #aaa;
+        padding: 4px 6px;
+      }
+    }
   }
 }

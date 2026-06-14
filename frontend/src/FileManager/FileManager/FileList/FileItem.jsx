@@ -55,6 +55,8 @@ const FileItem = ({
     if (file.isDirectory) {
       setCurrentPath(file.path);
       setSelectedFiles([]);
+    } else if (file.isImage) {
+      triggerAction.show("imagePreview");
     } else {
       onFileOpen(file);
       enableFilePreview && triggerAction.show("previewFile");

@@ -4,7 +4,7 @@ import { getFileManagerBaseUrl } from "../../api/api";
 import { getDataSize } from "../../utils/getDataSize";
 import { formatDate } from "../../utils/formatDate";
 import { FaRegFile, FaRegFolderOpen } from "react-icons/fa6";
-import { MdClose } from "react-icons/md";
+import { MdClose, MdExpandMore, MdChevronRight } from "react-icons/md";
 import "./MetadataPane.scss";
 
 const LABEL_MAP = {
@@ -52,6 +52,122 @@ const formatStagePosition = (pos) => {
     .join(", ");
 };
 
+const formatSimpleValue = (v) => {
+  if (v === true) return "Yes";
+  if (v === false) return "No";
+  if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(4);
+  if (Array.isArray(v)) return v.join(", ");
+  return String(v);
+};
+
+const CollapsibleSection = ({ title, children, defaultOpen = false }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="collapsible-section">
+      <button
+        className="collapsible-header"
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? <MdExpandMore size={16} /> : <MdChevronRight size={16} />}
+        <span>{title}</span>
+      </button>
+      {open && <div className="collapsible-body">{children}</div>}
+    </div>
+  );
+};
+
+const groupAcquisitionAttributes = (attrs) => {
+  const groups = {};
+  for (const [key, value] of Object.entries(attrs)) {
+    const parts = key.split(":");
+    const groupKey = parts.length >= 2 ? `${parts[0]}:${parts[1]}` : parts[0];
+    const label = parts.length >= 3 ? parts.slice(2).join(":") : key;
+    if (!groups[groupKey]) groups[groupKey] = [];
+    groups[groupKey].push({ label, value });
+  }
+  return groups;
+};
+
+const DescriptionBlock = ({ value }) => {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return <span className="metadata-value">{value}</span>;
+    }
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return <span className="metadata-value">{String(parsed)}</span>;
+  }
+
+  const topLevel = {};
+  const nested = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+      nested[k] = v;
+    } else {
+      topLevel[k] = v;
+    }
+  }
+
+  return (
+    <div className="description-block">
+      {Object.keys(topLevel).length > 0 && (
+        <table className="metadata-table">
+          <tbody>
+            {Object.entries(topLevel).map(([k, v]) => (
+              <tr key={k}>
+                <td className="metadata-label">{k}</td>
+                <td className="metadata-value">{formatSimpleValue(v)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {Object.entries(nested).map(([sectionName, sectionData]) => {
+        if (sectionName === "AcquisitionAttributes") {
+          const groups = groupAcquisitionAttributes(sectionData);
+          return (
+            <CollapsibleSection key={sectionName} title={sectionName}>
+              {Object.entries(groups).map(([groupName, entries]) => (
+                <CollapsibleSection key={groupName} title={groupName}>
+                  <table className="metadata-table compact">
+                    <tbody>
+                      {entries.map(({ label, value: v }) => (
+                        <tr key={label}>
+                          <td className="metadata-label">{label}</td>
+                          <td className="metadata-value">
+                            {formatSimpleValue(v)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </CollapsibleSection>
+              ))}
+            </CollapsibleSection>
+          );
+        }
+        return (
+          <CollapsibleSection key={sectionName} title={sectionName}>
+            <table className="metadata-table compact">
+              <tbody>
+                {Object.entries(sectionData).map(([k, v]) => (
+                  <tr key={k}>
+                    <td className="metadata-label">{k}</td>
+                    <td className="metadata-value">{formatSimpleValue(v)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </CollapsibleSection>
+        );
+      })}
+    </div>
+  );
+};
+
 const formatValue = (key, value) => {
   if (value == null) return null;
   switch (key) {
@@ -69,6 +185,8 @@ const formatValue = (key, value) => {
       return Array.isArray(value) ? value.join(" × ") : String(value);
     case "channels":
       return Array.isArray(value) ? value.join(", ") : String(value);
+    case "description":
+      return "___DESCRIPTION___";
     default:
       return String(value);
   }
@@ -177,20 +295,27 @@ const MetadataPane = ({ onClose }) => {
         {loading && <div className="metadata-loading">Loading metadata...</div>}
 
         {metadata && displayKeys.length > 0 && (
-          <table className="metadata-table">
-            <tbody>
-              {displayKeys.map((key) => {
-                const formatted = formatValue(key, metadata[key]);
-                if (formatted == null) return null;
-                return (
-                  <tr key={key}>
-                    <td className="metadata-label">{LABEL_MAP[key]}</td>
-                    <td className="metadata-value">{formatted}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <>
+            <table className="metadata-table">
+              <tbody>
+                {displayKeys
+                  .filter((k) => k !== "description")
+                  .map((key) => {
+                    const formatted = formatValue(key, metadata[key]);
+                    if (formatted == null) return null;
+                    return (
+                      <tr key={key}>
+                        <td className="metadata-label">{LABEL_MAP[key]}</td>
+                        <td className="metadata-value">{formatted}</td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+            {metadata.description && (
+              <DescriptionBlock value={metadata.description} />
+            )}
+          </>
         )}
 
         {metadata && !loading && displayKeys.length === 0 && (

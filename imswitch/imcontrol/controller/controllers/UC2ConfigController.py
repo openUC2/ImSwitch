@@ -109,19 +109,19 @@ class UC2ConfigController(ImConWidgetController):
         :return: Dictionary mapping CAN IDs to firmware filenames
         """
         return {
-            1: "UC2_canopen_master_release.bin",  # Master firmware (HAT v2, USB connected, use esptool)
-            10: "UC2_canopen_slave_motor_release.bin",  # Motor A
-            11: "UC2_canopen_slave_motor_release.bin",  # Motor X
-            12: "UC2_canopen_slave_motor_release.bin",  # Motor Y
-            13: "UC2_canopen_slave_motor_release.bin",  # Motor Z
-            14: "UC2_canopen_slave_motor_release.bin",  # Additional motor
-            15: "UC2_canopen_slave_motor_release.bin",  # Additional motor
-            20: "UC2_canopen_slave_laser_release.bin",  # Laser 0
-            21: "UC2_canopen_slave_laser_release.bin",  # Laser 1
-            22: "UC2_canopen_slave_laser_release.bin",  # Laser 2
-            30: "UC2_canopen_slave_led_release.bin",  # LED 0
-            31: "UC2_canopen_slave_led_release.bin",  # LED 1
-            40: "UC2_canopen_slave_galvo_release.bin",  # Galvo mirror
+            1: "esp32_UC2_canopen_master_release.bin",  # Master firmware (HAT v2, USB connected, use esptool)
+            10: "esp32_UC2_canopen_slave_motor_release_motA.bin",  # Motor A
+            11: "esp32_UC2_canopen_slave_motor_release_motX.bin",  # Motor X
+            12: "esp32_UC2_canopen_slave_motor_release_motY.bin",  # Motor Y
+            13: "esp32_UC2_canopen_slave_motor_release_motZ.bin",  # Motor Z
+            14: "esp32_UC2_canopen_slave_motor_release.bin",  # Additional motor
+            15: "esp32_UC2_canopen_slave_motor_release.bin",  # Additional motor
+            20: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 0
+            21: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 1
+            22: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 2
+            30: "esp32_UC2_canopen_slave_led_release.bin",  # LED 0
+            31: "esp32_UC2_canopen_slave_led_release.bin",  # LED 1
+            40: "esp32_UC2_canopen_slave_galvo_release.bin",  # Galvo mirror
         }
 
     def processSerialWriteMessage(self, message):

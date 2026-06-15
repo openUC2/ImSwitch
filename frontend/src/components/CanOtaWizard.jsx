@@ -223,8 +223,7 @@ const CanOtaWizard = ({ open, onClose }) => {
         dispatch(canOtaSlice.setError("Please select at least one device to update"));
         return;
       }
-      // Start the OTA update process
-      startOtaUpdate();
+      // OTA will be started manually via the "Start OTA" button on the progress step
     }
 
     dispatch(canOtaSlice.clearMessages());
@@ -234,14 +233,20 @@ const CanOtaWizard = ({ open, onClose }) => {
   const handleBack = () => {
     const currentStep = canOtaState.currentStep;
     const isCAN = canOtaState.otaMethod === "can_streaming";
-    
+
+    // Going back from the progress step: reset all update state so it can be restarted
+    if (currentStep === 5) {
+      dispatch(canOtaSlice.clearUpdateProgress());
+      dispatch(canOtaSlice.setIsUpdating(false));
+    }
+
     // For CAN streaming, skip WiFi setup when going back from Firmware Server
     if (isCAN && currentStep === 2) {
       dispatch(canOtaSlice.clearMessages());
       dispatch(canOtaSlice.setCurrentStep(0)); // Go back to method selection
       return;
     }
-    
+
     dispatch(canOtaSlice.clearMessages());
     dispatch(canOtaSlice.previousStep());
   };
@@ -1087,21 +1092,33 @@ const CanOtaWizard = ({ open, onClose }) => {
               {canOtaState.currentStep === 5 && canOtaState.isUpdating ? "Cancel Update" : "Cancel"}
             </Button>
             <Box sx={{ flex: "1 1 auto" }} />
-            {canOtaState.currentStep !== 5 && (
+            {/* Back: always visible except on the final step and while an update is running */}
+            {canOtaState.currentStep !== 5 || !canOtaState.isUpdating ? (
               <Button
                 onClick={handleBack}
+                disabled={canOtaState.currentStep === 0}
               >
                 Back
               </Button>
-            )}
-            {canOtaState.currentStep !== 5 && (
+            ) : null}
+
+            {/* Next / Start OTA */}
+            {canOtaState.currentStep !== 5 ? (
               <Button
                 variant="contained"
                 onClick={handleNext}
               >
-                {canOtaState.currentStep === steps.length - 2 ? "Start Update" : "Next"}
+                Next
               </Button>
-            )}
+            ) : !canOtaState.isUpdating ? (
+              <Button
+                variant="contained"
+                color="success"
+                onClick={startOtaUpdate}
+              >
+                Start OTA
+              </Button>
+            ) : null}
           </>
         )}
       </DialogActions>

@@ -971,77 +971,50 @@ class UC2ConfigController(ImConWidgetController):
         }
 
     @APIExport(runOnUIThread=False)
-    def listAvailableFirmware(self):
+    def listAvailableFirmware(self, can_ids: list = None):
         """
-        List all available firmware files from the configured server.
-        
-        Fetches the directory listing from <server_url>/latest/ and parses
-        available firmware files.
-        
-        :return: Dictionary with firmware files organized by device type
+        List firmware files from the configured server, mapped to CAN IDs.
+
+        Delegates to listAllFirmwareFiles() for the actual server fetch and then
+        maps the flat file list to the CAN-ID-keyed format expected by the CAN OTA
+        wizard.  Optionally filter to a subset of CAN IDs via *can_ids*.
+
+        :param can_ids: Optional list of integer CAN IDs to include. When None,
+                        all known CAN IDs are returned.
+        :return: {status, firmware_server, firmware_count,
+                  firmware: {can_id: {filename, url, can_id, size, mod_time}}}
         """
-        if not self._firmware_server_url:
-            return {
-                "status": "error",
-                "message": "Firmware server not set. Use setOTAFirmwareServer first."
-            }
+        # Reuse the working flat-list fetcher to avoid code duplication
+        flat = self.listAllFirmwareFiles()
+        if flat.get("status") != "success":
+            return flat  # Propagate error as-is
 
-        try:
-            # Fetch firmware list from server
-            list_url = f"{self._firmware_server_url}/"
-            self.__logger.debug(f"Fetching firmware list from {list_url}")
+        files_by_name = {f["filename"]: f for f in flat.get("files", [])}
 
-            response = requests.get(list_url, timeout=10, headers={"Accept": "application/json"})
-            response.raise_for_status()
+        # Build CAN-ID → expected firmware-filename mapping
+        can_id_to_firmware = self._get_can_id_firmware_mapping()
 
+        firmware_by_id = {}
+        for can_id, expected_filename in can_id_to_firmware.items():
+            # Optionally restrict to the requested CAN IDs
+            if can_ids is not None and can_id not in can_ids:
+                continue
+            if expected_filename in files_by_name:
+                f = files_by_name[expected_filename]
+                firmware_by_id[can_id] = {
+                    "filename": expected_filename,
+                    "url": f["url"],
+                    "can_id": can_id,
+                    "size": f.get("size", 0),
+                    "mod_time": f.get("mod_time", ""),
+                }
 
-            # Parse JSON response (same format as setOTAFirmwareServer)
-            firmware_data = response.json()
-
-            if not isinstance(firmware_data, list):
-                raise ValueError("Invalid response format from firmware server")
-
-            # Extract firmware file names from JSON response
-            firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
-            
-            self.__logger.debug(f"Available firmware files: {firmware_files}")
-
-            # Use centralized firmware mapping
-            can_id_to_firmware = self._get_can_id_firmware_mapping()
-            self.__logger.debug(f"CAN ID to firmware mapping: {can_id_to_firmware}")
-            # Organize by device ID using lookup table
-            firmware_by_id = {}
-            for can_id, expected_firmware in can_id_to_firmware.items():
-                # Check if expected firmware exists in available files
-                # print(expected_firmware)
-                if expected_firmware in firmware_files:
-                    firmware_url = f"{self._firmware_server_url}/{expected_firmware}"
-                    # print(firmware_url)
-                    # Find matching item in firmware_data to get size and mod_time
-                    firmware_info = next((item for item in firmware_data if item['name'] == expected_firmware), None)
-
-                    firmware_by_id[can_id] = {
-                        "filename": expected_firmware,
-                        "url": firmware_url,
-                        "can_id": can_id,
-                        "size": firmware_info.get('size', 0) if firmware_info else 0,
-                        "mod_time": firmware_info.get('mod_time', '') if firmware_info else ''
-                    }
-
-            return {
-                "status": "success",
-                "firmware_server": self._firmware_server_url,
-                "firmware_count": len(firmware_by_id),
-                "firmware": firmware_by_id
-            }
-
-        except requests.exceptions.RequestException as e:
-            self.__logger.error(f"Error fetching firmware list: {e}")
-            return {
-                "status": "error",
-                "message": f"Failed to fetch firmware list from server: {str(e)}",
-                "server_url": self._firmware_server_url
-            }
+        return {
+            "status": "success",
+            "firmware_server": self._firmware_server_url,
+            "firmware_count": len(firmware_by_id),
+            "firmware": firmware_by_id,
+        }
 
     @APIExport(runOnUIThread=False)
     def listAllFirmwareFiles(self):

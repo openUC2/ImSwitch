@@ -79,8 +79,8 @@ class ESP32StageManager(PositionerManager):
         # persisted back via PositionerController.setTransportPosition.
         self.transportPositions = {}
         self.transportPositions["A"] = positionerInfo.managerProperties.get('transportPositionA', 0)
-        self.transportPositions["X"] = positionerInfo.managerProperties.get('transportPositionX', 0)
-        self.transportPositions["Y"] = positionerInfo.managerProperties.get('transportPositionY', 0)
+        self.transportPositions["X"] = positionerInfo.managerProperties.get('transportPositionX', 65000)
+        self.transportPositions["Y"] = positionerInfo.managerProperties.get('transportPositionY', 40000)
         self.transportPositions["Z"] = positionerInfo.managerProperties.get('transportPositionZ', 0)
 
         # move z before homing? Sign encodes the safe (away-from-sample) direction.
@@ -894,7 +894,7 @@ class ESP32StageManager(PositionerManager):
         value = (self.transportPositions["X"], self.transportPositions["Y"], self.transportPositions["Z"])
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
         try:
-            self.move(value=self.transportPositions["A"], speed=speed, axis="A",
+            self.move(value=self.transportPositions["A"], speed=(speed,speed,speed), axis="A",
                       is_absolute=True, is_blocking=is_blocking)
         except Exception as e:
             self.__logger.error(f"Could not move A to transport position: {e}")

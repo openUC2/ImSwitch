@@ -661,7 +661,7 @@ const OverviewRegistrationWizard = () => {
         >
           {overviewStreamActive && liveStreamState.liveViewImage ? (
             <img
-              src={`data:image/jpeg;base64,${liveStreamState.liveViewImage}`}
+              src={liveStreamState.liveViewImage}
               alt="Overview Camera"
               style={{
                 display: "block",

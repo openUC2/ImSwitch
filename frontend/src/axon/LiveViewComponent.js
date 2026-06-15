@@ -61,22 +61,29 @@ const LiveViewComponent = ({
     }
   }, [liveStreamState.liveViewImage, dispatch]);
   const prevDimensionsRef = useRef({ width: 0, height: 0 }); // Track dimensions to avoid redundant callbacks
-  const histogramCounterRef = useRef(0); // Counter for throttling histogram computation
   // Monotonic counters that gate the JPEG-frame paint pipeline. Each
-  // arriving frame gets a unique ``decodeIdRef`` value; the bitmap's
-  // ``paint()`` then only writes the canvas if no newer frame has
-  // already painted (``lastPaintedIdRef``). Replaces the older "cancel
-  // every in-flight decode on next arrival" behaviour, which made
-  // every paint lose to its successor on platforms where decode is
-  // slower than the inter-frame interval (Chrome on Windows without
-  // GPU acceleration) — symptom: solid black canvas while the backend
-  // is happily emitting frames.
+  // arriving frame gets a unique ``decodeIdRef`` value; that frame's
+  // async <img> onload only writes the canvas if no newer frame has
+  // already painted (``lastPaintedIdRef``). This keeps a slow decode
+  // from painting over a fresher frame, without cancelling decodes
+  // (cancel-on-next-frame starved every paint on slow platforms and
+  // showed a solid black canvas).
   const decodeIdRef = useRef(0);
   const lastPaintedIdRef = useRef(0);
+  // Cache of the most recently decoded frame (an HTMLImageElement).
+  // Resize / intensity-window changes re-render FROM this cache instead
+  // of decoding the base64 frame again — one decode per frame, not
+  // three.
+  const lastImageRef = useRef(null);
   // Track mount state so async callbacks don't poke setState on an
   // unmounted component.
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
+  // Render diagnostics (disable with window.__IMSWITCH_STREAM_DEBUG__ =
+  // false). Logs average JPEG decode + canvas-paint time every ~2 s as
+  // "[STREAM render]". If recv/s (WebSocketHandler) is high but the view
+  // is still laggy, this line shows whether decode or paint is the cost.
+  const renderDbgRef = useRef({ n: 0, t0: 0, decodeMs: 0, paintMs: 0 });
   const [imageLoaded, setImageLoaded] = useState(false);
   const [containerSize, setContainerSize] = useState({
     width: 800,
@@ -84,54 +91,13 @@ const LiveViewComponent = ({
   });
   const [canvasStyle, setCanvasStyle] = useState({});
 
-  // Compute histogram from canvas (for JPEG streams)
-  const computeHistogramFromCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !liveStreamState.showHistogram) return;
-
-    // Throttle: only compute every 10th frame
-    histogramCounterRef.current++;
-    if (histogramCounterRef.current % 10 !== 0) return;
-
-    try {
-      const ctx = canvas.getContext("2d");
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const data = imageData.data;
-
-      const binCount = 256; // 8-bit histogram for JPEG
-      const histogram = new Array(binCount).fill(0);
-      const histogramX = new Array(binCount);
-
-      // Initialize x-axis values
-      for (let i = 0; i < binCount; i++) {
-        histogramX[i] = i;
-      }
-
-      // Count luminance values (RGB → Grayscale)
-      for (let i = 0; i < data.length; i += 4) {
-        const r = data[i];
-        const g = data[i + 1];
-        const b = data[i + 2];
-        const lum = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-        histogram[lum]++;
-      }
-
-      console.log("JPEG Histogram computed:", {
-        bins: binCount,
-        totalPixels: canvas.width * canvas.height,
-      });
-
-      // Update Redux
-      dispatch(
-        liveViewSlice.setHistogramData({
-          x: histogramX,
-          y: histogram,
-        }),
-      );
-    } catch (error) {
-      console.warn("JPEG histogram computation failed:", error);
-    }
-  }, [dispatch, liveStreamState.showHistogram]);
+  // JPEG histogram from the canvas is disabled: getImageData + a
+  // full-image luminance walk per frame was a meaningful chunk of the
+  // per-frame budget, and the live histogram isn't worth that cost on
+  // the streaming hot path. Kept as a no-op so call sites stay simple;
+  // re-enable behind a throttle + an explicit "show histogram" gate if
+  // it's ever needed again.
+  const computeHistogramFromCanvas = useCallback(() => {}, []);
 
   // Optimized intensity windowing - proper scientific image processing
   const applyIntensityWindowing = useCallback(
@@ -144,6 +110,18 @@ const LiveViewComponent = ({
 
       const ctx = canvas.getContext("2d");
       ctx.drawImage(image, 0, 0);
+
+      // Fast path: an identity window (the JPEG default, 0..255) maps
+      // every pixel to itself. The per-pixel loop below would scan the
+      // whole image — millions of array ops — to reproduce a
+      // bit-identical result. For a live JPEG stream that ran several
+      // times PER FRAME and was the single biggest cause of jank.
+      // Skip it whenever the window is the full 8-bit range; only pay
+      // for the pixel walk once the user actually narrows the slider.
+      if (minVal <= 0 && maxVal >= 255) {
+        computeHistogramFromCanvas();
+        return;
+      }
 
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const data = imageData.data;
@@ -242,14 +220,6 @@ const LiveViewComponent = ({
     [containerSize],
   );
 
-  // Legacy pixel-perfect intensity scaling (for compatibility)
-  const applyPixelIntensityScaling = useCallback(
-    (image, minVal, maxVal) => {
-      // This method is now deprecated - use applyIntensityWindowing instead
-      return applyIntensityWindowing(image, minVal, maxVal);
-    },
-    [applyIntensityWindowing],
-  );
   // Apply responsive sizing to the image
   const applyResponsiveSizing = useCallback(
     (image) => {
@@ -297,150 +267,129 @@ const LiveViewComponent = ({
     ],
   );
 
-  // Load and process image when it changes.
-  // Uses createImageBitmap when available (Chrome/Firefox) so JPEG
-  // decode runs off the main thread. Falls back to <img> for older
-  // browsers and when createImageBitmap throws on the blob.
+  // Decode each incoming JPEG frame EXACTLY ONCE, cache the decoded
+  // <img>, and render it.
   //
-  // Why we do NOT cancel in-flight decodes on the next frame: on
-  // platforms where the decode is slower than the inter-frame
-  // interval (Windows Chrome without GPU acceleration tends to take
-  // ~80–150 ms per createImageBitmap for a 3.75 MP JPEG, well over
-  // the 80 ms throttle), a cancel-on-next-frame policy means every
-  // single decode gets cancelled by the next arrival and nothing
-  // ever paints — the user sees a black canvas. Instead we let every
-  // decode finish; ordering is preserved by a monotonic counter, so
-  // the latest finished decode wins and earlier ones only paint if
-  // no newer frame has painted yet. Result: the canvas always shows
-  // a recent frame, never goes black, and the latency is bounded by
-  // the slowest decode rather than runaway-cancelled.
+  // The previous implementation decoded the same base64 frame up to
+  // three times per frame (this effect + a resize effect + an
+  // intensity effect, all keyed on liveViewImage) and ran a full-image
+  // per-pixel windowing pass each time. That amplification — plus the
+  // base64 round-trip the streaming-latency merge added — is what made
+  // the live view janky even on Mac. Now resize/intensity reuse the
+  // cached image (see the two effects below) so the only per-frame
+  // cost is one <img> decode + one draw.
+  //
+  // We decode with a plain <img> + data URL (the browser does the
+  // base64 + JPEG decode natively and asynchronously). A monotonic
+  // id guards against a slow decode painting over a newer frame that
+  // already landed.
   useEffect(() => {
     const src = liveStreamState.liveViewImage;
     if (!src) {
+      lastImageRef.current = null;
       setImageLoaded(false);
       setCanvasStyle({});
       return;
     }
 
     const myId = ++decodeIdRef.current;
-
-    const paint = (drawable) => {
+    const dbgOn =
+      typeof window !== 'undefined' && window.__IMSWITCH_STREAM_DEBUG__ !== false;
+    const tStart = dbgOn ? performance.now() : 0;
+    const img = new Image();
+    img.onload = () => {
       if (!mountedRef.current) return;
-      // Skip only if a newer frame has already painted — otherwise
-      // we'd overwrite fresh pixels with stale ones.
+      // A newer frame already painted — don't overwrite it with this
+      // older one that happened to finish decoding later.
       if (myId < lastPaintedIdRef.current) return;
+      lastPaintedIdRef.current = myId;
+      lastImageRef.current = img;
+      const tDecoded = dbgOn ? performance.now() : 0;
       try {
-        const canvas = canvasRef.current;
-        if (canvas) {
-          canvas.width = drawable.width;
-          canvas.height = drawable.height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(drawable, 0, 0);
-        }
-        // applyResponsiveSizing accepts anything drawImage accepts.
-        applyResponsiveSizing(drawable);
-        lastPaintedIdRef.current = myId;
+        // applyResponsiveSizing draws the image, applies the intensity
+        // window (identity-fast-path for the JPEG default), sizes the
+        // canvas, and updates the histogram.
+        applyResponsiveSizing(img);
         setImageLoaded(true);
       } catch (error) {
         console.error('Error processing image:', error);
         setImageLoaded(false);
         setCanvasStyle({});
       }
+      if (dbgOn) {
+        const d = renderDbgRef.current;
+        const now = performance.now();
+        d.decodeMs += tDecoded - tStart;
+        d.paintMs += now - tDecoded;
+        d.n++;
+        if (d.t0 === 0) d.t0 = tStart;
+        if (now - d.t0 >= 2000) {
+          console.log(
+            `[STREAM render] decode=${(d.decodeMs / d.n).toFixed(1)}ms ` +
+              `paint=${(d.paintMs / d.n).toFixed(1)}ms ` +
+              `painted=${((d.n / (now - d.t0)) * 1000).toFixed(1)}/s`,
+          );
+          d.n = 0;
+          d.t0 = now;
+          d.decodeMs = 0;
+          d.paintMs = 0;
+        }
+      }
     };
-
-    const paintViaImg = () => {
-      const img = new Image();
-      img.onload = () => paint(img);
-      img.onerror = () => {
-        if (!mountedRef.current) return;
-        if (myId < lastPaintedIdRef.current) return;
-        setImageLoaded(false);
-        setCanvasStyle({});
-      };
-      img.src = `data:image/jpeg;base64,${src}`;
-    };
-
-    if (typeof createImageBitmap === 'undefined') {
-      paintViaImg();
-      return;
-    }
-
-    // Fast path: off-thread JPEG decode via createImageBitmap.
-    try {
-      const binaryStr = atob(src);
-      const bytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-      const blob = new Blob([bytes], { type: 'image/jpeg' });
-      createImageBitmap(blob)
-        .then((bitmap) => {
-          try { paint(bitmap); } finally { bitmap.close(); }
-        })
-        .catch((err) => {
-          console.error('createImageBitmap failed, falling back to <img>:', err);
-          paintViaImg();
-        });
-    } catch (atobError) {
-      console.error('atob failed:', atobError);
+    img.onerror = () => {
+      if (!mountedRef.current || myId < lastPaintedIdRef.current) return;
+      console.error('Error loading image');
       setImageLoaded(false);
       setCanvasStyle({});
-    }
+    };
+    // liveViewImage is a ready-to-use URL (blob: for the live socket
+    // stream, or data: from a legacy backend). No string-building.
+    img.src = src;
   }, [liveStreamState.liveViewImage, applyResponsiveSizing]);
 
-  // Reapply sizing when container size changes
+  // Re-apply sizing when the container resizes — reuse the cached
+  // decoded frame, do NOT re-decode. (containerSize does not change
+  // per frame, so this never runs on the streaming hot path.)
   useEffect(() => {
-    if (imageLoaded && liveStreamState.liveViewImage) {
-      const img = new Image();
-      img.onload = () => applyResponsiveSizing(img);
-      img.src = `data:image/jpeg;base64,${liveStreamState.liveViewImage}`;
+    if (lastImageRef.current) {
+      applyResponsiveSizing(lastImageRef.current);
     }
-  }, [
-    containerSize,
-    imageLoaded,
-    liveStreamState.liveViewImage,
-    applyResponsiveSizing,
-  ]);
+  }, [containerSize, applyResponsiveSizing]);
 
-  // Update intensity windowing when min/max values change
+  // Re-apply intensity windowing when the user moves the min/max
+  // slider — reuse the cached decoded frame, do NOT re-decode.
+  // (min/max do not change per frame.)
   useEffect(() => {
-    if (imageLoaded && liveStreamState.liveViewImage) {
-      // Re-apply intensity windowing when intensity values change
-      const img = new Image();
-      img.onload = () => {
-        applyIntensityWindowing(
-          img,
-          liveStreamState.minVal,
-          liveStreamState.maxVal,
-        );
-      };
-      img.src = `data:image/jpeg;base64,${liveStreamState.liveViewImage}`;
+    if (lastImageRef.current) {
+      applyIntensityWindowing(
+        lastImageRef.current,
+        liveStreamState.minVal,
+        liveStreamState.maxVal,
+      );
     }
   }, [
     liveStreamState.minVal,
     liveStreamState.maxVal,
-    imageLoaded,
-    liveStreamState.liveViewImage,
     applyIntensityWindowing,
   ]);
 
-  // Handle container resize to maintain aspect ratio
+  // Handle container resize to maintain aspect ratio. Reuses the
+  // cached decoded frame — no per-frame re-decode, and the observer
+  // is created once (deps no longer include liveViewImage, so it
+  // isn't torn down and rebuilt on every frame).
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const resizeObserver = new ResizeObserver(() => {
-      // Reprocess the image when container size changes
-      if (liveStreamState.liveViewImage && imageLoaded) {
-        const img = new Image();
-        img.onload = () => {
-          applyResponsiveSizing(img);
-        };
-        img.src = `data:image/jpeg;base64,${liveStreamState.liveViewImage}`;
+      if (lastImageRef.current) {
+        applyResponsiveSizing(lastImageRef.current);
       }
     });
 
     resizeObserver.observe(container);
     return () => resizeObserver.disconnect();
-  }, [liveStreamState.liveViewImage, imageLoaded, applyResponsiveSizing]);
+  }, [applyResponsiveSizing]);
 
   // Handle intensity range change
   const handleRangeChange = (event, newValue) => {

@@ -33,6 +33,7 @@ import numpy as np
 from socketio import AsyncServer, ASGIApp
 import imswitch.imcommon.framework.base as abstract
 import time
+import os
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
 import msgpack  # MessagePack for efficient binary serialization
@@ -73,6 +74,99 @@ _client_frame_lock = threading.Lock()
 
 # Event loop reference - will be set by ImSwitchServer
 _shared_event_loop = None
+
+# ---------------------------------------------------------------------------
+# Streaming diagnostics
+# ---------------------------------------------------------------------------
+# Toggle with the env var IMSWITCH_STREAM_DEBUG=0 to silence. Default ON so
+# the autofocus-stall investigation is visible without code changes. All
+# logging is throttled to one line every ~2 s; the per-frame cost is a few
+# integer increments under a lock.
+#
+# The output answers "where does the JPEG-over-socket stream get stuck?":
+#   emit/s   — frames the server actually handed to socket.io
+#   drop/s   — frames dropped because NO client was within MAX_FRAME_LAG
+#              (i.e. the client hasn't acked recently → backpressure)
+#   ack/s    — frame_ack events received from clients
+#   loop_lag — worst asyncio event-loop wake-up overrun in the window.
+#              A big number here == the shared event loop is starved
+#              (GIL contention / a blocking call on the loop), which is
+#              the prime suspect during an autofocus sweep.
+#   per-client (sent,ack,lag) — backpressure window per browser tab.
+_STREAM_DEBUG = os.environ.get("IMSWITCH_STREAM_DEBUG", "1") not in (
+    "0", "false", "False", "no", "",
+)
+_stream_dbg = {
+    "calls": 0,      # _handle_stream_frame invocations
+    "emitted": 0,    # frames emitted (summed over ready clients)
+    "dropped": 0,    # frames dropped (no ready client)
+    "acks": 0,       # frame_ack events received
+    "loop_lag_ms": 0.0,  # worst event-loop wake-up overrun this window
+    "t_report": time.time(),
+}
+_stream_dbg_lock = threading.Lock()
+
+
+def _stream_dbg_report():
+    """Emit a throttled (~2 s) one-line streaming-health summary."""
+    if not _STREAM_DEBUG:
+        return
+    now = time.time()
+    with _stream_dbg_lock:
+        dt = now - _stream_dbg["t_report"]
+        if dt < 2.0:
+            return
+        calls = _stream_dbg["calls"]
+        emitted = _stream_dbg["emitted"]
+        dropped = _stream_dbg["dropped"]
+        acks = _stream_dbg["acks"]
+        loop_lag = _stream_dbg["loop_lag_ms"]
+        _stream_dbg.update(
+            calls=0, emitted=0, dropped=0, acks=0, loop_lag_ms=0.0,
+            t_report=now,
+        )
+    with _client_frame_lock:
+        clients = []
+        for sid, sent in _client_sent_frame_id.items():
+            if sent is None:
+                continue
+            ack = _client_ack_frame_id.get(sid)
+            lag = ((sent - ack) % 256) if ack is not None else None
+            clients.append(f"{str(sid)[:6]}(sent={sent},ack={ack},lag={lag})")
+    print(
+        f"[STREAM] emit={emitted/dt:5.1f}/s drop={dropped/dt:5.1f}/s "
+        f"ack={acks/dt:5.1f}/s calls={calls/dt:5.1f}/s "
+        f"loop_lag_max={loop_lag:4.0f}ms | "
+        f"{'  '.join(clients) if clients else 'no-clients'}",
+        flush=True,
+    )
+
+
+async def _loop_heartbeat():
+    """Measure event-loop starvation: how late does a fixed-interval tick fire?
+
+    If the shared asyncio loop (which carries socket.io emits AND acks) is
+    blocked — by GIL contention with the autofocus thread, or by a
+    long-running coroutine — this sleep overruns and ``loop_lag_ms`` spikes.
+    That single number distinguishes "the loop is starved" (backend
+    transport problem) from "the client is slow to ack" (drops high but
+    loop_lag low).
+    """
+    interval = 0.25
+    while True:
+        t0 = time.monotonic()
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            return
+        lag_ms = (time.monotonic() - t0 - interval) * 1000.0
+        if lag_ms > 1.0:
+            with _stream_dbg_lock:
+                if lag_ms > _stream_dbg["loop_lag_ms"]:
+                    _stream_dbg["loop_lag_ms"] = lag_ms
+            if lag_ms > 250.0:
+                print(f"[STREAM] ⚠ event loop stalled {lag_ms:.0f}ms "
+                      f"(asyncio tick overran — loop starved)", flush=True)
 
 
 class SignalInterface(abstract.SignalInterface):
@@ -147,6 +241,9 @@ class SignalInstance(psygnal.SignalInstance):
         UNIFIED HANDLING: Both binary and JPEG frames use the same 'frame' event
         with MessagePack-encoded metadata for efficiency and consistency.
         """
+        if _STREAM_DEBUG:
+            with _stream_dbg_lock:
+                _stream_dbg["calls"] += 1
         try:
             msg_type = message.get('type')
             event = message.get('event', 'frame')
@@ -160,30 +257,25 @@ class SignalInstance(psygnal.SignalInstance):
                 """
                 FRAME_ID_MODULO = 256  # Small value to test rollover frequently
                 # MAX_FRAME_LAG — how many frames may be "in flight"
-                # (sent but not yet acked). Trade-off:
+                # (sent but not yet acked).
                 #
-                #   lag=1: lowest latency. Server waits for ACK(N)
-                #          before sending N+1. On a slow client the
-                #          effective FPS drops to 1/RTT. On a fast
-                #          client (e.g. Mac/Linux with ~5 ms RTT) the
-                #          throttle dominates anyway, so there's no
-                #          throughput cost.
-                #   lag>1: higher FPS on slow clients, at the cost of
-                #          stale frames in the pipeline. With lag=3
-                #          you can be looking at a frame that's
-                #          ~3× throttle behind real time, which is
-                #          bad for live microscopy where the operator
-                #          uses the preview to drive the stage.
+                #   lag=1: lowest latency, but ANY jitter in the ACK
+                #          round-trip stalls the stream. During an
+                #          autofocus sweep the shared event loop is
+                #          contended, the round-trip spikes, and the
+                #          stream collapsed to ~1-2 fps.
+                #   lag=3: tolerant of jitter but lets up to ~3 frames
+                #          of backlog build → perceptible latency.
                 #
-                # We briefly ran lag=3 to recover Windows FPS, but
-                # the added latency was perceptible on all platforms.
-                # Back to lag=1: prefer low-latency over throughput.
-                # If Windows JPEG-over-WS is still slow after the
-                # WindowsSelectorEventLoopPolicy / ``ws="websockets"``
-                # fixes in ImSwitchServer.run, prefer the MJPEG
-                # transport (no socket.io, no ack loop) over raising
-                # this number.
-                MAX_FRAME_LAG = 1
+                # lag=2 is the balance: it absorbs one round-trip of
+                # event-loop jitter (so autofocus no longer hard-stalls)
+                # while keeping at most ~1 frame of backlog. This is
+                # only safe because the client now ACKs on RECEIPT (not
+                # after render) and the frame handler is cheap (Blob
+                # object-URL, no base64) — see WebSocketHandler. If a
+                # client truly can't keep up, the bound still drops
+                # frames rather than buffering without limit.
+                MAX_FRAME_LAG = 2
 
                 next_id = {}
                 for sid, sent_id in last_sent.items():
@@ -211,7 +303,14 @@ class SignalInstance(psygnal.SignalInstance):
                 ready_clients = get_ready_clients(_client_ack_frame_id, _client_sent_frame_id)
 
                 if not ready_clients:
-                    # print("No clients ready for new frame, dropping frame to avoid buildup")
+                    # No client within MAX_FRAME_LAG → backpressure drop.
+                    # High drop/s with low loop_lag == client not acking
+                    # (busy / not receiving). High drop/s WITH high
+                    # loop_lag == the loop can't deliver/collect acks.
+                    if _STREAM_DEBUG:
+                        with _stream_dbg_lock:
+                            _stream_dbg["dropped"] += 1
+                    _stream_dbg_report()
                     return
 
                 # Thread-safe emission using the shared event loop
@@ -270,6 +369,10 @@ class SignalInstance(psygnal.SignalInstance):
                             _shared_event_loop
                         )
 
+                if _STREAM_DEBUG:
+                    with _stream_dbg_lock:
+                        _stream_dbg["emitted"] += len(ready_clients)
+            _stream_dbg_report()
 
         except Exception as e:
             print(f"Error handling stream frame: {e}")
@@ -494,6 +597,9 @@ async def disconnect(sid):
 @sio.event
 async def frame_ack(sid, data):
     """Client explicitly acknowledges frame processing complete"""
+    if _STREAM_DEBUG:
+        with _stream_dbg_lock:
+            _stream_dbg["acks"] += 1
     with _client_frame_lock:
         _client_ack_frame_id[sid] = data.get('frame_id', None)  # Unified field name
         # print(f"Client {sid} acknowledged frame", data)
@@ -505,6 +611,14 @@ def set_shared_event_loop(loop):
     global _shared_event_loop
     _shared_event_loop = loop
     print(f"Shared event loop set: {loop}")
+    # Start the event-loop starvation heartbeat (see _loop_heartbeat).
+    # Scheduled thread-safely; it begins ticking once the loop runs.
+    if _STREAM_DEBUG:
+        try:
+            asyncio.run_coroutine_threadsafe(_loop_heartbeat(), loop)
+            print("[STREAM] diagnostics ON (set IMSWITCH_STREAM_DEBUG=0 to disable)")
+        except Exception as e:
+            print(f"[STREAM] could not start heartbeat: {e}")
 
 
 # Function to get the socket app for mounting on FastAPI

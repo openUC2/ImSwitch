@@ -874,7 +874,9 @@ class ESP32StageManager(PositionerManager):
                 
                 # Step 6: Moving to a save position (e.g. transport position) after homing XY to avoid collisions during Z restore
                 self._emitHomingState(phase="moving_to_safe_xy", message="Moving to safe XY position")
-                self.moveToTransportPosition(speed=self.homeSpeedY, is_blocking=True)
+                value = (self.transportPositions["X"], self.transportPositions["Y"], self.transportPositions["Z"])
+                self._motor.move_xyz(value, self.homeSpeedX, is_absolute=True, is_blocking=True)
+
                 if aborted():
                     return
 
@@ -913,8 +915,13 @@ class ESP32StageManager(PositionerManager):
         except Exception as e:
             self.__logger.error(f"Could not register homing callback: {e}")
 
-    def moveToTransportPosition(self, speed=10000, is_blocking=True):
+    def moveToTransportPosition(self, speed=10000, is_blocking=True, override_endstop_z=True):
         """Move A/X/Y/Z to the stored transportation (locking) position."""
+        if override_endstop_z:
+            self.__logger.warning("Overriding Z endstops to move to transport position.")
+            self.hardLimitsEnabledZ = False
+            self._motor.set_hard_limits(axis="Z", enabled=False)
+
         value = (self.transportPositions["X"], self.transportPositions["Y"], self.transportPositions["Z"])
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
         try:

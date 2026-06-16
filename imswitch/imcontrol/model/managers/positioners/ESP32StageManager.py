@@ -856,7 +856,7 @@ class ESP32StageManager(PositionerManager):
                 
                 # Step 6: Moving to a save position (e.g. transport position) after homing XY to avoid collisions during Z restore
                 self._emitHomingState(phase="moving_to_safe_xy", message="Moving to safe XY position")
-                self.moveToTransportPosition(speed=self.homeSpeedXY, is_blocking=True)
+                self.moveToTransportPosition(speed=self.homeSpeedY, is_blocking=True)
                 if aborted():
                     return
 

@@ -26,7 +26,7 @@ import MJPEGViewer from "./MJPEGViewer";
 import PositionControllerComponent from "./PositionControllerComponent";
 import HistogramOverlay from "../components/HistogramOverlay";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner";
-import { useSelector, useDispatch } from "react-redux";
+import { useSelector, useDispatch, shallowEqual } from "react-redux";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
@@ -50,10 +50,13 @@ const pulse = keyframes`
  * @param {function} onImageLoad - Callback when image dimensions change: (width, height)
  * @param {React.ReactNode} overlayContent - Optional overlay content to render on top of the viewer
  * @param {boolean} enableStageMovement - Enable default double-click stage movement behavior (default: true)
- * @param {boolean} enableZoomPan - Wrap the viewer in the zoom/pan shell (default: true).
- *   Set to false for precise single-click workflows (e.g. pixel calibration marking):
- *   the react-zoom-pan-pinch panning layer otherwise intercepts pointer events and
- *   swallows the click, so the viewer is rendered directly and clicks reach the canvas.
+ * @param {boolean} enableZoomPan - Wrap the viewer in the zoom/pan shell.
+ *   DEFAULT OFF: the react-zoom-pan-pinch TransformWrapper wraps the
+ *   live canvas and does layout/observer work as the canvas repaints,
+ *   which competes for the main thread during streaming (suspected
+ *   contributor to the frame-rate drop under load). It also swallows
+ *   single clicks. Pass enableZoomPan to opt back in where zoom is
+ *   actually wanted.
  */
 const LiveViewControlWrapper = ({
   useFastMode = true,
@@ -61,11 +64,28 @@ const LiveViewControlWrapper = ({
   onImageLoad,
   overlayContent,
   enableStageMovement = true,
-  enableZoomPan = true,
+  enableZoomPan = false,
 }) => {
   const dispatch = useDispatch();
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
-  const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
+  // Narrow subset selector (shallow-compared) so this wrapper — which
+  // hosts the heavy react-zoom-pan-pinch TransformWrapper — does NOT
+  // re-render when liveViewImage changes. It only depends on these few
+  // fields, none of which change at frame rate. Subscribing to the
+  // whole liveStreamState here re-rendered the zoom shell on every
+  // frame and was a major contributor to the main-thread stall.
+  const liveStreamState = useSelector(
+    (s) => ({
+      imageFormat: s.liveStreamState.imageFormat,
+      backendCapabilities: s.liveStreamState.backendCapabilities,
+      isLegacyBackend: s.liveStreamState.isLegacyBackend,
+      fps: s.liveStreamState.stats?.fps,
+      showHistogram: s.liveStreamState.showHistogram,
+      histogramX: s.liveStreamState.histogramX,
+      histogramY: s.liveStreamState.histogramY,
+    }),
+    shallowEqual,
+  );
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
   const transformFrameRef = useRef(null);
   const pendingTransformRef = useRef({
@@ -352,8 +372,8 @@ const LiveViewControlWrapper = ({
               />
             }
             label={
-              liveStreamState.stats?.fps > 0
-                ? `LIVE • ${liveStreamState.stats.fps.toFixed(1)} FPS`
+              liveStreamState.fps > 0
+                ? `LIVE • ${liveStreamState.fps.toFixed(1)} FPS`
                 : "LIVE"
             }
             size="small"

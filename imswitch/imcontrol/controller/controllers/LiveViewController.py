@@ -13,16 +13,6 @@ import numpy as np
 import threading
 import queue
 import time
-
-# Producer-side streaming diagnostics. Same toggle as noqt's
-# IMSWITCH_STREAM_DEBUG. When on, each StreamWorker logs a throttled
-# (~2 s) line with capture / broadcast / encode+emit timing and the
-# worst inter-frame gap — which reveals whether the *producer thread*
-# is being starved (e.g. by the autofocus thread holding the GIL, or by
-# a slow controller in the sigUpdateFrame broadcast fan-out).
-_STREAM_DEBUG = os.environ.get("IMSWITCH_STREAM_DEBUG", "1") not in (
-    "0", "false", "False", "no", "",
-)
 from pydantic import BaseModel
 
 from imswitch.imcommon.framework import Signal, Worker
@@ -239,23 +229,11 @@ class StreamWorker(Worker):
         self._logger.info(f"StreamWorker started with update period {self._updatePeriod}s")
         frameReadAttempts = 0
         last_detector_frame_number = -1
-        # Producer-side timing accumulators (see _STREAM_DEBUG).
-        _dbg = {"frames": 0, "cap": 0.0, "bcast": 0.0, "proc": 0.0,
-                "t0": time.time(), "prev": time.time(), "gap": 0.0}
         while self._running:
             try:
                 self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it
                 # Check if enough time has passed since last frame
                 if (time.time() - self._last_frame_time) >= self._updatePeriod:  # TODO: and  imswitch.__is_stream_ready_for_sending__
-                    # Capture and emit frame
-                    if _STREAM_DEBUG:
-                        _now = time.time()
-                        _gap = _now - _dbg["prev"]
-                        if _gap > _dbg["gap"]:
-                            _dbg["gap"] = _gap
-                        _dbg["prev"] = _now
-                        _t_cap = _now
-
                     # Get frame with actual detector frame number
                     result = self._detector.getLatestFrame(returnFrameNumber=True)
                     if isinstance(result, tuple) and len(result) == 2:
@@ -263,17 +241,12 @@ class StreamWorker(Worker):
                     else:
                         frame = result
                         detector_frame_number = None
-                    if _STREAM_DEBUG:
-                        _dbg["cap"] += time.time() - _t_cap
-                        _t_bcast = time.time()
 
                     # Broadcast frame to other controllers (HistogrammController, InLineHoloController, etc.)
                     # This is DISABLED by default for performance - enable via enableFrameBroadcast()
                     # Controllers that need frames should use getCachedFrame() or subscribe explicitly
                     if frame is not None and self._broadcast_frames:
                         self.sigUpdateFrame.emit(self._detector.name, frame, False, False, self._detector.pixelSizeUm, True) # (str, np.ndarray, bool, bool, float, bool)
-                    if _STREAM_DEBUG:
-                        _dbg["bcast"] += time.time() - _t_bcast
 
                     if (frame is None and last_detector_frame_number == detector_frame_number) and frameReadAttempts > 3:
                         self._logger.warning("Frame capture failed, stopping worker (Frame none or no new frame: {})".format(detector_frame_number==last_detector_frame_number))
@@ -284,25 +257,7 @@ class StreamWorker(Worker):
 
                     last_detector_frame_number = detector_frame_number
 
-                    if _STREAM_DEBUG:
-                        _t_proc = time.time()
                     frameResult = self._captureAndEmit(frame, detector_frame_number)
-                    if _STREAM_DEBUG:
-                        _dbg["proc"] += time.time() - _t_proc
-                        _dbg["frames"] += 1
-                        _elapsed = time.time() - _dbg["t0"]
-                        if _elapsed >= 2.0:
-                            n = max(1, _dbg["frames"])
-                            self._logger.info(
-                                f"[STREAM/{self._params.protocol}] "
-                                f"{_dbg['frames'] / _elapsed:.1f}fps  "
-                                f"cap={_dbg['cap'] / n * 1000:.1f}ms  "
-                                f"bcast={_dbg['bcast'] / n * 1000:.1f}ms  "
-                                f"enc+emit={_dbg['proc'] / n * 1000:.1f}ms  "
-                                f"max_gap={_dbg['gap'] * 1000:.0f}ms"
-                            )
-                            _dbg.update(frames=0, cap=0.0, bcast=0.0, proc=0.0,
-                                        t0=time.time(), gap=0.0)
                     self._last_frame_time = time.time()
 
                     # Only stop on explicit failure, not on None frames

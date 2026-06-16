@@ -4,6 +4,7 @@ import { Box, Typography } from "@mui/material";
 import * as liveViewSlice from "../state/slices/LiveStreamSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
+import { frameBus } from "../stream/frameBus.js";
 
 /**
  * LiveViewComponent - Unified image viewer with intensity scaling
@@ -40,26 +41,8 @@ const LiveViewComponent = ({
     lastTime: performance.now(),
   });
 
-  // Track FPS for JPEG stream (triggered on each new frame)
-  useEffect(() => {
-    if (!liveStreamState.liveViewImage) return;
-
-    const counter = fpsCounterRef.current;
-    counter.frames++;
-
-    const now = performance.now();
-    const elapsed = now - counter.lastTime;
-
-    // Update FPS every second
-    if (elapsed >= 1000) {
-      const fps = Math.round((counter.frames * 1000) / elapsed);
-      dispatch(liveViewSlice.setStats({ fps, bps: 0 })); // bps not available for JPEG
-
-      // Reset counters
-      counter.frames = 0;
-      counter.lastTime = now;
-    }
-  }, [liveStreamState.liveViewImage, dispatch]);
+  // FPS is now counted in the imperative paint path (paintFrameUrl)
+  // since the hot path no longer flows through Redux/liveViewImage.
   const prevDimensionsRef = useRef({ width: 0, height: 0 }); // Track dimensions to avoid redundant callbacks
   // Monotonic counters that gate the JPEG-frame paint pipeline. Each
   // arriving frame gets a unique ``decodeIdRef`` value; that frame's
@@ -79,11 +62,6 @@ const LiveViewComponent = ({
   // unmounted component.
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
-  // Render diagnostics (disable with window.__IMSWITCH_STREAM_DEBUG__ =
-  // false). Logs average JPEG decode + canvas-paint time every ~2 s as
-  // "[STREAM render]". If recv/s (WebSocketHandler) is high but the view
-  // is still laggy, this line shows whether decode or paint is the cost.
-  const renderDbgRef = useRef({ n: 0, t0: 0, decodeMs: 0, paintMs: 0 });
   const [imageLoaded, setImageLoaded] = useState(false);
   const [containerSize, setContainerSize] = useState({
     width: 800,
@@ -267,85 +245,79 @@ const LiveViewComponent = ({
     ],
   );
 
-  // Decode each incoming JPEG frame EXACTLY ONCE, cache the decoded
-  // <img>, and render it.
-  //
-  // The previous implementation decoded the same base64 frame up to
-  // three times per frame (this effect + a resize effect + an
-  // intensity effect, all keyed on liveViewImage) and ran a full-image
-  // per-pixel windowing pass each time. That amplification — plus the
-  // base64 round-trip the streaming-latency merge added — is what made
-  // the live view janky even on Mac. Now resize/intensity reuse the
-  // cached image (see the two effects below) so the only per-frame
-  // cost is one <img> decode + one draw.
-  //
-  // We decode with a plain <img> + data URL (the browser does the
-  // base64 + JPEG decode natively and asynchronously). A monotonic
-  // id guards against a slow decode painting over a newer frame that
-  // already landed.
-  useEffect(() => {
-    const src = liveStreamState.liveViewImage;
-    if (!src) {
-      lastImageRef.current = null;
-      setImageLoaded(false);
-      setCanvasStyle({});
-      return;
-    }
+  // Keep a ref to the latest applyResponsiveSizing so the frameBus
+  // subscriber (registered once) always calls the current closure
+  // (which captures the up-to-date min/max/containerSize).
+  const applyResponsiveSizingRef = useRef(applyResponsiveSizing);
+  applyResponsiveSizingRef.current = applyResponsiveSizing;
+  // Set the "has image" state only once (avoids a setState per frame).
+  const imageLoadedRef = useRef(false);
 
-    const myId = ++decodeIdRef.current;
-    const dbgOn =
-      typeof window !== 'undefined' && window.__IMSWITCH_STREAM_DEBUG__ !== false;
-    const tStart = dbgOn ? performance.now() : 0;
-    const img = new Image();
-    img.onload = () => {
-      if (!mountedRef.current) return;
-      // A newer frame already painted — don't overwrite it with this
-      // older one that happened to finish decoding later.
-      if (myId < lastPaintedIdRef.current) return;
-      lastPaintedIdRef.current = myId;
-      lastImageRef.current = img;
-      const tDecoded = dbgOn ? performance.now() : 0;
-      try {
-        // applyResponsiveSizing draws the image, applies the intensity
-        // window (identity-fast-path for the JPEG default), sizes the
-        // canvas, and updates the histogram.
-        applyResponsiveSizing(img);
-        setImageLoaded(true);
-      } catch (error) {
-        console.error('Error processing image:', error);
-        setImageLoaded(false);
-        setCanvasStyle({});
-      }
-      if (dbgOn) {
-        const d = renderDbgRef.current;
-        const now = performance.now();
-        d.decodeMs += tDecoded - tStart;
-        d.paintMs += now - tDecoded;
-        d.n++;
-        if (d.t0 === 0) d.t0 = tStart;
-        if (now - d.t0 >= 2000) {
-          console.log(
-            `[STREAM render] decode=${(d.decodeMs / d.n).toFixed(1)}ms ` +
-              `paint=${(d.paintMs / d.n).toFixed(1)}ms ` +
-              `painted=${((d.n / (now - d.t0)) * 1000).toFixed(1)}/s`,
-          );
-          d.n = 0;
-          d.t0 = now;
-          d.decodeMs = 0;
-          d.paintMs = 0;
+  // Paint a frame URL onto the canvas IMPERATIVELY — no React render,
+  // no Redux dispatch. This is the streaming hot path: it runs at full
+  // frame rate driven by frameBus, completely off the React commit
+  // cycle. That is the whole point — the previous design dispatched
+  // every frame into Redux, which re-rendered ~20 components (incl. the
+  // react-zoom-pan-pinch wrapper) 16×/sec and blocked the main thread,
+  // delaying the <img> onload to ~180 ms. MJPEG is smooth precisely
+  // because it never touches React per frame; this restores that.
+  //
+  // A monotonic id guards against a slow decode painting over a newer
+  // frame that already landed.
+  const paintFrameUrl = useCallback(
+    (src) => {
+      if (!src || !mountedRef.current) return;
+      const myId = ++decodeIdRef.current;
+      const img = new Image();
+      img.onload = () => {
+        if (!mountedRef.current || myId < lastPaintedIdRef.current) return;
+        lastPaintedIdRef.current = myId;
+        lastImageRef.current = img;
+        try {
+          // Draws the image, applies the intensity window (identity
+          // fast-path for the JPEG default), sizes the canvas.
+          applyResponsiveSizingRef.current(img);
+          if (!imageLoadedRef.current) {
+            imageLoadedRef.current = true;
+            setImageLoaded(true);
+          }
+        } catch (error) {
+          console.error("Error processing image:", error);
         }
-      }
-    };
-    img.onerror = () => {
-      if (!mountedRef.current || myId < lastPaintedIdRef.current) return;
-      console.error('Error loading image');
-      setImageLoaded(false);
-      setCanvasStyle({});
-    };
-    // liveViewImage is a ready-to-use URL (blob: for the live socket
-    // stream, or data: from a legacy backend). No string-building.
-    img.src = src;
-  }, [liveStreamState.liveViewImage, applyResponsiveSizing]);
+
+        // FPS (real paint rate) — one Redux dispatch per second.
+        const fc = fpsCounterRef.current;
+        fc.frames++;
+        const tnow = performance.now();
+        const fElapsed = tnow - fc.lastTime;
+        if (fElapsed >= 1000) {
+          dispatch(
+            liveViewSlice.setStats({
+              fps: Math.round((fc.frames * 1000) / fElapsed),
+              bps: 0,
+            }),
+          );
+          fc.frames = 0;
+          fc.lastTime = tnow;
+        }
+      };
+      img.onerror = () => {
+        // A blob URL that already expired (e.g. on remount) fails
+        // silently; the next published frame paints.
+      };
+      img.src = src;
+    },
+    [dispatch],
+  );
+
+  // Subscribe to the off-Redux frame stream ONCE. Paints every frame
+  // imperatively (paintFrameUrl). Also paints whatever frame is already
+  // buffered so a freshly-mounted viewer shows the last image instead
+  // of a blank canvas.
+  useEffect(() => {
+    paintFrameUrl(frameBus.getLatest());
+    return frameBus.subscribe(paintFrameUrl);
+  }, [paintFrameUrl]);
 
   // Re-apply sizing when the container resizes — reuse the cached
   // decoded frame, do NOT re-decode. (containerSize does not change
@@ -576,7 +548,7 @@ const LiveViewComponent = ({
       }}
     >
       {/* Canvas for intensity-scaled image */}
-      {liveStreamState.liveViewImage ? (
+      {imageLoaded || liveStreamState.liveViewImage ? (
         <canvas
           ref={canvasRef}
           style={{

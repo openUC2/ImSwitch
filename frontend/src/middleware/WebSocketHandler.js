@@ -30,6 +30,9 @@ import { io } from "socket.io-client";
 // MessagePack for efficient binary serialization
 import { decode as msgpackDecode } from "@msgpack/msgpack";
 
+// Off-Redux channel for the live JPEG stream (see frameBus.js).
+import { frameBus } from "../stream/frameBus.js";
+
 // Import API to check livestream status
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive.js";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout";
@@ -51,14 +54,9 @@ const WebSocketHandler = () => {
   // Previous JPEG Blob object-URL, so we can revoke it once a newer
   // frame has replaced it (otherwise every frame leaks a Blob).
   const lastJpegUrlRef = useRef(null);
-  // Client-side streaming diagnostics (disable with
-  // window.__IMSWITCH_STREAM_DEBUG__ = false). Logs frames-received/s
-  // and the worst inter-frame gap every ~2 s. Cross-reference with the
-  // backend's [STREAM] emit/s line: if the backend says it's emitting
-  // 18/s but the client receives 2/s, the stall is in the socket.io /
-  // websocket transport (or the server event loop can't flush emits);
-  // if both agree but the view is laggy, it's the client render.
-  const frameDbgRef = useRef({ n: 0, t0: 0, prev: 0, gap: 0 });
+  // Last time we pushed a JPEG frame into Redux (throttled — the hot
+  // path goes through frameBus instead). See the jpeg branch below.
+  const lastReduxFrameTsRef = useRef(0);
 
   // Per-instance server capabilities (each tab has its own)
   const serverCapabilitiesRef = useRef({
@@ -448,31 +446,6 @@ const WebSocketHandler = () => {
       let metadata = null;
       let frameData = null;
 
-      // Client receive-rate probe (throttled ~2 s).
-      if (window.__IMSWITCH_STREAM_DEBUG__ !== false) {
-        const d = frameDbgRef.current;
-        const now =
-          typeof performance !== "undefined" ? performance.now() : Date.now();
-        if (d.t0 === 0) {
-          d.t0 = now;
-          d.prev = now;
-        }
-        const gap = now - d.prev;
-        d.prev = now;
-        if (gap > d.gap) d.gap = gap;
-        d.n++;
-        const elapsed = now - d.t0;
-        if (elapsed >= 2000) {
-          console.log(
-            `[STREAM client] recv=${((d.n / elapsed) * 1000).toFixed(1)}/s ` +
-              `max_gap=${d.gap.toFixed(0)}ms`,
-          );
-          d.n = 0;
-          d.t0 = now;
-          d.gap = 0;
-        }
-      }
-
       try {
         // Decode complete MessagePack payload
         if (payload instanceof ArrayBuffer || payload instanceof Uint8Array) {
@@ -570,10 +543,7 @@ const WebSocketHandler = () => {
           (metadata.protocol === "jpeg" || metadata.format === "jpeg")
         ) {
           // JPEG frame: wrap the raw bytes in a Blob object-URL — no
-          // base64. ``liveViewImage`` is therefore a ready-to-use URL
-          // ("blob:..." normally, or a "data:..." URL if a legacy
-          // backend still sends a base64 string). Every consumer just
-          // does <img src={liveViewImage}>.
+          // base64. The URL is ready to use directly: <img src={url}>.
           let url;
           if (typeof frameData === "string") {
             url = `data:image/jpeg;base64,${frameData}`;
@@ -593,18 +563,33 @@ const WebSocketHandler = () => {
           lastJpegUrlRef.current = url.startsWith("blob:") ? url : null;
           if (prev) setTimeout(() => URL.revokeObjectURL(prev), 2000);
 
-          dispatch(liveStreamSlice.setLiveViewImage(url));
-          // imageFormat rarely changes — only dispatch on transition.
-          if (store.getState().liveStreamState.imageFormat !== "jpeg") {
-            dispatch(liveStreamSlice.setImageFormat("jpeg"));
-          }
-          if (metadata.pixel_size) {
-            dispatch(liveStreamSlice.setPixelSize(metadata.pixel_size));
-          }
-          if (metadata.server_timestamp) {
-            const latency =
-              (Date.now() / 1000 - metadata.server_timestamp) * 1000;
-            dispatch(liveStreamSlice.updateLatency(latency));
+          // HOT PATH: hand the frame straight to the viewer via frameBus.
+          // This stays OFF Redux/React so the ~20 components subscribed
+          // to liveStreamState do NOT re-render 16×/sec (that cascade was
+          // blocking the main thread and delaying the <img> onload by
+          // ~180 ms). The viewer paints imperatively from here.
+          frameBus.publish(url);
+
+          // COLD PATH: Redux is updated at a throttled rate, only for the
+          // secondary thumbnail consumers (SetLasersTab / TestHomingTab /
+          // OverviewRegistrationWizard) and the "stream has an image" UI
+          // state. ~6 fps is plenty for those and keeps the per-frame
+          // re-render storm off the global store.
+          const nowMs = Date.now();
+          if (nowMs - lastReduxFrameTsRef.current >= 150) {
+            lastReduxFrameTsRef.current = nowMs;
+            dispatch(liveStreamSlice.setLiveViewImage(url));
+            if (store.getState().liveStreamState.imageFormat !== "jpeg") {
+              dispatch(liveStreamSlice.setImageFormat("jpeg"));
+            }
+            if (metadata.pixel_size) {
+              dispatch(liveStreamSlice.setPixelSize(metadata.pixel_size));
+            }
+            if (metadata.server_timestamp) {
+              const latency =
+                (Date.now() / 1000 - metadata.server_timestamp) * 1000;
+              dispatch(liveStreamSlice.updateLatency(latency));
+            }
           }
         } else if (frameData) {
           // No metadata - fallback to binary frame

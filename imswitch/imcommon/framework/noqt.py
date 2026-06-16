@@ -74,7 +74,6 @@ _client_frame_lock = threading.Lock()
 # Event loop reference - will be set by ImSwitchServer
 _shared_event_loop = None
 
-
 class SignalInterface(abstract.SignalInterface):
     """Base implementation of abstract.SignalInterface."""
     def __init__(self) -> None:
@@ -159,31 +158,7 @@ class SignalInstance(psygnal.SignalInstance):
                 Implements rollover-safe backpressure check.
                 """
                 FRAME_ID_MODULO = 256  # Small value to test rollover frequently
-                # MAX_FRAME_LAG — how many frames may be "in flight"
-                # (sent but not yet acked). Trade-off:
-                #
-                #   lag=1: lowest latency. Server waits for ACK(N)
-                #          before sending N+1. On a slow client the
-                #          effective FPS drops to 1/RTT. On a fast
-                #          client (e.g. Mac/Linux with ~5 ms RTT) the
-                #          throttle dominates anyway, so there's no
-                #          throughput cost.
-                #   lag>1: higher FPS on slow clients, at the cost of
-                #          stale frames in the pipeline. With lag=3
-                #          you can be looking at a frame that's
-                #          ~3× throttle behind real time, which is
-                #          bad for live microscopy where the operator
-                #          uses the preview to drive the stage.
-                #
-                # We briefly ran lag=3 to recover Windows FPS, but
-                # the added latency was perceptible on all platforms.
-                # Back to lag=1: prefer low-latency over throughput.
-                # If Windows JPEG-over-WS is still slow after the
-                # WindowsSelectorEventLoopPolicy / ``ws="websockets"``
-                # fixes in ImSwitchServer.run, prefer the MJPEG
-                # transport (no socket.io, no ack loop) over raising
-                # this number.
-                MAX_FRAME_LAG = 1
+                MAX_FRAME_LAG = 1  # Allow client to be 1 frame behind
 
                 next_id = {}
                 for sid, sent_id in last_sent.items():
@@ -211,7 +186,7 @@ class SignalInstance(psygnal.SignalInstance):
                 ready_clients = get_ready_clients(_client_ack_frame_id, _client_sent_frame_id)
 
                 if not ready_clients:
-                    # print("No clients ready for new frame, dropping frame to avoid buildup")
+                    # No client within MAX_FRAME_LAG → backpressure drop.
                     return
 
                 # Thread-safe emission using the shared event loop
@@ -269,8 +244,6 @@ class SignalInstance(psygnal.SignalInstance):
                             sio.emit(event, frame_payload, to=sid),
                             _shared_event_loop
                         )
-
-
         except Exception as e:
             print(f"Error handling stream frame: {e}")
 
@@ -496,7 +469,6 @@ async def frame_ack(sid, data):
     """Client explicitly acknowledges frame processing complete"""
     with _client_frame_lock:
         _client_ack_frame_id[sid] = data.get('frame_id', None)  # Unified field name
-        # print(f"Client {sid} acknowledged frame", data)
 
 
 # Function to set the shared event loop (called by ImSwitchServer)

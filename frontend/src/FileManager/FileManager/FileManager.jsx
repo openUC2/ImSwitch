@@ -135,6 +135,7 @@ const FileManager = ({
                   filePreviewPath={filePreviewPath}
                   acceptedFileTypes={acceptedFileTypes}
                   triggerAction={triggerAction}
+                  onOpenWithVizarr={onOpenWithVizarr}
                 />
               </LayoutProvider>
             </ClipBoardProvider>

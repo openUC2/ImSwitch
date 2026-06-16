@@ -17,6 +17,7 @@ const Actions = ({
   filePreviewPath,
   acceptedFileTypes,
   triggerAction,
+  onOpenWithVizarr,
 }) => {
   const [activeAction, setActiveAction] = useState(null);
   const { selectedFiles } = useSelection();
@@ -50,8 +51,13 @@ const Actions = ({
     },
     imagePreview: {
       title: selectedFiles[0]?.name ?? "Image Preview",
-      component: <ImagePreviewAction />,
-      width: "60%",
+      component: (
+        <ImagePreviewAction
+          onOpenWithVizarr={onOpenWithVizarr}
+          triggerAction={triggerAction}
+        />
+      ),
+      width: "75%",
     },
   };
 

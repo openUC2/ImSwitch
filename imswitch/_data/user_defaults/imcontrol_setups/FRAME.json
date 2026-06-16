@@ -36,6 +36,10 @@
           "homeOnStartY":0,
           "homeOnStartZ":0,
           "homeOnStartA":0,
+          "transportPositionA":0,
+          "transportPositionX":0,
+          "transportPositionY":0,
+          "transportPositionZ":0,
           "initialSpeed": {
             "X": 15000,
             "Y": 15000,

@@ -37,7 +37,7 @@ class UC2ConfigManager(SignalInterface):
         return self.ESP32.config.loadDefaultConfig()
     '''
     def closeSerial(self):
-        return self.ESP32.closeSerial()
+        return self.ESP32.serial.closeSerial()
 
     def isConnected(self):
         try:

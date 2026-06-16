@@ -3,6 +3,7 @@ import { useSelector } from "react-redux";
 import { Tabs, Tab, Box } from "@mui/material";
 import SetLasersTab from "./FRAMESettings/SetLasersTab";
 import TestHomingTab from "./FRAMESettings/TestHomingTab";
+import FrameHomingTab from "./FRAMESettings/FrameHomingTab";
 import PixelCalibrationTab from "./FRAMESettings/PixelCalibrationTab";
 import ManualPixelCalibrationTab from "./FRAMESettings/ManualPixelCalibrationTab";
 import VerifyCalibrationTab from "./FRAMESettings/VerifyCalibrationTab";
@@ -52,6 +53,7 @@ const FRAMESettings = () => {
         <Tab value="verifyCalibration" label="Verify Calibration" />
         <Tab value="setLasers" label="Set Lasers" />
         <Tab value="testHoming" label="Test Homing" />
+        <Tab value="frameHoming" label="Frame Homing & Transport" />
         {hasObjectiveController && (
           <Tab value="objective" label="Objective Controller" />
         )}
@@ -65,6 +67,7 @@ const FRAMESettings = () => {
         {selectedTab === "verifyCalibration" && <VerifyCalibrationTab />}
         {selectedTab === "setLasers" && <SetLasersTab />}
         {selectedTab === "testHoming" && <TestHomingTab />}
+        {selectedTab === "frameHoming" && <FrameHomingTab />}
         {hasObjectiveController && selectedTab === "objective" && (
           <ExtendedObjectiveController />
         )}

@@ -1342,14 +1342,50 @@ class UC2ConfigController(ImConWidgetController):
                     "method": "can_streaming"
                 })
             
-            # Start streaming upload (blocking)
-            success = self._master.UC2ConfigManager.ESP32.canota.start_can_streaming_ota_blocking(
-                can_id=can_id,
-                firmware_path=str(firmware_path),
-                progress_callback=progress_callback,
-                status_callback=status_callback, 
-                baud=baud
-            )
+            # Start streaming upload (blocking) — retry up to 3 times on failure.
+            # The master occasionally returns size_write_failed on the first attempt
+            # after rebooting from a previous OTA, but succeeds on the next try.
+            MAX_RETRIES = 3
+            success = False
+            last_error = "CAN streaming upload failed"
+            for attempt in range(1, MAX_RETRIES + 1):
+                canota = self._master.UC2ConfigManager.ESP32.canota
+                # Make sure a previous cancel flag is cleared before this attempt
+                canota._cancel_event.clear()
+                success = canota.start_can_streaming_ota_blocking(
+                    can_id=can_id,
+                    firmware_path=str(firmware_path),
+                    progress_callback=progress_callback,
+                    status_callback=status_callback,
+                    baud=baud
+                )
+                if success:
+                    break
+                # Check if user cancelled — do not retry in that case
+                if canota._cancel_event.is_set():
+                    last_error = "Upload cancelled by user"
+                    break
+                if attempt < MAX_RETRIES:
+                    retry_msg = (
+                        f"Attempt {attempt}/{MAX_RETRIES} failed — "
+                        f"waiting 5 s before retry..."
+                    )
+                    self.__logger.warning(f"CAN OTA: {retry_msg}")
+                    status_callback(retry_msg, False)
+                    import time as _time
+                    _time.sleep(5)
+                    # Re-emit uploading state so the UI shows the retry
+                    self._ota_status[can_id]["status"] = "uploading"
+                    self._ota_status[can_id]["message"] = f"Retrying... (attempt {attempt + 1}/{MAX_RETRIES})"
+                    self.sigOTAStatusUpdate.emit({
+                        "canId": can_id,
+                        "status": "uploading",
+                        "progress": 5,
+                        "message": f"Retrying... (attempt {attempt + 1}/{MAX_RETRIES})",
+                        "method": "can_streaming"
+                    })
+                else:
+                    last_error = f"CAN streaming upload failed after {MAX_RETRIES} attempts"
             
             if success:
                 self._ota_status[can_id]["status"] = "success"
@@ -1368,7 +1404,7 @@ class UC2ConfigController(ImConWidgetController):
                     "message": "CAN streaming OTA completed successfully"
                 }
             else:
-                raise Exception("CAN streaming upload failed")
+                raise Exception(last_error)
                 
         except Exception as e:
             self.__logger.error(f"CAN streaming OTA failed for device {can_id}: {e}")
@@ -1391,6 +1427,25 @@ class UC2ConfigController(ImConWidgetController):
                 "message": f"CAN streaming OTA failed: {str(e)}"
             }
     
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def cancelCANStreamingOTA(self):
+        """
+        Request cancellation of any running CAN streaming OTA upload.
+
+        Sets the cancel flag on the canota object so the upload worker aborts
+        at the next chunk boundary and restores the serial connection.
+
+        :return: Status message
+        """
+        try:
+            canota = self._master.UC2ConfigManager.ESP32.canota
+            canota.cancel_streaming_ota()
+            self.__logger.info("CAN streaming OTA cancellation requested")
+            return {"status": "success", "message": "Cancellation requested"}
+        except Exception as e:
+            self.__logger.warning(f"Could not signal canota cancel: {e}")
+            return {"status": "error", "message": str(e)}
+
     @APIExport(runOnUIThread=False, requestType="POST")
     def startMultipleCANStreamingOTA(self, can_ids: list[int], delay_between: int = 5):
         """

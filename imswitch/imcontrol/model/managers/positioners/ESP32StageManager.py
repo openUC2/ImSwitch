@@ -853,8 +853,14 @@ class ESP32StageManager(PositionerManager):
                 self._emitHomingState(axis="Y", axisStatus="done")
                 if aborted():
                     return
+                
+                # Step 6: Moving to a save position (e.g. transport position) after homing XY to avoid collisions during Z restore
+                self._emitHomingState(phase="moving_to_safe_xy", message="Moving to safe XY position")
+                self.moveToTransportPosition(speed=self.homeSpeedXY, is_blocking=True)
+                if aborted():
+                    return
 
-                # Step 6: restore Z to its previous height, but never drop it below
+                # Step 7: restore Z to its previous height, but never drop it below
                 # the safe lift (avoids re-introducing the collision risk at the new XY).
                 self._emitHomingState(phase="restoring_z", message="Restoring Z position")
                 restoreZ = self._zPositionPriorHoming

@@ -158,26 +158,7 @@ class SignalInstance(psygnal.SignalInstance):
                 Implements rollover-safe backpressure check.
                 """
                 FRAME_ID_MODULO = 256  # Small value to test rollover frequently
-                # MAX_FRAME_LAG — how many frames may be "in flight"
-                # (sent but not yet acked).
-                #
-                #   lag=1: lowest latency, but ANY jitter in the ACK
-                #          round-trip stalls the stream. During an
-                #          autofocus sweep the shared event loop is
-                #          contended, the round-trip spikes, and the
-                #          stream collapsed to ~1-2 fps.
-                #   lag=3: tolerant of jitter but lets up to ~3 frames
-                #          of backlog build → perceptible latency.
-                #
-                # lag=2 is the balance: it absorbs one round-trip of
-                # event-loop jitter (so autofocus no longer hard-stalls)
-                # while keeping at most ~1 frame of backlog. This is
-                # only safe because the client now ACKs on RECEIPT (not
-                # after render) and the frame handler is cheap (Blob
-                # object-URL, no base64) — see WebSocketHandler. If a
-                # client truly can't keep up, the bound still drops
-                # frames rather than buffering without limit.
-                MAX_FRAME_LAG = 2
+                MAX_FRAME_LAG = 1  # Allow client to be 1 frame behind
 
                 next_id = {}
                 for sid, sent_id in last_sent.items():
@@ -263,7 +244,6 @@ class SignalInstance(psygnal.SignalInstance):
                             sio.emit(event, frame_payload, to=sid),
                             _shared_event_loop
                         )
-
         except Exception as e:
             print(f"Error handling stream frame: {e}")
 

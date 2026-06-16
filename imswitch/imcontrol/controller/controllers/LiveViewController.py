@@ -486,15 +486,13 @@ class JPEGStreamWorker(StreamWorker):
                 success = False
 
             if success:
-                # Emit raw JPEG bytes. The downstream socket.io path
-                # (noqt.py::_handle_stream_frame, 'jpeg_frame' branch) packs
-                # this with msgpack using ``use_bin_type=True``, which serialises
-                # ``bytes`` as a MessagePack ``bin`` value (Uint8Array on the
-                # client). Previously we base64-encoded these bytes into a
-                # JSON-safe string, which inflated the payload ~33% and cost
-                # ~5-10 ms per frame on the Pi 5. The React frontend must wrap
-                # the received Uint8Array as a Blob/ObjectURL instead of using
-                # a ``data:image/jpeg;base64,...`` URI.
+                # Encode the JPEG bytes as a base64 string. The frontend
+                # consumes ``data:image/jpeg;base64,<liveViewImage>`` in a
+                # plain <img>, which is the simplest, most robust path
+                # (the raw-bytes/Blob experiment was reverted). msgpack
+                # ships the string as-is.
+                import base64
+                encoded_image = base64.b64encode(jpeg_bytes).decode('utf-8')
 
                 # Create unified metadata structure
                 metadata = {
@@ -513,7 +511,7 @@ class JPEGStreamWorker(StreamWorker):
                     'type': 'jpeg_frame',
                     'event': 'frame',
                     'data': {
-                        'image': jpeg_bytes,
+                        'image': encoded_image,
                         'metadata': metadata
                     }
                 }

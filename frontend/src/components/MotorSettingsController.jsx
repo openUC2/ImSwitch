@@ -352,19 +352,6 @@ const AxisSettingsPanel = ({ axis, settings, onChange, onSave, isSaving, baseURL
         <AccordionDetails>
           <Grid container spacing={2}>
             <Grid item xs={12}>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={limits.enabled ?? false}
-                    onChange={(e) =>
-                      handleChange("limits", "enabled", e.target.checked)
-                    }
-                  />
-                }
-                label="Enable Position Limits (software - prevent movement below 0)"
-              />
-            </Grid>
-            <Grid item xs={12}>
               <Divider sx={{ my: 1 }} />
               <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
                 Hardware Hard Limits use physical endstop switches to prevent movement beyond safe range

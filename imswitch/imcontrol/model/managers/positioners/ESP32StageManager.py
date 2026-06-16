@@ -150,6 +150,12 @@ class ESP32StageManager(PositionerManager):
         self.limitYenabled = positionerInfo.managerProperties.get('limitYenabled', False)
         self.limitZenabled = positionerInfo.managerProperties.get('limitZenabled', False)
 
+        # Hardware hard limits - enable physical endstop protection per axis (default True)
+        self.hardLimitsEnabledX = positionerInfo.managerProperties.get('hardLimitsEnabledX', True)
+        self.hardLimitsEnabledY = positionerInfo.managerProperties.get('hardLimitsEnabledY', True)
+        self.hardLimitsEnabledZ = positionerInfo.managerProperties.get('hardLimitsEnabledZ', True)
+        self.hardLimitsEnabledA = positionerInfo.managerProperties.get('hardLimitsEnabledA', True)
+
         # retreive position coordinates for sample loading
         self.sampleLoadingPositions["X"] = positionerInfo.managerProperties.get('sampleLoadingPositionX', 0)
         self.sampleLoadingPositions["Y"] = positionerInfo.managerProperties.get('sampleLoadingPositionY', 0)
@@ -257,6 +263,18 @@ class ESP32StageManager(PositionerManager):
         time.sleep(0.5)
         if self.homeOnStartA: self.home_a()
         time.sleep(0.5)
+
+        # Apply hard-limit settings to hardware for all axes
+        try:
+            for _axis, _enabled in [
+                ('X', self.hardLimitsEnabledX),
+                ('Y', self.hardLimitsEnabledY),
+                ('Z', self.hardLimitsEnabledZ),
+                ('A', self.hardLimitsEnabledA),
+            ]:
+                self._motor.set_hard_limits(axis=_axis, enabled=_enabled)
+        except Exception as _e:
+            self.__logger.warning(f"Could not apply hard limits on startup: {_e}")
 
         # set speed for all axes
         self._speed = {"X": positionerInfo.managerProperties.get('speedX', 10000),
@@ -1043,13 +1061,13 @@ class ESP32StageManager(PositionerManager):
         
         # Limit settings
         if axis == 'X':
-            limits = {'enabled': self.limitXenabled}
+            limits = {'enabled': self.limitXenabled, 'hardLimitsEnabled': self.hardLimitsEnabledX}
         elif axis == 'Y':
-            limits = {'enabled': self.limitYenabled}
+            limits = {'enabled': self.limitYenabled, 'hardLimitsEnabled': self.hardLimitsEnabledY}
         elif axis == 'Z':
-            limits = {'enabled': self.limitZenabled}
+            limits = {'enabled': self.limitZenabled, 'hardLimitsEnabled': self.hardLimitsEnabledZ}
         else:
-            limits = {'enabled': False}
+            limits = {'enabled': False, 'hardLimitsEnabled': self.hardLimitsEnabledA}
         
         return {
             'axis': axis,
@@ -1193,6 +1211,19 @@ class ESP32StageManager(PositionerManager):
                     elif axis == 'Y': self.limitYenabled = limits['enabled']
                     elif axis == 'Z': self.limitZenabled = limits['enabled']
                     result['updated'].append('limits.enabled')
+
+                if 'hardLimitsEnabled' in limits:
+                    enabled = bool(limits['hardLimitsEnabled'])
+                    if axis == 'X': self.hardLimitsEnabledX = enabled
+                    elif axis == 'Y': self.hardLimitsEnabledY = enabled
+                    elif axis == 'Z': self.hardLimitsEnabledZ = enabled
+                    elif axis == 'A': self.hardLimitsEnabledA = enabled
+                    # Push the new setting to the hardware immediately
+                    try:
+                        self._motor.set_hard_limits(axis=axis, enabled=enabled)
+                    except Exception as _e:
+                        result['errors'].append(f'Failed to set hard limits on device: {_e}')
+                    result['updated'].append('limits.hardLimitsEnabled')
             
             result['success'] = True
             self.__logger.info(f"Updated motor settings for axis {axis}: {result['updated']}")

@@ -100,6 +100,15 @@ UV_SITE_PACKAGES=$(python -c 'import site; print(site.getsitepackages()[0])')
 echo '/usr/lib/python3/dist-packages' >"$UV_SITE_PACKAGES"/system-packages.pth
 python -c 'import sys; print("Python paths:"); [print(p) for p in sys.path]'
 
+# Install Tucam only for ARM64
+#
+if [ "$TARGETPLATFORM" = "linux/arm64" ]; then
+  echo "Installing Tucam for ARM64..."
+  wget "https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitch-master/tucam-v2_2.0.9.0_linux-aarch64.deb"
+  dpkg -i "tucam-v2_2.0.9.0_linux-aarch64.deb"
+  rm -f "tucam-v2_2.0.9.0_linux-aarch64.deb"
+fi
+
 # Clean up build-only tools
 
 apt-get remove -y \

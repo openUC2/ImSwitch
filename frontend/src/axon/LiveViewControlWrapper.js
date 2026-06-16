@@ -65,24 +65,6 @@ const LiveViewControlWrapper = ({
 }) => {
   const dispatch = useDispatch();
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
-  // Narrow subset selector (shallow-compared) so this wrapper — which
-  // hosts the heavy react-zoom-pan-pinch TransformWrapper — does NOT
-  // re-render when liveViewImage changes. It only depends on these few
-  // fields, none of which change at frame rate. Subscribing to the
-  // whole liveStreamState here re-rendered the zoom shell on every
-  // frame and was a major contributor to the main-thread stall.
-  const liveStreamState = useSelector(
-    (s) => ({
-      imageFormat: s.liveStreamState.imageFormat,
-      backendCapabilities: s.liveStreamState.backendCapabilities,
-      isLegacyBackend: s.liveStreamState.isLegacyBackend,
-      fps: s.liveStreamState.stats?.fps,
-      showHistogram: s.liveStreamState.showHistogram,
-      histogramX: s.liveStreamState.histogramX,
-      histogramY: s.liveStreamState.histogramY,
-    }),
-    shallowEqual,
-  );
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
   const transformFrameRef = useRef(null);

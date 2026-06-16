@@ -61,6 +61,7 @@ const LiveViewComponent = ({
     }
   }, [liveStreamState.liveViewImage, dispatch]);
   const prevDimensionsRef = useRef({ width: 0, height: 0 }); // Track dimensions to avoid redundant callbacks
+  const histogramCounterRef = useRef(0); // Counter for throttling histogram computation
   const [imageLoaded, setImageLoaded] = useState(false);
   const [containerSize, setContainerSize] = useState({
     width: 800,
@@ -68,13 +69,54 @@ const LiveViewComponent = ({
   });
   const [canvasStyle, setCanvasStyle] = useState({});
 
-  // JPEG histogram from the canvas is disabled: getImageData + a
-  // full-image luminance walk per frame was a meaningful chunk of the
-  // per-frame budget, and the live histogram isn't worth that cost on
-  // the streaming hot path. Kept as a no-op so call sites stay simple;
-  // re-enable behind a throttle + an explicit "show histogram" gate if
-  // it's ever needed again.
-  const computeHistogramFromCanvas = useCallback(() => {}, []);
+  // Compute histogram from canvas (for JPEG streams)
+  const computeHistogramFromCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !liveStreamState.showHistogram) return;
+
+    // Throttle: only compute every 10th frame
+    histogramCounterRef.current++;
+    if (histogramCounterRef.current % 10 !== 0) return;
+
+    try {
+      const ctx = canvas.getContext("2d");
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+
+      const binCount = 256; // 8-bit histogram for JPEG
+      const histogram = new Array(binCount).fill(0);
+      const histogramX = new Array(binCount);
+
+      // Initialize x-axis values
+      for (let i = 0; i < binCount; i++) {
+        histogramX[i] = i;
+      }
+
+      // Count luminance values (RGB → Grayscale)
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const lum = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+        histogram[lum]++;
+      }
+
+      console.log("JPEG Histogram computed:", {
+        bins: binCount,
+        totalPixels: canvas.width * canvas.height,
+      });
+
+      // Update Redux
+      dispatch(
+        liveViewSlice.setHistogramData({
+          x: histogramX,
+          y: histogram,
+        }),
+      );
+    } catch (error) {
+      console.warn("JPEG histogram computation failed:", error);
+    }
+  }, [dispatch, liveStreamState.showHistogram]);
 
   // Optimized intensity windowing - proper scientific image processing
   const applyIntensityWindowing = useCallback(
@@ -87,18 +129,6 @@ const LiveViewComponent = ({
 
       const ctx = canvas.getContext("2d");
       ctx.drawImage(image, 0, 0);
-
-      // Fast path: an identity window (the JPEG default, 0..255) maps
-      // every pixel to itself. The per-pixel loop below would scan the
-      // whole image — millions of array ops — to reproduce a
-      // bit-identical result. For a live JPEG stream that ran several
-      // times PER FRAME and was the single biggest cause of jank.
-      // Skip it whenever the window is the full 8-bit range; only pay
-      // for the pixel walk once the user actually narrows the slider.
-      if (minVal <= 0 && maxVal >= 255) {
-        computeHistogramFromCanvas();
-        return;
-      }
 
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const data = imageData.data;
@@ -197,6 +227,14 @@ const LiveViewComponent = ({
     [containerSize],
   );
 
+  // Legacy pixel-perfect intensity scaling (for compatibility)
+  const applyPixelIntensityScaling = useCallback(
+    (image, minVal, maxVal) => {
+      // This method is now deprecated - use applyIntensityWindowing instead
+      return applyIntensityWindowing(image, minVal, maxVal);
+    },
+    [applyIntensityWindowing],
+  );
   // Apply responsive sizing to the image
   const applyResponsiveSizing = useCallback(
     (image) => {
@@ -271,12 +309,12 @@ const LiveViewComponent = ({
         setImageLoaded(false);
         setCanvasStyle({}); // Reset canvas style on error
       };
-      img.src = `data:image/jpeg;base64,${liveStreamState.liveViewImage}`;
+      img.src = `data:image/jpeg;base64,${liveStreamState.liveViewImage}`; // TODO: We could consider rendering the fraame into a canvas
     } else {
       setImageLoaded(false);
       setCanvasStyle({}); // Reset canvas style when no image
     }
-  }, [liveStreamState.liveViewImage, applyResponsiveSizing]);
+  }, [liveStreamState.liveViewImage, applyResponsiveSizing]); // TODO: @gokugiant => let's check if this re-renders/repaints the whole page with every frame
 
   // Reapply sizing when container size changes
   useEffect(() => {
@@ -295,6 +333,7 @@ const LiveViewComponent = ({
   // Update intensity windowing when min/max values change
   useEffect(() => {
     if (imageLoaded && liveStreamState.liveViewImage) {
+      // Re-apply intensity windowing when intensity values change
       const img = new Image();
       img.onload = () => {
         applyIntensityWindowing(
@@ -319,6 +358,7 @@ const LiveViewComponent = ({
     if (!container) return;
 
     const resizeObserver = new ResizeObserver(() => {
+      // Reprocess the image when container size changes
       if (liveStreamState.liveViewImage && imageLoaded) {
         const img = new Image();
         img.onload = () => {

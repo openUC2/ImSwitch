@@ -59,7 +59,6 @@ import CompositeComponent from "./axon/CompositeComponent";
 //redux
 import { useDispatch, useSelector } from "react-redux";
 import * as connectionSettingsSlice from "./state/slices/ConnectionSettingsSlice.js";
-import * as webSocketSlice from "./state/slices/WebSocketSlice.js";
 import * as vizarrViewerSlice from "./state/slices/VizarrViewerSlice.js";
 import {
   clearNotification,
@@ -168,7 +167,6 @@ function App() {
   const connectionSettingsState = useSelector(
     connectionSettingsSlice.getConnectionSettingsState,
   );
-  const webSocketState = useSelector(webSocketSlice.getWebSocketState);
   const { isDarkMode } = useSelector(getThemeState);
 
   // Hook to detect mobile screens
@@ -223,9 +221,6 @@ function App() {
   });
 
   useEffect(() => {
-    if (!webSocketState.connected) {
-      return;
-    }
 
     let cancelled = false;
 
@@ -249,7 +244,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [webSocketState.connected, hostIP, apiPort]);
+  }, [ hostIP, apiPort]);
 
   const handleDismissHomingDialog = async () => {
     if (homingDialogBusy) {

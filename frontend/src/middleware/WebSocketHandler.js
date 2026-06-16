@@ -30,9 +30,6 @@ import { io } from "socket.io-client";
 // MessagePack for efficient binary serialization
 import { decode as msgpackDecode } from "@msgpack/msgpack";
 
-// Off-Redux channel for the live JPEG stream (see frameBus.js).
-import { frameBus } from "../stream/frameBus.js";
-
 // Import API to check livestream status
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive.js";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout";
@@ -51,12 +48,6 @@ const WebSocketHandler = () => {
   const lastEspReconnectAttemptRef = useRef(0);
   const espReconnectInFlightRef = useRef(false);
   const illuminationSyncInFlightRef = useRef(false);
-  // Previous JPEG Blob object-URL, so we can revoke it once a newer
-  // frame has replaced it (otherwise every frame leaks a Blob).
-  const lastJpegUrlRef = useRef(null);
-  // Last time we pushed a JPEG frame into Redux (throttled — the hot
-  // path goes through frameBus instead). See the jpeg branch below.
-  const lastReduxFrameTsRef = useRef(0);
 
   // Per-instance server capabilities (each tab has its own)
   const serverCapabilitiesRef = useRef({
@@ -477,13 +468,8 @@ const WebSocketHandler = () => {
               return;
             }
           } else if (decoded.image) {
-            // JPEG frame: the backend sends raw JPEG bytes (msgpack
-            // 'bin'). Keep them raw here — the jpeg branch below wraps
-            // them in a Blob object-URL. NO base64 round-trip: btoa was
-            // ~2-5 ms of main-thread work per frame, which delayed the
-            // ACK and made the socket.io stream stall under load
-            // (e.g. during an autofocus sweep).
-            frameData = decoded.image; // Uint8Array, or string from a legacy backend
+            // JPEG frame — base64 string from the backend.
+            frameData = decoded.image;
           }
         } else if (Array.isArray(payload) && payload.length === 2) {
           // Legacy format: [packed_metadata, frameData]
@@ -504,19 +490,6 @@ const WebSocketHandler = () => {
         } else {
           // Very old legacy format: just binary data
           frameData = payload;
-        }
-
-        // ── Flow control: ACK as EARLY as possible ──────────────────
-        // The ACK means "I have the bytes", NOT "I finished painting".
-        // Sending it before the async decode/render keeps the server's
-        // MAX_FRAME_LAG window open even when the browser's main thread
-        // is briefly busy. This is what lets the socket.io JPEG stream
-        // keep flowing during an autofocus sweep instead of collapsing
-        // to 1-2 fps while it waits on a render-gated ACK.
-        if (ack && typeof ack === "function") {
-          ack();
-        } else {
-          socket.emit("frame_ack", { frame_id: metadata?.frame_id });
         }
 
         // Update Redux with current frame ID (unified field name)
@@ -542,54 +515,18 @@ const WebSocketHandler = () => {
           metadata &&
           (metadata.protocol === "jpeg" || metadata.format === "jpeg")
         ) {
-          // JPEG frame: wrap the raw bytes in a Blob object-URL — no
-          // base64. The URL is ready to use directly: <img src={url}>.
-          let url;
-          if (typeof frameData === "string") {
-            url = `data:image/jpeg;base64,${frameData}`;
-          } else {
-            const bytes =
-              frameData instanceof Uint8Array
-                ? frameData
-                : new Uint8Array(frameData);
-            url = URL.createObjectURL(
-              new Blob([bytes], { type: "image/jpeg" }),
-            );
+          // JPEG frame - store the base64 string in Redux. Consumers
+          // render it as <img src={`data:image/jpeg;base64,${...}`}>.
+          dispatch(liveStreamSlice.setLiveViewImage(frameData));
+          dispatch(liveStreamSlice.setImageFormat("jpeg"));
+
+          if (metadata.pixel_size) {
+            dispatch(liveStreamSlice.setPixelSize(metadata.pixel_size));
           }
-          // Revoke the previous blob URL after a short grace period so
-          // any <img> still loading it can finish. Bounds memory to a
-          // couple seconds of frames instead of leaking one Blob/frame.
-          const prev = lastJpegUrlRef.current;
-          lastJpegUrlRef.current = url.startsWith("blob:") ? url : null;
-          if (prev) setTimeout(() => URL.revokeObjectURL(prev), 2000);
-
-          // HOT PATH: hand the frame straight to the viewer via frameBus.
-          // This stays OFF Redux/React so the ~20 components subscribed
-          // to liveStreamState do NOT re-render 16×/sec (that cascade was
-          // blocking the main thread and delaying the <img> onload by
-          // ~180 ms). The viewer paints imperatively from here.
-          frameBus.publish(url);
-
-          // COLD PATH: Redux is updated at a throttled rate, only for the
-          // secondary thumbnail consumers (SetLasersTab / TestHomingTab /
-          // OverviewRegistrationWizard) and the "stream has an image" UI
-          // state. ~6 fps is plenty for those and keeps the per-frame
-          // re-render storm off the global store.
-          const nowMs = Date.now();
-          if (nowMs - lastReduxFrameTsRef.current >= 150) {
-            lastReduxFrameTsRef.current = nowMs;
-            dispatch(liveStreamSlice.setLiveViewImage(url));
-            if (store.getState().liveStreamState.imageFormat !== "jpeg") {
-              dispatch(liveStreamSlice.setImageFormat("jpeg"));
-            }
-            if (metadata.pixel_size) {
-              dispatch(liveStreamSlice.setPixelSize(metadata.pixel_size));
-            }
-            if (metadata.server_timestamp) {
-              const latency =
-                (Date.now() / 1000 - metadata.server_timestamp) * 1000;
-              dispatch(liveStreamSlice.updateLatency(latency));
-            }
+          if (metadata.server_timestamp) {
+            const latency =
+              (Date.now() / 1000 - metadata.server_timestamp) * 1000;
+            dispatch(liveStreamSlice.updateLatency(latency));
           }
         } else if (frameData) {
           // No metadata - fallback to binary frame
@@ -605,6 +542,13 @@ const WebSocketHandler = () => {
       } catch (error) {
         console.error("Error decoding frame:", error);
         return;
+      }
+
+      // Send acknowledgement to enable flow control (after processing).
+      if (ack && typeof ack === "function") {
+        ack();
+      } else {
+        socket.emit("frame_ack", { frame_id: metadata?.frame_id });
       }
     });
 
@@ -655,19 +599,8 @@ const WebSocketHandler = () => {
         //update redux state - LEGACY JPEG PATH (deprecated - use 'frame' event instead)
         if (dataJson.detectorname || dataJson.detector_name) {
           // Note: Legacy JPEG image handling - kept for backward compatibility
-          // The new unified "frame" event handler above should be preferred.
-          // dataJson.image is a bare base64 string here; wrap it as a
-          // data: URL so liveViewImage keeps its "ready-to-use URL"
-          // contract (every consumer does <img src={liveViewImage}>).
-          dispatch(
-            liveStreamSlice.setLiveViewImage(
-              typeof dataJson.image === "string" &&
-                !dataJson.image.startsWith("data:") &&
-                !dataJson.image.startsWith("blob:")
-                ? `data:image/jpeg;base64,${dataJson.image}`
-                : dataJson.image,
-            ),
-          );
+          // The new unified "frame" event handler above should be preferred
+          dispatch(liveStreamSlice.setLiveViewImage(dataJson.image));
 
           // Track image format and set appropriate defaults based on streaming capability
           if (dataJson.format === "jpeg") {

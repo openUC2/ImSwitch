@@ -278,7 +278,7 @@ const SetLasersTab = () => {
             >
               {overviewStreamActive && liveStreamState.liveViewImage ? (
                 <img
-                  src={liveStreamState.liveViewImage}
+                  src={`data:image/jpeg;base64,${liveStreamState.liveViewImage}`}
                   alt="Overview Camera"
                   style={{ 
                     display: 'block',

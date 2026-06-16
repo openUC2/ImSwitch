@@ -57,6 +57,7 @@ import apiUC2ConfigControllerStartMultipleDeviceOTA from "../backendapi/apiUC2Co
 import apiUC2ConfigControllerGetOTADeviceMapping from "../backendapi/apiUC2ConfigControllerGetOTADeviceMapping";
 import apiUC2ConfigControllerStartCANStreamingOTA from "../backendapi/apiUC2ConfigControllerStartCANStreamingOTA";
 import apiUC2ConfigControllerStartMultipleCANStreamingOTA from "../backendapi/apiUC2ConfigControllerStartMultipleCANStreamingOTA";
+import apiUC2ConfigControllerCancelCANStreamingOTA from "../backendapi/apiUC2ConfigControllerCancelCANStreamingOTA";
 
 const steps = [
   "OTA Method",
@@ -251,7 +252,15 @@ const CanOtaWizard = ({ open, onClose }) => {
     dispatch(canOtaSlice.previousStep());
   };
 
-  const handleClose = () => {
+  const handleClose = async () => {
+    // If an OTA update is running, request cancellation first
+    if (canOtaState.isUpdating) {
+      try {
+        await apiUC2ConfigControllerCancelCANStreamingOTA();
+      } catch (_) {
+        // Best-effort — proceed with close even if cancel request fails
+      }
+    }
     dispatch(canOtaSlice.resetWizard());
     onClose();
   };
@@ -1102,7 +1111,7 @@ const CanOtaWizard = ({ open, onClose }) => {
               </Button>
             ) : null}
 
-            {/* Next / Start OTA */}
+            {/* Next / Start OTA / Retry */}
             {canOtaState.currentStep !== 5 ? (
               <Button
                 variant="contained"
@@ -1111,13 +1120,24 @@ const CanOtaWizard = ({ open, onClose }) => {
                 Next
               </Button>
             ) : !canOtaState.isUpdating ? (
-              <Button
-                variant="contained"
-                color="success"
-                onClick={startOtaUpdate}
-              >
-                Start OTA
-              </Button>
+              // Show "Next" if an update already ran (progress entries exist), "Start OTA" otherwise
+              Object.keys(canOtaState.updateProgress).length > 0 ? (
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={() => dispatch(canOtaSlice.nextStep())}
+                >
+                  Next
+                </Button>
+              ) : (
+                <Button
+                  variant="contained"
+                  color="success"
+                  onClick={startOtaUpdate}
+                >
+                  Start OTA
+                </Button>
+              )
             ) : null}
           </>
         )}

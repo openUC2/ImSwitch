@@ -441,8 +441,6 @@ class InLineHoloController(LiveUpdatedController):
         # Convert to complex field (E-field from intensity)
         E0 = np.sqrt(gray.astype(float))
 
-        # Propagate
-        Ef = self._fresnel_propagator(E0, self._params.dz)
         # Propagate. When show_raw is set we reconstruct at dz=0, which returns
         # the raw, in-focus hologram intensity regardless of the slider value.
         dz = 0.0 if self._params.show_raw else self._params.dz

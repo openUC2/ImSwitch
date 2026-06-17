@@ -61,6 +61,7 @@ import apiInLineHoloControllerSetDz from "../backendapi/apiInLineHoloControllerS
 import apiInLineHoloControllerSetBinning from "../backendapi/apiInLineHoloControllerSetBinning";
 import apiInLineHoloControllerSetPixelsize from "../backendapi/apiInLineHoloControllerSetPixelsize";
 import apiInLineHoloControllerSetWavelength from "../backendapi/apiInLineHoloControllerSetWavelength";
+import apiLiveViewControllerGetStreamParameters from "../backendapi/apiLiveViewControllerGetStreamParameters";
 
 const HoloController = () => {
   const dispatch = useDispatch();
@@ -87,15 +88,37 @@ const HoloController = () => {
   const [imageSize, setImageSize] = useState({ width: 1920, height: 1080 });
   const [displayInfo, setDisplayInfo] = useState(null);
 
-  // Compute the total scaling factor: subsampling (from stream) × binning (from holo processing)
+  // Focus sweep: step dz from start→end across N steps, one step per second.
+  const [sweep, setSweep] = useState({
+    startUm: 0,    // start dz in micrometers
+    endUm: 1000,   // end dz in micrometers
+    steps: 10,     // number of steps (must be < 20)
+    running: false,
+  });
+
+  // Resolve the subsampling factor of the *currently active* stream protocol.
+  // The live image in the viewer is subsampled by whichever protocol is active
+  // (jpeg/binary/webrtc). Reading "jpeg" unconditionally returned the wrong
+  // factor (e.g. 1) while the real stream was subsampled (e.g. 4), so the red
+  // ROI overlay box was scaled incorrectly until the user touched stream settings.
+  const getActiveSubsamplingFactor = useCallback(() => {
+    const ss = liveStreamState.streamSettings || {};
+    const fmt = liveStreamState.imageFormat || ss.current_compression_algorithm || "jpeg";
+    if (fmt === "binary") {
+      return ss.binary?.subsampling?.factor || ss.binary?.subsampling_factor || 1;
+    }
+    if (fmt === "webrtc") {
+      return ss.webrtc?.subsampling_factor || ss.webrtc?.subsampling?.factor || 1;
+    }
+    // jpeg / mjpeg
+    return ss.jpeg?.subsampling?.factor || ss.jpeg?.subsampling_factor || 1;
+  }, [liveStreamState.streamSettings, liveStreamState.imageFormat]);
+
+  // Compute the total scaling factor: subsampling (from active stream) × binning
   // This factor converts between preview pixels and backend/sensor pixels
   const totalScalingFactor = useMemo(() => {
-    const streamSubsampling = liveStreamState.streamSettings?.jpeg?.subsampling?.factor || 
-                              liveStreamState.streamSettings?.jpeg?.subsampling_factor ||
-                              liveStreamState.streamSettings?.binary?.subsampling?.factor || 1;
-    const binningFactor = holoState.binning || 1;
-    return streamSubsampling * binningFactor;
-  }, [liveStreamState.streamSettings, holoState.binning]);
+    return getActiveSubsamplingFactor() * (holoState.binning || 1);
+  }, [getActiveSubsamplingFactor, holoState.binning]);
 
   // ROI size in preview pixels (for overlay display)
   // roiSelection.size stores backend pixels, divide by scaling to get preview pixels
@@ -106,6 +129,10 @@ const HoloController = () => {
   // Ref for processed stream image
   const processedImageRef = useRef(null);
 
+  // Refs for the focus-sweep timer and current step index
+  const sweepTimerRef = useRef(null);
+  const sweepIndexRef = useRef(0);
+
   // Build stream URLs - these need full URLs for video streaming
   const baseUrl = `${connectionSettings.ip}:${connectionSettings.apiPort}/imswitch/api`;
   const processedStreamUrl = `${baseUrl}/InLineHoloController/mjpeg_stream_inlineholo?startStream=true&jpeg_quality=85`;
@@ -114,7 +141,8 @@ const HoloController = () => {
   useEffect(() => {
     loadParameters();
     loadState();
-    
+    loadStreamParameters();
+
     // Set stream URLs
     dispatch(holoSlice.setProcessedStreamUrl(processedStreamUrl));
     
@@ -123,6 +151,10 @@ const HoloController = () => {
     
     return () => {
       clearInterval(stateInterval);
+      if (sweepTimerRef.current) {
+        clearInterval(sweepTimerRef.current);
+        sweepTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -139,11 +171,12 @@ const HoloController = () => {
       dispatch(holoSlice.setBinning(params.binning || 1));
       dispatch(holoSlice.setRoiCenter(params.roi_center || [0, 0]));
       dispatch(holoSlice.setRoiSize(params.roi_size || 256));
-      dispatch(holoSlice.setColorChannel(params.color_channel || "green"));
+      dispatch(holoSlice.setColorChannel(params.color_channel || "red"));
       dispatch(holoSlice.setFlipX(params.flip_x || false));
       dispatch(holoSlice.setFlipY(params.flip_y || false));
       dispatch(holoSlice.setRotation(params.rotation || 0));
       dispatch(holoSlice.setUpdateFreq(params.update_freq || 10.0));
+      dispatch(holoSlice.setShowRaw(params.show_raw || false));
       
       // Update local ROI selection state
       setRoiSelection({
@@ -171,6 +204,54 @@ const HoloController = () => {
     } catch (error) {
       console.error("Failed to load hologram state:", error);
     }
+  }, [dispatch]);
+
+  // Fetch the *active* stream parameters from the backend so the ROI overlay
+  // scaling reflects the real subsampling factor on first open, before the user
+  // opens the stream settings panel.
+  const loadStreamParameters = useCallback(async () => {
+    try {
+      const response = await apiLiveViewControllerGetStreamParameters();
+      const allParams = response.protocols || response;
+      const currentProtocol =
+        response.current_protocol || liveStreamState.imageFormat || "jpeg";
+      const ss = liveStreamState.streamSettings || {};
+      // setStreamSettings shallow-merges top-level keys, so spread existing
+      // sub-objects to avoid clobbering fields used elsewhere (enabled, quality...)
+      dispatch(
+        liveStreamSlice.setStreamSettings({
+          current_compression_algorithm: currentProtocol,
+          binary: {
+            ...ss.binary,
+            subsampling: {
+              factor:
+                allParams.binary?.subsampling_factor ??
+                ss.binary?.subsampling?.factor ??
+                4,
+            },
+          },
+          jpeg: {
+            ...ss.jpeg,
+            subsampling: {
+              factor:
+                allParams.jpeg?.subsampling_factor ??
+                ss.jpeg?.subsampling?.factor ??
+                1,
+            },
+          },
+          webrtc: {
+            ...ss.webrtc,
+            subsampling_factor:
+              allParams.webrtc?.subsampling_factor ??
+              ss.webrtc?.subsampling_factor ??
+              1,
+          },
+        })
+      );
+    } catch (error) {
+      console.warn("Failed to load stream parameters for holo overlay:", error);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
 
   // Start processing
@@ -252,6 +333,63 @@ const HoloController = () => {
     []
   );
 
+  // Toggle between the raw, in-focus hologram (dz=0) and the slider dz
+  const handleShowRawToggle = useCallback(
+    async (event) => {
+      const checked = event.target.checked;
+      dispatch(holoSlice.setShowRaw(checked));
+      try {
+        await apiInLineHoloControllerSetParams({ show_raw: checked });
+      } catch (error) {
+        console.error("Failed to set show_raw:", error);
+      }
+    },
+    [dispatch]
+  );
+
+  // ----- Focus sweep -----
+  // Stop the sweep and leave dz at whatever value is currently active.
+  const stopFocusSweep = useCallback(() => {
+    if (sweepTimerRef.current) {
+      clearInterval(sweepTimerRef.current);
+      sweepTimerRef.current = null;
+    }
+    setSweep((prev) => ({ ...prev, running: false }));
+  }, []);
+
+  // Start sweeping dz from start→end across N steps, one step per second,
+  // looping back to the start until the user stops it. The dz slider follows
+  // because each step dispatches setDz into redux.
+  const startFocusSweep = useCallback(() => {
+    // Clamp steps to [2, 19] (requirement: must be < 20)
+    const nSteps = Math.max(2, Math.min(19, Math.round(sweep.steps) || 2));
+    const startUm = Number(sweep.startUm) || 0;
+    const endUm = Number(sweep.endUm) || 0;
+
+    if (sweepTimerRef.current) {
+      clearInterval(sweepTimerRef.current);
+      sweepTimerRef.current = null;
+    }
+    sweepIndexRef.current = 0;
+    setSweep((prev) => ({ ...prev, steps: nSteps, running: true }));
+
+    const applyStep = () => {
+      const i = sweepIndexRef.current;
+      const frac = nSteps <= 1 ? 0 : i / (nSteps - 1);
+      const dzMeters = (startUm + (endUm - startUm) * frac) * 1e-6;
+      dispatch(holoSlice.setDz(dzMeters));
+      apiInLineHoloControllerSetDz(dzMeters).catch((error) =>
+        console.error("Focus sweep: failed to set dz:", error)
+      );
+      // Advance, wrapping back to the start so the sweep cycles until stopped
+      sweepIndexRef.current = (i + 1) % nSteps;
+    };
+
+    // Fire the first step immediately, then once per second
+    applyStep();
+    sweepTimerRef.current = setInterval(applyStep, 1000);
+  }, [dispatch, sweep.startUm, sweep.endUm, sweep.steps]);
+
   // Update ROI parameters
   const handleRoiCenterXChange = useCallback((event, value) => {
     setRoiSelection((prev) => ({ ...prev, centerX: value }));
@@ -270,10 +408,8 @@ const HoloController = () => {
   // Backend expects absolute pixel coordinates in the FULL sensor resolution
   const handleApplyRoi = useCallback(async () => {
     try {
-      // Get stream subsampling factor (for coordinate scaling)
-      const streamSubsampling = liveStreamState.streamSettings?.jpeg?.subsampling?.factor || 
-                                liveStreamState.streamSettings?.jpeg?.subsampling_factor ||
-                                liveStreamState.streamSettings?.binary?.subsampling?.factor || 1;
+      // Get the active stream's subsampling factor (for coordinate scaling)
+      const streamSubsampling = getActiveSubsamplingFactor();
       
       // Use imageSize from viewer (this is the streamed/displayed image size)
       const streamedWidth = imageSize.width;
@@ -321,15 +457,13 @@ const HoloController = () => {
     } catch (error) {
       console.error("Failed to apply ROI:", error);
     }
-  }, [dispatch, roiSelection, liveStreamState.streamSettings, imageSize, holoState.binning, totalScalingFactor, roiSizeInPreview]);
+  }, [dispatch, roiSelection, getActiveSubsamplingFactor, imageSize, holoState.binning, totalScalingFactor, roiSizeInPreview]);
 
   // Reset ROI to center
   const handleResetRoi = useCallback(async () => {
     try {
-      // Get stream subsampling factor for coordinate conversion
-      const streamSubsampling = liveStreamState.streamSettings?.jpeg?.subsampling?.factor || 
-                                liveStreamState.streamSettings?.jpeg?.subsampling_factor ||
-                                liveStreamState.streamSettings?.binary?.subsampling?.factor || 1;
+      // Get the active stream's subsampling factor for coordinate conversion
+      const streamSubsampling = getActiveSubsamplingFactor();
       
       // Use imageSize from viewer
       const streamedWidth = imageSize.width;
@@ -360,7 +494,7 @@ const HoloController = () => {
     } catch (error) {
       console.error("Failed to reset ROI:", error);
     }
-  }, [dispatch, roiSelection, liveStreamState.streamSettings, imageSize]);
+  }, [dispatch, roiSelection, getActiveSubsamplingFactor, imageSize]);
 
   // Update developer parameters
   const handleUpdateParameter = useCallback(
@@ -499,10 +633,8 @@ const HoloController = () => {
     // We need to apply with the new values directly since state update is async
     (async () => {
       try {
-        // Get stream subsampling for coordinate conversion only
-        const streamSubsampling = liveStreamState.streamSettings?.jpeg?.subsampling?.factor || 
-                                  liveStreamState.streamSettings?.jpeg?.subsampling_factor ||
-                                  liveStreamState.streamSettings?.binary?.subsampling?.factor || 1;
+        // Get the active stream's subsampling for coordinate conversion only
+        const streamSubsampling = getActiveSubsamplingFactor();
         
         const streamedCenterX = imgWidth / 2;
         const streamedCenterY = imgHeight / 2;
@@ -534,7 +666,7 @@ const HoloController = () => {
         console.error('Failed to auto-apply ROI:', error);
       }
     })();
-  }, [liveStreamState.streamSettings, roiSelection.size, holoState.flipX, holoState.flipY, holoState.rotation]);
+  }, [getActiveSubsamplingFactor, roiSelection.size, holoState.flipX, holoState.flipY, holoState.rotation]);
 
   // Generate ROI overlay SVG for the stream viewer
   // This renders on top of the canvas to show the selected ROI
@@ -721,9 +853,27 @@ const HoloController = () => {
         <Grid item xs={12} md={6} sx={{ display: "flex" }}>
           <Card sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
             <CardContent sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
-              <Typography variant="h6" gutterBottom>
-                Processed Hologram
-              </Typography>
+              <Box
+                display="flex"
+                alignItems="center"
+                justifyContent="space-between"
+                sx={{ mb: 1 }}
+              >
+                <Typography variant="h6">Processed Hologram</Typography>
+                <Tooltip title="Show the raw, in-focus hologram (reconstruct at dz=0) instead of the dz set with the slider">
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        size="small"
+                        checked={holoState.showRaw}
+                        onChange={handleShowRawToggle}
+                      />
+                    }
+                    label="Raw (dz=0)"
+                    sx={{ mr: 0 }}
+                  />
+                </Tooltip>
+              </Box>
               <Box
                 sx={{
                   position: "relative",
@@ -738,13 +888,15 @@ const HoloController = () => {
                   justifyContent: "center",
                 }}
               >
+                {/* Scale the reconstruction up to fill the viewport (it is
+                    typically a small ROI) while preserving aspect ratio */}
                 <img
                   ref={processedImageRef}
                   src={processedStreamUrl}
                   alt="Processed Hologram Stream"
                   style={{
-                    maxWidth: "100%",
-                    maxHeight: "100%",
+                    width: "100%",
+                    height: "100%",
                     objectFit: "contain",
                   }}
                 />
@@ -782,6 +934,89 @@ const HoloController = () => {
           />
         </Box>
       </Paper>
+
+      {/* Focus Sweep */}
+      <Accordion sx={{ mb: 2 }}>
+        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+          <CenterFocusStrongIcon sx={{ mr: 1 }} />
+          <Typography>Focus Sweep (auto dz)</Typography>
+          {sweep.running && (
+            <Chip label="Running" color="success" size="small" sx={{ ml: 2 }} />
+          )}
+        </AccordionSummary>
+        <AccordionDetails>
+          <Grid container spacing={2} alignItems="center">
+            <Grid item xs={12} sm={4}>
+              <TextField
+                label="Start dz (µm)"
+                type="number"
+                value={sweep.startUm}
+                onChange={(e) =>
+                  setSweep((prev) => ({ ...prev, startUm: parseFloat(e.target.value) || 0 }))
+                }
+                fullWidth
+                disabled={sweep.running}
+                inputProps={{ step: 10 }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={4}>
+              <TextField
+                label="End dz (µm)"
+                type="number"
+                value={sweep.endUm}
+                onChange={(e) =>
+                  setSweep((prev) => ({ ...prev, endUm: parseFloat(e.target.value) || 0 }))
+                }
+                fullWidth
+                disabled={sweep.running}
+                inputProps={{ step: 10 }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={4}>
+              <TextField
+                label="Steps (< 20)"
+                type="number"
+                value={sweep.steps}
+                onChange={(e) =>
+                  setSweep((prev) => ({ ...prev, steps: parseInt(e.target.value, 10) || 2 }))
+                }
+                fullWidth
+                disabled={sweep.running}
+                inputProps={{ step: 1, min: 2, max: 19 }}
+              />
+            </Grid>
+          </Grid>
+
+          <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
+            <Button
+              variant="contained"
+              color="primary"
+              startIcon={<PlayArrowIcon />}
+              onClick={startFocusSweep}
+              disabled={sweep.running}
+            >
+              Start Sweep
+            </Button>
+            <Button
+              variant="contained"
+              color="error"
+              startIcon={<StopIcon />}
+              onClick={stopFocusSweep}
+              disabled={!sweep.running}
+            >
+              Stop
+            </Button>
+          </Stack>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ mt: 1, display: "block" }}
+          >
+            Steps dz from start to end (1 step/second) and loops until stopped.
+            Stop keeps the currently active dz. Maximum 19 steps.
+          </Typography>
+        </AccordionDetails>
+      </Accordion>
 
       {/* ROI Controls */}
       <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
@@ -871,7 +1106,7 @@ const HoloController = () => {
               }}
             />
             <Typography variant="caption" color="text.secondary">
-              Scaling: {totalScalingFactor}× (subsampling: {liveStreamState.streamSettings?.jpeg?.subsampling?.factor || 1}, binning: {holoState.binning || 1})
+              Scaling: {totalScalingFactor}× (subsampling: {getActiveSubsamplingFactor()}, binning: {holoState.binning || 1})
             </Typography>
           </Grid>
         </Grid>

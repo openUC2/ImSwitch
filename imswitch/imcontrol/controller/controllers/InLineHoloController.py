@@ -37,12 +37,13 @@ class InLineHoloParams:
     dz: float = 0.0  # propagation distance in meters
     roi_center: Optional[List[int]] = None  # [x, y] in pixels
     roi_size: Optional[int] = 256  # square ROI size
-    color_channel: str = "green"  # "red", "green", "blue"
+    color_channel: str = "red"  # "red", "green", "blue"
     flip_x: bool = False
     flip_y: bool = False
     rotation: int = 0  # 0, 90, 180, 270
     update_freq: float = 10.0  # Hz (processing framerate)
     binning: int = 1  # binning factor (1, 2, 4, etc.)
+    show_raw: bool = False  # if True, reconstruct at dz=0 (raw, in-focus hologram)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -58,6 +59,7 @@ class InLineHoloParams:
             "rotation": self.rotation,
             "update_freq": self.update_freq,
             "binning": self.binning,
+            "show_raw": self.show_raw,
         }
 
 
@@ -408,8 +410,10 @@ class InLineHoloController(LiveUpdatedController):
         # Convert to complex field (E-field from intensity)
         E0 = np.sqrt(gray.astype(float))
 
-        # Propagate
-        Ef = self._fresnel_propagator(E0, self._params.dz)
+        # Propagate. When show_raw is set we reconstruct at dz=0, which returns
+        # the raw, in-focus hologram intensity regardless of the slider value.
+        dz = 0.0 if self._params.show_raw else self._params.dz
+        Ef = self._fresnel_propagator(E0, dz)
 
         # Return intensity
         return self._abssqr(Ef)

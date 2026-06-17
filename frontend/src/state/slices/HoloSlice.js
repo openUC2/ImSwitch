@@ -23,10 +23,13 @@ const initialHoloState = {
   roiSize: 256, // square ROI size in pixels
   
   // Image processing parameters
-  colorChannel: "green", // "red", "green", "blue"
+  colorChannel: "red", // "red", "green", "blue"
   flipX: false,
   flipY: false,
   rotation: 0, // 0, 90, 180, 270 degrees
+
+  // Display raw hologram (reconstruct at dz=0) instead of the slider dz
+  showRaw: false,
   
   // Processing rate
   updateFreq: 10.0, // Hz (processing framerate)
@@ -107,7 +110,10 @@ const holoSlice = createSlice({
     setRotation: (state, action) => {
       state.rotation = action.payload;
     },
-    
+    setShowRaw: (state, action) => {
+      state.showRaw = action.payload;
+    },
+
     // Processing rate
     setUpdateFreq: (state, action) => {
       state.updateFreq = action.payload;
@@ -190,6 +196,7 @@ export const {
   setFlipX,
   setFlipY,
   setRotation,
+  setShowRaw,
   setUpdateFreq,
   setFrameSize,
   setLastProcessTime,

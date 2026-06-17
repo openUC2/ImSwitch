@@ -354,10 +354,10 @@ class InLineHoloController(LiveUpdatedController):
         # subsakmple
         if len(image.shape) == 2:
             # Grayscale
-            return image[::2, ::2]
+            return image[::self._params.binning, ::self._params.binning]
         else:
             # Color
-            return image[::2, ::2, :]
+            return image[::self._params.binning, ::self._params.binning, :]
 
     def _extract_roi(self, image):
         """Extract ROI from image based on current parameters.
@@ -428,13 +428,13 @@ class InLineHoloController(LiveUpdatedController):
 
     def _process_inline(self, image):
         """Process inline hologram"""
-        # Apply binning first
-        binned = self._apply_binning(image)
-
         # Extract ROI and color channel
-        roi = self._extract_roi(binned)
+        roi = self._extract_roi(image)
         gray = self._extract_color_channel(roi)
         gray = self._apply_transforms(gray)
+        
+        # Apply binning first
+        gray = self._apply_binning(gray)
 
         # Convert to complex field (E-field from intensity)
         E0 = np.sqrt(gray.astype(float))

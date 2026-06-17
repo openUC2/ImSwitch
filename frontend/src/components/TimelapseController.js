@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { useSelector } from "react-redux";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
+import { selectHasController } from "../state/slices/BackendCapabilitiesSlice";
 import {
-  Paper,
+  Box,
   Grid,
   TextField,
   Slider,
@@ -16,6 +17,9 @@ const TimelapseController = () => {
   const connectionSettings = useSelector(getConnectionSettingsState);
   const hostIP = connectionSettings.ip;
   const hostPort = connectionSettings.apiPort;
+  const hasLEDMatrixController = useSelector(
+    selectHasController("LEDMatrixController"),
+  );
   const socket = useWebSocket();
   const [parameters, setParameters] = useState({
     nTimes: 1,
@@ -167,14 +171,25 @@ const TimelapseController = () => {
     });
   };
 
+  const visibleSourceIndexes = parameters.illuSources.reduce(
+    (indexes, source, index) => {
+      if (!hasLEDMatrixController && /matrix/i.test(source)) {
+        return indexes;
+      }
+      indexes.push(index);
+      return indexes;
+    },
+    [],
+  );
+
   return (
     <>
       {!isActivated ? (
-        <Paper style={{ padding: "20px" }}>
+        <Box sx={{ width: "100%" }}>
           <Typography>Timelapse Controller is not activated</Typography>
-        </Paper>
+        </Box>
       ) : (
-        <Paper style={{ padding: "20px" }}>
+        <Box sx={{ p: 3 }}>
           <Grid container spacing={2}>
             <Grid item xs={6}>
               <TextField
@@ -212,49 +227,61 @@ const TimelapseController = () => {
                 fullWidth
               />
             </Grid>
-            {parameters.illuSources.map((source, index) => (
-              <Grid container spacing={2} key={index}>
-                <Grid item xs={6}>
-                  <Typography>{`Source: ${source}`}</Typography>
-                  <Slider
-                    value={parameters.illuIntensities[index] || 0}
-                    onChange={(e, value) =>
-                      handleChange("illuIntensities", value, index)
-                    }
-                    min={parameters.illuSourceMinIntensities[index] || 0}
-                    max={parameters.illuSourceMaxIntensities[index] || 100}
-                  />
-                </Grid>
-                <Grid item xs={3}>
-                  <TextField
-                    id={`gain${index}`}
-                    label="Gain"
-                    type="number"
-                    value={parameters.gain[index] || -1}
-                    onChange={(e) =>
-                      handleChange("gain", parseInt(e.target.value), index)
-                    }
-                    fullWidth
-                  />
-                </Grid>
-                <Grid item xs={3}>
-                  <TextField
-                    id={`exposureTime${index}`}
-                    label="Exposure Time (µs)"
-                    type="number"
-                    value={parameters.exposureTimes[index] || -1}
-                    onChange={(e) =>
-                      handleChange(
-                        "exposureTimes",
-                        parseInt(e.target.value),
-                        index,
-                      )
-                    }
-                    fullWidth
-                  />
-                </Grid>
+            {visibleSourceIndexes.length > 0 && (
+              <Grid item xs={12} sx={{ pt: 1 }}>
+                <Typography variant="subtitle2">Sources</Typography>
               </Grid>
-            ))}
+            )}
+            {visibleSourceIndexes.map((index) => {
+              const source = parameters.illuSources[index];
+              return (
+                <Grid item xs={12} key={index}>
+                  <Grid container spacing={2} alignItems="flex-start">
+                    <Grid item xs={6}>
+                      <Typography
+                        sx={{ mb: 1 }}
+                      >{`Source: ${source}`}</Typography>
+                      <Slider
+                        value={parameters.illuIntensities[index] || 0}
+                        onChange={(e, value) =>
+                          handleChange("illuIntensities", value, index)
+                        }
+                        min={parameters.illuSourceMinIntensities[index] || 0}
+                        max={parameters.illuSourceMaxIntensities[index] || 100}
+                      />
+                    </Grid>
+                    <Grid item xs={3}>
+                      <TextField
+                        id={`gain${index}`}
+                        label="Gain"
+                        type="number"
+                        value={parameters.gain[index] || -1}
+                        onChange={(e) =>
+                          handleChange("gain", parseInt(e.target.value), index)
+                        }
+                        fullWidth
+                      />
+                    </Grid>
+                    <Grid item xs={3}>
+                      <TextField
+                        id={`exposureTime${index}`}
+                        label="Exposure Time (µs)"
+                        type="number"
+                        value={parameters.exposureTimes[index] || -1}
+                        onChange={(e) =>
+                          handleChange(
+                            "exposureTimes",
+                            parseInt(e.target.value),
+                            index,
+                          )
+                        }
+                        fullWidth
+                      />
+                    </Grid>
+                  </Grid>
+                </Grid>
+              );
+            })}
             <Grid item xs={12}>
               <Typography>{`Current Step: ${currentStep}`}</Typography>
             </Grid>
@@ -278,7 +305,7 @@ const TimelapseController = () => {
               </Button>
             </Grid>
           </Grid>
-        </Paper>
+        </Box>
       )}
     </>
   );

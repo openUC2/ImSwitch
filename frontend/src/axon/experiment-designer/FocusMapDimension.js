@@ -255,11 +255,21 @@ const FocusMapDimension = () => {
     }
   }, []);
 
-  // Clear all focus maps
+  // Clear all focus maps.
+  // "Clear All" must FULLY disable focus mapping, otherwise the next
+  // experiment still re-sends focusMap.enabled and the backend re-measures /
+  // re-applies a Z surface (the stage appears to "snap back" to old focus
+  // points even after the user manually changed Z).  So in addition to
+  // clearing the backend maps + cached results we:
+  //   - disable the focus-map dimension (enabled=false) so it is excluded
+  //     from the experiment payload, and
+  //   - drop any manually added focus points.
   const handleClearAll = useCallback(async () => {
     try {
       await apiExperimentControllerClearFocusMap();
       dispatch(focusMapSlice.clearFocusMapResults());
+      dispatch(focusMapSlice.clearManualPoints());
+      dispatch(focusMapSlice.setFocusMapEnabled(false));
       setPreviewData(null);
     } catch (err) {
       dispatch(focusMapSlice.setFocusMapError(err.message || "Failed to clear focus maps"));
@@ -518,7 +528,7 @@ const FocusMapDimension = () => {
 
   const groupEntries = Object.entries(results);
   const channelOffsetEntries = Object.entries(config.channel_offsets || {});
-  const illuSources = parameterRange.illuSources || [];
+  const illuSources = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
 
   return (
     <Box>
@@ -1143,6 +1153,7 @@ const FocusMapDimension = () => {
                     size="small"
                     variant="contained"
                     startIcon={<PlayArrowIcon />}
+                    title={!config.use_manual_map ? "Enable 'Use manual map for all groups' above to activate manual fitting" : ""}
                     onClick={async () => {
                       dispatch(focusMapSlice.setFocusMapComputing({ isComputing: true, groupId: "manual" }));
                       dispatch(focusMapSlice.clearFocusMapError());
@@ -1195,9 +1206,10 @@ const FocusMapDimension = () => {
                 ui.isComputing ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />
               }
               onClick={handleComputeAll}
-              disabled={ui.isComputing}
+              disabled={ui.isComputing || config.use_manual_map}
+              title={config.use_manual_map ? "Disabled in manual map mode — use 'Fit from Points' instead" : ""}
             >
-              {ui.isComputing ? "Computing..." : "Compute All"}
+              {ui.isComputing ? "Measuring..." : "Auomatic Measure and Fit"} {/* TODO: We should only be able to click this button if we have not already entered items for the manual scan*/}
             </Button>
 
             {/* Interrupt button – only visible during computation */}

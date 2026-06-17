@@ -18,6 +18,12 @@ const initialState = {
   backendConnected: false, // Backend API reachable (enables UI functions)
   uc2Connected: false, // UC2 hardware connected to backend
 
+  // CAN-bus power & emergency-stop (safety) — busPower: 1=on, 0=off, null=unknown
+  busPower: null,
+  busAvailable: true, // bus usable (powered and not in E-stop)
+  emergencyActive: false, // hardware E-stop currently asserted
+  emergencyInfo: null, // { reason, msg, timestamp } from the last emergency event
+
   // Config file editing
   selectedFileForEdit: "",
   editorJson: null,
@@ -86,6 +92,26 @@ const uc2Slice = createSlice({
     },
     setUc2Connected: (state, action) => {
       state.uc2Connected = action.payload;
+    },
+
+    // CAN-bus power & emergency-stop
+    setBusPower: (state, action) => {
+      state.busPower = action.payload;
+    },
+    // Merge a bus-status snapshot ({ power, available, emergencyActive, ... })
+    setBusStatus: (state, action) => {
+      const s = action.payload || {};
+      if (s.power !== undefined) state.busPower = s.power;
+      if (s.available !== undefined) state.busAvailable = s.available;
+      if (s.emergencyActive !== undefined)
+        state.emergencyActive = s.emergencyActive;
+      if (s.reason !== undefined || s.msg !== undefined) {
+        state.emergencyInfo = {
+          reason: s.reason ?? null,
+          msg: s.msg ?? null,
+          timestamp: s.timestamp ?? new Date().toISOString(),
+        };
+      }
     },
 
     // Config file editing
@@ -184,6 +210,8 @@ export const {
   clearSerialLog,
   setBackendConnected,
   setUc2Connected,
+  setBusPower,
+  setBusStatus,
   setSelectedFileForEdit,
   setEditorJson,
   setEditorJsonText,

@@ -16,12 +16,53 @@ import time
 import numpy as np
 from imswitch.imcommon.model import initLogger
 from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowStep
+from psygnal import Signal as _PSignal
 
 try:
     from useq import MDASequence, MDAEvent, Channel
     HAS_USEQ = True
 except ImportError:
     HAS_USEQ = False
+
+
+
+
+
+class MDASignaler:
+    """pymmcore-plus compatible signal container for MDA acquisitions.
+
+    Mirrors the ``CMMCorePlus.mda.events`` API so that protocols written for
+    pymmcore-plus translate directly to ImSwitch::
+
+        manager.events.frameReady.connect(on_frame_ready)
+
+        def on_frame_ready(img: np.ndarray, event: MDAEvent) -> None:
+            results = analyzer.run(img)
+
+    Signals
+    -------
+    sequenceStarted(sequence)        : emitted right before the first event.
+    frameReady(image, event)         : emitted after each frame is acquired,
+                                       carrying the image data and the originating
+                                       ``MDAEvent`` (with its metadata/index).
+    sequenceFinished(sequence)       : emitted after the last event (or on stop).
+    sequenceCanceled(sequence)       : emitted when a run is stopped early.
+    """
+
+    def __init__(self):
+        # Build a tiny psygnal-backed container so connect/emit match
+        # pymmcore-plus exactly (including thread-safe disconnection).
+        class _PsygnalSignaler:
+            sequenceStarted = _PSignal(object)
+            frameReady = _PSignal(object, object)
+            sequenceFinished = _PSignal(object)
+            sequenceCanceled = _PSignal(object)
+
+        self._impl = _PsygnalSignaler()
+        self.sequenceStarted = self._impl.sequenceStarted
+        self.frameReady = self._impl.frameReady
+        self.sequenceFinished = self._impl.sequenceFinished
+        self.sequenceCanceled = self._impl.sequenceCanceled
 
 
 class MDASequenceManager:
@@ -79,6 +120,9 @@ class MDASequenceManager:
         self._hooks_after_sequence = []
         self._hooks_before_event = []
         self._hooks_after_event = []
+
+        # pymmcore-plus compatible signals (events.frameReady.connect(...))
+        self.events = MDASignaler()
 
         # State tracking
         self._is_running = False
@@ -163,6 +207,9 @@ class MDASequenceManager:
             for hook in self._hooks_before_sequence:
                 hook(sequence)
 
+            # Notify listeners that the sequence is starting (pymmcore-plus API)
+            self.events.sequenceStarted.emit(sequence)
+
             # Execute each MDAEvent in the sequence
             # Note: z_plan, time_plan, and grid_plan are automatically handled by useq-schema
             # which generates MDAEvents with appropriate positions (x_pos, y_pos, z_pos) and
@@ -170,6 +217,7 @@ class MDASequenceManager:
             for event_idx, event in enumerate(sequence):
                 if not self._is_running:
                     self.__logger.warning("MDA sequence stopped by user")
+                    self.events.sequenceCanceled.emit(sequence)
                     break
                 self.__logger.info(f"Processing event {event_idx}: {dict(event.index)}")
                 # Handle time_plan: Wait until min_start_time if specified
@@ -189,6 +237,14 @@ class MDASequenceManager:
                 # grid_plan handling: event.x_pos, event.y_pos are automatically set
                 image = self._execute_event(event, event_idx)
 
+                # Emit frameReady as soon as the image was acquired.
+                # Signature matches pymmcore-plus: (image, event).
+                if image is not None:
+                    try:
+                        self.events.frameReady.emit(image, event)
+                    except Exception as e:
+                        self.__logger.error(f"Error in frameReady callback: {e}")
+
                 # Run post-event hooks
                 for hook in self._hooks_after_event:
                     hook(event, image)
@@ -200,6 +256,9 @@ class MDASequenceManager:
             # Run post-sequence hooks
             for hook in self._hooks_after_sequence:
                 hook(sequence)
+
+            # Notify listeners that the sequence finished (pymmcore-plus API)
+            self.events.sequenceFinished.emit(sequence)
 
             self.__logger.info("MDA sequence completed successfully")
 

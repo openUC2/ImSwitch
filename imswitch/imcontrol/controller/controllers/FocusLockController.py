@@ -12,7 +12,6 @@ import threading
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger, APIExport, dirtools
 from ..basecontrollers import ImConWidgetController
-from imswitch import IS_HEADLESS
 
 # Import extracted modules
 from imswitch.imcontrol.controller.pidcontroller import PIDController
@@ -401,9 +400,6 @@ class FocusLockController(ImConWidgetController):
                 integral_limit=self._pi_params.integral_limit,
                 output_lowpass_alpha=self._pi_params.output_lowpass_alpha,
             )
-        if not IS_HEADLESS:
-            self._widget.setKp(self._pi_params.kp)
-            self._widget.setKi(self._pi_params.ki)
         return self._pi_params.to_dict()
 
     @APIExport(runOnUIThread=True)
@@ -533,15 +529,10 @@ class FocusLockController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def toggleFocus(self, toLock: bool = None):
         self.aboutToLock = False
-        if (not IS_HEADLESS and self._widget.lockButton.isChecked()) or (toLock is not None and toLock and not self.locked):
+        if toLock is not None and toLock and not self.locked:
             self.lockFocus(self.stage.getPosition()["Z"])
-            if not IS_HEADLESS:
-                self._widget.lockButton.setText("Unlock")
-        else:
             self.unlockFocus()
-            if not IS_HEADLESS:
-                self._widget.lockButton.setText("Lock")
-
+            
     def cameraDialog(self):
         try:
             self._master.detectorsManager[self.camera].openPropertiesDialog()
@@ -876,10 +867,6 @@ class FocusLockController(ImConWidgetController):
             )
         else:
             self.pi.set_parameters(kp, ki)
-        if not IS_HEADLESS:
-            self._widget.setKp(kp)
-            self._widget.setKi(ki)
-
     @APIExport(runOnUIThread=True)
     def getPIParameters(self) -> Tuple[float, float]:
         return self._pi_params.kp, self._pi_params.ki
@@ -955,17 +942,9 @@ class FocusLockController(ImConWidgetController):
         self.locked = True
         self._travel_used_um = 0.0
 
-        self.updateZStepLimits()
         self._emitStateChangedSignal()
         self._logger.info(f"Focus locked at position {zpos} with set point {self.current_focus_value}")
 
-    def updateZStepLimits(self):
-        """Update Z step limits from configuration."""
-        try:
-            if not IS_HEADLESS and hasattr(self, '_widget'):
-                self._focus_params.z_step_limit_nm = float(self._widget.zStepFromEdit.text())
-        except Exception:
-            pass  # Use default from focus params
 
     @staticmethod
     def extract(marray: np.ndarray, crop_size: Optional[int] = None, crop_center: Optional[List[int]] = None) -> np.ndarray:
@@ -1003,7 +982,6 @@ class FocusLockController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def setZStepLimit(self, limit_nm: float):
         self._focus_params.z_step_limit_nm = float(limit_nm)
-        self.updateZStepLimits()
         return self._focus_params.z_step_limit_nm
 
     @APIExport(runOnUIThread=True)
@@ -1686,7 +1664,7 @@ class FocusCalibThread(object):
 
     def show(self):
         """Display calibration results (GUI or headless mode)."""
-        if IS_HEADLESS or not hasattr(self._controller, '_widget'):
+        if not hasattr(self._controller, '_widget'):
             # Enhanced headless mode signaling
             if self._controller._current_calibration:
                 # Send comprehensive calibration signal for headless mode

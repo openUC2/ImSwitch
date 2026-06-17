@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import {
   IconButton,
   Tooltip,
@@ -6,6 +6,7 @@ import {
   Chip,
   Typography,
   CircularProgress,
+  Stack,
 } from "@mui/material";
 import { keyframes } from "@mui/system";
 import {
@@ -13,10 +14,15 @@ import {
   GamepadOutlined,
   FiberManualRecord,
   Videocam,
+  ZoomIn,
+  ZoomOut,
+  RestartAlt,
 } from "@mui/icons-material";
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import LiveViewComponent from "./LiveViewComponent";
 import LiveViewerGL from "../components/LiveViewerGL";
 import WebRTCViewer from "./WebRTCViewer";
+import MJPEGViewer from "./MJPEGViewer";
 import PositionControllerComponent from "./PositionControllerComponent";
 import HistogramOverlay from "../components/HistogramOverlay";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner";
@@ -44,6 +50,10 @@ const pulse = keyframes`
  * @param {function} onImageLoad - Callback when image dimensions change: (width, height)
  * @param {React.ReactNode} overlayContent - Optional overlay content to render on top of the viewer
  * @param {boolean} enableStageMovement - Enable default double-click stage movement behavior (default: true)
+ * @param {boolean} enableZoomPan - Wrap the viewer in the zoom/pan shell (default: true).
+ *   Set to false for precise single-click workflows (e.g. pixel calibration marking):
+ *   the react-zoom-pan-pinch panning layer otherwise intercepts pointer events and
+ *   swallows the click, so the viewer is rendered directly and clicks reach the canvas.
  */
 const LiveViewControlWrapper = ({
   useFastMode = true,
@@ -51,26 +61,90 @@ const LiveViewControlWrapper = ({
   onImageLoad,
   overlayContent,
   enableStageMovement = true,
+  enableZoomPan = true,
 }) => {
   const dispatch = useDispatch();
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
+  const transformFrameRef = useRef(null);
+  const pendingTransformRef = useRef({
+    scale: 1,
+    positionX: 0,
+    positionY: 0,
+  });
 
   // Get persistent position controller visibility from Redux
   const showPositionController = liveViewState.showPositionController || false;
   const [isHovering, setIsHovering] = useState(false);
+  const [transformState, setTransformState] = useState({
+    scale: 1,
+    positionX: 0,
+    positionY: 0,
+  });
 
   // Determine which viewer to use based on stream format
   // - WebRTC: Use WebRTCViewer for real-time low-latency streaming
-  // - Binary: Use LiveViewerGL for high-performance WebGL rendering
-  // - JPEG: Use LiveViewComponent (legacy) for JPEG streaming
+  //   (currently hidden from the dropdown — the code path is kept
+  //    intact for when we revisit the aiortc setup).
+  // - MJPEG: Use MJPEGViewer (direct HTTP multipart, no socket.io).
+  //          Recommended on Windows where the socket.io ws upgrade is
+  //          flaky and the JPEG-over-ws path runs at 3–4× lower FPS.
+  // - Binary: Use LiveViewerGL for high-performance WebGL rendering.
+  // - JPEG: Use LiveViewComponent (legacy) for JPEG-over-socket.io.
   const useWebRTC = liveStreamState.imageFormat === "webrtc";
+  const useMJPEG = liveStreamState.imageFormat === "mjpeg";
   const useWebGL =
     !useWebRTC &&
+    !useMJPEG &&
     liveStreamState.backendCapabilities.webglSupported &&
     !liveStreamState.isLegacyBackend &&
     liveStreamState.imageFormat !== "jpeg";
+  const canHover =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(hover: hover)").matches;
+  const showInteractiveControls =
+    showPositionController || (isHovering && canHover);
+  const zoomPercent = Math.round(transformState.scale * 100);
+
+  useEffect(() => {
+    return () => {
+      if (transformFrameRef.current !== null) {
+        cancelAnimationFrame(transformFrameRef.current);
+      }
+    };
+  }, []);
+
+  const handleTransformed = useCallback((_, state) => {
+    pendingTransformRef.current = {
+      scale: state.scale,
+      positionX: state.positionX,
+      positionY: state.positionY,
+    };
+
+    if (transformFrameRef.current !== null) {
+      return;
+    }
+
+    transformFrameRef.current = requestAnimationFrame(() => {
+      transformFrameRef.current = null;
+
+      setTransformState((prevState) => {
+        const nextState = pendingTransformRef.current;
+
+        if (
+          Math.abs(prevState.scale - nextState.scale) < 0.001 &&
+          Math.abs(prevState.positionX - nextState.positionX) < 0.001 &&
+          Math.abs(prevState.positionY - nextState.positionY) < 0.001
+        ) {
+          return prevState;
+        }
+
+        return nextState;
+      });
+    });
+  }, []);
 
   // Handle double-click for stage movement
   const handleImageDoubleClick = async (
@@ -136,6 +210,90 @@ const LiveViewControlWrapper = ({
     },
     [onImageLoad],
   );
+
+  const renderViewer = () => {
+    if (useWebRTC && liveViewState.isStreamRunning) {
+      return (
+        <WebRTCViewer
+          key="webrtc-viewer"
+          onClick={onClick}
+          onDoubleClick={handleImageDoubleClick}
+          onImageLoad={handleImageLoadInternal}
+        />
+      );
+    }
+
+    if (useMJPEG && liveViewState.isStreamRunning) {
+      return (
+        <MJPEGViewer
+          key="mjpeg-viewer"
+          onClick={onClick}
+          onDoubleClick={handleImageDoubleClick}
+          onImageLoad={handleImageLoadInternal}
+          overlayContent={overlayContent}
+        />
+      );
+    }
+
+    if (!liveViewState.isStreamRunning) {
+      return (
+        <Box
+          sx={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 2,
+          }}
+        >
+          <Videocam
+            sx={{
+              fontSize: 80,
+              color: "text.disabled",
+            }}
+          />
+          <Typography
+            variant="h6"
+            sx={{
+              color: "text.secondary",
+            }}
+          >
+            Stream nicht aktiv
+          </Typography>
+          <CircularProgress
+            size={24}
+            sx={{
+              color: "text.disabled",
+            }}
+          />
+        </Box>
+      );
+    }
+
+    if (useWebGL) {
+      return (
+        <LiveViewerGL
+          onClick={onClick}
+          onDoubleClick={handleImageDoubleClick}
+          onImageLoad={handleImageLoadInternal}
+          overlayContent={overlayContent}
+          enableViewportControls={false}
+        />
+      );
+    }
+
+    return (
+      <LiveViewComponent
+        useFastMode={useFastMode}
+        onClick={onClick}
+        onDoubleClick={handleImageDoubleClick}
+        onImageLoad={handleImageLoadInternal}
+        overlayContent={overlayContent}
+      />
+    );
+  };
 
   return (
     <div
@@ -293,70 +451,134 @@ const LiveViewControlWrapper = ({
           }}
         />
 
-        {/* Select appropriate viewer based on stream format */}
-        {/* WebRTC: Only render when stream is running to force remount on start/stop */}
-        {useWebRTC && liveViewState.isStreamRunning ? (
-          <WebRTCViewer
-            key="webrtc-viewer" // Force new instance on remount
-            onClick={onClick}
-            onDoubleClick={handleImageDoubleClick}
-            onImageLoad={handleImageLoadInternal}
-          />
-        ) : !liveViewState.isStreamRunning ? (
-          // Placeholder when stream is not running
-          <Box
-            sx={{
-              width: "100%",
-              height: "100%",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 2,
+        {liveViewState.isStreamRunning && enableZoomPan ? (
+          <TransformWrapper
+            key={`zoom-shell-${liveStreamState.imageFormat}-${liveViewState.isStreamRunning}`}
+            initialScale={1}
+            minScale={1}
+            maxScale={8}
+            centerOnInit
+            limitToBounds={false}
+            smooth
+            doubleClick={{ disabled: true }}
+            wheel={{
+              step: 0.15,
+              smoothStep: 0.01,
+              wheelDisabled: true,
+              touchPadDisabled: true,
             }}
+            pinch={{ step: 5 }}
+            panning={{
+              velocityDisabled: true,
+            }}
+            onTransformed={handleTransformed}
           >
-            <Videocam
-              sx={{
-                fontSize: 80,
-                color: "text.disabled",
-              }}
-            />
-            <Typography
-              variant="h6"
-              sx={{
-                color: "text.secondary",
-              }}
-            >
-              Stream nicht aktiv
-            </Typography>
-            <CircularProgress
-              size={24}
-              sx={{
-                color: "text.disabled",
-              }}
-            />
-          </Box>
-        ) : useWebGL ? (
-          <LiveViewerGL
-            onClick={onClick}
-            onDoubleClick={handleImageDoubleClick}
-            onImageLoad={handleImageLoadInternal}
-            overlayContent={overlayContent}
-          />
+            {({ zoomIn, zoomOut, resetTransform }) => {
+              const hasTransform =
+                Math.abs(transformState.scale - 1) > 0.01 ||
+                Math.abs(transformState.positionX) > 0.5 ||
+                Math.abs(transformState.positionY) > 0.5;
+
+              return (
+                <>
+                  <TransformComponent
+                    wrapperStyle={{
+                      width: "100%",
+                      height: "100%",
+                      touchAction: "none",
+                    }}
+                    contentStyle={{
+                      width: "100%",
+                      height: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {renderViewer()}
+                  </TransformComponent>
+
+                  {showInteractiveControls && (
+                    <>
+                      <Stack
+                        direction="row"
+                        spacing={1}
+                        sx={{
+                          position: "absolute",
+                          right: 12,
+                          bottom: 12,
+                          zIndex: 4,
+                          alignItems: "center",
+                        }}
+                      >
+                        <Chip
+                          label={`Zoom ${zoomPercent}%`}
+                          size="small"
+                          color={hasTransform ? "primary" : "default"}
+                          sx={{
+                            backgroundColor: hasTransform
+                              ? "primary.main"
+                              : "rgba(0, 0, 0, 0.55)",
+                            color: "white",
+                            fontWeight: 700,
+                            backdropFilter: "blur(4px)",
+                          }}
+                        />
+                        <Stack
+                          direction="row"
+                          spacing={0.5}
+                          sx={{
+                            p: 0.5,
+                            borderRadius: 999,
+                            backgroundColor: "rgba(0, 0, 0, 0.55)",
+                            backdropFilter: "blur(4px)",
+                          }}
+                        >
+                          <Tooltip title="Zoom out">
+                            <IconButton
+                              size="small"
+                              onClick={() => zoomOut(0.2)}
+                              sx={{ color: "white" }}
+                            >
+                              <ZoomOut fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Reset view">
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() => resetTransform(200)}
+                                disabled={!hasTransform}
+                                sx={{ color: "white" }}
+                              >
+                                <RestartAlt fontSize="small" />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                          <Tooltip title="Zoom in">
+                            <IconButton
+                              size="small"
+                              onClick={() => zoomIn(0.2)}
+                              sx={{ color: "white" }}
+                            >
+                              <ZoomIn fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Stack>
+                      </Stack>
+                    </>
+                  )}
+                </>
+              );
+            }}
+          </TransformWrapper>
         ) : (
-          <LiveViewComponent
-            useFastMode={useFastMode}
-            onClick={onClick}
-            onDoubleClick={handleImageDoubleClick}
-            onImageLoad={handleImageLoadInternal}
-            overlayContent={overlayContent}
-          />
+          renderViewer()
         )}
       </Box>
 
       {/* Position controller - shown on hover OR when toggled on */}
-      {(showPositionController ||
-        (isHovering && window.matchMedia("(hover: hover)").matches)) && (
+      {showInteractiveControls && (
         <div
           style={{
             position: "absolute",

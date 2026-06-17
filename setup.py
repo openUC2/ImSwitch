@@ -1,20 +1,6 @@
 from setuptools import setup, find_packages
 
 
-# Version will be read from your package's __init__.py
-# Make sure __version__ is defined in imswitch/__init__.py
-def get_version():
-    version_file = 'imswitch/__init__.py'
-    with open(version_file, 'r') as file:
-        for line in file:
-            if line.startswith('__version__'):
-                # Strip the line to remove whitespaces and newline characters,
-                # then split it on '=' and strip again to remove any remaining whitespaces.
-                # Finally, strip the quotes from the version string.
-                return line.strip().split('=')[1].strip().strip('\'"')
-    raise RuntimeError('Unable to find version string.')
-
-
 # NOTE: This setup.py is maintained for backward compatibility.
 # The primary configuration is now in pyproject.toml for UV support.
 # When using UV, this file is not needed, but it's kept for pip compatibility.
@@ -25,7 +11,6 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="ImSwitchUC2",
-    version=get_version(),
     author="Benedict Diederich, Xavier Casas Moreno, et al.",
     author_email="benedictdied@gmail.com",
     description="Microscopy control",
@@ -67,14 +52,14 @@ setup(
         "matplotlib == 3.9.2",
         "opencv-python",
         "dataclasses-json >= 0.5",
-        "aiortc >= 1.9.0",
+        "aiortc",
         "UC2-REST",
         "tk >= 0.1.0",
         "jupyter",
         "python-multipart >= 0.0.5",
         "piexif >= 1.1.3",
-        "NanoImagingPack==2.1.4",
-        "imswitchclient>=0.1.2",
+        "NanoImagingPack==2.1.5",
+        "imswitchclient>=0.1.7",
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "jupyterlab==4.2.5",
@@ -83,36 +68,29 @@ setup(
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
         "mikro-next>=0.18.0",
-        "arkitekt-next[all]==0.35.0",
+        "arkitekt-next[all]>=0.39.5",
         "koil>=2.0.5",
         "msgpack>=1.0.4",
         "esptool", 
-        "omero-py"
+        "omero-py",
+        "uc2-rest>=0.2.0.33", 
+        "unitelabs-sila", 
+        "unitelabs-cdk",
+        "ashlarUC2 @ git+https://github.com/Franzili/ashlarUC2",
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
-        'PyQt5': [
-            "qtpy >= 1.9",
-            "PyQt5 >= 5.15.2",
-            "QDarkStyle >= 3",
-            "QScintilla >= 2.12",
-            "PyQtWebEngine >= 5.15.2",
-            "pyqtgraph >= 0.12.1",
-            "napari[pyqt5] == 0.6.4",
-            "lantzdev[qt] >= 0.5.2",
-            "qtpy >= 1.9"
-        ],
         'Lepmon': [
             "RPi.GPIO",
             "luma.oled",
             "smbus2",
-            "smbus"
+            "smbus" 
         ],
         'microEye': [
                     "numba>=0.61.2"
         ],
         'Ashlar': [
-            "ashlarUC2"
+            "ashlarUC2 @ git+https://github.com/Franzili/ashlarUC2",
         ],
         'arkitekt':
             [

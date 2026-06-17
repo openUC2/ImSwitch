@@ -247,14 +247,6 @@ class MockCameraTucsen:
         """Set camera binning."""
         self.binning = binning
 
-    def setFlatfieldImage(self, flatfieldImage, isFlatfielding):
-        """Set flatfield image (mock implementation)."""
-        self.__logger.debug("Mock camera: flatfield image set")
-
-    def recordFlatfieldImage(self):
-        """Record flatfield image (mock implementation)."""
-        self.__logger.debug("Mock camera: flatfield image recorded")
-
     # Context manager support
     def __enter__(self):
         return self

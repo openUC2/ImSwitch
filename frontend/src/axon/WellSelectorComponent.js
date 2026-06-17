@@ -15,7 +15,8 @@ import * as overviewRegSlice from '../state/slices/OverviewRegistrationSlice.js'
 
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
-import OverviewRegistrationWizard from "./OverviewRegistrationWizard.js";
+import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
+import LabwareSelectionPanel from "../components/LabwareSelectionPanel.jsx";
 
 import {
   Button,
@@ -30,10 +31,12 @@ import {
   FormHelperText,
   FormControlLabel,
   ButtonGroup,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
   Slider,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
 } from "@mui/material";
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 
@@ -45,6 +48,9 @@ const WellSelectorComponent = () => {
     "image/test1.json",//TODO remove test
   ]);
 
+  // Pending layout switch awaiting user confirmation when pointList is non-empty
+  const [pendingLayoutEvent, setPendingLayoutEvent] = useState(null);
+
   //child ref
   const childRef = useRef();//canvas 
   const infoPopupRef = useRef();
@@ -55,8 +61,16 @@ const WellSelectorComponent = () => {
   // Access global Redux state
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const experimentState = useSelector(experimentSlice.getExperimentState);
-  const positionState = useSelector(positionSlice.getPositionState); 
+  const positionState = useSelector(positionSlice.getPositionState);
   const overviewRegState = useSelector(overviewRegSlice.getOverviewRegistrationState);
+
+  // Opening the wellplate view should refresh the objective state so the
+  // current pixel size / FOV (which drives tiling, overlap and freehand step
+  // sizes) is applied. The tab bar mounts this component fresh on open, so a
+  // mount effect is enough.
+  useEffect(() => {
+    fetchObjectiveControllerGetStatus(dispatch);
+  }, [dispatch]);
 
 
   //##################################################################################
@@ -64,27 +78,56 @@ const WellSelectorComponent = () => {
     dispatch(overviewRegSlice.setWizardOpen(true));
   };
 
-  const handleOverlayToggle = (event) => {
-    dispatch(overviewRegSlice.setOverlayEnabled(event.target.checked));
-    // Load overlay data if enabling and not yet loaded
-    if (event.target.checked && (!overviewRegState.overlayData || !overviewRegState.overlayData.slides || Object.keys(overviewRegState.overlayData.slides || {}).length === 0)) {
-      loadOverlayData();
+  // Convert the current freehand polygon (drawn on the canvas) into
+  // experiment scan points using the current FOV and area-scan overlap.
+  const handleConvertFreehandToPoints = () => {
+    if (!childRef.current || !childRef.current.generateFreehandScanPositions) {
+      if (infoPopupRef.current) {
+        infoPopupRef.current.showMessage("Freehand drawing not available.");
+      }
+      return;
     }
-  };
-
-  const handleOverlayOpacityChange = (event, newValue) => {
-    dispatch(overviewRegSlice.setOverlayOpacity(newValue));
-  };
-
-  const loadOverlayData = async () => {
-    try {
-      const data = await apiGetOverviewOverlayData(
-        overviewRegState.cameraName,
-        overviewRegState.layoutName || experimentState.wellLayout.name
+    const overlap = wellSelectorState.areaSelectOverlap || 0;
+    const positions = childRef.current.generateFreehandScanPositions(overlap);
+    if (!positions || positions.length === 0) {
+      if (infoPopupRef.current) {
+        infoPopupRef.current.showMessage(
+          "Draw a closed freehand region first (FREEHAND mode, click+drag)."
+        );
+      }
+      return;
+    }
+    // A freehand polygon is ONE logical scan area (like an area-select
+    // rectangle), so it becomes a SINGLE point-list entry whose interior scan
+    // positions ride along in ``neighborPointList``.  This is what makes the
+    // scan treat it as one group (one zarr/tif folder) instead of dozens of
+    // separate single-tile points.
+    const areaId = `freehand_${Date.now()}`;
+    const cx = positions.reduce((s, p) => s + p.x, 0) / positions.length;
+    const cy = positions.reduce((s, p) => s + p.y, 0) / positions.length;
+    dispatch(
+      experimentSlice.createPoint({
+        x: cx,
+        y: cy,
+        name: "Freehand",
+        shape: "",
+        areaType: "free_scan",
+        areaId,
+        groupId: areaId,
+        neighborPointList: positions.map((p) => ({
+          x: p.x,
+          y: p.y,
+          z: p.z ?? 0,
+          iX: 0,
+          iY: 0,
+        })),
+      })
+    );
+    childRef.current.clearFreehand && childRef.current.clearFreehand();
+    if (infoPopupRef.current) {
+      infoPopupRef.current.showMessage(
+        `Created 1 freehand region with ${positions.length} scan position(s).`
       );
-      dispatch(overviewRegSlice.setOverlayData(data));
-    } catch (e) {
-      console.warn("Failed to load overlay data:", e);
     }
   };
 
@@ -120,6 +163,33 @@ const WellSelectorComponent = () => {
   //##################################################################################
   const handleLayoutChange = (event) => {
     console.log("handleLayoutChange");
+    // Warn the user before swapping layouts when there are existing points,
+    // since their well coordinates will not match the new plate.
+    const newName = event?.target?.value;
+    if (
+      newName &&
+      newName !== experimentState?.wellLayout?.name &&
+      (experimentState?.pointList?.length || 0) > 0
+    ) {
+      setPendingLayoutEvent({ target: { value: newName } });
+      return;
+    }
+    applyLayoutChange(event);
+  };
+
+  const handleConfirmLayoutChange = () => {
+    const evt = pendingLayoutEvent;
+    setPendingLayoutEvent(null);
+    if (!evt) return;
+    dispatch(experimentSlice.setPointList([]));
+    dispatch(wellSelectorSlice.clearSelectedWellIds());
+    dispatch(wellSelectorSlice.clearConditionLabels());
+    applyLayoutChange(evt);
+  };
+
+  const handleCancelLayoutChange = () => setPendingLayoutEvent(null);
+
+  const applyLayoutChange = (event) => {
     //select layout
     let wellLayout; // = wsUtils.wellLayoutDefault;
 
@@ -180,11 +250,12 @@ const WellSelectorComponent = () => {
     // Get current position from Redux state
     const currentX = positionState.x;
     const currentY = positionState.y;
-    
+    const currentZ = positionState.z;
     // Create a new point with current position
     dispatch(experimentSlice.createPoint({
       x: currentX,
       y: currentY,
+      z: currentZ,
       name: `Position ${experimentState.pointList.length + 1}`,
       shape: ""
     }));
@@ -200,7 +271,7 @@ const WellSelectorComponent = () => {
     // Stage offset calibration is now available via right-click context menu on the canvas.
     // Right-click on the map and select "We are here (Calibrate Offset)" to set the stage offset.
     // This uses the clicked position as the known position and transmits it to the backend
-    // via the setStageOffsetAxis API (similar to StageOffsetCalibrationController.jsx).
+    // via the setStageOffsetAxis API (single source of truth for offsets).
     if (infoPopupRef.current) {
       infoPopupRef.current.showMessage("Right-click on the map where you are and select 'We are here' to calibrate the stage offset.");
     }
@@ -247,9 +318,28 @@ const WellSelectorComponent = () => {
   };
 
   //##################################################################################
+  const handleMoveCameraSpeedXYChange = (event) => {
+    dispatch(wellSelectorSlice.setMoveCameraSpeedXY(event.target.value));
+    // Keep the experiment scan speed in sync so "Move Camera Speed" drives the
+    // XY scan too (single source of truth shared with the Tiling tab control).
+    const v = parseFloat(event.target.value);
+    if (!isNaN(v) && v > 0) {
+      dispatch(experimentSlice.setSpeed(v));
+    }
+  };
+
+  //##################################################################################
+  const handleMoveCameraSpeedZChange = (event) => {
+    dispatch(wellSelectorSlice.setMoveCameraSpeedZ(event.target.value));
+  };
+
+  //##################################################################################
   return (
     <div style={{ border: "0px solid #eee", padding: "10px" }}>
-      
+
+        {/* Opentrons-style labware selection (loadName + well chips + condition labels) */}
+        <LabwareSelectionPanel defaultExpanded={false} />
+
         {/* LAYOUT */}
             {/* WellSelectorComponent with mode passed as prop width: "100%", height: "100%", display: "block"*/}
             <WellSelectorCanvas ref={childRef} style={{}} />
@@ -271,7 +361,7 @@ const WellSelectorComponent = () => {
           >
             {/* current layout */}
             <MenuItem
-              style={{ backgroundColor: "lightblue" }}
+              style={{ backgroundColor: "primary.main" }}
               value={experimentState.wellLayout.name}
             >
               {experimentState.wellLayout.name}
@@ -377,6 +467,23 @@ const WellSelectorComponent = () => {
           <Button
             variant="contained"
             style={{}}
+            onClick={() => handleModeChange(Mode.FREEHAND_DRAW)}
+            disabled={wellSelectorState.mode == Mode.FREEHAND_DRAW}
+          >
+            FREEHAND DRAW
+          </Button>
+
+          <Button
+            variant="contained"
+            style={{}}
+            onClick={handleConvertFreehandToPoints}
+          >
+            CONVERT FREEHAND TO SCAN POINTS
+          </Button>
+
+          <Button
+            variant="contained"
+            style={{}}
             onClick={() => handleAddCurrentPosition()}
           >
             ADD CURRENT POSITION
@@ -392,51 +499,62 @@ const WellSelectorComponent = () => {
         </ButtonGroup>
       </div>
 
+      {/* MOVE CAMERA speed controls – only shown when MOVE_CAMERA mode is active */}
+      {wellSelectorState.mode === Mode.MOVE_CAMERA && (
+        <Box sx={{ display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", mb: 1, mt: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            Move Camera Speed:
+          </Typography>
+          <TextField
+            label="XY Speed (µm/s)"
+            type="number"
+            size="small"
+            value={wellSelectorState.moveCameraSpeedXY ?? 20000}
+            onChange={handleMoveCameraSpeedXYChange}
+            inputProps={{ min: 1, step: 1000 }}
+            error={(parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000}
+            helperText={
+              (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000
+                ? "⚠ >20000 µm/s is highly unreliable (may lose steps/accuracy)"
+                : " "
+            }
+            sx={{ width: 230 }}
+          />
+          <TextField
+            label="Z Speed (µm/s)"
+            type="number"
+            size="small"
+            value={wellSelectorState.moveCameraSpeedZ ?? 1000}
+            onChange={handleMoveCameraSpeedZChange}
+            inputProps={{ min: 1, step: 100 }}
+            sx={{ width: 140 }}
+          />
+        </Box>
+      )}
+
       <InfoPopup ref={infoPopupRef}/>
 
-      {/* Overview Camera Overlay Controls */}
-      <Accordion sx={{ mt: 1 }} defaultExpanded={false}>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Typography variant="body2">Overview Camera Overlay</Typography>
-        </AccordionSummary>
-        <AccordionDetails>
-          <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap", mb: 1 }}>
-            <Button
-              variant="contained"
-              size="small"
-              onClick={handleOpenOverviewWizard}
-            >
-              Overview Overlay Wizard
-            </Button>
-            <label style={{ fontSize: "14px", display: "flex", alignItems: "center", gap: "4px" }}>
-              <input
-                type="checkbox"
-                checked={overviewRegState.overlayEnabled}
-                onChange={handleOverlayToggle}
-              />
-              Show Overlay
-            </label>
-          </Box>
-          {overviewRegState.overlayEnabled && (
-            <Box sx={{ display: "flex", alignItems: "center", gap: 2, mt: 1 }}>
-              <Typography variant="caption" sx={{ minWidth: 60 }}>Opacity:</Typography>
-              <Slider
-                value={overviewRegState.overlayOpacity}
-                onChange={handleOverlayOpacityChange}
-                min={0}
-                max={1}
-                step={0.05}
-                size="small"
-                sx={{ maxWidth: 200 }}
-              />
-              <Typography variant="caption">{Math.round(overviewRegState.overlayOpacity * 100)}%</Typography>
-            </Box>
-          )}
-        </AccordionDetails>
-      </Accordion>
-
-      {/* Overview Registration Wizard Dialog */}
-      <OverviewRegistrationWizard />
+      {/* Confirm before swapping layout (clears existing points) */}
+      <Dialog
+        open={pendingLayoutEvent != null}
+        onClose={handleCancelLayoutChange}
+      >
+        <DialogTitle>Switch layout?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Switching to <strong>{pendingLayoutEvent?.target?.value}</strong> will
+            remove all {experimentState?.pointList?.length || 0} point(s) from the
+            current experiment, since their coordinates are tied to the old
+            layout. Continue?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelLayoutChange}>Cancel</Button>
+          <Button onClick={handleConfirmLayoutChange} color="error" variant="contained">
+            Switch and clear
+          </Button>
+        </DialogActions>
+      </Dialog>
     </div>
   );
 };

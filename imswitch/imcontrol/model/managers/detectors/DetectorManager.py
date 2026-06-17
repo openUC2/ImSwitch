@@ -107,9 +107,6 @@ class DetectorManager(SignalInterface):
         self.__actions = actions if actions is not None else {}
         self.__croppable = croppable
 
-        self.__flatfieldImage = None
-        self.__isFlatfielding = False
-
         self._minValueFramePreview = -1
         self._maxValueFramePreview = -1
 
@@ -161,7 +158,10 @@ class DetectorManager(SignalInterface):
             return
         if name not in self.__parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
-        if name.find("posure")>0:name = "exposure" # TODO: Hacky fix for inconsistent naming
+        # Keep backward compatibility for legacy exposure naming, but do not
+        # remap exposure_mode (auto/manual) into numeric exposure.
+        if name.find("posure") > 0 and name != 'exposure_mode':
+            name = "exposure"  # TODO: Hacky fix for inconsistent naming
         self.__parameters[name].value = value
         return self.parameters
 
@@ -204,8 +204,6 @@ class DetectorManager(SignalInterface):
 
         self._binning = binning
 
-    def setFlatfieldImage(self, flatieldImage, setFlatfielding):
-        pass
 
     @property
     def name(self) -> str:
@@ -214,7 +212,7 @@ class DetectorManager(SignalInterface):
 
     @property
     def isRGB(self) -> bool:
-        return self.isRGB
+        return self._isRGB
 
     @property
     def model(self) -> str:
@@ -330,10 +328,6 @@ class DetectorManager(SignalInterface):
     def finalize(self) -> None:
         """ Close/cleanup detector. """
         pass
-
-    def recordFlatfieldImage(self, image: np.ndarray) -> np.ndarray:
-        """ Performs flatfield correction on the specified image. """
-        return image
 
     def getIsRGB(self):
         return self.isRGB

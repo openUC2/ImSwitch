@@ -1,11 +1,8 @@
 
-from imswitch import IS_HEADLESS
 from imswitch.config import get_config
 import os
 from imswitch.imcommon.model import dirtools
 import sys
-if not IS_HEADLESS:
-    from PyQt5.QtWidgets import QMessageBox
 from .notebook_process import testnotebook, startnotebook, stopnotebook
 
 class LaunchNotebookServer:
@@ -21,12 +18,7 @@ class LaunchNotebookServer:
 
         # check if jupyter notebook is installed
         if not testnotebook(execname):
-            if not IS_HEADLESS: QMessageBox.information(None, "Error", "It appears that Jupyter Notebook isn't where it usually is. " +
-                                    "Ensure you've installed Jupyter correctly in your current environment "+
-                                    "test it by running  'jupyter-notebook' in your terminal"+
-                                    "ImSwitch will run without it now. If you don't wanted to "+
-                                    "use imnotebook module in the firstplace, remove it from the config.json", QMessageBox.Ok)
-            else: print("No jupyter notebook found")
+            print("No jupyter notebook found")
             return False
 
         directory = None
@@ -41,6 +33,5 @@ class LaunchNotebookServer:
     def stopServer(self):
         try:stopnotebook()
         except Exception as e:
-            if not IS_HEADLESS: QMessageBox.information(None, "Error", "Could not stop Jupyter Notebook server: %s" % str(e), QMessageBox.Ok)
-            else: print("Could not stop Jupyter Notebook server: %s" % str(e))
+            print("Could not stop Jupyter Notebook server: %s" % str(e))
         return True

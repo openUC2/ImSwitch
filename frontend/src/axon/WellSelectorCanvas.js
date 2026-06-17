@@ -12,9 +12,18 @@ import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js"
 import * as wsUtils from "./WellSelectorUtils.js";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
 import apiPositionerControllerSetStageOffsetAxis from "../backendapi/apiPositionerControllerSetStageOffsetAxis.js";
+import apiPositionerControllerGetDevicePositionAxis from "../backendapi/apiPositionerControllerGetDevicePositionAxis.js";
 
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 
+import {
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Button,
+} from "@mui/material";
 import { X } from "@mui/icons-material";
 
 //##################################################################################
@@ -24,6 +33,7 @@ export const Mode = Object.freeze({
   CUP_SELECT: "cup",
   AREA_SELECT: "area",
   MOVE_CAMERA: "camera",
+  FREEHAND_DRAW: "freehand",
 });
 
 export const Shape = Object.freeze({
@@ -55,11 +65,25 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   // Position history for trace drawing
   const [positionHistory, setPositionHistory] = useState([]);
 
+  // "We are here" calibration dialog state. Holds the layout coordinate the
+  // user right-clicked. Confirming overwrites the persisted stage offset so
+  // the current physical position reports as that layout coordinate.
+  const [calibConfirm, setCalibConfirm] = useState(null);
+  const [calibBusy, setCalibBusy] = useState(false);
+  const [calibError, setCalibError] = useState("");
+
   const [isCtrlKeyPressed, setIsCtrlKeyPressed] = useState(false);
   const [isShiftKeyPressed, setIsShiftKeyPressed] = useState(false);
 
   //mode: single
   const [dragPointIndex, setDragPointIndex] = useState(-1);
+
+  //mode: freehand draw – polygon vertices in physical (µm) coordinates
+  const [freehandPoints, setFreehandPoints] = useState([]);
+  const [isFreehandDrawing, setIsFreehandDrawing] = useState(false);
+  const [freehandClosed, setFreehandClosed] = useState(false);
+  // Throttle: minimum stage distance between recorded freehand points (µm).
+  const FREEHAND_MIN_STEP_UM = 500;
 
   //##################################################################################
 
@@ -88,6 +112,44 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     resetHistory: () => {
       //clear position history
       setPositionHistory([]);
+    },
+    clearFreehand: () => {
+      setFreehandPoints([]);
+      setIsFreehandDrawing(false);
+      setFreehandClosed(false);
+    },
+    /**
+     * Generate scan positions inside the closed freehand polygon using
+     * the current objective FOV (with optional overlap).
+     * Returns an array of {x, y} in physical (µm) coordinates.
+     */
+    generateFreehandScanPositions: (overlap = 0) => {
+      const polygon = freehandPoints;
+      if (!polygon || polygon.length < 3) return [];
+      const fovX = objectiveState?.fovX || 0;
+      const fovY = objectiveState?.fovY || 0;
+      if (fovX <= 0 || fovY <= 0) return [];
+      const stepX = fovX * (1 - overlap);
+      const stepY = fovY * (1 - overlap);
+      let minX = Infinity,
+        minY = Infinity,
+        maxX = -Infinity,
+        maxY = -Infinity;
+      polygon.forEach((p) => {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      });
+      const positions = [];
+      for (let y = minY; y <= maxY; y += stepY) {
+        for (let x = minX; x <= maxX; x += stepX) {
+          if (wsUtils.isPointInPolygon({ x, y }, polygon)) {
+            positions.push({ x, y });
+          }
+        }
+      }
+      return positions;
     },
   }));
 
@@ -418,9 +480,22 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
       //calc neighbors
       let neighborPointList = [];
-      
+
+      // Pre-computed scan positions (e.g. a freehand region converted to scan
+      // points) ride along on the point itself in physical µm. Draw each one as
+      // a full-FOV tile so the individual scan points inside the group are
+      // visible — otherwise the shape/wellMode branches below find nothing to
+      // render and the converted region shows up as empty.
+      if (Array.isArray(itPoint.neighborPointList) && itPoint.neighborPointList.length > 0) {
+        neighborPointList = itPoint.neighborPointList.map((pos) => ({
+          x: calcPhy2Px(pos.x),
+          y: calcPhy2Px(pos.y),
+          iX: pos.iX,
+          iY: pos.iY,
+        }));
+
       // Check for new well-based patterns first
-      if (itPoint.wellMode === "center_only") {
+      } else if (itPoint.wellMode === "center_only") {
         // Find wells that intersect with this point and return their centers
         const intersectingWells = wsUtils.findWellsAtPosition(itPoint, experimentState.wellLayout);
         const centerPositions = wsUtils.generateWellCenterPositions(intersectingWells, experimentState.wellLayout);
@@ -820,6 +895,9 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     //------------ draw position trace
     drawPositionTrace(ctx);
 
+    //------------ draw freehand polygon
+    drawFreehandPolygon(ctx);
+
     //------------ draw overview camera overlay images
     drawOverviewOverlay(ctx);
 
@@ -827,6 +905,36 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     drawFocusMapOverlay(ctx);
 
     //ctx.restore();
+  };
+
+  //##################################################################################
+  // Draw the user's freehand polygon (and a closed-fill once finished).
+  const drawFreehandPolygon = (ctx) => {
+    if (!freehandPoints || freehandPoints.length === 0) return;
+    ctx.save();
+    ctx.beginPath();
+    freehandPoints.forEach((p, i) => {
+      const px = calcPhyPoint2PxPoint(p);
+      if (i === 0) ctx.moveTo(px.x, px.y);
+      else ctx.lineTo(px.x, px.y);
+    });
+    if (freehandClosed) {
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255, 200, 0, 0.15)";
+      ctx.fill();
+    }
+    ctx.strokeStyle = freehandClosed ? "rgba(255, 150, 0, 0.9)" : "rgba(0, 150, 255, 0.9)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Vertices
+    ctx.fillStyle = "rgba(0, 100, 200, 0.9)";
+    freehandPoints.forEach((p) => {
+      const px = calcPhyPoint2PxPoint(p);
+      ctx.beginPath();
+      ctx.arc(px.x, px.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
   };
 
   //##################################################################################
@@ -1114,6 +1222,14 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
         }
       });
     }
+
+    // Freehand drawing: start a new polygon (or restart after closing one)
+    if (wellSelectorState.mode == Mode.FREEHAND_DRAW) {
+      const phy = calcPxPoint2PhyPoint(newMousePosition);
+      setFreehandPoints([phy]);
+      setIsFreehandDrawing(true);
+      setFreehandClosed(false);
+    }
   };
 
   //##################################################################################
@@ -1142,6 +1258,25 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
       }
     }
 
+    // Freehand drawing: append a vertex when the cursor moved far enough
+    if (
+      wellSelectorState.mode == Mode.FREEHAND_DRAW &&
+      isFreehandDrawing &&
+      mouseDownFlag
+    ) {
+      const phy = calcPxPoint2PhyPoint(newMousePosition);
+      const last = freehandPoints[freehandPoints.length - 1];
+      if (!last) {
+        setFreehandPoints([phy]);
+      } else {
+        const dx = phy.x - last.x;
+        const dy = phy.y - last.y;
+        if (Math.hypot(dx, dy) >= FREEHAND_MIN_STEP_UM) {
+          setFreehandPoints([...freehandPoints, phy]);
+        }
+      }
+    }
+
     //handle offset
     if (!isCanvasDragging) return;
     setOffset({
@@ -1157,6 +1292,12 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     //handle mode single select
     if (wellSelectorState.mode == Mode.SINGLE_SELECT) {
       setDragPointIndex(-1);
+    }
+
+    // Freehand drawing: close the polygon on mouse-up
+    if (wellSelectorState.mode == Mode.FREEHAND_DRAW && isFreehandDrawing) {
+      setIsFreehandDrawing(false);
+      if (freehandPoints.length >= 3) setFreehandClosed(true);
     }
 
     //handle mode cup select
@@ -1333,12 +1474,13 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
     //handle mode
     if (wellSelectorState.mode == Mode.MOVE_CAMERA) {
+      const xySpeed = wellSelectorState.moveCameraSpeedXY ?? 20000;
       //move camera
       apiPositionerControllerMovePositioner({
         axis: "X",
         dist: calcPx2Phy(localPos.x),
         isAbsolute: true,
-        speed: 20000,
+        speed: xySpeed,
       })
         .then((positionerResponse) => {
           console.log("apiMovePositioner X", positionerResponse);
@@ -1351,7 +1493,7 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
         axis: "Y",
         dist: calcPx2Phy(localPos.y),
         isAbsolute: true,
-        speed: 20000,
+        speed: xySpeed,
       })
         .then((positionerResponse) => {
           console.log("apiMovePositioner Y", positionerResponse);
@@ -1511,35 +1653,19 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
       }
     }
 
-    // Add "We are here" calibration option to set stage offset
-    // This uses the clicked position on the canvas/wellplate as the known position
-    // and transmits it to the backend to calibrate the stage offset
+    // "We are here" - confirm via dialog, then record the current physical
+    // position as the clicked layout coordinate. The actual offset write
+    // happens in confirmCalibration() once the user agrees; this avoids
+    // accidental destructive clicks.
     const clickedPhysicalPosition = calcPxPoint2PhyPoint(menuPositionLocal);
     actionList.push({
-      label: "📍 We are here (Calibrate Offset)",
-      action: async () => {
-        try {
-          // Set stage offset for X axis using clicked position as known position
-          await apiPositionerControllerSetStageOffsetAxis({
-            knownPosition: clickedPhysicalPosition.x,
-            axis: "X",
-          });
-          console.log(`Stage offset X calibrated to known position: ${clickedPhysicalPosition.x}`);
-
-          // Small delay between API calls to avoid race conditions on the backend
-          await new Promise(resolve => setTimeout(resolve, 100));
-
-          // Set stage offset for Y axis using clicked position as known position
-          await apiPositionerControllerSetStageOffsetAxis({
-            knownPosition: clickedPhysicalPosition.y,
-            axis: "Y",
-          });
-          console.log(`Stage offset Y calibrated to known position: ${clickedPhysicalPosition.y}`);
-
-          console.log(`Stage offset calibrated: X=${clickedPhysicalPosition.x}, Y=${clickedPhysicalPosition.y}`);
-        } catch (error) {
-          console.error("Error calibrating stage offset:", error);
-        }
+      label: "We are here (calibrate offset)",
+      action: () => {
+        setCalibError("");
+        setCalibConfirm({
+          x: clickedPhysicalPosition.x,
+          y: clickedPhysicalPosition.y,
+        });
         setShowMenu(false);
       },
     });
@@ -1607,6 +1733,72 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
         </div>
       )}
       {/* context menu end */}
+
+      {/* "We are here" confirmation dialog */}
+      <Dialog
+        open={!!calibConfirm}
+        onClose={() => !calibBusy && setCalibConfirm(null)}
+      >
+        <DialogTitle>Overwrite stored stage offset?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            About to record the current physical stage position as the layout
+            coordinate (
+            {calibConfirm ? calibConfirm.x.toFixed(1) : "?"},{" "}
+            {calibConfirm ? calibConfirm.y.toFixed(1) : "?"}
+            ) um. After this the stage will report exactly that coordinate at
+            this physical place. The previously persisted offset will be
+            overwritten.
+          </DialogContentText>
+          {calibError && (
+            <DialogContentText sx={{ color: "error.main", mt: 1 }}>
+              {calibError}
+            </DialogContentText>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setCalibConfirm(null)}
+            disabled={calibBusy}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={async () => {
+              if (!calibConfirm) return;
+              setCalibBusy(true);
+              setCalibError("");
+              try {
+                // Snapshot raw device positions atomically before writing.
+                const dxRaw = await apiPositionerControllerGetDevicePositionAxis({ axis: "X" });
+                const dyRaw = await apiPositionerControllerGetDevicePositionAxis({ axis: "Y" });
+                const currentDeviceX = Number(dxRaw);
+                const currentDeviceY = Number(dyRaw);
+                await apiPositionerControllerSetStageOffsetAxis({
+                  axis: "X",
+                  knownPosition: calibConfirm.x,
+                  currentDevicePosition: null,
+                });
+                await apiPositionerControllerSetStageOffsetAxis({
+                  axis: "Y",
+                  knownPosition: calibConfirm.y,
+                  currentDevicePosition: null,
+                });
+                setCalibConfirm(null);
+              } catch (e) {
+                setCalibError(`Failed: ${e.message || e}`);
+              } finally {
+                setCalibBusy(false);
+              }
+            }}
+            variant="contained"
+            color="success"
+            disabled={calibBusy}
+          >
+            {calibBusy ? "Storing…" : "Confirm & store"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </div>
   );
 });

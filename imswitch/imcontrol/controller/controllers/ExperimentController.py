@@ -2,9 +2,10 @@ from datetime import datetime
 import time
 from fastapi import HTTPException
 import numpy as np
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any
+
 import os
+import sys
 import threading
 
 from imswitch.imcommon.framework import Signal
@@ -12,10 +13,9 @@ from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowContext, W
 from imswitch.imcontrol.model.managers.MDASequenceManager import MDASequenceManager
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
-from .wellplate_layouts import get_predefined_layouts, get_layout_by_name
 
 try:
-    IS_ASHLAR_AVAILABLE = True
+    IS_ASHLAR_AVAILABLE = True # TODO: seems wrong :D 
 except Exception:
     IS_ASHLAR_AVAILABLE = False
 
@@ -27,275 +27,36 @@ except Exception:
 
 # Import OME writers from new io location
 from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths
+from imswitch.imcontrol.model.io.frame_save_worker import FrameSaveWorker
 from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ExperimentPerformanceMode,
     ExperimentNormalMode,
+    ExecutionContext,
+    # Pydantic data models (single source of truth lives in
+    # ``experiment_controller/models.py``).  Re-imported here so external
+    # callers can keep doing
+    # ``from ...ExperimentController import Experiment`` etc.
+    CenterPosition,
+    Experiment,
+    ExperimentWorkflowParams,
+    FocusMapConfig,
+    FocusMapFromPointsRequest,
+    MDAChannelConfig,
+    MDASequenceInfo,
+    MDASequenceRequest,
+    NeighborPoint,
+    ParameterValue,
+    Point,
+    ScanArea,
+    ScanBounds,
+    ScanMetadata,
+    ScanPosition,
+    StartExperimentResponse,
+    SyntheticChannel,
 )
 from imswitch.imcontrol.model.focus_map import FocusMap, FocusMapManager, FocusMapResult
 from imswitch.imcontrol.model.overview_registration import OverviewRegistrationService, PixelPoint, StagePoint, SlotDefinition
-
-
-from pydantic import Field
-
-# -----------------------------------------------------------
-# Reuse the existing sub-models:
-# -----------------------------------------------------------
-
-
-class FocusMapFromPointsRequest(BaseModel):
-    """Request body for computeFocusMapFromPoints endpoint."""
-    points: List[Dict[str, float]]
-    group_id: str = "manual"
-    group_name: str = "Manual Points"
-    method: str = "rbf"
-    smoothing_factor: float = 0.1
-    z_offset: float = 0.0
-    clamp_enabled: bool = False
-    z_min: float = 0.0
-    z_max: float = 0.0
-
-
-class NeighborPoint(BaseModel):
-    x: float
-    y: float
-    z: Optional[float] = None
-    iX: int
-    iY: int
-
-class Point(BaseModel):
-    id: Optional[str] = None  # Allow string IDs from frontend
-    name: str
-    x: float
-    y: float
-    z: Optional[float] = None  # Per-point Z origin for Z-stacking/autofocus
-    iX: int = 0
-    iY: int = 0
-    neighborPointList: List[NeighborPoint] = Field(default_factory=list)
-    wellId: Optional[str] = None  # NEW: Well association
-    areaType: Optional[str] = None  # NEW: Area type (well, free_scan, etc.)
-
-# NEW: Models for pre-calculated scan coordinates
-class ScanPosition(BaseModel):
-    """Single position in a scan area"""
-    index: int
-    x: float
-    y: float
-    z: Optional[float] = None  # Per-position Z origin
-    iX: int
-    iY: int
-
-class ScanBounds(BaseModel):
-    """Bounding box for a scan area"""
-    minX: float
-    maxX: float
-    minY: float
-    maxY: float
-    width: float
-    height: float
-
-class CenterPosition(BaseModel):
-    """Center position of a scan area"""
-    x: float
-    y: float
-    z: Optional[float] = None
-
-class ScanArea(BaseModel):
-    """Pre-calculated scan area with ordered positions"""
-    areaId: str
-    areaName: str
-    areaType: str = "free_scan"  # well, free_scan, etc.
-    wellId: Optional[str] = None
-    centerPosition: CenterPosition
-    bounds: ScanBounds
-    scanPattern: str = "raster"  # snake or raster (calculated in frontend, positions already ordered)
-    positions: List[ScanPosition]
-
-class ScanMetadata(BaseModel):
-    """Metadata for the entire scan"""
-    totalPositions: int
-    fovX: float
-    fovY: float
-    overlapWidth: float = 0.0  # Used by frontend for coordinate calculation
-    overlapHeight: float = 0.0  # Used by frontend for coordinate calculation
-    scanPattern: str = "raster"  # Positions are already ordered per this pattern from frontend
-
-class ParameterValue(BaseModel):
-    illumination: Union[List[str], str] = None # X, Y, nX, nY
-    illuIntensities: Union[List[Optional[int]], Optional[int]] = None
-    brightfield: bool = 0,
-    darkfield: bool = 0,
-    differentialPhaseContrast: bool = 0,
-    timeLapsePeriod: float
-    numberOfImages: int
-    autoFocus: bool
-    autoFocusMin: float
-    autoFocusMax: float
-    autoFocusStepSize: float
-    autoFocusIlluminationChannel: str = "" # Selected illumination channel for autofocus
-    autoFocusMode: str = "software" # "software" (Z-sweep) or "hardware" (one-shot using FocusLock)
-    autofocus_target_focus_setpoint: float = None
-    autofocus_max_attempts: int = 2
-    zStack: bool
-    zStackMin: float
-    zStackMax: float
-    zStackStepSize: Union[List[float], float] = 1.
-    exposureTimes: Union[List[float], float] = None
-    gains: Union[List[float], float] = None
-    speed: float = 20000.0
-    performanceMode: bool = False
-    # Performance mode advanced settings
-    performanceTriggerMode: str = Field("hardware", description="Trigger mode: 'hardware' (external TTL) or 'software' (callback-based)")
-    performanceTPreMs: float = Field(90.0, description="Pre-exposure settle time in milliseconds")
-    performanceTPostMs: float = Field(50.0, description="Post-exposure/acquisition time in milliseconds")
-    ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
-    ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
-    ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
-    ome_write_individual_tiffs: bool = Field(False, description="Whether to write individual TIFF files per frame")
-    keepIlluminationOn: str = Field("auto", description="Illumination mode: 'auto' (single channel stays on), 'on' (always on), 'off' (per-frame toggle)")
-
-class FocusMapConfig(BaseModel):
-    """Configuration for optional focus mapping (Z surface estimation over XY)."""
-    enabled: bool = Field(False, description="Enable focus mapping before acquisition")
-
-    # Grid generation
-    rows: int = Field(3, description="Number of grid rows for focus measurement")
-    cols: int = Field(3, description="Number of grid columns for focus measurement")
-    add_margin: bool = Field(False, description="Shrink grid inward to avoid edge effects")
-
-    # Fit strategy
-    fit_by_region: bool = Field(True, description="Fit per well / scan region (True) or global (False)")
-    use_manual_map: bool = Field(False, description="Reuse a pre-existing manual/global map for all groups via interpolation instead of measuring per group")
-    method: str = Field("spline", description="Fit method: spline, rbf, or constant")
-    smoothing_factor: float = Field(0.1, description="Smoothing factor for surface fit")
-
-    # Runtime behavior
-    apply_during_scan: bool = Field(True, description="Move Z per XY using focus map during acquisition")
-    z_offset: float = Field(0.0, description="Global Z offset applied to interpolated values")
-    clamp_enabled: bool = Field(False, description="Clamp interpolated Z to min/max range")
-    z_min: float = Field(0.0, description="Minimum allowed Z value when clamping")
-    z_max: float = Field(0.0, description="Maximum allowed Z value when clamping")
-
-    # Autofocus integration
-    autofocus_profile: Optional[str] = Field(None, description="Reference to AF controller preset")
-    settle_ms: int = Field(0, description="Extra settle time in ms after Z move")
-    store_debug_artifacts: bool = Field(True, description="Store focus points + fit stats as JSON")
-    channel_offsets: Optional[Dict[str, float]] = Field(default=None, description="Per-illumination-channel Z offset (µm)")
-
-    # Autofocus parameters – passed through to doAutofocusBackground
-    af_range: float = Field(100.0, description="Autofocus Z range (±µm from current Z)")
-    af_resolution: float = Field(10.0, description="Autofocus step size (µm)")
-    af_cropsize: int = Field(2048, description="Crop size for focus quality algorithm")
-    af_algorithm: str = Field("LAPE", description="Focus quality algorithm: LAPE, GLVA, JPEG")
-    af_settle_time: float = Field(0.1, description="Settle time (s) after each Z step")
-    af_static_offset: float = Field(0.0, description="Static Z offset applied after autofocus (µm)")
-    af_two_stage: bool = Field(False, description="Use two-stage autofocus (coarse + fine)")
-    af_n_gauss: int = Field(0, description="Gaussian kernel size for focus algorithm")
-    af_illumination_channel: str = Field("", description="Illumination channel for autofocus")
-    af_mode: str = Field("software", description="Autofocus mode: software (Z-sweep) or hardware (FocusLock)")
-    af_max_attempts: int = Field(2, description="Max retry attempts for hardware autofocus")
-    af_target_setpoint: Optional[float] = Field(None, description="Target focus setpoint for hardware AF")
-
-    # Scan areas – passed from the frontend so that computeFocusMap knows the
-    # correct XY bounds even when no experiment has been started yet.
-    scan_areas: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description="List of scan area dicts with areaId, areaName, bounds (minX/maxX/minY/maxY)"
-    )
-
-
-class Experiment(BaseModel):
-    # From your old "Experiment" BaseModel:
-    name: str
-    parameterValue: ParameterValue
-    pointList: List[Point] = Field(default_factory=list)
-
-    # NEW: Pre-calculated scan data from frontend
-    scanAreas: Optional[List[ScanArea]] = None
-    scanMetadata: Optional[ScanMetadata] = None
-
-    # Focus mapping configuration (disabled by default)
-    focusMap: Optional[FocusMapConfig] = Field(default=None, description="Optional focus mapping configuration")
-
-    # From your old "ExperimentModel":
-    timepoints: int = Field(1, description="Number of timepoints for time-lapse")
-
-    # -----------------------------------------------------------
-    # A helper to produce the "configuration" dict
-    # -----------------------------------------------------------
-    def to_configuration(self) -> dict:
-        """
-        Convert this Experiment into a dict structure that your Zarr writer or
-        scanning logic can easily consume.
-        """
-        config = {
-            "experiment": {
-                "MicroscopeState": {
-                    "timepoints": self.timepoints,
-                },
-                # TODO: Complete it again
-            },
-        }
-        return config
-
-
-# MDA-related models for useq-schema integration
-class MDAChannelConfig(BaseModel):
-    """Configuration for an MDA channel."""
-    name: str = Field(..., description="Channel name/identifier")
-    exposure: Optional[float] = Field(100.0, description="Exposure time in milliseconds")
-    power: Optional[float] = Field(100.0, description="Laser/illumination power")
-
-class MDASequenceRequest(BaseModel):
-    """Request to start an MDA experiment using useq-schema."""
-    channels: List[MDAChannelConfig] = Field(..., description="List of channel configurations")
-    z_range: Optional[float] = Field(None, description="Total Z range to scan (µm)")
-    z_step: Optional[float] = Field(None, description="Z step size (µm)")
-    time_points: int = Field(1, description="Number of time points")
-    time_interval: float = Field(1.0, description="Interval between time points (seconds)")
-    save_directory: Optional[str] = Field(None, description="Directory to save data")
-    experiment_name: str = Field("MDA_Experiment", description="Name of the experiment")
-
-class MDASequenceInfo(BaseModel):
-    """Information about an MDA sequence."""
-    total_events: int
-    channels: List[str]
-    z_positions: List[float]
-    time_points: List[int]
-    axis_order: tuple
-    estimated_duration_minutes: float
-
-class ExperimentWorkflowParams(BaseModel):
-    """Parameters for the experiment workflow."""
-
-    # Illumination parameters
-    illuSources: List[str] = Field(default_factory=list, description="List of illumination sources")
-    illuSourceMinIntensities: List[float] = Field(default_factory=list, description="Minimum intensities for each source")
-    illuSourceMaxIntensities: List[float] = Field(default_factory=list, description="Maximum intensities for each source")
-    illuIntensities: List[float] = Field(default_factory=list, description="Intensities for each source")
-
-    # Camera parameters
-    exposureTimes: List[float] = Field(default_factory=list, description="Exposure times for each source")
-    gains: List[float] = Field(default_factory=list, description="gains settings for each source")
-
-    # Feature toggles
-    isDPCpossible: bool = Field(False, description="Whether DPC is possible")
-    isDarkfieldpossible: bool = Field(False, description="Whether darkfield is possible")
-
-    # timelapse parameters
-    timeLapsePeriodMin: float = Field(0, description="Minimum time for a timelapse series")
-    timeLapsePeriodMax: float = Field(100000000, description="Maximum time for a timelapse series in seconds")
-    numberOfImagesMin: int = Field(0, description="Minimum time for a timelapse series")
-    numberOfImagesMax: int = Field(0, description="Minimum time for a timelapse series")
-    autofocusMinFocusPosition: float = Field(-10000, description="Minimum autofocus position")
-    autofocusMaxFocusPosition: float = Field(10000, description="Maximum autofocus position")
-    autofocusStepSizeMin: float = Field(1, description="Minimum autofocus position")
-    autofocusStepSizeMax: float = Field(1000, description="Maximum autofocus position")
-    zStackMinFocusPosition: float = Field(0, description="Minimum Z-stack position")
-    zStackMaxFocusPosition: float = Field(10000, description="Maximum Z-stack position")
-    zStackStepSizeMin: float = Field(1, description="Minimum Z-stack position")
-    zStackStepSizeMax: float = Field(1000, description="Maximum Z-stack position")
-    performanceMode: bool = Field(False, description="Whether to use performance mode for the experiment - this would be executing the scan on the Cpp hardware directly, not on the Python side.")
-
+from imswitch.imcontrol.model import configfiletools
 
 
 class ExperimentController(ImConWidgetController):
@@ -313,6 +74,20 @@ class ExperimentController(ImConWidgetController):
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
         self.mda_manager = MDASequenceManager()
+
+        # Background frame-save worker. ``save_frame_ome`` and the
+        # individual-TIFF path it dispatches to used to call into
+        # ``ome_writer.write_frame`` / ``tifffile.imwrite`` *on the
+        # workflow thread*, which blocked the next stage step for
+        # 20–100 ms per frame at 9 MP (more for stitched/individual
+        # TIFFs, much more for a slow SD/USB target). Now we just
+        # queue the write here and the worker thread does the I/O.
+        # The queue is bounded so a slow disk back-pressures the
+        # acquisition loop instead of silently consuming RAM.
+        self._frame_saver = FrameSaveWorker(
+            name="ExperimentFrameSaver",
+            maxsize=32,
+        )
 
         # set default values
         self.SPEED_Y = self.SPEED_Y_default = 20000
@@ -333,11 +108,34 @@ class ExperimentController(ImConWidgetController):
             # laser maanger
             self.availableIlluminations.append(self._master.lasersManager[iDevice])
 
+        # Detect LED matrix presence so we can offer synthetic "Ring" and
+        # "DPC" channels in the Wellplate designer.  We grab the *first*
+        # LED matrix (multi-matrix setups are out of scope for now).
+        self._ledMatrix = None
+        self._ledMatrixName = None
+        try:
+            ledMatrixManager = getattr(self._master, "LEDMatrixsManager", None)
+            if ledMatrixManager is not None:
+                ledMatrixNames = ledMatrixManager.getAllDeviceNames()
+                if ledMatrixNames:
+                    self._ledMatrixName = ledMatrixNames[0]
+                    self._ledMatrix = ledMatrixManager[self._ledMatrixName]
+        except Exception as e:  # noqa: BLE001 - best-effort detection
+            self._logger.warning(f"LEDMatrix detection failed: {e}")
+            self._ledMatrix = None
+
+        # Names for the synthetic LED-matrix channels.  Kept as class-level
+        # constants so the workflow builder and channel-list endpoint use
+        # identical strings.
+        self.LED_MATRIX_RING_CHANNEL = "LED Matrix Ring"
+        self.LED_MATRIX_DPC_CHANNEL = "LED Matrix DPC"
+        self.DPC_SUB_CHANNELS = ("top", "bottom", "left", "right")
+
         # select stage
         self.allPositionerNames = self._master.positionersManager.getAllDeviceNames()[0]
         try:
             self.mStage = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
-        except:
+        except (KeyError, IndexError):
             self.mStage = None
 
         # stop if some external signal (e.g. memory full is triggered)
@@ -346,7 +144,11 @@ class ExperimentController(ImConWidgetController):
         # TODO: Adjust parameters
         # define changeable Experiment parameters as ExperimentWorkflowParams
         self.ExperimentParams = ExperimentWorkflowParams()
-        self.ExperimentParams.illuSources = self.allIlluNames
+        self.ExperimentParams.illuSources = list(self.allIlluNames)
+        # Per-source kind tag, parallel to illuSources.  Real lasers/LEDs are
+        # "default"; the LED-matrix synthetic channels appended below add
+        # "ring" and "dpc" entries.  Frontend renders kind-specific controls.
+        self.ExperimentParams.illuSourceKinds = ["default"] * len(self.allIlluNames)
         self.ExperimentParams.illuSourceMinIntensities = []
         self.ExperimentParams.illuSourceMaxIntensities = []
         self.ExperimentParams.illuIntensities = [0]*len(self.allIlluNames)
@@ -358,6 +160,71 @@ class ExperimentController(ImConWidgetController):
         for laserN in self.availableIlluminations:
             self.ExperimentParams.illuSourceMinIntensities.append(laserN.valueRangeMin)
             self.ExperimentParams.illuSourceMaxIntensities.append(laserN.valueRangeMax)
+
+        # Append LED-matrix synthetic channels when hardware is present.
+        # Intensity here is reported as the RGB byte range (0..255); the
+        # actual per-frame patterns (radius, RGB) come from
+        # parameterValue.illuminationParams[channel_name].
+        if self._ledMatrix is not None:
+            # Discover matrix size so the frontend can clamp the ring-radius
+            # slider to physically meaningful values.  Different LED matrix
+            # managers expose dimensions slightly differently, so we probe a
+            # few attribute names and fall back to a conservative 4×4 if all
+            # else fails.
+            _nx = (
+                getattr(self._ledMatrix, "Nx", None)
+                or getattr(self._ledMatrix, "nLedsX", None)
+                or getattr(self._ledMatrix, "Ncols", None)
+                or 4
+            )
+            _ny = (
+                getattr(self._ledMatrix, "Ny", None)
+                or getattr(self._ledMatrix, "nLedsY", None)
+                or getattr(self._ledMatrix, "Nrows", None)
+                or 4
+            )
+            try:
+                _nx = int(_nx)
+                _ny = int(_ny)
+            except (TypeError, ValueError):
+                _nx, _ny = 4, 4
+            # A ring of radius r needs r LEDs from the centre to the edge,
+            # so max usable radius is (min(N) - 1) // 2.  For an 8×8 matrix
+            # this gives 3 (rings at radii 0,1,2,3 → 4 distinct rings).
+            _max_ring_radius = max(0, (min(_nx, _ny) - 1) // 2)
+            self.ExperimentParams.ledMatrixInfo = {
+                "nLedsX": _nx,
+                "nLedsY": _ny,
+                "maxRingRadius": _max_ring_radius,
+            }
+            # Synthetic LED-matrix channels are advertised in their OWN list
+            # (illuSources stays conventional/default-only).  The frontend
+            # renders ring/DPC controls from this list and sends back enabled
+            # entries in ParameterValue.syntheticChannels.
+            self.ExperimentParams.syntheticChannels = [
+                SyntheticChannel(
+                    name=self.LED_MATRIX_RING_CHANNEL,
+                    kind="ring",
+                    enabled=False,
+                    intensityR=0, intensityG=0, intensityB=0,
+                    radius=_max_ring_radius,
+                ),
+                SyntheticChannel(
+                    name=self.LED_MATRIX_DPC_CHANNEL,
+                    kind="dpc",
+                    enabled=False,
+                    # DPC conventionally lights one colour; default to green.
+                    intensityR=0, intensityG=255, intensityB=0,
+                ),
+            ]
+            # Surface DPC capability separately so existing UI bits that
+            # only look at isDPCpossible can still gate features.
+            self.ExperimentParams.isDPCpossible = True
+            self._logger.info(
+                f"LEDMatrix '{self._ledMatrixName}' detected ({_nx}x{_ny}, "
+                f"maxRingRadius={_max_ring_radius}) — exposing synthetic "
+                f"channels: '{self.LED_MATRIX_RING_CHANNEL}', '{self.LED_MATRIX_DPC_CHANNEL}'."
+            )
         '''
         For Fast Scanning - Performance Mode -> Parameters will be sent to the hardware directly
         requires hardware triggering
@@ -366,7 +233,7 @@ class ExperimentController(ImConWidgetController):
         save_dir = dirtools.UserFileDirs.getValidatedDataPath()
         self.save_dir  = os.path.join(save_dir, "ExperimentController")
         # ensure all subfolders are generated:
-        os.makedirs(self.save_dir) if not os.path.exists(self.save_dir) else None
+        os.makedirs(self.save_dir, exist_ok=True)
 
         # writer thread control -------------------------------------------------
         self._writer_thread   = None
@@ -393,17 +260,62 @@ class ExperimentController(ImConWidgetController):
 
         # Initialize overview camera registration service
         self._overview_registration = OverviewRegistrationService()
+        # Background-task bookkeeping for overview-related endpoints. These
+        # endpoints (recaptureSlot, runAutonomousOverviewScan, ...) used to
+        # block the FastAPI worker thread for many seconds, freezing the UI.
+        # They now spawn worker threads and clients poll
+        # ``getOverviewAsyncStatus`` for completion.
+        self._overview_async_lock = threading.Lock()
+        self._overview_async_thread: Optional[threading.Thread] = None
+        self._overview_async_status: dict = {
+            "running": False,
+            "task": None,
+            "result": None,
+            "error": None,
+        }
+        self._ashlar_proc = None  # subprocess.Popen handle for the running ashlar process
+        # Overview camera is resolved through the DetectorManager, using the
+        # detector name configured in setup (experiment.overviewCameraName).
+        # Falls back to a detector literally named "overviewcamera" if any.
         self._overview_camera = None
         self._overview_camera_name = None
         try:
-            if hasattr(self._setupInfo, 'PixelCalibration') and hasattr(self._setupInfo.PixelCalibration, 'ObservationCamera'):
-                obs_cam_name = self._setupInfo.PixelCalibration.ObservationCamera
-                if obs_cam_name and obs_cam_name in allDetectorNames:
-                    self._overview_camera = self._master.detectorsManager[obs_cam_name]
-                    self._overview_camera_name = obs_cam_name
-                    self._logger.info(f"Overview camera initialized: {obs_cam_name}")
-        except Exception as e:
-            self._logger.warning(f"Could not initialize overview camera: {e}")
+            preferred = getattr(self._master.experimentManager, "overviewCameraName", None)
+            allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
+            candidates = []
+            if preferred:
+                candidates.append(preferred)
+            candidates.append("ObservationCamera")
+            for name in candidates:
+                if name and name in allDetectorNames:
+                    self._overview_camera_name = name
+                    self._overview_camera = self._master.detectorsManager[name]
+                    self._logger.info(f"Overview camera resolved to detector '{name}'")
+                    break
+            if self._overview_camera is None:
+                self._logger.info(
+                    "No overview camera configured; overview features will return errors"
+                )
+        except Exception as exc:
+            self._logger.warning(f"Failed to resolve overview camera: {exc}")
+
+        # Load persisted overview registration entries from the setup config
+        # (single source of truth) into the in-memory store.
+        try:
+            self._loadOverviewRegistrationFromSetup()
+        except Exception as exc:
+            self._logger.warning(
+                f"Could not load overview registration from setup file: {exc}"
+            )
+
+        # Initialize Opentrons-style labware manager. A single bad labware file
+        # must never block controller startup, so we swallow exceptions.
+        try:
+            from imswitch.imcontrol.model.labware import LabwareManager as _LabwareManager
+            self.labware_manager = _LabwareManager()
+        except Exception as exc:
+            self._logger.warning(f"LabwareManager init failed: {exc}")
+            self.labware_manager = None
 
         # Initialize omero  parameters  # TODO: Maybe not needed!
         self.omero_url = self._master.experimentManager.omeroServerUrl
@@ -413,91 +325,230 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="GET")
     def getHardwareParameters(self):
+        try:
+            det_px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+            self.ExperimentParams.pixel_size_um = float(det_px[1]) if len(det_px) > 1 else 1.0
+        except Exception:
+            pass
         return self.ExperimentParams
 
     @APIExport(requestType="GET")
-    def getAvailableWellplateLayouts(self):
-        """
-        Get list of available pre-defined wellplate layouts.
+    def getDetectorPixelSize(self) -> dict:
+        """Return the calibrated pixel size (µm/px) for the primary acquisition detector.
 
-        Returns:
-            Dict with layout names as keys and layout metadata as values
+        PixelCalibrationController injects the per-objective value from
+        PixelCalibration.affineCalibrations into the detector at startup and
+        whenever the objective changes, so this always reflects the current
+        calibration.
         """
         try:
-            layouts = get_predefined_layouts()
-            return {
-                name: {
-                    "name": layout.name,
-                    "description": layout.description,
-                    "rows": layout.rows,
-                    "cols": layout.cols,
-                    "well_count": len(layout.wells),
-                    "well_spacing_x": layout.well_spacing_x,
-                    "well_spacing_y": layout.well_spacing_y
-                }
-                for name, layout in layouts.items()
+            px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+            value = float(px[1]) if len(px) > 1 else 1.0
+        except Exception:
+            value = 1.0
+        return {"pixel_size_um": value}
+
+    # ------------------------------------------------------------------
+    # Wellplate / labware endpoints
+    #
+    # All layouts are now served by the Opentrons-style ``LabwareManager``
+    # (see ``imswitch.imcontrol.model.labware``). Use ``getLabwareList`` /
+    # ``getLabwareDefinition`` from new clients. The internal helper
+    # ``_labware_to_layout_dict`` is still needed by the overview-camera
+    # registration code, which consumes the canvas-style dict.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _labware_to_layout_dict(lab, offset_x: float = 0.0, offset_y: float = 0.0) -> dict:
+        """Convert a ``LabwareDefinition`` to the canvas-style wellplate
+        layout dict used by the overview-camera registration code. µm
+        everywhere."""
+        spacing_x = 0.0
+        spacing_y = 0.0
+        if len(lab.columns) >= 2:
+            r = lab.rows[0]
+            w_a = lab.wells.get(f"{r}{lab.columns[0]}")
+            w_b = lab.wells.get(f"{r}{lab.columns[1]}")
+            if w_a and w_b:
+                spacing_x = abs(w_b.x - w_a.x)
+        if len(lab.rows) >= 2:
+            c = lab.columns[0]
+            w_a = lab.wells.get(f"{lab.rows[0]}{c}")
+            w_b = lab.wells.get(f"{lab.rows[1]}{c}")
+            if w_a and w_b:
+                spacing_y = abs(w_b.y - w_a.y)
+
+        wells_out = []
+        for wid in lab.well_names_flat:
+            w = lab.wells[wid]
+            entry = {
+                "id": wid,
+                "name": wid,
+                "x": w.x + offset_x,
+                "y": w.y + offset_y,
+                "shape": w.geometry.shape,
+                "row": lab.rows.index(w.row),
+                "col": lab.columns.index(w.column),
             }
-        except Exception as e:
-            self._logger.error(f"Failed to get wellplate layouts: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            if w.geometry.shape == "circle":
+                entry["radius"] = w.geometry.radius
+            else:
+                entry["width"] = w.geometry.width
+                entry["height"] = w.geometry.height
+            wells_out.append(entry)
+        return {
+            "name": lab.display_name,
+            "description": ", ".join(lab.tags) if lab.tags else "",
+            "rows": len(lab.rows),
+            "cols": len(lab.columns),
+            "well_spacing_x": spacing_x,
+            "well_spacing_y": spacing_y,
+            "offset_x": offset_x,
+            "offset_y": offset_y,
+            "wells": wells_out,
+            "unit": "um",
+            "width": lab.dimensions.x,
+            "height": lab.dimensions.y,
+            "labwareLoadName": lab.load_name,
+        }
+
+    # ------------------------------------------------------------------
+    # New Opentrons-style endpoints
+    # ------------------------------------------------------------------
+    @APIExport(requestType="GET")
+    def getLabwareList(self) -> List[dict]:
+        """List summaries of all loaded labware definitions (µm dimensions)."""
+        if not self.labware_manager:
+            return []
+        return self.labware_manager.list_summaries()
 
     @APIExport(requestType="GET")
-    def getWellplateLayout(self, layout_name: str, offset_x: float = 0, offset_y: float = 0):
-        """
-        Get a specific wellplate layout with optional offset parameters.
-
-        Args:
-            layout_name: Name of the layout (e.g., '96-well-standard', '384-well-standard')
-            offset_x: X offset in micrometers (default: 0)
-            offset_y: Y offset in micrometers (default: 0)
-
-        Returns:
-            Complete wellplate layout definition including all wells
-        """
+    def getLabwareDefinition(
+        self,
+        load_name: str,
+        offset_x_um: float = 0.0,
+        offset_y_um: float = 0.0,
+    ) -> dict:
+        """Return a full ``LabwareDefinition`` (µm). Optional offsets shift
+        every well's x/y to map plate -> stage coordinates."""
+        if not self.labware_manager:
+            raise HTTPException(status_code=503, detail="LabwareManager unavailable")
         try:
-            layout = get_layout_by_name(layout_name, offset_x=offset_x, offset_y=offset_y)
-            if not layout:
-                raise HTTPException(status_code=404, detail=f"Layout '{layout_name}' not found")
-            return layout.dict()
-        except HTTPException:
-            raise
-        except Exception as e:
-            self._logger.error(f"Failed to get wellplate layout '{layout_name}': {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            lab = self.labware_manager.get_with_offset(load_name, offset_x_um, offset_y_um)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return lab.model_dump()
 
     @APIExport(requestType="POST")
-    def generateCustomWellplateLayout(self, layout_params: dict):
-        """
-        Generate a custom wellplate layout with specified parameters.
+    def selectWellsByPattern(self, request: dict) -> dict:
+        """Resolve a ``WellSelectionPattern`` against a labware. Pure function;
+        does not mutate experiment state.
 
-        Args:
-            layout_params: Dictionary with layout parameters:
-                - name: str (required)
-                - rows: int (required)
-                - cols: int (required)
-                - well_spacing_x: float (required, micrometers)
-                - well_spacing_y: float (required, micrometers)
-                - well_shape: str ('circle' or 'rectangle', default: 'circle')
-                - well_radius: float (micrometers, for circular wells)
-                - well_width: float (micrometers, for rectangular wells)
-                - well_height: float (micrometers, for rectangular wells)
-                - offset_x: float (default: 0)
-                - offset_y: float (default: 0)
-                - description: str (default: '')
-
-        Returns:
-            Complete wellplate layout definition
+        Request shape:
+            {
+              "load_name": "corning_96_wellplate_360ul_flat",
+              "pattern": {"ranges": ["A1:H12"], "rows": ["A"], ...},
+              "offset_x_um": 0.0,
+              "offset_y_um": 0.0
+            }
         """
+        if not self.labware_manager:
+            raise HTTPException(status_code=503, detail="LabwareManager unavailable")
+        from imswitch.imcontrol.model.labware import (
+            WellSelectionPattern, resolve_pattern,
+        )
+        load_name = request.get("load_name")
+        pattern_raw = request.get("pattern") or {}
+        offset_x = float(request.get("offset_x_um") or 0.0)
+        offset_y = float(request.get("offset_y_um") or 0.0)
         try:
-            layout = get_layout_by_name("custom", **layout_params)
-            if not layout:
-                raise HTTPException(status_code=400, detail="Invalid layout parameters")
-            return layout.dict()
-        except HTTPException:
-            raise
-        except Exception as e:
-            self._logger.error(f"Failed to generate custom wellplate layout: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            lab = self.labware_manager.get(load_name)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            pattern = WellSelectionPattern.model_validate(pattern_raw)
+            wells = resolve_pattern(lab, pattern)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        resolved = []
+        for w in wells:
+            entry = {
+                "well_id": w.id,
+                "row": w.row,
+                "column": w.column,
+                "x_um": w.x + offset_x,
+                "y_um": w.y + offset_y,
+                "z_um": w.z,
+                "shape": w.geometry.shape,
+            }
+            if w.geometry.shape == "circle":
+                entry["radius_um"] = w.geometry.radius
+            else:
+                entry["width_um"] = w.geometry.width
+                entry["height_um"] = w.geometry.height
+            resolved.append(entry)
+        return {"load_name": load_name, "count": len(resolved), "wells": resolved}
+
+    @APIExport(requestType="POST")
+    def applyWellSelectionToExperiment(self, request: dict) -> dict:
+        """Resolve a pattern and return ``Point`` dicts ready for the
+        experiment's pointList.
+
+        Request shape:
+            {
+              "load_name": "...",
+              "pattern": {...},
+              "offset_x_um": 0,
+              "offset_y_um": 0,
+              "condition_labels": {"A1": "Donor1+DMSO", ...},
+              "point_name_template": "{well_id}"
+            }
+        """
+        if not self.labware_manager:
+            raise HTTPException(status_code=503, detail="LabwareManager unavailable")
+        from imswitch.imcontrol.model.labware import (
+            WellSelectionPattern, resolve_pattern,
+        )
+        load_name = request.get("load_name")
+        pattern_raw = request.get("pattern") or {}
+        offset_x = float(request.get("offset_x_um") or 0.0)
+        offset_y = float(request.get("offset_y_um") or 0.0)
+        condition_labels: Dict[str, str] = dict(request.get("condition_labels") or {})
+        template: str = request.get("point_name_template") or "{well_id}"
+        try:
+            lab = self.labware_manager.get(load_name)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            pattern = WellSelectionPattern.model_validate(pattern_raw)
+            wells = resolve_pattern(lab, pattern)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        points: List[dict] = []
+        for w in wells:
+            label = condition_labels.get(w.id)
+            try:
+                name = template.format(
+                    well_id=w.id, row=w.row, column=w.column, label=label or ""
+                )
+            except (KeyError, IndexError):
+                name = w.id
+            points.append({
+                "name": name,
+                "x": w.x + offset_x,
+                "y": w.y + offset_y,
+                "z": w.z if w.z != 0 else None,
+                "iX": 0,
+                "iY": 0,
+                "neighborPointList": [],
+                "wellId": w.id,
+                "wellRow": w.row,
+                "wellColumn": w.column,
+                "labwareLoadName": load_name,
+                "conditionLabel": label,
+                "areaType": "well",
+            })
+        return {"load_name": load_name, "count": len(points), "points": points}
 
     @APIExport(requestType="GET")
     def getOMEROConfig(self):
@@ -566,7 +617,7 @@ class ExperimentController(ImConWidgetController):
             "write_individual_tiffs": getattr(self, '_ome_write_individual_tiffs', False)
         }
 
-
+    @APIExport(requestType="GET")
     def set_led_status(self, status: str = "idle"):
         """
         Set LED matrix status if available.
@@ -636,6 +687,10 @@ class ExperimentController(ImConWidgetController):
                         "y": pos.y,
                         "z": pos.z if pos.z is not None else (area.centerPosition.z if area.centerPosition.z is not None else None),
                         "wellId": area.wellId,
+                        "wellRow": area.wellRow,
+                        "wellColumn": area.wellColumn,
+                        "labwareLoadName": area.labwareLoadName,
+                        "conditionLabel": area.conditionLabel,
                         "areaName": area.areaName,
                         "areaType": area.areaType
                     })
@@ -662,6 +717,10 @@ class ExperimentController(ImConWidgetController):
                         "y": centerPoint.y,
                         "z": centerPoint.z,
                         "wellId": centerPoint.wellId,
+                        "wellRow": centerPoint.wellRow,
+                        "wellColumn": centerPoint.wellColumn,
+                        "labwareLoadName": centerPoint.labwareLoadName,
+                        "conditionLabel": centerPoint.conditionLabel,
                         "areaName": centerPoint.name,
                         "areaType": centerPoint.areaType or 'free_scan'
                     }]
@@ -678,6 +737,10 @@ class ExperimentController(ImConWidgetController):
                             "y": neighbor.y,
                             "z": neighbor.z if neighbor.z is not None else centerPoint.z,
                             "wellId": centerPoint.wellId,
+                            "wellRow": centerPoint.wellRow,
+                            "wellColumn": centerPoint.wellColumn,
+                            "labwareLoadName": centerPoint.labwareLoadName,
+                            "conditionLabel": centerPoint.conditionLabel,
                             "areaName": centerPoint.name,
                             "areaType": centerPoint.areaType or 'free_scan'
                         })
@@ -704,6 +767,10 @@ class ExperimentController(ImConWidgetController):
                 "x": current_x,
                 "y": current_y,
                 "wellId": None,
+                "wellRow": None,
+                "wellColumn": None,
+                "labwareLoadName": None,
+                "conditionLabel": None,
                 "areaName": "Current Position",
                 "areaType": "free_scan"
             }]
@@ -734,7 +801,6 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
-        # Extract key parameters
         exp_name = mExperiment.name
         p = mExperiment.parameterValue
 
@@ -748,65 +814,141 @@ class ExperimentController(ImConWidgetController):
         zStackMax = p.zStackMax
         zStackStepSize = p.zStackStepSize
 
-        # Illumination-related
-        illuSources = p.illumination
-        illuminationIntensities = p.illuIntensities
-        if type(illuminationIntensities) is not List  and type(illuminationIntensities) is not list: illuminationIntensities = [p.illuIntensities]
-        if type(illuSources) is not List  and type(illuSources) is not list: illuSources = [p.illumination]
-        isDarkfield = p.darkfield # TODO: Needs to be implemented
-        isBrightfield = p.brightfield
-        isDPC = p.differentialPhaseContrast
+        # Illumination-related (validators on the model guarantee these are
+        # lists – or None for `illumination`/`illuIntensities` when not set).
+        #
+        # `illumination` now carries ONLY conventional (default) sources.
+        # Synthetic LED-matrix channels (ring/DPC) arrive in their own
+        # `syntheticChannels` list and are merged into the parallel workflow
+        # arrays below.  Every parallel array (sources / kinds / intensities /
+        # exposures / gains) grows in lockstep so the downstream workflow and
+        # OME channel sizing stay index-aligned.
+        illuSources = list(p.illumination or [])
+        illuminationIntensities = list(p.illuIntensities or [])
 
-        # check if any of the illumination sources is turned on, if not, return error
-        if not any(illuminationIntensities):
-            return HTTPException(status_code=400, detail="No illumination sources are turned on. Please set at least one illumination source intensity.")
+        # Conventional sources are all "default" kind.
+        illuminationKinds = ["default"] * len(illuSources)
+        # Per-channel kind-specific params (radius/RGB), keyed by channel name.
+        # Built solely from syntheticChannels below – not from any sticky
+        # frontend cache, so a deselected channel can never leak stale RGB.
+        illuminationParams: Dict[str, Dict[str, Any]] = {}
 
-        # Resolve keepIlluminationOn mode:
-        #  "auto" → True when exactly 1 active channel, False otherwise
-        #  "on"   → True always
-        #  "off"  → False always
-        keepIlluminationOnSetting = getattr(p, 'keepIlluminationOn', 'auto')
-        nActiveChannels = sum(1 for v in illuminationIntensities if v > 0)
-        if keepIlluminationOnSetting == "auto":
-            keepIlluminationOn = (nActiveChannels == 1)
-        elif keepIlluminationOnSetting == "on":
-            keepIlluminationOn = True
+        # Default-channel camera settings, normalised to parallel illuSources.
+        gains = list(p.gains or [])
+        exposures = list(p.exposureTimes or [])
+        if len(gains) != len(illuSources):
+            gains = [-1] * len(illuSources)
+        if len(exposures) != len(illuSources):
+            _first_exposure = exposures[0] if exposures else 0
+            exposures = [_first_exposure] * len(illuSources)
+        if len(illuminationIntensities) < len(illuSources):
+            illuminationIntensities = illuminationIntensities + (
+                [0] * (len(illuSources) - len(illuminationIntensities))
+            )
         else:
-            keepIlluminationOn = False
-        self._logger.info(f"Illumination mode: setting={keepIlluminationOnSetting}, activeChannels={nActiveChannels}, keepOn={keepIlluminationOn}")
+            illuminationIntensities = illuminationIntensities[: len(illuSources)]
+
+        # ── Merge synthetic (ring/DPC) channels from their dedicated list ──
+        # Each enabled synthetic channel with a non-zero colour appends one
+        # entry to every parallel array.  Its scalar "intensity" is max(R,G,B)
+        # (the >0 active-channel gate the workflow loop uses); the real pattern
+        # (radius + RGB) lives in illuminationParams[name] for the LED-matrix
+        # driver.  This single, explicit merge replaces the old RGB→intensity
+        # promotion hack and its channelEnabledForExperiment gymnastics.
+        for _sc in (p.syntheticChannels or []):
+            if not _sc.enabled or _sc.rgb_max <= 0:
+                continue
+            illuSources.append(_sc.name)
+            illuminationKinds.append(_sc.kind)
+            illuminationIntensities.append(_sc.rgb_max)
+            illuminationParams[_sc.name] = {
+                "radius": int(_sc.radius) if _sc.radius is not None else 0,
+                "intensityR": int(_sc.intensityR or 0),
+                "intensityG": int(_sc.intensityG or 0),
+                "intensityB": int(_sc.intensityB or 0),
+            }
+            gains.append(float(_sc.gain) if _sc.gain is not None else -1)
+            exposures.append(
+                float(_sc.exposure) if _sc.exposure is not None
+                else (exposures[0] if exposures else 0)
+            )
+
+        # Push the merged intensities back so the model convenience properties
+        # (passthrough_illumination, n_active_channels, resolve_keep_illumination_on)
+        # account for synthetic channels too.
+        try:
+            p.illuIntensities = illuminationIntensities
+        except Exception:
+            pass  # pydantic frozen model — fall back to local var only
+
+        # LED-matrix synthetic channels are software-controlled per-frame and
+        # cannot ride the hardware-trigger fast path.  If any are selected,
+        # silently fall back to normal mode so the user gets correct frames
+        # instead of a confusing failure.
+        _has_led_matrix_channel = any(k in ("ring", "dpc") for k in illuminationKinds)
+        if _has_led_matrix_channel and p.performanceMode:
+            self._logger.info(
+                "LED-matrix synthetic channel(s) selected — overriding "
+                "performanceMode=False (these patterns require per-frame "
+                "software control of the LED matrix)."
+            )
+            p.performanceMode = False
+
+        # Detect passthrough mode: no illumination channels configured.
+        # In this mode we acquire frames without touching the current
+        # illumination, exposure, or gain settings on the device.
+        _passthrough_illumination = p.passthrough_illumination
+        if _passthrough_illumination:
+            self._logger.info(
+                "No illumination intensities set – entering passthrough mode: "
+                "current illumination/camera settings will not be changed."
+            )
+
+        # Resolve keepIlluminationOn (auto/on/off → bool) on the model.
+        keepIlluminationOn = p.resolve_keep_illumination_on()
+        self._logger.info(
+            f"Illumination mode: setting={p.keepIlluminationOn}, "
+            f"activeChannels={p.n_active_channels}, keepOn={keepIlluminationOn}"
+        )
 
         # check if we want to use performance mode
         self.ExperimentParams.performanceMode = p.performanceMode
         performanceMode = p.performanceMode
 
-        # camera-related
-        gains = p.gains
-        exposures = p.exposureTimes
+        # Scan speed (XY/Z) from the frontend; falls back to the __init__
+        # defaults when the request leaves them unset (<= 0).
         if p.speed <= 0:
             self.SPEED_X = self.SPEED_X_default
             self.SPEED_Y = self.SPEED_Y_default
-            self.SPEED_Z = self.SPEED_Z_default
         else:
             self.SPEED_X = p.speed
             self.SPEED_Y = p.speed
-            self.SPEED_Z = p.speed
+        if p.z_speed <= 0:
+            self.SPEED_Z = self.SPEED_Z_default
+        else:
+            self.SPEED_Z = p.z_speed
 
-        # Autofocus Related
-        isAutoFocus = p.autoFocus
-        autofocusMax = p.autoFocusMax
-        autofocusMin = p.autoFocusMin
-        autofocusStepSize = p.autoFocusStepSize
-        autofocusIlluminationChannel = getattr(p, 'autoFocusIlluminationChannel', "") or ""
-        autofocusMode = getattr(p, 'autoFocusMode', 'software')  # Default to software if not specified
-        autofocus_target_focus_setpoint = getattr(p, 'autofocus_target_focus_setpoint', None)
-        autofocus_max_attempts = getattr(p, 'autofocus_max_attempts', 2)
+        # Autofocus and timepoint values are read from `p` (ParameterValue)
+        # directly via ExecutionContext.to_kwargs(); no local aliases needed.
+        # gains/exposures were already built parallel to illuSources (including
+        # the merged synthetic channels) in the illumination block above.
 
-        # pre-check gains/exposures  if they are lists and have same lengths as illuminationsources
-        if type(gains) is not List and type(gains) is not list: gains = [gains]
-        if type(exposures) is not List and type(exposures) is not list: exposures = [exposures]
-        if len(gains) != len(illuSources): gains = [-1]*len(illuSources)
-        if len(exposures) != len(illuSources): exposures = [exposures[0]]*len(illuSources)
-
+        # Passthrough-mode overrides: use a single sentinel channel so the
+        # acquisition loop runs exactly once per position without modifying
+        # illumination, exposure, or gain.
+        if _passthrough_illumination:
+            illuSources = [illuSources[0]] if illuSources else ["default"]
+            illuminationIntensities = [1]  # sentinel: passes >0 gate; never sent to device
+            # Passthrough only ever happens when no channel (default OR
+            # synthetic) is active, so the collapsed sentinel is conventional.
+            illuminationKinds = ["default"]
+            gains = [-1]   # set_exposure_time_gain skips when gain < 0
+            exposures = [0]  # set_exposure_time_gain skips when exposure_time <= 0
+            keepIlluminationOn = True  # never send set_laser_power commands
+            self._logger.info(
+                f"Passthrough mode: using channel '{illuSources[0]}' as sentinel, "
+                "illumination/exposure/gain unchanged."
+            )
 
         # Check if another workflow is running
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
@@ -823,6 +965,12 @@ class ExperimentController(ImConWidgetController):
         self._last_scan_areas = None
         self._focus_map_fit_by_region = True
         self._focus_map_settle_ms = 0
+        # Whether THIS experiment should drive Z from a focus map.  Reset every
+        # run so that a map left over in focus_map_manager from a previous
+        # acquisition is NOT silently re-applied to an experiment that did not
+        # request focus mapping (e.g. after the user hit "Clear All").  The
+        # acquisition loop gates focus-map Z moves on this flag.
+        self._focus_map_active = False
         if mExperiment.scanAreas:
             self._last_scan_areas = [
                 {
@@ -846,6 +994,10 @@ class ExperimentController(ImConWidgetController):
             self._logger.info("Focus mapping enabled – computing Z surface per scan group")
             self._focus_map_fit_by_region = focusMapConfig.fit_by_region
             self._focus_map_settle_ms = focusMapConfig.settle_ms
+            # Only drive Z from the map during the scan when the config asks for
+            # it (apply_during_scan, default True).  This is the single gate the
+            # acquisition loop checks before applying any focus-map Z.
+            self._focus_map_active = bool(getattr(focusMapConfig, "apply_during_scan", True))
             self._run_focus_map_phase(mExperiment, focusMapConfig)
         # Turn off illumination again after focus mapping so the
         # acquisition loop starts from a clean state.
@@ -872,19 +1024,26 @@ class ExperimentController(ImConWidgetController):
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         drivePath = dirtools.UserFileDirs.getValidatedDataPath()
         dirPath = os.path.join(drivePath, 'ExperimentController', timeStamp)
-        if not os.path.exists(dirPath):
-            os.makedirs(dirPath)
+        os.makedirs(dirPath, exist_ok=True)
+        self._last_experiment_dir = dirPath
         mFileName = f"{timeStamp}_{exp_name}"
 
         workflowSteps = []
         file_writers = []  # Initialize outside the loop for context storage
 
-        # OME writer-related
+        # Tiling behaviour toggle (Wellplate "Tiling" tab): move the stage back
+        # to the pre-scan XYZ when the scan ends.  Read once here so the
+        # normal-mode finalization can branch on it via self.controller.
+        # ("Override per-group Z with current Z" is handled entirely on the
+        # frontend, which rewrites each position's Z before sending.)
+        self._return_to_origin = bool(getattr(p, "returnToOrigin", False))
+
+        # OME writer-related (model defaults guarantee fields exist)
         self._ome_write_tiff = p.ome_write_tiff
         self._ome_write_zarr = p.ome_write_zarr
         self._ome_write_stitched_tiff = p.ome_write_stitched_tiff
-        self._ome_write_single_tiff = getattr(p, 'ome_write_single_tiff', False)  # Default to False if not specified
-        self._ome_write_individual_tiffs = getattr(p, 'ome_write_individual_tiffs', False)  # Default to False if not specified
+        self._ome_write_single_tiff = p.ome_write_single_tiff
+        self._ome_write_individual_tiffs = p.ome_write_individual_tiffs
 
         # determine if each sub scan in snake_tiles is a single tile or a multi-tile scan - if single image we should squah them in a single TIF (e.g. by appending )
         is_single_tile_scan = all(len(tile) == 1 for tile in snake_tiles)
@@ -897,17 +1056,33 @@ class ExperimentController(ImConWidgetController):
 
         # Decide which execution mode to use
         if performanceMode and self.performance_mode.is_hardware_capable():
-            # Execute in performance mode
-            experiment_params = {
-                'mExperiment': mExperiment,
-                'tPeriod': tPeriod,
-                'nTimes': nTimes
+            # Get the initial Z position at the start of each timepoint
+            initial_z_position = self.mStage.getPosition()["Z"]
+            initial_position = self.mStage.getPosition()
+            self._initial_experiment_position = {
+                "X": initial_position.get("X", 0),
+                "Y": initial_position.get("Y", 0),
+                "Z": initial_z_position,
             }
-            result = self.performance_mode.execute_experiment(
+
+            ctx = ExecutionContext(
+                experiment=mExperiment,
                 snake_tiles=snake_tiles,
+                z_positions=z_positions,
+                illumination_sources=illuSources,
                 illumination_intensities=illuminationIntensities,
-                experiment_params=experiment_params
+                exposures=exposures,
+                gains=gains,
+                exp_name=exp_name,
+                dir_path=dirPath,
+                file_name=mFileName,
+                initial_xyz=self._initial_experiment_position,
+                keep_illumination_on=keepIlluminationOn,
+                is_rgb=self.isRGB,
+                illumination_kinds=illuminationKinds,
+                illumination_params=illuminationParams,
             )
+            result = self.performance_mode.execute_experiment(ctx=ctx)
             return {"status": "running", "mode": "performance"}
         else:
             # Execute in normal mode using workflow
@@ -925,40 +1100,28 @@ class ExperimentController(ImConWidgetController):
                 "Z": initial_z_position,
             }
 
-            for t in range(nTimes):
-                experiment_params = {
-                    'mExperiment': mExperiment,
-                    'tPeriod': tPeriod,
-                    'nTimes': nTimes
-                }
+            # Build the typed execution context once and re-use across timepoints.
+            ctx = ExecutionContext(
+                experiment=mExperiment,
+                snake_tiles=snake_tiles,
+                z_positions=z_positions,
+                illumination_sources=illuSources,
+                illumination_intensities=illuminationIntensities,
+                exposures=exposures,
+                gains=gains,
+                exp_name=exp_name,
+                dir_path=dirPath,
+                file_name=mFileName,
+                initial_xyz=self._initial_experiment_position,
+                keep_illumination_on=keepIlluminationOn,
+                is_rgb=self.isRGB,
+                illumination_kinds=illuminationKinds,
+                illumination_params=illuminationParams,
+            )
 
-                result = self.normal_mode.execute_experiment(
-                    snake_tiles=snake_tiles,
-                    illumination_intensities=illuminationIntensities,
-                    illumination_sources=illuSources,
-                    z_positions=z_positions,
-                    initial_z_position=initial_z_position,
-                    exposures=exposures,
-                    gains=gains,
-                    exp_name=exp_name,
-                    dir_path=dirPath,
-                    m_file_name=mFileName,
-                    t=t,
-                    n_times=nTimes,  # Pass total number of time points
-                    is_auto_focus=isAutoFocus,
-                    autofocus_min=autofocusMin,
-                    autofocus_max=autofocusMax,
-                    autofocus_step_size=autofocusStepSize,
-                    autofocus_illumination_channel=autofocusIlluminationChannel,
-                    autofocus_mode=autofocusMode,  # Pass autofocus mode
-                    autofocus_target_focus_setpoint=autofocus_target_focus_setpoint,
-                    autofocus_max_attempts=autofocus_max_attempts,
-                    t_period=tPeriod,
-                    isRGB=self.mDetector._isRGB,
-                    t_pre_s=p.performanceTPreMs / 1000.0,  # Convert ms to seconds
-                    t_post_s=p.performanceTPostMs / 1000.0,  # Convert ms to seconds
-                    keep_illumination_on=keepIlluminationOn,
-                )
+            for t in range(nTimes):
+                ctx.timepoint_index = t
+                result = self.normal_mode.execute_experiment(ctx=ctx)
 
                 # Append workflow steps and file writers to the accumulated lists
                 all_workflow_steps.extend(result["workflow_steps"])
@@ -994,6 +1157,30 @@ class ExperimentController(ImConWidgetController):
             # Start the workflow
             self.workflow_manager.start_workflow(wf, context)
 
+            # Auto-trigger Ashlar stitching once the workflow thread finishes,
+            # guaranteeing all individual TIFFs are on disk before stitching starts.
+            if p.ome_write_ashlar_stitch:
+                _wf_thread = self.workflow_manager.current_thread
+                _pixel_size = getattr(p, 'ashlar_pixel_size', 1.0)
+                _max_shift = getattr(p, 'ashlar_maximum_shift', 50.0)
+                _align_ch = getattr(p, 'ashlar_align_channel', 0)
+                _exp_dir = dirPath
+
+                def _auto_stitch():
+                    if _wf_thread is not None:
+                        _wf_thread.join()
+                    self._logger.info("Experiment complete — auto-starting Ashlar stitching")
+                    self.runAshlarStitching(
+                        pixelSize=_pixel_size,
+                        maximumShift=_max_shift,
+                        alignChannel=_align_ch,
+                        experimentDir=_exp_dir,
+                    )
+
+                threading.Thread(
+                    target=_auto_stitch, daemon=True, name="AshlarAutoTrigger"
+                ).start()
+
         return {"status": "running"}
 
     def computeScanRanges(self, snake_tiles):
@@ -1006,27 +1193,34 @@ class ExperimentController(ImConWidgetController):
     ########################################
     # Hardware-related functions
     ########################################
-    def acquire_frame(self, channel: str, frameSync: int = 3):
+    def acquire_frame(self, channel: str, frameSync: int = 1):
         self._logger.debug(f"Acquiring frame on channel {channel}")
 
-        # ensure we get a fresh frame (frameSync=3 to account for exposure/gain register latency)
-        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        # Make timeout dependent on exposure time so long exposures don't
+        # prematurely abort.  The camera needs at least (frameSync+1) frame
+        # periods to deliver a fresh frame after an illumination / gain change.
+        try:
+            exposure_s = self.mDetector.getLatestFrame.__self__._camera.exposure_time / 1e6
+        except Exception:
+            exposure_s = 0.1
+        timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
         cTime = time.time()
 
-        lastFrameNumber=-1
-        while(1):
+        lastFrameNumber = -1
+        mFrame = None
+        while True:
             # get frame and frame number to get one that is newer than the one with illumination off eventually
             mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
-            if lastFrameNumber==-1:
+            if lastFrameNumber == -1:
                 # first round
                 lastFrameNumber = currentFrameNumber
-            if time.time()-cTime> timeoutFrameRequest:
+            if time.time() - cTime > timeoutFrameRequest:
                 # in case exposure time is too long we need break at one point
                 if mFrame is None:
                     mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
                 break
-            if currentFrameNumber <= lastFrameNumber+frameSync:
-                time.sleep(0.01) # off-load CPU
+            if currentFrameNumber <= lastFrameNumber + frameSync:
+                time.sleep(0.01)  # off-load CPU
             else:
                 break
         return mFrame
@@ -1141,7 +1335,12 @@ class ExperimentController(ImConWidgetController):
                   af_settle_time: float = 0.1,
                   af_static_offset: float = 0.0,
                   af_two_stage: bool = False,
-                  af_n_gauss: int = 0) -> Optional[float]:
+                  af_n_gauss: int = 0,
+                  af_software_method: str = "scan",
+                  af_hc_initial_step: float = 20.0,
+                  af_hc_min_step: float = 1.0,
+                  af_hc_step_reduction: float = 0.5,
+                  af_hc_max_iterations: int = 50) -> Optional[float]:
         """Perform autofocus using either hardware or software method.
 
         Args:
@@ -1189,6 +1388,11 @@ class ExperimentController(ImConWidgetController):
                 minZ=minZ,
                 maxZ=maxZ,
                 stepSize=stepSize,
+                af_software_method=af_software_method,
+                af_hc_initial_step=af_hc_initial_step,
+                af_hc_min_step=af_hc_min_step,
+                af_hc_step_reduction=af_hc_step_reduction,
+                af_hc_max_iterations=af_hc_max_iterations,
             )
 
     def autofocus_software(self, af_range: float = 100.0, af_resolution: float = 10.0,
@@ -1196,8 +1400,17 @@ class ExperimentController(ImConWidgetController):
                            af_settle_time: float = 0.1, af_static_offset: float = 0.0,
                            af_two_stage: bool = False, af_n_gauss: int = 0,
                            illuminationChannel: str = "",
-                           minZ: float = 0, maxZ: float = 0, stepSize: float = 0):
-        """Perform software-based autofocus using AutofocusController (Z-sweep).
+                           minZ: float = 0, maxZ: float = 0, stepSize: float = 0,
+                           af_software_method: str = "scan",
+                           af_hc_initial_step: float = 20.0,
+                           af_hc_min_step: float = 1.0,
+                           af_hc_step_reduction: float = 0.5,
+                           af_hc_max_iterations: int = 50):
+        """Perform software-based autofocus using AutofocusController.
+
+        Supports two methods:
+        - 'scan' (Z-sweep): scans through Z range and fits Gaussian to find peak
+        - 'hillClimbing': iterative gradient ascent for faster convergence
 
         All parameters are passed through from FocusMapConfig or experiment settings.
         Legacy minZ/maxZ/stepSize params are kept for backward compatibility but
@@ -1207,10 +1420,10 @@ class ExperimentController(ImConWidgetController):
             float: Best focus Z position, or None if autofocus failed
         """
         self._logger.debug(
-            "Performing software autofocus (Z-sweep)... "
+            "Performing software autofocus (method=%s)... "
             "af_range=%s, af_resolution=%s, af_algorithm=%s, af_cropsize=%s, "
             "af_settle_time=%s, af_n_gauss=%s, af_two_stage=%s, illumination=%s",
-            af_range, af_resolution, af_algorithm, af_cropsize,
+            af_software_method, af_range, af_resolution, af_algorithm, af_cropsize,
             af_settle_time, af_n_gauss, af_two_stage, illuminationChannel
         )
 
@@ -1240,32 +1453,50 @@ class ExperimentController(ImConWidgetController):
                 self._logger.warning(f"Failed to set illumination channel {illuminationChannel}: {e}")
 
         try:
-            # Determine rangez: prefer af_range, fall back to legacy minZ/maxZ
-            if af_range > 0:
-                rangez = af_range
-            elif maxZ > minZ:
-                rangez = abs(maxZ - minZ) / 2.0
+            if af_software_method == "hillClimbing":
+                # Hill-climbing autofocus: iterative gradient ascent
+                self._logger.debug(
+                    "Using hill-climbing AF: initial_step=%s, min_step=%s, "
+                    "step_reduction=%s, max_iterations=%s",
+                    af_hc_initial_step, af_hc_min_step,
+                    af_hc_step_reduction, af_hc_max_iterations
+                )
+                autofocusController.autoFocusHillClimbing(
+                    initial_step=af_hc_initial_step,
+                    min_step=af_hc_min_step,
+                    step_reduction=af_hc_step_reduction,
+                    max_iterations=af_hc_max_iterations,
+                    tSettle=af_settle_time,
+                    nCropsize=af_cropsize,
+                    focusAlgorithm=af_algorithm,
+                    nGauss=af_n_gauss,
+                    static_offset=af_static_offset,
+                )
             else:
-                rangez = 50.0
+                # Z-sweep autofocus: scan through range and fit Gaussian
+                # Determine rangez: prefer af_range, fall back to legacy minZ/maxZ
+                if af_range > 0:
+                    rangez = af_range
+                elif maxZ > minZ:
+                    rangez = abs(maxZ - minZ) / 2.0
+                else:
+                    rangez = 50.0
 
-            # Determine resolution: prefer af_resolution, fall back to legacy stepSize
-            resolutionz = af_resolution if af_resolution > 0 else (stepSize if stepSize > 0 else 10.0)
+                # Determine resolution: prefer af_resolution, fall back to legacy stepSize
+                resolutionz = af_resolution if af_resolution > 0 else (stepSize if stepSize > 0 else 10.0)
 
-            # Call autofocus – use autoFocus which starts doAutofocusBackground
-            # in a thread with proper state management and validation.
-            # Then wait for the AF thread to finish before reading the result.
-            autofocusController.autoFocus(
-                rangez=rangez,
-                resolutionz=resolutionz,
-                defocusz=0,
-                tSettle=af_settle_time,
-                isDebug=False,
-                nGauss=af_n_gauss,
-                nCropsize=af_cropsize,
-                focusAlgorithm=af_algorithm,
-                static_offset=af_static_offset,
-                twoStage=af_two_stage
-            )
+                autofocusController.autoFocus(
+                    rangez=rangez,
+                    resolutionz=resolutionz,
+                    defocusz=0,
+                    tSettle=af_settle_time,
+                    isDebug=False,
+                    nGauss=af_n_gauss,
+                    nCropsize=af_cropsize,
+                    focusAlgorithm=af_algorithm,
+                    static_offset=af_static_offset,
+                    twoStage=af_two_stage
+                )
 
             # Wait for autofocus thread to finish (it runs in _AutofocusThead)
             af_thread = getattr(autofocusController, '_AutofocusThead', None)
@@ -1335,6 +1566,13 @@ class ExperimentController(ImConWidgetController):
             self._logger.debug("No image found in metadata!")
             return
 
+        # Colour (RGB) detectors deliver (H, W, 3) arrays. Preserve the colour
+        # for RGB cameras (the OME writer now carries a trailing samples axis);
+        # only collapse to grayscale for non-RGB detectors that nonetheless
+        # hand us a 3-channel frame.
+        if img.ndim == 3 and img.shape[2] == 3 and not getattr(self, 'isRGB', False):
+            img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype) # TODO: Is this common sense @Franzili?
+
         # Get tile index to identify the correct OME writer
         position_center_index = kwargs.get("position_center_index")
         if position_center_index is None:
@@ -1355,12 +1593,12 @@ class ExperimentController(ImConWidgetController):
             "z_index": kwargs.get("z_index", 0),
             "channel_index": kwargs.get("channel_index", 0),
         }
-        
+
         # Enrich metadata with MetadataHub data if available
         try:
             if hasattr(self._master, 'metadataHub') and self._master.metadataHub is not None:
                 detector_name = self._master.detectorsManager.getAllDeviceNames()[0]
-                
+
                 # Get objective info from hub
                 hub_global = self._master.metadataHub.get_latest(flat=True, filter_category='Objective')
                 for key, value_dict in hub_global.items():
@@ -1372,7 +1610,7 @@ class ExperimentController(ImConWidgetController):
                         ome_metadata['objective_magnification'] = value_dict.get('value')
                     elif 'NA' in key:
                         ome_metadata['objective_na'] = value_dict.get('value')
-                
+
                 # Get detector context (includes isRGB, exposure, etc.)
                 detector_ctx = self._master.metadataHub.get_detector(detector_name)
                 if detector_ctx:
@@ -1384,33 +1622,75 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.debug(f"Could not enrich OME metadata from MetadataHub: {e}")
 
-        try:
-            # Get file_writers list from context
-            file_writers = context.get_object("file_writers")
-            if file_writers is None or position_center_index >= len(file_writers):
-                self._logger.error(f"No OME writer found for tile index {position_center_index}")
-                metadata["frame_saved"] = False
-                return
+        # Resolve the writer for this tile *before* we hand work to
+        # the background saver — pulling from ``context`` on the
+        # worker thread would be a lifetime hazard.
+        file_writers = context.get_object("file_writers")
+        if file_writers is None or position_center_index >= len(file_writers):
+            self._logger.error(
+                f"No OME writer found for tile index {position_center_index}"
+            )
+            metadata["frame_saved"] = False
+            metadata.pop("result", None)
+            return
+        ome_writer = file_writers[position_center_index]
 
-            # Write frame using the specific OME writer from the list
-            ome_writer = file_writers[position_center_index]
-            chunk_info = ome_writer.write_frame(img, ome_metadata)
+        # Copy the frame so the camera SDK ring buffer can be reused
+        # while the background thread writes. Skipping this is the
+        # textbook way to end up with torn frames in the output stack.
+        # ~5–10 ms for 9 MP on a Pi 5 — much cheaper than the inline
+        # write it replaces.
+        try:
+            img_copy = img.copy()
+        except Exception as copy_err:
+            self._logger.error(f"Frame copy failed: {copy_err}")
+            metadata["frame_saved"] = False
+            metadata.pop("result", None)
+            return
+
+        # The on_success callback runs on the saver thread. Keep it
+        # cheap — signal emission is already thread-safe (see
+        # noqt.SignalInstance.emit which run_coroutine_threadsafe's
+        # the broadcast onto the shared event loop).
+        def _on_success(chunk_info):
             if ome_writer.store:
                 data_path = dirtools.UserFileDirs.getValidatedDataPath()
-                self.setOmeZarrUrl(ome_writer.store.split(data_path)[-1])  # Update OME-Zarr URL in context
-            # Emit signal for frontend updates if Zarr chunk was written
+                self.setOmeZarrUrl(
+                    ome_writer.store.split(data_path)[-1]
+                )
             if chunk_info and "rel_chunk" in chunk_info:
-                sigZarrDict = {
+                self.sigUpdateOMEZarrStore.emit({
                     "event": "zarr_chunk",
                     "path": chunk_info["rel_chunk"],
-                    "zarr": str(self.getOmeZarrUrl())
-                }
-                self.sigUpdateOMEZarrStore.emit(sigZarrDict)
+                    "zarr": str(self.getOmeZarrUrl()),
+                })
 
-            metadata["frame_saved"] = True
-        except Exception as e:
-            self._logger.error(f"Error saving OME frame: {e}")
-            metadata["frame_saved"] = False
+        def _on_error(err):
+            self._logger.error(f"Error saving OME frame: {err}")
+
+        # Queue the write. ``submit`` BLOCKS when the queue is full,
+        # which is intentional: it lets a slow disk back-pressure the
+        # acquisition loop rather than silently dropping frames.
+        # maxsize=32 (see __init__) caps peak RAM at ~32 × frame_size.
+        self._frame_saver.submit(
+            ome_writer.write_frame,
+            img_copy,
+            ome_metadata,
+            on_success=_on_success,
+            on_error=_on_error,
+        )
+
+        # The frame is in the saver's queue or already on disk by the
+        # time this method returns; either way it's "saved" from the
+        # workflow's perspective. (If the actual disk write later
+        # fails, ``_on_error`` logs it.)
+        metadata["frame_saved"] = True
+
+        # Release the workflow's reference to the frame. We already
+        # made our own copy above; without this pop the array stays
+        # alive in WorkflowContext.data for every step, causing
+        # unbounded RAM growth during long wellplate experiments.
+        metadata.pop("result", None)
 
         '''
         if tiff_writer is None:
@@ -1481,19 +1761,104 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Channel {channel} not found in available lasers: {self.allIlluNames}")
             return None
         self._master.lasersManager[channel].setValue(power, getReturn=True)
-        if self._master.lasersManager[channel].enabled == 0:
+        # Use `not enabled` instead of `== 0` to handle False/None/0 returned
+        # after _switch_off_all_illumination calls setEnabled(False).
+        if power > 0 and not self._master.lasersManager[channel].enabled:
             self._master.lasersManager[channel].setEnabled(1, getReturn=True)
         self._logger.debug(f"Setting laser power to {power} for channel {channel}")
         time.sleep(0.04)  # Short delay to ensure power is set before next acquisition # TODO: Necessary?
         return power
 
+    def set_led_matrix_pattern(
+        self,
+        kind: str,
+        direction: Optional[str] = None,
+        radius: Optional[int] = None,
+        intensity_r: int = 0,
+        intensity_g: int = 0,
+        intensity_b: int = 0,
+        settle_s: float = 0.05,
+    ):
+        """Drive the LED matrix for a Wellplate-designer synthetic channel.
+
+        Args:
+            kind: "ring" | "halves" | "off".  "halves" is the DPC quadrant
+                primitive (combined with ``direction``).
+            direction: For ``kind="halves"``: "top" | "bottom" | "left" | "right".
+            radius: For ``kind="ring"``: ring radius in LED units.
+            intensity_r/g/b: 0..255 per colour channel.
+            settle_s: Sleep after setting so illumination stabilises before
+                the camera trigger fires.  setHalves/setRing return as soon
+                as the command is acked over serial, so a short settle is
+                important to avoid the first row of the rolling-shutter
+                frame capturing the previous pattern.
+        """
+        if self._ledMatrix is None:
+            self._logger.warning(
+                f"set_led_matrix_pattern({kind}) called but no LED matrix is configured."
+            )
+            return None
+        try:
+            if kind == "off":
+                self._ledMatrix.setAll(state=(0, 0, 0), getReturn=False)
+            elif kind == "ring":
+                if radius is None:
+                    self._logger.error("set_led_matrix_pattern(ring): missing 'radius'")
+                    return None
+                self._ledMatrix.setRing(
+                    radius=int(radius),
+                    intensity=(int(intensity_r), int(intensity_g), int(intensity_b)),
+                )
+            elif kind == "halves":
+                if direction is None or direction not in self.DPC_SUB_CHANNELS:
+                    self._logger.error(
+                        f"set_led_matrix_pattern(halves): direction must be one of "
+                        f"{self.DPC_SUB_CHANNELS}, got {direction!r}"
+                    )
+                    return None
+                self._ledMatrix.setHalves(
+                    intensity=(int(intensity_r), int(intensity_g), int(intensity_b)),
+                    region=direction,
+                )
+            else:
+                self._logger.error(f"set_led_matrix_pattern: unknown kind {kind!r}")
+                return None
+        except Exception as e:  # noqa: BLE001 - hardware errors surfaced as log warnings
+            self._logger.warning(f"set_led_matrix_pattern({kind}) failed: {e}")
+            return None
+
+        # Settle so the camera doesn't read mid-transition (rolling shutter
+        # captures the previous pattern on the top rows otherwise).
+        if settle_s > 0:
+            time.sleep(settle_s)
+        return kind
+
+
+    def home_axis(self, axis: str, isBlocking: bool = True):
+        if axis not in ["X", "Y", "Z"]:
+            self._logger.error(f"Invalid axis '{axis}' specified for movement")
+            return None
+        self._logger.debug(f"Moving axis {axis} to home position with blocking={isBlocking}")
+        self.mStage.doHome(axis=axis, isBlocking=isBlocking)
+
+    @APIExport(requestType="POST")
+    def homeAllAxes(self):
+        """Home all stage axes (X, Y, Z) sequentially. Blocks until complete."""
+        self._logger.info("Homing all axes before experiment...")
+        for axis in ["X", "Y", "Z"]:
+            self.home_axis(axis=axis, isBlocking=True)
+        self._logger.info("All axes homed successfully.")
+        return {"status": "ok", "message": "All axes homed"}
 
 
     def move_stage_xy(self, posX: float = None, posY: float = None, relative: bool = False):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
         self._logger.info(f"Moving stage to X={posX}, Y={posY}")
         #if posY and posX is None:
-        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X_default, self.SPEED_Y_default), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
+        # Use the experiment-configured scan speed (set from the frontend in
+        # startWellplateExperiment); falls back to the defaults in __init__ when
+        # no experiment has overridden it.
+        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()
         #self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
         return (posX, posY) # TODO: Need to adjust in case of relative move
@@ -1517,7 +1882,7 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error setting detector parameter {parameter} to {value}: {e}")
 
-    def return_to_initial_position(self):
+    def return_to_initial_position(self, include_z_position: bool = False):
         """Return the stage to the position stored at experiment start."""
         try:
             if hasattr(self, "_initial_experiment_position") and self._initial_experiment_position:
@@ -1527,7 +1892,7 @@ class ExperimentController(ImConWidgetController):
                     pos["X"], pos["Y"], pos["Z"],
                 )
                 self.move_stage_xy(pos["X"], pos["Y"], relative=False)
-                self.move_stage_z(pos["Z"], relative=False)
+                if include_z_position: self.move_stage_z(pos["Z"], relative=False)
                 self._initial_experiment_position = None
             else:
                 self._logger.debug("No initial experiment position stored, skipping return.")
@@ -1609,6 +1974,29 @@ class ExperimentController(ImConWidgetController):
         # Set LED status to idle
         self.set_led_status("idle")
 
+        # Drain any frame writes that are still queued on the
+        # background saver — the workflow has stopped producing new
+        # frames, so this should normally be a brief wait. Bounded so
+        # that a stuck disk doesn't hang stopExperiment forever; if
+        # the timeout fires, the saver thread keeps running in the
+        # background and the writes still eventually land on disk.
+        try:
+            if getattr(self, "_frame_saver", None) is not None:
+                pending = self._frame_saver.pending()
+                if pending:
+                    self._logger.info(
+                        f"Draining {pending} pending frame write(s)…"
+                    )
+                drained = self._frame_saver.flush(timeout=30.0)
+                if not drained:
+                    self._logger.warning(
+                        f"Frame saver still has "
+                        f"{self._frame_saver.pending()} pending write(s) "
+                        f"after 30 s — they will complete in the background."
+                    )
+        except Exception as e:
+            self._logger.debug(f"Frame saver flush failed: {e}")
+
         # If nothing was running, return appropriate message
         if not results:
             return "No experiments are currently running"
@@ -1657,6 +2045,191 @@ class ExperimentController(ImConWidgetController):
     **after** arriving at each grid co‑ordinate.
     """
 
+    @APIExport(requestType="GET")
+    def runAshlarStitching(
+        self,
+        pixelSize: float = 1.0,
+        maximumShift: float = 50.0,
+        alignChannel: int = 0,
+        experimentDir: str = "",
+    ) -> dict:
+        """
+        Schedule ashlarUC2 stitching for the last (or specified) experiment
+        directory and return immediately.
+
+        The actual stitching runs in a background thread identical to the
+        overview-scan async pattern.  Poll ``getOverviewAsyncStatus`` for
+        completion; the result dict will contain ``outputDir`` on success.
+
+        Parameters
+        ----------
+        pixelSize     : physical pixel size in µm/pixel
+        maximumShift  : max per-tile corrective shift in µm (ashlar -m)
+        alignChannel  : channel index used for alignment (ashlar -c)
+        experimentDir : absolute path to a specific experiment directory;
+                        uses the most recent experiment when empty
+        """
+        # Resolve which experiment directory to stitch before spawning the thread
+        target_dir = experimentDir.strip() if experimentDir else ""
+        if not target_dir:
+            target_dir = getattr(self, "_last_experiment_dir", "")
+        if not target_dir or not os.path.isdir(target_dir):
+            return {
+                "started": False,
+                "error": (
+                    f"Experiment directory not found: '{target_dir}'. "
+                    "Run an experiment first or provide experimentDir."
+                ),
+            }
+
+        if not self._tryStartOverviewAsync("ashlar_stitching"):
+            return {
+                "started": False,
+                "error": "Another background task is still running",
+                "status": self._overview_async_status,
+            }
+
+        # Resolve pixel size: when the UI still shows the default (1.0) read the
+        # calibrated value that PixelCalibrationController pushed into the detector
+        # from PixelCalibration.affineCalibrations in the ImSwitchConfig file.
+        resolved_pixel_size = pixelSize
+        if pixelSize == 1.0:
+            try:
+                det_px = self.mDetector.pixelSizeUm  # [Z, Y, X]
+                cal_px = float(det_px[1]) if len(det_px) > 1 else 1.0
+                if cal_px > 0 and cal_px != 1.0:
+                    resolved_pixel_size = cal_px
+                    self._logger.info(
+                        f"Ashlar: using calibrated pixel size from detector: {cal_px:.4f} µm/px"
+                    )
+            except Exception as exc:
+                self._logger.warning(f"Could not read detector pixel size: {exc}")
+
+        thread = threading.Thread(
+            target=self._runAshlarStitchingWorker,
+            args=(target_dir, resolved_pixel_size, maximumShift, alignChannel),
+            daemon=True,
+            name="runAshlarStitching",
+        )
+        with self._overview_async_lock:
+            self._overview_async_thread = thread
+        thread.start()
+        return {"started": True, "task": "ashlar_stitching", "experimentDir": target_dir}
+
+
+    def _runAshlarStitchingWorker(
+        self,
+        target_dir: str,
+        pixelSize: float,
+        maximumShift: float,
+        alignChannel: int,
+    ) -> None:
+        """
+        Worker thread body for ashlar stitching.
+        Calls _finishOverviewAsync so getOverviewAsyncStatus reflects completion.
+        """
+        import subprocess, sys
+
+        self._logger.info(f"Ashlar stitching started for: {target_dir}")
+
+        # Locate convert_experiment_tiffs.py relative to this controller file.
+        # imswitch/imcontrol/controller/controllers/ → root → scripts/
+        script = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..", "..", "..", "..", "scripts",
+                "convert_experiment_tiffs.py",
+            )
+        )
+        if not os.path.isfile(script):
+            self._logger.error(f"Stitching script not found: {script}")
+            self._finishOverviewAsync(
+                error=f"convert_experiment_tiffs.py not found at: {script}"
+            )
+            return
+
+        cmd = [
+            sys.executable, script,
+            target_dir,
+            "--mode", "ashlar",
+            "--maximum-shift", str(maximumShift),
+            "--align-channel", str(alignChannel),
+            "--pixel-size", str(pixelSize),
+        ]
+        self._logger.info(f"Ashlar command: {' '.join(cmd)}")
+
+        import threading, time
+        deadline = time.monotonic() + 7200  # 2-hour hard timeout
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            with self._overview_async_lock:
+                self._ashlar_proc = proc
+
+            stderr_lines: list[str] = []
+
+            def _stream():
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    self._logger.info(f"[ashlar] {line}")
+                    stderr_lines.append(line)
+                    with self._overview_async_lock:
+                        if self._overview_async_status.get("running"):
+                            self._overview_async_status["message"] = line
+
+            reader_thread = threading.Thread(target=_stream, daemon=True)
+            reader_thread.start()
+
+            # Wait for process with a per-second timeout check so we honour
+            # the 2-hour deadline even if Popen.wait() doesn't time out itself.
+            while proc.poll() is None:
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    reader_thread.join(timeout=5)
+                    self._logger.error("Ashlar stitching timed out after 2 hours")
+                    self._finishOverviewAsync(error="Stitching timed out after 2 hours")
+                    return
+                time.sleep(1)
+
+            reader_thread.join(timeout=10)
+            with self._overview_async_lock:
+                self._ashlar_proc = None
+            rc = proc.returncode
+
+            if rc == 0:
+                output_dir = os.path.join(target_dir, "converted", "ashlar")
+                output_files = []
+                if os.path.isdir(output_dir):
+                    output_files = [
+                        f for f in os.listdir(output_dir)
+                        if f.endswith(".tif") or f.endswith(".tiff")
+                    ]
+                if output_files:
+                    self._logger.info(f"Ashlar stitching completed → {output_dir} ({len(output_files)} file(s))")
+                    self._finishOverviewAsync(result={
+                        "status": "done",
+                        "outputDir": output_dir,
+                        "files": output_files,
+                        "message": stderr_lines[-1] if stderr_lines else "",
+                    })
+                else:
+                    tail = "\n".join(stderr_lines[-40:]) or "Script exited 0 but no stitched files were written."
+                    self._logger.error(f"Ashlar stitching produced no output files. Script output:\n{tail}")
+                    self._finishOverviewAsync(error=tail)
+            else:
+                tail = "\n".join(stderr_lines[-20:]) or f"Script exited with code {rc}"
+                self._logger.error(f"Ashlar stitching failed (rc={rc}): {tail}")
+                self._finishOverviewAsync(error=tail)
+
+        except Exception as exc:
+            self._logger.error(f"Ashlar stitching worker exception: {exc}", exc_info=True)
+            self._finishOverviewAsync(error=str(exc))
+
     def setOmeZarrUrl(self, url):
         """Set the OME-Zarr URL for the experiment."""
         self._omeZarrUrl = url
@@ -1681,12 +2254,12 @@ class ExperimentController(ImConWidgetController):
                       tPeriod:int=1, nTimes:int=1,
                       isSnakeScan:bool=True):
         """Full workflow: arm camera ➔ launch writer ➔ execute scan.
-        
+
         Args:
             xstart: Starting X position
             xstep: Step size in X direction
             nx: Number of steps in X
-            ystart: Starting Y position  
+            ystart: Starting Y position
             ystep: Step size in Y direction
             ny: Number of steps in Y
             zstart: Starting Z position (for Z-stacking)
@@ -1713,7 +2286,7 @@ class ExperimentController(ImConWidgetController):
         # Ensure illumination is a list
         if illumination is None:
             illumination = []
-        
+
         # Build illumination dict for metadata (maintain backward compatibility)
         illum_dict = {}
         for i, val in enumerate(illumination[:5]):  # Take up to 5 channels
@@ -1725,7 +2298,7 @@ class ExperimentController(ImConWidgetController):
         nScan = max(nIlluminations, 1)
         total_frames = nx * ny * nz * nScan
         self._logger.info(f"Stage-scan: {nx}×{ny}×{nz} ({total_frames} frames)")
-        
+
         def addDataPoint(metadataList, x, y, z, illuminationChannel, illuminationValue, runningNumber):
             """Helper function to add metadata for each position."""
             metadataList.append({
@@ -1749,7 +2322,7 @@ class ExperimentController(ImConWidgetController):
                     # Snake pattern: reverse X direction on odd rows
                     if isSnakeScan and iy % 2 == 1:
                         x = xstart + (nx - 1 - ix) * xstep
-                
+
                     # If there's at least one valid illumination or LED set, take only one image as "default"
                     if nIlluminations == 0:
                         runningNumber += 1
@@ -1791,10 +2364,10 @@ class ExperimentController(ImConWidgetController):
                     daemon=True
                 )
                 self._writer_thread_ome.start()
-            
+
             # Pad illumination list to 5 channels if needed
             illumination_padded = (illumination + [0] * 5)[:5] if illumination else [0, 0, 0, 0, 0]
-            
+
             # 3. execute stage scan (blocks until finished) ------------------------
             self.fastStageScanIsRunning = True  # Set flag to indicate scan is running
             self.mStage.start_stage_scanning(
@@ -1823,7 +2396,7 @@ class ExperimentController(ImConWidgetController):
                         self._master.lasersManager[laser_name].setValue(0)
                     except Exception as e:
                         self._logger.debug(f"Could not turn off laser {laser_name}: {e}")
-            
+
             self._logger.debug("All illumination sources switched off before scan")
         except Exception as e:
             self._logger.warning(f"Error switching off illumination: {e}")
@@ -1888,7 +2461,8 @@ class ExperimentController(ImConWidgetController):
             grid_shape=grid_shape,
             grid_geometry=grid_geometry,
             config=writer_config,
-            logger=self._logger
+            logger=self._logger,
+            isRGB=getattr(self, 'isRGB', False),
         )
 
         # ------------------------------------------------------------- main loop
@@ -2051,8 +2625,8 @@ class ExperimentController(ImConWidgetController):
     def start_mda_experiment(self, request: MDASequenceRequest) -> Dict[str, Any]:
         """
         Start an MDA experiment using useq-schema.
-        
-        This provides a modern, standardized interface for multi-dimensional 
+
+        This provides a modern, standardized interface for multi-dimensional
         acquisition experiments.
         """
         if not self.mda_manager.is_available():
@@ -2107,8 +2681,7 @@ class ExperimentController(ImConWidgetController):
                 drivePath = dirtools.UserFileDirs.Data
                 dirPath = os.path.join(drivePath, 'MDAExperiments', timeStamp)
 
-            if not os.path.exists(dirPath):
-                os.makedirs(dirPath)
+            os.makedirs(dirPath, exist_ok=True)
 
             # Create workflow progress handler
             def sendProgress(payload):
@@ -2175,10 +2748,10 @@ class ExperimentController(ImConWidgetController):
     def run_native_mda_sequence(self, sequence_dict: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a native useq-schema MDASequence from JSON.
-        
+
         This endpoint accepts a native useq.MDASequence serialized as JSON (dict),
         following the EXACT pattern from pymmcore-plus and raman-mda-engine.
-        
+
         Args:
             sequence_dict: Native useq.MDASequence serialized to dict/JSON with fields:
                 - metadata: Dict with arbitrary experiment metadata
@@ -2190,10 +2763,10 @@ class ExperimentController(ImConWidgetController):
                 - autofocus_plan: Dict with autofocus configuration
                 - axis_order: String like "tpcz" defining acquisition order
                 - keep_shutter_open_across: Tuple of axes to keep shutter open
-        
+
         Returns:
             Dict with execution status and sequence information
-            
+
         Example request body:
             {
                 "metadata": {"experiment": "test", "user": "researcher"},
@@ -2242,8 +2815,9 @@ class ExperimentController(ImConWidgetController):
             drivePath = dirtools.UserFileDirs.Data
             dirPath = os.path.join(drivePath, 'NativeMDA', experiment_name, timeStamp)
 
-            if not os.path.exists(dirPath):
-                os.makedirs(dirPath)
+            created_new = not os.path.exists(dirPath)
+            os.makedirs(dirPath, exist_ok=True)
+            if created_new:
                 self._logger.info(f"Created output directory: {dirPath}")
 
             # Run the MDA sequence using the native engine
@@ -2538,7 +3112,7 @@ class ExperimentController(ImConWidgetController):
         if focusMapConfig.scan_areas is not None and len(focusMapConfig.scan_areas) > 0:
             # Caller provided scan areas directly (e.g. from frontend)
             self._last_scan_areas = focusMapConfig.scan_areas
-        
+
         effective_scan_areas = getattr(self, '_last_scan_areas', None)
         if effective_scan_areas is None or len(effective_scan_areas) == 0:
             # Fallback: use current stage position as single area
@@ -2637,6 +3211,11 @@ class ExperimentController(ImConWidgetController):
                     illuminationChannel=config.af_illumination_channel,
                     max_attempts=config.af_max_attempts,
                     target_focus_setpoint=config.af_target_setpoint,
+                    af_software_method=config.af_software_method,
+                    af_hc_initial_step=config.af_hc_initial_step,
+                    af_hc_min_step=config.af_hc_min_step,
+                    af_hc_step_reduction=config.af_hc_step_reduction,
+                    af_hc_max_iterations=config.af_hc_max_iterations,
                 )
 
                 if best_z is None:
@@ -2652,7 +3231,7 @@ class ExperimentController(ImConWidgetController):
                     f"Focus map [{group_id}]: point {i+1}/{len(grid)} "
                     f"at ({gx:.1f}, {gy:.1f}) → Z={best_z:.3f}"
                 )
-                # settle for a moment 
+                # settle for a moment
                 time.sleep(0.5)
 
             except Exception as e:
@@ -2907,21 +3486,18 @@ class ExperimentController(ImConWidgetController):
             layout_dict = layout_data
             layout_name = layout_data.get("name", layout_name)
         else:
-            # 2. Try backend lookup
-            try:
-                layout = get_layout_by_name(layout_name)
-                if layout is None:
-                    raise ValueError(f"Layout '{layout_name}' not found")
-                if hasattr(layout, 'model_dump'):
-                    layout_dict = layout.model_dump()
-                elif hasattr(layout, 'dict'):
-                    layout_dict = layout.dict()
-                else:
-                    layout_dict = layout
-            except Exception:
+            # 2. Try the labware manager (Opentrons defs by load_name)
+            layout_dict = None
+            if self.labware_manager:
+                try:
+                    lab = self.labware_manager.get(layout_name)
+                    layout_dict = self._labware_to_layout_dict(lab)
+                except KeyError:
+                    layout_dict = None
+            if layout_dict is None:
                 # 3. Last-resort hardcoded Heidstar fallback
                 self._logger.warning(
-                    "No layout_data from frontend and backend lookup failed. "
+                    "No layout_data from frontend and labware lookup failed. "
                     "Using hardcoded Heidstar fallback – coordinates may not match canvas!"
                 )
                 layout_dict = {
@@ -2973,17 +3549,7 @@ class ExperimentController(ImConWidgetController):
         if frame is None:
             raise HTTPException(status_code=500, detail="No frame from overview camera")
 
-        # Apply flip settings if available
-        try:
-            if hasattr(self._setupInfo, 'PixelCalibration'):
-                flip = getattr(self._setupInfo.PixelCalibration, 'ObservationCameraFlip', {})
-                if isinstance(flip, dict):
-                    if flip.get('flipY', False):
-                        frame = np.flip(frame, 0)
-                    if flip.get('flipX', False):
-                        frame = np.flip(frame, 1)
-        except Exception:
-            pass
+
 
         # Get current stage position for traceability
         stage_x, stage_y, stage_z = 0.0, 0.0, 0.0
@@ -3024,6 +3590,139 @@ class ExperimentController(ImConWidgetController):
         meta["imageMimeType"] = "image/jpeg"
         meta["stagePosition"] = {"x": stage_x, "y": stage_y, "z": stage_z}
         return meta
+
+    @APIExport(requestType="POST")
+    def recaptureSlot(
+        self,
+        slot_id: str = "1",
+        layout_data: dict = None,
+        layout_name: str = "Heidstar 4x Histosample",
+        camera_name: str = "",
+    ):
+        """Recapture a single overview slide slot instead of all 4.
+
+        Returns immediately with ``{started: True, task: ...}``. The actual
+        stage move + snap runs in a background thread; clients poll
+        :meth:`getOverviewAsyncStatus` for completion / result. This unblocks
+        the FastAPI worker thread so the rest of the UI stays responsive.
+        """
+        if not self._tryStartOverviewAsync(f"recapture_slot_{slot_id}"):
+            return {
+                "started": False,
+                "error": "Another overview task is still running",
+                "status": self._overview_async_status,
+            }
+
+        thread = threading.Thread(
+            target=self._recaptureSlotWorker,
+            args=(slot_id, layout_data, layout_name, camera_name),
+            daemon=True,
+            name=f"recaptureSlot-{slot_id}",
+        )
+        with self._overview_async_lock:
+            self._overview_async_thread = thread
+        thread.start()
+        return {"started": True, "task": f"recapture_slot_{slot_id}"}
+
+    def _recaptureSlotWorker(
+        self,
+        slot_id: str,
+        layout_data: Optional[dict],
+        layout_name: str,
+        camera_name: str,
+    ) -> None:
+        try:
+            result = self._recaptureSlotBlocking(
+                slot_id=slot_id,
+                layout_data=layout_data,
+                layout_name=layout_name,
+                camera_name=camera_name,
+            )
+            self._finishOverviewAsync(result=result)
+        except Exception as exc:
+            self._logger.error(f"recaptureSlot worker failed: {exc}", exc_info=True)
+            self._finishOverviewAsync(error=str(exc))
+
+    def _recaptureSlotBlocking(
+        self,
+        slot_id: str = "1",
+        layout_data: dict = None,
+        layout_name: str = "Heidstar 4x Histosample",
+        camera_name: str = "",
+    ) -> dict:
+        """Synchronous body of recaptureSlot - executed inside the worker."""
+        # Resolve the layout the same way getOverviewRegistrationConfig does.
+        if layout_data is not None and isinstance(layout_data, dict) and layout_data.get("wells"):
+            layout_dict = layout_data
+            layout_name = layout_data.get("name", layout_name)
+        else:
+            layout_dict = None
+            if self.labware_manager:
+                try:
+                    lab = self.labware_manager.get(layout_name)
+                    layout_dict = self._labware_to_layout_dict(lab)
+                except KeyError:
+                    layout_dict = None
+            if layout_dict is None:
+                # Heidstar fallback (matches getOverviewRegistrationConfig).
+                layout_dict = {
+                    "name": "Heidstar 4x Histosample",
+                    "unit": "um",
+                    "width": 127000,
+                    "height": 84000,
+                    "wells": [
+                        {"x": 18400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide1"},
+                        {"x": 48400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide2"},
+                        {"x": 78400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide3"},
+                        {"x": 108400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide4"},
+                    ],
+                }
+
+        # Compute slot center from slot definitions.
+        slots = self._overview_registration.get_slot_definitions(layout_dict)
+        slot_index = None
+        try:
+            slot_index = int(slot_id) - 1  # API uses 1-based slot ids
+        except (TypeError, ValueError):
+            pass
+        if slot_index is None or slot_index < 0 or slot_index >= len(slots):
+            raise ValueError(
+                f"Invalid slot_id '{slot_id}' for layout with {len(slots)} slots"
+            )
+
+        slot = slots[slot_index]
+        slot_dict = slot.model_dump() if hasattr(slot, "model_dump") else slot.dict()
+        center_x = slot_dict.get("centerX")
+        center_y = slot_dict.get("centerY")
+        if center_x is None or center_y is None:
+            corners = (
+                slot_dict.get("stageCorners")
+                or slot_dict.get("corners")
+                or []
+            )
+            if len(corners) >= 1:
+                xs = [c.get("x", 0.0) for c in corners]
+                ys = [c.get("y", 0.0) for c in corners]
+                center_x = sum(xs) / len(xs)
+                center_y = sum(ys) / len(ys)
+            else:
+                well = layout_dict["wells"][slot_index]
+                center_x = float(well.get("x", 0.0))
+                center_y = float(well.get("y", 0.0))
+
+        # Move the stage to the slot center (blocking) before snapping.
+        if self.mStage is not None:
+            try:
+                self.mStage.move(value=float(center_x), axis="X", is_absolute=True, is_blocking=True)
+                self.mStage.move(value=float(center_y), axis="Y", is_absolute=True, is_blocking=True)
+            except Exception as e:
+                self._logger.warning(f"recaptureSlot: stage move failed: {e}")
+
+        # Re-use the existing snap logic so the snapshot is stored consistently.
+        result = self.snapOverviewImage(slot_id=str(slot_id), camera_name=camera_name)
+        result["recapturedSlot"] = slot_id
+        result["slotCenter"] = {"x": float(center_x), "y": float(center_y)}
+        return result
 
     @APIExport(requestType="POST")
     def registerOverviewSlide(self, registration_data: dict):
@@ -3081,6 +3780,7 @@ class ExperimentController(ImConWidgetController):
                 corners_px=corners_px,
                 slot_stage_corners=slot_stage_corners,
                 raw_image=raw_image,
+                stage_position=registration_data.get("stagePosition"),
             )
 
             return {
@@ -3094,6 +3794,15 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Registration failed: {e}", exc_info=True)
             raise HTTPException(status_code=400, detail=str(e))
+        finally:
+            try:
+                self._persistOverviewRegistrationToSetup(
+                    cam_name, layout_name
+                )
+            except Exception as _exc:
+                self._logger.debug(
+                    f"Skip persisting overview registration: {_exc}"
+                )
 
     @APIExport(requestType="GET")
     def getOverviewRegistrationStatus(self, camera_name: str = "", layout_name: str = "Heidstar 4x Histosample"):
@@ -3133,17 +3842,6 @@ class ExperimentController(ImConWidgetController):
         if frame is None:
             raise HTTPException(status_code=500, detail="No frame from overview camera")
 
-        # Apply flips
-        try:
-            if hasattr(self._setupInfo, 'PixelCalibration'):
-                flip = getattr(self._setupInfo.PixelCalibration, 'ObservationCameraFlip', {})
-                if isinstance(flip, dict):
-                    if flip.get('flipY', False):
-                        frame = np.flip(frame, 0)
-                    if flip.get('flipX', False):
-                        frame = np.flip(frame, 1)
-        except Exception:
-            pass
 
         frame = np.ascontiguousarray(frame)
 
@@ -3173,6 +3871,310 @@ class ExperimentController(ImConWidgetController):
         """
         cam_name = camera_name or self._overview_camera_name or "overviewcamera"
         return self._overview_registration.get_overlay_data(cam_name, layout_name)
+
+    # ------------------------------------------------------------------
+    # Autonomous overview scan + registration config endpoints
+    # ------------------------------------------------------------------
+    # Async overview-task plumbing
+    # ------------------------------------------------------------------
+    def _tryStartOverviewAsync(self, task_name: str) -> bool:
+        """Reserve the single async overview slot. Returns False if busy."""
+        with self._overview_async_lock:
+            t = self._overview_async_thread
+            if t is not None and t.is_alive():
+                return False
+            self._overview_async_status = {
+                "running": True,
+                "task": task_name,
+                "result": None,
+                "error": None,
+                "message": "",
+            }
+            self._overview_async_thread = None
+            return True
+
+    def _finishOverviewAsync(self, result=None, error=None) -> None:
+        with self._overview_async_lock:
+            self._overview_async_status = {
+                "running": False,
+                "task": self._overview_async_status.get("task"),
+                "result": result,
+                "error": error,
+            }
+
+    @APIExport(requestType="GET")
+    def getOverviewAsyncStatus(self):
+        """Return the current background-overview-task state for polling."""
+        with self._overview_async_lock:
+            return dict(self._overview_async_status)
+
+    @APIExport(requestType="GET")
+    def stopAshlarStitching(self) -> dict:
+        """Kill the running Ashlar stitching subprocess, if any."""
+        with self._overview_async_lock:
+            proc = self._ashlar_proc
+        if proc is None or proc.poll() is not None:
+            return {"stopped": False, "message": "No stitching process is running"}
+        proc.kill()
+        self._logger.info("Ashlar stitching process killed by user request")
+        self._finishOverviewAsync(error="Stitching stopped by user")
+        return {"stopped": True}
+
+    # ------------------------------------------------------------------
+    # Known calibration reference points per layout
+    # ------------------------------------------------------------------
+    # Hard-coded reference centres (in micrometres) for known calibration
+    # targets. ``StageOffsetCalibrationTab`` shows these as the "expected"
+    # position; the deviation from the brightest spot detected by the raster
+    # scan is what gets persisted as the stage offset.
+    _KNOWN_CALIBRATION_POINTS: Dict[str, Dict[str, Any]] = {
+        "Heidstar 4x Histosample": {
+            "x": 20000.0,
+            "y": 40000.0,
+            "description": "Centre of the openUC2 calibration pinhole on the Heidstar 4x slide carrier (slot 1).",
+        },
+        "openUC2 96-Well Calibration Chart": {
+            "x": 14380.0,
+            "y": 11240.0,
+            "description": "Centre well A1 of the openUC2 96-well calibration chart (slot 1).",
+        },
+    }
+
+    @APIExport(requestType="GET")
+    def getKnownCalibrationPoint(self, layout_name: str = "Heidstar 4x Histosample"):
+        """Return the expected (x_um, y_um) calibration centre for a layout.
+
+        The frontend uses this as the "true" position when storing a stage
+        offset: ``offset = expected - actual``.
+        """
+        ref = self._KNOWN_CALIBRATION_POINTS.get(layout_name)
+        if ref is None:
+            return {"success": False, "layoutName": layout_name, "known": None}
+        return {"success": True, "layoutName": layout_name, "known": dict(ref)}
+
+    @APIExport(requestType="GET")
+    def getKnownCalibrationLayouts(self):
+        """List every layout that ships a known calibration reference point."""
+        return {
+            "layouts": [
+                {"name": name, **dict(data)}
+                for name, data in self._KNOWN_CALIBRATION_POINTS.items()
+            ]
+        }
+
+    # ------------------------------------------------------------------
+    @APIExport(requestType="POST")
+    def runAutonomousOverviewScan(
+        self,
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+        settle_time_s: float = 0.5,
+    ):
+        """Schedule an autonomous overview scan and return immediately.
+
+        The actual stage iteration + snap loop runs in a background thread so
+        the FastAPI worker stays free. Poll :meth:`getOverviewAsyncStatus` for
+        completion and the final ``scanResults`` / ``overlayData`` payload.
+        """
+        if not self._tryStartOverviewAsync("autonomous_overview_scan"):
+            return {
+                "started": False,
+                "error": "Another overview task is still running",
+                "status": self._overview_async_status,
+            }
+
+        thread = threading.Thread(
+            target=self._runAutonomousOverviewScanWorker,
+            args=(camera_name, layout_name, settle_time_s),
+            daemon=True,
+            name="runAutonomousOverviewScan",
+        )
+        with self._overview_async_lock:
+            self._overview_async_thread = thread
+        thread.start()
+        return {"started": True, "task": "autonomous_overview_scan"}
+
+    def _runAutonomousOverviewScanWorker(
+        self,
+        camera_name: str,
+        layout_name: str,
+        settle_time_s: float,
+    ) -> None:
+        try:
+            result = self._runAutonomousOverviewScanBlocking(
+                camera_name=camera_name,
+                layout_name=layout_name,
+                settle_time_s=settle_time_s,
+            )
+            self._finishOverviewAsync(result=result)
+        except Exception as exc:
+            self._logger.error(
+                f"runAutonomousOverviewScan worker failed: {exc}", exc_info=True
+            )
+            self._finishOverviewAsync(error=str(exc))
+
+    def _runAutonomousOverviewScanBlocking(
+        self,
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+        settle_time_s: float = 0.5,
+    ) -> dict:
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        cam = self._overview_camera
+        if cam is None:
+            raise HTTPException(status_code=400, detail="Overview camera not available")
+
+        config = self._overview_registration.load_registration_config(cam_name, layout_name)
+        if not config or not config.get("slots"):
+            raise HTTPException(
+                status_code=400,
+                detail="No registration config found. Run the manual wizard first.",
+            )
+
+        results: Dict[str, Any] = {}
+        for slot_id, slot_data in config["slots"].items():
+            pos = slot_data.get("stagePosition") or {}
+            try:
+                # Move XY together when possible, then Z separately
+                if self.mStage is not None:
+                    if "x" in pos and "y" in pos:
+                        self.mStage.move(
+                            value=(float(pos["x"]), float(pos["y"])),
+                            axis="XY",
+                            is_absolute=True,
+                            is_blocking=True,
+                        )
+                    if "z" in pos:
+                        self.mStage.move(
+                            value=float(pos["z"]),
+                            axis="Z",
+                            is_absolute=True,
+                            is_blocking=True,
+                        )
+                if settle_time_s and settle_time_s > 0:
+                    time.sleep(float(settle_time_s))
+
+                frame = cam.getLatestFrame()
+                if frame is None:
+                    results[slot_id] = {"success": False, "error": "No frame from camera"}
+                    continue
+                frame = np.ascontiguousarray(frame)
+
+                refresh = self._overview_registration.refresh_overlay_image(
+                    camera_name=cam_name,
+                    layout_name=layout_name,
+                    slot_id=slot_id,
+                    new_image=frame,
+                )
+                results[slot_id] = {"success": True, **refresh}
+            except Exception as exc:
+                self._logger.error(
+                    f"Autonomous scan failed for slot {slot_id}: {exc}", exc_info=True
+                )
+                results[slot_id] = {"success": False, "error": str(exc)}
+
+        overlay_data = self._overview_registration.get_overlay_data(cam_name, layout_name)
+        return {"success": True, "scanResults": results, "overlayData": overlay_data}
+
+    @APIExport(requestType="GET")
+    def getOverviewRegistrationConfigData(
+        self,
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+    ):
+        """Return the persisted overview-registration config for editing."""
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        config = self._overview_registration.load_registration_config(cam_name, layout_name)
+        if config is None:
+            return {"exists": False, "config": None}
+        return {"exists": True, "config": config}
+
+    @APIExport(requestType="POST")
+    def updateOverviewRegistrationConfig(self, config_data: dict):
+        """Apply edits to the registration config (e.g. updated XYZ positions)."""
+        if not isinstance(config_data, dict):
+            raise HTTPException(status_code=400, detail="config_data must be an object")
+        cam_name = config_data.get(
+            "cameraName", self._overview_camera_name or "overviewcamera"
+        )
+        layout_name = config_data.get("layoutName", "Heidstar 4x Histosample")
+        try:
+            path = self._overview_registration.save_registration_config_from_dict(
+                cam_name, layout_name, config_data
+            )
+            self._persistOverviewRegistrationToSetup(cam_name, layout_name)
+            return {"success": True, "path": path}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @APIExport(requestType="GET")
+    def getOverviewOverlayImage(
+        self,
+        slot_id: str = "1",
+        camera_name: str = "",
+        layout_name: str = "Heidstar 4x Histosample",
+    ):
+        """Return the stored JPEG overlay (base64) for a single slot."""
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        b64 = self._overview_registration.load_overlay_jpeg(
+            cam_name, layout_name, slot_id
+        )
+        if b64 is None:
+            raise HTTPException(
+                status_code=404, detail="No overlay image found for this slot"
+            )
+        return {
+            "imageBase64": b64,
+            "imageMimeType": "image/jpeg",
+            "slotId": slot_id,
+        }
+
+    # ------------------------------------------------------------------
+    # Overview registration <-> setup-config persistence helpers
+    # ------------------------------------------------------------------
+    def _overviewRegistrationKey(self, camera_name: str, layout_name: str) -> str:
+        """Composite key used inside ``_setupInfo.overviewRegistration``."""
+        return f"{camera_name}__{layout_name}"
+
+    def _loadOverviewRegistrationFromSetup(self):
+        """Push any persisted entries from the setup file into the in-memory
+        registration store, so they survive process restarts."""
+        store = getattr(self._setupInfo, "overviewRegistration", None)
+        if not store or not isinstance(store, dict):
+            return
+        for key, cfg in store.items():
+            if not isinstance(cfg, dict):
+                continue
+            cam_name = cfg.get("cameraName") or self._overview_camera_name or "overviewcamera"
+            layout_name = cfg.get("layoutName") or "Heidstar 4x Histosample"
+            try:
+                self._overview_registration.save_registration_config_from_dict(
+                    cam_name, layout_name, cfg
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to load overview registration '{key}': {exc}"
+                )
+
+    def _persistOverviewRegistrationToSetup(self, camera_name: str, layout_name: str):
+        """Mirror the latest registration config into the imcontrol_setups
+        JSON (single source of truth, alongside ``stageOffsets``)."""
+        cfg = self._overview_registration.load_registration_config(
+            camera_name, layout_name
+        )
+        if cfg is None:
+            return
+        if getattr(self._setupInfo, "overviewRegistration", None) is None:
+            self._setupInfo.overviewRegistration = {}
+        key = self._overviewRegistrationKey(camera_name, layout_name)
+        self._setupInfo.overviewRegistration[key] = cfg
+        try:
+            options = configfiletools.loadOptions()[0]
+            configfiletools.saveSetupInfo(options, self._setupInfo)
+        except Exception as exc:
+            self._logger.warning(
+                f"saveSetupInfo failed for overview registration: {exc}"
+            )
 
 
 # Copyright (C) 2025 Benedict Diederich

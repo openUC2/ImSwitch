@@ -22,7 +22,7 @@ config = update_config(log_level="DEBUG")
 
 # Or set it when starting ImSwitch
 from imswitch.__main__ import main
-main(is_headless=True, log_level="DEBUG")
+main(log_level="DEBUG")
 ```
 
 Available log levels:

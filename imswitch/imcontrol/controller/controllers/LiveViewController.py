@@ -5,6 +5,7 @@ This controller manages per-detector streaming with dedicated worker threads and
 multiple streaming protocols (binary, JPEG, MJPEG, WebRTC).
 """
 import asyncio
+import os
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Any
 from abc import abstractmethod
@@ -44,6 +45,19 @@ class StreamParams:
     turn_servers: list = field(default_factory=list)
     max_width: int = 1280  # Maximum frame width in pixels, 0 = no limit
 
+    # Fan-out control: when True, the StreamWorker also emits raw frames on
+    # ``sigUpdateFrame`` (wired to ``CommunicationChannel.sigUpdateImage``),
+    # which then triggers every connected controller's ``update()``
+    # synchronously on the streaming thread (HistogrammController,
+    # FFTController, InLineHoloController, OffAxisHoloController,
+    # ImageController, RecordingService for streaming recordings, …).
+    # For large sensors on a Pi 5 this is a major source of streaming lag:
+    # the broadcast cost is linear in (n_listeners × pixel_count). Set to
+    # False on detectors that don't need realtime per-frame analysis. Can be
+    # overridden per-detector via ``DetectorInfo.defaultStreamSettings`` in
+    # the setup JSON, e.g. ``{"broadcast_frames": false}``.
+    broadcast_frames: bool = True
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
         return {
@@ -53,16 +67,62 @@ class StreamParams:
             "compression_level": self.compression_level,
             "subsampling_factor": self.subsampling_factor,
             "throttle_ms": self.throttle_ms,
+            "crop_size": self.crop_size,
             "jpeg_quality": self.jpeg_quality,
             "stun_servers": self.stun_servers,
             "turn_servers": self.turn_servers,
             "max_width": self.max_width,
+            "broadcast_frames": self.broadcast_frames,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'StreamParams':
         """Create StreamParams from dictionary."""
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+class _JpegEncoder:
+    """JPEG encoder backed by ``cv2.imencode``.
+
+    Kept as a tiny wrapper (rather than calling ``cv2.imencode`` inline)
+    so the JPEG and MJPEG workers share one ``encode()`` API and one
+    ``backend`` check. cv2 is already a hard dependency of the streaming
+    path; we deliberately do NOT pull in PyTurboJPEG — the marginal
+    encode speedup wasn't worth the extra native dependency and the
+    per-session probing it added.
+    """
+
+    def __init__(self, logger=None):
+        self._logger = logger
+        self._cv2 = None
+        try:
+            import cv2
+            self._cv2 = cv2
+        except ImportError:
+            if logger is not None:
+                logger.error(
+                    "opencv-python (cv2) is required for JPEG streaming"
+                )
+
+    @property
+    def backend(self) -> str:
+        return "cv2" if self._cv2 is not None else "none"
+
+    def encode(self, img: np.ndarray, quality: int) -> bytes:
+        """Encode ``img`` (uint8, BGR or grayscale) as JPEG bytes.
+
+        Raises ``RuntimeError`` if cv2 is unavailable or the encode fails.
+        """
+        if self._cv2 is None:
+            raise RuntimeError("No JPEG encoder available (cv2 missing)")
+        quality = max(1, min(100, int(quality)))
+        ok, encoded = self._cv2.imencode(
+            '.jpg', img,
+            [int(self._cv2.IMWRITE_JPEG_QUALITY), quality],
+        )
+        if ok:
+            return bytes(encoded)
+        raise RuntimeError("cv2.imencode returned False")
 
 
 def apply_center_crop(frame: np.ndarray, crop_size: int) -> np.ndarray:
@@ -129,6 +189,40 @@ class StreamWorker(Worker):
         # Enable via enableFrameBroadcast() if controllers need frame updates
         self._broadcast_frames = True
 
+        # Preallocated buffers for the uint16 → uint8 cast used by
+        # subclasses' ``_u16_to_u8_no_alloc`` (§4.B.8). Sized to the most
+        # recently seen post-crop+subsample shape; reallocated only when
+        # the shape changes. ``None`` until first use.
+        self._u8_buf: Optional[np.ndarray] = None
+        self._u16_tmp: Optional[np.ndarray] = None
+
+    def _u16_to_u8_no_alloc(self, src: np.ndarray) -> np.ndarray:
+        """Convert ``src`` (uint16) → uint8 via ``>> 4`` without allocating.
+
+        After §4.A the cast already runs on a small post-crop+subsample
+        frame (~1 MB for a 4× subsampled 9 MP sensor), so the residual
+        per-frame allocation is small. This helper removes it anyway by
+        reusing two preallocated buffers across calls — useful when the
+        worker is steady-state and Python's allocator would otherwise
+        churn on the matched alloc/free pair.
+
+        The returned buffer is **reused** across calls. Anything that
+        needs to outlive the next ``_captureAndEmit`` iteration must copy
+        it first (cv2.imencode produces a fresh ``bytes`` object, so the
+        workers' main paths are safe).
+        """
+        if (self._u8_buf is None
+                or self._u8_buf.shape != src.shape):
+            self._u8_buf = np.empty(src.shape, dtype=np.uint8)
+            self._u16_tmp = np.empty(src.shape, dtype=np.uint16)
+        # Two passes over the data, zero allocations. ``np.right_shift``
+        # requires matching dtypes for ``out``, hence the u16 scratch
+        # buffer plus ``np.copyto`` with ``casting='unsafe'`` for the
+        # truncation to u8.
+        np.right_shift(src, 4, out=self._u16_tmp)
+        np.copyto(self._u8_buf, self._u16_tmp, casting='unsafe')
+        return self._u8_buf
+
     def run(self):
         """Start polling frames without timer - wait and push immediately."""
         self._running = True
@@ -140,8 +234,6 @@ class StreamWorker(Worker):
                 self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it
                 # Check if enough time has passed since last frame
                 if (time.time() - self._last_frame_time) >= self._updatePeriod:  # TODO: and  imswitch.__is_stream_ready_for_sending__
-                    # Capture and emit frame
-
                     # Get frame with actual detector frame number
                     result = self._detector.getLatestFrame(returnFrameNumber=True)
                     if isinstance(result, tuple) and len(result) == 2:
@@ -162,7 +254,7 @@ class StreamWorker(Worker):
                         break  # No frame available, but not an error - keep running
                     else:
                         frameReadAttempts = 0  # Reset attempts on successful read
-                    
+
                     last_detector_frame_number = detector_frame_number
 
                     frameResult = self._captureAndEmit(frame, detector_frame_number)
@@ -317,6 +409,12 @@ class JPEGStreamWorker(StreamWorker):
         except ImportError:
             self._logger.error("opencv-python required for JPEG streaming")
             self._cv2 = None
+        # Shared cv2.imencode wrapper (see _JpegEncoder).
+        self._jpeg = _JpegEncoder(logger=self._logger)
+        if self._jpeg.backend == "none" and self._cv2 is None:
+            self._logger.error(
+                "No JPEG encoder available (cv2 missing)."
+            )
 
     def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame from detector, encode as JPEG, and emit pre-formatted socket.io message."""
@@ -338,32 +436,62 @@ class JPEGStreamWorker(StreamWorker):
             except:
                 pass
 
-            # Normalize to uint8 if needed
             if frame is None:
                 self._logger.warning("Received None frame, skipping")
                 return None  # Not an error, but skip processing
-            if frame.dtype == np.uint16: # convert to uint8 if needed also for its dynamic range 
-                frame = (frame / 16).astype(np.uint8)   
 
-            # Apply center crop if specified (before subsampling)
+            # Order matters for large sensors: shrink the frame BEFORE
+            # converting dtype, so the dtype cast runs on the small frame,
+            # not the full sensor. ``crop_size`` is interpreted in sensor
+            # pixels (unchanged semantics from the previous implementation).
+            #
+            # 1) Crop (slice view, no copy).
             if self._params.crop_size > 0:
                 frame = apply_center_crop(frame, self._params.crop_size)
 
-            # Apply subsampling if needed
+            # 2) Subsample (stride view, no copy).
             if self._params.subsampling_factor > 1:
                 frame = frame[::self._params.subsampling_factor, ::self._params.subsampling_factor]
 
-            # Convert RGB → BGR for JPEG encoding (OpenCV expects BGR)
-            if len(frame.shape) == 3 and frame.shape[2] == 3:
-                frame = self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)
+            # 3) Convert uint16 → uint8 via right-shift, into a preallocated
+            # buffer (see StreamWorker._u16_to_u8_no_alloc). Avoids both the
+            # float64 intermediate the old ``frame / 16`` produced AND the
+            # per-frame alloc that ``(frame >> 4).astype(np.uint8)`` does.
+            if frame.dtype == np.uint16:
+                frame = self._u16_to_u8_no_alloc(frame)
 
-            # Encode as JPEG
-            encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]
-            success, encoded = self._cv2.imencode('.jpg', frame, encode_params)
+            # 4) Ensure C-contiguous for the encoder. The preallocated
+            # buffer above is contiguous, so this is a no-op on the u16
+            # path; it covers the uint8-input path where step 2 produced
+            # a strided view.
+            if not frame.flags.c_contiguous:
+                frame = np.ascontiguousarray(frame)
+
+            # 5) Convert RGB → BGR for JPEG encoding (both libjpeg-turbo and
+            # OpenCV expect BGR for 3-channel input).
+            if len(frame.shape) == 3 and frame.shape[2] == 3:
+                if self._cv2 is not None:
+                    frame = self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)
+                else:
+                    # No cv2 — flip channel order in NumPy.
+                    frame = np.ascontiguousarray(frame[..., ::-1])
+
+            # 6) Encode as JPEG (cv2.imencode via _JpegEncoder).
+            try:
+                jpeg_bytes = self._jpeg.encode(frame, self._params.jpeg_quality)
+                success = True
+            except Exception as enc_err:
+                self._logger.warning(f"JPEG encode failed: {enc_err!r}")
+                jpeg_bytes = b''
+                success = False
 
             if success:
+                # Encode the JPEG bytes as a base64 string. The frontend
+                # consumes ``data:image/jpeg;base64,<liveViewImage>`` in a
+                # plain <img>, which is the simplest, most robust path
+                # (the raw-bytes/Blob experiment was reverted). msgpack
+                # ships the string as-is.
                 import base64
-                jpeg_bytes = encoded.tobytes()
                 encoded_image = base64.b64encode(jpeg_bytes).decode('utf-8')
 
                 # Create unified metadata structure
@@ -416,38 +544,79 @@ class MJPEGStreamWorker(StreamWorker):
         except ImportError:
             self._logger.error("opencv-python required for MJPEG streaming")
             self._cv2 = None
+        # Shared cv2.imencode wrapper (see _JpegEncoder).
+        self._jpeg = _JpegEncoder(logger=self._logger)
+        if self._jpeg.backend == "none" and self._cv2 is None:
+            self._logger.error(
+                "No JPEG encoder available (cv2 missing)."
+            )
 
     def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame and put in queue for MJPEG streaming."""
-        if self._cv2 is None:
+        if self._cv2 is None and self._jpeg.backend == "none":
             return False  # This is a configuration error
 
         try:
+            if frame is None:
+                self._logger.warning("Received None frame, skipping")
+                return None
 
+            # Same ordering as JPEGStreamWorker: shrink first, then convert
+            # dtype, so the cast runs on the small frame. The previous
+            # ``np.min / np.max → float → cast`` did 4+ full-frame passes in
+            # float64 — the worst case for large sensors. We use the same
+            # fixed right-shift as JPEGStreamWorker for consistency. This
+            # trades per-frame auto-stretch for ~10x lower CPU; if
+            # auto-stretch is needed in MJPEG specifically, compute
+            # vmin/vmax on the already-subsampled thumbnail (step 2 below).
 
-            # Normalize to uint8 if needed
-            if frame.dtype != np.uint8:
-                vmin = float(np.min(frame))
-                vmax = float(np.max(frame))
-                if vmax > vmin:
-                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
-                else:
-                    frame = np.zeros_like(frame, dtype=np.uint8)
-
-            # Apply center crop if specified (before encoding)
+            # 1) Crop (view).
             if self._params.crop_size > 0:
                 frame = apply_center_crop(frame, self._params.crop_size)
 
-            # Convert RGB → BGR for JPEG encoding (OpenCV expects BGR)
-            if len(frame.shape) == 3 and frame.shape[2] == 3: # TODO: Is this correct for all RGB cameras? 
-                frame = self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)
+            # 2) Subsample (view). The MJPEG worker previously skipped this
+            # entirely, encoding the full sensor every frame — single biggest
+            # win on this path.
+            if self._params.subsampling_factor > 1:
+                frame = frame[::self._params.subsampling_factor, ::self._params.subsampling_factor]
 
-            # Encode as JPEG
-            encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]
-            success, encoded = self._cv2.imencode('.jpg', frame, encode_params)
+            # 3) Convert to uint8.
+            if frame.dtype == np.uint16:
+                # Preallocated-buffer right-shift; matches JPEGStreamWorker.
+                frame = self._u16_to_u8_no_alloc(frame)
+            elif frame.dtype != np.uint8:
+                # Float or other dtype: rare path. Keep the previous min/max
+                # stretch, but it now runs on the already-cropped+subsampled
+                # frame (≪ 1/16 the cost) instead of the full sensor.
+                vmin = float(frame.min())
+                vmax = float(frame.max())
+                if vmax > vmin:
+                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
+                else:
+                    frame = np.zeros(frame.shape, dtype=np.uint8)
+
+            # 4) Ensure C-contiguous for cv2.imencode.
+            if not frame.flags.c_contiguous:
+                frame = np.ascontiguousarray(frame)
+
+            # 5) Convert RGB → BGR for JPEG encoding (both libjpeg-turbo and
+            # OpenCV expect BGR for 3-channel input).
+            if len(frame.shape) == 3 and frame.shape[2] == 3:  # TODO: Is this correct for all RGB cameras?
+                if self._cv2 is not None:
+                    frame = self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)
+                else:
+                    frame = np.ascontiguousarray(frame[..., ::-1])
+
+            # 6) Encode as JPEG (cv2.imencode via _JpegEncoder).
+            try:
+                jpeg_bytes = self._jpeg.encode(frame, self._params.jpeg_quality)
+                success = True
+            except Exception as enc_err:
+                self._logger.warning(f"MJPEG encode failed: {enc_err!r}")
+                jpeg_bytes = b''
+                success = False
 
             if success:
-                jpeg_bytes = encoded.tobytes()
                 # Build MJPEG frame with proper headers
                 header = (
                     b'--frame\r\n'
@@ -500,57 +669,111 @@ class WebRTCStreamWorker(StreamWorker):
             self._has_webrtc = False
 
     def _captureAndEmit(self, frame, detector_frame_number=None):
-        """Capture frame and put in queue for WebRTC streaming."""
+        """Capture frame, prepare it fully for av.VideoFrame, and enqueue.
+
+        All the expensive preprocessing (dtype cast, crop, subsample,
+        grayscale→RGB, target-size resize, even-dim alignment) runs *here*
+        on the StreamWorker thread instead of inside ``recv()`` on the
+        aiortc event loop. The queue therefore holds frames that are
+        rgb24, contiguous, even-dimensioned, and already at the target
+        size — ``recv()`` only needs to wrap them in ``av.VideoFrame``.
+        """
         if not self._has_webrtc:
             return False  # This is a configuration error
 
         try:
-            # Apply basic preprocessing based on throttle setting
-            # For WebRTC, we want to minimize processing latency
-            throttle_ms = getattr(self._params, 'throttle_ms', 50)
+            if frame is None:
+                return None
 
-            # Normalize to uint8 efficiently
-            if frame.dtype != np.uint8:
-                if throttle_ms < 33:  # ~30 FPS or higher - use fast conversion
-                    if frame.dtype == np.uint16:
-                        frame = (frame >> 8).astype(np.uint8)  # Quick 16->8 bit conversion
-                    else:
-                        # Quick normalization without min/max calculation
-                        frame = (frame / frame.max() * 255).astype(np.uint8)
-                else:
-                    # Normal processing for lower frame rates
-                    vmin = float(np.min(frame))
-                    vmax = float(np.max(frame))
-                    if vmax > vmin:
-                        frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
-                    else:
-                        frame = np.zeros_like(frame, dtype=np.uint8)
-
-            # Apply center crop if specified (before streaming)
+            # 1) Crop (view).
             if self._params.crop_size > 0:
                 frame = apply_center_crop(frame, self._params.crop_size)
 
-            # Put frame in queue, replacing old frame if full
-            try:
-                # Clear the queue to keep only the latest frame (reduces latency)
-                while not self._frame_queue.empty():
-                    try:
-                        self._frame_queue.get_nowait()
-                    except queue.Empty:
-                        break
+            # 2) Subsample via stride slice (view; cheap).
+            sub = max(1, int(getattr(self._params, "subsampling_factor", 1)))
+            if sub > 1:
+                frame = frame[::sub, ::sub]
 
-                # Add the new frame
+            # 3) uint16 → uint8. Preallocated-buffer right-shift; matches
+            # JPEG/MJPEG workers. (For genuinely 16-bit data this
+            # discards 4 low bits — fine for a lossy WebRTC codec.)
+            if frame.dtype == np.uint16:
+                frame = self._u16_to_u8_no_alloc(frame)
+            elif frame.dtype != np.uint8:
+                # Rare path: float or other dtype. Run min/max stretch on
+                # the already-cropped+subsampled frame, not the full sensor.
+                vmin = float(frame.min())
+                vmax = float(frame.max())
+                if vmax > vmin:
+                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
+                else:
+                    frame = np.zeros(frame.shape, dtype=np.uint8)
+
+            # 4) Make sure it's RGB-channels-last for av.VideoFrame("rgb24").
+            if frame.ndim == 2:
+                # Grayscale → RGB via broadcasting (no extra alloc beyond
+                # the final contiguous copy below).
+                frame = np.repeat(frame[..., None], 3, axis=2)
+            elif frame.ndim == 3 and frame.shape[2] == 1:
+                frame = np.repeat(frame, 3, axis=2)
+            elif frame.ndim == 3 and frame.shape[2] == 4:
+                frame = frame[:, :, :3]
+
+            # 5) Target size: respect ``max_width`` and a hard 720p cap so
+            # software libx264 inside aiortc can keep up on a Pi 5. This
+            # used to run inside ``recv()`` — moving it here means the
+            # asyncio loop only does the lightweight VideoFrame wrap.
+            orig_h, orig_w = frame.shape[:2]
+            max_width = int(getattr(self._params, "max_width", 1280)) or orig_w
+            # Hard cap to 720p — pi5 software h264 can't handle more
+            # at any reasonable framerate.
+            hard_w_cap = 1280
+            target_w = min(max_width, hard_w_cap)
+
+            if orig_w > target_w:
+                scale = target_w / orig_w
+                new_w = int(orig_w * scale)
+                new_h = int(orig_h * scale)
+                # Even dims (codec requirement).
+                new_w -= new_w % 2
+                new_h -= new_h % 2
+                try:
+                    import cv2
+                    frame = cv2.resize(
+                        frame, (new_w, new_h), interpolation=cv2.INTER_AREA
+                    )
+                except ImportError:
+                    # No cv2: stride-subsample down by a power of 2 as a
+                    # last resort. Loses aspect-ratio precision but
+                    # functional.
+                    step = max(1, orig_w // new_w)
+                    frame = frame[::step, ::step]
+
+            # 6) Strip a row/col if necessary to land on even dims.
+            h, w = frame.shape[:2]
+            if w % 2:
+                frame = frame[:, : w - 1]
+            if h % 2:
+                frame = frame[: h - 1, :]
+
+            # 7) Contiguous, ready for av.VideoFrame.from_ndarray("rgb24").
+            if not frame.flags.c_contiguous:
+                frame = np.ascontiguousarray(frame)
+
+            # Single-slot semantics: drop any stale frame, push the new
+            # one. Lowest latency at the cost of dropping intermediate
+            # frames when the consumer is slow — exactly what WebRTC
+            # wants for live preview.
+            while not self._frame_queue.empty():
+                try:
+                    self._frame_queue.get_nowait()
+                except queue.Empty:
+                    break
+            try:
                 self._frame_queue.put_nowait(frame)
                 return True
-
             except queue.Full:
-                # This shouldn't happen since we clear the queue, but just in case
-                try:
-                    self._frame_queue.get_nowait()  # Remove one old frame
-                    self._frame_queue.put_nowait(frame)  # Add new frame
-                    return True
-                except (queue.Empty, queue.Full):
-                    return None  # Queue issues, but not a fatal error
+                return None
 
         except Exception as e:
             self._logger.error(f"Error in WebRTCStreamWorker: {e}")
@@ -617,99 +840,38 @@ class DetectorVideoTrack:
                             continue
 
                 if frame is None:
-                    # Use last frame if available, otherwise create a small placeholder frame
+                    # Use last frame if available, otherwise create a small placeholder frame.
                     if hasattr(inner_self, '_last_frame') and inner_self._last_frame is not None:
-                        frame = inner_self._last_frame.copy()  # Make a copy to avoid issues
+                        frame = inner_self._last_frame  # already prepared by producer
                     else:
-                        # Create a small black frame to reduce bandwidth
-                        frame = np.zeros((240, 320, 3), dtype=np.uint8)  # RGB format directly
+                        # Create a small black frame to reduce bandwidth.
+                        frame = np.zeros((240, 320, 3), dtype=np.uint8)
                         inner_self._logger.info("Using placeholder frame")
                 else:
-                    # Store the frame as last frame for fallback
+                    # Frames coming out of the queue are already rgb24,
+                    # contiguous, even-dimensioned, and sized to the WebRTC
+                    # target by WebRTCStreamWorker._captureAndEmit. We just
+                    # need to wrap them. Keep one as a fallback for the
+                    # next empty-queue tick.
                     inner_self._last_frame = frame
 
-                # Ensure frame is the right shape and size
-                if len(frame.shape) == 2:
-                    # Grayscale - convert to RGB
-                    frame = np.stack([frame, frame, frame], axis=2)
-                elif len(frame.shape) == 3 and frame.shape[2] == 1:
+                # Defensive sanity checks — cheap and protect against an
+                # accidental upstream change. If any of these trigger
+                # we'd rather pay a one-frame cv2 hit than send a malformed
+                # buffer to libx264.
+                if frame.ndim == 2:
+                    frame = np.repeat(frame[..., None], 3, axis=2)
+                elif frame.ndim == 3 and frame.shape[2] == 1:
                     frame = np.repeat(frame, 3, axis=2)
-                elif len(frame.shape) == 3 and frame.shape[2] == 4:
-                    # Remove alpha channel if present
+                elif frame.ndim == 3 and frame.shape[2] == 4:
                     frame = frame[:, :, :3]
+                if not frame.flags.c_contiguous:
+                    frame = np.ascontiguousarray(frame)
+                h, w = frame.shape[:2]
+                if (w % 2) or (h % 2):
+                    frame = frame[: h - (h % 2), : w - (w % 2)]
 
-                # Get original dimensions
-                original_height, original_width = frame.shape[:2]
-
-                # Get max dimensions from stream parameters
-                max_width = getattr(inner_self._stream_params, 'max_width', 1280)  # Default to 1280 if not set
-                if max_width == 0:  # 0 means no limit
-                    max_width = original_width
-
-                # Calculate max_height based on aspect ratio
-                aspect_ratio = original_width / original_height
-                max_height = int(max_width / aspect_ratio)
-
-                # Apply subsampling factor if configured
-                if hasattr(inner_self._stream_params, 'subsampling_factor') and inner_self._stream_params.subsampling_factor > 1:
-                    max_width = max_width // inner_self._stream_params.subsampling_factor
-                    max_height = max_height // inner_self._stream_params.subsampling_factor
-
-                # Resize while preserving aspect ratio if frame is larger than limits
-                if original_width > max_width or original_height > max_height:
-                    import cv2
-                    # Calculate scaling factor to maintain aspect ratio
-                    scale_width = max_width / original_width
-                    scale_height = max_height / original_height
-                    scale = min(scale_width, scale_height)
-
-                    new_width = int(original_width * scale)
-                    new_height = int(original_height * scale)
-
-                    # Ensure dimensions are even (required for some video codecs)
-                    new_width = new_width - (new_width % 2)
-                    new_height = new_height - (new_height % 2)
-
-                    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-                    # inner_self._logger.info(f"Resized frame from {original_width}x{original_height} to {new_width}x{new_height} (max: {max_width}x{max_height})")
-                elif hasattr(inner_self._stream_params, 'subsampling_factor') and inner_self._stream_params.subsampling_factor > 1:
-                    # Apply subsampling even if frame is within limits
-                    import cv2
-                    new_width = original_width // inner_self._stream_params.subsampling_factor
-                    new_height = original_height // inner_self._stream_params.subsampling_factor
-
-                    # Ensure dimensions are even
-                    new_width = new_width - (new_width % 2)
-                    new_height = new_height - (new_height % 2)
-
-                    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-                    inner_self._logger.info(f"Subsampled frame from {original_width}x{original_height} to {new_width}x{new_height} (factor: {inner_self._stream_params.subsampling_factor})")
-
-                # Ensure frame is contiguous and optimize for WebRTC
-                frame = np.ascontiguousarray(frame)
-
-                # Ensure frame dimensions are even (required by some codecs)
-                height, width = frame.shape[:2]
-                if width % 2 != 0:
-                    width -= 1
-                    frame = frame[:, :width]
-                if height % 2 != 0:
-                    height -= 1
-                    frame = frame[:height, :]
-
-                # Create av.VideoFrame with error handling and timeout protection
                 try:
-                    # Use a smaller frame if the original is too large (reduces encoding time)
-                    if frame.size > 1280 * 720 * 3:  # If frame is larger than 720p
-                        # Quick downsample for faster processing
-                        import cv2
-                        target_height = min(480, height)
-                        target_width = int(target_height * width / height)
-                        # Ensure even dimensions
-                        target_width = target_width - (target_width % 2)
-                        target_height = target_height - (target_height % 2)
-                        frame = cv2.resize(frame, (target_width, target_height), interpolation=cv2.INTER_AREA)
-
                     new_frame = inner_self._av.VideoFrame.from_ndarray(frame, format="rgb24")
                     new_frame.pts = inner_self._timestamp
                     new_frame.time_base = inner_self._time_base
@@ -760,19 +922,31 @@ class LiveViewController(LiveUpdatedController):
         self._activeStreams: Dict[str, tuple] = {}
         self._streamThreads: Dict[str, threading.Thread] = {}
         self._streamIsRunning = False
+        self._streamLock = threading.Lock()  # Protects _activeStreams and _streamThreads
 
         # WebRTC peer connections: {detectorName: RTCPeerConnection}
         self._webrtc_peers: Dict[str, Any] = {}
         self._webrtc_loop = None
         self._webrtc_loop_thread = None
 
-        # Global stream parameters per protocol
+        # Global stream parameters per protocol (defaults)
         self._streamParams: Dict[str, StreamParams] = {
             'binary': StreamParams(protocol='binary'),
             'jpeg': StreamParams(protocol='jpeg'),
             'mjpeg': StreamParams(protocol='mjpeg'),
             'webrtc': StreamParams(protocol='webrtc'),
         }
+
+        # Per-detector stream parameters: {detectorName: StreamParams}
+        # Stores the last-used params for each detector so they survive detector switches.
+        self._detectorParams: Dict[str, StreamParams] = {}
+
+        # Load per-detector defaults from the setup config (DetectorInfo.defaultStreamSettings).
+        # These are *fixed* defaults — the frontend can override them for the
+        # current session via setStreamParameters but cannot persist changes
+        # back to the config. They are seeded into _detectorParams here so
+        # the first startLiveView() call uses them.
+        self._loadDetectorDefaultsFromConfig()
 
         # Connect to communication channel signals
         self._commChannel.sigStartLiveAcquistion.connect(self._onStartLiveAcquisition)
@@ -786,6 +960,72 @@ class LiveViewController(LiveUpdatedController):
             self.sigAcquisitionStarted.emit()
             '''
         self._logger.info("LiveViewController initialized")
+
+    def _loadDetectorDefaultsFromConfig(self) -> None:
+        """Seed per-detector stream params from ``DetectorInfo.defaultStreamSettings``.
+
+        Called once during ``__init__``. Each detector's defaultStreamSettings
+        dict (from setup JSON) is merged on top of the global protocol
+        defaults and stored in ``_detectorParams[detectorName]``. Any later
+        ``startLiveView`` call without explicit params will use this entry,
+        giving each camera its own sensible default protocol + subsampling.
+        default dict structure example:
+        "defaultStreamSettings": {
+            "protocol": "jpeg",
+            "jpeg_quality": 80,
+            "subsampling_factor": 4,
+            "throttle_ms": 50,
+            "broadcast_frames": false   // optional; default true. Set false
+                                        // on large sensors to skip the
+                                        // per-frame fan-out to Histogram/
+                                        // FFT/Holo/RecordingService.
+        }
+        """
+        detector_infos = {}
+        try:
+            if hasattr(self, '_setupInfo') and self._setupInfo is not None:
+                detector_infos = getattr(self._setupInfo, 'detectors', None) or {}
+        except Exception:
+            detector_infos = {}
+
+        for detector_name, info in detector_infos.items():
+            try:
+                defaults = getattr(info, 'defaultStreamSettings', None) or {}
+                if not isinstance(defaults, dict) or not defaults:
+                    continue
+                protocol = str(defaults.get('protocol') or 'binary').lower()
+                if protocol not in self._streamParams:
+                    self._logger.warning(
+                        f"Detector {detector_name}: unknown defaultStreamSettings.protocol "
+                        f"'{protocol}', falling back to 'binary'."
+                    )
+                    protocol = 'binary'
+
+                # Start from the global protocol baseline so we don't drop
+                # required fields, then layer the detector-specific defaults
+                # on top.
+                base = self._streamParams[protocol].to_dict()
+                base.update({k: v for k, v in defaults.items() if k != 'protocol'})
+                base['protocol'] = protocol
+
+                # StreamParams.from_dict is lenient about unknown keys.
+                try:
+                    params = StreamParams.from_dict(base)
+                except Exception:
+                    params = StreamParams(protocol=protocol)
+                    for k, v in defaults.items():
+                        if k != 'protocol' and hasattr(params, k):
+                            setattr(params, k, v)
+
+                self._detectorParams[detector_name] = params
+                self._logger.info(
+                    f"Detector {detector_name}: loaded default stream settings "
+                    f"protocol={protocol}, subsampling={getattr(params, 'subsampling_factor', '?')}"
+                )
+            except Exception as e:
+                self._logger.warning(
+                    f"Failed to load defaultStreamSettings for detector {detector_name}: {e}"
+                )
 
     def _get_or_create_webrtc_loop(self):
         """Get or create a persistent event loop for WebRTC in a separate thread."""
@@ -834,8 +1074,10 @@ class LiveViewController(LiveUpdatedController):
         """Handle stop live acquisition signal."""
         if stop:
             self._logger.info("Stopping all live acquisitions")
-            # Stop all active streams
-            for detector_name in list(self._activeStreams.keys()):
+            # Stop all active streams (take snapshot of keys under lock)
+            with self._streamLock:
+                detector_names = list(self._activeStreams.keys())
+            for detector_name in detector_names:
                 self.stopLiveView(detector_name, stopCamera=False)
 
     @APIExport()
@@ -879,35 +1121,51 @@ class LiveViewController(LiveUpdatedController):
             if not detector._running:
                 detector.startAcquisition()
 
-            # Check if detector already has an active stream
-            if detectorName in self._activeStreams:
-                old_protocol, old_worker = self._activeStreams[detectorName]
-                return {
-                    "status": "already_running",
-                    "detector": detectorName,
-                    "protocol": old_protocol,
-                    "message": f"Stream already active for {detectorName} with protocol {old_protocol}. Stop it first."
-                }
+            with self._streamLock:
+                # Check if detector already has an active stream
+                if detectorName in self._activeStreams:
+                    old_protocol, old_worker = self._activeStreams[detectorName]
+                    return {
+                        "status": "already_running",
+                        "detector": detectorName,
+                        "protocol": old_protocol,
+                        "message": f"Stream already active for {detectorName} with protocol {old_protocol}. Stop it first."
+                    }
 
-            # Get stream parameters and update global params
-            stream_params = self._streamParams.get(protocol, StreamParams(protocol=protocol))
+            # Resolve effective stream parameters. Priority:
+            # 1. Explicit params from this call
+            # 2. Previously saved per-detector params (matching the requested protocol)
+            # 3. Global protocol defaults
+            global_params = self._streamParams.get(protocol, StreamParams(protocol=protocol))
+            saved_detector = self._detectorParams.get(detectorName)
+
             if params:
-                # Update with provided parameters
+                # Caller provided explicit overrides — start from global and apply
+                stream_params = StreamParams(**global_params.to_dict())
                 for key, value in params.items():
                     if hasattr(stream_params, key):
                         setattr(stream_params, key, value)
+            elif saved_detector is not None and saved_detector.protocol == protocol:
+                # Re-use the params from the last time this detector was streamed
+                # with the same protocol
+                stream_params = StreamParams(**saved_detector.to_dict())
+            elif saved_detector is not None and saved_detector.protocol != protocol:
+                # Detector has saved params but for a different protocol —
+                # start from global defaults but keep detector-specific settings
+                # like subsampling_factor, throttle_ms that are protocol-agnostic
+                stream_params = StreamParams(**global_params.to_dict())
+                # Carry over common detector-specific settings
+                for common_key in ('subsampling_factor', 'throttle_ms', 'crop_size'):
+                    if hasattr(saved_detector, common_key):
+                        setattr(stream_params, common_key, getattr(saved_detector, common_key))
+            else:
+                stream_params = StreamParams(**global_params.to_dict())
 
-            # Update DetectorsManager global params for streaming configuration
-            update_params = {}
-            if protocol in ["binary", "jpeg"]:
-                update_params['stream_compression_algorithm'] = stream_params.compression_algorithm if protocol == "binary" else "jpeg"
-                update_params['stream_compression_level'] = stream_params.compression_level
-                update_params['stream_subsampling_factor'] = stream_params.subsampling_factor
-                update_params['stream_throttle_ms'] = stream_params.throttle_ms
-                if protocol == "jpeg":
-                    update_params['compressionlevel'] = stream_params.jpeg_quality
+            stream_params.detector_name = detectorName
+            stream_params.protocol = protocol
 
-                # self._master.detectorsManager.updateGlobalDetectorParams(update_params) # TOOD: I think this is still not needed anymore
+            # Persist effective params for this detector
+            self._detectorParams[detectorName] = StreamParams(**stream_params.to_dict())
 
             # Create appropriate worker
             worker = self._createWorker(detector, protocol, stream_params)
@@ -921,21 +1179,24 @@ class LiveViewController(LiveUpdatedController):
             # The worker emits pre-formatted messages ready for socket.io emission
             worker.sigStreamFrame.connect(self._commChannel.sigUpdateStreamFrame)
 
-            # Frame broadcasting to other controllers is DISABLED by default for performance
-            # Controllers should use getCachedFrame() for on-demand frame access
-            # Uncomment below if you need real-time frame updates to all controllers:
+            # Frame broadcasting (sigUpdateImage fan-out to every controller's
+            # update() — Histogram, FFT, Holo, RecordingService for streaming
+            # recordings, ImageController, …) is gated by
+            # ``stream_params.broadcast_frames``. Default True preserves prior
+            # behaviour; set ``"broadcast_frames": false`` in a detector's
+            # ``defaultStreamSettings`` (setup JSON) to turn it off for big
+            # sensors where the per-frame fan-out cost is dominant.
             worker.sigUpdateFrame.connect(self._commChannel.sigUpdateImage)
-            worker.enableFrameBroadcast(True)
+            worker.enableFrameBroadcast(bool(stream_params.broadcast_frames))
 
             # Start worker in thread
-            # mThread = Thread
-            # worker.moveToThread()
             thread = threading.Thread(target=worker.run, daemon=True)
             thread.start()
 
-            # Store worker and thread (only protocol and worker, not tuple key)
-            self._activeStreams[detectorName] = (protocol, worker)
-            self._streamThreads[detectorName] = thread
+            with self._streamLock:
+                # Store worker and thread (only protocol and worker, not tuple key)
+                self._activeStreams[detectorName] = (protocol, worker)
+                self._streamThreads[detectorName] = thread
 
             # Emit signal
             self.sigStreamStarted.emit(detectorName, protocol)
@@ -969,27 +1230,28 @@ class LiveViewController(LiveUpdatedController):
             Dictionary with status
         """
         try:
-            # If no detector specified, stop first active stream
-            if detectorName is None:
-                if not self._activeStreams:
+            with self._streamLock:
+                # If no detector specified, stop first active stream
+                if detectorName is None:
+                    if not self._activeStreams:
+                        return {
+                            "status": "not_running",
+                            "message": "No active streams to stop"
+                        }
+                    detectorName = list(self._activeStreams.keys())[0]
+
+                # Check if detector has active stream
+                if detectorName not in self._activeStreams:
                     return {
                         "status": "not_running",
-                        "message": "No active streams to stop"
+                        "detector": detectorName,
+                        "message": f"No active stream for detector {detectorName}"
                     }
-                detectorName = list(self._activeStreams.keys())[0]
 
-            # Check if detector has active stream
-            if detectorName not in self._activeStreams:
-                return {
-                    "status": "not_running",
-                    "detector": detectorName,
-                    "message": f"No active stream for detector {detectorName}"
-                }
+                # Get protocol and worker
+                protocol, worker = self._activeStreams[detectorName]
 
-            # Get protocol and worker
-            protocol, worker = self._activeStreams[detectorName]
-
-            # Stop worker
+            # Stop worker (outside lock — worker.stop() may take time)
             worker.stop()
 
             # If it's WebRTC, close the peer connection
@@ -1010,10 +1272,12 @@ class LiveViewController(LiveUpdatedController):
                 except Exception as e:
                     self._logger.error(f"Error closing WebRTC peer: {e}")
 
-            # Clean up
-            del self._activeStreams[detectorName]
-            if detectorName in self._streamThreads:
-                del self._streamThreads[detectorName]
+            with self._streamLock:
+                # Clean up
+                if detectorName in self._activeStreams:
+                    del self._activeStreams[detectorName]
+                if detectorName in self._streamThreads:
+                    del self._streamThreads[detectorName]
 
             # Emit signal
             self.sigStreamStopped.emit(detectorName, protocol)
@@ -1075,26 +1339,37 @@ class LiveViewController(LiveUpdatedController):
                 if hasattr(stream_params, key):
                     setattr(stream_params, key, value)
                     print(f"Set {protocol} param {key} to {value}")
-            # Check if any detector is currently streaming with this protocol
-            # and restart it if necessary to apply the new parameters
-            detectors_to_restart = []
-            for detector_name, (active_protocol, worker) in self._activeStreams.items():
-                # close any streams with this protocol
+
+            # Push the same updates into every running worker of this
+            # protocol — no restart needed. The worker reads
+            # ``self._params.<field>`` on every iteration (``throttle_ms``,
+            # ``subsampling_factor``, ``crop_size``, ``max_width``,
+            # ``jpeg_quality``), so a plain attribute mutation under the
+            # GIL is enough.
+            #
+            # Why this matters: the old behaviour was stopLiveView +
+            # startLiveView per change. The frontend's submit handler
+            # also stops/starts on a *format change* (jpeg → mjpeg), so
+            # any submit produced 2–3 nested restarts and a thrashing
+            # log. The same teardown also dropped any in-flight WebRTC
+            # peer connection (the "had to apply twice" symptom). With
+            # in-place mutation, a format change does exactly one
+            # explicit stop+start from the frontend (required — the
+            # worker class is different), while same-protocol param
+            # changes just propagate live.
+            updated_detectors = []
+            for detector_name, (active_protocol, worker) in list(self._activeStreams.items()):
                 if active_protocol != protocol:
-                    detectors_to_restart.append(detector_name)
-
-            # Restart streams with updated parameters
-            restarted_streams = []
-            for detector_name in detectors_to_restart:
-                self._logger.info(f"Restarting {protocol} stream for {detector_name} with updated parameters")
-                # Stop the current stream
-                self.stopLiveView(detectorName=detector_name, stopCamera=False)
-
-                # Start with new parameters
-                result = self.startLiveView(detector_name, protocol, params)
-                if result['status'] == 'success':
-                    restarted_streams.append(detector_name)
-
+                    continue
+                # Mirror onto the per-detector saved params too so the
+                # next startLiveView starts where we left off.
+                saved = self._detectorParams.get(detector_name)
+                for key, value in params.items():
+                    if hasattr(worker._params, key):
+                        setattr(worker._params, key, value)
+                    if saved is not None and hasattr(saved, key):
+                        setattr(saved, key, value)
+                updated_detectors.append(detector_name)
 
             response = {
                 "status": "success",
@@ -1102,11 +1377,14 @@ class LiveViewController(LiveUpdatedController):
                 "params": stream_params.to_dict()
             }
 
-            if restarted_streams:
-                response["restarted_detectors"] = restarted_streams
-                response["message"] = f"Parameters updated and {len(restarted_streams)} stream(s) restarted"
+            if updated_detectors:
+                response["updated_detectors"] = updated_detectors
+                response["message"] = (
+                    f"Parameters updated live on {len(updated_detectors)} "
+                    f"stream(s); no restart required."
+                )
             else:
-                response["message"] = "Parameters updated (no active streams to restart)"
+                response["message"] = "Parameters updated (no active streams)"
 
             return response
 
@@ -1185,6 +1463,9 @@ class LiveViewController(LiveUpdatedController):
                             "is_active": any(prot == p for prot in active_protocols.values())
                         }
                         for p, params in self._streamParams.items()
+                    },
+                    "per_detector": {
+                        det: dp.to_dict() for det, dp in self._detectorParams.items()
                     }
                 }
         except Exception as e:
@@ -1193,6 +1474,54 @@ class LiveViewController(LiveUpdatedController):
                 "status": "error",
                 "message": str(e)
             }
+
+    @APIExport(requestType="POST")
+    def setDetectorStreamParameters(self, detectorName: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Set stream parameters for a specific detector.
+        These override the global protocol defaults when the detector is next started.
+        If the detector is currently streaming, the stream is restarted with the new params.
+        """
+        try:
+            saved = self._detectorParams.get(detectorName)
+            if saved is None:
+                saved = StreamParams()
+            for key, value in params.items():
+                if hasattr(saved, key):
+                    setattr(saved, key, value)
+            self._detectorParams[detectorName] = saved
+
+            # If currently active, mutate the running worker's params
+            # in place instead of stopping and restarting. Same rationale
+            # as setStreamParameters: the worker re-reads its params on
+            # every loop iteration, so a plain attribute set under the
+            # GIL is enough. Restarting here was causing the second
+            # cycle of stop/start in the cascade the frontend triggers
+            # on a submit (setStreamParameters → maybe-restart → optional
+            # stop+start on format-change → setDetectorStreamParameters
+            # → second restart).
+            if detectorName in self._activeStreams:
+                _protocol, worker = self._activeStreams[detectorName]
+                for key, value in params.items():
+                    if hasattr(worker._params, key):
+                        setattr(worker._params, key, value)
+                return {
+                    "status": "success",
+                    "detector": detectorName,
+                    "params": saved.to_dict(),
+                    "restarted": False,
+                    "updated_live": True,
+                }
+
+            return {
+                "status": "success",
+                "detector": detectorName,
+                "params": saved.to_dict(),
+                "restarted": False
+            }
+        except Exception as e:
+            self._logger.error(f"Error setting detector stream params: {e}")
+            return {"status": "error", "message": str(e)}
 
     @APIExport()
     def getActiveStreams(self) -> Dict[str, Any]:

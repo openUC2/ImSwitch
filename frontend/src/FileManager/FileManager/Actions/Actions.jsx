@@ -3,6 +3,7 @@ import Modal from "../../components/Modal/Modal";
 import DeleteAction from "./Delete/Delete.action";
 import UploadFileAction from "./UploadFile/UploadFile.action";
 import PreviewFileAction from "./PreviewFile/PreviewFile.action";
+import ImagePreviewAction from "./ImagePreview/ImagePreview.action";
 import { useSelection } from "../../contexts/SelectionContext";
 import { useShortcutHandler } from "../../hooks/useShortcutHandler";
 
@@ -16,6 +17,7 @@ const Actions = ({
   filePreviewPath,
   acceptedFileTypes,
   triggerAction,
+  onOpenWithVizarr,
 }) => {
   const [activeAction, setActiveAction] = useState(null);
   const { selectedFiles } = useSelection();
@@ -46,6 +48,16 @@ const Actions = ({
       title: "Preview",
       component: <PreviewFileAction filePreviewPath={filePreviewPath} />,
       width: "50%",
+    },
+    imagePreview: {
+      title: selectedFiles[0]?.name ?? "Image Preview",
+      component: (
+        <ImagePreviewAction
+          onOpenWithVizarr={onOpenWithVizarr}
+          triggerAction={triggerAction}
+        />
+      ),
+      width: "75%",
     },
   };
 

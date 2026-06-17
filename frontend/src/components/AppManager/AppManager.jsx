@@ -29,6 +29,7 @@ import {
 import {
   Search as SearchIcon,
   Apps as AppsIcon,
+  Tune as TuneIcon,
   Star as StarIcon,
   Code as CodeIcon,
   Computer as ComputerIcon,
@@ -43,7 +44,6 @@ import {
   selectEnabledApps,
   selectSearchQuery,
   selectSelectedCategory,
-  selectAppStats,
   toggleApp,
   setSearchQuery,
   setSelectedCategory,
@@ -51,6 +51,7 @@ import {
   enableCategory,
   disableCategory,
 } from "../../state/slices/appManagerSlice";
+import { selectAvailableControllers } from "../../state/slices/BackendCapabilitiesSlice";
 
 // App registry imports
 import {
@@ -58,6 +59,7 @@ import {
   APP_CATEGORIES,
   getAppsByCategory,
   searchApps,
+  filterAppsByAvailableControllers,
 } from "../../constants/appRegistry";
 
 // Category metadata for UI
@@ -79,6 +81,12 @@ const CATEGORY_INFO = {
     icon: AppsIcon,
     color: "#4caf50",
     description: "Microscopy applications and tools",
+  },
+  [APP_CATEGORIES.CALIBRATION]: {
+    label: "Calibration",
+    icon: TuneIcon,
+    color: "#00acc1",
+    description: "Hardware calibration and alignment tools",
   },
   [APP_CATEGORIES.CODING]: {
     label: "Coding",
@@ -222,8 +230,8 @@ const AppCard = ({ app, isEnabled, onToggle, onLaunch }) => {
             app.essential
               ? "Essential (Always Available)"
               : isEnabled
-              ? "Show in Navigation"
-              : "Hidden from Navigation"
+                ? "Show in Navigation"
+                : "Hidden from Navigation"
           }
           sx={{
             flexGrow: 1,
@@ -271,15 +279,36 @@ const AppManager = ({ onNavigateToApp }) => {
   const enabledApps = useSelector(selectEnabledApps);
   const searchQuery = useSelector(selectSearchQuery);
   const selectedCategory = useSelector(selectSelectedCategory);
-  const stats = useSelector(selectAppStats);
+  const availableControllers = useSelector(selectAvailableControllers);
+  const availableApps = useMemo(
+    () =>
+      filterAppsByAvailableControllers(
+        Object.values(APP_REGISTRY),
+        availableControllers,
+      ),
+    [availableControllers],
+  );
+
+  const availableAppIds = useMemo(
+    () => new Set(availableApps.map((app) => app.id)),
+    [availableApps],
+  );
+
+  const enabledAvailableCount = useMemo(
+    () => enabledApps.filter((id) => availableAppIds.has(id)).length,
+    [enabledApps, availableAppIds],
+  );
 
   // Computed data
   const filteredApps = useMemo(() => {
-    let apps = Object.values(APP_REGISTRY);
+    let apps = availableApps;
 
     // Apply search filter
     if (searchQuery.trim()) {
-      apps = searchApps(searchQuery);
+      apps = filterAppsByAvailableControllers(
+        searchApps(searchQuery),
+        availableControllers,
+      );
     }
 
     // Apply category filter
@@ -288,7 +317,7 @@ const AppManager = ({ onNavigateToApp }) => {
     }
 
     return apps;
-  }, [searchQuery, selectedCategory]);
+  }, [searchQuery, selectedCategory, availableApps, availableControllers]);
 
   // Event handlers
   const handleToggleApp = (appId) => {
@@ -333,9 +362,12 @@ const AppManager = ({ onNavigateToApp }) => {
   const categoryStats = useMemo(() => {
     const stats = {};
     Object.values(APP_CATEGORIES).forEach((category) => {
-      const appsInCategory = getAppsByCategory(category);
+      const appsInCategory = filterAppsByAvailableControllers(
+        getAppsByCategory(category),
+        availableControllers,
+      );
       const enabledInCategory = appsInCategory.filter((app) =>
-        enabledApps.includes(app.id)
+        enabledApps.includes(app.id),
       );
       stats[category] = {
         total: appsInCategory.length,
@@ -343,7 +375,7 @@ const AppManager = ({ onNavigateToApp }) => {
       };
     });
     return stats;
-  }, [enabledApps]);
+  }, [enabledApps, availableControllers]);
 
   return (
     <Box sx={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -361,8 +393,7 @@ const AppManager = ({ onNavigateToApp }) => {
           </Box>
 
           <Typography variant="body2" sx={{ mr: 2 }}>
-            {stats.enabledCount} of {stats.totalApps + 2} apps enabled
-            {/* 2 additional for essential apps */}
+            {enabledAvailableCount} of {availableApps.length} apps enabled
           </Typography>
 
           <Tooltip title="Reset to defaults">
@@ -460,11 +491,11 @@ const AppManager = ({ onNavigateToApp }) => {
               const IconComponent = info.icon;
               const count =
                 key === "all"
-                  ? stats.totalApps
+                  ? availableApps.length
                   : categoryStats[key]?.total || 0;
               const enabled =
                 key === "all"
-                  ? stats.enabledCount
+                  ? enabledAvailableCount
                   : categoryStats[key]?.enabled || 0;
 
               return (

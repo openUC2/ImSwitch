@@ -22,7 +22,6 @@ except:
 from imswitch.imcommon.model import initLogger, APIExport
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from ..basecontrollers import LiveUpdatedController
-from imswitch import IS_HEADLESS
 
 
 # =========================
@@ -35,15 +34,21 @@ class InLineHoloParams:
     wavelength: float = 488e-9  # meters
     na: float = 0.3
     dz: float = 0.0  # propagation distance in meters
+    dz_max: float = 30000e-6  # max dz exposed to UI slider (meters); 30 mm default
+    dz_step: float = 1e-6  # dz slider step size (meters); 1 µm default
     roi_center: Optional[List[int]] = None  # [x, y] in pixels
     roi_size: Optional[int] = 256  # square ROI size
-    color_channel: str = "red"  # "red", "green", "blue"
+    # "red", "green", "blue" or "white" (mean of all channels)
+    color_channel: str = "red"
     flip_x: bool = False
     flip_y: bool = False
     rotation: int = 0  # 0, 90, 180, 270
     update_freq: float = 10.0  # Hz (processing framerate)
     binning: int = 1  # binning factor (1, 2, 4, etc.)
     show_raw: bool = False  # if True, reconstruct at dz=0 (raw, in-focus hologram)
+    # When True, ignore ROI crop and reconstruct the full sensor image
+    # (with software binning applied). Useful for full-FOV preview at low res.
+    full_frame: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -51,6 +56,8 @@ class InLineHoloParams:
             "wavelength": self.wavelength,
             "na": self.na,
             "dz": self.dz,
+            "dz_max": self.dz_max,
+            "dz_step": self.dz_step,
             "roi_center": self.roi_center,
             "roi_size": self.roi_size,
             "color_channel": self.color_channel,
@@ -60,6 +67,7 @@ class InLineHoloParams:
             "update_freq": self.update_freq,
             "binning": self.binning,
             "show_raw": self.show_raw,
+            "full_frame": self.full_frame,
         }
 
 
@@ -72,6 +80,11 @@ class InLineHoloState:
     last_process_time: float = 0.0
     frame_count: int = 0
     processed_count: int = 0
+    # Timestamp of the last frame successfully pushed onto the MJPEG queue.
+    # Frontend uses this to detect a stalled processed stream and offer a
+    # restart action.
+    last_mjpeg_emit_time: float = 0.0
+    mjpeg_client_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -81,6 +94,8 @@ class InLineHoloState:
             "last_process_time": self.last_process_time,
             "frame_count": self.frame_count,
             "processed_count": self.processed_count,
+            "last_mjpeg_emit_time": self.last_mjpeg_emit_time,
+            "mjpeg_client_count": self.mjpeg_client_count,
         }
 
 
@@ -176,9 +191,6 @@ class InLineHoloController(LiveUpdatedController):
         self._commChannel.sigUpdateImage.connect(self.update)
 
         # Legacy GUI setup
-        if not IS_HEADLESS:
-            self._setup_legacy_gui()
-
         self._logger.info("InLineHoloController initialized successfully")
 
     def __del__(self):
@@ -350,7 +362,14 @@ class InLineHoloController(LiveUpdatedController):
             return image[::2, ::2, :]
 
     def _extract_roi(self, image):
-        """Extract ROI from image based on current parameters"""
+        """Extract ROI from image based on current parameters.
+
+        When ``full_frame`` is enabled, the ROI is bypassed entirely so the
+        reconstruction sees the full (already-binned) sensor image.
+        """
+        if self._params.full_frame:
+            return image
+
         h, w = image.shape[:2]
 
         # Determine ROI center
@@ -371,13 +390,25 @@ class InLineHoloController(LiveUpdatedController):
         return image[y1:y2, x1:x2]
 
     def _extract_color_channel(self, image):
-        """Extract specified color channel from RGB image"""
+        """Extract specified color channel from RGB image.
+
+        Channels are R/G/B in that index order (i.e. ``image[:, :, 0]`` is
+        red). Downstream cameras are responsible for delivering true RGB —
+        notably picamera2_interface.py converts its native BGR-in-memory
+        "RGB888" output into true RGB at the source.
+
+        ``white`` returns the mean across all channels (a luminance proxy).
+        """
         if len(image.shape) == 2:
             return image  # Already grayscale
 
-        channel_map = {"red": 0, "green": 1, "blue": 2}
-        channel_idx = channel_map.get(self._params.color_channel, 1)
+        channel = self._params.color_channel
+        if channel == "white":
+            # Mean over channels; cast to float to avoid uint8 overflow
+            return image.astype(np.float32).mean(axis=2)
 
+        channel_map = {"red": 0, "green": 1, "blue": 2}
+        channel_idx = channel_map.get(channel, 1)
         return image[:, :, channel_idx]
 
     def _apply_transforms(self, image):
@@ -479,6 +510,7 @@ class InLineHoloController(LiveUpdatedController):
                 # Put in queue, drop frame if full
                 try:
                     self._mjpeg_queue.put_nowait(mjpeg_frame)
+                    self._state.last_mjpeg_emit_time = time.time()
                 except queue.Full:
                     pass  # Drop frame if queue is full
         except Exception as e:
@@ -789,6 +821,7 @@ class InLineHoloController(LiveUpdatedController):
         # Start streaming
         with self._processing_lock:
             self._state.is_streaming = True
+            self._state.mjpeg_client_count += 1
 
         # Ensure processing is running
         if not self._state.is_processing:
@@ -799,7 +832,12 @@ class InLineHoloController(LiveUpdatedController):
 
         # Create generator for streaming response
         def frame_generator():
-            """Generator that yields MJPEG frames."""
+            """Generator that yields MJPEG frames.
+
+            ``is_streaming`` is only reset to False when the *last* connected
+            client disconnects, so opening the holo page in two tabs (or a
+            quick refresh) doesn't tear down everyone else's stream.
+            """
             try:
                 while self._state.is_streaming:
                     try:
@@ -810,11 +848,16 @@ class InLineHoloController(LiveUpdatedController):
                         continue
             except GeneratorExit:
                 self._logger.info("MJPEG stream connection closed by client")
-                with self._processing_lock:
-                    self._state.is_streaming = False
-                self._emit_state_changed()
             except Exception as e:
                 self._logger.error(f"Error in MJPEG frame generator: {e}")
+            finally:
+                with self._processing_lock:
+                    self._state.mjpeg_client_count = max(
+                        0, self._state.mjpeg_client_count - 1
+                    )
+                    if self._state.mjpeg_client_count == 0:
+                        self._state.is_streaming = False
+                self._emit_state_changed()
 
         # Return streaming response with proper headers
         headers = {
@@ -830,6 +873,61 @@ class InLineHoloController(LiveUpdatedController):
             media_type="multipart/x-mixed-replace;boundary=frame",
             headers=headers
         )
+
+    @APIExport(runOnUIThread=True)
+    def get_camera_info_inlineholo(self) -> Dict[str, Any]:
+        """Return info about the detector backing the inline-holo controller.
+
+        The frontend needs the detector name to address it from the shared
+        SettingsController endpoints (exposure / gain / mode / white balance).
+
+        Returns:
+            ``{"camera": "<name>", "is_rgb": bool}``
+        """
+        is_rgb = False
+        try:
+            detector = self._master.detectorsManager[self.camera]
+            is_rgb = bool(getattr(detector, "_isRGB", False))
+        except Exception:
+            pass
+        return {"camera": self.camera, "is_rgb": is_rgb}
+
+    @APIExport(runOnUIThread=True)
+    def restart_stream_inlineholo(self) -> Dict[str, Any]:
+        """Recover from a stalled processed stream.
+
+        Drops any queued MJPEG frames, resets stream-health counters, and
+        bounces the processing pipeline (stop → start) so a wedged worker
+        gets re-armed. Pairs with a fresh ``<img>`` mount on the client side
+        that reopens ``mjpeg_stream_inlineholo``.
+        """
+        # Remember whether we were processing — if so, restart afterwards.
+        was_processing = self._state.is_processing
+
+        while not self._mjpeg_queue.empty():
+            try:
+                self._mjpeg_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        with self._processing_lock:
+            self._state.is_streaming = False
+            self._state.mjpeg_client_count = 0
+            self._state.last_mjpeg_emit_time = 0.0
+            self._state.is_processing = False
+            self._state.is_paused = False
+
+        # Reset frame counter so rate-limiting starts fresh.
+        self._frame_counter = 0
+
+        if was_processing:
+            # Re-arm processing immediately; the frontend will reopen the
+            # MJPEG socket which flips is_streaming back to True.
+            self.start_processing_inlineholo()
+
+        self._emit_state_changed()
+        self._logger.info("Inline holo stream restarted by user")
+        return self._state.to_dict()
 
     #@APIExport(runOnUIThread=True)
     def process_single_frame(self, image: np.ndarray = None) -> Dict[str, Any]:
@@ -899,17 +997,6 @@ class InLineHoloController(LiveUpdatedController):
         """Legacy: Change inline propagation distance"""
         dz = magnitude * 1e-3  # Convert to meters
         self.set_dz(dz)
-
-    def displayImage(self, im, name):
-        """Legacy: Display image in napari widget"""
-        if IS_HEADLESS:
-            return
-
-        if im.dtype == complex or np.iscomplexobj(im):
-            self._widget.setImage(np.abs(im), name + "_abs")
-            self._widget.setImage(np.angle(im), name + "_angle")
-        else:
-            self._widget.setImage(np.abs(im), name)
 
 
 

@@ -17,6 +17,7 @@ import PauseIcon from "@mui/icons-material/Pause";
 import StopIcon from "@mui/icons-material/Stop";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import VisibilityIcon from "@mui/icons-material/Visibility";
+import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 
 // Dimension components
 import DimensionBar from "./DimensionBar";
@@ -44,6 +45,8 @@ import * as objectiveSlice from "../../state/slices/ObjectiveSlice";
 import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsSlice";
 import * as vizarrViewerSlice from "../../state/slices/VizarrViewerSlice";
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
+import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
+import * as positionSlice from "../../state/slices/PositionSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 
 // API
@@ -52,6 +55,8 @@ import apiExperimentControllerStopExperiment from "../../backendapi/apiExperimen
 import apiExperimentControllerPauseWorkflow from "../../backendapi/apiExperimentControllerPauseWorkflow";
 import apiExperimentControllerResumeExperiment from "../../backendapi/apiExperimentControllerResumeExperiment";
 import apiExperimentControllerInterruptFocusMap from "../../backendapi/apiExperimentControllerInterruptFocusMap";
+import apiExperimentControllerRunAshlarStitching from "../../backendapi/apiExperimentControllerRunAshlarStitching";
+import apiExperimentControllerGetOverviewAsyncStatus from "../../backendapi/apiExperimentControllerGetOverviewAsyncStatus";
 import fetchGetExperimentStatus from "../../middleware/fetchExperimentControllerGetExperimentStatus";
 
 // Status enum
@@ -85,11 +90,15 @@ const ExperimentDesigner = () => {
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const focusMapConfig = useSelector(focusMapSlice.getFocusMapConfig);
+  const parameterRange = useSelector(parameterRangeSlice.getParameterRangeState);
+  const positionState = useSelector(positionSlice.getPositionState);
 
   // Progress tracking
   const [cachedStepId, setCachedStepId] = useState(0);
   const [cachedTotalSteps, setCachedTotalSteps] = useState(undefined);
   const [cachedStepName, setCachedStepName] = useState("");
+  const [ashlarRunning, setAshlarRunning] = useState(false);
+  const [ashlarInterrupted, setAshlarInterrupted] = useState(false);
 
   // Periodic status fetch
   useEffect(() => {
@@ -99,6 +108,51 @@ const ExperimentDesigner = () => {
     }, 3000);
     return () => clearInterval(intervalId);
   }, [dispatch]);
+
+  // Trigger Ashlar stitching automatically when the experiment finishes.
+  // Use a boolean ref so we catch any IDLE transition that follows a RUNNING
+  // phase — including RUNNING→STOPPING→IDLE flows.
+  const wasRunningRef = useRef(false);
+  useEffect(() => {
+    const curr = experimentStatus.status;
+    if (curr === Status.RUNNING) {
+      wasRunningRef.current = true;
+    } else if (wasRunningRef.current && curr === Status.IDLE) {
+      wasRunningRef.current = false;
+      if (experimentState.parameterValue.ome_write_ashlar_stitch) {
+        // Backend auto-starts stitching once all tiles are written.
+        // Start polling so we can show progress as soon as it begins.
+        setAshlarRunning(true);
+      }
+    }
+  }, [
+    experimentStatus.status,
+    experimentState.parameterValue.ome_write_ashlar_stitch,
+    experimentState.parameterValue.ashlar_pixel_size,
+    experimentState.parameterValue.ashlar_maximum_shift,
+    experimentState.parameterValue.ashlar_align_channel,
+  ]);
+
+  // Poll stitching progress until the background job finishes
+  useEffect(() => {
+    if (!ashlarRunning) return;
+    const intervalId = setInterval(() => {
+      apiExperimentControllerGetOverviewAsyncStatus()
+        .then((status) => {
+          if (status?.message)
+            infoPopupRef.current?.showMessage(`Stitching: ${status.message}`);
+          if (!status?.running) {
+            setAshlarRunning(false);
+            if (status?.error)
+              infoPopupRef.current?.showMessage(`Stitching failed: ${status.error.slice(0, 120)}`);
+            else
+              infoPopupRef.current?.showMessage("Ashlar stitching complete");
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(intervalId);
+  }, [ashlarRunning]);
 
   // Warn the user before leaving/refreshing the page while an experiment is running
   useEffect(() => {
@@ -166,28 +220,74 @@ const ExperimentDesigner = () => {
       wellSelectorState
     );
 
+    // "Override per-group Z with current Z" (Tiling tab): rewrite every stored
+    // Z with the microscope's current stage Z. Done here on the frontend (the
+    // backend just consumes the coordinates). Skipped when a focus map is
+    // active, since the focus map drives Z per-XY.
+    if (experimentState.parameterValue.overrideZWithCurrentZ && !focusMapConfig.enabled) {
+      const currentZ = positionState?.z ?? 0;
+      (scanConfig.scanAreas || []).forEach((area) => {
+        if (area.centerPosition) area.centerPosition.z = currentZ;
+        (area.positions || []).forEach((pos) => { pos.z = currentZ; });
+      });
+    }
+
     console.log("Scan configuration:", scanConfig);
     console.log(`Total positions: ${scanConfig.metadata.totalPositions}`);
 
     // Zero out intensities for channels that are not enabled for experiment acquisition
-    const channelEnabled = experimentState.parameterValue.channelEnabledForExperiment || [];
-    const rawIntensities = experimentState.parameterValue.illuIntensities || [];
+    const pv = experimentState.parameterValue;
+    const channelEnabled = pv.channelEnabledForExperiment || [];
+    const rawIntensities = pv.illuIntensities || [];
+    const exposureTimes = pv.exposureTimes || [];
+    const gains = pv.gains || [];
+    const illuminationParamsState = pv.illuminationParams || {};
     const filteredIntensities = rawIntensities.map((val, idx) =>
       channelEnabled[idx] === true ? val : 0    );
+
+    // Split the flat channel list into conventional sources + a dedicated
+    // synthetic (ring/DPC) list. The Channels dimension renders one merged
+    // list [default..., synthetic...]; here we cut it back at the default-source
+    // boundary so the REST payload keeps `illumination` conventional-only and
+    // carries ring/DPC in `syntheticChannels` (single source of truth, no
+    // RGB→intensity promotion on the backend).
+    const defaultSourceNames = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
+    const syntheticDefs = Array.isArray(parameterRange.syntheticChannels) ? parameterRange.syntheticChannels : [];
+    const nDefault = defaultSourceNames.length;
+    const syntheticChannelsPayload = syntheticDefs.map((s, j) => {
+      const idx = nDefault + j;
+      const params = illuminationParamsState[s.name] || {};
+      return {
+        name: s.name,
+        kind: s.kind,
+        enabled: channelEnabled[idx] === true,
+        intensityR: params.intensityR ?? s.intensityR ?? 0,
+        intensityG: params.intensityG ?? s.intensityG ?? 0,
+        intensityB: params.intensityB ?? s.intensityB ?? 0,
+        radius: params.radius ?? s.radius ?? null,
+        exposure: exposureTimes[idx] ?? null,
+        gain: gains[idx] ?? null,
+      };
+    });
 
     const experimentRequest = {
       name: experimentState.name,
       parameterValue: {
-        ...experimentState.parameterValue,
-        illuIntensities: filteredIntensities,
+        ...pv,
+        // Conventional channels only; synthetic channels travel separately.
+        illumination: defaultSourceNames,
+        illuIntensities: filteredIntensities.slice(0, nDefault),
+        exposureTimes: exposureTimes.slice(0, nDefault),
+        gains: gains.slice(0, nDefault),
+        syntheticChannels: syntheticChannelsPayload,
         resortPointListToSnakeCoordinates: false,
         is_snakescan: wellSelectorState.areaSelectSnakescan,
-        overlapWidth: wellSelectorState.mode === "area" 
-          ? wellSelectorState.areaSelectOverlap 
-          : experimentState.parameterValue.overlapWidth,
-        overlapHeight: wellSelectorState.mode === "area" 
-          ? wellSelectorState.areaSelectOverlap 
-          : experimentState.parameterValue.overlapHeight,
+        overlapWidth: wellSelectorState.mode === "area"
+          ? wellSelectorState.areaSelectOverlap
+          : pv.overlapWidth,
+        overlapHeight: wellSelectorState.mode === "area"
+          ? wellSelectorState.areaSelectOverlap
+          : pv.overlapHeight,
       },
       scanAreas: scanConfig.scanAreas,
       scanMetadata: scanConfig.metadata,
@@ -224,6 +324,47 @@ const ExperimentDesigner = () => {
       })
       .catch(() => {
         infoPopupRef.current?.showMessage("Resume Experiment failed");
+      });
+  };
+
+  const handleStopStitch = () => {
+    const axiosInstance = createAxiosInstance();
+    axiosInstance.get("/ExperimentController/stopAshlarStitching")
+      .then((res) => {
+        if (res.data?.stopped) {
+          setAshlarRunning(false);
+          setAshlarInterrupted(true);
+          infoPopupRef.current?.showMessage("Ashlar stitching stopped");
+        } else {
+          infoPopupRef.current?.showMessage(res.data?.message ?? "No stitching process running");
+        }
+      })
+      .catch(() => {
+        infoPopupRef.current?.showMessage("Failed to stop Ashlar stitching");
+      });
+  };
+
+  const handleRestartStitch = () => {
+    setAshlarInterrupted(false);
+    apiExperimentControllerRunAshlarStitching({
+      pixelSize: experimentState.parameterValue.ashlar_pixel_size,
+      maximumShift: experimentState.parameterValue.ashlar_maximum_shift,
+      alignChannel: experimentState.parameterValue.ashlar_align_channel,
+    })
+      .then((data) => {
+        if (data?.started) {
+          setAshlarRunning(true);
+          infoPopupRef.current?.showMessage("Ashlar stitching restarted");
+        } else {
+          setAshlarInterrupted(true);
+          infoPopupRef.current?.showMessage(
+            `Could not restart stitching: ${data?.error ?? "unknown error"}`
+          );
+        }
+      })
+      .catch(() => {
+        setAshlarInterrupted(true);
+        infoPopupRef.current?.showMessage("Failed to restart Ashlar stitching");
       });
   };
 
@@ -325,6 +466,34 @@ const ExperimentDesigner = () => {
             </span>
           </Tooltip>
         </ButtonGroup>
+
+        {/* Stitching control button — Stop while running, Restart after interrupted */}
+        {ashlarRunning && (
+          <Tooltip title="Kill the running Ashlar stitching process">
+            <Button
+              size="small"
+              variant="outlined"
+              color="warning"
+              startIcon={<AutoFixHighIcon />}
+              onClick={handleStopStitch}
+            >
+              Stop Stitching
+            </Button>
+          </Tooltip>
+        )}
+        {ashlarInterrupted && !ashlarRunning && (
+          <Tooltip title="Restart Ashlar stitching from the beginning">
+            <Button
+              size="small"
+              variant="outlined"
+              color="secondary"
+              startIcon={<AutoFixHighIcon />}
+              onClick={handleRestartStitch}
+            >
+              Restart Stitching
+            </Button>
+          </Tooltip>
+        )}
 
         {/* Status */}
         <Typography

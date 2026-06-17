@@ -11,7 +11,6 @@ try:
     from imswitch.imcommon.model import initLogger, APIExport, dirtools
     from imswitch.imcommon.framework import Signal, Timer
     from ..basecontrollers import ImConWidgetController
-    from imswitch import IS_HEADLESS
     _HAS_IMSWITCH = True
 except ImportError:
     # Fallback for testing without full ImSwitch environment

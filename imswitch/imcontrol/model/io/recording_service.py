@@ -147,10 +147,18 @@ class BackgroundStorageWorker:
         self._stop_event = threading.Event()
         self._is_running = False
         self._lock = threading.Lock()
-        
+
         # Statistics
         self._tasks_completed = 0
         self._tasks_failed = 0
+
+        # Per-filepath kept-open TiffWriter handles for 'append_tiff' tasks.
+        # ``tiff.imwrite(..., append=True)`` reopens the file, reads the
+        # IFD chain, seeks to the end and rewrites the directory on every
+        # call. For 9 MP / 18 MB frames that's ~3x the cost of a normal
+        # append. Reuse one ``TiffWriter`` per filepath instead and close
+        # them all on stop().
+        self._tiff_appenders: Dict[str, "tiff.TiffWriter"] = {}
     
     def start(self):
         """Start the background worker thread."""
@@ -167,12 +175,21 @@ class BackgroundStorageWorker:
         """Stop the background worker."""
         if not self._is_running:
             return
-        
+
         self._stop_event.set()
-        
+
         if wait and self._worker_thread:
             self._worker_thread.join(timeout=timeout)
-        
+
+        # Flush + close any kept-open append-TiffWriters so the IFD chain
+        # is finalised on disk and the files are readable.
+        for path, writer in list(self._tiff_appenders.items()):
+            try:
+                writer.close()
+            except Exception as e:
+                self._logger.warning(f"Closing TIFF appender for {path} failed: {e}")
+        self._tiff_appenders.clear()
+
         self._is_running = False
         self._logger.info(f"BackgroundStorageWorker stopped. Completed: {self._tasks_completed}, Failed: {self._tasks_failed}")
     
@@ -302,8 +319,34 @@ class BackgroundStorageWorker:
         cv2.imwrite(filepath, img)
     
     def _append_tiff(self, filepath: str, data: np.ndarray):
-        """Append to existing TIFF file."""
-        tiff.imwrite(filepath, data, append=True)
+        """Append a frame to a multi-page TIFF, keeping the writer open.
+
+        Previously this called ``tiff.imwrite(filepath, data, append=True)``
+        on every frame, which reopens the file and rewrites the IFD chain
+        each time — ~3x the cost of a normal append for 9 MP frames. We
+        now keep one ``TiffWriter`` per filepath in
+        ``self._tiff_appenders`` and only close them on ``stop()``.
+
+        Cheap compression (``zlib`` level 1) is applied by default — on
+        microscopy data it usually halves the on-disk size at ~1 GB/s on
+        a Pi 5, which is faster end-to-end than uncompressed because
+        storage I/O is the bottleneck. Pass ``metadata['compression']`` /
+        ``metadata['compressionargs']`` via a wrapper if you need to
+        override per task.
+        """
+        os.makedirs(os.path.dirname(filepath), exist_ok=True) if os.path.dirname(filepath) else None
+
+        writer = self._tiff_appenders.get(filepath)
+        if writer is None:
+            writer = tiff.TiffWriter(filepath, bigtiff=True, append=os.path.exists(filepath))
+            self._tiff_appenders[filepath] = writer
+
+        try:
+            writer.write(data, compression="zlib", compressionargs={"level": 1})
+        except TypeError:
+            # Older tifffile rejects ``compressionargs`` — retry with the
+            # codec default level, which is still cheap.
+            writer.write(data, compression="zlib")
 
 
 # =============================================================================
@@ -463,7 +506,7 @@ class RecordingService(SignalInterface):
     def __init__(self, detectors_manager=None, metadata_hub=None):
         """
         Initialize the recording service.
-        
+
         Args:
             detectors_manager: DetectorsManager for detector access
             metadata_hub: Optional MetadataHub for comprehensive metadata
@@ -472,15 +515,15 @@ class RecordingService(SignalInterface):
         self._detectors_manager = detectors_manager
         self._metadata_hub = metadata_hub
         self._logger = logging.getLogger(self.__class__.__name__)
-        
+
         # Background worker for async I/O
         self._storage_worker = BackgroundStorageWorker()
         self._storage_worker.start()
-        
+
         # Video recording state
         self._video_writer: Optional[MP4Writer] = None
         self._video_detector_name: Optional[str] = None  # Detector to capture from
-        
+
         # Streaming recording state
         self._is_streaming = False
         self._streaming_format: Optional[SaveFormat] = None
@@ -489,21 +532,47 @@ class RecordingService(SignalInterface):
         self._streaming_start_time: Optional[float] = None
         self._streaming_detector_names: List[str] = []
         self._streaming_adapter = None  # StreamingDataStoreAdapter
-        
+
         # Frame callback connection
         self._frame_callback_connected = False
         self._comm_channel = None  # Will be set externally
-        
+
         # Memory recordings (RAM mode)
         self._mem_recordings: Dict[str, Any] = {}
-    
+
+        # Dedicated dispatch thread for the per-frame callbacks. Without
+        # this, ``_on_new_frame`` runs on the StreamWorker thread and
+        # blocks the live stream for the duration of ``MP4Writer.write_frame``
+        # (synchronous H.264 encode, ~50-100 ms at 9 MP on a Pi 5) plus
+        # ``StreamingDataStoreAdapter.write_frame`` (which does a
+        # 18 MB ``frame.copy()`` even though the actual TIFF/Zarr write is
+        # off-thread). We push each frame onto a bounded queue here; the
+        # streaming thread returns immediately after a fast ``frame.copy()``
+        # at the boundary. Queue overflow drops the oldest pending frame
+        # with a warning rather than back-pressuring the live preview.
+        self._dispatch_queue: "queue.Queue[Tuple[str, np.ndarray]]" = queue.Queue(maxsize=8)
+        self._dispatch_stop = threading.Event()
+        self._dispatch_thread = threading.Thread(
+            target=self._dispatch_loop,
+            name="RecordingDispatch",
+            daemon=True,
+        )
+        self._dispatch_dropped = 0
+        self._dispatch_thread.start()
+
     def __del__(self):
         self.shutdown()
-    
+
     def shutdown(self):
         """Shutdown the service and release resources."""
         self.stop_video_recording()
         self.stop_streaming()
+        # Signal the dispatch thread to drain & exit before stopping the
+        # background storage worker (which downstream writers may still
+        # depend on).
+        self._dispatch_stop.set()
+        if self._dispatch_thread.is_alive():
+            self._dispatch_thread.join(timeout=5.0)
         self._storage_worker.stop(wait=True, timeout=10.0)
     
     # =========================================================================
@@ -536,34 +605,122 @@ class RecordingService(SignalInterface):
     # =========================================================================
     
     def _on_new_frame(self, detector_name: str, frame: np.ndarray, init: bool, scale: list, is_current_detector: bool):
-        """
-        (
-            str, np.ndarray, bool, list, bool
-        )  # (detectorName, image, init, scale, isCurrentDetector)
-        
-        Callback for new frames - writes to active recording.
-        
-        This is called by the signal connection when a new frame is available.
+        """Streaming-thread entry point. Enqueues the frame for off-thread dispatch.
+
+        ``(str, np.ndarray, bool, list, bool)``
+        ``(detectorName, image, init, scale, isCurrentDetector)``
+
+        This used to call ``MP4Writer.write_frame`` and
+        ``StreamingDataStoreAdapter.write_frame`` synchronously, blocking
+        the StreamWorker thread for tens to hundreds of milliseconds per
+        frame on large sensors. Now the heavy work runs on
+        ``_dispatch_thread`` (see ``_dispatch_loop``); this method only
+        copies the frame (to release the SDK-owned buffer) and pushes it
+        onto a bounded queue. On overflow we drop the oldest pending
+        frame, which is preferable to letting the live preview stall.
         """
         if frame is None:
             return
-        
-        # Write to video recording if active
-        if self._video_writer is not None and self._video_writer.is_recording:
-            if self._video_detector_name is None or self._video_detector_name == detector_name:
-                self._video_writer.write_frame(frame)
-                self.sigRecordingFrameNumUpdated.emit(self._video_writer.frame_count)
-        
-        # Write to streaming adapter if active
-        if self._streaming_adapter is not None and hasattr(self._streaming_adapter, '_is_open'):
-            if self._streaming_adapter._is_open:
-                if not self._streaming_detector_names or detector_name in self._streaming_detector_names:
-                    try:
+        # No recorder active? Skip — avoid the copy.
+        video_active = (
+            self._video_writer is not None
+            and self._video_writer.is_recording
+            and (self._video_detector_name is None
+                 or self._video_detector_name == detector_name)
+        )
+        streaming_active = (
+            self._streaming_adapter is not None
+            and getattr(self._streaming_adapter, "_is_open", False)
+            and (not self._streaming_detector_names
+                 or detector_name in self._streaming_detector_names)
+        )
+        if not (video_active or streaming_active):
+            return
+
+        # The frame may be a numpy view into the camera SDK's ring buffer
+        # which will be overwritten as new frames arrive. Copy here, on
+        # the streaming thread, so the dispatch thread can write safely.
+        # 18 MB ``np.copy`` is ~5 ms on a Pi 5 — much cheaper than the
+        # synchronous H.264 encode this used to do inline.
+        frame_copy = frame.copy()
+
+        try:
+            self._dispatch_queue.put_nowait((detector_name, frame_copy))
+        except queue.Full:
+            # Drop oldest pending frame, replace with newest. This trades
+            # data fidelity for live-preview smoothness; the caller will
+            # see ``_dispatch_dropped`` in stats.
+            try:
+                self._dispatch_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._dispatch_queue.put_nowait((detector_name, frame_copy))
+            except queue.Full:
+                pass
+            self._dispatch_dropped += 1
+            if self._dispatch_dropped % 100 == 1:
+                self._logger.warning(
+                    f"RecordingDispatch queue full; dropping frames "
+                    f"(total dropped so far: {self._dispatch_dropped}). "
+                    f"Disk or video encoder cannot keep up with stream."
+                )
+
+    def _dispatch_loop(self):
+        """Background thread: pull frames from queue, run actual writers."""
+        while not self._dispatch_stop.is_set():
+            try:
+                detector_name, frame = self._dispatch_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            # Video write (MP4Writer.write_frame is synchronous — that's
+            # exactly what we're moving off the streaming thread).
+            try:
+                if self._video_writer is not None and self._video_writer.is_recording:
+                    if (self._video_detector_name is None
+                            or self._video_detector_name == detector_name):
+                        self._video_writer.write_frame(frame)
+                        self.sigRecordingFrameNumUpdated.emit(
+                            self._video_writer.frame_count
+                        )
+            except Exception as e:
+                self._logger.error(f"Video frame write failed: {e}")
+
+            # Streaming adapter write. The adapter already enqueues into
+            # its own background thread (data_store.background_writes=True),
+            # but ``write_frame`` itself does a ``frame.copy()`` plus a
+            # MetadataHub lookup — non-trivial at high frame rates. Doing
+            # it here keeps the streaming thread clean.
+            try:
+                if (self._streaming_adapter is not None
+                        and getattr(self._streaming_adapter, "_is_open", False)):
+                    if (not self._streaming_detector_names
+                            or detector_name in self._streaming_detector_names):
                         self._streaming_adapter.write_frame(detector_name, frame)
                         self._streaming_frame_count += 1
-                        self.sigRecordingFrameNumUpdated.emit(self._streaming_frame_count)
-                    except Exception as e:
-                        self._logger.error(f"Error writing frame to streaming adapter: {e}")
+                        self.sigRecordingFrameNumUpdated.emit(
+                            self._streaming_frame_count
+                        )
+            except Exception as e:
+                self._logger.error(
+                    f"Error writing frame to streaming adapter: {e}"
+                )
+
+        # Drain remaining frames on shutdown so the recording is complete.
+        while True:
+            try:
+                detector_name, frame = self._dispatch_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                if self._video_writer is not None and self._video_writer.is_recording:
+                    self._video_writer.write_frame(frame)
+                if (self._streaming_adapter is not None
+                        and getattr(self._streaming_adapter, "_is_open", False)):
+                    self._streaming_adapter.write_frame(detector_name, frame)
+            except Exception as e:
+                self._logger.error(f"Drain write failed: {e}")
     
     def _connect_frame_callback(self):
         """Connect to frame signal for continuous recording."""
@@ -630,6 +787,7 @@ class RecordingService(SignalInterface):
         
         results = {}
         images = {}
+        # TODO: Check if the detector is running 
         
         # Capture images from all detectors
         for det_name in detector_names:

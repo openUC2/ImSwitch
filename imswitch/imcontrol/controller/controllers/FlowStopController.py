@@ -13,7 +13,6 @@ from imswitch.imcommon.model import dirtools, APIExport
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from ..basecontrollers import LiveUpdatedController
-from imswitch import IS_HEADLESS
 from imswitch.imcontrol.model import SaveMode, SaveFormat
 
 class FlowStopController(LiveUpdatedController):
@@ -61,22 +60,6 @@ class FlowStopController(LiveUpdatedController):
         self.changeAutoExposureTime('auto')
 
         # Connect FlowStopWidget signals
-        if not IS_HEADLESS:
-            # Connect CommunicationChannel signals
-            #self._commChannel.sigUpdateImage.connect(self.update)
-            self._widget.sigSnapClicked.connect(self.snapImageFlowCam)
-            self._widget.sigSliderFocusValueChanged.connect(self.changeFocus)
-            self._widget.sigSliderPumpSpeedValueChanged.connect(self.changePumpSpeed)
-            self._widget.sigExposureTimeChanged.connect(self.changeExposureTime)
-            self._widget.sigGainChanged.connect(self.changeGain)
-            self._widget.sigPumpDirectionToggled.connect(self.changePumpDirection)
-
-            # Connect buttons
-            self._widget.buttonStart.clicked.connect(self.startFlowStopExperimentByButton)
-            self._widget.buttonStop.clicked.connect(self.stopFlowStopExperimentByButton)
-            self._widget.pumpMovePosButton.clicked.connect(self.movePumpPos)
-            self._widget.pumpMoveNegButton.clicked.connect(self.movePumpNeg)
-
         # start thread if it was funning
         if self.wasRunning:
             timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
@@ -139,10 +122,7 @@ class FlowStopController(LiveUpdatedController):
 
     @APIExport()
     def getExperimentParameters(self) -> dict:
-        if not IS_HEADLESS:
-            self.mExperimentParameters = self._widget.getAutomaticImagingParameters()
-        else:
-            self.mExperimentParameters["timeStamp"] = datetime.datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
+        self.mExperimentParameters["timeStamp"] = datetime.datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
         return self.mExperimentParameters
 
     @APIExport()
@@ -234,12 +214,6 @@ class FlowStopController(LiveUpdatedController):
     def stopFlowStopExperiment(self):
         self.sigIsRunning.emit(False)
         self.is_measure=False
-        if not IS_HEADLESS:
-            self._widget.buttonStart.setEnabled(True)
-            self._widget.buttonStop.setEnabled(False)
-            self._widget.buttonStop.setStyleSheet("background-color: grey")
-            self._widget.buttonStart.setStyleSheet("background-color: green")
-
     def flowExperimentThread(self, timeStamp: str, experimentName: str,
                              experimentDescription: str, uniqueId: str,
                              numImages: int, volumePerImage: float,
@@ -309,9 +283,6 @@ class FlowStopController(LiveUpdatedController):
                 # maintain framerate
                 while (time.time()-currentTime)<(1/frameRate):
                     time.sleep(0.05)
-                if not IS_HEADLESS:
-                    self._widget.labelStatusValue.setText(f'Running: {self.imagesTaken+1}/{numImages}')
-            else:
                 break
 
         # stop the video writer

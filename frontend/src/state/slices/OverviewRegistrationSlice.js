@@ -1,5 +1,36 @@
 import { createSlice } from "@reduxjs/toolkit";
 
+// LocalStorage keys for overlay preferences (persist across page reloads).
+const LS_OVERLAY_ENABLED = "overviewRegistration.overlayEnabled";
+const LS_OVERLAY_OPACITY = "overviewRegistration.overlayOpacity";
+
+const readBool = (key, fallback) => {
+  try {
+    const v = window.localStorage.getItem(key);
+    if (v === null) return fallback;
+    return v === "true";
+  } catch {
+    return fallback;
+  }
+};
+const readNumber = (key, fallback) => {
+  try {
+    const v = window.localStorage.getItem(key);
+    if (v === null) return fallback;
+    const n = parseFloat(v);
+    return isNaN(n) ? fallback : n;
+  } catch {
+    return fallback;
+  }
+};
+const writeLS = (key, value) => {
+  try {
+    window.localStorage.setItem(key, String(value));
+  } catch {
+    /* ignore quota / SSR errors */
+  }
+};
+
 /**
  * Redux slice for Overview Camera Registration Wizard and overlay state.
  *
@@ -48,10 +79,17 @@ const initialOverviewRegistrationState = {
   // Registration result for current slide
   lastRegistrationResult: null,
 
-  // Overlay state for WellSelector canvas
-  overlayEnabled: false,
-  overlayOpacity: 0.6,
+  // Overlay state for WellSelector canvas (persisted via localStorage)
+  overlayEnabled: readBool(LS_OVERLAY_ENABLED, false),
+  overlayOpacity: readNumber(LS_OVERLAY_OPACITY, 0.6),
   overlayData: {}, // { slides: { "1": {imageBase64, stageBounds, ...}, ... } }
+
+  // Autonomous overview scan state
+  autonomousScanRunning: false,
+  autonomousScanProgress: { current: 0, total: 0, slotId: "" },
+
+  // Editable registration config (XYZ table etc.)
+  registrationConfig: null,
 
   // Loading / error state
   isLoading: false,
@@ -145,13 +183,48 @@ const overviewRegistrationSlice = createSlice({
     // Overlay
     setOverlayEnabled: (state, action) => {
       state.overlayEnabled = action.payload;
+      writeLS(LS_OVERLAY_ENABLED, action.payload);
     },
     setOverlayOpacity: (state, action) => {
       state.overlayOpacity = action.payload;
       if (isNaN(state.overlayOpacity)) state.overlayOpacity = 0.6;
+      writeLS(LS_OVERLAY_OPACITY, state.overlayOpacity);
     },
     setOverlayData: (state, action) => {
       state.overlayData = action.payload;
+    },
+
+    // Autonomous overview scan
+    setAutonomousScanRunning: (state, action) => {
+      state.autonomousScanRunning = action.payload;
+    },
+    setAutonomousScanProgress: (state, action) => {
+      state.autonomousScanProgress = {
+        current: action.payload.current ?? 0,
+        total: action.payload.total ?? 0,
+        slotId: action.payload.slotId ?? "",
+      };
+    },
+
+    // Editable registration config
+    setRegistrationConfig: (state, action) => {
+      state.registrationConfig = action.payload;
+    },
+    updateRegistrationConfigSlot: (state, action) => {
+      const { slotId, patch } = action.payload;
+      if (!state.registrationConfig || !state.registrationConfig.slots) return;
+      const slot = state.registrationConfig.slots[slotId];
+      if (!slot) return;
+      state.registrationConfig.slots[slotId] = { ...slot, ...patch };
+    },
+    updateRegistrationConfigSlotPosition: (state, action) => {
+      const { slotId, axis, value } = action.payload;
+      if (!state.registrationConfig || !state.registrationConfig.slots) return;
+      const slot = state.registrationConfig.slots[slotId];
+      if (!slot) return;
+      const pos = { ...(slot.stagePosition || { x: 0, y: 0, z: 0 }) };
+      pos[axis] = value;
+      slot.stagePosition = pos;
     },
 
     // Loading / error
@@ -195,6 +268,11 @@ export const {
   setOverlayEnabled,
   setOverlayOpacity,
   setOverlayData,
+  setAutonomousScanRunning,
+  setAutonomousScanProgress,
+  setRegistrationConfig,
+  updateRegistrationConfigSlot,
+  updateRegistrationConfigSlotPosition,
   setIsLoading,
   setError,
   resetWizard,

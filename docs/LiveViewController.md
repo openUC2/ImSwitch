@@ -344,13 +344,6 @@ Workers implement different strategies for handling backpressure:
 - **BinaryStreamWorker**: Skips frames if processing takes too long
 - **JPEGStreamWorker**: Similar to binary, processes latest available frame
 
-### Headless Mode
-
-In headless mode (`IS_HEADLESS=True`):
-- LVWorker timer in DetectorsManager is not started automatically
-- Streaming is explicitly managed by LiveViewController
-- No unnecessary resource consumption when not streaming
-
 ## WebRTC Support (Future)
 
 The `WebRTCStreamWorker` provides a foundation for WebRTC streaming. Future implementation will include:

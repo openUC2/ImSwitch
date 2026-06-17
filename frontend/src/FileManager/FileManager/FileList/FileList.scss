@@ -33,6 +33,14 @@
     border-radius: 5px;
     margin: 5px 0;
 
+    // Image thumbnail shown in place of the generic file/folder icon.
+    .file-thumb {
+      object-fit: cover;
+      border-radius: 4px;
+      display: block;
+      background-color: $border-color;
+    }
+
     .drag-icon {
       position: absolute !important;
       top: -1000px;

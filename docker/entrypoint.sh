@@ -14,10 +14,6 @@
 #   SCAN_EXT_DATA_PATH - Enable external storage scanning: "true"/"1" or "false" (default)
 #   EXT_DATA_PATH      - Mount point directory for external drives (e.g., /media, /Volumes)
 #
-# Interactive Shell:
-#   For an interactive shell with ImSwitch environment activated, use:
-#   docker run --entrypoint=venv-shell.sh <image-name>
-#
 # Storage Management:
 #   The new storage management system automatically handles:
 #   - Detection of external drives when SCAN_EXT_DATA_PATH=true
@@ -150,7 +146,6 @@ fi
 # Activate Python Environment
 # ============================================================================
 export PATH="/root/.local/bin:$PATH"
-source /opt/imswitch/.venv/bin/activate
 
 # ============================================================================
 # Build ImSwitch Command Line Arguments
@@ -196,8 +191,8 @@ params+=" --ext-data-folder ${EXT_DATA_PATH}"
 # Start ImSwitch
 # ============================================================================
 log 'Starting ImSwitch with the following parameters:'
-log "python3 -m imswitch $params"
-# params is a single string, so we use eval to properly pass it as multiple arguments
-# example: eval python3 -m imswitch --headless --http-port 8001 --no-ssl --config-folder /Users/bene/ImSwitchConfig --config-file example_virtual_microscope.json --data-folder /Users/bene/ImSwitchConfig  --scan-ext-data-folder --ext-data-folder /Volumes
-
-python3 -m imswitch $params
+log "uv run python3 -m imswitch $params"
+# Run via uv so the project's locked virtual environment is used; --no-sync avoids
+# a redundant dependency check on every container start.
+cd /opt/imswitch
+exec uv run --no-sync python3 -m imswitch $params

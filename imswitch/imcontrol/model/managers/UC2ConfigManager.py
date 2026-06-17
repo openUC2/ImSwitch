@@ -6,9 +6,13 @@ from imswitch.imcommon.model import initLogger
 
 class UC2ConfigManager(SignalInterface):
 
-    def __init__(self, Info, lowLevelManagers, *args, **kwargs):
+    def __init__(self, Info, lowLevelManagers, setupInfo=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
+
+        # Keep a reference so we can persist serial-port / baudrate overrides
+        # back to the setup JSON via configfiletools.saveSetupInfo.
+        self._setupInfo = setupInfo
 
         # TODO: HARDCODED!!
         try:
@@ -16,8 +20,8 @@ class UC2ConfigManager(SignalInterface):
         except Exception as e:
             self.__logger.error(f"Could not connect to ESP32 low level manager: {e}")
             return
-        
-        # Grab DigitalIn/Out Controller 
+
+        # Grab DigitalIn/Out Controller
         self._digitalIn = self.ESP32.digitalin
         self._digitalOut = self.ESP32.digitalout
 
@@ -33,7 +37,7 @@ class UC2ConfigManager(SignalInterface):
         return self.ESP32.config.loadDefaultConfig()
     '''
     def closeSerial(self):
-        return self.ESP32.closeSerial()
+        return self.ESP32.serial.closeSerial()
 
     def isConnected(self):
         try:
@@ -41,14 +45,74 @@ class UC2ConfigManager(SignalInterface):
         except:
             return False
 
+    def ping(self, timeout=0.5):
+        """Active health-check (sends /state_get, waits for response)."""
+        try:
+            return self.ESP32.serial.ping(timeout=timeout)
+        except Exception:
+            # Older UC2-REST builds may not have .ping yet — fall back to flag.
+            return self.isConnected()
+
     def interruptSerialCommunication(self):
         self.ESP32.serial.interruptCurrentSerialCommunication()
 
-    def initSerial(self, baudrate=None):
+    def initSerial(self, port=None, baudrate=None):
+        if not hasattr(self, "ESP32"):
+            self.__logger.info("we do not have any esp32 initiliazed")
+            return
         try:
-            self.ESP32.serial.reconnect(baudrate=baudrate)
-        except:
-            self.ESP32.serial.reconnect() # fall back to old version of UC2-REST
+            self.ESP32.serial.reconnect(port=port, baudrate=baudrate)
+        except TypeError:
+            # Older UC2-REST builds: reconnect(baudrate=...) only
+            try:
+                self.ESP32.serial.reconnect(baudrate=baudrate)
+            except Exception:
+                self.ESP32.serial.reconnect()
+        except Exception:
+            # last-ditch fallback to keep behaviour compatible
+            self.ESP32.serial.reconnect()
+
+    def setSerialConfig(self, port=None, baudrate=None, persist=True):
+        """Apply (and optionally persist) a new serial port / baudrate.
+
+        - Reconnects the running serial link via ``initSerial``.
+        - When ``persist`` is True, writes the new values into
+          ``setupInfo.rs232devices["ESP32"].managerProperties`` and saves
+          the setup JSON so the change survives a restart.
+        """
+        self.initSerial(port=port, baudrate=baudrate)
+        connected = self.isConnected()
+
+        if persist and self._setupInfo is not None:
+            try:
+                rs232 = getattr(self._setupInfo, "rs232devices", None)
+                esp_info = rs232.get("ESP32") if rs232 else None
+                if esp_info is None:
+                    self.__logger.warning(
+                        "Cannot persist serial config: no rs232devices['ESP32'] in setupInfo"
+                    )
+                else:
+                    props = dict(esp_info.managerProperties or {})
+                    if port is not None:
+                        props["serialport"] = port
+                    if baudrate is not None:
+                        props["baudrate"] = int(baudrate)
+                    esp_info.managerProperties = props
+
+                    from imswitch.imcontrol.model import configfiletools
+                    options, _ = configfiletools.loadOptions()
+                    configfiletools.saveSetupInfo(options, self._setupInfo)
+                    self.__logger.info(
+                        f"ESP32 serial config saved (port={port}, baudrate={baudrate})"
+                    )
+            except Exception as e:
+                self.__logger.error(f"Failed to persist serial config: {e}", exc_info=True)
+
+        return {
+            "connected": connected,
+            "port": port,
+            "baudrate": baudrate,
+        }
 
     def pairBT(self):
         self.ESP32.state.pairBT()
@@ -71,6 +135,68 @@ class UC2ConfigManager(SignalInterface):
             device_id (_type_): _description_
         """
         self.ESP32.can.reboot_remote(can_address=device_id, isBlocking=True, timeout=1)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # CAN-bus power & emergency-stop (safety)
+    # ──────────────────────────────────────────────────────────────────────
+    def setBusPower(self, enable=True):
+        """Enable (default) / disable the high-current CAN-bus power that feeds
+        the slaves. Maps to ESP32.state.set_power."""
+        return self.ESP32.state.set_power(int(bool(enable)))
+
+    def getBusPower(self):
+        """Current CAN-bus power state: 1=ON, 0=OFF, or None if unavailable."""
+        try:
+            return int(self.ESP32.state.get_power())
+        except Exception:
+            return None
+
+    def getEstop(self):
+        """E-stop diagnostics dict {estopPolarity, estopRaw, estopActive}."""
+        try:
+            return self.ESP32.state.get_estop()
+        except Exception:
+            return {}
+
+    def isEmergencyActive(self):
+        """Last known emergency-stop state as reported by the firmware (cached,
+        no serial round-trip)."""
+        try:
+            return bool(self.ESP32.state.is_emergency_active())
+        except Exception:
+            return False
+
+    def registerEmergencyCallback(self, callbackfct):
+        """Register a callback invoked on emergency (E-stop) events. The callback
+        receives the firmware "emergency" dict, e.g.
+        {"active":1,"reason":"estop","msg":"..."}."""
+        try:
+            self.ESP32.state.register_emergency_callback(callbackfct)
+            return True
+        except Exception as e:
+            self.__logger.error(f"Could not register emergency callback: {e}")
+            return False
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Fan & board temperature
+    # ──────────────────────────────────────────────────────────────────────
+    def getFan(self, blocking=True):
+        """Fan state dict {mode,wiper,manual,rpm,stalled,kick,tempC,curve}."""
+        try:
+            return self.ESP32.fan.get_fan(blocking=blocking)
+        except Exception:
+            return {}
+
+    def setFanMode(self, mode="auto", wiper=None):
+        """Set fan mode 'auto'|'manual'|'off'. wiper 0-127 used for 'manual'."""
+        return self.ESP32.fan.set_mode(mode=mode, wiper=wiper)
+
+    def getTemperature(self):
+        """Board/air temperatures {pcb,air,esp,pcb_ok,air_ok}."""
+        try:
+            return self.ESP32.fan.get_temp()
+        except Exception:
+            return {}
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

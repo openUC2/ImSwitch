@@ -42,6 +42,11 @@ class WorkflowContext:
             del self.objects[key]
 
     def store_step_result(self, step_id: str, metadata: Dict[str, Any]):
+        # Only keep lightweight metadata; drop large payloads (e.g. numpy
+        # frames) to prevent unbounded RAM growth during long experiments.
+        metadata.pop("result", None)
+        metadata.pop("pre_result", None)
+        metadata.pop("post_result", None)
         self.data[step_id] = metadata
 
     def get_step_result(self, step_id: str) -> Optional[Dict[str, Any]]:
@@ -165,7 +170,7 @@ class WorkflowStep:
 
         # Emit event that step completed
         context.emit_event("progress", {"status": "completed", "step_id": context.current_step_index, "name": self.name, "total_step_number": context.total_step_number})
-        return metadata["result"]
+        return  metadata
 
 class Workflow:
     def __init__(self, steps: List[WorkflowStep], manager: Optional["WorkflowManager"] = None):
@@ -255,6 +260,10 @@ class WorkflowsManager:
     def workflow_finished(self, workflow: Workflow, context: WorkflowContext):
         # Check if the finished workflow is the current one
         if self.current_workflow == workflow:
+            # Clear accumulated step results to free memory (frame arrays, etc.)
+            if self.current_context is not None:
+                self.current_context.data.clear()
+                self.current_context.objects.clear()
             self.current_workflow = None
             self.current_context = None
             self.current_thread = None

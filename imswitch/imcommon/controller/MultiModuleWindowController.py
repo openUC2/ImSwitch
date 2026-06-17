@@ -2,27 +2,15 @@ import webbrowser
 
 import psutil
 
-from imswitch import IS_HEADLESS, __version__
+from imswitch import  __version__
 from imswitch.imcommon.framework import Timer
 from imswitch.imcommon.model import dirtools, modulesconfigtools, ostools, APIExport
 from .basecontrollers import WidgetController
-
-if not IS_HEADLESS:
-    from imswitch.imcommon.view import guitools
-    from .CheckUpdatesController import CheckUpdatesController
-    from .PickModulesController import PickModulesController
 
 
 class MultiModuleWindowController(WidgetController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        self.pickModulesController = self._factory.createController(
-            PickModulesController, self._widget.pickModulesDialog
-        )
-        self.checkUpdatesController = self._factory.createController(
-            CheckUpdatesController, self._widget.checkUpdatesDialog
-        )
 
         self._moduleIdNameMap = {}
 
@@ -32,33 +20,6 @@ class MultiModuleWindowController(WidgetController):
 
         self.updateRAMUsage()
 
-        # Connect signals
-        self._widget.sigPickModules.connect(self.pickModules)
-        self._widget.sigOpenUserDir.connect(self.openUserDir)
-        self._widget.sigShowDocs.connect(self.showDocs)
-        self._widget.sigCheckUpdates.connect(self.checkUpdates)
-        self._widget.sigShowAbout.connect(self.showAbout)
-
-        self._widget.sigModuleAdded.connect(self.moduleAdded)
-
-    def pickModules(self):
-        """ Let the user change which modules are active. """
-
-        self.pickModulesController.setModules(modulesconfigtools.getAvailableModules())
-        self.pickModulesController.setSelectedModules(modulesconfigtools.getEnabledModuleIds())
-        if not self._widget.showPickModulesDialogBlocking():
-            return
-        moduleIds = self.pickModulesController.getSelectedModules()
-        if not moduleIds:
-            return
-
-        proceed = guitools.askYesNoQuestion(self._widget, 'Warning',
-                                            'The software will restart. Continue?')
-        if not proceed:
-            return
-
-        modulesconfigtools.setEnabledModuleIds(moduleIds)
-        ostools.restartSoftware()
 
     def openUserDir(self):
         """ Shows the user files directory in system file explorer. """

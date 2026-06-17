@@ -30,21 +30,12 @@ class GXPIPYManager(DetectorManager):
         except:
             self.cameraId = 1
 
-        try:
-            pixelSize = detectorInfo.managerProperties['cameraEffPixelsize'] # mum
-        except:
-            # returning back to default pixelsize
-            pixelSize = 1
-
-        try:
-            self.flipX = detectorInfo.managerProperties['gxipycam']['flipX']
-        except:
-            self.flipX = False
-
-        try:
-            self.flipY = detectorInfo.managerProperties['gxipycam']['flipY']
-        except:
-            self.flipY = False
+        # Pixel size and flip are owned by PixelCalibrationController; the
+        # values are injected via setPixelSizeUm() / setFlipImage() at startup
+        # and on objective change. Use neutral defaults here.
+        pixelSize = 1.0
+        self.flipX = False
+        self.flipY = False
 
 
         try:
@@ -86,8 +77,9 @@ class GXPIPYManager(DetectorManager):
                                     editable=True),
             'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),
             'binning': DetectorNumberParameter(group="Misc", value=1, valueUnits="arb.u.", editable=True),
-            'flipX': DetectorBooleanParameter(group="Misc", value=self.flipX, editable=True),
-            'flipY': DetectorBooleanParameter(group="Misc", value=self.flipY, editable=True),
+            # Flip is owned by PixelCalibration (set via setFlipImage), not the user.
+            'flipX': DetectorBooleanParameter(group="Misc", value=self.flipX, editable=False),
+            'flipY': DetectorBooleanParameter(group="Misc", value=self.flipY, editable=False),
             'trigger_source': DetectorListParameter(group='Acquisition mode',
                             value='Continuous',
                             options=['Continuous',
@@ -117,11 +109,6 @@ class GXPIPYManager(DetectorManager):
 
         super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
                          model=model, parameters=parameters, actions=actions, croppable=True)
-
-
-    def setFlatfieldImage(self, flatfieldImage, isFlatfielding):
-        """Set flatfield image for correction."""
-        self._camera.setFlatfieldImage(flatfieldImage, isFlatfielding)
 
     def _updatePropertiesFromCamera(self):
         self.setParameter('Real exposure time', self._camera.getPropertyValue('exposure_time')[0])
@@ -338,11 +325,6 @@ class GXPIPYManager(DetectorManager):
     def closeEvent(self):
         self._camera.close()
 
-    def recordFlatfieldImage(self):
-        '''
-        record n images and average them before subtracting from the latest frame
-        '''
-        self._camera.recordFlatfieldImage()
 
     def getCameraStatus(self):
         """ Returns comprehensive GXIPY camera status information. """

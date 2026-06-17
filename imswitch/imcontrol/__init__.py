@@ -2,7 +2,7 @@ import imswitch
 import dataclasses
 import sys
 import os
-from imswitch import IS_HEADLESS, DEFAULT_DATA_PATH
+from imswitch import DEFAULT_DATA_PATH
 
 __imswitch_module__ = True
 __title__ = 'Hardware Control'
@@ -13,22 +13,8 @@ def getMainViewAndController(moduleCommChannel, *_args,
     from imswitch.imcommon.model import initLogger
     from .controller import ImConMainController
     from .model import configfiletools
-    from .view import ViewSetupInfo, ImConMainView, ImConMainViewNoQt
+    from .view import ViewSetupInfo, ImConMainViewNoQt
     logger = initLogger('imcontrol init')
-
-    def pickSetup(options):
-        from qtpy import QtWidgets
-        from imswitch.imcontrol.view import PickSetupDialog
-
-        # Let user pick the setup to use
-        pickSetupDialog = PickSetupDialog()
-        pickSetupDialog.setSetups(configfiletools.getSetupList())
-        result = pickSetupDialog.exec_()
-        setupFileName = pickSetupDialog.getSelectedSetup()
-        if result != QtWidgets.QDialog.Accepted or not setupFileName:
-            logger.critical('User did not pick a setup to use')
-            sys.exit()
-        return dataclasses.replace(options, setupFileName=setupFileName)
 
 
     '''
@@ -36,8 +22,6 @@ def getMainViewAndController(moduleCommChannel, *_args,
     '''
     if overrideOptions is None:
         options, optionsDidNotExist = configfiletools.loadOptions()
-        if not optionsDidNotExist:
-            if not IS_HEADLESS: options = pickSetup(options)  # Setup to use not set, let user pick
         configfiletools.saveOptions(options)
     else:
         # force the options to use a specific configuration
@@ -76,12 +60,8 @@ def getMainViewAndController(moduleCommChannel, *_args,
                 # Have user pick setup anyway
                 logger.debug('Setup file not found, let user pick setup')
                 logger.debug('Error loading setup file: %s', e)
-                if IS_HEADLESS:
-                    # load from default _data
-                    setupFileName = imswitch.DEFAULT_SETUP_FILE
-                else:
-                    options = pickSetup(options)
-                    configfiletools.saveOptions(options)
+                # load from default _data
+                setupFileName = imswitch.DEFAULT_SETUP_FILE
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)
     # this case is used for pytesting
     elif overrideSetupInfo is not None:
@@ -95,16 +75,12 @@ def getMainViewAndController(moduleCommChannel, *_args,
         logger.debug("Overriding data save path with: "+DEFAULT_DATA_PATH)
         options_rec = dataclasses.replace(options.recording, outputFolder=DEFAULT_DATA_PATH)
         options = dataclasses.replace(options, recording=options_rec)
-    if not IS_HEADLESS:
-        view = ImConMainView(options, setupInfo)
-    else:
-        view = ImConMainViewNoQt(options, setupInfo)
+    view = ImConMainViewNoQt(options, setupInfo)
     try:
         controller = ImConMainController(options, setupInfo, view, moduleCommChannel)
     except Exception as e:
         # TODO: To broad exception
         logger.error('Error initializing controller: %s', e)
-        if not IS_HEADLESS: view.close()
         raise e
 
     return view, controller

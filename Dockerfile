@@ -54,12 +54,27 @@
 
 
 # Use an appropriate base image for multi-arch support
-# Note: Debian Bookworm has Python 3.11 which is required for picamera2 compatibility
-FROM debian:bookworm
+FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim
 
+# Needed for platform detection in install-drivers.sh:
 ARG TARGETPLATFORM
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
+
+# Install the project into `/opt/imswitch`
+WORKDIR /opt/imswitch
+
+# Keep Python from buffering stdout and stderr to avoid situations where the application crashes without emitting any logs due to buffering:
+ENV PYTHONUNBUFFERED=1
+# Enable bytecode compilation:
+ENV UV_COMPILE_BYTECODE=1
+# Copy from the cache instead of linking since the source tree is a mounted volume:
+ENV UV_LINK_MODE=copy
+# Omit development dependencies
+ENV UV_NO_DEV=1
+# Ensure installed tools can be executed out of the box
+ENV UV_TOOL_BIN_DIR=/usr/local/bin
 
 # Note(ethanjli): we have RUN steps calling build scripts which each create and delete many files,
 # in order to prevent junk from being baked into the final container image. This also gives us more
@@ -67,29 +82,53 @@ ENV TZ=Etc/UTC
 # We split up the work into different scripts run at different stages to facilitate correct
 # container image caching.
 
-RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-uv.sh
-ENV PATH=/root/.local/bin:/opt/imswitch/.venv/bin:$PATH
-
-RUN --mount=type=bind,source=docker/build-drivers.sh,target=/mnt/build/build-drivers.sh /mnt/build/build-drivers.sh
-ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32:"$LD_LIBRARY_PATH"
-ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
+# Install rarely-changing hardware drivers in a lower container image layer:
+RUN \
+  --mount=type=cache,sharing=locked,target=/var/cache/apt \
+  --mount=type=cache,sharing=locked,target=/var/lib/apt \
+  --mount=type=cache,target=/root/.cache/uv \
+  --mount=type=bind,source=docker/raspberrypi.gpg,target=/mnt/build/raspberrypi.gpg \
+  --mount=type=bind,source=docker/install-drivers.sh,target=/mnt/build/install-drivers.sh \
+  /mnt/build/install-drivers.sh
+ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib
+# LD_LIBRARY_PATH is set separately; expanding $LD_LIBRARY_PATH before it is defined causes a
+# Dockerfile linter warning and is a no-op at build time anyway.
+ENV LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32
+ENV GENICAM_GENTL64_PATH=/opt/VimbaX/cti
 
 # Larger slowly-changing dependencies are installed in a separate container image layer before the
 # rapidly-changing ImSwitch repository:
-RUN --mount=type=bind,source=docker/build-imswitch-deps.sh,target=/mnt/build/build-imswitch-deps.sh --mount=type=bind,source=./pyproject.toml,target=/mnt/ImSwitch/pyproject.toml /mnt/build/build-imswitch-deps.sh
+RUN \
+  --mount=type=cache,sharing=locked,target=/var/cache/apt \
+  --mount=type=cache,sharing=locked,target=/var/lib/apt \
+  --mount=type=cache,target=/root/.cache/uv \
+  --mount=type=bind,source=docker/install-imswitch-deps.sh,target=/mnt/build/install-imswitch-deps.sh \
+  --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+  --mount=type=bind,source=uv.lock,target=uv.lock \
+  /mnt/build/install-imswitch-deps.sh
 
-# Always pull the latest version of ImSwitch and UC2-REST repositories
-# Question(ethanjli): if we're copying the ImSwitch & UC2-REST repositories from local files using
-# the COPY directive, shouldn't that ignore the cache anyways? Is there any way we can get rid of
-# this BUILD_DATE hack?
-# Adding a dynamic build argument to prevent caching
-ARG BUILD_DATE
-RUN --mount=type=bind,source=docker/build-imswitch.sh,target=/mnt/build/build-imswitch.sh --mount=type=bind,source=.,target=/mnt/ImSwitch /mnt/build/build-imswitch.sh
+# Install Imswitch itself:
+COPY . /opt/imswitch
+RUN \
+  --mount=type=cache,sharing=locked,target=/var/cache/apt \
+  --mount=type=cache,sharing=locked,target=/var/lib/apt \
+  --mount=type=cache,target=/root/.cache/uv \
+  uv sync --frozen
+# Place executables in the environment at the front of the path
+ENV PATH="/opt/imswitch/.venv/bin:$PATH"
 # Expose HTTP port and Jupyter server port
 EXPOSE 8001 8888 8889
 
 COPY docker/entrypoint.sh /entrypoint.sh
-COPY docker/venv-shell.sh /venv-shell.sh
-RUN chmod +x /entrypoint.sh /venv-shell.sh
+RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
+
+# Run as unprivileged user
+RUN \
+  groupadd --system --gid 1000 pi && \
+  groupadd --system --gid 989 spi && \
+  groupadd --system --gid 988 i2c && \
+  groupadd --system --gid 986 gpio && \
+  useradd --system --gid 1000 --uid 1000 --create-home pi
+USER pi

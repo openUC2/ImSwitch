@@ -59,15 +59,26 @@ const initialExperimentState = {
     autoFocusStaticOffset: 0.0, // Static offset to add to final focus position
     autoFocusTwoStage: false, // Enable two-stage autofocus (coarse + fine scan)
     autoFocusAlgorithm: "LAPE", // Focus measurement method (LAPE, GLVA, JPEG)
+    // Software autofocus method: "scan" (Z-sweep) or "hillClimbing" (gradient search)
+    autoFocusSoftwareMethod: "scan",
+    // Hill-climbing autofocus parameters
+    autoFocusHillClimbingInitialStep: 20,  // Starting step size (µm)
+    autoFocusHillClimbingMinStep: 1,       // Convergence criterion (µm)
+    autoFocusHillClimbingStepReduction: 0.5, // Step reduction factor on reversal
+    autoFocusHillClimbingMaxIterations: 50,  // Safety iteration limit
     // Hardware autofocus (FocusLock-based one-shot) parameters
-    autoFocusMode: "software", // "software" (Z-sweep) or "hardware" (one-shot using FocusLock)
+    autoFocusMode: "software", // "software" (Z-sweep/hill-climbing) or "hardware" (one-shot using FocusLock)
     autofocus_max_attempts: 3, // Max attempts for hardware autofocus
     autofocus_target_focus_setpoint: 0, // Target focus setpoint for hardware autofocus
     zStack: false,
     zStackMin: 0.0,
     zStackMax: 0.0,
     zStackStepSize: 0.1,
-    speed: 0, 
+    speed: 20000,
+    z_speed: 5000,
+    // Tiling behaviour toggles (Tiling tab). Default off.
+    returnToOrigin: false,        // move stage back to pre-scan XYZ when the scan ends
+    overrideZWithCurrentZ: false, // use current stage Z for every position (ignored if focus map active)
     gains: 0,
     exposureTimes: 0,
     performanceMode: false,
@@ -79,6 +90,11 @@ const initialExperimentState = {
     ome_write_zarr: false,
     ome_write_stitched_tiff: true,
     ome_write_individual_tiffs: false,
+    ome_write_ashlar_stitch: false,
+    ashlar_pixel_size: 1.0,           // µm/pixel — physical pixel size for Ashlar alignment
+    ashlar_pixel_size_user_set: false, // true once the user has manually edited the field
+    ashlar_maximum_shift: 50.0,   // µm — max per-tile corrective shift allowed by Ashlar
+    ashlar_align_channel: 0,      // zero-based channel index used for tile alignment
     // Tile overlap parameters (moved from WellSelectorSlice)
     overlapWidth: 0.0,  // 0.0 = no overlap (100% spacing), 0.1 = 10% overlap (90% spacing)
     overlapHeight: 0.0,  // 0.0 = no overlap (100% spacing), 0.1 = 10% overlap (90% spacing)
@@ -86,6 +102,12 @@ const initialExperimentState = {
     is_snakescan: false,  // Enable snakescan pattern (alternating row directions)
     // Illumination mode
     keepIlluminationOn: "auto",  // "auto" = on for single channel, off for multi | "on" = always keep on | "off" = per-frame toggle
+    // Per-channel kind-specific params (radius/RGB) keyed by channel name.
+    // Drives LED-matrix synthetic channels ("ring" / "dpc"); ignored for
+    // "default" channels.  Example shape:
+    //   { "LED Matrix Ring": { radius: 8, intensityR: 0, intensityG: 255, intensityB: 0 },
+    //     "LED Matrix DPC":  { intensityR: 0, intensityG: 255, intensityB: 0 } }
+    illuminationParams: {},
   },
 };
 
@@ -190,6 +212,21 @@ const experimentSlice = createSlice({
       console.log("setAutoFocusMode", action.payload);
       state.parameterValue.autoFocusMode = action.payload;
     },
+    setAutoFocusSoftwareMethod: (state, action) => {
+      state.parameterValue.autoFocusSoftwareMethod = action.payload;
+    },
+    setAutoFocusHillClimbingInitialStep: (state, action) => {
+      state.parameterValue.autoFocusHillClimbingInitialStep = action.payload;
+    },
+    setAutoFocusHillClimbingMinStep: (state, action) => {
+      state.parameterValue.autoFocusHillClimbingMinStep = action.payload;
+    },
+    setAutoFocusHillClimbingStepReduction: (state, action) => {
+      state.parameterValue.autoFocusHillClimbingStepReduction = action.payload;
+    },
+    setAutoFocusHillClimbingMaxIterations: (state, action) => {
+      state.parameterValue.autoFocusHillClimbingMaxIterations = action.payload;
+    },
     setAutoFocusMaxAttempts: (state, action) => {
       console.log("setAutoFocusMaxAttempts", action.payload);
       state.parameterValue.autofocus_max_attempts = action.payload;
@@ -217,6 +254,10 @@ const experimentSlice = createSlice({
     setSpeed: (state, action) => {
         console.log("setSpeed");
         state.parameterValue.speed = action.payload;
+    },
+    setZSpeed: (state, action) => {
+        console.log("setZSpeed");
+        state.parameterValue.z_speed = action.payload;
     },
     setGains: (state, action) => {
       console.log("setGains");
@@ -266,6 +307,25 @@ const experimentSlice = createSlice({
       console.log("setOmeWriteIndividualTiffs", action.payload);
       state.parameterValue.ome_write_individual_tiffs = action.payload;
     },
+    setOmeWriteAshlarStitch: (state, action) => {
+      console.log("setOmeWriteAshlarStitch", action.payload);
+      state.parameterValue.ome_write_ashlar_stitch = action.payload;
+    },
+    setAshlarPixelSize: (state, action) => {
+      state.parameterValue.ashlar_pixel_size = action.payload;
+      state.parameterValue.ashlar_pixel_size_user_set = true;
+    },
+    setAshlarPixelSizeCalibrated: (state, action) => {
+      if (!state.parameterValue.ashlar_pixel_size_user_set) {
+        state.parameterValue.ashlar_pixel_size = action.payload;
+      }
+    },
+    setAshlarMaximumShift: (state, action) => {
+      state.parameterValue.ashlar_maximum_shift = action.payload;
+    },
+    setAshlarAlignChannel: (state, action) => {
+      state.parameterValue.ashlar_align_channel = action.payload;
+    },
     //------------------------ overlap parameters
     setOverlapWidth: (state, action) => {
       console.log("setOverlapWidth", action.payload);
@@ -279,9 +339,34 @@ const experimentSlice = createSlice({
       console.log("setIsSnakescan", action.payload);
       state.parameterValue.is_snakescan = action.payload;
     },
+    setReturnToOrigin: (state, action) => {
+      state.parameterValue.returnToOrigin = action.payload;
+    },
+    setOverrideZWithCurrentZ: (state, action) => {
+      state.parameterValue.overrideZWithCurrentZ = action.payload;
+    },
     setKeepIlluminationOn: (state, action) => {
       console.log("setKeepIlluminationOn", action.payload);
       state.parameterValue.keepIlluminationOn = action.payload;
+    },
+    // Wholesale replace the per-channel kind-specific params dict.  Used
+    // when hydrating from a preset or resetting the whole channel config.
+    setIlluminationParams: (state, action) => {
+      console.log("setIlluminationParams", action.payload);
+      state.parameterValue.illuminationParams =
+        action.payload && typeof action.payload === "object" ? action.payload : {};
+    },
+    // Merge a single channel's params dict.  Payload shape:
+    //   { channelName: "LED Matrix Ring", params: { radius: 8, intensityG: 255 } }
+    // Missing keys are preserved (partial updates), set value to undefined to remove a key.
+    setIlluminationParamsForChannel: (state, action) => {
+      const { channelName, params } = action.payload || {};
+      if (!channelName || !params || typeof params !== "object") return;
+      const current = state.parameterValue.illuminationParams || {};
+      state.parameterValue.illuminationParams = {
+        ...current,
+        [channelName]: { ...(current[channelName] || {}), ...params },
+      };
     },
     //------------------------ points
     createPoint: (state, action) => {
@@ -299,6 +384,19 @@ const experimentSlice = createSlice({
         rectMinusY: (action.payload.rectMinusY != null) ? (action.payload.rectMinusY) : (0),
         circleRadiusX: (action.payload.circleRadiusX != null) ? (action.payload.circleRadiusX) : (0),
         circleRadiusY: (action.payload.circleRadiusY != null) ? (action.payload.circleRadiusY) : (0),
+        // Optional grouping metadata. Points sharing the same ``areaId`` /
+        // ``groupId`` belong to a single logical scan area (e.g. freehand
+        // polygon, area-select rectangle, per-well subpoints) and downstream
+        // writers should co-locate their images in one zarr/tif folder.
+        areaId: action.payload.areaId,
+        areaType: action.payload.areaType,
+        groupId: action.payload.groupId,
+        wellId: action.payload.wellId,
+        // Pre-computed scan positions for region-style points (e.g. a freehand
+        // polygon) so the whole region is ONE point-list entry / scan group.
+        neighborPointList: Array.isArray(action.payload.neighborPointList)
+          ? action.payload.neighborPointList
+          : [],
       };
       
       console.log("createPoint newPoint", newPoint);
@@ -323,6 +421,72 @@ const experimentSlice = createSlice({
     addPoint: (state, action) => {
       console.log("addPoint");
       state.pointList.push(action.payload);
+    },
+    appendPoints: (state, action) => {
+      // Append a batch of points (e.g. from labware well-selection apply).
+      // Skips duplicates by exact (x, y, name) match to avoid double-adding
+      // the same well twice.
+      const incoming = Array.isArray(action.payload) ? action.payload : [];
+      const seen = new Set(
+        state.pointList.map((p) => `${p.x}|${p.y}|${p.name || ""}`)
+      );
+      for (const p of incoming) {
+        const newPoint = {
+          id: p.id || uuidv4(),
+          name: p.name || "",
+          x: p.x,
+          y: p.y,
+          z: p.z != null ? p.z : 0,
+          shape: p.shape || "",
+          rectPlusX: p.rectPlusX || 0,
+          rectPlusY: p.rectPlusY || 0,
+          rectMinusX: p.rectMinusX || 0,
+          rectMinusY: p.rectMinusY || 0,
+          circleRadiusX: p.circleRadiusX || 0,
+          circleRadiusY: p.circleRadiusY || 0,
+          // Labware metadata pass-through
+          wellId: p.wellId,
+          wellRow: p.wellRow,
+          wellColumn: p.wellColumn,
+          labwareLoadName: p.labwareLoadName,
+          conditionLabel: p.conditionLabel,
+          areaType: p.areaType,
+          areaId: p.areaId,
+          groupId: p.groupId,
+        };
+        const key = `${newPoint.x}|${newPoint.y}|${newPoint.name}`;
+        if (!seen.has(key)) {
+          state.pointList.push(newPoint);
+          seen.add(key);
+        }
+      }
+    },
+    replacePoints: (state, action) => {
+      // Replace the entire pointList with a new batch (well-selection apply
+      // in "replace" mode).
+      const incoming = Array.isArray(action.payload) ? action.payload : [];
+      state.pointList = incoming.map((p) => ({
+        id: p.id || uuidv4(),
+        name: p.name || "",
+        x: p.x,
+        y: p.y,
+        z: p.z != null ? p.z : 0,
+        shape: p.shape || "",
+        rectPlusX: p.rectPlusX || 0,
+        rectPlusY: p.rectPlusY || 0,
+        rectMinusX: p.rectMinusX || 0,
+        rectMinusY: p.rectMinusY || 0,
+        circleRadiusX: p.circleRadiusX || 0,
+        circleRadiusY: p.circleRadiusY || 0,
+        wellId: p.wellId,
+        wellRow: p.wellRow,
+        wellColumn: p.wellColumn,
+        labwareLoadName: p.labwareLoadName,
+        conditionLabel: p.conditionLabel,
+        areaType: p.areaType,
+        areaId: p.areaId,
+        groupId: p.groupId,
+      }));
     },
     removePoint: (state, action) => {
       console.log("removePoint");
@@ -374,6 +538,11 @@ export const {
   setAutoFocusTwoStage,
   setAutoFocusAlgorithm,
   setAutoFocusMode,
+  setAutoFocusSoftwareMethod,
+  setAutoFocusHillClimbingInitialStep,
+  setAutoFocusHillClimbingMinStep,
+  setAutoFocusHillClimbingStepReduction,
+  setAutoFocusHillClimbingMaxIterations,
   setAutoFocusMaxAttempts,
   setAutoFocusTargetSetpoint,
   setZStack,
@@ -381,6 +550,7 @@ export const {
   setZStackMax,
   setZStackStepSize,
   setSpeed,
+  setZSpeed,
   setGains,
   setExposureTimes,
   setPerformanceMode,
@@ -391,12 +561,23 @@ export const {
   setOmeWriteZarr,
   setOmeWriteStitchedTiff,
   setOmeWriteIndividualTiffs,
+  setOmeWriteAshlarStitch,
+  setAshlarPixelSize,
+  setAshlarPixelSizeCalibrated,
+  setAshlarMaximumShift,
+  setAshlarAlignChannel,
   setOverlapWidth,
   setOverlapHeight,
   setIsSnakescan,
+  setReturnToOrigin,
+  setOverrideZWithCurrentZ,
   setKeepIlluminationOn,
+  setIlluminationParams,
+  setIlluminationParamsForChannel,
   createPoint,
   addPoint,
+  appendPoints,
+  replacePoints,
   removePoint,
   setPointList,
   replacePoint,

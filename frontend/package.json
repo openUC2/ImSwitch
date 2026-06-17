@@ -1,6 +1,5 @@
 {
-  "name": "microscope-app",
-  "version": "1.5.7",
+  "name": "imswitch-frontend",
   "private": true,
   "homepage": "/imswitch/ui",
   "dependencies": {
@@ -26,8 +25,10 @@
     "date-fns": "^4.1.0",
     "deck.gl": "^9.2.1",
     "eslint-config-react-app": "^7.0.1",
+    "intro.js": "^8.3.2",
     "json-edit-react": "^1.23.1",
     "lz4js": "^0.2.0",
+    "notistack": "^3.0.2",
     "ol": "^10.3.1",
     "plotly.js": "^2.35.3",
     "prop-types": "^15.8.1",
@@ -70,7 +71,7 @@
   },
   "scripts": {
     "start": "craco start",
-    "build": "craco build",
+    "build": "GENERATE_SOURCEMAP=false craco build",
     "test": "craco test"
   },
   "scripts_old": {

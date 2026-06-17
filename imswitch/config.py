@@ -13,8 +13,6 @@ class ImSwitchConfig:
     """Central configuration object for ImSwitch."""
 
     # Core settings
-    is_headless: bool = False
-
     # Network settings
     http_port: int = 8001
     ssl: bool = True
@@ -69,7 +67,6 @@ class ImSwitchConfig:
         """Update configuration from argparse Namespace object."""
         # Map argparse attribute names to config attribute names
         arg_mapping = {
-            'headless': 'is_headless',
             'config_file': 'default_config',
             'http_port': 'http_port',
             'ssl': 'ssl',
@@ -90,7 +87,6 @@ class ImSwitchConfig:
 
     def to_legacy_globals(self, imswitch_module) -> None:
         """Update legacy global variables for backward compatibility.""" # @ethanjli this also needs a review as this is sharing global variables
-        imswitch_module.IS_HEADLESS = self.is_headless
         imswitch_module.__httpport__ = self.http_port
         imswitch_module.__ssl__ = self.ssl
         imswitch_module.DEFAULT_SETUP_FILE = self.default_config

@@ -7,11 +7,13 @@ import * as experimentStateSlice from "../state/slices/ExperimentStateSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as tileStreamSlice from "../state/slices/TileStreamSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
+import * as homingSlice from "../state/slices/HomingSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
 import * as focusLockSlice from "../state/slices/FocusLockSlice.js";
 import * as mazeGameSlice from "../state/slices/MazeGameSlice.js";
 import * as autofocusSlice from "../state/slices/AutofocusSlice.js";
+import * as opticalFlowSlice from "../state/slices/OpticalFlowSlice.js";
 import * as socketDebugSlice from "../state/slices/SocketDebugSlice.js";
 import * as uc2Slice from "../state/slices/UC2Slice.js";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
@@ -20,6 +22,8 @@ import * as usbFlashSlice from "../state/slices/usbFlashSlice.js";
 import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 import * as storageSlice from "../state/slices/StorageSlice.js";
+import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
+import { fetchAvailableControllers } from "../state/slices/BackendCapabilitiesSlice";
 
 import { io } from "socket.io-client";
 
@@ -29,14 +33,21 @@ import { decode as msgpackDecode } from "@msgpack/msgpack";
 // Import API to check livestream status
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive.js";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout";
+import fetchLaserRuntimeState from "./fetchLaserRuntimeState.js";
 
 const isWebSocketDebugEnabled = () =>
   typeof window !== "undefined" && Boolean(window.__IMSWITCH_DEBUG_WEBSOCKET__);
+
+// ESP32 auto-reconnect throttle: Wait 15 seconds between reconnect attempts
+const ESP_RECONNECT_COOLDOWN_MS = 15000;
 
 //##################################################################################
 const WebSocketHandler = () => {
   const dispatch = useDispatch();
   const connectionCheckRef = useRef(null);
+  const lastEspReconnectAttemptRef = useRef(0);
+  const espReconnectInFlightRef = useRef(false);
+  const illuminationSyncInFlightRef = useRef(false);
 
   // Per-instance server capabilities (each tab has its own)
   const serverCapabilitiesRef = useRef({
@@ -57,53 +68,91 @@ const WebSocketHandler = () => {
     async (ip = hostIP, port = hostPort) => {
       // Skip monitoring if backend connection is not configured
       if (!ip || !port) {
-        dispatch(uc2Slice.setUc2Connected(false));
-        return;
-      }
-
-      try {
-        console.debug(`Checking UC2 connection to ${ip}:${port}/imswitch`);
-
-        // Use cross-browser compatible fetch with timeout
-        const response = await fetchWithTimeout(
-          `${ip}:${port}/imswitch/api/UC2ConfigController/is_connected`,
-          { method: "GET" },
-          10000,
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          const hardwareConnected = data === true;
-
-          console.debug(
-            `Backend API: Connected, Hardware: ${
-              hardwareConnected ? "Connected" : "Disconnected"
-            }`,
-          );
-
-          // Update BOTH statuses
-          dispatch(uc2Slice.setBackendConnected(true)); // API is reachable
-          dispatch(uc2Slice.setUc2Connected(hardwareConnected)); // Hardware status
-
-          return hardwareConnected; // Return hardware status for compatibility
-        } else {
-          console.debug(`UC2 connection check: HTTP ${response.status}`);
-          dispatch(uc2Slice.setBackendConnected(false));
-          dispatch(uc2Slice.setUc2Connected(false));
-          return false;
-        }
-      } catch (error) {
-        if (error.name === "AbortError") {
-          console.debug("UC2 connection check: Request timeout");
-        } else {
-          console.debug("UC2 connection check: Network error", error.message);
-        }
         dispatch(uc2Slice.setBackendConnected(false));
         dispatch(uc2Slice.setUc2Connected(false));
         return false;
       }
+
+      // ── Schritt 1: Backend API erreichbar ──
+      const apiBase = `${ip}:${port}/imswitch/api/UC2ConfigController`;
+      let backendAlive = false;
+      try {
+        console.debug(`[Check 1] Backend liveness: ${apiBase}/is_connected`);
+        const livenessResponse = await fetchWithTimeout(
+          `${apiBase}/is_connected`,
+          { method: "GET" },
+          5000,
+        );
+        backendAlive = livenessResponse.ok;
+        console.debug(`[Check 1] Backend alive: ${backendAlive}`);
+      } catch (error) {
+        backendAlive = false;
+      }
+      dispatch(uc2Slice.setBackendConnected(backendAlive));
+
+      // ── Schritt 2: ESP32/UART hardware connectivity ──
+      let hardwareConnected = false;
+      if (backendAlive) {
+        try {
+          console.debug(
+            `[Check 2] Hardware check: ${apiBase}/uc2_board_is_connected`,
+          );
+          const hwResponse = await fetchWithTimeout(
+            `${apiBase}/uc2_board_is_connected`,
+            { method: "GET" },
+            5000,
+          );
+          if (hwResponse.ok) {
+            const data = await hwResponse.json();
+            hardwareConnected = data === true;
+          }
+          console.debug(
+            `[Check 2] Hardware (ESP32/UART) connected: ${hardwareConnected}`,
+          );
+        } catch (error) {
+          hardwareConnected = false;
+        }
+
+        // If ESP is unplugged and then replugged, trigger a throttled reconnect
+        // so the serial link can recover without restarting the backend.
+        if (!hardwareConnected) {
+          const now = Date.now();
+          const canAttemptReconnect =
+            !espReconnectInFlightRef.current &&
+            now - lastEspReconnectAttemptRef.current >=
+              ESP_RECONNECT_COOLDOWN_MS;
+
+          if (canAttemptReconnect) {
+            espReconnectInFlightRef.current = true;
+            lastEspReconnectAttemptRef.current = now;
+
+            try {
+              console.debug(
+                `[Check 2b] Trigger ESP reconnect: ${apiBase}/reconnect`,
+              );
+              //FIXME: Do not attempt aut reconnects! This results in a race condition where the stater if we are reconnected is actually not really in sync with the hardware, hence it periodically dis- and reconnects
+              /*
+              await fetchWithTimeout(
+                `${apiBase}/reconnect`,
+                { method: "GET" },
+                5000,
+              );
+              */
+            } catch (error) {
+              console.debug(
+                "[Check 2b] ESP reconnect request failed:",
+                error?.message,
+              );
+            } finally {
+              espReconnectInFlightRef.current = false;
+            }
+          }
+        }
+      }
+      dispatch(uc2Slice.setUc2Connected(hardwareConnected));
+      return hardwareConnected; // Return hardware status for compatibility
     },
-    [hostIP, hostPort, dispatch], // Dependencies for useCallback
+    [hostIP, hostPort, dispatch],
   );
 
   // Sync livestream status with backend
@@ -124,6 +173,62 @@ const WebSocketHandler = () => {
       return false;
     }
   }, [dispatch]);
+
+  // Sync laser power/enabled state with backend on every reconnect.
+  // This keeps illumination controls in sync after backend restarts.
+  const syncIlluminationState = useCallback(async () => {
+    if (!hostIP || !hostPort) {
+      return;
+    }
+
+    if (illuminationSyncInFlightRef.current) {
+      return;
+    }
+
+    const parameterRangeState = store.getState().parameterRangeState;
+    const sources = Array.isArray(parameterRangeState?.illuSources)
+      ? parameterRangeState.illuSources
+      : [];
+    const kinds = Array.isArray(parameterRangeState?.illuSourceKinds)
+      ? parameterRangeState.illuSourceKinds
+      : [];
+
+    if (sources.length === 0) {
+      return;
+    }
+
+    illuminationSyncInFlightRef.current = true;
+
+    try {
+      const runtimeStates = await fetchLaserRuntimeState({
+        hostIP,
+        hostPort,
+        sources,
+        kinds,
+      });
+
+      runtimeStates.forEach(({ laserName, power, enabled, ok, error }) => {
+        if (!ok && error) {
+          console.warn(
+            `[WebSocket] Failed to sync laser state for ${laserName}:`,
+            error,
+          );
+        }
+
+        dispatch(
+          laserSlice.setLaserState({
+            laserName,
+            power,
+            enabled,
+          }),
+        );
+      });
+
+      console.log("[WebSocket] Illumination state synced on reconnect.");
+    } finally {
+      illuminationSyncInFlightRef.current = false;
+    }
+  }, [dispatch, hostIP, hostPort]);
 
   // WebSocket connection test
   const testWebSocketConnection = useCallback(
@@ -298,11 +403,17 @@ const WebSocketHandler = () => {
       //update redux state
       dispatch(webSocketSlice.setConnected(true));
 
+      // Refetch available backend controllers on every reconnect so UI reacts
+      // to config/controller changes after backend restarts.
+      dispatch(fetchAvailableControllers());
+
       // Sync livestream status with backend on connect/reconnect
       // This ensures frontend state matches backend state after backend restart
       syncLivestreamStatus().then((isActive) => {
         console.log(`[WebSocket] Livestream status synced: ${isActive}`);
       });
+
+      syncIlluminationState();
     });
 
     // Listen for server capabilities
@@ -357,7 +468,7 @@ const WebSocketHandler = () => {
               return;
             }
           } else if (decoded.image) {
-            // JPEG frame
+            // JPEG frame — base64 string from the backend.
             frameData = decoded.image;
           }
         } else if (Array.isArray(payload) && payload.length === 2) {
@@ -404,19 +515,17 @@ const WebSocketHandler = () => {
           metadata &&
           (metadata.protocol === "jpeg" || metadata.format === "jpeg")
         ) {
-          // JPEG frame - update Redux (base64 image)
+          // JPEG frame - store the base64 string in Redux. Consumers
+          // render it as <img src={`data:image/jpeg;base64,${...}`}>.
           dispatch(liveStreamSlice.setLiveViewImage(frameData));
           dispatch(liveStreamSlice.setImageFormat("jpeg"));
 
-          // Update pixel size if available
           if (metadata.pixel_size) {
             dispatch(liveStreamSlice.setPixelSize(metadata.pixel_size));
           }
-
-          // Track latency if server timestamp is available
           if (metadata.server_timestamp) {
             const latency =
-              (Date.now() / 1000 - metadata.server_timestamp) * 1000; // Convert to ms
+              (Date.now() / 1000 - metadata.server_timestamp) * 1000;
             dispatch(liveStreamSlice.updateLatency(latency));
           }
         } else if (frameData) {
@@ -435,12 +544,10 @@ const WebSocketHandler = () => {
         return;
       }
 
-      // Send acknowledgement to enable flow control
-      // This tells the server we're ready for the next frame
+      // Send acknowledgement to enable flow control (after processing).
       if (ack && typeof ack === "function") {
         ack();
       } else {
-        // Fallback: emit explicit acknowledgement event with unified field name
         socket.emit("frame_ack", { frame_id: metadata?.frame_id });
       }
     });
@@ -604,25 +711,58 @@ const WebSocketHandler = () => {
         dispatch(tileStreamSlice.setTileViewImage(dataJson.image));
       } else if (dataJson.name === "sigObjectiveChanged") {
         console.log("sigObjectiveChanged", dataJson);
-        //update redux state
-        // TODO add check if parameter exists
-        // TODO check if this works
-        dispatch(objectiveSlice.setPixelSize(dataJson.args.p0.pixelsize));
-        dispatch(objectiveSlice.setNA(dataJson.args.p0.NA));
-        dispatch(
-          objectiveSlice.setMagnification(dataJson.args.p0.magnification),
-        );
-        dispatch(
-          objectiveSlice.setObjectiveName(dataJson.args.p0.objectiveName),
-        );
-        dispatch(objectiveSlice.setFovX(dataJson.args.p0.FOV[0]));
-        dispatch(objectiveSlice.setFovY(dataJson.args.p0.FOV[1]));
-
-        /*  data:
-        Args: {"p0":0.2,"p1":0.5,"p2":10,"p3":"10x","p4":100,"p5":100}
-        sigObjectiveChanged = Signal(float, float, float, str, float, float) 
-              # pixelsize, NA, magnification, objectiveName, FOVx, FOVy
-        */
+        const p = dataJson.args.p0;
+        if (p.pixelsize != null)
+          dispatch(objectiveSlice.setPixelSize(p.pixelsize));
+        if (p.NA != null) dispatch(objectiveSlice.setNA(p.NA));
+        if (p.magnification != null)
+          dispatch(objectiveSlice.setMagnification(p.magnification));
+        if (p.objectiveName != null)
+          dispatch(objectiveSlice.setObjectiveName(p.objectiveName));
+        if (p.FOV) {
+          dispatch(objectiveSlice.setFovX(p.FOV[0]));
+          dispatch(objectiveSlice.setFovY(p.FOV[1]));
+        }
+        if (p.currentObjective != null)
+          dispatch(objectiveSlice.setCurrentObjective(p.currentObjective));
+        if (p.x0 != null) dispatch(objectiveSlice.setPosX0(p.x0));
+        if (p.x1 != null) dispatch(objectiveSlice.setPosX1(p.x1));
+        if (p.z0 != null) dispatch(objectiveSlice.setPosZ0(p.z0));
+        if (p.z1 != null) dispatch(objectiveSlice.setPosZ1(p.z1));
+        if (p.availableObjectivesNames)
+          dispatch(
+            objectiveSlice.setAvailableObjectivesNames(
+              p.availableObjectivesNames,
+            ),
+          );
+        if (p.availableObjectiveMagnifications)
+          dispatch(
+            objectiveSlice.setAvailableObjectiveMagnifications(
+              p.availableObjectiveMagnifications,
+            ),
+          );
+        if (p.availableObjectiveNAs)
+          dispatch(
+            objectiveSlice.setAvailableObjectiveNAs(p.availableObjectiveNAs),
+          );
+        if (p.availableObjectivePixelSizes)
+          dispatch(
+            objectiveSlice.setAvailableObjectivePixelSizes(
+              p.availableObjectivePixelSizes,
+            ),
+          );
+        if (p.availableObjectiveMagnifications) {
+          dispatch(
+            objectiveSlice.setmagnification1(
+              p.availableObjectiveMagnifications[0] ?? 0,
+            ),
+          );
+          dispatch(
+            objectiveSlice.setmagnification2(
+              p.availableObjectiveMagnifications[1] ?? 0,
+            ),
+          );
+        }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateMotorPosition") {
         console.log("sigUpdateMotorPosition received:", dataJson);
@@ -654,6 +794,17 @@ const WebSocketHandler = () => {
           }
         } catch (error) {
           console.error("Error in sigUpdateMotorPosition handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigHomingState") {
+        // Per-axis frame-homing progress: {active, cancelled, phase, axes, message}
+        try {
+          const homingState = dataJson.args?.p0;
+          if (homingState) {
+            dispatch(homingSlice.setHomingState(homingState));
+          }
+        } catch (error) {
+          console.error("Error in sigHomingState handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateLaserPower") {
@@ -801,8 +952,10 @@ const WebSocketHandler = () => {
               }),
             );
 
-            // Auto-advance to completion step on terminal states
-            const terminalStates = ["success", "failed", "warning"];
+            // Auto-advance to completion step on terminal states.
+            // "cancelled" is treated as terminal so the UI unblocks even
+            // when the user aborted a stuck flash via cancelUSBFlash.
+            const terminalStates = ["success", "failed", "warning", "cancelled"];
             if (terminalStates.includes(flashStatus.status)) {
               if (
                 flashStatus.status === "success" ||
@@ -814,12 +967,31 @@ const WebSocketHandler = () => {
                     message: flashStatus.message,
                   }),
                 );
+              } else if (flashStatus.status === "cancelled") {
+                dispatch(
+                  usbFlashSlice.setFlashResult({
+                    status: "cancelled",
+                    message: flashStatus.message || "Flashing cancelled",
+                  }),
+                );
               }
               dispatch(usbFlashSlice.setIsFlashing(false));
             }
           }
         } catch (error) {
           console.error("Error in sigUSBFlashStatusUpdate handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigBusStatusUpdate") {
+        // Handle CAN-bus power / emergency-stop (E-stop) status changes
+        console.log("sigBusStatusUpdate received:", dataJson);
+        try {
+          const busStatus = dataJson.args?.p0;
+          if (busStatus) {
+            dispatch(uc2Slice.setBusStatus(busStatus));
+          }
+        } catch (error) {
+          console.error("Error in sigBusStatusUpdate handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigStorageStatusUpdate") {
@@ -834,6 +1006,32 @@ const WebSocketHandler = () => {
           dispatch(storageSlice.setStorageSnapshot(storageSnapshot));
         } catch (error) {
           console.error("Error in sigStorageStatusUpdate handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigDetectorParametersUpdated") {
+        if (isWebSocketDebugEnabled()) {
+          console.log(
+            "[WS-DEBUG][detector] sigDetectorParametersUpdated received:",
+            dataJson,
+          );
+        }
+        try {
+          const parametersUpdate = dataJson.args?.p0 || dataJson.args || {};
+          // Extract parameters from the update
+          const { detectorName, parameters } = parametersUpdate;
+          if (parameters) {
+            dispatch(detectorParametersSlice.normalizeParameters(parameters));
+            if (detectorName) {
+              dispatch(
+                detectorParametersSlice.setCurrentDetectorName(detectorName),
+              );
+            }
+          }
+        } catch (error) {
+          console.error(
+            "Error in sigDetectorParametersUpdated handler:",
+            error,
+          );
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateOMEZarrStore") {
@@ -1028,6 +1226,39 @@ const WebSocketHandler = () => {
         } catch (error) {
           console.error("Error parsing autofocus live value signal:", error);
         }
+      } else if (dataJson.name === "sigUpdateFlowAngle") {
+        // Optical-flow live sample: p0=time (s), p1=angle (deg).
+        // Single-sample stream -- we append to the Redux array so the plot
+        // updates incrementally without redrawing from scratch.
+        try {
+          const t = Number(dataJson.args?.p0);
+          const a = Number(dataJson.args?.p1);
+          if (Number.isFinite(t) && Number.isFinite(a)) {
+            dispatch(opticalFlowSlice.appendSample({ time: t, angle: a }));
+          }
+        } catch (error) {
+          console.error("Error parsing optical-flow angle signal:", error);
+        }
+      } else if (dataJson.name === "sigFlowStateChanged") {
+        // Optical-flow FSM state transitions (idle/running/finished/...)
+        try {
+          const newState = dataJson.args?.p0 || dataJson.args || "idle";
+          if (typeof newState === "string") {
+            dispatch(opticalFlowSlice.setState(newState));
+          }
+        } catch (error) {
+          console.error("Error parsing optical-flow state signal:", error);
+        }
+      } else if (dataJson.name === "sigFlowResult") {
+        // Optical-flow aggregated result {meanAngle, std, n, ...}
+        try {
+          const payload = dataJson.args?.p0 || dataJson.args;
+          if (payload && typeof payload === "object") {
+            dispatch(opticalFlowSlice.setResult(payload));
+          }
+        } catch (error) {
+          console.error("Error parsing optical-flow result signal:", error);
+        }
       } else if (dataJson.name === "sigGameState") {
         // Handle maze game state updates
         try {
@@ -1149,7 +1380,7 @@ const WebSocketHandler = () => {
       socket.disconnect();
       socket.close();
     };
-  }, [dispatch, connectionSettingsState, syncLivestreamStatus]);
+  }, [dispatch, connectionSettingsState, syncLivestreamStatus, syncIlluminationState]);
 
   // Global UC2 connection monitoring (periodic checks with pause functionality)
   useEffect(() => {

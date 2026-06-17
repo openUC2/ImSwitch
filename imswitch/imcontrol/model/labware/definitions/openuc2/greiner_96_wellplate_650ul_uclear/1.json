@@ -1,0 +1,1134 @@
+{
+  "schemaVersion": 2,
+  "version": 1,
+  "namespace": "openuc2",
+  "metadata": {
+    "displayName": "Greiner 96 Well µClear 650 µL Flat",
+    "displayCategory": "wellPlate",
+    "displayVolumeUnits": "µL",
+    "tags": [
+      "SBS",
+      "wellPlate",
+      "cell-painting",
+      "colony-counting",
+      "hematopoietic-stem-cells",
+      "_generated"
+    ]
+  },
+  "brand": {
+    "brand": "Greiner Bio-One",
+    "brandId": [],
+    "links": []
+  },
+  "parameters": {
+    "format": "96Standard",
+    "isTiprack": false,
+    "loadName": "greiner_96_wellplate_650ul_uclear",
+    "isMagneticModuleCompatible": false,
+    "quirks": [],
+    "isDeckSlotCompatible": true
+  },
+  "ordering": [
+    [
+      "A1",
+      "B1",
+      "C1",
+      "D1",
+      "E1",
+      "F1",
+      "G1",
+      "H1"
+    ],
+    [
+      "A2",
+      "B2",
+      "C2",
+      "D2",
+      "E2",
+      "F2",
+      "G2",
+      "H2"
+    ],
+    [
+      "A3",
+      "B3",
+      "C3",
+      "D3",
+      "E3",
+      "F3",
+      "G3",
+      "H3"
+    ],
+    [
+      "A4",
+      "B4",
+      "C4",
+      "D4",
+      "E4",
+      "F4",
+      "G4",
+      "H4"
+    ],
+    [
+      "A5",
+      "B5",
+      "C5",
+      "D5",
+      "E5",
+      "F5",
+      "G5",
+      "H5"
+    ],
+    [
+      "A6",
+      "B6",
+      "C6",
+      "D6",
+      "E6",
+      "F6",
+      "G6",
+      "H6"
+    ],
+    [
+      "A7",
+      "B7",
+      "C7",
+      "D7",
+      "E7",
+      "F7",
+      "G7",
+      "H7"
+    ],
+    [
+      "A8",
+      "B8",
+      "C8",
+      "D8",
+      "E8",
+      "F8",
+      "G8",
+      "H8"
+    ],
+    [
+      "A9",
+      "B9",
+      "C9",
+      "D9",
+      "E9",
+      "F9",
+      "G9",
+      "H9"
+    ],
+    [
+      "A10",
+      "B10",
+      "C10",
+      "D10",
+      "E10",
+      "F10",
+      "G10",
+      "H10"
+    ],
+    [
+      "A11",
+      "B11",
+      "C11",
+      "D11",
+      "E11",
+      "F11",
+      "G11",
+      "H11"
+    ],
+    [
+      "A12",
+      "B12",
+      "C12",
+      "D12",
+      "E12",
+      "F12",
+      "G12",
+      "H12"
+    ]
+  ],
+  "cornerOffsetFromSlot": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "dimensions": {
+    "xDimension": 127.76,
+    "yDimension": 85.48,
+    "zDimension": 14.35
+  },
+  "wells": {
+    "A1": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 14.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B1": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 14.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C1": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 14.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D1": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 14.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E1": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 14.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F1": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 14.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G1": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 14.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H1": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 14.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "A2": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 23.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B2": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 23.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C2": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 23.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D2": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 23.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E2": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 23.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F2": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 23.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G2": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 23.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H2": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 23.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "A3": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 32.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B3": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 32.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C3": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 32.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D3": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 32.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E3": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 32.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F3": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 32.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G3": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 32.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H3": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 32.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "A4": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 41.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B4": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 41.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C4": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 41.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D4": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 41.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E4": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 41.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F4": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 41.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G4": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 41.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H4": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 41.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "A5": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 50.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B5": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 50.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C5": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 50.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D5": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 50.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E5": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 50.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F5": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 50.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G5": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 50.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H5": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 50.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "A6": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 59.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B6": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 59.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C6": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 59.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D6": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 59.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E6": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 59.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F6": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 59.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G6": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 59.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H6": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 59.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "A7": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 68.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B7": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 68.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C7": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 68.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D7": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 68.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E7": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 68.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F7": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 68.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G7": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 68.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H7": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 68.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "A8": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 77.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B8": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 77.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C8": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 77.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D8": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 77.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E8": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 77.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F8": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 77.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G8": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 77.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H8": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 77.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "A9": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 86.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B9": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 86.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C9": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 86.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D9": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 86.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E9": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 86.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F9": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 86.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G9": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 86.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H9": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 86.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "A10": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 95.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B10": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 95.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C10": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 95.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D10": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 95.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E10": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 95.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F10": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 95.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G10": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 95.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H10": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 95.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "A11": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 104.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B11": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 104.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C11": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 104.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D11": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 104.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E11": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 104.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F11": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 104.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G11": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 104.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H11": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 104.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "A12": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 113.38,
+      "y": 74.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "B12": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 113.38,
+      "y": 65.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "C12": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 113.38,
+      "y": 56.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "D12": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 113.38,
+      "y": 47.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "E12": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 113.38,
+      "y": 38.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "F12": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 113.38,
+      "y": 29.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "G12": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 113.38,
+      "y": 20.24,
+      "z": 0.0,
+      "diameter": 6.96
+    },
+    "H12": {
+      "shape": "circular",
+      "depth": 11.0,
+      "totalLiquidVolume": 650.0,
+      "x": 113.38,
+      "y": 11.24,
+      "z": 0.0,
+      "diameter": 6.96
+    }
+  },
+  "groups": [
+    {
+      "wells": [
+        "A1",
+        "B1",
+        "C1",
+        "D1",
+        "E1",
+        "F1",
+        "G1",
+        "H1",
+        "A2",
+        "B2",
+        "C2",
+        "D2",
+        "E2",
+        "F2",
+        "G2",
+        "H2",
+        "A3",
+        "B3",
+        "C3",
+        "D3",
+        "E3",
+        "F3",
+        "G3",
+        "H3",
+        "A4",
+        "B4",
+        "C4",
+        "D4",
+        "E4",
+        "F4",
+        "G4",
+        "H4",
+        "A5",
+        "B5",
+        "C5",
+        "D5",
+        "E5",
+        "F5",
+        "G5",
+        "H5",
+        "A6",
+        "B6",
+        "C6",
+        "D6",
+        "E6",
+        "F6",
+        "G6",
+        "H6",
+        "A7",
+        "B7",
+        "C7",
+        "D7",
+        "E7",
+        "F7",
+        "G7",
+        "H7",
+        "A8",
+        "B8",
+        "C8",
+        "D8",
+        "E8",
+        "F8",
+        "G8",
+        "H8",
+        "A9",
+        "B9",
+        "C9",
+        "D9",
+        "E9",
+        "F9",
+        "G9",
+        "H9",
+        "A10",
+        "B10",
+        "C10",
+        "D10",
+        "E10",
+        "F10",
+        "G10",
+        "H10",
+        "A11",
+        "B11",
+        "C11",
+        "D11",
+        "E11",
+        "F11",
+        "G11",
+        "H11",
+        "A12",
+        "B12",
+        "C12",
+        "D12",
+        "E12",
+        "F12",
+        "G12",
+        "H12"
+      ],
+      "metadata": {
+        "displayCategory": "wellPlate"
+      }
+    }
+  ]
+}

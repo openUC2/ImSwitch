@@ -1,6 +1,5 @@
 import os
 import threading
-from imswitch import IS_HEADLESS
 import datetime
 from imswitch.imcommon.model import APIExport, initLogger, dirtools, ostools
 from imswitch.imcommon.framework import Signal
@@ -42,6 +41,7 @@ class UC2ConfigController(ImConWidgetController):
     sigOTAStatusUpdate = Signal(object)  # Emits OTA status updates
     sigUSBFlashStatusUpdate = Signal(object)  # Emits USB flash status updates
     sigCameraTrigger = Signal(object)  # Emits camera trigger events from hardware
+    sigBusStatusUpdate = Signal(object)  # Emits CAN-bus power / emergency-stop status changes
 
 
     def __init__(self, *args, **kwargs):
@@ -57,6 +57,10 @@ class UC2ConfigController(ImConWidgetController):
 
         # Prevent concurrent flashing attempts
         self._usb_flash_lock = threading.Lock()
+        # Reference to a running esptool subprocess so cancel can reach it.
+        self._usb_flash_proc = None
+        # Cooperative cancel flag honoured by _run_esptool's read loop.
+        self._usb_flash_cancel_event = threading.Event()
 
 
         # WiFi credentials for OTA (can be overridden via API)
@@ -82,6 +86,9 @@ class UC2ConfigController(ImConWidgetController):
         # register camera trigger callback for performance mode
         self.registerCameraTriggerCallback()
 
+        # register emergency-stop callback (CAN-bus power / E-stop button)
+        self.registerEmergencyCallback()
+
         # register the callbacks for emitting serial-related signals
         if hasattr(self._master.UC2ConfigManager, "ESP32"):
             try:
@@ -91,21 +98,6 @@ class UC2ConfigController(ImConWidgetController):
                 self._logger.error(f"Could not register serial callbacks: {e}")
 
 
-        # Connect buttons to the logic handlers
-        if IS_HEADLESS:
-            return
-        # Connect buttons to the logic handlers
-        self._widget.setPositionXBtn.clicked.connect(self.set_positionX)
-        self._widget.setPositionYBtn.clicked.connect(self.set_positionY)
-        self._widget.setPositionZBtn.clicked.connect(self.set_positionZ)
-        self._widget.setPositionABtn.clicked.connect(self.set_positionA)
-
-        self._widget.autoEnableBtn.clicked.connect(self.set_auto_enable)
-        self._widget.unsetAutoEnableBtn.clicked.connect(self.unset_auto_enable)
-        self._widget.reconnectButton.clicked.connect(self.reconnect)
-        self._widget.closeConnectionButton.clicked.connect(self.closeConnection)
-        self._widget.btpairingButton.clicked.connect(self.btpairing)
-        self._widget.stopCommunicationButton.clicked.connect(self.interruptSerialCommunication)
 
     def _get_can_id_firmware_mapping(self):
         """
@@ -117,19 +109,19 @@ class UC2ConfigController(ImConWidgetController):
         :return: Dictionary mapping CAN IDs to firmware filenames
         """
         return {
-            1: "esp32_UC2_3_CAN_HAT_Master_v2.bin",  # Master firmware (USB connected, use esptool)
-            10: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor A
-            11: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor X
-            12: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor Y
-            13: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor Z
-            14: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Additional motor
-            15: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Additional motor
-            20: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # Laser 0
-            21: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # Laser 1
-            22: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # Laser 2
-            30: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # LED 0
-            31: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # LED 1
-            40: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",  # Galvo mirror
+            1: "esp32_UC2_canopen_master_release.bin",  # Master firmware (HAT v2, USB connected, use esptool)
+            10: "esp32_UC2_canopen_slave_motor_release_motA.bin",  # Motor A
+            11: "esp32_UC2_canopen_slave_motor_release_motX.bin",  # Motor X
+            12: "esp32_UC2_canopen_slave_motor_release_motY.bin",  # Motor Y
+            13: "esp32_UC2_canopen_slave_motor_release_motZ.bin",  # Motor Z
+            14: "esp32_UC2_canopen_slave_motor_release.bin",  # Additional motor
+            15: "esp32_UC2_canopen_slave_motor_release.bin",  # Additional motor
+            20: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 0
+            21: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 1
+            22: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 2
+            30: "esp32_UC2_canopen_slave_led_release.bin",  # LED 0
+            31: "esp32_UC2_canopen_slave_led_release.bin",  # LED 1
+            40: "esp32_UC2_canopen_slave_galvo_release.bin",  # Galvo mirror
         }
 
     def processSerialWriteMessage(self, message):
@@ -319,6 +311,130 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Could not register camera trigger callback: {e}")
 
+    def registerEmergencyCallback(self):
+        """
+        Register a callback for emergency-stop (E-stop) events.
+
+        The CANopen master firmware pushes an unsolicited block when the
+        hardware E-stop is pressed/released:
+            {"emergency":{"active":1,"reason":"estop","msg":"..."}}
+        We forward it to the frontend via sigBusStatusUpdate so the UI can
+        warn the user and reflect that the CAN-bus is no longer available.
+        """
+        def emergency_callback(em):
+            try:
+                emergency_active = bool(em.get("active", 0))
+                status = {
+                    "emergencyActive": emergency_active,
+                    # The high-current bus is unavailable while the E-stop is asserted.
+                    "available": not emergency_active,
+                    "reason": em.get("reason"),
+                    "msg": em.get("msg"),
+                    "timestamp": datetime.datetime.now().isoformat(),
+                }
+                self.sigBusStatusUpdate.emit(status)
+            except Exception as e:
+                self.__logger.error(f"Error in emergency_callback: {e}")
+
+        try:
+            registered = self._master.UC2ConfigManager.registerEmergencyCallback(emergency_callback)
+            if registered:
+                self.__logger.debug("Emergency-stop callback registered successfully")
+            else:
+                self.__logger.debug("Emergency-stop callback not registered (state module unavailable)")
+        except Exception as e:
+            self.__logger.error(f"Could not register emergency callback: {e}")
+
+    ''' CAN-bus power & emergency-stop (safety) '''
+
+    @APIExport(runOnUIThread=False)
+    def setBusPower(self, enable: bool = True):
+        """
+        Enable/disable the high-current CAN-bus power that feeds the slaves.
+
+        :param enable: True to power the bus, False to cut power.
+        :return: Status dict with the requested power state.
+        """
+        try:
+            self._master.UC2ConfigManager.setBusPower(enable)
+            return {"status": "success", "power": int(bool(enable))}
+        except Exception as e:
+            self.__logger.error(f"setBusPower failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getBusStatus(self):
+        """
+        Query CAN-bus power and emergency-stop status.
+
+        :return: {
+            "power": 1|0|None,           # high-current bus power state
+            "emergencyActive": bool,     # E-stop currently asserted
+            "available": bool,           # bus usable (powered and not in E-stop)
+            "estop": {...}               # raw E-stop diagnostics (best-effort)
+        }
+        """
+        try:
+            power = self._master.UC2ConfigManager.getBusPower()
+            emergency_active = self._master.UC2ConfigManager.isEmergencyActive()
+            estop = self._master.UC2ConfigManager.getEstop()
+            return {
+                "power": power,
+                "emergencyActive": bool(emergency_active),
+                "available": (power == 1) and not emergency_active,
+                "estop": estop,
+            }
+        except Exception as e:
+            self.__logger.error(f"getBusStatus failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    ''' Fan & board temperature '''
+
+    @APIExport(runOnUIThread=False)
+    def getFanState(self):
+        """
+        Read the current fan state from the firmware.
+
+        :return: {mode, wiper, manual, rpm, stalled, kick, tempC, curve}
+        """
+        try:
+            return self._master.UC2ConfigManager.getFan()
+        except Exception as e:
+            self.__logger.error(f"getFanState failed: {e}")
+            return {}
+
+    @APIExport(runOnUIThread=False)
+    def setFanMode(self, mode: str = "auto", wiper: int = None):
+        """
+        Set the fan operating mode.
+
+        :param mode: 'auto' (curve-driven), 'manual' (fixed wiper) or 'off'.
+        :param wiper: 0-127 PWM wiper, required/used for 'manual' mode.
+        :return: Status dict.
+        """
+        try:
+            w = int(wiper) if wiper is not None else None
+        except (TypeError, ValueError):
+            w = None
+        try:
+            self._master.UC2ConfigManager.setFanMode(mode=mode, wiper=w)
+            return {"status": "success", "mode": mode, "wiper": w}
+        except Exception as e:
+            self.__logger.error(f"setFanMode failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getBoardTemperature(self):
+        """
+        Read board/air temperatures from the firmware.
+
+        :return: {pcb, air, esp, pcb_ok, air_ok}
+        """
+        try:
+            return self._master.UC2ConfigManager.getTemperature()
+        except Exception as e:
+            self.__logger.error(f"getBoardTemperature failed: {e}")
+            return {}
 
     @APIExport(runOnUIThread=False)
     def scan_canbus(self, timeout:int=5) -> dict:
@@ -592,13 +708,11 @@ class UC2ConfigController(ImConWidgetController):
 
         # retrieve the positions from the motor controller
         positions = self.stages.getPosition()
-        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Motor positions: A="+str(positions["A"])+", X="+str(positions["X"])+", \n Y="+str(positions["Y"])+", Z="+str(positions["Z"]))
         # update the GUI
         self._commChannel.sigUpdateMotorPosition.emit()
 
     def interruptSerialCommunication(self):
         self._master.UC2ConfigManager.interruptSerialCommunication()
-        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("We are intrrupting the last command")
 
     def set_auto_enable(self):
         # Add your logic to auto-enable the motors here.
@@ -609,33 +723,17 @@ class UC2ConfigController(ImConWidgetController):
         # Add your logic to unset auto-enable for the motors here.
         self.stages.enalbeMotors(enable=True, enableauto=False)
 
-    def set_positionX(self):
-        if not IS_HEADLESS: x = self._widget.motorXEdit.text()
-        self.set_motor_positions(None, x, None, None)
-
-    def set_positionY(self):
-        if not IS_HEADLESS: y = self._widget.motorYEdit.text()
-        self.set_motor_positions(None, None, y, None)
-
-    def set_positionZ(self):
-        if not IS_HEADLESS: z = self._widget.motorZEdit.text()
-        self.set_motor_positions(None, None, None, z)
-
-    def set_positionA(self):
-        if not IS_HEADLESS: a = self._widget.motorAEdit.text()
-        self.set_motor_positions(a, None, None, None)
-
-    def reconnectThread(self, baudrate=None):
-        self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
-        if not IS_HEADLESS:
-            self._widget.reconnectDeviceLabel.setText("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
-        else:
-            self.__logger.debug("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
-            self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
+    def reconnectThread(self, baudrate=None, port=None):
+        try:
+            self._master.UC2ConfigManager.initSerial(port=port, baudrate=baudrate)
+        except TypeError:
+            # Older managers may not accept the port kwarg
+            self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
+        self.__logger.debug("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
+        self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
 
     def closeConnection(self):
         self._master.UC2ConfigManager.closeSerial()
-        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Connection to ESP32 closed.")
 
     @APIExport(runOnUIThread=True)
     def moveToSampleMountingPosition(self):
@@ -667,23 +765,88 @@ class UC2ConfigController(ImConWidgetController):
         return {"message": f"Data path set to {path}"}
 
     @APIExport(runOnUIThread=True)
-    def reconnect(self):
-        self._logger.debug('Reconnecting to ESP32 device.')
-        baudrate = None
-        if not IS_HEADLESS:
-            self._widget.reconnectDeviceLabel.setText("Reconnecting to ESP32 device.")
-            if self._widget.getBaudRateGui() in (115200, 500000):
-                baudrate = self._widget.getBaudRateGui()
-        mThread = threading.Thread(target=self.reconnectThread, args=(baudrate,))
+    def reconnect(self, port: str = None, baudrate: int = None):
+        """Reconnect to the ESP32 over serial.
+
+        Optionally override the port and/or baudrate. When both are omitted
+        the values from the setup JSON / current runtime are used.
+        """
+        self._logger.debug(
+            f'Reconnecting to ESP32 device (port={port}, baudrate={baudrate}).'
+        )
+        try:
+            baudrate_int = int(baudrate) if baudrate is not None else None
+        except (TypeError, ValueError):
+            baudrate_int = None
+        port_str = port if port else None
+        mThread = threading.Thread(
+            target=self.reconnectThread,
+            kwargs={"baudrate": baudrate_int, "port": port_str},
+        )
         mThread.start()
+        return {
+            "status": "started",
+            "port": port_str,
+            "baudrate": baudrate_int,
+        }
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setSerialConfig(self, port: str = None, baudrate: int = None, persist: bool = True):
+        """Apply (and optionally persist) the serial port / baudrate used to
+        talk to the ESP32.
+
+        - Calls UC2ConfigManager.setSerialConfig to reconnect.
+        - When ``persist`` is True, writes the values into the setup JSON via
+          configfiletools.saveSetupInfo so the change survives a restart.
+        """
+        try:
+            baudrate_int = int(baudrate) if baudrate is not None else None
+        except (TypeError, ValueError):
+            return {"status": "error", "message": f"Invalid baudrate: {baudrate!r}"}
+        port_str = port if port else None
+
+        try:
+            result = self._master.UC2ConfigManager.setSerialConfig(
+                port=port_str, baudrate=baudrate_int, persist=bool(persist)
+            )
+        except AttributeError:
+            return {
+                "status": "error",
+                "message": "UC2ConfigManager does not support setSerialConfig (old build).",
+            }
+        except Exception as e:
+            self.__logger.error(f"setSerialConfig failed: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
+
+        self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
+        return {
+            "status": "success" if result.get("connected") else "warning",
+            "connected": bool(result.get("connected")),
+            "port": result.get("port"),
+            "baudrate": result.get("baudrate"),
+            "persisted": bool(persist),
+        }
 
     @APIExport(runOnUIThread=True)
     def writeSerial(self, payload):
         return self._master.UC2ConfigManager.ESP32.serial.writeSerial(payload)
 
     @APIExport(runOnUIThread=True)
-    def uc2_board_is_connected(self):
-        return self._master.UC2ConfigManager.isConnected()
+    def uc2_board_is_connected(self, strict: bool = False):
+        """Check whether the ESP32 board is reachable.
+
+        - ``strict=False`` (default): cheap flag-only check used by the
+          polling loop in the frontend.
+        - ``strict=True``: actively pings the firmware (writes /state_get)
+          and reports True only if the device responds within ~0.5s.
+        """
+        if not strict:
+            return self._master.UC2ConfigManager.isConnected()
+        try:
+            return bool(self._master.UC2ConfigManager.ping(timeout=0.5))
+        except Exception as e:
+            self.__logger.debug(f"strict uc2_board_is_connected ping failed: {e}")
+            return False
 
     @APIExport(runOnUIThread=True)
     def btpairing(self):
@@ -691,7 +854,6 @@ class UC2ConfigController(ImConWidgetController):
         mThread = threading.Thread(target=self._master.UC2ConfigManager.pairBT)
         mThread.start()
         mThread.join()
-        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Bring the PS controller into pairing mode")
 
     @APIExport(runOnUIThread=True)
     def restartCANDevice(self, device_id=0):
@@ -747,11 +909,18 @@ class UC2ConfigController(ImConWidgetController):
         - id_20_esp32_seeed_xiao_esp32s3_can_slave_laser_debug.bin
         - id_21_esp32_seeed_xiao_esp32s3_can_slave_led_debug.bin
         
+        # update: the new naming convention for canopen is
+        - UC2_canopen_slave_motor_release.bin
+        - UC2_canopen_slave_laser_release.bin
+        - UC2_canopen_slave_led_release.bin
+        - UC2_canopen_master_release.bin
+        - UC2_canopen_slave_galvo_release.bin
+        
         :param server_url: URL of the firmware server (default: http://host.docker.internal/firmware)
         :return: Status message with list of available firmware files
         """
-        # Remove trailing slash if present
-        server_url = server_url.rstrip('/')
+        
+        
 
         try:
             # Test server connectivity
@@ -802,77 +971,50 @@ class UC2ConfigController(ImConWidgetController):
         }
 
     @APIExport(runOnUIThread=False)
-    def listAvailableFirmware(self):
+    def listAvailableFirmware(self, can_ids: list = None):
         """
-        List all available firmware files from the configured server.
-        
-        Fetches the directory listing from <server_url>/latest/ and parses
-        available firmware files.
-        
-        :return: Dictionary with firmware files organized by device type
+        List firmware files from the configured server, mapped to CAN IDs.
+
+        Delegates to listAllFirmwareFiles() for the actual server fetch and then
+        maps the flat file list to the CAN-ID-keyed format expected by the CAN OTA
+        wizard.  Optionally filter to a subset of CAN IDs via *can_ids*.
+
+        :param can_ids: Optional list of integer CAN IDs to include. When None,
+                        all known CAN IDs are returned.
+        :return: {status, firmware_server, firmware_count,
+                  firmware: {can_id: {filename, url, can_id, size, mod_time}}}
         """
-        if not self._firmware_server_url:
-            return {
-                "status": "error",
-                "message": "Firmware server not set. Use setOTAFirmwareServer first."
-            }
+        # Reuse the working flat-list fetcher to avoid code duplication
+        flat = self.listAllFirmwareFiles()
+        if flat.get("status") != "success":
+            return flat  # Propagate error as-is
 
-        try:
-            # Fetch firmware list from server
-            list_url = f"{self._firmware_server_url}/"
-            self.__logger.debug(f"Fetching firmware list from {list_url}")
+        files_by_name = {f["filename"]: f for f in flat.get("files", [])}
 
-            response = requests.get(list_url, timeout=10, headers={"Accept": "application/json"})
-            response.raise_for_status()
+        # Build CAN-ID → expected firmware-filename mapping
+        can_id_to_firmware = self._get_can_id_firmware_mapping()
 
+        firmware_by_id = {}
+        for can_id, expected_filename in can_id_to_firmware.items():
+            # Optionally restrict to the requested CAN IDs
+            if can_ids is not None and can_id not in can_ids:
+                continue
+            if expected_filename in files_by_name:
+                f = files_by_name[expected_filename]
+                firmware_by_id[can_id] = {
+                    "filename": expected_filename,
+                    "url": f["url"],
+                    "can_id": can_id,
+                    "size": f.get("size", 0),
+                    "mod_time": f.get("mod_time", ""),
+                }
 
-            # Parse JSON response (same format as setOTAFirmwareServer)
-            firmware_data = response.json()
-
-            if not isinstance(firmware_data, list):
-                raise ValueError("Invalid response format from firmware server")
-
-            # Extract firmware file names from JSON response
-            firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
-            
-            self.__logger.debug(f"Available firmware files: {firmware_files}")
-
-            # Use centralized firmware mapping
-            can_id_to_firmware = self._get_can_id_firmware_mapping()
-            self.__logger.debug(f"CAN ID to firmware mapping: {can_id_to_firmware}")
-            # Organize by device ID using lookup table
-            firmware_by_id = {}
-            for can_id, expected_firmware in can_id_to_firmware.items():
-                # Check if expected firmware exists in available files
-                # print(expected_firmware)
-                if expected_firmware in firmware_files:
-                    firmware_url = f"{self._firmware_server_url}/{expected_firmware}"
-                    # print(firmware_url)
-                    # Find matching item in firmware_data to get size and mod_time
-                    firmware_info = next((item for item in firmware_data if item['name'] == expected_firmware), None)
-
-                    firmware_by_id[can_id] = {
-                        "filename": expected_firmware,
-                        "url": firmware_url,
-                        "can_id": can_id,
-                        "size": firmware_info.get('size', 0) if firmware_info else 0,
-                        "mod_time": firmware_info.get('mod_time', '') if firmware_info else ''
-                    }
-
-            return {
-                "status": "success",
-                "firmware_server": self._firmware_server_url,
-                "firmware_count": len(firmware_by_id),
-                "firmware": firmware_by_id
-            }
-
-        except requests.exceptions.RequestException as e:
-            self.__logger.error(f"Error fetching firmware list: {e}")
-            return {
-                "status": "error",
-                "message": f"Failed to fetch firmware list from server: {str(e)}",
-                "server_url": self._firmware_server_url
-            }
+        return {
+            "status": "success",
+            "firmware_server": self._firmware_server_url,
+            "firmware_count": len(firmware_by_id),
+            "firmware": firmware_by_id,
+        }
 
     @APIExport(runOnUIThread=False)
     def listAllFirmwareFiles(self):
@@ -1200,14 +1342,50 @@ class UC2ConfigController(ImConWidgetController):
                     "method": "can_streaming"
                 })
             
-            # Start streaming upload (blocking)
-            success = self._master.UC2ConfigManager.ESP32.canota.start_can_streaming_ota_blocking(
-                can_id=can_id,
-                firmware_path=str(firmware_path),
-                progress_callback=progress_callback,
-                status_callback=status_callback, 
-                baud=baud
-            )
+            # Start streaming upload (blocking) — retry up to 3 times on failure.
+            # The master occasionally returns size_write_failed on the first attempt
+            # after rebooting from a previous OTA, but succeeds on the next try.
+            MAX_RETRIES = 3
+            success = False
+            last_error = "CAN streaming upload failed"
+            for attempt in range(1, MAX_RETRIES + 1):
+                canota = self._master.UC2ConfigManager.ESP32.canota
+                # Make sure a previous cancel flag is cleared before this attempt
+                canota._cancel_event.clear()
+                success = canota.start_can_streaming_ota_blocking(
+                    can_id=can_id,
+                    firmware_path=str(firmware_path),
+                    progress_callback=progress_callback,
+                    status_callback=status_callback,
+                    baud=baud
+                )
+                if success:
+                    break
+                # Check if user cancelled — do not retry in that case
+                if canota._cancel_event.is_set():
+                    last_error = "Upload cancelled by user"
+                    break
+                if attempt < MAX_RETRIES:
+                    retry_msg = (
+                        f"Attempt {attempt}/{MAX_RETRIES} failed — "
+                        f"waiting 5 s before retry..."
+                    )
+                    self.__logger.warning(f"CAN OTA: {retry_msg}")
+                    status_callback(retry_msg, False)
+                    import time as _time
+                    _time.sleep(5)
+                    # Re-emit uploading state so the UI shows the retry
+                    self._ota_status[can_id]["status"] = "uploading"
+                    self._ota_status[can_id]["message"] = f"Retrying... (attempt {attempt + 1}/{MAX_RETRIES})"
+                    self.sigOTAStatusUpdate.emit({
+                        "canId": can_id,
+                        "status": "uploading",
+                        "progress": 5,
+                        "message": f"Retrying... (attempt {attempt + 1}/{MAX_RETRIES})",
+                        "method": "can_streaming"
+                    })
+                else:
+                    last_error = f"CAN streaming upload failed after {MAX_RETRIES} attempts"
             
             if success:
                 self._ota_status[can_id]["status"] = "success"
@@ -1226,7 +1404,7 @@ class UC2ConfigController(ImConWidgetController):
                     "message": "CAN streaming OTA completed successfully"
                 }
             else:
-                raise Exception("CAN streaming upload failed")
+                raise Exception(last_error)
                 
         except Exception as e:
             self.__logger.error(f"CAN streaming OTA failed for device {can_id}: {e}")
@@ -1249,6 +1427,25 @@ class UC2ConfigController(ImConWidgetController):
                 "message": f"CAN streaming OTA failed: {str(e)}"
             }
     
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def cancelCANStreamingOTA(self):
+        """
+        Request cancellation of any running CAN streaming OTA upload.
+
+        Sets the cancel flag on the canota object so the upload worker aborts
+        at the next chunk boundary and restores the serial connection.
+
+        :return: Status message
+        """
+        try:
+            canota = self._master.UC2ConfigManager.ESP32.canota
+            canota.cancel_streaming_ota()
+            self.__logger.info("CAN streaming OTA cancellation requested")
+            return {"status": "success", "message": "Cancellation requested"}
+        except Exception as e:
+            self.__logger.warning(f"Could not signal canota cancel: {e}")
+            return {"status": "error", "message": str(e)}
+
     @APIExport(runOnUIThread=False, requestType="POST")
     def startMultipleCANStreamingOTA(self, can_ids: list[int], delay_between: int = 5):
         """
@@ -1490,7 +1687,13 @@ class UC2ConfigController(ImConWidgetController):
         firmware_filename = firmware_filename.lstrip("./")
         local_path = self._firmware_cache_dir / firmware_filename
         if local_path.exists():
-            return local_path
+            # remove firmware before downloading to ensure we get the latest version (in case firmware server updates the file but keeps the same name)
+            try:                
+                # delete existing file before download to ensure we get the latest version (in case firmware server updates the file but keeps the same name)
+                os.remove(local_path)
+            except Exception as e:
+                self.__logger.warning(f"Failed to delete existing firmware file {local_path}: {e}")
+                # If we can't delete the old file, we can still try to download and overwrite it, but log a warning
 
         url = f"{server_url}/{firmware_filename}"
         try:
@@ -1562,12 +1765,19 @@ class UC2ConfigController(ImConWidgetController):
         Run esptool via subprocess, streaming stdout/stderr lines through
         sigUSBFlashStatusUpdate so the frontend can display real-time progress
         (e.g. "Writing at 0x000f3000... (62%)").
+
+        Honours self._usb_flash_cancel_event – if it gets set while esptool
+        is running (e.g. via cancelUSBFlash), the subprocess is terminated and
+        the function returns (False, "cancelled by user").
+
         Returns (success, collected_output_string).
         """
         collected_lines = []
+        cancelled = False
 
         def _stream_subprocess(cmd_args):
             """Run esptool as subprocess and stream output line by line."""
+            nonlocal cancelled
             cmd = [sys.executable, "-m", "esptool"] + cmd_args
             proc = subprocess.Popen(
                 cmd,
@@ -1576,37 +1786,65 @@ class UC2ConfigController(ImConWidgetController):
                 text=True,
                 bufsize=1,
             )
-            for line in proc.stdout:
-                line = line.rstrip("\n\r")
-                if not line:
-                    continue
-                collected_lines.append(line)
-                self.__logger.debug(f"esptool: {line}")
+            # Publish so cancelUSBFlash can reach it.
+            self._usb_flash_proc = proc
 
-                # Parse "Writing at 0x000XXXXX... (NN%)" for progress
-                progress_match = None
-                if "Writing at" in line and "%" in line:
+            try:
+                for line in proc.stdout:
+                    if self._usb_flash_cancel_event.is_set():
+                        cancelled = True
+                        self.__logger.warning("Flash cancel requested — terminating esptool")
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+                        break
+                    line = line.rstrip("\n\r")
+                    if not line:
+                        continue
+                    collected_lines.append(line)
+                    self.__logger.debug(f"esptool: {line}")
+
+                    # Parse "Writing at 0x000XXXXX... (NN%)" for progress
+                    progress_match = None
+                    if "Writing at" in line and "%" in line:
+                        try:
+                            pct_str = line.split("(")[1].split("%")[0].strip()
+                            pct = int(pct_str)
+                            # Map esptool 0-100% into our 30-85% range
+                            mapped = 30 + int(pct * 0.55)
+                            progress_match = mapped
+                        except (IndexError, ValueError):
+                            pass
+
+                    self._emit_usb_flash_status(
+                        "flashing",
+                        progress_match if progress_match is not None else -1,
+                        line,
+                    )
+
+                if cancelled:
+                    # Give it a moment to react to terminate, then kill.
                     try:
-                        pct_str = line.split("(")[1].split("%")[0].strip()
-                        pct = int(pct_str)
-                        # Map esptool 0-100% into our 30-85% range
-                        mapped = 30 + int(pct * 0.55)
-                        progress_match = mapped
-                    except (IndexError, ValueError):
-                        pass
-
-                self._emit_usb_flash_status(
-                    "flashing",
-                    progress_match if progress_match is not None else -1,
-                    line,
-                )
-            proc.stdout.close()
-            proc.wait()
-            return proc.returncode
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        proc.wait()
+                else:
+                    proc.stdout.close()
+                    proc.wait()
+                return proc.returncode
+            finally:
+                self._usb_flash_proc = None
 
         # Prefer subprocess so we can stream output
         try:
             rc = _stream_subprocess(args)
+            if cancelled:
+                return False, "cancelled by user"
             ok = rc == 0
             return ok, "\n".join(collected_lines)
         except FileNotFoundError:
@@ -1634,10 +1872,10 @@ class UC2ConfigController(ImConWidgetController):
 
     # Chip-specific esptool flash parameters
     _CHIP_FLASH_PARAMS = {
-        "esp32":   {"offset": "0x10000", "flash_mode": "dio", "flash_freq": "80m", "flash_size": "4MB"},
-        "esp32s3": {"offset": "0x0",     "flash_mode": "dio", "flash_freq": "40m", "flash_size": "detect"},
-        "esp32s2": {"offset": "0x10000", "flash_mode": "dio", "flash_freq": "80m", "flash_size": "detect"},
-        "esp32c3": {"offset": "0x0",     "flash_mode": "dio", "flash_freq": "80m", "flash_size": "detect"},
+        "esp32":   {"offset": "0x10000", "flash-mode": "dio",  "flash-freq": "80m", "flash-size": "4MB"},
+        "esp32s3": {"offset": "0x0",     "flash-mode": "qio",  "flash-freq": "80m", "flash-size": "4MB"},  # ← fixed
+        "esp32s2": {"offset": "0x10000", "flash-mode": "dio",  "flash-freq": "80m", "flash-size": "detect"},
+        "esp32c3": {"offset": "0x0",     "flash-mode": "dio",  "flash-freq": "80m", "flash-size": "detect"},
     }
 
     # Known CAN bus addresses
@@ -1689,7 +1927,28 @@ class UC2ConfigController(ImConWidgetController):
           erase_flash: if True, erase the entire flash before writing firmware.
           skip_disconnect: if True, skip disconnecting ImSwitch serial before flashing (useful for XIAO).
         """
-        with self._usb_flash_lock:
+        # If another flash is already running, cancel it before starting a
+        # new one. Otherwise we'd just block forever holding the lock.
+        if not self._usb_flash_lock.acquire(blocking=False):
+            self.__logger.warning(
+                "flashMasterFirmwareUSB called while a previous flash is still active "
+                "— cancelling the previous run and continuing."
+            )
+            self._cancel_running_flash(reason="superseded by new flash request")
+            # Wait up to 5s for the previous run to release the lock.
+            if not self._usb_flash_lock.acquire(timeout=5.0):
+                self._emit_usb_flash_status(
+                    "failed", 0,
+                    "A previous flash is still running and did not release in time."
+                )
+                return {
+                    "status": "error",
+                    "message": "Previous flash is still running — try again in a few seconds.",
+                }
+
+        try:
+            # Fresh cancel event for this run.
+            self._usb_flash_cancel_event.clear()
             try:
                 return self._do_flash(
                     port=port, match=match, baud=baud,
@@ -1702,10 +1961,165 @@ class UC2ConfigController(ImConWidgetController):
                 self.__logger.error(f"Unexpected flash error: {exc}", exc_info=True)
                 self._emit_usb_flash_status("failed", 0, f"Unexpected error: {exc}")
                 return {"status": "error", "message": str(exc)}
+        finally:
+            self._usb_flash_lock.release()
+
+    def _cancel_running_flash(self, reason: str = "cancelled by user"):
+        """Signal cancel + terminate the esptool subprocess if any.
+
+        Used both by the public cancelUSBFlash API and by re-entrant
+        flashMasterFirmwareUSB calls that want to supersede a stuck run.
+        Returns True if a process was running and got terminated.
+        """
+        self._usb_flash_cancel_event.set()
+        proc = self._usb_flash_proc
+        killed = False
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    killed = True
+                    self.__logger.info(f"esptool subprocess terminated ({reason})")
+            except Exception as e:
+                self.__logger.warning(f"Failed to terminate esptool: {e}")
+        # Surface a terminal status so the UI unblocks even if the read loop
+        # was already past its final line.
+        self._emit_usb_flash_status("cancelled", -1, reason)
+        return killed
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def cancelUSBFlash(self):
+        """Cancel a USB-flash run currently in progress.
+
+        Safe to call when nothing is running — returns ``{"status": "idle"}``.
+        """
+        if self._usb_flash_proc is None and not self._usb_flash_lock.locked():
+            return {"status": "idle", "message": "No flash in progress."}
+        killed = self._cancel_running_flash(reason="cancelled by user")
+        return {
+            "status": "cancelled",
+            "killed": killed,
+            "message": (
+                "Flash cancel requested — subprocess terminated." if killed
+                else "Flash cancel requested."
+            ),
+        }
+
+    def _validate_firmware_binary(self, fw_path: Path, is_merged: bool, chip: str) -> dict:
+        """
+        Pre-flight sanity check on a firmware binary before flashing.
+
+        For merged binaries the ESP32 bootloader magic byte (0xE9) MUST be at
+        offset 0x0.  A common mistake is building with the wrong BOOT_ADDR
+        (e.g. 0x1000 instead of 0x0 for ESP32-S3), which produces a file that
+        starts with 4 KB of 0xFF padding – it flashes without error but the
+        chip always boot-loops with "invalid header: 0xffffffff".
+
+        Returns a dict with keys:
+            valid        – bool, False means do NOT flash
+            magic_offset – int, actual offset where 0xE9 was found
+            flash_mode   – str, decoded flash mode from the bootloader header
+            flash_freq   – str, decoded flash frequency from the bootloader header
+            warnings     – list[str], non-fatal issues to surface to the user
+            errors       – list[str], fatal issues that block flashing
+        """
+        flash_mode_map = {0: "QIO", 1: "QOUT", 2: "DIO", 3: "DOUT"}
+        flash_freq_map = {0x0: "40m", 0x1: "26m", 0x2: "20m", 0xF: "80m"}
+        flash_size_map = {0x0: "1MB", 0x1: "2MB", 0x2: "4MB", 0x3: "8MB", 0x4: "16MB"}
+
+        result = {
+            "valid": True,
+            "magic_offset": None,
+            "flash_mode": None,
+            "flash_freq": None,
+            "flash_size": None,
+            "warnings": [],
+            "errors": [],
+        }
+
+        try:
+            with open(fw_path, "rb") as f:
+                # Read enough to cover the 0x1000 offset (common wrong value)
+                header_region = f.read(0x11000)
+        except Exception as e:
+            result["errors"].append(f"Cannot read firmware file: {e}")
+            result["valid"] = False
+            return result
+
+        if len(header_region) < 8:
+            result["errors"].append(f"Firmware file too small ({len(header_region)} bytes)")
+            result["valid"] = False
+            return result
+
+        # Find first occurrence of ESP32 bootloader magic 0xE9
+        magic_offset = None
+        for i in range(min(len(header_region), 0x11000)):
+            if header_region[i] == 0xE9:
+                magic_offset = i
+                break
+
+        result["magic_offset"] = magic_offset
+
+        if magic_offset is None:
+            result["errors"].append("No ESP32 bootloader magic byte (0xE9) found in first 64 KB – not a valid firmware")
+            result["valid"] = False
+            return result
+
+        # Decode flash params from the bootloader header
+        hdr = header_region[magic_offset:magic_offset + 4]
+        fm   = flash_mode_map.get(hdr[2], f"unknown(0x{hdr[2]:02x})")
+        freq = flash_freq_map.get(hdr[3] & 0x0F, f"unknown(0x{hdr[3] & 0x0F:02x})")
+        size = flash_size_map.get((hdr[3] & 0xF0) >> 4, f"unknown")
+        result["flash_mode"] = fm
+        result["flash_freq"] = freq
+        result["flash_size"] = size
+
+        if is_merged:
+            # The bootloader magic must sit at the chip's boot address. For
+            # ESP32-S3 / S2 / C3 that is 0x0; for the classic ESP32 the
+            # bootloader lives at 0x1000, so a merged image legitimately starts
+            # with 0x1000 bytes of 0xFF padding (magic at 0x1000). Both layouts
+            # are flashed at 0x0 — esptool/the ROM handle the leading padding.
+            #
+            # NOTE: flash mode/freq (e.g. DIO/40m) are intentionally NOT flagged
+            # here. They are whatever the firmware's sdkconfig compiled and match
+            # the bundled bootloader, which is exactly what PlatformIO flashes.
+            expected_offsets = {
+                "esp32":   (0x0, 0x1000),
+                "esp32s2": (0x0,),
+                "esp32s3": (0x0,),
+                "esp32c3": (0x0,),
+            }.get(chip, (0x0, 0x1000))
+
+            if magic_offset not in expected_offsets:
+                pretty = " or ".join(f"0x{o:x}" for o in expected_offsets)
+                result["errors"].append(
+                    f"Merged binary has bootloader at 0x{magic_offset:x} instead of {pretty} "
+                    f"(expected for {chip}). The binary was built with a wrong boot address. "
+                    f"Flashing this at 0x0 will produce 'invalid header: 0xffffffff'. "
+                    f"→ Rebuild with the correct BOOT_ADDR for {chip}."
+                )
+                result["valid"] = False
+
+        self.__logger.info(
+            f"Firmware validation: magic@0x{magic_offset:x}, "
+            f"mode={fm}, freq={freq}, size={size}, valid={result['valid']}"
+        )
+        for w in result["warnings"]:
+            self.__logger.warning(f"Firmware warning: {w}")
+        for e in result["errors"]:
+            self.__logger.error(f"Firmware error: {e}")
+
+        return result
 
     def _do_flash(self, *, port, match, baud, firmware_filename,
                   reconnect_after, chip, erase_flash, skip_disconnect):
         """Internal flash implementation – wrapped for clean error recovery."""
+
+        # 0) Pre-flash safety hint: 12V power may interfere with XIAO USB flashing
+        self._emit_usb_flash_status("flashing", 2,
+            "⚡ Hint: If flashing fails on XIAO boards, turn off 12V power "
+            "(press the emergency stop button) before flashing.")
 
         # 1) Optionally disconnect ImSwitch serial
         if not skip_disconnect:
@@ -1759,32 +2173,77 @@ class UC2ConfigController(ImConWidgetController):
         resolved_chip = chip
         if chip == "auto" or not chip:
             detected = self._detect_chip_from_port(flash_port)
-            resolved_chip = detected or "esp32"  # fallback to esp32
+            resolved_chip = detected or "esp32s3"  # fallback to esp32s3
             self.__logger.info(f"Chip auto-detection: {detected or 'none'} → using {resolved_chip}")
         flash_params = self._CHIP_FLASH_PARAMS.get(resolved_chip, self._CHIP_FLASH_PARAMS["esp32"])
         self._emit_usb_flash_status("flashing", 27, f"Chip: {resolved_chip}, offset: {flash_params['offset']}")
 
-        # 4c) For chips that flash at 0x0 (esp32s3, esp32c3, etc.) the binary must
-        #     include the bootloader ("merged" build).  espota binaries do NOT include
-        #     the bootloader and will cause boot-loops when flashed via esptool at 0x0.
-        #     Convention: merged binaries have a "_merged" postfix before .bin, if not, we flash at the correct offset of 0x10000 (if supported by the chip) or warn the user.
-        if flash_params["offset"] == "0x0" and fw_path:
-            fw_name = fw_path.name  # e.g. "firmware.bin"
-            if "_merged" not in fw_name:
-                # Try downloading the merged variant from the server
-                fw_path = self._download_firmware_by_name(fw_name)
-                flash_params["offset"] = "0x10000"  # flash at 0x10000 for non-merged binaries (if chip supports it)
-                if fw_path:
-                    self.__logger.info(f"Using standard firmware for {resolved_chip}: {fw_path} at offset {flash_params['offset']}")
-                    self._emit_usb_flash_status("downloading", 22, f"Using merged firmware: {fw_path.name}")
-                    erase_flash = False # we flash non-merged binaries at the correct offset, so no need to erase the whole flash
-                else:
-                    self.__logger.warning(
-                        f"No merged firmware '{fw_path}' found on server. "
-                        f"Flashing '{fw_name}' at offset {flash_params['offset']} – "
-                        f"this may cause boot-loops if the binary is an OTA/espota build."
-                    )
-                    self._emit_usb_flash_status("flashing", 22, f"Warning: no merged firmware found, using {fw_name}")
+        # 4c) Determine correct flash offset based on whether the binary
+        #     is a "merged" build (bootloader + partitions + app) or a
+        #     standalone app-only build.
+        #
+        #     Merged binaries include the bootloader and MUST be flashed at
+        #     offset 0x0.  Non-merged (app-only) binaries MUST be flashed at
+        #     the app partition offset (0x10000 for both ESP32 and ESP32-S3).
+        #
+        #     Rules:
+        #     • merged binary  → offset 0x0, erase is safe
+        #     • non-merged     → offset 0x10000, erase is BLOCKED (would
+        #       wipe the bootloader / partition table already on the device)
+        fw_name = fw_path.name if fw_path else ""
+        is_merged = "_merged" in fw_name
+
+        if is_merged:
+            flash_params["offset"] = "0x0"
+            self.__logger.info(f"Merged firmware detected: {fw_name} → flashing at 0x0")
+        else:
+            # App-only binary → always flash at the app partition offset
+            flash_params["offset"] = "0x10000"
+            if erase_flash:
+                erase_flash = False
+                self.__logger.warning(
+                    "Erase flash disabled: non-merged firmware cannot be flashed "
+                    "after erasing (bootloader/partitions would be lost)."
+                )
+                self._emit_usb_flash_status("flashing", 22,
+                    "⚠️ Erase disabled – non-merged firmware needs existing bootloader")
+            self.__logger.info(
+                f"Non-merged firmware: {fw_name} → flashing at 0x10000"
+            )
+
+        # ── Pre-flight binary validation ──────────────────────────────────────
+        # Check magic byte position and flash params baked into the binary BEFORE
+        # spending time erasing flash or writing a binary that will never boot.
+        validation = self._validate_firmware_binary(fw_path, is_merged, resolved_chip)
+        for w in validation["warnings"]:
+            self._emit_usb_flash_status("flashing", 28, f"⚠️ {w}")
+        if not validation["valid"]:
+            error_detail = " | ".join(validation["errors"])
+            self._emit_usb_flash_status(
+                "failed", 28,
+                f"❌ Binary validation failed – will not flash: {error_detail}"
+            )
+            return {
+                "status": "error",
+                "message": "Binary validation failed – flashing aborted to prevent boot-loop",
+                "details": error_detail,
+                "firmware": str(fw_path),
+                "magic_offset": f"0x{validation['magic_offset']:x}" if validation["magic_offset"] is not None else None,
+                "flash_mode_in_binary": validation["flash_mode"],
+                "flash_freq_in_binary": validation["flash_freq"],
+                "hint": (
+                    "Rebuild the firmware using the corrected CI YAML "
+                    "(BOOT_ADDR=0x0000, flash_mode=qio, flash_freq=80m for ESP32-S3). "
+                    "Then clear the firmware cache and retry."
+                ),
+            }
+        self._emit_usb_flash_status(
+            "flashing", 29,
+            f"✅ Binary OK: magic@0x{validation['magic_offset']:x}, "
+            f"mode={validation['flash_mode']}, freq={validation['flash_freq']}"
+        )
+        # ─────────────────────────────────────────────────────────────────────
+
         self.__logger.info(
             f"Flashing firmware via {flash_port} (baud={baud}, chip={resolved_chip}, "
             f"file={fw_path.name}, erase={erase_flash})"
@@ -1801,6 +2260,13 @@ class UC2ConfigController(ImConWidgetController):
             ]
             ok, msg = self._run_esptool(erase_args)
             if not ok:
+                if self._usb_flash_cancel_event.is_set():
+                    # cancelled status already emitted by _cancel_running_flash
+                    return {
+                        "status": "cancelled",
+                        "message": "Erase cancelled by user",
+                        "port": flash_port,
+                    }
                 self._emit_usb_flash_status("failed", 29, "Flash erase failed", msg)
                 return {
                     "status": "error",
@@ -1812,23 +2278,53 @@ class UC2ConfigController(ImConWidgetController):
 
         # 5) Write flash with chip-appropriate parameters
         self._emit_usb_flash_status("flashing", 30, "Writing firmware to device...")
-        write_args = [
-            "--port", flash_port,
-            "--baud", str(baud),
-            "--chip", resolved_chip,
-            "write_flash",
-            "--flash_mode", flash_params["flash_mode"],
-            "--flash_freq", flash_params["flash_freq"],
-            "--flash_size", flash_params["flash_size"],
-            flash_params["offset"],
-            str(fw_path),
-        ]
+        if is_merged:
+            '''
+            The Python code should NOT pass --flash-mode/--flash-freq for merged binaries. 
+            A merged binary has those settings baked into the bootloader already. 
+            Passing them to write_flash only works if esptool can find and patch 
+            the magic byte — which it can't here, so you're just creating confusion. 
+            The write call for a merged binary should be minimal:
+            '''
+            write_args = [
+                "--port", flash_port,
+                "--baud", str(baud),
+                "--chip", resolved_chip,
+                "write-flash",
+                "0x0",
+                str(fw_path),
+            ]
+        else:
+            write_args = [
+                "--port", flash_port,
+                "--baud", str(baud),
+                "--chip", resolved_chip,
+                "write-flash",
+                # Preserve the flash mode/freq/size baked into the compiled app
+                # image header (mirrors `pio run --target upload`). Overriding
+                # them here would patch the app header to e.g. qio/80m while the
+                # on-device bootloader stays dio/40m -> header mismatch on boot.
+                "--flash-mode", "keep",
+                "--flash-freq", "keep",
+                "--flash-size", "keep",
+                flash_params["offset"],
+                str(fw_path),
+            ]
         ok, msg = self._run_esptool(write_args)
         if not ok:
+            if self._usb_flash_cancel_event.is_set():
+                # cancelled status already emitted by _cancel_running_flash
+                return {
+                    "status": "cancelled",
+                    "message": "Flash cancelled by user",
+                    "port": flash_port,
+                    "firmware": str(fw_path),
+                    "chip": resolved_chip,
+                }
             self._emit_usb_flash_status("failed", 50, "Firmware write failed", msg)
             return {
                 "status": "error",
-                "message": "write_flash failed",
+                "message": "write-flash failed",
                 "details": msg,
                 "port": flash_port,
                 "firmware": str(fw_path),
@@ -1875,11 +2371,13 @@ class UC2ConfigController(ImConWidgetController):
         address: int = 1,
         baud: int = 115200,
         timeout: float = 2.0,
+        skip_flash: bool = False,
     ):
         """
         Send a CAN bus address assignment to a freshly-flashed device via serial.
 
         Opens the serial port, sends a JSON command to set the CAN address, and closes.
+        Also verifies the device booted correctly (no "invalid header" boot-loops).
         Known addresses: master=1, a=10, x=11, y=12, z=13, led=30.
 
         Parameters:
@@ -1887,14 +2385,15 @@ class UC2ConfigController(ImConWidgetController):
           address: CAN bus address to assign (e.g. 1 for master, 11 for X axis).
           baud: serial baudrate for communication (default 115200).
           timeout: serial read timeout in seconds (default 2.0).
+          skip_flash: if True, this is a standalone CAN address assignment (no prior flash).
         """
         import json as _json
         import serial as _serial
 
         if not port:
             return {"status": "error", "message": "No serial port specified"}
-
-        cmd = _json.dumps({"task": "/can_act", "address": int(address)})
+        # new command {"task":"/can_act","nodeId":10,"canMotorAxis":1, "address":10}
+        cmd = _json.dumps({"task": "/can_act", "address": int(address), "nodeId": int(address), "canMotorAxis": int(1)})
         self.__logger.info(f"Sending CAN address {address} to {port} @ {baud} baud")
         self._emit_usb_flash_status("flashing", 92, f"Assigning CAN address {address}...")
 
@@ -1903,7 +2402,7 @@ class UC2ConfigController(ImConWidgetController):
                 # Wait for the device to finish booting.  Freshly-flashed ESP32s
                 # may print boot messages / SHA-256 lines for several seconds.
                 self.__logger.info(f"Waiting for device boot on {port}...")
-                boot_wait_s = 5  # generous wait for boot-loop detection
+                boot_wait_s = 2  # generous wait for boot-loop detection
                 boot_output = ""
                 deadline = time.time() + boot_wait_s
                 stable_count = 0
@@ -1922,6 +2421,22 @@ class UC2ConfigController(ImConWidgetController):
                 if boot_output:
                     self.__logger.info(f"Boot output from device:\n{boot_output.strip()[-500:]}")
 
+                # Detect boot-loop: "invalid header: 0xffffffff" repeated in output
+                if "invalid header" in boot_output.lower() or "0xffffffff" in boot_output:
+                    error_msg = (
+                        "Device appears to be in a boot-loop (invalid header: 0xffffffff). "
+                        "The firmware was likely not flashed correctly. "
+                        "Try flashing with a merged firmware (.._merged.bin) and erase flash enabled."
+                    )
+                    self.__logger.error(error_msg)
+                    self._emit_usb_flash_status("failed", 92, "❌ Boot-loop detected!", error_msg)
+                    return {
+                        "status": "error",
+                        "message": error_msg,
+                        "boot_output": boot_output.strip()[-500:],
+                        "boot_loop_detected": True,
+                    }
+
                 # Flush any remaining bytes in the input buffer
                 ser.reset_input_buffer()
 
@@ -1938,16 +2453,255 @@ class UC2ConfigController(ImConWidgetController):
                         if response:
                             break
                         time.sleep(0.1)
+
+                # Verify firmware is running by sending state_get
+                ser.reset_input_buffer()
+                state_cmd = _json.dumps({"task": "/state_get"})
+                ser.write((state_cmd + "\n").encode("utf-8"))
+                ser.flush()
+                time.sleep(0.5)
+                state_response = ""
+                state_deadline = time.time() + timeout
+                while time.time() < state_deadline:
+                    if ser.in_waiting:
+                        state_response += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                        time.sleep(0.05)
+                    else:
+                        if state_response:
+                            break
+                        time.sleep(0.1)
+
+                firmware_ok = True
+                if "0xffffffff" in state_response or "invalid header" in state_response.lower():
+                    firmware_ok = False
+
             self.__logger.info(f"CAN address response: {response.strip()}")
+            self.__logger.info(f"State verification: {state_response.strip()[:200]}")
+
+            if not firmware_ok:
+                self._emit_usb_flash_status("failed", 95,
+                    "❌ Firmware verification failed (device not responding correctly)")
+                return {
+                    "status": "error",
+                    "message": "Firmware verification failed – device not responding correctly",
+                    "response": response.strip(),
+                    "state_response": state_response.strip()[:200],
+                    "boot_loop_detected": True,
+                }
+
             self._emit_usb_flash_status("success", 100, f"✅ CAN address {address} assigned!")
             return {
                 "status": "success",
                 "message": f"CAN address {address} assigned on {port}",
                 "response": response.strip(),
+                "state_response": state_response.strip()[:200],
+                "firmware_verified": True,
             }
         except Exception as e:
             self.__logger.error(f"Failed to send CAN address: {e}")
             self._emit_usb_flash_status("failed", 92, f"CAN address assignment failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setSerialConfig(self, port: str = "", baudrate: int = 115200, persist: bool = True):
+        """Apply (and optionally persist) the serial port / baudrate used to talk to the ESP32.
+
+        Parameters:
+          port: serial port device path (e.g. "/dev/ttyACM0"). Empty/"auto" keeps current.
+          baudrate: serial baudrate (default 115200). Pass 0/None to keep current.
+          persist: when True, write the change back to the setup JSON.
+        """
+        # Normalize optional inputs coming from query params
+        port_arg = port.strip() if isinstance(port, str) else port
+        if not port_arg or str(port_arg).lower() == "auto":
+            port_arg = None
+        baud_arg = int(baudrate) if baudrate not in (None, 0, "", "null") else None
+
+        try:
+            result = self._master.UC2ConfigManager.setSerialConfig(
+                port=port_arg,
+                baudrate=baud_arg,
+                persist=bool(persist),
+            )
+            return {"status": "success", **result, "persisted": bool(persist)}
+        except Exception as e:
+            self.__logger.error(f"Failed to set serial config: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
+        
+    # Digital Input/Output API Methods
+    @APIExport(runOnUIThread=False)
+    def probeDeviceState(
+        self,
+        port: str = "",
+        baud: int = 115200,
+        timeout: float = 2.0,
+    ):
+        """
+        Send ``{"task":"/state_get"}`` to the device and return the raw response.
+
+        Useful for verifying that the firmware is running correctly after flashing
+        without modifying the CAN address.
+
+        Parameters:
+          port: serial port device path (e.g. "/dev/ttyACM0").
+          baud: serial baudrate (115200 or 921600).
+          timeout: serial read timeout in seconds (default 2.0).
+        """
+        import json as _json
+        import serial as _serial
+
+        if not port:
+            return {"status": "error", "message": "No serial port specified"}
+
+        self.__logger.info(f"Probing device state on {port} @ {baud} baud")
+        try:
+            with _serial.Serial(port, baud, timeout=timeout) as ser:
+                ser.reset_input_buffer()
+                state_cmd = _json.dumps({"task": "/state_get"})
+                ser.write((state_cmd + "\n").encode("utf-8"))
+                ser.flush()
+                time.sleep(0.5)
+                state_response = ""
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    if ser.in_waiting:
+                        state_response += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                        time.sleep(0.05)
+                    else:
+                        if state_response:
+                            break
+                        time.sleep(0.1)
+
+            self.__logger.info(f"Probe state response: {state_response.strip()[:200]}")
+            firmware_ok = not ("0xffffffff" in state_response or "invalid header" in state_response.lower())
+            return {
+                "status": "success" if firmware_ok else "warning",
+                "state_response": state_response.strip()[:500],
+                "firmware_ok": firmware_ok,
+            }
+        except Exception as e:
+            self.__logger.error(f"Failed to probe device state: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def testDeviceAction(
+        self,
+        port: str = "",
+        device_type: str = "motor",
+        baud: int = 115200,
+        timeout: float = 2.0,
+        # Motor params
+        stepperid: int = 1,
+        speed: int = 2000,
+        position: int = 1000,
+        isabs: int = 0,
+        # LED array params
+        r: int = 25,
+        g: int = 25,
+        b: int = 25,
+        led_action: str = "fill",
+        # Laser params
+        laserid: int = 1,
+        laserval: int = 118,
+    ):
+        """
+        Send a device-specific validation/test command directly over serial.
+
+        Used after USB flashing + CAN address assignment to verify that the slave
+        firmware is actually functioning (motor moves, LEDs light up, laser turns on).
+
+        Parameters:
+          port: serial port device path (e.g. "/dev/ttyACM0").
+          device_type: one of "motor", "ledarray", "laser".
+          baud: serial baudrate (default 115200, can be overridden).
+          timeout: serial read timeout in seconds.
+          stepperid, speed, position, isabs: motor parameters (device_type="motor").
+          r, g, b, led_action: LED array parameters (device_type="ledarray").
+          laserid, laserval: laser parameters (device_type="laser").
+        """
+        import json as _json
+        import serial as _serial
+
+        if not port:
+            return {"status": "error", "message": "No serial port specified"}
+
+        dt = (device_type or "").lower().strip()
+        if dt == "motor":
+            cmd_obj = {
+                "task": "/motor_act",
+                "motor": {
+                    "steppers": [{
+                        "stepperid": int(stepperid),
+                        "speed": int(speed),
+                        "position": int(position),
+                        "isabs": int(isabs),
+                    }]
+                },
+                "qid": 5,
+            }
+        elif dt in ("ledarray", "led", "ledarr"):
+            cmd_obj = {
+                "task": "/ledarr_act",
+                "qid": 17,
+                "led": {
+                    "action": led_action or "fill",
+                    "r": int(r),
+                    "g": int(g),
+                    "b": int(b),
+                },
+            }
+        elif dt == "laser":
+            cmd_obj = {
+                "task": "/laser_act",
+                "LASERid": int(laserid),
+                "LASERval": int(laserval),
+                "qid": 1,
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Unknown device_type '{device_type}'. Use 'motor', 'ledarray', or 'laser'.",
+            }
+
+        cmd = _json.dumps(cmd_obj)
+        self.__logger.info(f"Test device action ({dt}) on {port} @ {baud} baud: {cmd}")
+
+        try:
+            with _serial.Serial(port, int(baud), timeout=float(timeout)) as ser:
+                ser.reset_input_buffer()
+                ser.write((cmd + "\n").encode("utf-8"))
+                ser.flush()
+                time.sleep(0.3)
+                response = ""
+                deadline = time.time() + float(timeout)
+                while time.time() < deadline:
+                    if ser.in_waiting:
+                        response += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                        time.sleep(0.05)
+                    else:
+                        if response:
+                            break
+                        time.sleep(0.1)
+
+            response_stripped = response.strip()
+            self.__logger.info(f"Test device response ({dt}): {response_stripped[:300]}")
+
+            # Heuristic success check: look for a JSON-ish status:ok or absence of error markers
+            ok = True
+            lower_resp = response_stripped.lower()
+            if "0xffffffff" in lower_resp or "invalid header" in lower_resp:
+                ok = False
+            if '"status":"error"' in lower_resp.replace(" ", ""):
+                ok = False
+
+            return {
+                "status": "success" if ok else "warning",
+                "device_type": dt,
+                "command": cmd_obj,
+                "response": response_stripped[:1000],
+            }
+        except Exception as e:
+            self.__logger.error(f"Failed to send test action ({dt}): {e}")
             return {"status": "error", "message": str(e)}
 
     # Digital Input/Output API Methods
@@ -2432,7 +3186,7 @@ class UC2ConfigController(ImConWidgetController):
                             self._setupInfo.positioners[positionerName].managerProperties[key] = value
 
                     # Save the updated setupInfo to disk
-                    from imswitch.imcommon.model import configfiletools
+                    import imswitch.imcontrol.model.configfiletools as configfiletools
                     mOptions, _ = configfiletools.loadOptions()
                     configfiletools.saveSetupInfo(mOptions, self._setupInfo)
                     self.__logger.info(f"Saved motor settings for {positionerName}")

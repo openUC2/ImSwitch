@@ -5,7 +5,6 @@ except:
 
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
-from imswitch import IS_HEADLESS
 
 
 
@@ -40,7 +39,6 @@ class ESP32InfoScreenController(ImConWidgetController):
         # get LEDMatrix # TODO: Improve
         allLEDMatrixNames = self._master.LEDMatrixsManager.getAllDeviceNames()
         if len(allLEDMatrixNames) == 0:
-            if not IS_HEADLESS: self._widget.replaceWithError('No LEDMatrix found in your setup file.')
             return
         self.ledMatrix = self._master.LEDMatrixsManager[allLEDMatrixNames[0]]
 

@@ -1,151 +1,275 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Paper,
   Grid,
+  Box,
   Button,
+  ButtonGroup,
+  Chip,
+  Switch,
   CircularProgress,
   Typography,
 } from "@mui/material";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
+import { setNotification } from "../state/slices/NotificationSlice.js";
 import { useDispatch, useSelector } from "react-redux";
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
-
-// Hypothetical backend helpers (adjust import paths if different)
 import apiObjectiveControllerMoveToObjective from "../backendapi/apiObjectiveControllerMoveToObjective.js";
-import apiObjectiveControllerGetCurrentObjective from "../backendapi/apiObjectiveControllerGetCurrentObjective.js";
+
+const OBJECTIVE_SWITCH_TIMEOUT_MS = 15000;
 
 export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const dispatch = useDispatch();
-  const [currentSlot, setCurrentSlot] = useState(null); // Let's say local state, or read from Redux
-  const [isSwitching, setIsSwitching] = useState(false); // Show spinner while switching
+  const [currentSlot, setCurrentSlot] = useState(null);
+  const [pendingSlot, setPendingSlot] = useState(null);
+  const [isSwitching, setIsSwitching] = useState(false);
+  const [zLevelingEnabled, setZLevelingEnabled] = useState(true);
+  const switchTimeoutRef = useRef(null);
+  const latestObjectiveRef = useRef(null);
+  const isSwitchingRef = useRef(false);
 
-  // Access global Redux state (objectiveState from objectiveSlice)
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
-  const magnification1 = objectiveState.magnification1;
-  const magnification2 = objectiveState.magnification2;
-  // Fetch objective status on mount
+  const name0 = objectiveState.availableObjectivesNames?.[0] || "Obj 1";
+  const name1 = objectiveState.availableObjectivesNames?.[1] || "Obj 2";
+  const mag0 = objectiveState.availableObjectiveMagnifications?.[0];
+  const mag1 = objectiveState.availableObjectiveMagnifications?.[1];
+  const label0 = mag0 ? `${name0} (${mag0}×)` : name0;
+  const label1 = mag1 ? `${name1} (${mag1}×)` : name1;
+  const isObjectiveSwitchBlocked = isSwitching;
+
+  const clearSwitchTimeout = () => {
+    if (switchTimeoutRef.current) {
+      clearTimeout(switchTimeoutRef.current);
+      switchTimeoutRef.current = null;
+    }
+  };
+
   useEffect(() => {
     fetchObjectiveControllerGetStatus(dispatch);
   }, [dispatch]);
 
-  // Track Redux state changes (e.g. from socket updates) and update
-  // local state + clear spinner when the objective has changed.
   useEffect(() => {
+    latestObjectiveRef.current = objectiveState.currentObjective;
+
     if (objectiveState.currentObjective != null) {
+      clearSwitchTimeout();
       setCurrentSlot(objectiveState.currentObjective);
-      setIsSwitching(false); // Objective update received => done switching
+      setPendingSlot(null);
+      setIsSwitching(false);
     }
   }, [objectiveState.currentObjective]);
 
   useEffect(() => {
-      //refresh status
-      refreshStatus();
-    }, [hostIP, hostPort]); // on host ip/port change
-  
-  // Switch to a different objective, show spinner until we get update from the socket
-  const switchTo = async (slot, skipZ = 0) => {
+    isSwitchingRef.current = isSwitching;
+  }, [isSwitching]);
+
+  useEffect(() => {
+    return () => {
+      clearSwitchTimeout();
+    };
+  }, []);
+
+  useEffect(() => {
+    fetchObjectiveControllerGetStatus(dispatch);
+  }, [hostIP, hostPort, dispatch]);
+
+  const switchTo = async (slot) => {
+    if (isObjectiveSwitchBlocked) {
+      return;
+    }
+
+    if (objectiveState.currentObjective === slot) {
+      dispatch(
+        setNotification({
+          message: "This objective is already selected.",
+          type: "info",
+        }),
+      );
+      return;
+    }
+
     try {
       setIsSwitching(true);
+      setPendingSlot(slot);
+      setCurrentSlot(null);
+      const skipZ = !zLevelingEnabled;
       await apiObjectiveControllerMoveToObjective(slot, skipZ);
-      // Move completed – update slot and clear spinner immediately; no need to wait for
-      // a socket event that may never arrive.
-      dispatch(objectiveSlice.setCurrentObjective(slot));
-      setCurrentSlot(slot);
-      setIsSwitching(false);
-      // Also refresh full status to sync pixelsize / FOV etc.
-      fetchObjectiveControllerGetStatus(dispatch);
+
+      clearSwitchTimeout();
+      switchTimeoutRef.current = setTimeout(() => {
+        switchTimeoutRef.current = null;
+        if (!isSwitchingRef.current) {
+          return;
+        }
+
+        setPendingSlot(null);
+        setCurrentSlot(latestObjectiveRef.current ?? null);
+        setIsSwitching(false);
+        dispatch(
+          setNotification({
+            message:
+              "Objective switch timed out. Please check hardware connection and try again.",
+            type: "error",
+          }),
+        );
+      }, OBJECTIVE_SWITCH_TIMEOUT_MS);
     } catch (e) {
       console.error(`Error switching to objective ${slot}`, e);
+      clearSwitchTimeout();
+      dispatch(
+        setNotification({
+          message: `Objective switch failed: ${e?.message || e}`,
+          type: "error",
+        }),
+      );
+      fetchObjectiveControllerGetStatus(dispatch);
+      setPendingSlot(null);
+      setCurrentSlot(
+        latestObjectiveRef.current ?? objectiveState.currentObjective,
+      );
       setIsSwitching(false);
     }
   };
 
-  // Fetch objective status (x1 and x2) from backend
-  const refreshStatus = () => {
-      //request fetch status
-      fetchObjectiveControllerGetStatus(dispatch);
-    };
-  
-
   return (
     <Paper sx={{ p: 2 }}>
       <Grid container spacing={2} alignItems="center">
-        {/* Info row about the current objective */}
         <Grid item xs={12}>
-          <Typography>
-            {/* Show numeric slot + name from Redux */}
-            Current:{" "}
-            {objectiveState.objectivName && `(${objectiveState.objectivName})`}
-          </Typography>
-          <Typography sx={{ fontSize: "0.9rem" }}>
-            {objectiveState.magnification != null &&
-              `Mag: ${objectiveState.magnification}×  • `}
-            {objectiveState.NA != null && `NA ${objectiveState.NA}  • `}
-            {objectiveState.pixelsize != null &&
-              `Pixel ${objectiveState.pixelsize} µm`}
-          </Typography>
+          {isObjectiveSwitchBlocked ? (
+            <Typography color="text.secondary">
+              The objective is switching right now... please wait.
+            </Typography>
+          ) : (
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1,
+                flexWrap: "wrap",
+              }}
+            >
+              <Typography>Current objective:</Typography>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={
+                  <Box
+                    sx={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 0.75,
+                    }}
+                  >
+                    <span>
+                      {objectiveState.objectivName &&
+                        `(${objectiveState.objectivName})`}
+                    </span>
+                    {objectiveState.magnification != null && (
+                      <span>Mag: {objectiveState.magnification}×</span>
+                    )}
+                    {objectiveState.NA != null && (
+                      <span>NA {objectiveState.NA}</span>
+                    )}
+                    {objectiveState.pixelsize != null && (
+                      <span>Pixel {objectiveState.pixelsize} µm</span>
+                    )}
+                  </Box>
+                }
+              />
+            </Box>
+          )}
         </Grid>
 
-        {/* Buttons to switch objective */}
         <Grid item xs={12}>
-          <Grid container spacing={2}>
-            <Grid item>
-              <Button
-                variant="contained"
-                color={currentSlot === 0 ? "secondary" : "primary"}
-                onClick={() => switchTo(0)}
+          <Grid container spacing={1.5} alignItems="center">
+            <Grid item xs={12}>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 2,
+                  flexWrap: "wrap",
+                  width: "100%",
+                }}
               >
-                {/* Button text */}
-                Switch to{" "}
-                {isSwitching && currentSlot !== 0 ? (
-                  <CircularProgress
-                    size={14}
-                    sx={{ color: "#fff", marginLeft: 8 }}
-                  />
-                ) : (
-                  magnification1 && `(Mag: ${magnification1}×)`
-                )}
-              </Button>
+                <Typography variant="subtitle1" sx={{ whiteSpace: "nowrap" }}>
+                  Objective Switcher
+                </Typography>
+
+                <ButtonGroup
+                  variant="outlined"
+                  size="small"
+                  color="primary"
+                  disabled={isObjectiveSwitchBlocked}
+                >
+                  <Button
+                    variant={currentSlot === 0 ? "contained" : "outlined"}
+                    color="primary"
+                    onClick={() => switchTo(0)}
+                  >
+                    <Box
+                      sx={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 0.75,
+                      }}
+                    >
+                      {isSwitching && pendingSlot === 0 ? (
+                        <CircularProgress size={14} sx={{ color: "#fff" }} />
+                      ) : null}
+                      {label0}
+                    </Box>
+                  </Button>
+
+                  <Button
+                    variant={currentSlot === 1 ? "contained" : "outlined"}
+                    color="primary"
+                    onClick={() => switchTo(1)}
+                  >
+                    <Box
+                      sx={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 0.75,
+                      }}
+                    >
+                      {isSwitching && pendingSlot === 1 ? (
+                        <CircularProgress size={14} sx={{ color: "#fff" }} />
+                      ) : null}
+                      {label1}
+                    </Box>
+                  </Button>
+                </ButtonGroup>
+              </Box>
             </Grid>
-            <Grid item>
-              <Button
-                variant="outlined"
-                color={currentSlot === 0 ? "secondary" : "primary"}
-                onClick={() => switchTo(0, false)}
+
+            <Grid item xs={12}>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 2,
+                  flexWrap: "wrap",
+                  width: "100%",
+                }}
               >
-                {/* Combined objective + Z motion */}
-                Switch + Z{" "}
-                {magnification1 && `(${magnification1}×)`}
-              </Button>
-            </Grid>
-            <Grid item>
-              <Button
-                variant="contained"
-                color={currentSlot === 1 ? "secondary" : "primary"}
-                onClick={() => switchTo(1)}
-              >
-                {/* Button text */}
-                Switch to{" "}
-                {isSwitching && currentSlot !== 1 ? (
-                  <CircularProgress
-                    size={14}
-                    sx={{ color: "#fff", marginLeft: 8 }}
-                  />
-                ) : (
-                  magnification2 && `(Mag: ${magnification2}×)`
-                )}
-              </Button>
-            </Grid>
-            <Grid item>
-              <Button
-                variant="outlined"
-                color={currentSlot === 1 ? "secondary" : "primary"}
-                onClick={() => switchTo(1, false)}
-              >
-                {/* Combined objective + Z motion */}
-                Switch + Z{" "}
-                {magnification2 && `(${magnification2}×)`}
-              </Button>
+                <Switch
+                  checked={zLevelingEnabled}
+                  onChange={(e) => setZLevelingEnabled(e.target.checked)}
+                  size="small"
+                />
+                <Typography
+                  variant="body2"
+                  component="span"
+                  sx={{ whiteSpace: "nowrap" }}
+                >
+                  Z leveling
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Switching will apply{" "}
+                  {zLevelingEnabled ? "with Z leveling" : "without Z leveling"}.
+                </Typography>
+              </Box>
             </Grid>
           </Grid>
         </Grid>

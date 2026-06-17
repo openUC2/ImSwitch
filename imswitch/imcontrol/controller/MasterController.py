@@ -30,7 +30,6 @@ from imswitch.imcontrol.model import (
     FOVLockManager,
     RotatorsManager,
     LEDsManager,
-    FlatfieldManager,
     FlowStopManager,
     WorkflowManager,
     TimelapseManager,
@@ -124,7 +123,7 @@ class MasterController:
         if "SLM" in self.__setupInfo.availableWidgets:
             self.slmManager = SLMManager(self.__setupInfo.slm)
         self.UC2ConfigManager = UC2ConfigManager(
-            self.__setupInfo.uc2Config, lowLevelManagers
+            self.__setupInfo.uc2Config, lowLevelManagers, setupInfo=self.__setupInfo
         )
         
         # Initialize InstrumentMetadataManager for OME instrument metadata
@@ -162,12 +161,13 @@ class MasterController:
             self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
         if "Lepmon" in self.__setupInfo.availableWidgets:
             self.LepmonManager = LepmonManager(self.__setupInfo.Lepmon)
-        if "FlatField" in self.__setupInfo.availableWidgets:
-            self.FlatfieldManager = FlatfieldManager(self.__setupInfo.Flatfield)
-        if "PixelCalibration" in self.__setupInfo.availableWidgets:
-            self.PixelCalibrationManager = PixelCalibrationManager(
-                self.__setupInfo.PixelCalibration
-            )
+        # PixelCalibration is the single source of truth for per-detector
+        # affine calibration (pixel size + flip). Always instantiate so that
+        # downstream code can rely on its presence regardless of the setup
+        # JSON having a "PixelCalibration" entry.
+        self.PixelCalibrationManager = PixelCalibrationManager(
+            self.__setupInfo.PixelCalibration
+        )
         if "AutoFocus" in self.__setupInfo.availableWidgets:
             self.AutoFocusManager = AutofocusManager(self.__setupInfo.autofocus)
         if "FOV" in self.__setupInfo.availableWidgets:

@@ -20,10 +20,10 @@ class TucsenCamManager(DetectorManager):
 
         binning = 1
         cameraId = detectorInfo.managerProperties['cameraListIndex']
-        try:
-            pixelSize = detectorInfo.managerProperties['cameraEffPixelsize'] # mum
-        except:
-            pixelSize = 1
+        # Pixel size and flip are owned by PixelCalibrationController; the
+        # values are injected via setPixelSizeUm() / setFlipImage() at startup
+        # and on objective change. Use neutral defaults here.
+        pixelSize = 1.0
 
         try:
             self._mockstackpath = detectorInfo.managerProperties['mockstackpath']
@@ -40,16 +40,8 @@ class TucsenCamManager(DetectorManager):
         except:
             self._mocktype = "normal"
 
-        # Get flip settings from affine calibration if available
-        try:
-            flipX = detectorInfo.managerProperties['tucsencam']['flipX']
-        except:
-            flipX = False
-
-        try:
-            flipY = detectorInfo.managerProperties['tucsencam']['flipY']
-        except:
-            flipY = False
+        flipX = False
+        flipY = False
 
         flipImage = (flipY, flipX)
 
@@ -113,8 +105,6 @@ class TucsenCamManager(DetectorManager):
         super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
                          model=model, parameters=parameters, actions=actions, croppable=True)
 
-    def setFlatfieldImage(self, flatfieldImage, isFlatfielding):
-        self._camera.setFlatfieldImage(flatfieldImage, isFlatfielding)
 
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         return self._camera.getLast(returnFrameNumber=returnFrameNumber)
@@ -254,11 +244,6 @@ class TucsenCamManager(DetectorManager):
     def closeEvent(self):
         self._camera.close()
 
-    def recordFlatfieldImage(self):
-        '''
-        record n images and average them before subtracting from the latest frame
-        '''
-        self._camera.recordFlatfieldImage()
 
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.

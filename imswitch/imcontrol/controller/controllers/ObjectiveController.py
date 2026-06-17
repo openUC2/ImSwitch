@@ -4,10 +4,11 @@ from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from imswitch.imcontrol.controller.basecontrollers import LiveUpdatedController
 
-from imswitch import IS_HEADLESS
 
 
 from typing import Tuple, Optional
+import threading
+import time
 
 
 class ObjectiveController(LiveUpdatedController):
@@ -45,6 +46,19 @@ class ObjectiveController(LiveUpdatedController):
         self._detectorWidth: Optional[int] = None
         self._detectorHeight: Optional[int] = None
 
+        # Track objective move request lifecycle for explicit API acknowledgements.
+        self._moveStateLock = threading.Lock()
+        self._moveRequestCounter: int = 0
+        self._latestMoveRequestId: Optional[int] = None
+        self._pendingMoveRequestId: Optional[int] = None
+        self._pendingTargetSlot: Optional[int] = None
+        self._isMovingObjective: bool = False
+        self._lastMoveError: Optional[str] = None
+        self._lastMoveStartedAt: Optional[float] = None
+        self._lastMoveCompletedAt: Optional[float] = None
+        self._lastCompletedRequestId: Optional[int] = None
+        self._lastCompletedSlot: Optional[int] = None
+
         # Cache configuration values for quick access
         self._objectivePositions = list(self._configManager.objectivePositions)  # [x0, x1] in µm
         self._zPositions = list(self._configManager.zPositions)  # [z0, z1] in µm - Z focus offsets
@@ -52,6 +66,9 @@ class ObjectiveController(LiveUpdatedController):
         self._NAs = list(self._configManager.NAs)
         self._magnifications = list(self._configManager.magnifications)
         self._objectiveNames = list(self._configManager.objectiveNames)
+
+        # Compute which slots are actually configured (name truthy AND magnification > 0)
+        self._isSlotConfigured = self._computeIsSlotConfigured()
 
         # Connect to config manager signals for external parameter updates
         self._configManager.sigObjectiveParametersChanged.connect(self._onConfigParametersChanged)
@@ -116,10 +133,55 @@ class ObjectiveController(LiveUpdatedController):
 
     # === State Property Accessors ===
 
+    def _computeIsSlotConfigured(self):
+        """Return [bool, bool] — slot i is configured iff its name is truthy AND magnification > 0."""
+        result = []
+        for i in range(2):
+            name = self._objectiveNames[i] if i < len(self._objectiveNames) else None
+            mag = self._magnifications[i] if i < len(self._magnifications) else 0
+            result.append(bool(name) and (mag if mag is not None else 0) > 0)
+        return result
+
+    @APIExport(runOnUIThread=True)
+    def isSlotConfigured(self, slot: int) -> bool:
+        """Return True if the given slot (0 or 1) has a non-empty name and magnification > 0."""
+        if slot not in [0, 1]:
+            return False
+        return self._isSlotConfigured[slot]
+
     def _getCurrentPixelSize(self) -> Optional[float]:
-        """Get the pixel size for the current objective."""
-        if self._currentObjective is not None and 0 <= self._currentObjective < len(self._pixelsizes):
-            return self._pixelsizes[self._currentObjective]
+        """Get the pixel size for the current objective.
+
+        PixelCalibration is the single source of truth: ask it first for a
+        per-(detector, objective) calibration. Fall back to the legacy
+        ``ObjectiveInfo.pixelsizes`` list only for migration of old setups.
+        """
+        if self._currentObjective is None:
+            return None
+
+        # Try PixelCalibrationController first.
+        try:
+            pix_ctrl = self._master._controllersRegistry.get("PixelCalibration", None)
+            if pix_ctrl is not None and hasattr(pix_ctrl, "getPixelSize"):
+                detector_name = self._master.detectorsManager.getAllDeviceNames()[0]
+                sx, sy = pix_ctrl.getPixelSize(detector_name, str(self._currentObjective))
+                avg = (abs(sx) + abs(sy)) / 2.0
+                if avg > 0 and avg != 1.0:
+                    return avg
+        except Exception:
+            pass
+
+        # Legacy fallback (deprecated): static config-driven pixel sizes.
+        if 0 <= self._currentObjective < len(self._pixelsizes):
+            value = self._pixelsizes[self._currentObjective]
+            if not getattr(self, "_warnedLegacyPixelsize", False):
+                self._logger.warning(
+                    "ObjectiveInfo.pixelsizes is DEPRECATED - use the PixelCalibration "
+                    "controller as the single source of truth. Falling back to the "
+                    "value from the setup file (this warning is shown once)."
+                )
+                self._warnedLegacyPixelsize = True
+            return value
         return None
 
     def _getCurrentNA(self) -> Optional[float]:
@@ -183,7 +245,7 @@ class ObjectiveController(LiveUpdatedController):
                 axis="A",
                 is_absolute=True,
                 is_blocking=True,
-                speed=self._configManager.homeSpeed
+                speed=self._configManager.moveSpeed
             )
             return True
         except Exception as e:
@@ -213,8 +275,7 @@ class ObjectiveController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Objective homing failed: {e}", exc_info=True)
             self._isHomed = False
-        # need to state the current status after homing (e.g. 2 )
-        self._currentObjective = 2
+        self._currentObjective = None
 
     @APIExport(runOnUIThread=True)
     def moveToObjective(self, slot: int, skipZ: bool = False):
@@ -226,56 +287,123 @@ class ObjectiveController(LiveUpdatedController):
             skipZ: If True, only move axis A (objective turret) without Z focus adjustment.
                    If False (default), also apply Z delta based on z0/z1 config.
         """
-        import threading
-        mThread = threading.Thread(target=self.moveToObjectiveThread, args=(slot, skipZ))
+        if slot not in [0, 1]:
+            return {
+                "accepted": False,
+                "reason": "invalid_slot",
+                "targetSlot": slot,
+                "skipZ": bool(skipZ)
+            }
+
+        if not self._isSlotConfigured[slot]:
+            return {
+                "accepted": False,
+                "reason": "slot_not_configured",
+                "targetSlot": slot,
+                "skipZ": bool(skipZ)
+            }
+
+        with self._moveStateLock:
+            if self._isMovingObjective:
+                return {
+                    "accepted": False,
+                    "reason": "busy",
+                    "targetSlot": slot,
+                    "skipZ": bool(skipZ),
+                    "pendingRequestId": self._pendingMoveRequestId,
+                    "pendingTargetSlot": self._pendingTargetSlot
+                }
+
+            self._moveRequestCounter += 1
+            request_id = self._moveRequestCounter
+            started_at = time.time()
+
+            self._latestMoveRequestId = request_id
+            self._pendingMoveRequestId = request_id
+            self._pendingTargetSlot = slot
+            self._isMovingObjective = True
+            self._lastMoveError = None
+            self._lastMoveStartedAt = started_at
+
+        mThread = threading.Thread(
+            target=self.moveToObjectiveThread,
+            args=(slot, skipZ, request_id),
+            daemon=True,
+        )
         mThread.start()
 
-    def moveToObjectiveThread(self, slot: int, skipZ: bool = False):
+        return {
+            "accepted": True,
+            "requestId": request_id,
+            "targetSlot": slot,
+            "skipZ": bool(skipZ),
+            "startedAt": started_at,
+            "status": "started"
+        }
+
+    def moveToObjectiveThread(self, slot: int, skipZ: bool = False, request_id: Optional[int] = None):
+        completed_at = None
+        success = False
+        last_error = None
         if slot not in [0, 1]:
-            self._logger.error(f"Invalid objective slot: {slot} (must be 0 or 1)")
-            return
+            last_error = f"Invalid objective slot: {slot} (must be 0 or 1)"
+            self._logger.error(last_error)
+        elif not self._isSlotConfigured[slot]:
+            last_error = (
+                f"Objective slot {slot} is not configured (empty name or magnification=0); "
+                "refusing to issue axis-A motion."
+            )
+            self._logger.warning(last_error)
+        else:
+            if slot == self._currentObjective:
+                self._logger.debug(f"Already at objective slot {slot}, no movement needed")
+                success = True
+            else:
+                self._logger.info(f"Moving to objective slot {slot} ({self._objectiveNames[slot]}), skipZ={skipZ}")
 
-        if False and slot == self._currentObjective:
-            self._logger.debug(f"Already at objective slot {slot}, no movement needed")
-            return
+                # Calculate Z delta if needed (before changing slot)
+                z_delta = 0
+                if not skipZ and self._currentObjective is not None and self._currentObjective in [0, 1]:
+                    # Calculate Z delta: difference between target z position and current z position
+                    current_z = self._zPositions[self._currentObjective] if self._currentObjective < len(self._zPositions) else 0
+                    target_z = self._zPositions[slot] if slot < len(self._zPositions) else 0
+                    z_delta = target_z - current_z
+                    self._logger.debug(f"Z delta: {z_delta} µm (from z{self._currentObjective}={current_z} to z{slot}={target_z})")
+                    # Apply Z focus adjustment if needed
+                    if  z_delta != 0 and self._positioner is not None:
+                        try:
+                            self._logger.info(f"Applying Z focus adjustment: {z_delta} µm")
+                            self._positioner.move(
+                                value=z_delta,
+                                axis="Z",
+                                is_absolute=False,  # Relative movement for Z
+                                is_blocking=False
+                            )
+                        except Exception as e:
+                            self._logger.error(f"Failed to apply Z focus adjustment: {e}", exc_info=True)
 
-        self._logger.info(f"Moving to objective slot {slot} ({self._objectiveNames[slot]}), skipZ={skipZ}")
-
-        # Calculate Z delta if needed (before changing slot)
-        z_delta = 0
-        if not skipZ and self._currentObjective is not None and self._currentObjective in [0, 1]:
-            # Calculate Z delta: difference between target z position and current z position
-            current_z = self._zPositions[self._currentObjective] if self._currentObjective < len(self._zPositions) else 0
-            target_z = self._zPositions[slot] if slot < len(self._zPositions) else 0
-            z_delta = target_z - current_z
-            self._logger.debug(f"Z delta: {z_delta} µm (from z{self._currentObjective}={current_z} to z{slot}={target_z})")
-            # Apply Z focus adjustment if needed
-            if  z_delta != 0 and self._positioner is not None:
-                try:
-                    self._logger.info(f"Applying Z focus adjustment: {z_delta} µm")
-                    self._positioner.move(
-                        value=z_delta,
-                        axis="Z",
-                        is_absolute=False,  # Relative movement for Z
-                        is_blocking=False
-                    )
-                except Exception as e:
-                    self._logger.error(f"Failed to apply Z focus adjustment: {e}", exc_info=True)
-
-        # Move the axis A motor (objective turret)
-        success = self._moveMotorToSlot(slot)
+                # Move the axis A motor (objective turret)
+                success = self._moveMotorToSlot(slot)
+                if not success and self._hasMotor:
+                    last_error = f"Failed to move objective motor to slot {slot}"
 
         if success or not self._hasMotor:
-            # Update state
             self._currentObjective = slot
-
-
-            # Update detector pixel size
             self._updatePixelSize()
 
-            # Update UI if not headless
-            if not IS_HEADLESS:
-                self._widget.setCurrentObjectiveInfo(self._currentObjective)
+        completed_at = time.time()
+        with self._moveStateLock:
+            if request_id is None or self._pendingMoveRequestId == request_id:
+                self._isMovingObjective = False
+                self._pendingMoveRequestId = None
+                self._pendingTargetSlot = None
+                self._lastMoveCompletedAt = completed_at
+                if success:
+                    self._lastMoveError = None
+                    self._lastCompletedRequestId = request_id
+                    self._lastCompletedSlot = slot
+                else:
+                    self._lastMoveError = last_error or "objective_move_failed"
 
     @APIExport(runOnUIThread=True)
     def getCurrentObjective(self):
@@ -333,6 +461,9 @@ class ObjectiveController(LiveUpdatedController):
             self._objectivePositions[slot] = params["position"]
         if "zPosition" in params and slot < len(self._zPositions):
             self._zPositions[slot] = params["zPosition"]
+
+        # Recompute configured state in case name/magnification changed
+        self._isSlotConfigured = self._computeIsSlotConfigured()
 
         # If this is the current objective, update detector
         if slot == self._currentObjective:
@@ -503,6 +634,21 @@ class ObjectiveController(LiveUpdatedController):
         self._logger.info(f"Set objective {slot} position to {position} µm")
 
     @APIExport(runOnUIThread=True)
+    def setMoveSpeed(self, speed: int) -> dict:
+        """
+        Set the speed used when switching between objective slots and persist to config.
+        
+        Args:
+            speed: Motor speed in steps/s (default 20000 if not configured)
+            
+        Returns:
+            Dictionary with the updated moveSpeed value
+        """
+        self._configManager.setMoveSpeed(int(speed))
+        self._logger.info(f"Updated objective moveSpeed to {speed}")
+        return {"moveSpeed": self._configManager.moveSpeed}
+
+    @APIExport(runOnUIThread=True)
     def setObjectiveParameters(self, objectiveSlot: int, pixelsize: float = None,
                                objectiveName: str = None, NA: float = None,
                                magnification: int = None, position: float = None):
@@ -535,38 +681,69 @@ class ObjectiveController(LiveUpdatedController):
             emitSignal=True
         )
 
+        # Recompute configured state — this call may promote a single-objective setup to dual
+        self._isSlotConfigured = self._computeIsSlotConfigured()
+
         # Return updated parameters
         return self._configManager.getObjectiveParameters(objectiveSlot)
+
+    def _getPerSlotPixelSizes(self):
+        """Get pixel sizes for all slots, preferring PixelCalibrationController."""
+        result = list(self._pixelsizes)
+        try:
+            pix_ctrl = self._master._controllersRegistry.get("PixelCalibration", None)
+            if pix_ctrl is not None and hasattr(pix_ctrl, "getPixelSize"):
+                detector_name = self._master.detectorsManager.getAllDeviceNames()[0]
+                for slot in range(len(result)):
+                    sx, sy = pix_ctrl.getPixelSize(detector_name, str(slot))
+                    avg = (abs(sx) + abs(sy)) / 2.0
+                    if avg > 0 and avg != 1.0:
+                        result[slot] = avg
+        except Exception:
+            pass
+        return result
 
     @APIExport(runOnUIThread=True)
     def getstatus(self):
         """
         Get the current status of the objective.
-        
+
         Returns:
             Dictionary with complete objective status
         """
-        # Build status from controller state (single source of truth)
+        per_slot_pixelsizes = self._getPerSlotPixelSizes()
+
+        # Snapshot move lifecycle state atomically to avoid mixed values while
+        # the move thread updates these fields.
+        with self._moveStateLock:
+            is_moving_objective = self._isMovingObjective
+            pending_objective_request_id = self._pendingMoveRequestId
+            pending_objective_target_slot = self._pendingTargetSlot
+            last_objective_request_id = self._latestMoveRequestId
+            last_completed_objective_request_id = self._lastCompletedRequestId
+            last_completed_objective_slot = self._lastCompletedSlot
+            last_objective_move_error = self._lastMoveError
+            last_objective_move_started_at = self._lastMoveStartedAt
+            last_objective_move_completed_at = self._lastMoveCompletedAt
+
         status = {
-            # Current state
             "currentObjective": self._currentObjective,
             "isHomed": self._isHomed,
 
-            # Current objective parameters
             "objectiveName": self._getCurrentObjectiveName(),
             "pixelsize": self._getCurrentPixelSize(),
             "NA": self._getCurrentNA(),
             "magnification": self._getCurrentMagnification(),
             "FOV": self._getCurrentFOV(),
 
-            # Available objectives configuration
             "availableObjectives": [0, 1],
+            "slotConfigured": list(self._isSlotConfigured),
             "availableObjectivesNames": list(self._objectiveNames),
             "availableObjectivesPositions": list(self._objectivePositions),
-            "availableObjectiveZPositions": list(self._zPositions),  # z0, z1 focus offsets
+            "availableObjectiveZPositions": list(self._zPositions),
             "availableObjectiveMagnifications": list(self._magnifications),
             "availableObjectiveNAs": list(self._NAs),
-            "availableObjectivePixelSizes": list(self._pixelsizes),
+            "availableObjectivePixelSizes": per_slot_pixelsizes,
 
             # Legacy API aliases for x0, x1, z0, z1 (for frontend compatibility)
             "x0": self._objectivePositions[0] if len(self._objectivePositions) > 0 else None,
@@ -579,6 +756,7 @@ class ObjectiveController(LiveUpdatedController):
             "homePolarity": self._configManager.homePolarity,
             "homeSpeed": self._configManager.homeSpeed,
             "homeAcceleration": self._configManager.homeAcceleration,
+            "moveSpeed": self._configManager.moveSpeed,
 
             # Detector info
             "detectorWidth": self._detectorWidth,
@@ -587,6 +765,17 @@ class ObjectiveController(LiveUpdatedController):
             # Motor availability
             "hasMotor": self._hasMotor,
             "isActive": self._configManager.isActive,
+
+            # Move request lifecycle
+            "isMovingObjective": is_moving_objective,
+            "pendingObjectiveRequestId": pending_objective_request_id,
+            "pendingObjectiveTargetSlot": pending_objective_target_slot,
+            "lastObjectiveRequestId": last_objective_request_id,
+            "lastCompletedObjectiveRequestId": last_completed_objective_request_id,
+            "lastCompletedObjectiveSlot": last_completed_objective_slot,
+            "lastObjectiveMoveError": last_objective_move_error,
+            "lastObjectiveMoveStartedAt": last_objective_move_started_at,
+            "lastObjectiveMoveCompletedAt": last_objective_move_completed_at,
 
             # Current motor position (if available)
             "motorPosition": None,

@@ -15,6 +15,7 @@ import {
   AccordionDetails,
   Chip,
   Tooltip,
+  TextField,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -23,7 +24,9 @@ import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import * as wellSelectorSlice from "../../state/slices/WellSelectorSlice";
+import * as focusMapSlice from "../../state/slices/FocusMapSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
+import apiExperimentControllerGetCurrentExperimentParams from "../../backendapi/apiExperimentControllerGetCurrentExperimentParams";
 
 /**
  * TilingDimension - Tiling/mosaic configuration interface
@@ -40,7 +43,23 @@ const TilingDimension = () => {
   // Redux state
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
+  const focusMapConfig = useSelector(focusMapSlice.getFocusMapConfig);
   const parameterValue = experimentState.parameterValue;
+  // When a focus map is active it drives Z per-XY, so the manual Z override is
+  // meaningless – grey it out (the backend also ignores it in that case).
+  const focusMapEnabled = !!focusMapConfig?.enabled;
+
+  // Fetch calibrated pixel size from the backend once on mount and pre-fill
+  // the Ashlar pixel size field if the user hasn't manually set it yet.
+  useEffect(() => {
+    apiExperimentControllerGetCurrentExperimentParams()
+      .then((params) => {
+        if (params?.pixel_size_um) {
+          dispatch(experimentSlice.setAshlarPixelSizeCalibrated(params.pixel_size_um));
+        }
+      })
+      .catch(() => {});
+  }, [dispatch]);
 
   // Calculate overlap percentage for display
   const overlapPercent = Math.round((parameterValue.overlapWidth || 0) * 100);
@@ -62,6 +81,8 @@ const TilingDimension = () => {
     dispatch(experimentSlice.setOverlapHeight(overlapValue));
     dispatch(wellSelectorSlice.setOverlapWidth(overlapValue));
     dispatch(wellSelectorSlice.setOverlapHeight(overlapValue));
+    // Keep areaSelectOverlap in sync so it isn't 0 when the run starts in area mode
+    dispatch(wellSelectorSlice.setAreaSelectOverlap(overlapValue));
   };
 
   // Handle snakescan toggle
@@ -208,6 +229,59 @@ const TilingDimension = () => {
         </Box>
       </Box>
 
+      {/* Stage & Z behaviour */}
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+          Stage & Z Behaviour
+        </Typography>
+
+        <FormControlLabel
+          control={
+            <Switch
+              checked={!!parameterValue.returnToOrigin}
+              onChange={(e) =>
+                dispatch(experimentSlice.setReturnToOrigin(e.target.checked))
+              }
+            />
+          }
+          label={
+            <Box>
+              <Typography variant="body2">Return to origin after scan</Typography>
+              <Typography variant="caption" color="textSecondary">
+                When the scan finishes, move the stage back to the XYZ position it
+                was at before the scan started.
+              </Typography>
+            </Box>
+          }
+          sx={{ alignItems: "flex-start", mb: 1, ml: 0 }}
+        />
+
+        <FormControlLabel
+          disabled={focusMapEnabled}
+          control={
+            <Switch
+              checked={!!parameterValue.overrideZWithCurrentZ}
+              onChange={(e) =>
+                dispatch(experimentSlice.setOverrideZWithCurrentZ(e.target.checked))
+              }
+            />
+          }
+          label={
+            <Box>
+              <Typography variant="body2">
+                Override per-group Z with current Z
+              </Typography>
+              <Typography variant="caption" color="textSecondary">
+                {focusMapEnabled
+                  ? "Disabled while a focus map is active – the focus map drives Z."
+                  : "Ignore each area's stored Z and use the microscope's current Z for every position (e.g. after re-focusing)."}
+              </Typography>
+            </Box>
+          }
+          sx={{ alignItems: "flex-start", ml: 0 }}
+        />
+      </Box>
+
       {/* Stitching Intent */}
       <Box sx={{ mb: 3 }}>
         <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
@@ -217,9 +291,18 @@ const TilingDimension = () => {
         <FormControl size="small" sx={{ minWidth: 200 }}>
           <InputLabel>Stitching Mode</InputLabel>
           <Select
-            value={parameterValue.ome_write_stitched_tiff ? "full" : "none"}
+            value={
+              parameterValue.ome_write_ashlar_stitch
+                ? "ashlar"
+                : parameterValue.ome_write_stitched_tiff
+                ? "full"
+                : "none"
+            }
             onChange={(e) => {
               dispatch(experimentSlice.setOmeWriteStitchedTiff(e.target.value === "full"));
+              dispatch(experimentSlice.setOmeWriteAshlarStitch(e.target.value === "ashlar"));
+              // Ashlar stitches from individual tile TIFFs — ensure they are saved
+              dispatch(experimentSlice.setOmeWriteIndividualTiffs(e.target.value === "ashlar"));
             }}
             label="Stitching Mode"
           >
@@ -239,8 +322,66 @@ const TilingDimension = () => {
                 </Typography>
               </Box>
             </MenuItem>
+             <MenuItem value="ashlar">
+              <Box>
+                <Typography variant="body2">Ashlar Stitch</Typography>
+                <Typography variant="caption" color="textSecondary">
+                  Stitch tiles using Ashlar
+                </Typography>
+              </Box>
+            </MenuItem>
           </Select>
         </FormControl>
+
+        {/* Ashlar parameters – shown only when Ashlar mode is active */}
+        {parameterValue.ome_write_ashlar_stitch && (
+          <Box sx={{ mt: 2, display: "flex", flexDirection: "column", gap: 2 }}>
+            <Typography variant="caption" color="textSecondary">
+              Ashlar Parameters
+            </Typography>
+            <Box sx={{ display: "flex", gap: 2 }}>
+              <Tooltip title="Physical pixel size in µm/pixel. Must match the objective + camera calibration." arrow>
+                <TextField
+                  label="Pixel Size (µm/px)"
+                  type="number"
+                  size="small"
+                  value={parameterValue.ashlar_pixel_size ?? 1.0}
+                  inputProps={{ min: 0.01, step: 0.01 }}
+                  onChange={(e) =>
+                    dispatch(experimentSlice.setAshlarPixelSize(parseFloat(e.target.value) || 1.0))
+                  }
+                  sx={{ flex: 1 }}
+                />
+              </Tooltip>
+              <Tooltip title="Maximum allowed per-tile corrective shift in µm. Increase if tiles are misaligned at their edges." arrow>
+                <TextField
+                  label="Max Shift (µm)"
+                  type="number"
+                  size="small"
+                  value={parameterValue.ashlar_maximum_shift ?? 50.0}
+                  inputProps={{ min: 0, step: 1 }}
+                  onChange={(e) =>
+                    dispatch(experimentSlice.setAshlarMaximumShift(parseFloat(e.target.value) || 50.0))
+                  }
+                  sx={{ flex: 1 }}
+                />
+              </Tooltip>
+              <Tooltip title="Zero-based index of the channel used for tile alignment. Use the channel with the best contrast." arrow>
+                <TextField
+                  label="Align Channel"
+                  type="number"
+                  size="small"
+                  value={parameterValue.ashlar_align_channel ?? 0}
+                  inputProps={{ min: 0, step: 1 }}
+                  onChange={(e) =>
+                    dispatch(experimentSlice.setAshlarAlignChannel(parseInt(e.target.value, 10) || 0))
+                  }
+                  sx={{ flex: 1 }}
+                />
+              </Tooltip>
+            </Box>
+          </Box>
+        )}
       </Box>
 
       {/* Advanced Settings */}
@@ -280,6 +421,7 @@ const TilingDimension = () => {
                   onChange={(e, val) => {
                     dispatch(experimentSlice.setOverlapWidth(val / 100));
                     dispatch(wellSelectorSlice.setOverlapWidth(val / 100));
+                    dispatch(wellSelectorSlice.setAreaSelectOverlap(val / 100));
                   }}
                   valueLabelDisplay="auto"
                   valueLabelFormat={(val) => `${val}%`}
@@ -306,6 +448,7 @@ const TilingDimension = () => {
                   onChange={(e, val) => {
                     dispatch(experimentSlice.setOverlapHeight(val / 100));
                     dispatch(wellSelectorSlice.setOverlapHeight(val / 100));
+                    dispatch(wellSelectorSlice.setAreaSelectOverlap(val / 100));
                   }}
                   valueLabelDisplay="auto"
                   valueLabelFormat={(val) => `${val}%`}
@@ -320,18 +463,58 @@ const TilingDimension = () => {
             <Box>
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
                 <Typography variant="caption" sx={{ fontWeight: 500 }}>
-                  Stage Speed
+                  XY Speed
                 </Typography>
-                <Tooltip title="Speed of stage movement between tiles. Lower speeds reduce vibration but increase total scan time." arrow>
+                <Tooltip title="Speed of XY stage movement between tiles. Lower speeds reduce vibration but increase total scan time." arrow>
                   <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
                 </Tooltip>
               </Box>
               <FormControl size="small" fullWidth sx={{ mt: 0.5 }}>
                 <Select
                   value={parameterValue.speed || 20000}
-                  onChange={(e) => dispatch(experimentSlice.setSpeed(Number(e.target.value)))}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    dispatch(experimentSlice.setSpeed(v));
+                    // Keep the wellplate "Move Camera Speed" in sync so both
+                    // controls always agree on the XY scan speed.
+                    dispatch(wellSelectorSlice.setMoveCameraSpeedXY(v));
+                  }}
                 >
-                  {[5000, 10000, 15000, 20000, 25000, 30000].map((speed) => (
+                  {[10000, 20000, 30000, 40000, 50000, 60000, 70000, 80000].map((speed) => (
+                    <MenuItem key={speed} value={speed}>
+                      {speed} µm/s
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              {(parameterValue.speed || 20000) > 20000 && (
+                <Typography
+                  variant="caption"
+                  color="error"
+                  sx={{ display: "block", mt: 0.5 }}
+                >
+                  ⚠ Speeds above 20000 µm/s are highly unreliable — the stage may
+                  lose steps and positioning accuracy.
+                </Typography>
+              )}
+            </Box>
+
+            {/* Z speed */}
+            <Box>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Z Speed
+                </Typography>
+                <Tooltip title="Speed of Z stage movement during focus steps. Use lower values to minimize mechanical vibration." arrow>
+                  <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
+              <FormControl size="small" fullWidth sx={{ mt: 0.5 }}>
+                <Select
+                  value={parameterValue.z_speed || 5000}
+                  onChange={(e) => dispatch(experimentSlice.setZSpeed(Number(e.target.value)))}
+                >
+                  {[500, 1000, 2000, 5000, 10000, 20000].map((speed) => (
                     <MenuItem key={speed} value={speed}>
                       {speed} µm/s
                     </MenuItem>

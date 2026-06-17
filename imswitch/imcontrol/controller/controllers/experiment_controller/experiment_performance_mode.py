@@ -15,6 +15,7 @@ import numpy as np
 
 from .experiment_mode_base import ExperimentModeBase
 from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths
+from imswitch.imcontrol.model.io.ome_writers import write_plate_metadata_sidecar
 from imswitch.imcommon.model import dirtools
 
 
@@ -50,22 +51,42 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         self._stagescan_complete_event = threading.Event()
 
     def execute_experiment(self,
-                         snake_tiles: List[List[Dict]],
-                         illumination_intensities: List[float],
-                         experiment_params: Dict[str, Any],
+                         snake_tiles: List[List[Dict]] = None,
+                         illumination_intensities: List[float] = None,
+                         experiment_params: Dict[str, Any] = None,
+                         ctx=None,
                          **kwargs) -> Dict[str, Any]:
         """
         Execute experiment in performance mode.
 
+        Preferred call form (used by ``ExperimentController.startWellplateExperiment``)::
+
+            self.execute_experiment(ctx=execution_context)
+
+        The historical kwargs-based form is still supported.
+
         Args:
-            snake_tiles: List of tiles containing scan points
-            illumination_intensities: List of illumination values
-            experiment_params: Dictionary containing experiment parameters
+            ctx: Optional :class:`ExecutionContext` to derive
+                ``snake_tiles``, ``illumination_intensities`` and
+                ``experiment_params`` from.
+            snake_tiles: List of tiles containing scan points (legacy).
+            illumination_intensities: List of illumination values (legacy).
+            experiment_params: Dictionary containing experiment parameters (legacy).
             **kwargs: Additional parameters
 
         Returns:
             Dictionary with execution results
         """
+        if ctx is not None:
+            snake_tiles = ctx.snake_tiles if snake_tiles is None else snake_tiles
+            illumination_intensities = (
+                ctx.illumination_intensities
+                if illumination_intensities is None
+                else illumination_intensities
+            )
+            if experiment_params is None:
+                experiment_params = ctx.performance_experiment_params()
+
         self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
         
         # Extract trigger mode from experiment parameters
@@ -116,6 +137,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                     snake_tiles, illumination_intensities, experiment_params
                 )
 
+            protocol_saved = False  # Ensure protocol is written only once per experiment
             for snake_tile in snake_tiles:
                 # Calculate timeout based on scan parameters
                 scan_timeout = self._calculate_scan_timeout(snake_tile, illumination_intensities, experiment_params)
@@ -138,8 +160,11 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 zarr_url = self._execute_fast_stage_scan(scan_params, t_period, n_times, experiment_params)
                 self._logger.info(f"Performance mode scan completed. Data saved to: {zarr_url}")
                 
-                # Save experiment protocol to JSON
-                self._save_performance_protocol(scan_params, experiment_params, zarr_url)
+                # Save experiment protocol to JSON exactly once per experiment
+                # (guard prevents re-saving on subsequent tiles/wells).
+                if not protocol_saved:
+                    self._save_performance_protocol(scan_params, experiment_params, zarr_url)
+                    protocol_saved = True
 
             # Finalize OME writers if they were created
             if file_writers:
@@ -941,9 +966,50 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             grid_shape=grid_shape,
             grid_geometry=grid_geometry,
             config=writer_config,
-            logger=self._logger
+            logger=self._logger,
+            isRGB=getattr(self.controller, 'isRGB', False),
         )
         file_writers.append(ome_writer)
+
+        # Best-effort OME-NGFF plate metadata sidecar (performance mode uses
+        # one writer for all wells, so we emit only the sidecar – not per-well
+        # zarr attrs).
+        try:
+            wells_used: List[tuple] = []
+            condition_labels: Dict[str, str] = {}
+            labware_load_name: Optional[str] = None
+            for tiles in snake_tiles:
+                if not tiles:
+                    continue
+                first = tiles[0]
+                w_row = first.get("wellRow")
+                w_col = first.get("wellColumn")
+                w_load = first.get("labwareLoadName")
+                w_cond = first.get("conditionLabel")
+                if w_load and labware_load_name is None:
+                    labware_load_name = w_load
+                if w_row and w_col is not None:
+                    wells_used.append((str(w_row), str(int(w_col))))
+                    if w_cond:
+                        condition_labels[f"{w_row}{int(w_col)}"] = w_cond
+            if labware_load_name and getattr(self.controller, "labware_manager", None) is not None:
+                lab = self.controller.labware_manager.get(labware_load_name)
+                if lab is not None:
+                    write_plate_metadata_sidecar(
+                        output_dir=dirPath,
+                        plate_name=labware_load_name,
+                        rows=list(lab.rows),
+                        columns=[str(c) for c in lab.columns],
+                        wells_used=wells_used,
+                        extra={
+                            "imswitch_labware": {
+                                "loadName": labware_load_name,
+                                "conditionLabels": condition_labels or None,
+                            }
+                        },
+                    )
+        except Exception as exc:  # noqa: BLE001 - sidecar is best-effort
+            self._logger.warning(f"Failed to write plate metadata sidecar (performance mode): {exc}")
 
         return file_writers
 

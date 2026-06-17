@@ -6,7 +6,6 @@ import os
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
 from datetime import datetime
-from imswitch import IS_HEADLESS
 class TemperatureController(ImConWidgetController):
     """ Linked to TemperatureWidget."""
 
@@ -38,13 +37,6 @@ class TemperatureController(ImConWidgetController):
         self.temperatureController = self._master.rs232sManager["ESP32"]._esp32.temperature
 
         # Connect TemperatureWidget signals
-        if not IS_HEADLESS:
-            self._widget.sigPIDToggled.connect(self.setPID)
-            self._widget.sigsliderTemperatureValueChanged.connect(self.valueTemperatureValueChanged)
-            self._widget.sigShowTemperatureToggled.connect(self.switchTemperatureMonitor)
-            self.setPID(self._widget.getPIDChecked())
-
-
         # create logging directory
         self.temperatureDir = os.path.join(dirtools.UserFileDirs.Root, 'temperatureController')
         if not os.path.exists(self.temperatureDir):

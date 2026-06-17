@@ -7,6 +7,7 @@ import GenericTabBar from "./GenericTabBar";
 //import { FixedSizeList as List } from "react-window";
 
 import * as experimentSlice from "../state/slices/ExperimentSlice";
+import * as positionSlice from "../state/slices/PositionSlice.js";
 
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
 
@@ -40,6 +41,7 @@ const PointListEditorComponent = () => {
 
   // Access global Redux state
   const experimentState = useSelector(experimentSlice.getExperimentState);
+  const positionState = useSelector(positionSlice.getPositionState);
   //console.log("PointListEditorComponent", experimentState);
   //console.log("PointListEditorComponent", experimentState.pointList);
 
@@ -81,13 +83,22 @@ const PointListEditorComponent = () => {
   };
 
   //##################################################################################
+  const handleSetCurrentZ = (index) => {
+    // Override the point's Z with the current stage Z position from Redux
+    handlePointChanged(index, "z", positionState.z);
+  };
+
+  //##################################################################################
   const handleDeleteAll = () => {
     // Update Redux state
     dispatch(experimentSlice.setPointList([]));
   };
   //##################################################################################
-  const handleGotoButtonClick = (x, y, z) => {
-    console.log("handleGotoButtonClick", x, y, z);
+  // Move the stage to a point. "includeZ" controls whether the Z axis is moved
+  // as well: the plain "Goto" stays in-plane (XY only) so the focus isn't
+  // disturbed, while "Goto (incl. Z)" also drives Z to the stored value.
+  const handleGotoButtonClick = (x, y, z, includeZ = false) => {
+    console.log("handleGotoButtonClick", x, y, z, "includeZ", includeZ);
     // Do something with x and y
     apiPositionerControllerMovePositioner({
       axis: "X",
@@ -129,8 +140,8 @@ const PointListEditorComponent = () => {
         );
       });
 
-    // Also move Z if a valid z value is provided
-    if (z != null && z !== 0) {
+    // Only move Z when the user explicitly asked for it (Goto incl. Z).
+    if (includeZ && z != null) {
       apiPositionerControllerMovePositioner({
         axis: "Z",
         dist: z,
@@ -444,14 +455,39 @@ const PointListEditorComponent = () => {
                 </>
               )}
 
-              {/* dummy button*/}
-              {viewMode != ViewMode.READONLY && (
+              {/* Set current Z position */}
+              {viewMode == ViewMode.POSITION && (
                 <Button
                   sx={{ padding: "0px" }}
+                  onClick={() => handleSetCurrentZ(index)}
+                  title="Set Z to current stage position"
+                >
+                  Set Z
+                </Button>
+              )}
+              {/* Goto buttons: XY-only and XYZ */}
+              {viewMode != ViewMode.READONLY && (
+                <Button
+                  sx={{ padding: "0px", minWidth: "48px" }}
                   disabled={false}
-                  onClick={() => handleGotoButtonClick(item.x, item.y, item.z)}
+                  onClick={() =>
+                    handleGotoButtonClick(item.x, item.y, item.z, false)
+                  }
+                  title="Move to this point's XY position (Z unchanged)"
                 >
                   Goto
+                </Button>
+              )}
+              {viewMode != ViewMode.READONLY && (
+                <Button
+                  sx={{ padding: "0px", minWidth: "64px" }}
+                  disabled={false}
+                  onClick={() =>
+                    handleGotoButtonClick(item.x, item.y, item.z, true)
+                  }
+                  title="Move to this point's XYZ position (includes Z)"
+                >
+                  Goto +Z
                 </Button>
               )}
               {/* Remove item button*/}

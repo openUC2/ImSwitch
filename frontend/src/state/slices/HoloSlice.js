@@ -15,28 +15,38 @@ const initialHoloState = {
   wavelength: 488e-9, // meters (488nm = blue-green laser)
   na: 0.3, // numerical aperture
   dz: 0.0, // propagation distance in meters
+  dzMax: 30000e-6, // upper bound of dz slider in meters (default 30 mm)
+  dzStep: 1e-6, // dz slider step in meters (default 1 µm)
   binning: 1, // binning factor (1, 2, 4, etc.)
   previousBinning: 1, // store previous binning for pause/resume
-  
+  fullFrame: false, // reconstruct full sensor (with binning) instead of ROI
+
   // ROI parameters
   roiCenter: [0, 0], // [x, y] in pixels (center of ROI)
   roiSize: 256, // square ROI size in pixels
-  
+
   // Image processing parameters
-  colorChannel: "red", // "red", "green", "blue"
+  colorChannel: "red", // "red", "green", "blue", "white"
   flipX: false,
   flipY: false,
   rotation: 0, // 0, 90, 180, 270 degrees
 
   // Display raw hologram (reconstruct at dz=0) instead of the slider dz
   showRaw: false,
-  
+
+
   // Processing rate
   updateFreq: 10.0, // Hz (processing framerate)
-  
+
+  // Backing detector info (populated by get_camera_info_inlineholo)
+  cameraName: null,
+  isRGB: false,
+
   // Frame data
   frameSize: [1920, 1080], // Default camera frame size [width, height]
   lastProcessTime: 0.0,
+  lastMjpegEmitTime: 0.0, // wall-clock of last server-side MJPEG push
+  mjpegClientCount: 0,
   frameCount: 0,
   processedCount: 0,
   
@@ -87,6 +97,27 @@ const holoSlice = createSlice({
     },
     setPreviousBinning: (state, action) => {
       state.previousBinning = action.payload;
+    },
+    setFullFrame: (state, action) => {
+      state.fullFrame = action.payload;
+    },
+    setDzMax: (state, action) => {
+      state.dzMax = action.payload;
+    },
+    setDzStep: (state, action) => {
+      state.dzStep = action.payload;
+    },
+    setCameraName: (state, action) => {
+      state.cameraName = action.payload;
+    },
+    setIsRGB: (state, action) => {
+      state.isRGB = action.payload;
+    },
+    setLastMjpegEmitTime: (state, action) => {
+      state.lastMjpegEmitTime = action.payload;
+    },
+    setMjpegClientCount: (state, action) => {
+      state.mjpegClientCount = action.payload;
     },
     
     // ROI parameters
@@ -190,6 +221,13 @@ export const {
   setDz,
   setBinning,
   setPreviousBinning,
+  setFullFrame,
+  setDzMax,
+  setDzStep,
+  setCameraName,
+  setIsRGB,
+  setLastMjpegEmitTime,
+  setMjpegClientCount,
   setRoiCenter,
   setRoiSize,
   setColorChannel,

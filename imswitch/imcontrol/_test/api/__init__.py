@@ -158,7 +158,6 @@ class ImSwitchAPITestServer:
 
             main(
                 default_config=self.config_file,
-                is_headless=True,
                 http_port=self.http_port,
                 ssl=self.ssl,  # Fixed: was self.is_ssl
             )

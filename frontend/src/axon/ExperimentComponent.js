@@ -82,6 +82,33 @@ const ExperimentComponent = () => {
     };
   }, []); // Empty dependency array ensures this runs once on mount
 
+  // Read the live detector exposure/gain and apply them to ALL channels.
+  // NOTE: this intentionally only runs when the user clicks "Use Current Camera
+  // Settings". It must NOT run automatically on mount: the per-channel
+  // exposure/gain values live in `parameterValue.exposureTimes` / `.gains`
+  // (arrays, persisted via redux-persist). Overwriting them on every mount with
+  // the single live detector value is what made per-channel exposure snap back
+  // to 100 ms / gain 0 whenever the WellPlate view was reopened or the page
+  // reloaded. Leaving the stored arrays untouched lets ChannelsDimension keep
+  // (and persist) whatever the user set — including the result of
+  // "auto exposure once".
+  const fetchAndApplyCameraSettings = () => {
+    const api = createAxiosInstance();
+    api.get("/SettingsController/getDetectorParameters")
+      .then((res) => res.data)
+      .then((data) => {
+        if (data.exposure != null) {
+          dispatch(experimentSlice.setExposureTimes(data.exposure));
+        }
+        if (data.gain != null) {
+          dispatch(experimentSlice.setGains(data.gain));
+        }
+      })
+      .catch((err) => {
+        console.warn("Could not fetch detector parameters:", err);
+      });
+  };
+
   //##################################################################################
   const handleStart = () => {
     console.log("Experiment started");
@@ -403,6 +430,14 @@ const ExperimentComponent = () => {
           title="Open OME-Zarr in external vizarr.io viewer (requires internet)"
         >
           Open External Vizarr
+        </Button>
+
+        <Button
+          variant="outlined"
+          onClick={fetchAndApplyCameraSettings}
+          title="Read current detector exposure and gain, and apply them as experiment defaults"
+        >
+          Use Current Camera Settings
         </Button>
 
         {/* Display the step name (fixed width) and loading bar with percentage */}

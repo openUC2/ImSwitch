@@ -13,6 +13,9 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
+  DialogContentText,
+  DialogActions,
+  Tooltip,
   Switch,
   FormControlLabel,
 } from "@mui/material";
@@ -28,6 +31,7 @@ import {
   GetApp,
 } from "@mui/icons-material";
 import StreamControlOverlay from "../components/StreamControlOverlay";
+import StreamPresets from "./StreamPresets";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner";
 import { useSelector, useDispatch } from "react-redux";
@@ -42,6 +46,7 @@ export default function StreamControls({
   isRecording,
   onStartRecord,
   onStopRecord,
+  onStopRecordAndDownload,
   onGoToFolder,
   lastCapturePath,
 }) {
@@ -56,6 +61,20 @@ export default function StreamControls({
   // Default is empty - detector name is now automatically included in timestamp-based filename
   const [snapFileName, setSnapFileName] = useState("");
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const [fijiInfoOpen, setFijiInfoOpen] = useState(false);
+
+  // Wrap snap & download to show a one-time Fiji hint for TIFF files
+  const handleSnapAndDownload = useCallback(
+    (fileName, format) => {
+      // Show the hint only on the very first TIFF snap & download
+      if (format === 1 && !localStorage.getItem("fijiHintShown")) {
+        setFijiInfoOpen(true);
+        localStorage.setItem("fijiHintShown", "1");
+      }
+      onSnapAndDownload(fileName, format);
+    },
+    [onSnapAndDownload],
+  );
 
   // Separate format options for snap and record
   const snapFormatOptions = [
@@ -229,6 +248,7 @@ export default function StreamControls({
       {/* Stream Control Section */}
       <Box
         component="fieldset"
+        data-tour="stream-controls"
         sx={{
           border: 1,
           borderColor: "divider",
@@ -298,14 +318,20 @@ export default function StreamControls({
           onClick={() => setOverlayOpen(true)}
           sx={{ ml: "auto" }}
           startIcon={<Settings />}
+          data-tour="stream-settings-button"
         >
           Settings
         </Button>
       </Box>
 
+      {/* Stream presets / macros — recall named bundles of objective +
+          exposure + gain + livestream parameters. Frontend-only. */}
+      <StreamPresets />
+
       {/* Recording Controls Section */}
       <Box
         component="fieldset"
+        data-tour="capture-controls"
         sx={{
           border: 1,
           borderColor: "divider",
@@ -407,7 +433,7 @@ export default function StreamControls({
             variant="contained"
             color="primary"
             size="small"
-            onClick={() => onSnapAndDownload(snapFileName, snapFormat)}
+            onClick={() => handleSnapAndDownload(snapFileName, snapFormat)}
             startIcon={<GetApp />}
             disabled={!isLiveViewActive}
             sx={{ whiteSpace: "nowrap", width: 160, height: 40, minHeight: 40 }}
@@ -436,7 +462,7 @@ export default function StreamControls({
             display: "flex",
             gap: 1,
             alignItems: "center",
-            flexWrap: "wrap",
+            flexWrap: "nowrap",
           }}
         >
           <Typography
@@ -468,7 +494,7 @@ export default function StreamControls({
           {!isRecording ? (
             <Button
               variant="contained"
-              color="secondary"
+              color="primary"
               size="small"
               onClick={() => onStartRecord(snapFileName, recordFormat)}
               startIcon={<FiberManualRecord />}
@@ -503,17 +529,71 @@ export default function StreamControls({
               Stop
             </Button>
           )}
+
+          <Tooltip
+            title={isRecording ? "" : "Please start a recording first"}
+            arrow
+          >
+            <span>
+              <Button
+                variant="contained"
+                color="warning"
+                size="small"
+                onClick={onStopRecordAndDownload}
+                startIcon={<GetApp />}
+                disabled={!isRecording}
+                sx={{
+                  whiteSpace: "nowrap",
+                  height: 40,
+                  minHeight: 40,
+                  width: 160,
+                }}
+              >
+                Stop & Download
+              </Button>
+            </span>
+          </Tooltip>
         </Box>
       </Box>
 
       {/* Stream Control Overlay as Dialog */}
+      {/* One-time Fiji info dialog shown on first TIFF snap & download */}
+      <Dialog open={fijiInfoOpen} onClose={() => setFijiInfoOpen(false)}>
+        <DialogTitle>Open TIFF files with Fiji / ImageJ</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            The downloaded TIFF image is 16-bit. Most operating system viewers
+            will display it as a black or washed-out image because they cannot
+            scale 16-bit data correctly.
+            <br />
+            <br />
+            Please open the file with{" "}
+            <strong>
+              <a
+                href="https://fiji.sc"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Fiji / ImageJ
+              </a>
+            </strong>{" "}
+            — it handles 16-bit images properly and applies the correct
+            brightness/contrast scaling automatically.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setFijiInfoOpen(false)} variant="contained">
+            Got it
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog
         open={overlayOpen}
         onClose={() => setOverlayOpen(false)}
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>Stream Settings</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <StreamControlOverlay
             stats={hudData.stats}

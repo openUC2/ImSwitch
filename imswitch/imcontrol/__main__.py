@@ -1,12 +1,7 @@
 from imswitch import imcontrol
 from imswitch.imcommon import prepareApp, launchApp
 from imswitch.imcommon.controller import ModuleCommunicationChannel
-from imswitch import IS_HEADLESS
 import os
-
-if IS_HEADLESS:
-    os.environ["DISPLAY"] = ":0"
-    os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 
 def main():

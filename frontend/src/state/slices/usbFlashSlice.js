@@ -24,6 +24,8 @@ const initialState = {
   // Available firmware files (flat list from server)
   firmwareFiles: [], // [{ filename, size, mod_time, url }]
   selectedFirmware: null, // { filename, size, mod_time, url }
+  firmwareSearchQuery: "", // search/filter text for firmware list
+  showMergedFirmware: false, // merged binaries are hidden by default; user must opt-in
 
   // Flash options
   baudRate: 921600,
@@ -45,6 +47,9 @@ const initialState = {
 
   // Result
   flashResult: null,
+
+  // State response received after CAN address assignment / device probe
+  canStateResponse: null,
 
   // General states
   error: null,
@@ -79,9 +84,12 @@ const usbFlashSlice = createSlice({
       state.flashMessage = "";
       state.flashDetails = null;
       state.flashResult = null;
+      state.canStateResponse = null;
       state.error = null;
       state.successMessage = null;
       state.selectedFirmware = null;
+      state.firmwareSearchQuery = "";
+      state.showMergedFirmware = false;
       state.firmwareFiles = [];
       state.isFlashing = false;
       state.eraseFlash = false;
@@ -117,6 +125,12 @@ const usbFlashSlice = createSlice({
     },
     setSelectedFirmware: (state, action) => {
       state.selectedFirmware = action.payload;
+    },
+    setFirmwareSearchQuery: (state, action) => {
+      state.firmwareSearchQuery = action.payload;
+    },
+    setShowMergedFirmware: (state, action) => {
+      state.showMergedFirmware = action.payload;
     },
     setIsLoadingFirmware: (state, action) => {
       state.isLoadingFirmware = action.payload;
@@ -164,6 +178,9 @@ const usbFlashSlice = createSlice({
     setFlashResult: (state, action) => {
       state.flashResult = action.payload;
     },
+    setCanStateResponse: (state, action) => {
+      state.canStateResponse = action.payload;
+    },
 
     // Update flash progress from socket event
     updateFlashProgress: (state, action) => {
@@ -205,6 +222,8 @@ export const {
   setFirmwareFiles,
   setSelectedFirmware,
   setIsLoadingFirmware,
+  setFirmwareSearchQuery,
+  setShowMergedFirmware,
   setBaudRate,
   setReconnectAfter,
   setEraseFlash,
@@ -218,6 +237,7 @@ export const {
   setFlashMessage,
   setFlashDetails,
   setFlashResult,
+  setCanStateResponse,
   updateFlashProgress,
   setError,
   setSuccessMessage,

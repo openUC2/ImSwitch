@@ -14,6 +14,7 @@ class CommunicationChannel(SignalInterface):
 
     sigUpdateStreamFrame = Signal()
 
+    sigDetectorParametersUpdated = Signal(dict)  # Emits: {'detectorName': str, 'parameters': dict}
 
     sigUpdateImage = Signal(
         str, np.ndarray, bool, list, bool
@@ -89,9 +90,6 @@ class CommunicationChannel(SignalInterface):
     sigExperimentStop = Signal()
     #sigRequestScannersInScan = Signal()
 
-    #sigSendScannersInScan = Signal(object)  # (scannerList)
-    sigFlatFieldRunning = Signal(bool)
-    sigFlatFieldImage = Signal(object)
 
     sigAutoFocus =  Signal(float, float) # scanrange and stepsize
     sigAutoFocusRunning = Signal(bool) # indicate if autofocus is running or not
@@ -115,6 +113,8 @@ class CommunicationChannel(SignalInterface):
     sigUpdateRotatorPosition = Signal(str, str)  # (rotatorName)
 
     sigUpdateMotorPosition = Signal(list)  # # TODO: Just forcely update the positoin in the GUI
+
+    sigHomingState = Signal(dict)  # (homingStateDict) - per-axis frame-homing progress for the frontend
 
     sigUpdateLaserPower = Signal(dict)  # (laserPowerDict) - updates laser power values from device callbacks
 

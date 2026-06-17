@@ -4,7 +4,6 @@ try:
 except ImportError:
     entry_points = None
 import h5py
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.controller import MainController, PickDatasetsController
 from imswitch.imcommon.model import (
     ostools,
@@ -51,18 +50,6 @@ class ImConMainController(MainController):
             self._moduleCommChannel,
         )
 
-        if not IS_HEADLESS:
-            # Connect view signals
-            self.__mainView.sigLoadParamsFromHDF5.connect(self.loadParamsFromHDF5)
-            self.__mainView.sigPickSetup.connect(self.pickSetup)
-            self.__mainView.sigClosing.connect(self.closeEvent)
-            self.pickSetupController = self.__factory.createController(
-                PickSetupController, self.__mainView.pickSetupDialog
-            )
-            self.pickDatasetsController = self.__factory.createController(
-                PickDatasetsController, self.__mainView.pickDatasetsDialog
-            )
-
         self.controllers = {}
 
         for widgetKey, widget in self.__mainView.widgets.items():
@@ -74,6 +61,11 @@ class ImConMainController(MainController):
                     f"{widgetKey}Controller{self.__setupInfo.scan.scanWidgetType}"
                 )
             if widgetKey == "ImSwitchServer":
+                continue
+            # ensure that PixelCalibrationController is always created last, as it is required for the 
+            # correct functioning of other controllers => sort list of widgets so that PixelCalibration is last
+            if widgetKey == "PixelCalibration" or widgetKey == "StageCenter" or widgetKey == "LiveView":
+                # delay creation of PixelCalibrationController until the end, as it is required for the correct functioning of other controllers
                 continue
             if widgetKey == "Arkitekt" and not hasattr(
                 self.__masterController, "arkitektManager"
@@ -133,6 +125,7 @@ class ImConMainController(MainController):
                 except Exception as e:
                     self.__logger.debug(e)
 
+            
         # Add AcceptanceTestController in any case
         try:
             self.__logger.info("Creating controller for AcceptanceTest ")
@@ -154,23 +147,62 @@ class ImConMainController(MainController):
                 f"Could not dynamically import {controller_name}: {e}"
             )
 
-        # Add LiveViewController in case of IS_HEADLESS in anyway
+        # Add PixelCalibrationController for pixel calibration management 
         try:
-            if IS_HEADLESS:
-                self.__logger.info("Creating controller for LiveView ")
-                controller_name = "LiveViewController"
-                module = importlib.import_module(
-                    "imswitch.imcontrol.controller.controllers.LiveViewController"
+            self.__logger.info("Creating controller for PixelCalibration ")
+            controller_name = "PixelCalibrationController"
+            module = importlib.import_module(
+                "imswitch.imcontrol.controller.controllers.PixelCalibrationController"
+            )
+            controller_class = getattr(module, controller_name)
+            if controller_class is not None:
+                self.controllers["PixelCalibration"] = self.__factory.createController(
+                    controller_class, self.__mainView.widgets["PixelCalibration"]
                 )
-                controller_class = getattr(module, controller_name)
-                if controller_class is not None:
-                    self.controllers["LiveView"] = self.__factory.createController(
-                        controller_class, widget
-                    )
-                    # Register LiveViewController
-                    self.__masterController.registerController(
-                        "LiveView", self.controllers["LiveView"]
-                    )
+                # Register PixelCalibrationController
+                self.__masterController.registerController(
+                    "PixelCalibration", self.controllers["PixelCalibration"]
+                )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not dynamically import {controller_name}: {e}"
+            )
+        # Add StageCenterController for stage centering functionality (if StageCenter widget is present)
+        try:
+            self.__logger.info("Creating controller for StageCenter ")
+            controller_name = "StageCenterController"
+            module = importlib.import_module(
+                "imswitch.imcontrol.controller.controllers.StageCenterController" 
+            )
+            controller_class = getattr(module, controller_name)
+            if controller_class is not None:
+                self.controllers["StageCenter"] = self.__factory.createController(
+                    controller_class, self.__mainView.widgets["StageCenter"]
+                )
+                # Register StageCenterController
+                self.__masterController.registerController(
+                    "StageCenter", self.controllers["StageCenter"]
+                )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not dynamically import {controller_name}: {e}"
+            )   
+        # Add LiveViewController for live streaming (if LiveView widget is present)
+        try:
+            self.__logger.info("Creating controller for LiveView ")
+            controller_name = "LiveViewController"
+            module = importlib.import_module(
+                "imswitch.imcontrol.controller.controllers.LiveViewController"
+            )
+            controller_class = getattr(module, controller_name)
+            if controller_class is not None:
+                self.controllers["LiveView"] = self.__factory.createController(
+                    controller_class, widget
+                )
+                # Register LiveViewController
+                self.__masterController.registerController(
+                    "LiveView", self.controllers["LiveView"]
+                )
         except Exception as e:
             self.__logger.warning(
                 f"Could not dynamically import {controller_name}: {e}"
@@ -219,36 +251,29 @@ class ImConMainController(MainController):
             f" hardware setup file.",
         )
         self.__apiui = None
-        if IS_HEADLESS:
-            uiObjs = mainView.widgets
-            self.__apiui = generateUI(
-                uiObjs,
-                missingAttributeErrorMsg=lambda attr: f"The imcontrol API does either not have any"
-                f" method {attr}, or the widget that defines it"
-                f" is not included in your currently active"
-                f" hardware setup file.",
-            )
+        uiObjs = mainView.widgets
+        self.__apiui = generateUI(
+            uiObjs,
+            missingAttributeErrorMsg=lambda attr: f"The imcontrol API does either not have any"
+            f" method {attr}, or the widget that defines it"
+            f" is not included in your currently active"
+            f" hardware setup file.",
+        )
 
-            # Connect LiveViewController stream signal to noqt signal handler in headless mode
-            if "LiveView" in self.controllers:
-                try:
-                    liveViewController = self.controllers["LiveView"]
-                    # The sigStreamFrame from LiveViewController emits pre-formatted messages
-                    # These are automatically handled by noqt's SignalInstance._handle_stream_frame
-                    self.__logger.debug(
-                        "Connected LiveViewController.sigStreamFrame for streaming"
-                    )
-                except Exception as e:
-                    self.__logger.warning(
-                        f"Could not connect LiveViewController streaming signal: {e}"
-                    )
+        # Connect LiveViewController stream signal to noqt signal handler in headless mode
+        if "LiveView" in self.controllers:
+            try:
+                liveViewController = self.controllers["LiveView"]
+                # The sigStreamFrame from LiveViewController emits pre-formatted messages
+                # These are automatically handled by noqt's SignalInstance._handle_stream_frame
+                self.__logger.debug(
+                    "Connected LiveViewController.sigStreamFrame for streaming"
+                )
+            except Exception as e:
+                self.__logger.warning(
+                    f"Could not connect LiveViewController streaming signal: {e}"
+                )
 
-        # Generate Shorcuts
-        if not IS_HEADLESS:
-            self.__shortcuts = None
-            shorcutObjs = list(self.__mainView.widgets.values())
-            self.__shortcuts = generateShortcuts(shorcutObjs)
-            self.__mainView.addShortcuts(self.__shortcuts)
 
         self.__logger.debug("Start ImSwitch Server")
         self._serverWorker = ImSwitchServer(self.__api, self.__apiui, setupInfo)

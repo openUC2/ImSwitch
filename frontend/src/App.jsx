@@ -66,7 +66,7 @@ import {
   setNotification,
 } from "./state/slices/NotificationSlice.js";
 import { getThemeState } from "./state/slices/ThemeSlice.js";
-import { SnackbarProvider, useSnackbar } from "notistack";
+import { SnackbarProvider, useSnackbar, enqueueSnackbar } from "notistack";
 import useBackendControllerCapabilities from "./hooks/useBackendControllerCapabilities";
 import apiPositionerControllerHomeAxis from "./backendapi/apiPositionerControllerHomeAxis";
 import apiPositionerControllerGetHomingStatus from "./backendapi/apiPositionerControllerGetHomingStatus";
@@ -416,6 +416,35 @@ function App() {
     setSelectedPlugin("ImJoy");
   };
 
+  // Copy a `napari --plugin openuc2-processor <url>` command to the clipboard so
+  // the user can download/process this dataset in the napari plugin.
+  const handleOpenInNapari = (file) => {
+    const cleanPath = file.path?.startsWith("/")
+      ? file.path.slice(1)
+      : file.path;
+    const url = `${hostIP}:${apiPort}/imswitch/api/FileManager/download/${cleanPath}`;
+    const command = `napari --plugin openuc2-processor "${url}"`;
+    const notify = (variant, message) => {
+      try {
+        enqueueSnackbar(message, { variant });
+      } catch (e) {
+        /* SnackbarProvider not mounted */
+      }
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(command)
+        .then(() => notify("success", "Copied napari command to clipboard"))
+        .catch(() => {
+          console.log(command);
+          notify("warning", "Copy failed — command logged to console");
+        });
+    } else {
+      console.log(command);
+      notify("info", "Clipboard unavailable — command logged to console");
+    }
+  };
+
   // Handler to open OME-Zarr files with the integrated Vizarr viewer
   const handleOpenWithVizarr = (file) => {
     console.log("[App] Opening file with Vizarr:", file);
@@ -718,6 +747,7 @@ function App() {
                     onDownload={handleDownload}
                     onFileOpen={handleOpenWithImJoy}
                     onOpenWithVizarr={handleOpenWithVizarr}
+                    onOpenInNapari={handleOpenInNapari}
                     onDelete={handleDelete}
                     onRefresh={handleRefresh}
                     layout="list"

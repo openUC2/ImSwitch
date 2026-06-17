@@ -35,6 +35,7 @@ const FileManager = ({
   onRefresh,
   onFileOpen = () => {},
   onOpenWithVizarr = null,
+  onOpenInNapari = null,
   onError = () => {},
   layout = "grid",
   enableFilePreview = true,
@@ -110,6 +111,7 @@ const FileManager = ({
                       onRename={onRename}
                       onFileOpen={onFileOpen}
                       onOpenWithVizarr={onOpenWithVizarr}
+                      onOpenInNapari={onOpenInNapari}
                       onRefresh={onRefresh}
                       enableFilePreview={enableFilePreview}
                       triggerAction={triggerAction}
@@ -174,6 +176,7 @@ FileManager.propTypes = {
   onRefresh: PropTypes.func,
   onFileOpen: PropTypes.func,
   onOpenWithVizarr: PropTypes.func,
+  onOpenInNapari: PropTypes.func,
   onError: PropTypes.func,
   layout: PropTypes.oneOf(["grid", "list"]),
   maxFileSize: PropTypes.number,

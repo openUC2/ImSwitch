@@ -254,6 +254,8 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
             maxX: positionState.x + (numX - 1) * sX,
             minY: positionState.y,
             maxY: positionState.y + (numY - 1) * sY,
+            width: (numX - 1) * sX,
+            height: (numY - 1) * sY,
           },
           scanPattern: "snake",
           positions: snakePositions.map((pos, idx) => ({ ...pos, index: idx })),

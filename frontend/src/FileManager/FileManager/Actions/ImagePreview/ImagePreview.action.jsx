@@ -8,7 +8,7 @@ import {
   formatSimpleValue,
   groupAcquisitionAttributes,
 } from "../../../utils/metadataFormat";
-import { MdOutlineFileDownload, MdOpenInNew, MdExpandMore, MdChevronRight } from "react-icons/md";
+import { MdOutlineFileDownload, MdOpenInNew, MdExpandMore, MdChevronRight, MdContentCopy } from "react-icons/md";
 import { FaRegFile } from "react-icons/fa6";
 import { SiImagej } from "react-icons/si";
 import { MdViewInAr } from "react-icons/md";
@@ -107,7 +107,7 @@ const DescriptionBlock = ({ value }) => {
   );
 };
 
-const ImagePreviewAction = ({ onOpenWithVizarr, triggerAction }) => {
+const ImagePreviewAction = ({ onOpenWithVizarr, onOpenInNapari, triggerAction }) => {
   const { selectedFiles } = useSelection();
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -175,6 +175,13 @@ const ImagePreviewAction = ({ onOpenWithVizarr, triggerAction }) => {
     }
   };
 
+  const handleOpenInNapari = () => {
+    if (onOpenInNapari) {
+      onOpenInNapari(file);
+      triggerAction.close();
+    }
+  };
+
   const displayKeys = metadata
     ? Object.keys(LABEL_MAP).filter(
         (k) =>
@@ -235,6 +242,14 @@ const ImagePreviewAction = ({ onOpenWithVizarr, triggerAction }) => {
                 <span>Fiji</span>
               </div>
             </Button>
+            {onOpenInNapari && (
+              <Button onClick={handleOpenInNapari} padding="0.4rem 0.7rem">
+                <div className="action-btn">
+                  <MdContentCopy size={16} />
+                  <span>napari</span>
+                </div>
+              </Button>
+            )}
             {isZarr && onOpenWithVizarr && (
               <Button onClick={handleOpenInVizarr} padding="0.4rem 0.7rem" type="secondary">
                 <div className="action-btn">

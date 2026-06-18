@@ -18,6 +18,7 @@ const Actions = ({
   acceptedFileTypes,
   triggerAction,
   onOpenWithVizarr,
+  onOpenInNapari,
 }) => {
   const [activeAction, setActiveAction] = useState(null);
   const { selectedFiles } = useSelection();
@@ -54,6 +55,7 @@ const Actions = ({
       component: (
         <ImagePreviewAction
           onOpenWithVizarr={onOpenWithVizarr}
+          onOpenInNapari={onOpenInNapari}
           triggerAction={triggerAction}
         />
       ),

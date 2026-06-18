@@ -138,6 +138,7 @@ const FileManager = ({
                   acceptedFileTypes={acceptedFileTypes}
                   triggerAction={triggerAction}
                   onOpenWithVizarr={onOpenWithVizarr}
+                  onOpenInNapari={onOpenInNapari}
                 />
               </LayoutProvider>
             </ClipBoardProvider>

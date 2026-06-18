@@ -7,6 +7,7 @@ import FrameHomingTab from "./FRAMESettings/FrameHomingTab";
 import PixelCalibrationTab from "./FRAMESettings/PixelCalibrationTab";
 import ManualPixelCalibrationTab from "./FRAMESettings/ManualPixelCalibrationTab";
 import VerifyCalibrationTab from "./FRAMESettings/VerifyCalibrationTab";
+import ReadNoiseCalibrationTab from "./FRAMESettings/ReadNoiseCalibrationTab";
 import ExtendedObjectiveController from "./ObjectiveController";
 import StageOffsetCalibrationTab from "./FRAMESettings/StageOffsetCalibrationTab";
 import OpticalFlowTab from "./FRAMESettings/OpticalFlowTab";
@@ -51,6 +52,7 @@ const FRAMESettings = () => {
         <Tab value="autoPixel" label="Automatic Pixel Calibration" />
         <Tab value="manualPixel" label="Manual Pixel Calibration" />
         <Tab value="verifyCalibration" label="Verify Calibration" />
+        <Tab value="readNoise" label="Read Noise Calibration" />
         <Tab value="setLasers" label="Set Lasers" />
         <Tab value="testHoming" label="Test Homing" />
         <Tab value="frameHoming" label="Frame Homing & Transport" />
@@ -65,6 +67,7 @@ const FRAMESettings = () => {
         {selectedTab === "autoPixel" && <PixelCalibrationTab />}
         {selectedTab === "manualPixel" && <ManualPixelCalibrationTab />}
         {selectedTab === "verifyCalibration" && <VerifyCalibrationTab />}
+        {selectedTab === "readNoise" && <ReadNoiseCalibrationTab />}
         {selectedTab === "setLasers" && <SetLasersTab />}
         {selectedTab === "testHoming" && <TestHomingTab />}
         {selectedTab === "frameHoming" && <FrameHomingTab />}

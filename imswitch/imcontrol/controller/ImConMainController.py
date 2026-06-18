@@ -240,6 +240,22 @@ class ImConMainController(MainController):
                 f"Could not create MetadataController: {e}"
             )
 
+        # Add ReadNoiseCalibrationController for camera read-noise/gain calibration (no widget required)
+        try:
+            self.__logger.info("Creating ReadNoiseCalibrationController for read-noise calibration")
+            from .controllers.ReadNoiseCalibrationController import ReadNoiseCalibrationController
+            self.controllers["ReadNoiseCalibration"] = self.__factory.createController(
+                ReadNoiseCalibrationController, None
+            )
+            # Register ReadNoiseCalibrationController
+            self.__masterController.registerController(
+                "ReadNoiseCalibration", self.controllers["ReadNoiseCalibration"]
+            )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not create ReadNoiseCalibrationController: {e}"
+            )
+
         # Generate API
         self.__api = None
         apiObjs = list(self.controllers.values()) + [self.__commChannel]

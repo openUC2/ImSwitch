@@ -24,8 +24,21 @@ import { selectHasController } from "../state/slices/BackendCapabilitiesSlice";
  * - Objective Controller (objective management)
  * - Stage Offset Calibration (raster scan -> stage offset)
  */
+// localStorage handshake key: another view (e.g. the startup "Homing
+// Recommended" dialog) can request a specific tab to be opened on mount by
+// setting this key before navigating to the FRAME Settings plugin. Consumed
+// once so a later manual visit still opens the default tab.
+const INITIAL_TAB_KEY = "frameSettings.initialTab";
+
 const FRAMESettings = () => {
-  const [selectedTab, setSelectedTab] = useState("autoPixel");
+  const [selectedTab, setSelectedTab] = useState(() => {
+    const requested = localStorage.getItem(INITIAL_TAB_KEY);
+    if (requested) {
+      localStorage.removeItem(INITIAL_TAB_KEY);
+      return requested;
+    }
+    return "autoPixel";
+  });
   const hasObjectiveController = useSelector(
     selectHasController("ObjectiveController"),
   );

@@ -17,6 +17,7 @@ import {
 import { useTheme, alpha } from "@mui/material/styles";
 import AddLocationIcon from "@mui/icons-material/AddLocation";
 import MyLocationIcon from "@mui/icons-material/MyLocation";
+import HeightIcon from "@mui/icons-material/Height";
 import DeleteIcon from "@mui/icons-material/Delete";
 import SaveAltIcon from "@mui/icons-material/SaveAlt";
 import FileUploadIcon from "@mui/icons-material/FileUpload";
@@ -102,20 +103,24 @@ const PositionsDimension = () => {
     [handlePointChanged],
   );
 
-  // Drive the stage to a stored position (absolute move, XY then optional Z).
-  const handleGoto = useCallback((point) => {
+  // Drive the stage to a stored position (absolute move). `includeZ` controls
+  // whether Z is moved too: the plain move stays in-plane (XY only) so focus
+  // isn't disturbed, while "incl. Z" also drives Z to the stored value.
+  const handleGoto = useCallback((point, includeZ = false) => {
     apiPositionerControllerMovePositioner({ axis: "X", dist: point.x, isAbsolute: true, speed: 20000 }).catch(
       (e) => console.error("Goto X failed", e),
     );
     apiPositionerControllerMovePositioner({ axis: "Y", dist: point.y, isAbsolute: true, speed: 20000 }).catch(
       (e) => console.error("Goto Y failed", e),
     );
-    if (point.z != null && point.z !== "") {
+    if (includeZ && point.z != null && point.z !== "") {
       apiPositionerControllerMovePositioner({ axis: "Z", dist: point.z, isAbsolute: true, speed: 20000 }).catch(
         (e) => console.error("Goto Z failed", e),
       );
     }
-    infoPopupRef.current?.showMessage(`Moving stage to ${point.name || "position"}`);
+    infoPopupRef.current?.showMessage(
+      `Moving stage to ${point.name || "position"}${includeZ ? " (incl. Z)" : " (XY only)"}`,
+    );
   }, []);
 
   const handleRemovePosition = useCallback(
@@ -195,8 +200,11 @@ const PositionsDimension = () => {
               areaType: areaIdx >= 0 ? cols[areaIdx] || "" : "",
             });
           }
-          dispatch(experimentSlice.setPointList(newPoints));
-          infoPopupRef.current?.showMessage(`Loaded ${newPoints.length} positions from CSV`);
+          // Append imported positions to the existing list (don't replace).
+          dispatch(experimentSlice.setPointList([...pointList, ...newPoints]));
+          infoPopupRef.current?.showMessage(
+            `Imported ${newPoints.length} position(s) — appended to ${pointList.length} existing.`,
+          );
         } catch (err) {
           console.error("Failed to parse CSV:", err);
           infoPopupRef.current?.showMessage("Failed to parse CSV file");
@@ -205,7 +213,7 @@ const PositionsDimension = () => {
       reader.readAsText(file);
       event.target.value = "";
     },
-    [dispatch],
+    [dispatch, pointList],
   );
 
   return (
@@ -240,25 +248,32 @@ const PositionsDimension = () => {
 
       {/* Save / Load CSV */}
       <Box sx={{ display: "flex", gap: 1, mb: 2 }}>
-        <Button
-          size="small"
-          variant="outlined"
-          fullWidth
-          startIcon={<SaveAltIcon />}
-          onClick={handleSavePositions}
-          disabled={pointList.length === 0}
-        >
-          Save (CSV)
-        </Button>
-        <Button
-          size="small"
-          variant="outlined"
-          fullWidth
-          startIcon={<FileUploadIcon />}
-          onClick={handleLoadPositions}
-        >
-          Load (CSV)
-        </Button>
+        <Tooltip title="Export all positions to a CSV file on disc">
+          <span style={{ flex: 1, display: "flex" }}>
+            <Button
+              size="small"
+              variant="outlined"
+              fullWidth
+              startIcon={<SaveAltIcon />}
+              onClick={handleSavePositions}
+              disabled={pointList.length === 0}
+            >
+              Export (CSV)
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title="Import positions from a CSV file and append them to the current list">
+          <Button
+            size="small"
+            variant="outlined"
+            fullWidth
+            startIcon={<FileUploadIcon />}
+            onClick={handleLoadPositions}
+            sx={{ flex: 1 }}
+          >
+            Import (append)
+          </Button>
+        </Tooltip>
         <input
           ref={fileInputRef}
           type="file"
@@ -342,9 +357,14 @@ const PositionsDimension = () => {
                       />
                     </TableCell>
                     <TableCell sx={{ py: 0.25, whiteSpace: "nowrap" }} align="center">
-                      <Tooltip title="Drive the stage to this position">
-                        <IconButton size="small" onClick={() => handleGoto(point)}>
+                      <Tooltip title="Move stage here — XY only (keeps current focus)">
+                        <IconButton size="small" onClick={() => handleGoto(point, false)}>
                           <MyLocationIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Move stage here — including Z">
+                        <IconButton size="small" onClick={() => handleGoto(point, true)}>
+                          <HeightIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
                       <Tooltip title="Remove position">

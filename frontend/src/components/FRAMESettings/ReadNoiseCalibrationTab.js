@@ -454,16 +454,38 @@ const ReadNoiseCalibrationTab = () => {
   useEffect(() => {
     if (!acquiring) return undefined;
     let cancelled = false;
+    let finished = false; // process completion exactly once
     const id = setInterval(async () => {
+      if (finished) return;
       try {
         const p = await apiGetProgress();
-        if (cancelled) return;
+        if (cancelled || finished) return;
         setAcqProgress(p);
         if (!p.running) {
+          finished = true;
+          if (p.error) {
+            setActionError(p.message);
+          } else if (p.done && p.phase) {
+            // Optimistic local sync straight from the progress payload, so the
+            // wizard can advance even if the authoritative getStatus below blips.
+            setSession((s) =>
+              s ? { ...s, [`${p.phase}Count`]: p.total || s[`${p.phase}Count`] || 1 } : s,
+            );
+          }
+          // Sync the active session (brightCount/darkCount) BEFORE flipping
+          // `acquiring`. Flipping it first triggers this effect's cleanup, which
+          // sets cancelled=true; the `await apiGetStatus()` below yields long
+          // enough for React to run that cleanup, so the terminal setSession was
+          // being dropped -- leaving brightDone/darkDone false and the Next
+          // button stuck disabled. Refreshing first keeps cancelled=false here.
+          try {
+            const st = await apiGetStatus();
+            if (!cancelled && st && st.session) setSession(st.session);
+          } catch (e) {
+            /* keep the optimistic value */
+          }
+          clearInterval(id);
           setAcquiring(false);
-          if (p.error) setActionError(p.message);
-          const st = await apiGetStatus();
-          if (!cancelled) setSession(st.session);
         }
       } catch (e) {
         /* transient */

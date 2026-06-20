@@ -260,6 +260,7 @@ class OMEWriter:
         omero_connection_params: Optional[OMEROConnectionParams] = None,
         shared_omero_key: Optional[str] = None,
         well_metadata: Optional[Dict[str, Any]] = None,
+        image_name: Optional[str] = None,
     ):
         """
         Initialize the OME writer.
@@ -279,6 +280,8 @@ class OMEWriter:
                 Recognised keys: ``wellRow`` (str, e.g. "A"), ``wellColumn`` (int, 1-based),
                 ``labwareLoadName`` (str), ``conditionLabel`` (str). When provided, the OME-NGFF
                 ``well`` group attrs and a custom ``imswitch_well`` block are emitted.
+            image_name: Optional clean image name (e.g. the position/area name) used
+                for OME/OMERO image metadata. Falls back to the output file basename.
         """
         self.file_paths = file_paths
         self.tile_h, self.tile_w = tile_shape
@@ -290,6 +293,9 @@ class OMEWriter:
         self.omero_connection_params = omero_connection_params
         self.shared_omero_key = shared_omero_key
         self.well_metadata = well_metadata or None
+        # Optional clean image name for OME/OMERO metadata. Falls back to the
+        # file basename (legacy behaviour) when not provided.
+        self._image_name = image_name or None
 
         # Zarr components
         self.store = None
@@ -394,7 +400,7 @@ class OMEWriter:
         # Set multiscales metadata with physical coordinate transformations
         self.root.attrs["multiscales"] = [{
             "version": "0.4",
-            "name": "experiment",
+            "name": self._image_name or "experiment",
             "datasets": [
                 {
                     "path": "0",
@@ -432,7 +438,7 @@ class OMEWriter:
 
         self.root.attrs["omero"] = {
             "id": 1,
-            "name": os.path.basename(self.file_paths.zarr_dir),
+            "name": self._image_name or os.path.basename(self.file_paths.zarr_dir),
             "version": "0.4",
             "channels": channels,
             "rdefs": {
@@ -511,7 +517,7 @@ class OMEWriter:
         try:
             self.omero_uploader = OMEROUploader(
                 connection_params=self.omero_connection_params,
-                image_name=os.path.basename(self.file_paths.base_dir),
+                image_name=self._image_name or os.path.basename(self.file_paths.base_dir),
                 dtype=np.uint16,
                 size_x=self.nx * self.tile_w,
                 size_y=self.ny * self.tile_h,
@@ -959,7 +965,7 @@ class OMEWriter:
 
         self.root.attrs["multiscales"] = [{
             "version": "0.4",
-            "name": "experiment",
+            "name": self._image_name or "experiment",
             "datasets": datasets,
             "axes": axes,
             "coordinateTransformations": [

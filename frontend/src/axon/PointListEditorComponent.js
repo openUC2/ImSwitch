@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { ReactSortable } from "react-sortablejs";
 import { useDispatch, useSelector } from "react-redux";
-import ExperimentComponent from "./ExperimentComponent";
-import GenericTabBar from "./GenericTabBar";
-
 //import { FixedSizeList as List } from "react-window";
 
 import * as experimentSlice from "../state/slices/ExperimentSlice";
@@ -187,10 +184,6 @@ const PointListEditorComponent = () => {
     >
       {/* Header */}
       <h4 style={{ margin: "0", padding: "0" }}>Point List Editor</h4>
-
-      {/* Add             <ExperimentComponent /> */}
-      <ExperimentComponent />
-      <h1> </h1>
 
       {/* Remove item button */}
       <div

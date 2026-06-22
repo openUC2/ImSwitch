@@ -385,7 +385,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
           "Boot-loop detected! The device is showing 'invalid header: 0xffffffff'. " +
           "The firmware was not flashed correctly. Try using a merged firmware (_merged.bin) " +
           "with erase flash enabled."
-        ));
+        )); 
         dispatch(usbFlashSlice.setIsFlashing(false));
         return;
       }

@@ -109,19 +109,19 @@ class UC2ConfigController(ImConWidgetController):
         :return: Dictionary mapping CAN IDs to firmware filenames
         """
         return {
-            1: "UC2_canopen_master_release.bin",  # Master firmware (HAT v2, USB connected, use esptool)
-            10: "UC2_canopen_slave_motor_release.bin",  # Motor A
-            11: "UC2_canopen_slave_motor_release.bin",  # Motor X
-            12: "UC2_canopen_slave_motor_release.bin",  # Motor Y
-            13: "UC2_canopen_slave_motor_release.bin",  # Motor Z
-            14: "UC2_canopen_slave_motor_release.bin",  # Additional motor
-            15: "UC2_canopen_slave_motor_release.bin",  # Additional motor
-            20: "UC2_canopen_slave_laser_release.bin",  # Laser 0
-            21: "UC2_canopen_slave_laser_release.bin",  # Laser 1
-            22: "UC2_canopen_slave_laser_release.bin",  # Laser 2
-            30: "UC2_canopen_slave_led_release.bin",  # LED 0
-            31: "UC2_canopen_slave_led_release.bin",  # LED 1
-            40: "UC2_canopen_slave_galvo_release.bin",  # Galvo mirror
+            1: "esp32_UC2_canopen_master_release.bin",  # Master firmware (HAT v2, USB connected, use esptool)
+            10: "esp32_UC2_canopen_slave_motor_release_motA.bin",  # Motor A
+            11: "esp32_UC2_canopen_slave_motor_release_motX.bin",  # Motor X
+            12: "esp32_UC2_canopen_slave_motor_release_motY.bin",  # Motor Y
+            13: "esp32_UC2_canopen_slave_motor_release_motZ.bin",  # Motor Z
+            14: "esp32_UC2_canopen_slave_motor_release.bin",  # Additional motor
+            15: "esp32_UC2_canopen_slave_motor_release.bin",  # Additional motor
+            20: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 0
+            21: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 1
+            22: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 2
+            30: "esp32_UC2_canopen_slave_led_release.bin",  # LED 0
+            31: "esp32_UC2_canopen_slave_led_release.bin",  # LED 1
+            40: "esp32_UC2_canopen_slave_galvo_release.bin",  # Galvo mirror
         }
 
     def processSerialWriteMessage(self, message):
@@ -971,77 +971,50 @@ class UC2ConfigController(ImConWidgetController):
         }
 
     @APIExport(runOnUIThread=False)
-    def listAvailableFirmware(self):
+    def listAvailableFirmware(self, can_ids: list = None):
         """
-        List all available firmware files from the configured server.
-        
-        Fetches the directory listing from <server_url>/latest/ and parses
-        available firmware files.
-        
-        :return: Dictionary with firmware files organized by device type
+        List firmware files from the configured server, mapped to CAN IDs.
+
+        Delegates to listAllFirmwareFiles() for the actual server fetch and then
+        maps the flat file list to the CAN-ID-keyed format expected by the CAN OTA
+        wizard.  Optionally filter to a subset of CAN IDs via *can_ids*.
+
+        :param can_ids: Optional list of integer CAN IDs to include. When None,
+                        all known CAN IDs are returned.
+        :return: {status, firmware_server, firmware_count,
+                  firmware: {can_id: {filename, url, can_id, size, mod_time}}}
         """
-        if not self._firmware_server_url:
-            return {
-                "status": "error",
-                "message": "Firmware server not set. Use setOTAFirmwareServer first."
-            }
+        # Reuse the working flat-list fetcher to avoid code duplication
+        flat = self.listAllFirmwareFiles()
+        if flat.get("status") != "success":
+            return flat  # Propagate error as-is
 
-        try:
-            # Fetch firmware list from server
-            list_url = f"{self._firmware_server_url}/"
-            self.__logger.debug(f"Fetching firmware list from {list_url}")
+        files_by_name = {f["filename"]: f for f in flat.get("files", [])}
 
-            response = requests.get(list_url, timeout=10, headers={"Accept": "application/json"})
-            response.raise_for_status()
+        # Build CAN-ID → expected firmware-filename mapping
+        can_id_to_firmware = self._get_can_id_firmware_mapping()
 
+        firmware_by_id = {}
+        for can_id, expected_filename in can_id_to_firmware.items():
+            # Optionally restrict to the requested CAN IDs
+            if can_ids is not None and can_id not in can_ids:
+                continue
+            if expected_filename in files_by_name:
+                f = files_by_name[expected_filename]
+                firmware_by_id[can_id] = {
+                    "filename": expected_filename,
+                    "url": f["url"],
+                    "can_id": can_id,
+                    "size": f.get("size", 0),
+                    "mod_time": f.get("mod_time", ""),
+                }
 
-            # Parse JSON response (same format as setOTAFirmwareServer)
-            firmware_data = response.json()
-
-            if not isinstance(firmware_data, list):
-                raise ValueError("Invalid response format from firmware server")
-
-            # Extract firmware file names from JSON response
-            firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
-            
-            self.__logger.debug(f"Available firmware files: {firmware_files}")
-
-            # Use centralized firmware mapping
-            can_id_to_firmware = self._get_can_id_firmware_mapping()
-            self.__logger.debug(f"CAN ID to firmware mapping: {can_id_to_firmware}")
-            # Organize by device ID using lookup table
-            firmware_by_id = {}
-            for can_id, expected_firmware in can_id_to_firmware.items():
-                # Check if expected firmware exists in available files
-                # print(expected_firmware)
-                if expected_firmware in firmware_files:
-                    firmware_url = f"{self._firmware_server_url}/{expected_firmware}"
-                    # print(firmware_url)
-                    # Find matching item in firmware_data to get size and mod_time
-                    firmware_info = next((item for item in firmware_data if item['name'] == expected_firmware), None)
-
-                    firmware_by_id[can_id] = {
-                        "filename": expected_firmware,
-                        "url": firmware_url,
-                        "can_id": can_id,
-                        "size": firmware_info.get('size', 0) if firmware_info else 0,
-                        "mod_time": firmware_info.get('mod_time', '') if firmware_info else ''
-                    }
-
-            return {
-                "status": "success",
-                "firmware_server": self._firmware_server_url,
-                "firmware_count": len(firmware_by_id),
-                "firmware": firmware_by_id
-            }
-
-        except requests.exceptions.RequestException as e:
-            self.__logger.error(f"Error fetching firmware list: {e}")
-            return {
-                "status": "error",
-                "message": f"Failed to fetch firmware list from server: {str(e)}",
-                "server_url": self._firmware_server_url
-            }
+        return {
+            "status": "success",
+            "firmware_server": self._firmware_server_url,
+            "firmware_count": len(firmware_by_id),
+            "firmware": firmware_by_id,
+        }
 
     @APIExport(runOnUIThread=False)
     def listAllFirmwareFiles(self):
@@ -1369,14 +1342,50 @@ class UC2ConfigController(ImConWidgetController):
                     "method": "can_streaming"
                 })
             
-            # Start streaming upload (blocking)
-            success = self._master.UC2ConfigManager.ESP32.canota.start_can_streaming_ota_blocking(
-                can_id=can_id,
-                firmware_path=str(firmware_path),
-                progress_callback=progress_callback,
-                status_callback=status_callback, 
-                baud=baud
-            )
+            # Start streaming upload (blocking) — retry up to 3 times on failure.
+            # The master occasionally returns size_write_failed on the first attempt
+            # after rebooting from a previous OTA, but succeeds on the next try.
+            MAX_RETRIES = 3
+            success = False
+            last_error = "CAN streaming upload failed"
+            for attempt in range(1, MAX_RETRIES + 1):
+                canota = self._master.UC2ConfigManager.ESP32.canota
+                # Make sure a previous cancel flag is cleared before this attempt
+                canota._cancel_event.clear()
+                success = canota.start_can_streaming_ota_blocking(
+                    can_id=can_id,
+                    firmware_path=str(firmware_path),
+                    progress_callback=progress_callback,
+                    status_callback=status_callback,
+                    baud=baud
+                )
+                if success:
+                    break
+                # Check if user cancelled — do not retry in that case
+                if canota._cancel_event.is_set():
+                    last_error = "Upload cancelled by user"
+                    break
+                if attempt < MAX_RETRIES:
+                    retry_msg = (
+                        f"Attempt {attempt}/{MAX_RETRIES} failed — "
+                        f"waiting 5 s before retry..."
+                    )
+                    self.__logger.warning(f"CAN OTA: {retry_msg}")
+                    status_callback(retry_msg, False)
+                    import time as _time
+                    _time.sleep(5)
+                    # Re-emit uploading state so the UI shows the retry
+                    self._ota_status[can_id]["status"] = "uploading"
+                    self._ota_status[can_id]["message"] = f"Retrying... (attempt {attempt + 1}/{MAX_RETRIES})"
+                    self.sigOTAStatusUpdate.emit({
+                        "canId": can_id,
+                        "status": "uploading",
+                        "progress": 5,
+                        "message": f"Retrying... (attempt {attempt + 1}/{MAX_RETRIES})",
+                        "method": "can_streaming"
+                    })
+                else:
+                    last_error = f"CAN streaming upload failed after {MAX_RETRIES} attempts"
             
             if success:
                 self._ota_status[can_id]["status"] = "success"
@@ -1395,7 +1404,7 @@ class UC2ConfigController(ImConWidgetController):
                     "message": "CAN streaming OTA completed successfully"
                 }
             else:
-                raise Exception("CAN streaming upload failed")
+                raise Exception(last_error)
                 
         except Exception as e:
             self.__logger.error(f"CAN streaming OTA failed for device {can_id}: {e}")
@@ -1418,6 +1427,25 @@ class UC2ConfigController(ImConWidgetController):
                 "message": f"CAN streaming OTA failed: {str(e)}"
             }
     
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def cancelCANStreamingOTA(self):
+        """
+        Request cancellation of any running CAN streaming OTA upload.
+
+        Sets the cancel flag on the canota object so the upload worker aborts
+        at the next chunk boundary and restores the serial connection.
+
+        :return: Status message
+        """
+        try:
+            canota = self._master.UC2ConfigManager.ESP32.canota
+            canota.cancel_streaming_ota()
+            self.__logger.info("CAN streaming OTA cancellation requested")
+            return {"status": "success", "message": "Cancellation requested"}
+        except Exception as e:
+            self.__logger.warning(f"Could not signal canota cancel: {e}")
+            return {"status": "error", "message": str(e)}
+
     @APIExport(runOnUIThread=False, requestType="POST")
     def startMultipleCANStreamingOTA(self, can_ids: list[int], delay_between: int = 5):
         """
@@ -2047,28 +2075,31 @@ class UC2ConfigController(ImConWidgetController):
         result["flash_size"] = size
 
         if is_merged:
-            # For merged binaries the magic MUST be at 0x0
-            if magic_offset != 0:
+            # The bootloader magic must sit at the chip's boot address. For
+            # ESP32-S3 / S2 / C3 that is 0x0; for the classic ESP32 the
+            # bootloader lives at 0x1000, so a merged image legitimately starts
+            # with 0x1000 bytes of 0xFF padding (magic at 0x1000). Both layouts
+            # are flashed at 0x0 — esptool/the ROM handle the leading padding.
+            #
+            # NOTE: flash mode/freq (e.g. DIO/40m) are intentionally NOT flagged
+            # here. They are whatever the firmware's sdkconfig compiled and match
+            # the bundled bootloader, which is exactly what PlatformIO flashes.
+            expected_offsets = {
+                "esp32":   (0x0, 0x1000),
+                "esp32s2": (0x0,),
+                "esp32s3": (0x0,),
+                "esp32c3": (0x0,),
+            }.get(chip, (0x0, 0x1000))
+
+            if magic_offset not in expected_offsets:
+                pretty = " or ".join(f"0x{o:x}" for o in expected_offsets)
                 result["errors"].append(
-                    f"Merged binary has bootloader at 0x{magic_offset:x} instead of 0x0. "
-                    f"The binary was built with wrong BOOT_ADDR (likely 0x{magic_offset:x} "
-                    f"instead of 0x0000 for {chip}). "
-                    f"Flashing this at 0x0 will ALWAYS produce 'invalid header: 0xffffffff'. "
-                    f"→ Rebuild using the corrected CI YAML with BOOT_ADDR=0x0000."
+                    f"Merged binary has bootloader at 0x{magic_offset:x} instead of {pretty} "
+                    f"(expected for {chip}). The binary was built with a wrong boot address. "
+                    f"Flashing this at 0x0 will produce 'invalid header: 0xffffffff'. "
+                    f"→ Rebuild with the correct BOOT_ADDR for {chip}."
                 )
                 result["valid"] = False
-
-            # Warn about suboptimal flash mode for S3
-            if chip == "esp32s3" and fm == "DIO":
-                result["warnings"].append(
-                    f"Flash mode in binary is DIO but QIO is recommended for ESP32-S3. "
-                    f"Rebuild with --flash_mode qio in merge_bin."
-                )
-            if chip == "esp32s3" and freq == "40m":
-                result["warnings"].append(
-                    f"Flash frequency in binary is 40m but 80m is recommended for ESP32-S3. "
-                    f"Rebuild with --flash_freq 80m in merge_bin."
-                )
 
         self.__logger.info(
             f"Firmware validation: magic@0x{magic_offset:x}, "
@@ -2269,9 +2300,13 @@ class UC2ConfigController(ImConWidgetController):
                 "--baud", str(baud),
                 "--chip", resolved_chip,
                 "write-flash",
-                "--flash-mode", flash_params["flash-mode"],
-                "--flash-freq", flash_params["flash-freq"],
-                "--flash-size", flash_params["flash-size"],
+                # Preserve the flash mode/freq/size baked into the compiled app
+                # image header (mirrors `pio run --target upload`). Overriding
+                # them here would patch the app header to e.g. qio/80m while the
+                # on-device bootloader stays dio/40m -> header mismatch on boot.
+                "--flash-mode", "keep",
+                "--flash-freq", "keep",
+                "--flash-size", "keep",
                 flash_params["offset"],
                 str(fw_path),
             ]

@@ -5,6 +5,7 @@ This controller manages per-detector streaming with dedicated worker threads and
 multiple streaming protocols (binary, JPEG, MJPEG, WebRTC).
 """
 import asyncio
+import os
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Any
 from abc import abstractmethod
@@ -81,95 +82,47 @@ class StreamParams:
 
 
 class _JpegEncoder:
-    """JPEG encoder that prefers PyTurboJPEG, falls back to cv2.imencode.
+    """JPEG encoder backed by ``cv2.imencode``.
 
-    PyTurboJPEG is a thin Python wrapper over libjpeg-turbo. On a Pi 5
-    (Cortex-A76 with NEON) it is typically 1.5-2x faster than
-    ``cv2.imencode('.jpg', ...)`` at the same quality, because it avoids
-    OpenCV's internal copy and goes straight to libjpeg-turbo's NEON
-    paths. If the ``turbojpeg`` package is not installed, or its native
-    library cannot be loaded, or a single encode call fails, the encoder
-    falls back to ``cv2.imencode`` automatically.
-
-    Reusing one instance per worker amortises the small TurboJPEG
-    bootstrap cost across all frames.
+    Kept as a tiny wrapper (rather than calling ``cv2.imencode`` inline)
+    so the JPEG and MJPEG workers share one ``encode()`` API and one
+    ``backend`` check. cv2 is already a hard dependency of the streaming
+    path; we deliberately do NOT pull in PyTurboJPEG — the marginal
+    encode speedup wasn't worth the extra native dependency and the
+    per-session probing it added.
     """
 
     def __init__(self, logger=None):
         self._logger = logger
-        self._turbo = None
-        self._fmt_bgr = None
-        self._fmt_gray = None
         self._cv2 = None
-
-        try:
-            from turbojpeg import TurboJPEG, TJPF_BGR, TJPF_GRAY
-            self._turbo = TurboJPEG()
-            self._fmt_bgr = TJPF_BGR
-            self._fmt_gray = TJPF_GRAY
-            if logger is not None:
-                logger.info("JPEG encoder: PyTurboJPEG (libjpeg-turbo)")
-        except Exception as e:
-            # ImportError, OSError (native lib missing), RuntimeError, etc.
-            if logger is not None:
-                logger.info(
-                    f"PyTurboJPEG not available ({e!r}); "
-                    f"using cv2.imencode fallback"
-                )
-
         try:
             import cv2
             self._cv2 = cv2
         except ImportError:
-            pass
+            if logger is not None:
+                logger.error(
+                    "opencv-python (cv2) is required for JPEG streaming"
+                )
 
     @property
     def backend(self) -> str:
-        if self._turbo is not None:
-            return "turbojpeg"
-        if self._cv2 is not None:
-            return "cv2"
-        return "none"
+        return "cv2" if self._cv2 is not None else "none"
 
     def encode(self, img: np.ndarray, quality: int) -> bytes:
-        """Encode ``img`` (uint8, BGR or grayscale) as a JPEG byte string.
+        """Encode ``img`` (uint8, BGR or grayscale) as JPEG bytes.
 
-        Raises ``RuntimeError`` if no backend is available or both fail.
+        Raises ``RuntimeError`` if cv2 is unavailable or the encode fails.
         """
+        if self._cv2 is None:
+            raise RuntimeError("No JPEG encoder available (cv2 missing)")
         quality = max(1, min(100, int(quality)))
-
-        if self._turbo is not None:
-            try:
-                if img.ndim == 2:
-                    return self._turbo.encode(
-                        img, quality=quality, pixel_format=self._fmt_gray
-                    )
-                else:
-                    return self._turbo.encode(
-                        img, quality=quality, pixel_format=self._fmt_bgr
-                    )
-            except Exception as e:
-                if self._logger is not None:
-                    self._logger.warning(
-                        f"PyTurboJPEG encode failed ({e!r}); "
-                        f"falling back to cv2 for the rest of this session."
-                    )
-                # Disable turbo for subsequent frames so we don't keep
-                # paying for the failed-path overhead.
-                self._turbo = None
-
-        if self._cv2 is not None:
-            ok, encoded = self._cv2.imencode(
-                '.jpg', img,
-                [int(self._cv2.IMWRITE_JPEG_QUALITY), quality],
-            )
-            if ok:
-                return bytes(encoded)
-            raise RuntimeError("cv2.imencode returned False")
-
-        raise RuntimeError(
-            "No JPEG encoder available (neither PyTurboJPEG nor cv2)"
+        ok, encoded = self._cv2.imencode(
+            '.jpg', img,
+            [int(self._cv2.IMWRITE_JPEG_QUALITY), quality],
         )
+        if ok:
+            return bytes(encoded)
+        raise RuntimeError("cv2.imencode returned False")
 
 
 def apply_center_crop(frame: np.ndarray, crop_size: int) -> np.ndarray:
@@ -255,8 +208,8 @@ class StreamWorker(Worker):
 
         The returned buffer is **reused** across calls. Anything that
         needs to outlive the next ``_captureAndEmit`` iteration must copy
-        it first (cv2/PyTurboJPEG encode produces a fresh ``bytes``
-        object, so the workers' main paths are safe).
+        it first (cv2.imencode produces a fresh ``bytes`` object, so the
+        workers' main paths are safe).
         """
         if (self._u8_buf is None
                 or self._u8_buf.shape != src.shape):
@@ -281,8 +234,6 @@ class StreamWorker(Worker):
                 self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it
                 # Check if enough time has passed since last frame
                 if (time.time() - self._last_frame_time) >= self._updatePeriod:  # TODO: and  imswitch.__is_stream_ready_for_sending__
-                    # Capture and emit frame
-
                     # Get frame with actual detector frame number
                     result = self._detector.getLatestFrame(returnFrameNumber=True)
                     if isinstance(result, tuple) and len(result) == 2:
@@ -303,7 +254,7 @@ class StreamWorker(Worker):
                         break  # No frame available, but not an error - keep running
                     else:
                         frameReadAttempts = 0  # Reset attempts on successful read
-                    
+
                     last_detector_frame_number = detector_frame_number
 
                     frameResult = self._captureAndEmit(frame, detector_frame_number)
@@ -458,11 +409,11 @@ class JPEGStreamWorker(StreamWorker):
         except ImportError:
             self._logger.error("opencv-python required for JPEG streaming")
             self._cv2 = None
-        # Prefer PyTurboJPEG; falls back to cv2.imencode automatically.
+        # Shared cv2.imencode wrapper (see _JpegEncoder).
         self._jpeg = _JpegEncoder(logger=self._logger)
         if self._jpeg.backend == "none" and self._cv2 is None:
             self._logger.error(
-                "No JPEG encoder available (neither PyTurboJPEG nor cv2)."
+                "No JPEG encoder available (cv2 missing)."
             )
 
     def _captureAndEmit(self, frame, detector_frame_number=None):
@@ -525,7 +476,7 @@ class JPEGStreamWorker(StreamWorker):
                     # No cv2 — flip channel order in NumPy.
                     frame = np.ascontiguousarray(frame[..., ::-1])
 
-            # 6) Encode as JPEG via _JpegEncoder (PyTurboJPEG → cv2 fallback).
+            # 6) Encode as JPEG (cv2.imencode via _JpegEncoder).
             try:
                 jpeg_bytes = self._jpeg.encode(frame, self._params.jpeg_quality)
                 success = True
@@ -535,15 +486,13 @@ class JPEGStreamWorker(StreamWorker):
                 success = False
 
             if success:
-                # Emit raw JPEG bytes. The downstream socket.io path
-                # (noqt.py::_handle_stream_frame, 'jpeg_frame' branch) packs
-                # this with msgpack using ``use_bin_type=True``, which serialises
-                # ``bytes`` as a MessagePack ``bin`` value (Uint8Array on the
-                # client). Previously we base64-encoded these bytes into a
-                # JSON-safe string, which inflated the payload ~33% and cost
-                # ~5-10 ms per frame on the Pi 5. The React frontend must wrap
-                # the received Uint8Array as a Blob/ObjectURL instead of using
-                # a ``data:image/jpeg;base64,...`` URI.
+                # Encode the JPEG bytes as a base64 string. The frontend
+                # consumes ``data:image/jpeg;base64,<liveViewImage>`` in a
+                # plain <img>, which is the simplest, most robust path
+                # (the raw-bytes/Blob experiment was reverted). msgpack
+                # ships the string as-is.
+                import base64
+                encoded_image = base64.b64encode(jpeg_bytes).decode('utf-8')
 
                 # Create unified metadata structure
                 metadata = {
@@ -562,7 +511,7 @@ class JPEGStreamWorker(StreamWorker):
                     'type': 'jpeg_frame',
                     'event': 'frame',
                     'data': {
-                        'image': jpeg_bytes,
+                        'image': encoded_image,
                         'metadata': metadata
                     }
                 }
@@ -595,11 +544,11 @@ class MJPEGStreamWorker(StreamWorker):
         except ImportError:
             self._logger.error("opencv-python required for MJPEG streaming")
             self._cv2 = None
-        # Prefer PyTurboJPEG; falls back to cv2.imencode automatically.
+        # Shared cv2.imencode wrapper (see _JpegEncoder).
         self._jpeg = _JpegEncoder(logger=self._logger)
         if self._jpeg.backend == "none" and self._cv2 is None:
             self._logger.error(
-                "No JPEG encoder available (neither PyTurboJPEG nor cv2)."
+                "No JPEG encoder available (cv2 missing)."
             )
 
     def _captureAndEmit(self, frame, detector_frame_number=None):
@@ -658,7 +607,7 @@ class MJPEGStreamWorker(StreamWorker):
                 else:
                     frame = np.ascontiguousarray(frame[..., ::-1])
 
-            # 6) Encode as JPEG via _JpegEncoder (PyTurboJPEG → cv2 fallback).
+            # 6) Encode as JPEG (cv2.imencode via _JpegEncoder).
             try:
                 jpeg_bytes = self._jpeg.encode(frame, self._params.jpeg_quality)
                 success = True

@@ -39,12 +39,13 @@ class InLineHoloParams:
     roi_center: Optional[List[int]] = None  # [x, y] in pixels
     roi_size: Optional[int] = 256  # square ROI size
     # "red", "green", "blue" or "white" (mean of all channels)
-    color_channel: str = "green"
+    color_channel: str = "red"
     flip_x: bool = False
     flip_y: bool = False
     rotation: int = 0  # 0, 90, 180, 270
     update_freq: float = 10.0  # Hz (processing framerate)
     binning: int = 1  # binning factor (1, 2, 4, etc.)
+    show_raw: bool = False  # if True, reconstruct at dz=0 (raw, in-focus hologram)
     # When True, ignore ROI crop and reconstruct the full sensor image
     # (with software binning applied). Useful for full-FOV preview at low res.
     full_frame: bool = False
@@ -65,6 +66,7 @@ class InLineHoloParams:
             "rotation": self.rotation,
             "update_freq": self.update_freq,
             "binning": self.binning,
+            "show_raw": self.show_raw,
             "full_frame": self.full_frame,
         }
 
@@ -354,10 +356,10 @@ class InLineHoloController(LiveUpdatedController):
         # subsakmple
         if len(image.shape) == 2:
             # Grayscale
-            return image[::2, ::2]
+            return image[::self._params.binning, ::self._params.binning]
         else:
             # Color
-            return image[::2, ::2, :]
+            return image[::self._params.binning, ::self._params.binning, :]
 
     def _extract_roi(self, image):
         """Extract ROI from image based on current parameters.
@@ -428,19 +430,21 @@ class InLineHoloController(LiveUpdatedController):
 
     def _process_inline(self, image):
         """Process inline hologram"""
-        # Apply binning first
-        binned = self._apply_binning(image)
-
         # Extract ROI and color channel
-        roi = self._extract_roi(binned)
+        roi = self._extract_roi(image)
         gray = self._extract_color_channel(roi)
         gray = self._apply_transforms(gray)
+        
+        # Apply binning first
+        gray = self._apply_binning(gray)
 
         # Convert to complex field (E-field from intensity)
         E0 = np.sqrt(gray.astype(float))
 
-        # Propagate
-        Ef = self._fresnel_propagator(E0, self._params.dz)
+        # Propagate. When show_raw is set we reconstruct at dz=0, which returns
+        # the raw, in-focus hologram intensity regardless of the slider value.
+        dz = 0.0 if self._params.show_raw else self._params.dz
+        Ef = self._fresnel_propagator(E0, dz)
 
         # Return intensity
         return self._abssqr(Ef)

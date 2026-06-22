@@ -7,6 +7,7 @@ import * as experimentStateSlice from "../state/slices/ExperimentStateSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as tileStreamSlice from "../state/slices/TileStreamSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
+import * as homingSlice from "../state/slices/HomingSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
 import * as focusLockSlice from "../state/slices/FocusLockSlice.js";
@@ -467,28 +468,8 @@ const WebSocketHandler = () => {
               return;
             }
           } else if (decoded.image) {
-            // JPEG frame.  The backend sends raw bytes (msgpack 'bin' type)
-            // since §4.A.  All existing UI consumers expect a base64 string,
-            // so we re-encode here.  Cost: < 1 ms for a 500 KB JPEG on a
-            // laptop; net win because the Pi 5 saves ~0.5 ms by not running
-            // Python's base64.b64encode on every frame.
-            if (typeof decoded.image === 'string') {
-              // Legacy / mixed backend already supplied a base64 string.
-              frameData = decoded.image;
-            } else {
-              const raw = decoded.image instanceof Uint8Array
-                ? decoded.image
-                : new Uint8Array(decoded.image);
-              // Build the binary string in 32 KB chunks to stay well within
-              // the JS call-stack limit for Function.apply argument lists.
-              const CHUNK = 0x8000;
-              let binary = '';
-              for (let i = 0; i < raw.length; i += CHUNK) {
-                binary += String.fromCharCode.apply(
-                  null, raw.subarray(i, Math.min(i + CHUNK, raw.length)));
-              }
-              frameData = btoa(binary);
-            }
+            // JPEG frame — base64 string from the backend.
+            frameData = decoded.image;
           }
         } else if (Array.isArray(payload) && payload.length === 2) {
           // Legacy format: [packed_metadata, frameData]
@@ -534,19 +515,17 @@ const WebSocketHandler = () => {
           metadata &&
           (metadata.protocol === "jpeg" || metadata.format === "jpeg")
         ) {
-          // JPEG frame - update Redux (base64 image)
+          // JPEG frame - store the base64 string in Redux. Consumers
+          // render it as <img src={`data:image/jpeg;base64,${...}`}>.
           dispatch(liveStreamSlice.setLiveViewImage(frameData));
           dispatch(liveStreamSlice.setImageFormat("jpeg"));
 
-          // Update pixel size if available
           if (metadata.pixel_size) {
             dispatch(liveStreamSlice.setPixelSize(metadata.pixel_size));
           }
-
-          // Track latency if server timestamp is available
           if (metadata.server_timestamp) {
             const latency =
-              (Date.now() / 1000 - metadata.server_timestamp) * 1000; // Convert to ms
+              (Date.now() / 1000 - metadata.server_timestamp) * 1000;
             dispatch(liveStreamSlice.updateLatency(latency));
           }
         } else if (frameData) {
@@ -565,12 +544,10 @@ const WebSocketHandler = () => {
         return;
       }
 
-      // Send acknowledgement to enable flow control
-      // This tells the server we're ready for the next frame
+      // Send acknowledgement to enable flow control (after processing).
       if (ack && typeof ack === "function") {
         ack();
       } else {
-        // Fallback: emit explicit acknowledgement event with unified field name
         socket.emit("frame_ack", { frame_id: metadata?.frame_id });
       }
     });
@@ -817,6 +794,17 @@ const WebSocketHandler = () => {
           }
         } catch (error) {
           console.error("Error in sigUpdateMotorPosition handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigHomingState") {
+        // Per-axis frame-homing progress: {active, cancelled, phase, axes, message}
+        try {
+          const homingState = dataJson.args?.p0;
+          if (homingState) {
+            dispatch(homingSlice.setHomingState(homingState));
+          }
+        } catch (error) {
+          console.error("Error in sigHomingState handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateLaserPower") {

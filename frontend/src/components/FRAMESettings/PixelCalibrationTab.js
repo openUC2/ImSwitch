@@ -12,9 +12,8 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
-  FormControlLabel,
-  Checkbox,
   Divider,
+  LinearProgress,
 } from '@mui/material';
 
 import LiveViewControlWrapper from '../../axon/LiveViewControlWrapper';
@@ -23,6 +22,8 @@ import apiPixelCalibrationControllerGetPendingCalibration from '../../backendapi
 import apiPixelCalibrationControllerApplyPendingCalibration from '../../backendapi/apiPixelCalibrationControllerApplyPendingCalibration';
 import apiPixelCalibrationControllerDiscardPendingCalibration from '../../backendapi/apiPixelCalibrationControllerDiscardPendingCalibration';
 import apiPixelCalibrationControllerGetAvailableDetectors from '../../backendapi/apiPixelCalibrationControllerGetAvailableDetectors';
+import apiPixelCalibrationControllerGetCalibrationProgress from '../../backendapi/apiPixelCalibrationControllerGetCalibrationProgress';
+import apiPixelCalibrationControllerStopCalibration from '../../backendapi/apiPixelCalibrationControllerStopCalibration';
 import apiObjectiveControllerGetStatus from '../../backendapi/apiObjectiveControllerGetStatus';
 
 /**
@@ -39,8 +40,8 @@ const PixelCalibrationTab = () => {
   // --- selection / parameters ---
   const [detectorName, setDetectorName] = useState('');
   const [availableDetectors, setAvailableDetectors] = useState([]);
-  // Objective: '' = current, '0', '1' (string so it survives the round-trip).
-  const [objectiveId, setObjectiveId] = useState('');
+  // Objective: 'current' = active slot, '0', '1' (string so it survives the round-trip).
+  const [objectiveId, setObjectiveId] = useState('current');
   const [stepSizeUm, setStepSizeUm] = useState(100.0);
   const [pattern, setPattern] = useState('cross');
   const [nSteps, setNSteps] = useState(4);
@@ -85,13 +86,13 @@ const PixelCalibrationTab = () => {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+  const [progress, setProgress] = useState(null); // {step,total,message} while running
+  const [stopping, setStopping] = useState(false);
 
   // --- pending calibration review state ---
   const [pending, setPending] = useState(null); // raw pending payload from backend
   const [editPixelSizeX, setEditPixelSizeX] = useState('');
   const [editPixelSizeY, setEditPixelSizeY] = useState('');
-  const [editFlipX, setEditFlipX] = useState(false);
-  const [editFlipY, setEditFlipY] = useState(false);
   const [editAffineMatrix, setEditAffineMatrix] = useState('');
 
   const pollRef = useRef(null);
@@ -104,8 +105,6 @@ const PixelCalibrationTab = () => {
     const sy = Number(data?.metrics?.scale_y_um_per_pixel ?? 0);
     setEditPixelSizeX(Math.abs(sx).toString());
     setEditPixelSizeY(Math.abs(sy).toString());
-    setEditFlipX(sx < 0);
-    setEditFlipY(sy < 0);
     setEditAffineMatrix(JSON.stringify(data?.affine_matrix ?? [], null, 2));
   };
 
@@ -116,29 +115,60 @@ const PixelCalibrationTab = () => {
     }
   };
 
-  // Poll while loading and no pending yet
+  // Poll progress + pending while a run is in flight.
   useEffect(() => {
     if (!loading || !detectorName) return undefined;
     pollRef.current = setInterval(async () => {
+      // Live progress for the bar / status line.
+      try {
+        const prog = await apiPixelCalibrationControllerGetCalibrationProgress();
+        if (prog?.success) setProgress(prog);
+      } catch (_e) { /* ignore */ }
+
       try {
         const resp = await apiPixelCalibrationControllerGetPendingCalibration(
           detectorName,
           objectiveId,
         );
         const data = resp?.pending ?? resp;
+        if (data && data.error) {
+          // The background thread failed – surface it instead of polling forever.
+          setError(`Calibration failed: ${data.error}`);
+          setStatus('');
+          setLoading(false);
+          setStopping(false);
+          setProgress(null);
+          stopPolling();
+          return;
+        }
         if (data && (data.affine_matrix || data.metrics)) {
           setPending(data);
           populateReviewFromPending(data);
           setLoading(false);
+          setStopping(false);
+          setProgress(null);
           setStatus('Calibration complete – please review and apply.');
           stopPolling();
         }
       } catch (err) {
         // keep polling unless backend explicitly errors
       }
-    }, 2000);
+    }, 1000);
     return stopPolling;
   }, [loading, detectorName, objectiveId]);
+
+  // If the user stopped the run (no pending result will appear), detect the
+  // "not running anymore" transition via progress and exit the loading state.
+  useEffect(() => {
+    if (!loading || !stopping) return;
+    if (progress && progress.running === false) {
+      setLoading(false);
+      setStopping(false);
+      setStatus(progress.message || 'Calibration stopped.');
+      setProgress(null);
+      stopPolling();
+    }
+  }, [loading, stopping, progress]);
 
   // --- actions ---------------------------------------------------------------
 
@@ -151,9 +181,11 @@ const PixelCalibrationTab = () => {
       setError('');
       setStatus('Calibration started in background – polling for result…');
       setPending(null);
+      setProgress(null);
+      setStopping(false);
       setLoading(true);
 
-      await apiPixelCalibrationControllerCalibrateStageAffine({
+      const resp = await apiPixelCalibrationControllerCalibrateStageAffine({
         detectorName,
         objectiveId,
         stepSizeUm,
@@ -161,10 +193,26 @@ const PixelCalibrationTab = () => {
         nSteps,
         backlashUm,
       });
+      // The backend rejects synchronously on bad camera intensity / busy state.
+      if (resp && resp.success === false) {
+        setLoading(false);
+        setStatus('');
+        setError(resp.error || 'Calibration could not be started.');
+      }
     } catch (err) {
       setLoading(false);
       setError(`Failed to start calibration: ${err.message}`);
       setStatus('');
+    }
+  };
+
+  const handleStop = async () => {
+    try {
+      setStopping(true);
+      setStatus('Stopping calibration…');
+      await apiPixelCalibrationControllerStopCalibration();
+    } catch (err) {
+      setError(`Failed to stop: ${err.message}`);
     }
   };
 
@@ -180,9 +228,12 @@ const PixelCalibrationTab = () => {
         return;
       }
 
-      // Re-encode flips into signed scale values (the backend convention)
-      const sx = Math.abs(parseFloat(editPixelSizeX)) * (editFlipX ? -1 : 1);
-      const sy = Math.abs(parseFloat(editPixelSizeY)) * (editFlipY ? -1 : 1);
+      // Flip is purely calibration-derived: keep the sign the calibration
+      // measured and only let the user adjust the pixel-size magnitude.
+      const measuredSx = Number(pending?.metrics?.scale_x_um_per_pixel ?? 0);
+      const measuredSy = Number(pending?.metrics?.scale_y_um_per_pixel ?? 0);
+      const sx = Math.abs(parseFloat(editPixelSizeX)) * (measuredSx < 0 ? -1 : 1);
+      const sy = Math.abs(parseFloat(editPixelSizeY)) * (measuredSy < 0 ? -1 : 1);
 
       const metrics = {
         ...(pending?.metrics ?? {}),
@@ -220,8 +271,9 @@ const PixelCalibrationTab = () => {
   return (
     <Box>
       <Grid container spacing={3}>
-        {/* Left: live detector view */}
+        {/* Left: live detector view (sticky so it stays visible while the right column scrolls) */}
         <Grid item xs={12} md={7}>
+          <Box sx={{ position: { xs: 'static', md: 'sticky' }, top: { md: 16 } }}>
           <Paper sx={{ p: 2 }}>
             <Typography variant="h6" gutterBottom>
               Detector Live View
@@ -243,6 +295,7 @@ const PixelCalibrationTab = () => {
               <LiveViewControlWrapper useFastMode={true} />
             </Box>
           </Paper>
+          </Box>
         </Grid>
 
         {/* Right: parameters + review */}
@@ -292,7 +345,7 @@ const PixelCalibrationTab = () => {
                 label="Objective"
                 onChange={(e) => setObjectiveId(e.target.value)}
               >
-                <MenuItem value="">Current</MenuItem>
+                <MenuItem value="current">Current</MenuItem>
                 <MenuItem value="0">Objective 0</MenuItem>
                 <MenuItem value="1">Objective 1</MenuItem>
               </Select>
@@ -361,23 +414,55 @@ const PixelCalibrationTab = () => {
               inputProps={{ step: 10, min: 0 }}
             />
 
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={handleCalibrate}
-              disabled={loading || !detectorName}
-              fullWidth
-              size="large"
-            >
-              {loading ? (
-                <>
-                  <CircularProgress size={22} sx={{ mr: 1 }} />
-                  Running…
-                </>
-              ) : (
-                'Start calibration'
-              )}
-            </Button>
+            {!loading ? (
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleCalibrate}
+                disabled={!detectorName}
+                fullWidth
+                size="large"
+              >
+                Start calibration
+              </Button>
+            ) : (
+              <Button
+                variant="contained"
+                color="error"
+                onClick={handleStop}
+                disabled={stopping}
+                fullWidth
+                size="large"
+              >
+                {stopping ? (
+                  <>
+                    <CircularProgress size={22} sx={{ mr: 1, color: 'inherit' }} />
+                    Stopping…
+                  </>
+                ) : (
+                  'Stop calibration'
+                )}
+              </Button>
+            )}
+
+            {/* Progress bar while a run is in flight */}
+            {loading && (
+              <Box sx={{ mt: 2 }}>
+                <LinearProgress
+                  variant={progress && progress.total > 0 ? 'determinate' : 'indeterminate'}
+                  value={
+                    progress && progress.total > 0
+                      ? Math.min(100, Math.round((progress.step / progress.total) * 100))
+                      : undefined
+                  }
+                />
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                  {progress && progress.total > 0
+                    ? `Step ${progress.step}/${progress.total}${progress.message ? ` – ${progress.message}` : ''}`
+                    : (progress?.message || 'Working…')}
+                </Typography>
+              </Box>
+            )}
           </Paper>
 
           {/* Pending calibration review */}
@@ -390,6 +475,22 @@ const PixelCalibrationTab = () => {
                 Verify the values below. Nothing is applied to the detector
                 until you press <b>Apply</b>.
               </Alert>
+
+              {pending?.metrics?.validation_ok === false && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  Quality check failed: {pending.metrics.validation_message || 'low-quality calibration'}.
+                  The pixel size may be unreliable — consider re-running with more
+                  contrast/exposure or a larger step size.
+                </Alert>
+              )}
+              {pending?.metrics?.validation_ok === true && (
+                <Alert severity="success" sx={{ mb: 2 }}>
+                  Quality check passed
+                  {pending?.metrics?.mean_correlation != null
+                    ? ` (mean correlation ${Number(pending.metrics.mean_correlation).toFixed(2)})`
+                    : ''}.
+                </Alert>
+              )}
 
               <Grid container spacing={2}>
                 <Grid item xs={6}>
@@ -410,27 +511,15 @@ const PixelCalibrationTab = () => {
                     fullWidth
                   />
                 </Grid>
-                <Grid item xs={6}>
-                  <FormControlLabel
-                    control={
-                      <Checkbox
-                        checked={editFlipX}
-                        onChange={(e) => setEditFlipX(e.target.checked)}
-                      />
-                    }
-                    label="Flip X"
-                  />
-                </Grid>
-                <Grid item xs={6}>
-                  <FormControlLabel
-                    control={
-                      <Checkbox
-                        checked={editFlipY}
-                        onChange={(e) => setEditFlipY(e.target.checked)}
-                      />
-                    }
-                    label="Flip Y"
-                  />
+                <Grid item xs={12}>
+                  <Alert severity="info" icon={false} sx={{ py: 0.5 }}>
+                    <Typography variant="body2">
+                      <strong>Image flip (measured by calibration):</strong>{' '}
+                      X&nbsp;{Number(pending?.metrics?.scale_x_um_per_pixel ?? 0) < 0 ? 'flipped' : 'normal'},{' '}
+                      Y&nbsp;{Number(pending?.metrics?.scale_y_um_per_pixel ?? 0) < 0 ? 'flipped' : 'normal'}.
+                      Flip is calibration-owned and applied automatically on Apply.
+                    </Typography>
+                  </Alert>
                 </Grid>
               </Grid>
 

@@ -59,7 +59,6 @@ import CompositeComponent from "./axon/CompositeComponent";
 //redux
 import { useDispatch, useSelector } from "react-redux";
 import * as connectionSettingsSlice from "./state/slices/ConnectionSettingsSlice.js";
-import * as webSocketSlice from "./state/slices/WebSocketSlice.js";
 import * as vizarrViewerSlice from "./state/slices/VizarrViewerSlice.js";
 import {
   clearNotification,
@@ -67,12 +66,10 @@ import {
   setNotification,
 } from "./state/slices/NotificationSlice.js";
 import { getThemeState } from "./state/slices/ThemeSlice.js";
-import { SnackbarProvider, useSnackbar } from "notistack";
+import { SnackbarProvider, useSnackbar, enqueueSnackbar } from "notistack";
 import useBackendControllerCapabilities from "./hooks/useBackendControllerCapabilities";
-import apiPositionerControllerHomeAxis from "./backendapi/apiPositionerControllerHomeAxis";
 import apiPositionerControllerGetHomingStatus from "./backendapi/apiPositionerControllerGetHomingStatus";
 import apiPositionerControllerDismissHomingRecommendation from "./backendapi/apiPositionerControllerDismissHomingRecommendation";
-import apiPositionerControllerGetPositions from "./backendapi/apiPositionerControllerGetPositions";
 
 // Filemanager
 import { api } from "./FileManager/api/api.js";
@@ -168,7 +165,6 @@ function App() {
   const connectionSettingsState = useSelector(
     connectionSettingsSlice.getConnectionSettingsState,
   );
-  const webSocketState = useSelector(webSocketSlice.getWebSocketState);
   const { isDarkMode } = useSelector(getThemeState);
 
   // Hook to detect mobile screens
@@ -223,9 +219,6 @@ function App() {
   });
 
   useEffect(() => {
-    if (!webSocketState.connected) {
-      return;
-    }
 
     let cancelled = false;
 
@@ -249,7 +242,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [webSocketState.connected, hostIP, apiPort]);
+  }, [ hostIP, apiPort]);
 
   const handleDismissHomingDialog = async () => {
     if (homingDialogBusy) {
@@ -273,53 +266,14 @@ function App() {
     }
   };
 
-  const handleStartHomingFromDialog = async () => {
-    if (homingDialogBusy) {
-      return;
-    }
-
-    setHomingDialogBusy(true);
-
-    try {
-      const positions = await apiPositionerControllerGetPositions();
-      const firstPositionerName = Object.keys(positions || {})[0];
-      const availableAxes = firstPositionerName
-        ? Object.keys(positions[firstPositionerName] || {})
-        : [];
-
-      const preferredAxes = ["X", "Y"];
-      const axesToHome = preferredAxes.filter((axis) =>
-        availableAxes.includes(axis),
-      );
-
-      if (axesToHome.length === 0) {
-        throw new Error("No X/Y axes available for homing");
-      }
-
-      for (const axis of axesToHome) {
-        await apiPositionerControllerHomeAxis({
-          axis,
-          isBlocking: false,
-        });
-      }
-
-      dispatch(
-        setNotification({
-          message: `Homing started for axis ${axesToHome.join(", ")}.`,
-          type: "success",
-        }),
-      );
-      setHomingDialogOpen(false);
-    } catch (error) {
-      dispatch(
-        setNotification({
-          message: "Failed to start homing from startup prompt.",
-          type: "error",
-        }),
-      );
-    } finally {
-      setHomingDialogBusy(false);
-    }
+  // Route the startup homing recommendation to the FRAME-specific homing
+  // procedure (FRAME Settings → "Frame Homing & Transport") rather than a
+  // generic X/Y home call. FRAMESettingsController consumes the localStorage
+  // key on mount to pre-select that tab.
+  const handleOpenFrameHoming = () => {
+    localStorage.setItem("frameSettings.initialTab", "frameHoming");
+    setSelectedPlugin("FRAMESettings");
+    setHomingDialogOpen(false);
   };
 
   /*
@@ -419,6 +373,35 @@ function App() {
     });
     // Switch to ImJoy tab
     setSelectedPlugin("ImJoy");
+  };
+
+  // Copy a `napari --plugin openuc2-processor <url>` command to the clipboard so
+  // the user can download/process this dataset in the napari plugin.
+  const handleOpenInNapari = (file) => {
+    const cleanPath = file.path?.startsWith("/")
+      ? file.path.slice(1)
+      : file.path;
+    const url = `${hostIP}:${apiPort}/imswitch/api/FileManager/download/${cleanPath}`;
+    const command = `napari --plugin openuc2-processor "${url}"`;
+    const notify = (variant, message) => {
+      try {
+        enqueueSnackbar(message, { variant });
+      } catch (e) {
+        /* SnackbarProvider not mounted */
+      }
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(command)
+        .then(() => notify("success", "Copied napari command to clipboard"))
+        .catch(() => {
+          console.log(command);
+          notify("warning", "Copy failed — command logged to console");
+        });
+    } else {
+      console.log(command);
+      notify("info", "Clipboard unavailable — command logged to console");
+    }
   };
 
   // Handler to open OME-Zarr files with the integrated Vizarr viewer
@@ -596,10 +579,10 @@ function App() {
             </Button>
             <Button
               variant="contained"
-              onClick={handleStartHomingFromDialog}
+              onClick={handleOpenFrameHoming}
               disabled={homingDialogBusy}
             >
-              Start homing (X/Y)
+              Open Frame Homing
             </Button>
           </DialogActions>
         </Dialog>
@@ -723,6 +706,7 @@ function App() {
                     onDownload={handleDownload}
                     onFileOpen={handleOpenWithImJoy}
                     onOpenWithVizarr={handleOpenWithVizarr}
+                    onOpenInNapari={handleOpenInNapari}
                     onDelete={handleDelete}
                     onRefresh={handleRefresh}
                     layout="list"

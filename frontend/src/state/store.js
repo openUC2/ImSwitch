@@ -58,6 +58,7 @@ import goniometerReducer from "./slices/GoniometerSlice";
 import detectorParametersReducer from "./slices/DetectorParametersSlice";
 import backendCapabilitiesReducer from "./slices/BackendCapabilitiesSlice";
 import onboardingReducer from "./slices/OnboardingSlice";
+import homingReducer from "./slices/HomingSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -131,6 +132,7 @@ const rootReducer = combineReducers({
   wellSelectorState: wellSelectorReducer,
   objectiveState: objectiveReducer,
   position: positionReducer,
+  homing: homingReducer, // runtime-only frame-homing progress (not persisted)
   LEDMatrixState: LEDMatrixReducer,
   experimentWorkflowState: experimentStateReducer,
   liveViewState: liveViewReducer,

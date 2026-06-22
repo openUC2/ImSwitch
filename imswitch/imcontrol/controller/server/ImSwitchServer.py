@@ -27,6 +27,11 @@ from typing import Dict
 from imswitch import __ssl__, __httpport__, __version__
 from imswitch.imcontrol.model import configfiletools
 from fastapi.responses import RedirectResponse
+try:
+    # On-the-fly thumbnails + OME metadata for the FileManager (optional: never block startup).
+    from imswitch.imcontrol.model.io import thumbnails as _thumbnails
+except Exception:
+    _thumbnails = None
 import asyncio
 from datetime import datetime
 from fastapi.openapi.docs import (
@@ -201,6 +206,15 @@ def _build_item_metadata(path: Path, base_path: Path, is_dir_override: Optional[
     is_dir = path.is_dir() if is_dir_override is None else is_dir_override
     rel_path = _make_rel_path(base_path, path)
     preview_url = None if is_dir else f"/preview{rel_path}"
+
+    # Image detection so the grid can show a thumbnail (note: *.zarr is a directory).
+    is_image, image_type = (False, None)
+    if _thumbnails is not None:
+        try:
+            is_image, image_type = _thumbnails.is_image(str(path))
+        except Exception:
+            is_image, image_type = (False, None)
+
     return {
         "name": path.name,
         "isDirectory": is_dir,
@@ -208,6 +222,9 @@ def _build_item_metadata(path: Path, base_path: Path, is_dir_override: Optional[
         "_id": rel_path,
         "size": None if is_dir else stat_info.st_size,
         "filePreviewPath": preview_url,
+        "thumbnailPath": f"/thumbnail{rel_path}" if is_image else None,
+        "isImage": is_image,
+        "imageType": image_type,
         "modifiedTime": stat_info.st_mtime,
     }
 
@@ -270,6 +287,50 @@ def preview_file(file_path: str):
 
     # Serve the file
     return FileResponse(absolute_path, filename=absolute_path.name)
+
+
+@api_router.get("/FileManager/thumbnail/{file_path:path}")
+def thumbnail_file(file_path: str, size: int = 256):
+    """Serve a small cached JPEG thumbnail for an image file/store.
+
+    Generated on first request and cached outside the data folder; subsequent requests
+    are served from cache. Supports OME-TIFF, OME-Zarr, plain TIFF and standard images.
+    """
+    if _thumbnails is None:
+        raise HTTPException(status_code=503, detail="Thumbnail service unavailable")
+    base_path = _get_base_path()
+    absolute_path = _safe_resolve_path(base_path, file_path)
+    if not absolute_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    is_image, _ = _thumbnails.is_image(str(absolute_path))
+    if not is_image:
+        raise HTTPException(status_code=415, detail="Not a previewable image")
+    size = max(16, min(2048, int(size)))
+    try:
+        thumb_path = _thumbnails.get_thumbnail(str(absolute_path), size)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Thumbnail generation failed: {e}")
+    return FileResponse(
+        thumb_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@api_router.get("/FileManager/metadata/{file_path:path}")
+def metadata_file(file_path: str):
+    """Return OME/NGFF metadata (pixel size, channels, dimensions, ...) as JSON."""
+    if _thumbnails is None:
+        raise HTTPException(status_code=503, detail="Metadata service unavailable")
+    base_path = _get_base_path()
+    absolute_path = _safe_resolve_path(base_path, file_path)
+    if not absolute_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        return _thumbnails.extract_metadata(str(absolute_path))
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=200)
+
 
 @api_router.get("/FileManager/")
 def get_items(path: str = ""):

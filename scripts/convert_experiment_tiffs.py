@@ -1158,11 +1158,13 @@ def build_ashlar_stitched(
     pixel_size: float = 1.0,
     maximum_shift: float = 50.0,
     align_channel: int = 0,
+    tile_size: int = 1024,
+    pyramid: Optional[bool] = None,
 ):
     """
     Stitch tiles for every timepoint using ashlarUC2's ImSwitchTiffReader,
     which understands the ImSwitch filename convention natively.
- 
+
     Strategy
     --------
     For each timepoint we collect one representative tile per (XY position,
@@ -1170,7 +1172,7 @@ def build_ashlar_stitched(
     is chosen (Laplacian-variance focus measure).  The selected files are
     passed directly to ``build_imswitch_reader``, which reads the stage
     coordinates from the filenames and feeds them to ASHLAR's edge aligner.
- 
+
     Multi-channel handling
     ----------------------
     ASHLAR expects one *reader* per imaging cycle.  For a single-cycle
@@ -1180,14 +1182,18 @@ def build_ashlar_stitched(
     groups tiles by channel automatically when given a directory or list of
     files, so we pass it the full per-timepoint file list and let it sort
     out the channel ordering.
- 
+
     Parameters
     ----------
-    grid         : ExperimentGrid
-    out_dir      : str  – output directory
-    pixel_size   : float – physical pixel size in µm/pixel
-    maximum_shift: float – max per-tile corrective shift in µm (ashlar -m)
-    align_channel: int   – channel index used for alignment (ashlar -c)
+    grid          : ExperimentGrid
+    out_dir       : str  – output directory
+    pixel_size    : float – physical pixel size in µm/pixel
+    maximum_shift : float – max per-tile corrective shift in µm (ashlar -m)
+    align_channel : int   – channel index used for alignment (ashlar -c)
+    tile_size     : int   – output TIFF tile size in pixels (default 1024)
+    pyramid       : bool|None – write OME-TIFF pyramid subresolutions;
+                    None (default) = auto-disable for outputs estimated > 500 MB
+                    to avoid OOM kills on memory-limited systems.
     """
     # Import process_images and build_imswitch_reader from ashlarUC2.
     process_images = None
@@ -1212,10 +1218,62 @@ def build_ashlar_stitched(
         )
         sys.exit(1)
 
+    # ------------------------------------------------------------------
+    # Pre-compute estimated output size from actual tile pixel dimensions.
+    # We read one sample tile from disk rather than relying on reader
+    # metadata, because different ashlar/ashlarUC2 versions return
+    # positions and size in different units (pixels vs µm), making
+    # reader-metadata-based estimates unreliable.
+    # ------------------------------------------------------------------
+    _sample_tile_for_size = next(
+        (t for tl in grid.lookup.values() for t in tl if tl), None
+    )
+    _tile_h_px = _tile_w_px = 1
+    if _sample_tile_for_size is not None:
+        try:
+            _smp_img = tif.imread(_sample_tile_for_size.filepath)
+            _tile_h_px, _tile_w_px = _smp_img.shape[:2]
+        except Exception:
+            pass
+
+    _grid_nx = len(grid.ix_positions)
+    _grid_ny = len(grid.iy_positions)
+    _grid_nc = len(grid.c_indices)
+    # Conservative upper bound: full canvas with no overlap correction.
+    # Overestimates the true output size, which is intentional — the OOM
+    # threshold should be generous so we never under-estimate.
+    _canvas_estimated_mb = (
+        _grid_nx * _tile_w_px * _grid_ny * _tile_h_px * _grid_nc * 2 / (1024 ** 2)
+    )
+
     print("\n=== Building ashlar-stitched OME-TIFFs (sub-pixel alignment) ===")
-    print(f"  pixel_size={pixel_size} µm  maximum_shift={maximum_shift} µm  "
-          f"align_channel={align_channel}")
+    print(
+        f"  pixel_size={pixel_size} µm  maximum_shift={maximum_shift} µm  "
+        f"align_channel={align_channel}  tile_size={tile_size}"
+    )
+    print(
+        f"  Grid: {_grid_nx}×{_grid_ny} positions × {_grid_nc} channel(s)  "
+        f"→ estimated canvas ≈ {_canvas_estimated_mb:.0f} MB"
+    )
     os.makedirs(out_dir, exist_ok=True)
+
+    # Resolve the pyramid flag once for all timepoints (grid layout is fixed).
+    # Use .ome.tif output for pyramid, .tif for flat — ashlar may also check
+    # the extension internally, so matching the extension to the intent gives
+    # a belt-and-suspenders guarantee even if it ignores the `pyramid` kwarg.
+    _OOM_THRESHOLD_MB = 400  # conservative; pyramid generation peaks well above canvas size
+    if pyramid is None:
+        _use_pyramid = _canvas_estimated_mb < _OOM_THRESHOLD_MB
+        if not _use_pyramid:
+            print(
+                f"  Estimated canvas {_canvas_estimated_mb:.0f} MB ≥ {_OOM_THRESHOLD_MB} MB — "
+                f"disabling pyramid to prevent OOM kill (rc=-9). "
+                f"Pass --pyramid to force pyramid generation."
+            )
+    else:
+        _use_pyramid = pyramid
+
+    _out_ext = ".ome.tif" if _use_pyramid else ".tif"
 
     files_written: List[str] = []
 
@@ -1246,8 +1304,8 @@ def build_ashlar_stitched(
         print(f"  {len(selected_paths)} tiles selected  "
               f"({n_positions} XY positions × {n_channels} channel(s))")
 
-        out_file = os.path.join(out_dir, f"ashlar_stitched_t{tp:04d}.ome.tif")
-        print(f"  Output → {os.path.basename(out_file)}")
+        out_file = os.path.join(out_dir, f"ashlar_stitched_t{tp:04d}{_out_ext}")
+        print(f"  Output → {os.path.basename(out_file)}  (pyramid={_use_pyramid})")
 
         # ------------------------------------------------------------------
         # Build reader.  Prefer build_imswitch_reader when available; fall back to
@@ -1332,8 +1390,8 @@ def build_ashlar_stitched(
                 stitch_alpha=0.01,
                 maximum_error=None,
                 filter_sigma=0,
-                pyramid=out_file.endswith(".ome.tif") or out_file.endswith(".ome.tiff"),
-                tile_size=1024,
+                pyramid=_use_pyramid,
+                tile_size=tile_size,
                 ffp=None,
                 dfp=None,
                 barrel_correction=0,
@@ -1358,7 +1416,8 @@ def build_ashlar_stitched(
             print(f"  Written: {out_file}")
             files_written.append(out_file)
             # If the stitched TIFF has 3 channels (RGB input tiles), merge to RGB.
-            rgb_path = out_file[:-8] + "_rgb.tif" if out_file.endswith(".ome.tif") else out_file + "_rgb.tif"
+            _stem = out_file[:-8] if out_file.endswith(".ome.tif") else out_file[:-4]
+            rgb_path = _stem + "_rgb.tif"
             try:
                 if _save_rgb_from_multichannel(out_file, rgb_path):
                     print(f"  RGB: {os.path.basename(rgb_path)}")
@@ -1371,6 +1430,102 @@ def build_ashlar_stitched(
 
     if not files_written:
         print("  ERROR: No output files were written by ashlar.")
+
+
+# ---------------------------------------------------------------------------
+# Mode 7b: Add OME-TIFF pyramid subresolutions to an existing flat TIFF
+#
+# Ashlar writes a flat (non-pyramidal) .tif when pyramid=False.  This
+# function generates the pyramid in a SECOND PASS by memory-mapping the
+# already-written flat TIFF and downsampling one tile at a time.  Peak RAM
+# usage is proportional to the tile_size (a few hundred MB at most), not to
+# the full canvas — so images that OOM-kill an in-process pyramid build will
+# succeed here.
+# ---------------------------------------------------------------------------
+
+def add_pyramid_to_tiff(
+    src_path: str,
+    out_path: Optional[str] = None,
+    tile_size: int = 512,
+    n_subresolutions: int = 5,
+) -> str:
+    """
+    Read a flat TIFF at *src_path* and write an OME-TIFF pyramid at *out_path*.
+
+    The source file is accessed via a memory-map so only the chunks being
+    actively processed reside in RAM.  This makes the operation feasible for
+    images that are too large for an in-memory pyramid build.
+
+    Parameters
+    ----------
+    src_path         : path to the flat (non-pyramidal) stitched TIFF
+    out_path         : output path; defaults to src_path with .ome.tif extension
+    tile_size        : TIFF tile size for the output (default 512)
+    n_subresolutions : number of pyramid levels to generate (default 5)
+
+    Returns
+    -------
+    str  – path of the written pyramidal OME-TIFF
+    """
+    if out_path is None:
+        base = src_path
+        for _suf in (".flat.tif", ".tif"):
+            if base.endswith(_suf):
+                base = base[: -len(_suf)]
+                break
+        out_path = base + ".ome.tif"
+
+    print(f"  Building pyramid: {os.path.basename(src_path)} → {os.path.basename(out_path)}")
+
+    # Memory-map the source: the array is backed by the file on disk and only
+    # the accessed regions are loaded into RAM.
+    src = tif.memmap(src_path)
+    print(f"  Source shape: {src.shape}  dtype: {src.dtype}  "
+          f"({src.nbytes / (1024**2):.0f} MB on disk)")
+
+    use_bigtiff = src.nbytes > _4GB
+    with tif.TiffWriter(out_path, bigtiff=use_bigtiff) as writer:
+        # Level 0 — full resolution.  tifffile streams tile-by-tile when given
+        # a memmap array, keeping peak RAM close to one tile.
+        options = dict(
+            tile=(tile_size, tile_size),
+            compression="deflate",
+            photometric="minisblack" if src.ndim == 2 else None,
+        )
+        if options["photometric"] is None:
+            del options["photometric"]
+
+        writer.write(src, subresolutions=n_subresolutions, **options)
+
+    print(f"  Written: {out_path}")
+    return out_path
+
+
+def add_pyramid_to_ashlar_outputs(ashlar_dir: str, tile_size: int = 512):
+    """
+    Find all flat .tif files in *ashlar_dir* and generate a paired .ome.tif
+    pyramid for each one.  Skips files that already have a paired .ome.tif.
+    """
+    print(f"\n=== Adding pyramid subresolutions to ashlar outputs in {ashlar_dir} ===")
+    flat_tiffs = [
+        f for f in os.listdir(ashlar_dir)
+        if f.endswith(".tif") and not f.endswith(".ome.tif")
+    ]
+    if not flat_tiffs:
+        print("  No flat .tif files found.")
+        return
+    for fname in sorted(flat_tiffs):
+        src = os.path.join(ashlar_dir, fname)
+        stem = fname[:-4]
+        out = os.path.join(ashlar_dir, stem + ".ome.tif")
+        if os.path.isfile(out):
+            print(f"  Skipping {fname} (pyramid already exists: {os.path.basename(out)})")
+            continue
+        try:
+            add_pyramid_to_tiff(src, out, tile_size=tile_size)
+        except Exception as exc:
+            print(f"  ERROR generating pyramid for {fname}: {exc}")
+            import traceback; traceback.print_exc()
 
 
 # ---------------------------------------------------------------------------
@@ -1425,7 +1580,7 @@ def write_tile_configuration(grid: ExperimentGrid, out_dir: str):
 # ---------------------------------------------------------------------------
 
 ALL_MODES = ["composite", "stitch", "mip", "mip-composite", "focus", "tile-config",
-             "timelapse", "timelapse-mip", "ashlar"]
+             "timelapse", "timelapse-mip", "ashlar", "ashlar-pyramid"]
 
 '''
 Explanation of modes:
@@ -1498,6 +1653,27 @@ def main():
         default=0,
         metavar="CHANNEL",
         help="Channel index used for ashlar alignment (default: 0)",
+    )
+    parser.add_argument(
+        "--tile-size",
+        type=int,
+        default=1024,
+        metavar="PIXELS",
+        help="Output TIFF tile size in pixels for ashlar (default: 1024)",
+    )
+    _pyramid_group = parser.add_mutually_exclusive_group()
+    _pyramid_group.add_argument(
+        "--pyramid",
+        dest="pyramid",
+        action="store_true",
+        default=None,
+        help="Always build OME-TIFF pyramid subresolutions (may OOM for large images)",
+    )
+    _pyramid_group.add_argument(
+        "--no-pyramid",
+        dest="pyramid",
+        action="store_false",
+        help="Never build pyramid subresolutions (saves memory; overrides auto-detect)",
     )
     args = parser.parse_args()
 
@@ -1576,7 +1752,22 @@ def main():
             pixel_size=pixel_size,
             maximum_shift=args.maximum_shift,
             align_channel=args.align_channel,
+            tile_size=args.tile_size,
+            pyramid=args.pyramid,
         )
+
+    if "ashlar-pyramid" in modes:
+        # Second-pass pyramid generation: reads already-stitched flat .tif files
+        # from the ashlar output directory and writes paired .ome.tif pyramids.
+        # Uses memory-mapping so peak RAM scales with tile_size, not canvas size.
+        _ashlar_dir = os.path.join(out_dir, "ashlar")
+        if os.path.isdir(_ashlar_dir):
+            add_pyramid_to_ashlar_outputs(_ashlar_dir, tile_size=args.tile_size)
+        else:
+            print(
+                f"\nMode 'ashlar-pyramid': no ashlar output directory found at {_ashlar_dir}.\n"
+                f"Run '--mode ashlar' first to produce the flat stitched TIFFs."
+            )
 
     print(f"\nAll outputs written to: {out_dir}")
 

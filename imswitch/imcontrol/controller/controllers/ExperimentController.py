@@ -2155,6 +2155,8 @@ class ExperimentController(ImConWidgetController):
             "--maximum-shift", str(maximumShift),
             "--align-channel", str(alignChannel),
             "--pixel-size", str(pixelSize),
+            "--tile-size", "512",
+            "--no-pyramid",  # pyramid generation OOM-kills large scans (rc=-9); generate pyramid separately if needed
         ]
         self._logger.info(f"Ashlar command: {' '.join(cmd)}")
 
@@ -2223,7 +2225,16 @@ class ExperimentController(ImConWidgetController):
                     self._finishOverviewAsync(error=tail)
             else:
                 tail = "\n".join(stderr_lines[-20:]) or f"Script exited with code {rc}"
-                self._logger.error(f"Ashlar stitching failed (rc={rc}): {tail}")
+                if rc == -9:
+                    self._logger.error(
+                        f"Ashlar stitching killed by OS (rc=-9 / SIGKILL) — "
+                        f"almost certainly an out-of-memory (OOM) condition. "
+                        f"The stitched image is too large for available RAM. "
+                        f"Try scanning fewer tiles, reducing channel count, or "
+                        f"adding swap space. Last output:\n{tail}"
+                    )
+                else:
+                    self._logger.error(f"Ashlar stitching failed (rc={rc}): {tail}")
                 self._finishOverviewAsync(error=tail)
 
         except Exception as exc:

@@ -1,8 +1,6 @@
 import { createContext, useContext, useState, useEffect } from "react";
 
-const PWAContext = createContext({
-  installPromptEvent: null,
-});
+const PWAContext = createContext(null);
 
 export function PWAProvider({ children }) {
   const [installPromptEvent, setInstallPromptEvent] = useState(null);

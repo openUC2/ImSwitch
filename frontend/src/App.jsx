@@ -26,7 +26,6 @@ import MotorSettingsController from "./components/MotorSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
 import LargeFovScanController from "./components/OpenLayers.js";
 import SocketView from "./components/SocketView.js";
-
 import TimelapseController from "./components/TimelapseController.js";
 import STORMControllerArkitekt from "./components/STORMControllerArkitekt.js";
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
@@ -70,10 +69,8 @@ import {
 import { getThemeState } from "./state/slices/ThemeSlice.js";
 import { SnackbarProvider, useSnackbar, enqueueSnackbar } from "notistack";
 import useBackendControllerCapabilities from "./hooks/useBackendControllerCapabilities";
-import apiPositionerControllerHomeAxis from "./backendapi/apiPositionerControllerHomeAxis";
 import apiPositionerControllerGetHomingStatus from "./backendapi/apiPositionerControllerGetHomingStatus";
 import apiPositionerControllerDismissHomingRecommendation from "./backendapi/apiPositionerControllerDismissHomingRecommendation";
-import apiPositionerControllerGetPositions from "./backendapi/apiPositionerControllerGetPositions";
 
 // Filemanager
 import { api } from "./FileManager/api/api.js";
@@ -269,53 +266,14 @@ function App() {
     }
   };
 
-  const handleStartHomingFromDialog = async () => {
-    if (homingDialogBusy) {
-      return;
-    }
-
-    setHomingDialogBusy(true);
-
-    try {
-      const positions = await apiPositionerControllerGetPositions();
-      const firstPositionerName = Object.keys(positions || {})[0];
-      const availableAxes = firstPositionerName
-        ? Object.keys(positions[firstPositionerName] || {})
-        : [];
-
-      const preferredAxes = ["X", "Y"];
-      const axesToHome = preferredAxes.filter((axis) =>
-        availableAxes.includes(axis),
-      );
-
-      if (axesToHome.length === 0) {
-        throw new Error("No X/Y axes available for homing");
-      }
-
-      for (const axis of axesToHome) {
-        await apiPositionerControllerHomeAxis({
-          axis,
-          isBlocking: false,
-        });
-      }
-
-      dispatch(
-        setNotification({
-          message: `Homing started for axis ${axesToHome.join(", ")}.`,
-          type: "success",
-        }),
-      );
-      setHomingDialogOpen(false);
-    } catch (error) {
-      dispatch(
-        setNotification({
-          message: "Failed to start homing from startup prompt.",
-          type: "error",
-        }),
-      );
-    } finally {
-      setHomingDialogBusy(false);
-    }
+  // Route the startup homing recommendation to the FRAME-specific homing
+  // procedure (FRAME Settings → "Frame Homing & Transport") rather than a
+  // generic X/Y home call. FRAMESettingsController consumes the localStorage
+  // key on mount to pre-select that tab.
+  const handleOpenFrameHoming = () => {
+    localStorage.setItem("frameSettings.initialTab", "frameHoming");
+    setSelectedPlugin("FRAMESettings");
+    setHomingDialogOpen(false);
   };
 
   /*
@@ -622,10 +580,10 @@ function App() {
               </Button>
               <Button
                 variant="contained"
-                onClick={handleStartHomingFromDialog}
+                onClick={handleOpenFrameHoming}
                 disabled={homingDialogBusy}
               >
-                Start homing (X/Y)
+                Open Frame Homing
               </Button>
             </DialogActions>
           </Dialog>

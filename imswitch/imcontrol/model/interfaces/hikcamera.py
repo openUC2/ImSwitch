@@ -552,6 +552,9 @@ class CameraHIK:
             if self.flipImage[1]:  # flipX
                 frame = np.flip(frame, axis=1)
 
+            # on mac we want to print the current pixel
+            if platform == "darwin":
+                self.__logger.debug(f"Frame {fid} received with pixel format 0x{pix:x}, shape {frame.shape}")
 
             # pass to user callback
             user_cb(frame, fid, ts)

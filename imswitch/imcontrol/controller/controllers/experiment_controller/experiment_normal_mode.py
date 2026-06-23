@@ -6,6 +6,7 @@ of the scanning process using workflow steps for precise control.
 """
 
 import os
+import re
 from typing import List, Dict, Any, Optional
 import numpy as np
 
@@ -23,6 +24,19 @@ from .experiment_mode_base import ExperimentModeBase
 # Order matters: it's the order frames are acquired and saved per XY
 # position, and the OME channel-name ordering ("DPC_top", "DPC_bottom", ...).
 DPC_SUB_DIRS = ("top", "bottom", "left", "right")
+
+
+def _sanitize_name(name: str, max_len: int = 40) -> str:
+    """Make a position/area name safe to use as a file/folder path component.
+
+    Keeps alphanumerics, dot, dash and underscore; collapses every other run of
+    characters to a single dash; trims separators and length. Returns "" for an
+    empty/None input so callers can fall back to the legacy index-only naming
+    (keeping the output byte-identical when no name is set).
+    """
+    s = re.sub(r"[^0-9A-Za-z._-]+", "-", str(name or "").strip())
+    s = s.strip("-_.")
+    return s[:max_len]
 
 
 class ExperimentNormalMode(ExperimentModeBase):
@@ -391,9 +405,17 @@ class ExperimentNormalMode(ExperimentModeBase):
         condition_labels: Dict[str, str] = {}
         for position_center_index, tiles in enumerate(snake_tiles):
             experiment_name = f"{t}_{exp_name}_{position_center_index}"
+            # Per-area position name (frontend pointList → ScanArea.areaName,
+            # carried onto every tile by generate_snake_tiles). Appended to the
+            # base name, additively: the timestamp/experiment/index prefix is
+            # preserved so existing index-based tooling still resolves the files,
+            # while the file, the per-area folder (both derived from this base
+            # path) and the OME/OMERO image name now carry the position name.
+            # Empty name => byte-identical to the legacy index-only naming.
+            area_name = _sanitize_name(tiles[0].get("areaName") or tiles[0].get("name")) if tiles else ""
             m_file_path = os.path.join(
                 dir_path,
-                m_file_name + str(position_center_index) + "_" + experiment_name + "_" + ".ome.tif"
+                m_file_name + str(position_center_index) + "_" + experiment_name + "_" + area_name + ".ome.tif"
             )
             self._logger.debug(f"OME-TIFF path: {m_file_path}")
 
@@ -502,6 +524,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                 omero_connection_params=omero_connection_params,
                 shared_omero_key=shared_omero_key,
                 well_metadata=well_metadata,
+                # Clean position name for the OME/OMERO image-name metadata
+                # (falls back to the file basename when no name is set).
+                image_name=area_name or None,
             )
             file_writers.append(ome_writer)
 

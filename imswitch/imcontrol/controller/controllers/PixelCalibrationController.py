@@ -423,7 +423,12 @@ class PixelCalibrationController(LiveUpdatedController):
         """Request the running automatic calibration to abort at the next step."""
         if not self._calibrationProgress.get("running"):
             return {"success": False, "message": "No calibration is running."}
+        # stop all motors:
         self._calibrationAbort.set()
+        stage = self._master.positionersManager[
+            self._master.positionersManager.getAllDeviceNames()[0]
+        ]
+        stage.stopAll()
         self._calibrationProgress["message"] = "Stopping…"
         self._logger.info("Stop requested for automatic calibration")
         return {"success": True, "message": "Stop requested; calibration will abort shortly."}

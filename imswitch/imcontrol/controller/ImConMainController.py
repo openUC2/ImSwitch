@@ -167,21 +167,21 @@ class ImConMainController(MainController):
             self.__logger.warning(
                 f"Could not dynamically import {controller_name}: {e}"
             )
-        # Add StageCenterController for stage centering functionality (if StageCenter widget is present)
+        # Add StageCenterCalibrationController for stage centering functionality (if StageCenter widget is present)
         try:
             self.__logger.info("Creating controller for StageCenter ")
-            controller_name = "StageCenterController"
+            controller_name = "StageCenterCalibrationController"
             module = importlib.import_module(
-                "imswitch.imcontrol.controller.controllers.StageCenterController" 
+                "imswitch.imcontrol.controller.controllers.StageCenterCalibrationController" 
             )
             controller_class = getattr(module, controller_name)
             if controller_class is not None:
-                self.controllers["StageCenter"] = self.__factory.createController(
-                    controller_class, self.__mainView.widgets["StageCenter"]
+                self.controllers["StageCenterCalibration"] = self.__factory.createController(
+                    controller_class, self.__mainView.widgets["StageCenterCalibration"]
                 )
-                # Register StageCenterController
+                # Register StageCenterCalibrationController
                 self.__masterController.registerController(
-                    "StageCenter", self.controllers["StageCenter"]
+                    "StageCenterCalibration", self.controllers["StageCenterCalibration"]
                 )
         except Exception as e:
             self.__logger.warning(
@@ -238,6 +238,22 @@ class ImConMainController(MainController):
         except Exception as e:
             self.__logger.warning(
                 f"Could not create MetadataController: {e}"
+            )
+
+        # Add ReadNoiseCalibrationController for camera read-noise/gain calibration (no widget required)
+        try:
+            self.__logger.info("Creating ReadNoiseCalibrationController for read-noise calibration")
+            from .controllers.ReadNoiseCalibrationController import ReadNoiseCalibrationController
+            self.controllers["ReadNoiseCalibration"] = self.__factory.createController(
+                ReadNoiseCalibrationController, None
+            )
+            # Register ReadNoiseCalibrationController
+            self.__masterController.registerController(
+                "ReadNoiseCalibration", self.controllers["ReadNoiseCalibration"]
+            )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not create ReadNoiseCalibrationController: {e}"
             )
 
         # Generate API

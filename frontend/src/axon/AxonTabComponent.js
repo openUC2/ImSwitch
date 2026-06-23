@@ -117,7 +117,7 @@ const AxonTabComponent = () => {
               id="1"
               tabNames={[
                 "Well Selector",
-                "Live View",
+                "Camera feed",
                 "Parameter",
                 "Points",
                 "State",
@@ -143,7 +143,7 @@ const AxonTabComponent = () => {
             <GenericTabBar
               id="2"
               tabNames={[
-                "Live View",
+                "Camera feed",
                 //              "Tile View",
                 "Points",
                 "Parameter",

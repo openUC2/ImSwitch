@@ -2126,7 +2126,7 @@ const HoloController = () => {
               <Box
                 sx={{
                   position: "relative",
-                  width: "100%",
+                  width: "30%",
                   minHeight: 300,
                   backgroundColor: "#000",
                   borderRadius: 1,
@@ -2299,7 +2299,7 @@ const HoloController = () => {
               <Box
                 sx={{
                   position: "relative",
-                  width: "100%",
+                  width: "30%",
                   minHeight: 300,
                   backgroundColor: "#000",
                   borderRadius: 1,

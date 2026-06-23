@@ -1,13 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import {
-  Box,
-  Tabs,
-  Tab,
-  Tooltip,
-  Typography,
-  IconButton,
-} from "@mui/material";
+import { Box, Tabs, Tab, Tooltip, Typography, IconButton } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import introJs from "intro.js";
 import "intro.js/introjs.css";
@@ -70,10 +63,17 @@ async function switchToDetector({
     const name = detectors[targetIdx] || null;
     const saved = name && liveStreamState.perDetectorSettings?.[name];
     const override = saved && saved.protocol === protocol ? saved : null;
-    const result = await apiLiveViewControllerStartLiveView(name, protocol, override);
+    const result = await apiLiveViewControllerStartLiveView(
+      name,
+      protocol,
+      override,
+    );
     if (result?.params && name) {
       dispatch(
-        liveStreamSlice.updateDetectorSettings({ detectorName: name, settings: result.params }),
+        liveStreamSlice.updateDetectorSettings({
+          detectorName: name,
+          settings: result.params,
+        }),
       );
     }
   } catch (err) {
@@ -85,7 +85,8 @@ async function switchToDetector({
 const findWidefieldIdx = (detectors, overviewName) => {
   if (!detectors || detectors.length === 0) return -1;
   let idx = detectors.findIndex((n) => /wide/i.test(n));
-  if (idx < 0 && overviewName) idx = detectors.findIndex((n) => n !== overviewName);
+  if (idx < 0 && overviewName)
+    idx = detectors.findIndex((n) => n !== overviewName);
   return idx < 0 ? 0 : idx;
 };
 
@@ -129,7 +130,8 @@ const TOUR_STEPS = [
   {
     target: '[data-tour-wp="viewport-strip"]',
     title: "Viewports",
-    intro: "Switch the left side here: plate map, live camera, stitched overview, or the 3D stage twin.",
+    intro:
+      "Switch the left side here: plate map, camera feed, stitched overview, or the 3D stage twin.",
   },
   {
     target: '[data-tour-wp="tab-plate-map"]',
@@ -140,13 +142,15 @@ const TOUR_STEPS = [
   },
   {
     target: '[data-tour-wp="tab-live-view"]',
-    title: "Live View",
-    intro: "The live <b>widefield</b> camera — auto-selected when you open this tab.",
+    title: "Camera feed",
+    intro:
+      "The live <b>widefield</b> camera — auto-selected when you open this tab.",
   },
   {
     target: '[data-tour-wp="tab-overview"]',
     title: "Overview",
-    intro: "Stitched overview overlay + registration. Opening it switches to the <b>overview camera</b>.",
+    intro:
+      "Stitched overview overlay + registration. Opening it switches to the <b>overview camera</b>.",
   },
   {
     target: '[data-tour-wp="tab-3d-twin"]',
@@ -163,13 +167,16 @@ const TOUR_STEPS = [
   {
     target: null,
     title: "You're set",
-    intro: "Explore at your own pace — reopen this tour any time from the <b>ⓘ</b> button.",
+    intro:
+      "Explore at your own pace — reopen this tour any time from the <b>ⓘ</b> button.",
   },
 ];
 
 /** Build + launch a self-contained intro.js tour over the workspace. */
 const launchTour = (isDarkMode) => {
-  const steps = TOUR_STEPS.filter((s) => !s.target || document.querySelector(s.target)).map((s) => ({
+  const steps = TOUR_STEPS.filter(
+    (s) => !s.target || document.querySelector(s.target),
+  ).map((s) => ({
     element: s.target ? document.querySelector(s.target) : undefined,
     title: s.title,
     intro: s.intro,
@@ -214,7 +221,10 @@ const StageStatePanel = () => (
  * `value`, `onChange` etc. into the underlying Tab (wrapping a Tab directly in
  * a Tooltip breaks selection).
  */
-const TooltipTab = React.forwardRef(function TooltipTab({ help, ...tabProps }, ref) {
+const TooltipTab = React.forwardRef(function TooltipTab(
+  { help, ...tabProps },
+  ref,
+) {
   return (
     <Tooltip title={help} arrow placement="bottom" enterDelay={400}>
       <Tab ref={ref} {...tabProps} />
@@ -243,7 +253,9 @@ const WellPlateWorkspace = () => {
 
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
-  const overviewRegState = useSelector(overviewRegSlice.getOverviewRegistrationState);
+  const overviewRegState = useSelector(
+    overviewRegSlice.getOverviewRegistrationState,
+  );
   const { isDarkMode } = useSelector(getThemeState);
 
   // Which viewport is showing on the left. Purely UI state, persisted so the
@@ -272,11 +284,18 @@ const WellPlateWorkspace = () => {
 
   // Auto-switch the camera when entering the Live View / Overview viewports.
   useEffect(() => {
-    const { detectors, activeTab, isStreamRunning, liveStreamState: ls } = liveRef.current;
+    const {
+      detectors,
+      activeTab,
+      isStreamRunning,
+      liveStreamState: ls,
+    } = liveRef.current;
     if (!detectors || detectors.length < 2) return; // nothing to switch between
     let targetIdx = -1;
-    if (viewport === VIEW_LIVE) targetIdx = findWidefieldIdx(detectors, overviewName);
-    else if (viewport === VIEW_OVERVIEW) targetIdx = findOverviewIdx(detectors, overviewName);
+    if (viewport === VIEW_LIVE)
+      targetIdx = findWidefieldIdx(detectors, overviewName);
+    else if (viewport === VIEW_OVERVIEW)
+      targetIdx = findOverviewIdx(detectors, overviewName);
     if (targetIdx < 0) return;
     switchToDetector({
       dispatch,
@@ -302,7 +321,7 @@ const WellPlateWorkspace = () => {
     },
     {
       key: "live-view",
-      label: "Live View",
+      label: "Camera feed",
       icon: <VideocamIcon />,
       help: "Live widefield camera (auto-selected here) and capture controls.",
       render: () => <LiveViewPanel />,

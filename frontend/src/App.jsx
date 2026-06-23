@@ -7,6 +7,7 @@ import { darkTheme, lightTheme } from "./themes";
 import AboutPage from "./components/AboutPage.js";
 import BlocklyController from "./components/BlocklyController.js";
 import ConnectionSettings from "./components/ConnectionSettings.jsx";
+import DesktopAppSettings from "./components/DesktopAppSettings.jsx";
 import DetectorTriggerController from "./components/DetectorTriggerController.js";
 import ExtendedLEDMatrixController from "./components/ExtendedLEDMatrixController.jsx";
 import FlowStopController from "./components/FlowStopController.js";
@@ -25,7 +26,6 @@ import MotorSettingsController from "./components/MotorSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
 import LargeFovScanController from "./components/OpenLayers.js";
 import SocketView from "./components/SocketView.js";
-
 import TimelapseController from "./components/TimelapseController.js";
 import STORMControllerArkitekt from "./components/STORMControllerArkitekt.js";
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
@@ -39,6 +39,7 @@ import WiFiController from "./components/WiFiController.jsx";
 import LoggingController from "./components/LoggingController.jsx";
 import VizarrViewer from "./components/VizarrViewer.jsx";
 import { JupyterProvider } from "./context/JupyterContext.js";
+import { PWAProvider } from "./context/PWAContext.js";
 import DemoController from "./components/DemoController.js";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
 import GalvoScannerController from "./components/GalvoScannerController.jsx";
@@ -219,7 +220,6 @@ function App() {
   });
 
   useEffect(() => {
-
     let cancelled = false;
 
     const checkHomingStatus = async () => {
@@ -242,7 +242,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [ hostIP, apiPort]);
+  }, [hostIP, apiPort]);
 
   const handleDismissHomingDialog = async () => {
     if (homingDialogBusy) {
@@ -551,225 +551,241 @@ function App() {
   const plugins = usePluginWidgets();
 
   return (
-    <ThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>
-      <SnackbarProvider maxSnack={6} dense>
-        <ReduxNotificationBridge />
-        <WebSocketHandler />
-        <OnboardingTour selectedPlugin={selectedPlugin} />
-        <CssBaseline />
+    <PWAProvider>
+      <ThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>
+        <SnackbarProvider maxSnack={6} dense>
+          <ReduxNotificationBridge />
+          <WebSocketHandler />
+          <OnboardingTour selectedPlugin={selectedPlugin} />
+          <CssBaseline />
 
-        <Dialog
-          open={homingDialogOpen}
-          onClose={handleDismissHomingDialog}
-          disableEscapeKeyDown={homingDialogBusy}
-        >
-          <DialogTitle>Homing Recommended</DialogTitle>
-          <DialogContent>
-            <DialogContentText>
-              The machine has not been homed since backend startup. Homing is
-              recommended before moving the stage.
-            </DialogContentText>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              onClick={handleDismissHomingDialog}
-              disabled={homingDialogBusy}
-            >
-              Continue without homing
-            </Button>
-            <Button
-              variant="contained"
-              onClick={handleOpenFrameHoming}
-              disabled={homingDialogBusy}
-            >
-              Open Frame Homing
-            </Button>
-          </DialogActions>
-        </Dialog>
-
-        <Box sx={{ display: "flex" }}>
-          <NavigationDrawer
-            sidebarVisible={sidebarVisible}
-            setSidebarVisible={setSidebarVisible}
-            isMobile={isMobile}
-            drawerWidth={drawerWidth}
-            selectedPlugin={selectedPlugin}
-            handlePluginChange={handlePluginChange}
-            plugins={plugins}
-          />
-
-          <TopBar
-            isMobile={isMobile}
-            sidebarVisible={sidebarVisible}
-            setSidebarVisible={setSidebarVisible}
-            selectedPlugin={selectedPlugin}
-            onSettingsNavigate={handlePluginChange} // Pass existing navigation handler
-            onStorageChange={handleStorageChange}
-          />
-
-          <Box
-            component="main"
-            sx={{
-              top: 64,
-              flexGrow: 1,
-              display: "flex",
-              position: "absolute",
-              p:
-                selectedPlugin === "JupyterNotebook" ||
-                selectedPlugin === "ImJoy"
-                  ? 0
-                  : isMobile
-                    ? 1
-                    : 3,
-              left: drawerWidth,
-              width: "calc(100% - " + drawerWidth + "px)",
-              height: "calc(100vh - 64px)",
-              marginLeft: !isMobile && sidebarVisible ? 0 : 0,
-              transition: (theme) =>
-                theme.transitions.create(["margin", "padding"], {
-                  easing: theme.transitions.easing.sharp,
-                  duration: theme.transitions.duration.leavingScreen,
-                }),
-              minHeight: "calc(100vh - 64px)",
-              overflow:
-                selectedPlugin === "JupyterNotebook" ||
-                selectedPlugin === "ImJoy"
-                  ? "hidden"
-                  : "auto",
-            }}
+          <Dialog
+            open={homingDialogOpen}
+            onClose={handleDismissHomingDialog}
+            disableEscapeKeyDown={homingDialogBusy}
           >
-            {selectedPlugin === "LiveView" && (
-              <LiveView
-                // pass down a setter or context for the image if needed
-                setFileManagerInitialPath={handleFileManagerInitialPathChange} // pass function
-              />
-            )}
+            <DialogTitle>Homing Recommended</DialogTitle>
+            <DialogContent>
+              <DialogContentText>
+                The machine has not been homed since backend startup. Homing is
+                recommended before moving the stage.
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button
+                onClick={handleDismissHomingDialog}
+                disabled={homingDialogBusy}
+              >
+                Continue without homing
+              </Button>
+              <Button
+                variant="contained"
+                onClick={handleOpenFrameHoming}
+                disabled={homingDialogBusy}
+              >
+                Open Frame Homing
+              </Button>
+            </DialogActions>
+          </Dialog>
 
-            {selectedPlugin === "WellPlate" && <AxonTabComponent />}
-            {selectedPlugin === "GalvoScannerController" && (
-              <GalvoScannerController />
-            )}
-            {selectedPlugin === "ShitScope" && (
-              <ShitScopeComponent
-                onOpenFileManager={handleFileManagerInitialPathChange}
-              />
-            )}
-            {selectedPlugin === "ImJoy" && (
-              <ImJoyView sharedImage={sharedImage} />
-            )}
-            {selectedPlugin === "STORMLocal" && <STORMControllerLocal />}
-            {selectedPlugin === "STORMArkitekt" && <STORMControllerArkitekt />}
-            {selectedPlugin === "FRAMESettings" && <FRAMESettingsController />}
-            {selectedPlugin === "Stresstest" && <StresstestController />}
-            {selectedPlugin === "FocusLock" && <FocusLockController />}
-            {selectedPlugin === "AcceptanceTest" && <AcceptanceTestComponent />}
-            {selectedPlugin === "HoloController" && <HoloController />}
-            {selectedPlugin === "OffAxisHoloController" && (
-              <OffAxisHoloController />
-            )}
-            {selectedPlugin === "DPCController" && <DPCController />}
-            {selectedPlugin === "JupyterNotebook" && (
-              <Box sx={{ width: "100%", height: "100%", minHeight: 0 }}>
-                <JupyterProvider>
-                  <JupyterExecutor />
-                </JupyterProvider>
-              </Box>
-            )}
-            {selectedPlugin === "GoniometerController" && (
-              <GoniometerController />
-            )}
-            {selectedPlugin === "Infinity Scanning" && (
-              <LargeFovScanController />
-            )}
-            {selectedPlugin === "Blockly" && <BlocklyController />}
-            {selectedPlugin === "Objective" && <ObjectiveController />}
-            {selectedPlugin === "About" && <AboutPage />}
-            {selectedPlugin === "SystemSettings" && <SystemSettings />}
-            {selectedPlugin === "MotorSettings" && <MotorSettingsController />}
-            {selectedPlugin === "FileManager" && (
-              <div className="app" style={{ width: "100%", maxWidth: "100%" }}>
+          <Box sx={{ display: "flex" }}>
+            <NavigationDrawer
+              sidebarVisible={sidebarVisible}
+              setSidebarVisible={setSidebarVisible}
+              isMobile={isMobile}
+              drawerWidth={drawerWidth}
+              selectedPlugin={selectedPlugin}
+              handlePluginChange={handlePluginChange}
+              plugins={plugins}
+            />
+
+            <TopBar
+              isMobile={isMobile}
+              sidebarVisible={sidebarVisible}
+              setSidebarVisible={setSidebarVisible}
+              selectedPlugin={selectedPlugin}
+              onSettingsNavigate={handlePluginChange} // Pass existing navigation handler
+              onStorageChange={handleStorageChange}
+            />
+
+            <Box
+              component="main"
+              sx={{
+                top: 64,
+                flexGrow: 1,
+                display: "flex",
+                position: "absolute",
+                p:
+                  selectedPlugin === "JupyterNotebook" ||
+                  selectedPlugin === "ImJoy"
+                    ? 0
+                    : isMobile
+                      ? 1
+                      : 3,
+                left: drawerWidth,
+                width: "calc(100% - " + drawerWidth + "px)",
+                height: "calc(100vh - 64px)",
+                marginLeft: !isMobile && sidebarVisible ? 0 : 0,
+                transition: (theme) =>
+                  theme.transitions.create(["margin", "padding"], {
+                    easing: theme.transitions.easing.sharp,
+                    duration: theme.transitions.duration.leavingScreen,
+                  }),
+                minHeight: "calc(100vh - 64px)",
+                overflow:
+                  selectedPlugin === "JupyterNotebook" ||
+                  selectedPlugin === "ImJoy"
+                    ? "hidden"
+                    : "auto",
+              }}
+            >
+              {selectedPlugin === "LiveView" && (
+                <LiveView
+                  // pass down a setter or context for the image if needed
+                  setFileManagerInitialPath={handleFileManagerInitialPathChange} // pass function
+                />
+              )}
+
+              {selectedPlugin === "WellPlate" && <AxonTabComponent />}
+              {selectedPlugin === "GalvoScannerController" && (
+                <GalvoScannerController />
+              )}
+              {selectedPlugin === "ShitScope" && (
+                <ShitScopeComponent
+                  onOpenFileManager={handleFileManagerInitialPathChange}
+                />
+              )}
+              {selectedPlugin === "ImJoy" && (
+                <ImJoyView sharedImage={sharedImage} />
+              )}
+              {selectedPlugin === "STORMLocal" && <STORMControllerLocal />}
+              {selectedPlugin === "STORMArkitekt" && (
+                <STORMControllerArkitekt />
+              )}
+              {selectedPlugin === "FRAMESettings" && (
+                <FRAMESettingsController />
+              )}
+              {selectedPlugin === "Stresstest" && <StresstestController />}
+              {selectedPlugin === "FocusLock" && <FocusLockController />}
+              {selectedPlugin === "AcceptanceTest" && (
+                <AcceptanceTestComponent />
+              )}
+              {selectedPlugin === "HoloController" && <HoloController />}
+              {selectedPlugin === "OffAxisHoloController" && (
+                <OffAxisHoloController />
+              )}
+              {selectedPlugin === "DPCController" && <DPCController />}
+              {selectedPlugin === "JupyterNotebook" && (
+                <Box sx={{ width: "100%", height: "100%", minHeight: 0 }}>
+                  <JupyterProvider>
+                    <JupyterExecutor />
+                  </JupyterProvider>
+                </Box>
+              )}
+              {selectedPlugin === "GoniometerController" && (
+                <GoniometerController />
+              )}
+              {selectedPlugin === "Infinity Scanning" && (
+                <LargeFovScanController />
+              )}
+              {selectedPlugin === "Blockly" && <BlocklyController />}
+              {selectedPlugin === "Objective" && <ObjectiveController />}
+              {selectedPlugin === "About" && <AboutPage />}
+              {selectedPlugin === "SystemSettings" && <SystemSettings />}
+              {selectedPlugin === "MotorSettings" && (
+                <MotorSettingsController />
+              )}
+              {selectedPlugin === "FileManager" && (
                 <div
-                  className="file-manager-container"
+                  className="app"
                   style={{ width: "100%", maxWidth: "100%" }}
                 >
-                  <FileManager
-                    key={`fm-${storageRefreshKey}`} // Force remount on storage change
-                    baseUrl={`${hostIP}:${apiPort}/imswitch/api`}
-                    files={files}
-                    fileUploadConfig={fileUploadConfig}
-                    isLoading={isLoading}
-                    onCreateFolder={handleCreateFolder}
-                    onFileUploading={handleFileUploading}
-                    onFileUploaded={handleFileUploaded}
-                    onPaste={handlePaste}
-                    onRename={handleRename}
-                    onDownload={handleDownload}
-                    onFileOpen={handleOpenWithImJoy}
-                    onOpenWithVizarr={handleOpenWithVizarr}
-                    onOpenInNapari={handleOpenInNapari}
-                    onDelete={handleDelete}
-                    onRefresh={handleRefresh}
-                    layout="list"
-                    enableFilePreview
-                    maxFileSize={10485760}
-                    filePreviewPath={`${hostIP}:${apiPort}/imswitch/api`}
-                    acceptedFileTypes=".txt, .png, .jpg, .jpeg, .pdf, .doc, .docx, .exe, .js, .csv"
-                    initialPath={fileManagerInitialPath}
-                  />
+                  <div
+                    className="file-manager-container"
+                    style={{ width: "100%", maxWidth: "100%" }}
+                  >
+                    <FileManager
+                      key={`fm-${storageRefreshKey}`} // Force remount on storage change
+                      baseUrl={`${hostIP}:${apiPort}/imswitch/api`}
+                      files={files}
+                      fileUploadConfig={fileUploadConfig}
+                      isLoading={isLoading}
+                      onCreateFolder={handleCreateFolder}
+                      onFileUploading={handleFileUploading}
+                      onFileUploaded={handleFileUploaded}
+                      onPaste={handlePaste}
+                      onRename={handleRename}
+                      onDownload={handleDownload}
+                      onFileOpen={handleOpenWithImJoy}
+                      onOpenWithVizarr={handleOpenWithVizarr}
+                      onOpenInNapari={handleOpenInNapari}
+                      onDelete={handleDelete}
+                      onRefresh={handleRefresh}
+                      layout="list"
+                      enableFilePreview
+                      maxFileSize={10485760}
+                      filePreviewPath={`${hostIP}:${apiPort}/imswitch/api`}
+                      acceptedFileTypes=".txt, .png, .jpg, .jpeg, .pdf, .doc, .docx, .exe, .js, .csv"
+                      initialPath={fileManagerInitialPath}
+                    />
+                  </div>
                 </div>
-              </div>
-            )}
-            {selectedPlugin === "VizarrViewer" && (
-              <Box sx={{ width: "100%", height: "calc(100vh - 64px)" }}>
-                <VizarrViewer
-                  zarrUrl={vizarrViewerState.currentUrl}
-                  onClose={handleCloseVizarr}
-                  height="100%"
-                  width="100%"
-                />
-              </Box>
-            )}
-            {selectedPlugin === "AppManager" && (
-              <AppManagerPage onNavigateToApp={handlePluginChange} />
-            )}
-            {selectedPlugin === "LightSheet" && <LightsheetController />}
-            {selectedPlugin === "Timelapse" && <TimelapseController />}
-            {selectedPlugin === "WiFi" && <WiFiController />}
-            {plugins.map(
-              (p) =>
-                selectedPlugin === p.name && (
-                  <Suspense fallback={<div>loading…</div>} key={p.name}>
-                    <p.Component hostIP={hostIP} hostPort={apiPort} />
-                  </Suspense>
-                ),
-            )}
-            {selectedPlugin === "DemoController" && <DemoController />}
-            {selectedPlugin === "CompositeAcquisition" && (
-              <CompositeAcquisitionComponent />
-            )}
-            {selectedPlugin === "CompositeStreamViewer" && (
-              <CompositeStreamViewer />
-            )}
-            {selectedPlugin === "CompositeComponent" && <CompositeComponent />}
-            {selectedPlugin === "FlowStop" && <FlowStopController />}
-            {selectedPlugin === "UC2" && <UC2ConfigurationController />}
-            {selectedPlugin === "SerialDebug" && <SerialDebugController />}
-            {selectedPlugin === "DetectorTrigger" && (
-              <DetectorTriggerController />
-            )}
-            {selectedPlugin === "ExtendedLEDMatrix" && (
-              <ExtendedLEDMatrixController />
-            )}
-            {selectedPlugin === "Lepmon" && <LepMonController />}
-            {selectedPlugin === "MazeGame" && <MazeGameController />}
-            {selectedPlugin === "SocketView" && <SocketView />}
-            {selectedPlugin === "SystemUpdate" && <SystemUpdateController />}
-            {selectedPlugin === "Connections" && <ConnectionSettings />}
-            {selectedPlugin === "Logging" && <LoggingController />}
+              )}
+              {selectedPlugin === "VizarrViewer" && (
+                <Box sx={{ width: "100%", height: "calc(100vh - 64px)" }}>
+                  <VizarrViewer
+                    zarrUrl={vizarrViewerState.currentUrl}
+                    onClose={handleCloseVizarr}
+                    height="100%"
+                    width="100%"
+                  />
+                </Box>
+              )}
+              {selectedPlugin === "AppManager" && (
+                <AppManagerPage onNavigateToApp={handlePluginChange} />
+              )}
+              {selectedPlugin === "LightSheet" && <LightsheetController />}
+              {selectedPlugin === "Timelapse" && <TimelapseController />}
+              {selectedPlugin === "WiFi" && <WiFiController />}
+              {plugins.map(
+                (p) =>
+                  selectedPlugin === p.name && (
+                    <Suspense fallback={<div>loading…</div>} key={p.name}>
+                      <p.Component hostIP={hostIP} hostPort={apiPort} />
+                    </Suspense>
+                  ),
+              )}
+              {selectedPlugin === "DemoController" && <DemoController />}
+              {selectedPlugin === "CompositeAcquisition" && (
+                <CompositeAcquisitionComponent />
+              )}
+              {selectedPlugin === "CompositeStreamViewer" && (
+                <CompositeStreamViewer />
+              )}
+              {selectedPlugin === "CompositeComponent" && (
+                <CompositeComponent />
+              )}
+              {selectedPlugin === "FlowStop" && <FlowStopController />}
+              {selectedPlugin === "UC2" && <UC2ConfigurationController />}
+              {selectedPlugin === "SerialDebug" && <SerialDebugController />}
+              {selectedPlugin === "DetectorTrigger" && (
+                <DetectorTriggerController />
+              )}
+              {selectedPlugin === "ExtendedLEDMatrix" && (
+                <ExtendedLEDMatrixController />
+              )}
+              {selectedPlugin === "Lepmon" && <LepMonController />}
+              {selectedPlugin === "MazeGame" && <MazeGameController />}
+              {selectedPlugin === "SocketView" && <SocketView />}
+              {selectedPlugin === "SystemUpdate" && <SystemUpdateController />}
+              {selectedPlugin === "Connections" && <ConnectionSettings />}
+              {selectedPlugin === "DesktopApp" && <DesktopAppSettings />}
+              {selectedPlugin === "Logging" && <LoggingController />}
+            </Box>
           </Box>
-        </Box>
-      </SnackbarProvider>
-    </ThemeProvider>
+        </SnackbarProvider>
+      </ThemeProvider>
+    </PWAProvider>
   );
 }
 

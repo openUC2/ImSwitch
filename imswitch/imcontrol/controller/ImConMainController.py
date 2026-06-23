@@ -51,10 +51,20 @@ class ImConMainController(MainController):
         )
 
         self.controllers = {}
+        # if not present, add StageCenterCalibration  and AcceptanceTestController
+        if "StageCenterCalibration" not in self.__mainView.widgets:
+            self.__mainView.widgets["StageCenterCalibration"] = 'StageCenterCalibration'
+        if "AcceptanceTest" not in self.__mainView.widgets:
+            self.__mainView.widgets["AcceptanceTest"] = 'AcceptanceTest'
 
         for widgetKey, widget in self.__mainView.widgets.items():
             self.__logger.info(f"Creating controller for widget {widgetKey}")
-
+            # TODO: Hacky workaround
+            if widgetKey == "StageCenterCalibration":
+                widget = ("StageCenterCalibration",None,None)
+            if widgetKey == "AcceptanceTest":
+                widget = ("AcceptanceTest",None,None)
+                
             controller_name = f"{widgetKey}Controller"
             if widgetKey == "Scan":
                 controller_name = (
@@ -64,7 +74,7 @@ class ImConMainController(MainController):
                 continue
             # ensure that PixelCalibrationController is always created last, as it is required for the 
             # correct functioning of other controllers => sort list of widgets so that PixelCalibration is last
-            if widgetKey == "PixelCalibration" or widgetKey == "StageCenter" or widgetKey == "LiveView":
+            if widgetKey == "PixelCalibration" or widgetKey == "LiveView":
                 # delay creation of PixelCalibrationController until the end, as it is required for the correct functioning of other controllers
                 continue
             if widgetKey == "Arkitekt" and not hasattr(
@@ -125,28 +135,7 @@ class ImConMainController(MainController):
                 except Exception as e:
                     self.__logger.debug(e)
 
-            
-        # Add AcceptanceTestController in any case
-        try:
-            self.__logger.info("Creating controller for AcceptanceTest ")
-            controller_name = "AcceptanceTestController"
-            module = importlib.import_module(
-                "imswitch.imcontrol.controller.controllers.AcceptanceTestController"
-            )
-            controller_class = getattr(module, controller_name)
-            if controller_class is not None:
-                self.controllers["AcceptanceTest"] = self.__factory.createController(
-                    controller_class, None
-                )
-                # Register AcceptanceTestController
-                self.__masterController.registerController(
-                    "AcceptanceTest", self.controllers["AcceptanceTest"]
-                )
-        except Exception as e:
-            self.__logger.warning(
-                f"Could not dynamically import {controller_name}: {e}"
-            )
-
+           
         # Add PixelCalibrationController for pixel calibration management 
         try:
             self.__logger.info("Creating controller for PixelCalibration ")
@@ -167,26 +156,6 @@ class ImConMainController(MainController):
             self.__logger.warning(
                 f"Could not dynamically import {controller_name}: {e}"
             )
-        # Add StageCenterCalibrationController for stage centering functionality (if StageCenter widget is present)
-        try:
-            self.__logger.info("Creating controller for StageCenter ")
-            controller_name = "StageCenterCalibrationController"
-            module = importlib.import_module(
-                "imswitch.imcontrol.controller.controllers.StageCenterCalibrationController" 
-            )
-            controller_class = getattr(module, controller_name)
-            if controller_class is not None:
-                self.controllers["StageCenterCalibration"] = self.__factory.createController(
-                    controller_class, self.__mainView.widgets["StageCenterCalibration"]
-                )
-                # Register StageCenterCalibrationController
-                self.__masterController.registerController(
-                    "StageCenterCalibration", self.controllers["StageCenterCalibration"]
-                )
-        except Exception as e:
-            self.__logger.warning(
-                f"Could not dynamically import {controller_name}: {e}"
-            )   
         # Add LiveViewController for live streaming (if LiveView widget is present)
         try:
             self.__logger.info("Creating controller for LiveView ")

@@ -40,6 +40,8 @@ import {
   Wifi as WifiIcon,
   Cable as CableIcon,
   AddCircleOutline as AddCircleOutlineIcon,
+  Edit as EditIcon,
+  Memory as MemoryIcon,
 } from "@mui/icons-material";
 
 // Redux slice
@@ -52,6 +54,7 @@ import apiUC2ConfigControllerGetOTAFirmwareServer from "../backendapi/apiUC2Conf
 import apiUC2ConfigControllerSetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerSetOTAFirmwareServer";
 import apiUC2ConfigControllerListAvailableFirmware from "../backendapi/apiUC2ConfigControllerListAvailableFirmware";
 import apiUC2ConfigControllerScanCanbus from "../backendapi/apiUC2ConfigControllerScanCanbus";
+import apiUC2ConfigControllerReassignCANId from "../backendapi/apiUC2ConfigControllerReassignCANId";
 import apiUC2ConfigControllerStartSingleDeviceOTA from "../backendapi/apiUC2ConfigControllerStartSingleDeviceOTA";
 import apiUC2ConfigControllerStartMultipleDeviceOTA from "../backendapi/apiUC2ConfigControllerStartMultipleDeviceOTA";
 import apiUC2ConfigControllerGetOTADeviceMapping from "../backendapi/apiUC2ConfigControllerGetOTADeviceMapping";
@@ -78,6 +81,17 @@ const CanOtaWizard = ({ open, onClose }) => {
 
   // Manual CAN address entry
   const [manualCanId, setManualCanId] = React.useState("");
+
+  // Deep scan: probe the whole 1..127 id range to discover unrouted / freshly
+  // flashed boards (so they can be reassigned by MAC).
+  const [deepScan, setDeepScan] = React.useState(false);
+
+  // CAN-ID reassignment (by MAC) state
+  const [reassignDevice, setReassignDevice] = React.useState(null); // device object being reassigned
+  const [reassignNewId, setReassignNewId] = React.useState("");
+  const [reassignBusy, setReassignBusy] = React.useState(false);
+  const [reassignError, setReassignError] = React.useState(null);
+  const [reassignSuccess, setReassignSuccess] = React.useState(null);
 
   // Load initial data when wizard opens
   useEffect(() => {
@@ -269,7 +283,9 @@ const CanOtaWizard = ({ open, onClose }) => {
     try {
       dispatch(canOtaSlice.setIsScanningDevices(true));
       dispatch(canOtaSlice.setScanError(null));
-      const devices = await apiUC2ConfigControllerScanCanbus(5);
+      // Deep scan probes every id (1..127) so unrouted boards are found; it is
+      // a little slower, hence the longer timeout.
+      const devices = await apiUC2ConfigControllerScanCanbus(deepScan ? 10 : 5, deepScan);
       const scannedList = devices.scan || [];
       // Preserve manually added devices that are not in the scan results
       const manualDevices = canOtaState.scannedDevices.filter(
@@ -284,6 +300,60 @@ const CanOtaWizard = ({ open, onClose }) => {
       console.error("Error scanning CAN bus:", error);
       dispatch(canOtaSlice.setScanError("Failed to scan CAN bus: " + error.message));
       dispatch(canOtaSlice.setIsScanningDevices(false));
+    }
+  };
+
+  const openReassignDialog = (device) => {
+    setReassignDevice(device);
+    setReassignNewId("");
+    setReassignError(null);
+    setReassignSuccess(null);
+  };
+
+  const closeReassignDialog = () => {
+    if (reassignBusy) return;
+    setReassignDevice(null);
+    setReassignNewId("");
+    setReassignError(null);
+    setReassignSuccess(null);
+  };
+
+  const handleReassignConfirm = async () => {
+    if (!reassignDevice) return;
+    const newId = parseInt(reassignNewId, 10);
+    if (isNaN(newId) || newId < 1 || newId > 127) {
+      setReassignError("New CAN ID must be between 1 and 127");
+      return;
+    }
+    try {
+      setReassignBusy(true);
+      setReassignError(null);
+      const mac = reassignDevice.mac || null;
+      // Prefer assigning by MAC (firmware finds the node); fall back to current id.
+      const resp = mac
+        ? await apiUC2ConfigControllerReassignCANId(newId, mac)
+        : await apiUC2ConfigControllerReassignCANId(newId, null, reassignDevice.canId);
+
+      if (resp && (resp.status === "ok" || resp.status === "success")) {
+        setReassignSuccess(
+          `Assigned CAN ID ${newId}${mac ? ` to ${mac}` : ` (was ${reassignDevice.canId})`}. ` +
+          "Device is resetting — rescanning..."
+        );
+        // The device persists + resets CANopen comms; give it time to reappear.
+        await new Promise((r) => setTimeout(r, 1300));
+        setReassignDevice(null);
+        setReassignNewId("");
+        setReassignBusy(false);
+        await handleScanDevices();
+        return;
+      }
+      setReassignError(
+        "Reassign failed: " + (resp?.error || resp?.message || "unknown error")
+      );
+    } catch (e) {
+      setReassignError("Reassign failed: " + e.message);
+    } finally {
+      setReassignBusy(false);
     }
   };
 
@@ -612,7 +682,7 @@ const CanOtaWizard = ({ open, onClose }) => {
         Click the button below to scan the CAN bus for connected devices.
       </Typography>
 
-      <Box sx={{ mt: 3, mb: 2 }}>
+      <Box sx={{ mt: 3, mb: 2, display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
         <Button
           variant="contained"
           onClick={handleScanDevices}
@@ -621,6 +691,18 @@ const CanOtaWizard = ({ open, onClose }) => {
         >
           {canOtaState.isScanningDevices ? "Scanning..." : "Scan CAN Bus"}
         </Button>
+        <Tooltip title="Probe every CAN ID (1..127) to also find freshly flashed / unrouted boards by their MAC. A little slower.">
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={deepScan}
+                onChange={(e) => setDeepScan(e.target.checked)}
+                disabled={canOtaState.isScanningDevices}
+              />
+            }
+            label="Deep scan (discover all by MAC)"
+          />
+        </Tooltip>
       </Box>
 
       {canOtaState.scanError && (
@@ -697,7 +779,22 @@ const CanOtaWizard = ({ open, onClose }) => {
             {canOtaState.scannedDevices.map((device, index) => (
               <React.Fragment key={device.canId}>
                 {index > 0 && <Divider />}
-                <ListItem>
+                <ListItem
+                  secondaryAction={
+                    !device.manual ? (
+                      <Tooltip title={device.mac ? "Reassign this device's CAN ID (bound to its MAC)" : "Reassign this device's CAN ID"}>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<EditIcon />}
+                          onClick={() => openReassignDialog(device)}
+                        >
+                          Change ID
+                        </Button>
+                      </Tooltip>
+                    ) : null
+                  }
+                >
                   <ListItemText
                     primary={
                       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -707,15 +804,28 @@ const CanOtaWizard = ({ open, onClose }) => {
                         <Chip
                           label={device.deviceTypeStr || "Unknown"}
                           size="small"
-                          color="primary"
+                          color={device.deviceTypeStr === "unrouted" ? "warning" : "primary"}
                           variant="outlined"
                         />
                       </Box>
                     }
+                    secondaryTypographyProps={{ component: "div" }}
                     secondary={
-                      <Typography variant="body2" color="text.secondary">
-                        Status: {device.statusStr || "Unknown"} | Type Code: {device.deviceType}
-                      </Typography>
+                      <Box component="span" sx={{ display: "block" }}>
+                        <Typography component="span" variant="body2" color="text.secondary" sx={{ display: "block" }}>
+                          Status: {device.statusStr || "Unknown"} | Type Code: {device.deviceType}
+                        </Typography>
+                        {device.mac && (
+                          <Typography component="span" variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                            MAC: {device.mac}
+                          </Typography>
+                        )}
+                        {device.build && (
+                          <Typography component="span" variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                            Build: {device.build}{device.fwVersion ? ` · ${device.fwVersion}` : ""}
+                          </Typography>
+                        )}
+                      </Box>
                     }
                   />
                 </ListItem>
@@ -724,6 +834,54 @@ const CanOtaWizard = ({ open, onClose }) => {
           </List>
         </Paper>
       )}
+
+      {/* Reassign CAN ID dialog (assign by MAC, no reflash needed) */}
+      <Dialog open={Boolean(reassignDevice)} onClose={closeReassignDialog} maxWidth="xs" fullWidth>
+        <DialogTitle>Reassign CAN ID</DialogTitle>
+        <DialogContent>
+          {reassignDevice && (
+            <Box sx={{ mt: 1 }}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                {reassignDevice.mac
+                  ? `Target MAC ${reassignDevice.mac} (currently CAN ID ${reassignDevice.canId}).`
+                  : `Target currently at CAN ID ${reassignDevice.canId}.`}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                {reassignDevice.mac
+                  ? "The master locates the board by its MAC, so the new ID is bound to this physical device."
+                  : "No MAC available — the change is applied to whatever node currently holds this CAN ID."}
+              </Typography>
+              <TextField
+                autoFocus
+                fullWidth
+                margin="normal"
+                label="New CAN ID (1-127)"
+                type="number"
+                value={reassignNewId}
+                onChange={(e) => setReassignNewId(e.target.value)}
+                disabled={reassignBusy}
+              />
+              {reassignError && <Alert severity="error" sx={{ mt: 1 }}>{reassignError}</Alert>}
+              {reassignSuccess && <Alert severity="success" sx={{ mt: 1 }}>{reassignSuccess}</Alert>}
+              <Alert severity="info" sx={{ mt: 2 }} icon={<InfoIcon />}>
+                The device persists the new ID to flash and resets its CAN comms; it
+                reappears at the new ID after ~1 s, then the list re-scans.
+              </Alert>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeReassignDialog} disabled={reassignBusy}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleReassignConfirm}
+            disabled={reassignBusy || !reassignNewId}
+            startIcon={reassignBusy ? <CircularProgress size={16} /> : <MemoryIcon />}
+          >
+            {reassignBusy ? "Assigning..." : "Assign ID"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 

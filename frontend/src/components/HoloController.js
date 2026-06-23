@@ -30,6 +30,11 @@ import {
   Tooltip,
   Alert,
   Divider,
+  Tabs,
+  Tab,
+  CircularProgress,
+  ToggleButton,
+  ToggleButtonGroup,
 } from "@mui/material";
 import {
   PlayArrow as PlayArrowIcon,
@@ -41,6 +46,10 @@ import {
   CenterFocusStrong as CenterFocusStrongIcon,
   InfoOutlined as InfoOutlinedIcon,
   RestartAlt as RestartAltIcon,
+  AutoAwesome as AutoAwesomeIcon,
+  Layers as LayersIcon,
+  PhotoCamera as PhotoCameraIcon,
+  DeleteOutline as DeleteOutlineIcon,
 } from "@mui/icons-material";
 
 // Redux slice
@@ -64,6 +73,11 @@ import apiInLineHoloControllerSetDz from "../backendapi/apiInLineHoloControllerS
 import apiInLineHoloControllerSetBinning from "../backendapi/apiInLineHoloControllerSetBinning";
 import apiInLineHoloControllerGetCameraInfo from "../backendapi/apiInLineHoloControllerGetCameraInfo";
 import apiInLineHoloControllerRestartStream from "../backendapi/apiInLineHoloControllerRestartStream";
+import apiInLineHoloControllerAcquireBackground from "../backendapi/apiInLineHoloControllerAcquireBackground";
+import apiInLineHoloControllerGetBackground from "../backendapi/apiInLineHoloControllerGetBackground";
+import apiInLineHoloControllerClearBackground from "../backendapi/apiInLineHoloControllerClearBackground";
+import apiInLineHoloControllerSetBgEnabled from "../backendapi/apiInLineHoloControllerSetBgEnabled";
+import apiInLineHoloControllerReconstructHighQuality from "../backendapi/apiInLineHoloControllerReconstructHighQuality";
 import apiLiveViewControllerGetStreamParameters from "../backendapi/apiLiveViewControllerGetStreamParameters";
 
 // How long without a server-side MJPEG emit before we declare the processed
@@ -222,6 +236,16 @@ const HoloController = () => {
   const [streamNonce, setStreamNonce] = useState(0);
   const [streamStalled, setStreamStalled] = useState(false);
 
+  // Tabs: 0 = Live, 1 = Background, 2 = Refine (HQ)
+  const [activeTab, setActiveTab] = useState(0);
+  // Background acquisition UI
+  const [bgNumFrames, setBgNumFrames] = useState(20);
+  const [bgBusy, setBgBusy] = useState(false);
+  // High-quality reconstruction in-flight (immediate local feedback)
+  const [reconstructing, setReconstructing] = useState(false);
+  // Last reconstruction summary: { method, iterations, elapsed }
+  const [refineInfo, setRefineInfo] = useState(null);
+
   // Resolve the subsampling factor of the *currently active* stream protocol.
   // Reading "jpeg" unconditionally returned the wrong factor (e.g. 1) while the
   // real stream was binary at factor 4, so the red ROI overlay box was wrong
@@ -288,6 +312,16 @@ const HoloController = () => {
       dispatch(holoSlice.setRotation(params.rotation || 0));
       dispatch(holoSlice.setUpdateFreq(params.update_freq || 10.0));
       dispatch(holoSlice.setShowRaw(params.show_raw || false));
+      if (params.bg_enabled !== undefined)
+        dispatch(holoSlice.setBgEnabled(!!params.bg_enabled));
+      if (params.refine_method)
+        dispatch(holoSlice.setRefineMethod(params.refine_method));
+      if (params.refine_iterations !== undefined)
+        dispatch(holoSlice.setRefineIterations(params.refine_iterations));
+      if (params.refine_support_threshold !== undefined)
+        dispatch(holoSlice.setRefineSupportThreshold(params.refine_support_threshold));
+      if (params.refine_tv_weight !== undefined)
+        dispatch(holoSlice.setRefineTvWeight(params.refine_tv_weight));
 
       setRoiSelection((prev) => ({
         ...prev,
@@ -317,8 +351,38 @@ const HoloController = () => {
         dispatch(
           holoSlice.setMjpegClientCount(state.mjpeg_client_count || 0)
         );
+      if (state.has_background !== undefined)
+        dispatch(holoSlice.setHasBackground(!!state.has_background));
+      if (state.is_refining !== undefined)
+        dispatch(holoSlice.setIsRefining(!!state.is_refining));
     } catch (error) {
       console.error("Failed to load hologram state:", error);
+    }
+  }, [dispatch]);
+
+  // Fetch the stored background preview (restores it after a page reload).
+  const loadBackground = useCallback(async () => {
+    try {
+      const data = await apiInLineHoloControllerGetBackground();
+      dispatch(holoSlice.setHasBackground(!!data.has_background));
+      dispatch(holoSlice.setBackgroundUrl(data.image || null));
+      if (data.bg_enabled !== undefined)
+        dispatch(holoSlice.setBgEnabled(!!data.bg_enabled));
+      if (data.has_background) {
+        dispatch(
+          holoSlice.setBackgroundMeta({
+            mode: data.mode,
+            num_frames: data.num_frames,
+            width: data.width,
+            height: data.height,
+            timestamp: data.timestamp,
+          })
+        );
+      } else {
+        dispatch(holoSlice.setBackgroundMeta(null));
+      }
+    } catch (error) {
+      console.error("Failed to load background:", error);
     }
   }, [dispatch]);
 
@@ -434,6 +498,7 @@ const HoloController = () => {
     loadState();
     loadStreamParameters();
     loadCameraInfo();
+    loadBackground();
     dispatch(holoSlice.setProcessedStreamUrl(processedStreamUrl));
     const stateInterval = setInterval(loadState, 3000);
     return () => {
@@ -530,6 +595,104 @@ const HoloController = () => {
     setStreamStalled(false);
     await loadState();
   }, [loadState]);
+
+  // ---------------- Background normalization ----------------
+
+  const handleAcquireBackground = useCallback(
+    async (mode) => {
+      setBgBusy(true);
+      try {
+        const data = await apiInLineHoloControllerAcquireBackground({
+          mode,
+          numFrames: bgNumFrames,
+        });
+        if (data.success) {
+          dispatch(holoSlice.setHasBackground(true));
+          dispatch(holoSlice.setBackgroundUrl(data.image || null));
+          dispatch(
+            holoSlice.setBackgroundMeta({
+              mode: data.mode,
+              num_frames: data.num_frames,
+              width: data.width,
+              height: data.height,
+              timestamp: Date.now() / 1000,
+            })
+          );
+        } else {
+          console.error("Acquire background failed:", data.error);
+        }
+      } catch (error) {
+        console.error("Failed to acquire background:", error);
+      } finally {
+        setBgBusy(false);
+      }
+    },
+    [dispatch, bgNumFrames]
+  );
+
+  const handleClearBackground = useCallback(async () => {
+    try {
+      await apiInLineHoloControllerClearBackground();
+      dispatch(holoSlice.setHasBackground(false));
+      dispatch(holoSlice.setBackgroundUrl(null));
+      dispatch(holoSlice.setBackgroundMeta(null));
+      dispatch(holoSlice.setBgEnabled(false));
+    } catch (error) {
+      console.error("Failed to clear background:", error);
+    }
+  }, [dispatch]);
+
+  const handleToggleBgEnabled = useCallback(
+    async (checked) => {
+      dispatch(holoSlice.setBgEnabled(checked));
+      try {
+        const data = await apiInLineHoloControllerSetBgEnabled(checked);
+        if (data && data.success === false) {
+          // Backend refused (e.g. no background acquired yet) — revert.
+          dispatch(holoSlice.setBgEnabled(false));
+        }
+      } catch (error) {
+        console.error("Failed to toggle background division:", error);
+        dispatch(holoSlice.setBgEnabled(!checked));
+      }
+    },
+    [dispatch]
+  );
+
+  // ---------------- High-quality refinement ----------------
+
+  const handleReconstruct = useCallback(async () => {
+    setReconstructing(true);
+    try {
+      const data = await apiInLineHoloControllerReconstructHighQuality({
+        method: holoState.refineMethod,
+        iterations: holoState.refineIterations,
+        supportThreshold: holoState.refineSupportThreshold,
+        tvWeight: holoState.refineTvWeight,
+      });
+      if (data.success) {
+        dispatch(holoSlice.setRefinedAmplitudeUrl(data.amplitude || null));
+        dispatch(holoSlice.setRefinedPhaseUrl(data.phase || null));
+        setRefineInfo({
+          method: data.method,
+          iterations: data.iterations,
+          elapsed: data.elapsed,
+        });
+      } else {
+        console.error("Reconstruction failed:", data.error);
+      }
+    } catch (error) {
+      console.error("Failed to run reconstruction:", error);
+    } finally {
+      setReconstructing(false);
+    }
+  }, [
+    dispatch,
+    holoState.refineMethod,
+    holoState.refineIterations,
+    holoState.refineSupportThreshold,
+    holoState.refineTvWeight,
+  ]);
 
   // ---------------- dz slider ----------------
 
@@ -1102,9 +1265,31 @@ const HoloController = () => {
               size="small"
             />
           )}
+          {holoState.bgEnabled && (
+            <Chip label="BG divide ON" color="info" size="small" />
+          )}
         </Stack>
       </Paper>
 
+      {/* Tab navigation: Live preview / Background / high-quality Refine */}
+      <Tabs
+        value={activeTab}
+        onChange={(e, v) => setActiveTab(v)}
+        sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}
+        variant="scrollable"
+        scrollButtons="auto"
+      >
+        <Tab icon={<PlayArrowIcon />} iconPosition="start" label="Live" />
+        <Tab
+          icon={<LayersIcon />}
+          iconPosition="start"
+          label={holoState.hasBackground ? "Background ●" : "Background"}
+        />
+        <Tab icon={<AutoAwesomeIcon />} iconPosition="start" label="Refine (HQ)" />
+      </Tabs>
+
+      {activeTab === 0 && (
+        <>
       {/* Video Streams — full viewport width, side-by-side from sm upward */}
       <Grid container spacing={2} mb={2} sx={{ alignItems: "stretch" }}>
         <Grid item xs={12} md={6} sx={{ display: "flex" }}>
@@ -1802,6 +1987,350 @@ const HoloController = () => {
           </Grid>
         </AccordionDetails>
       </Accordion>
+        </>
+      )}
+
+      {/* ===================== Background tab ===================== */}
+      {activeTab === 1 && (
+        <>
+          <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+              <LayersIcon color="action" />
+              <Typography variant="h6">Background Normalization</Typography>
+              <Tooltip title="Divides every live frame by a stored background image. Removes the static illumination envelope, fixed-pattern speckle (dust on fiber tip / slide / sensor glass) and the |R|² pedestal — multiplicative artifacts, so we divide, not subtract. The single biggest cheap win.">
+                <InfoOutlinedIcon fontSize="small" color="action" />
+              </Tooltip>
+            </Stack>
+
+            <Alert severity="info" sx={{ mb: 2 }}>
+              <strong>Median burst</strong> — capture with the sample{" "}
+              <em>in view</em>; moving objects wash out, leaving the static
+              illumination/speckle.
+              <br />
+              <strong>Snapshot</strong> — for static samples: move the sample{" "}
+              <em>out of the FOV</em> first, then capture.
+            </Alert>
+
+            <Grid container spacing={2} alignItems="center" sx={{ mb: 1 }}>
+              <Grid item xs={6} sm={3} md={2}>
+                <TextField
+                  label="Burst frames"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={bgNumFrames}
+                  onChange={(e) =>
+                    setBgNumFrames(Math.max(1, parseInt(e.target.value, 10) || 1))
+                  }
+                  inputProps={{ min: 1, max: 200, step: 1 }}
+                  disabled={bgBusy}
+                />
+              </Grid>
+              <Grid item xs={12} sm={5} md={4}>
+                <Button
+                  variant="contained"
+                  fullWidth
+                  startIcon={
+                    bgBusy ? (
+                      <CircularProgress size={18} color="inherit" />
+                    ) : (
+                      <PhotoCameraIcon />
+                    )
+                  }
+                  onClick={() => handleAcquireBackground("median")}
+                  disabled={bgBusy}
+                >
+                  Acquire (median burst)
+                </Button>
+              </Grid>
+              <Grid item xs={12} sm={4} md={3}>
+                <Button
+                  variant="outlined"
+                  fullWidth
+                  startIcon={
+                    bgBusy ? (
+                      <CircularProgress size={18} color="inherit" />
+                    ) : (
+                      <PhotoCameraIcon />
+                    )
+                  }
+                  onClick={() => handleAcquireBackground("snapshot")}
+                  disabled={bgBusy}
+                >
+                  Acquire (snapshot)
+                </Button>
+              </Grid>
+              <Grid item xs={12} sm={12} md={3}>
+                <Tooltip title="Remove the stored background and turn off live division.">
+                  <span>
+                    <Button
+                      variant="text"
+                      color="error"
+                      fullWidth
+                      startIcon={<DeleteOutlineIcon />}
+                      onClick={handleClearBackground}
+                      disabled={!holoState.hasBackground || bgBusy}
+                    >
+                      Clear
+                    </Button>
+                  </span>
+                </Tooltip>
+              </Grid>
+            </Grid>
+
+            <Stack
+              direction="row"
+              spacing={2}
+              alignItems="center"
+              flexWrap="wrap"
+              useFlexGap
+            >
+              <Tooltip title="Divide every live frame by this background. Disabled until a background is acquired.">
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={holoState.bgEnabled}
+                      onChange={(e) => handleToggleBgEnabled(e.target.checked)}
+                      disabled={!holoState.hasBackground}
+                    />
+                  }
+                  label="Divide out background (live)"
+                />
+              </Tooltip>
+              <Chip
+                size="small"
+                label={
+                  holoState.hasBackground ? "Background stored" : "No background"
+                }
+                color={holoState.hasBackground ? "success" : "default"}
+                variant={holoState.hasBackground ? "filled" : "outlined"}
+              />
+              {holoState.backgroundMeta && (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`${holoState.backgroundMeta.mode} · ${holoState.backgroundMeta.width}×${holoState.backgroundMeta.height} · ${holoState.backgroundMeta.num_frames} frames`}
+                />
+              )}
+            </Stack>
+          </Paper>
+
+          <Card>
+            <CardContent>
+              <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+                <Typography variant="h6">Background Preview</Typography>
+                <Tooltip title="The stored background (current colour channel), downsampled for display.">
+                  <InfoOutlinedIcon fontSize="small" color="action" />
+                </Tooltip>
+              </Stack>
+              <Box
+                sx={{
+                  position: "relative",
+                  width: "30%",
+                  minHeight: 300,
+                  backgroundColor: "#000",
+                  borderRadius: 1,
+                  overflow: "hidden",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                {holoState.backgroundUrl ? (
+                  <img
+                    src={holoState.backgroundUrl}
+                    alt="Stored background"
+                    style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                  />
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    No background acquired yet.
+                  </Typography>
+                )}
+              </Box>
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {/* ===================== Refine (HQ) tab ===================== */}
+      {activeTab === 2 && (
+        <>
+          <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+              <AutoAwesomeIcon color="action" />
+              <Typography variant="h6">High-Quality Reconstruction</Typography>
+              <Tooltip title="Iterative single-shot reconstruction. Uses the current dz and (if enabled) the background normalization. Phase retrieval suppresses the twin image; TV-regularized additionally smooths speckle while preserving edges. Takes a few seconds.">
+                <InfoOutlinedIcon fontSize="small" color="action" />
+              </Tooltip>
+            </Stack>
+
+            <Alert severity="info" sx={{ mb: 2 }}>
+              Reconstructs the latest frame at the current <strong>dz</strong> (
+              {(holoState.dz * 1e6).toFixed(1)} µm)
+              {holoState.bgEnabled
+                ? " with background division."
+                : "."}{" "}
+              Focus dz on the <strong>Live</strong> tab first.
+            </Alert>
+
+            <Grid container spacing={2} alignItems="center">
+              <Grid item xs={12} sm={6} md={4}>
+                <FormControl size="small" fullWidth>
+                  <InputLabel id="refine-method-label">Method</InputLabel>
+                  <Select
+                    labelId="refine-method-label"
+                    value={holoState.refineMethod}
+                    label="Method"
+                    onChange={(e) =>
+                      dispatch(holoSlice.setRefineMethod(e.target.value))
+                    }
+                  >
+                    <MenuItem value="phase_retrieval">
+                      Phase retrieval (twin-image removal)
+                    </MenuItem>
+                    <MenuItem value="tv">TV-regularized</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={6} sm={3} md={2}>
+                <TextField
+                  label="Iterations"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={holoState.refineIterations}
+                  onChange={(e) =>
+                    dispatch(
+                      holoSlice.setRefineIterations(
+                        Math.max(1, parseInt(e.target.value, 10) || 1)
+                      )
+                    )
+                  }
+                  inputProps={{ min: 1, max: 200, step: 1 }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={3} md={6}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  fullWidth
+                  size="large"
+                  startIcon={
+                    reconstructing || holoState.isRefining ? (
+                      <CircularProgress size={20} color="inherit" />
+                    ) : (
+                      <AutoAwesomeIcon />
+                    )
+                  }
+                  onClick={handleReconstruct}
+                  disabled={reconstructing || holoState.isRefining}
+                >
+                  {reconstructing || holoState.isRefining
+                    ? "Reconstructing..."
+                    : "Reconstruct (high quality)"}
+                </Button>
+              </Grid>
+            </Grid>
+
+            <Accordion sx={{ mt: 2 }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <SettingsIcon sx={{ mr: 1 }} />
+                <Typography>Advanced</Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}>
+                    <FreeNumberField
+                      label="Support threshold"
+                      value={holoState.refineSupportThreshold}
+                      onCommit={(v) =>
+                        dispatch(holoSlice.setRefineSupportThreshold(v))
+                      }
+                      fixedDecimals={2}
+                      min={0}
+                      max={1}
+                      tooltip="Object-support threshold (0–1). Higher = tighter support (less of the field is treated as object). Used by both methods."
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <FreeNumberField
+                      label="TV weight"
+                      value={holoState.refineTvWeight}
+                      onCommit={(v) => dispatch(holoSlice.setRefineTvWeight(v))}
+                      fixedDecimals={3}
+                      min={0}
+                      tooltip="Total-variation regularization strength (TV-regularized method only). Higher = smoother, more speckle suppression, softer edges."
+                      disabled={holoState.refineMethod !== "tv"}
+                    />
+                  </Grid>
+                </Grid>
+              </AccordionDetails>
+            </Accordion>
+          </Paper>
+
+          <Card>
+            <CardContent>
+              <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+                <Typography variant="h6">Reconstruction</Typography>
+                <Box sx={{ flex: 1 }} />
+                <ToggleButtonGroup
+                  size="small"
+                  exclusive
+                  value={holoState.refineView}
+                  onChange={(e, v) => v && dispatch(holoSlice.setRefineView(v))}
+                >
+                  <ToggleButton value="amplitude">Amplitude</ToggleButton>
+                  <ToggleButton value="phase">Phase</ToggleButton>
+                </ToggleButtonGroup>
+              </Stack>
+              {refineInfo && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ mb: 1, display: "block" }}
+                >
+                  {refineInfo.method === "tv"
+                    ? "TV-regularized"
+                    : "Phase retrieval"}{" "}
+                  · {refineInfo.iterations} iterations · {refineInfo.elapsed}s
+                </Typography>
+              )}
+              <Box
+                sx={{
+                  position: "relative",
+                  width: "30%",
+                  minHeight: 300,
+                  backgroundColor: "#000",
+                  borderRadius: 1,
+                  overflow: "hidden",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                {(holoState.refineView === "phase"
+                  ? holoState.refinedPhaseUrl
+                  : holoState.refinedAmplitudeUrl) ? (
+                  <img
+                    src={
+                      holoState.refineView === "phase"
+                        ? holoState.refinedPhaseUrl
+                        : holoState.refinedAmplitudeUrl
+                    }
+                    alt="High-quality reconstruction"
+                    style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                  />
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    Press "Reconstruct (high quality)" to compute.
+                  </Typography>
+                )}
+              </Box>
+            </CardContent>
+          </Card>
+        </>
+      )}
     </Box>
   );
 };

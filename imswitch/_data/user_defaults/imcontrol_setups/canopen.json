@@ -1,0 +1,133 @@
+{
+      "detectors": {
+        "WidefieldCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "HikCamManager",
+            "managerProperties": {
+                "isRGB": 1,
+                "cameraListIndex_old": 1,
+                "cameraListIndex_": 596,
+                "cameraListIndex": 507,
+                "hikcam": {
+                    "exposure": 0,
+                    "gain": 0,
+                    "blacklevel": 100,
+                    "image_width": 1000,
+                    "image_height": 1000
+                }
+            },
+            "forAcquisition": true,
+            "forFocusLock": false,
+            "defaultStreamSettings": {}
+        }},
+  "rs232devices": {
+    "CANopen": {
+      "managerName": "UC2CANOpenManager",
+      "managerProperties": {
+        "interface": "socketcan",
+        "channel": "can0",
+        "bitrate": 500000
+      }
+    }
+  },
+  "positioners": {
+    "CANStage": {
+      "managerName": "UC2CANOpenStageManager",
+      "managerProperties": { "rs232device": "CANopen", "isEnable": true },
+      "axes": ["X", "Y", "Z", "A"],
+      "forScanning": true,
+      "forPositioning": true
+    }
+  },
+  "lasers": {
+    "405": {
+      "analogChannel": null,
+      "digitalLine": null,
+      "managerName": "UC2CANOpenLaserManager",
+      "managerProperties": {
+        "rs232device": "CANopen",
+        "channel_index": 1
+      },
+      "valueRangeMin": 0,
+      "valueRangeMax": 1023,
+      "wavelength": 635,
+      "freqRangeMin": 0,
+      "freqRangeMax": 0,
+      "freqRangeInit": 0,
+      "valueRangeStep": 1.0
+    }
+  },
+  "LEDs": {},
+  "LEDMatrixs": {
+    "ESP32 LEDMatrix": {
+      "analogChannel": null,
+      "digitalLine": null,
+      "managerName": "UC2CANOpenLEDMatrixManager",
+      "managerProperties": {
+        "rs232device": "CANopen",
+        "Nx": 4,
+        "Ny": 4,
+        "wavelength": 488,
+        "valueRangeMin": 0,
+        "valueRangeMax": 32768
+      }
+    }
+  },
+  "slm": null,
+  "sim": null,
+  "dpc": null,
+  "objective": {
+    "pixelsizes": [0.53, 0.265],
+    "NAs": [0.1, 0.75],
+    "magnifications": [10, 20],
+    "objectiveNames": ["4x", "20x"],
+    "objectivePositions": [1000.0, 31300.0],
+    "homeDirection": 1,
+    "homePolarity": 0,
+    "homeSpeed": 20000,
+    "homeAcceleration": 200000,
+    "moveSpeed": 20000,
+    "calibrateOnStart": false,
+    "active": true
+  },
+  "PixelCalibration": {},
+  "experiment": {},
+  "uc2Config": null,
+  "ism": null,
+  "arkitekt": {
+    "enabled": true,
+    "appName": "imswitch",
+    "redeemToken": "",
+    "url": "go.arkitekt.live",
+    "syncInAsync": true,
+    "deconvolveActionHash": "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"
+  },
+  "sila2": null,
+  "availableWidgets": [
+    "Settings",
+    "View",
+    "Recording",
+    "Image",
+    "Laser",
+    "Positioner",
+    "Autofocus",
+    "MCT",
+    "UC2Config",
+    "PixelCalibration",
+    "Objective",
+    "Experiment",
+    "Lightsheet",
+    "WiFi",
+    "MazeGame",
+    "LiveView",
+    "LEDMatrix",
+    "Composite",
+    "Holo",
+    "OffAxisHolo",
+    "GalvoScanner",
+    "Goniometer",
+    "StageCenterCalibration",
+    "OpticalFlowController"
+  ]
+}

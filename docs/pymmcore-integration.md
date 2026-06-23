@@ -9,6 +9,79 @@ There is **no Java**, **no MMStudio**, and **no separate server process**:
 `pymmcore-plus` loads the same C++ adapters that MMStudio uses directly
 into the ImSwitch Python process.
 
+## Architecture at a glance
+
+### Simplified
+
+The whole integration is one straight pipe: ImSwitch's generic device
+managers talk to a single shared core, which loads the vendor C++ adapter
+that actually drives the hardware.
+
+```mermaid
+flowchart TD
+    UI["ImSwitch UI / REST API"]
+    MGR["MMCore* device managers<br/>Detector · Positioner · Laser"]
+    SGL["MMCoreManager<br/>shared CMMCorePlus singleton"]
+    PLUS["pymmcore-plus"]
+    CORE["MMCore (C++)"]
+    ADP["Device adapters<br/>libmmgr_dal_*.so"]
+    HW["Camera · Stage · Laser hardware"]
+
+    UI --> MGR --> SGL --> PLUS --> CORE --> ADP --> HW
+```
+
+### A little more complex
+
+The setup JSON's `managerName` decides which manager wraps each device.
+All three managers funnel through the **one** process-wide `MMCoreManager`
+singleton, so a single `.cfg` (or set of `loadDevice` calls) drives every
+device without USB/serial conflicts. `pymmcore` statically embeds MMCore;
+the adapters are loaded at runtime from the discovered search path.
+
+```mermaid
+flowchart TD
+    JSON["Setup JSON<br/>managerName = MMCore*Manager<br/>managerProperties = cfgPath | adapterName + deviceName"]
+
+    subgraph py["ImSwitch Python process"]
+        direction TB
+        REST["MMCoreController (REST)<br/>get/setMMCoreParameter(s)<br/>snapMMCoreToDisk → background thread"]
+
+        subgraph mgrs["MMCore device managers"]
+            DET["MMCoreDetectorManager<br/>snap / sequence buffer / ROI / exposure"]
+            POS["MMCorePositionerManager<br/>setRelativeXYPosition / setRelativePosition"]
+            LAS["MMCoreLaserManager<br/>setShutterOpen / setProperty(Volts)"]
+        end
+
+        SGL["MMCoreManager — module-level singleton<br/>get_core() · ensure_loaded(cfg) · ensure_core()<br/>discover_adapter_paths()"]
+    end
+
+    subgraph mm["Micro-Manager native stack"]
+        direction TB
+        PLUS["pymmcore-plus — CMMCorePlus<br/>numpy frames · psygnal events"]
+        PMC["pymmcore — SWIG bindings<br/>(embeds MMCore)"]
+        CORE["MMCore C++ core"]
+        ADP["Device adapters libmmgr_dal_*.so<br/>DemoCamera · Hamamatsu · Andor · ASI · ~250 more"]
+    end
+
+    HW["Hardware<br/>camera · XY/Z stage · shutter / DA laser"]
+
+    JSON --> DET & POS & LAS
+    REST -.->|"read / write params, snap"| DET
+
+    DET --> SGL
+    POS --> SGL
+    LAS --> SGL
+
+    SGL -->|"Mode A: loadSystemConfiguration(cfg), once per path"| PLUS
+    SGL -->|"Mode B: loadDevice + initializeDevice"| PLUS
+    SGL -.->|"setDeviceAdapterSearchPaths(MICROMANAGER_PATH …)"| ADP
+
+    PLUS --> PMC --> CORE --> ADP --> HW
+```
+
+> These diagrams use [Mermaid](https://mermaid.js.org/), which GitHub renders
+> natively in Markdown.
+
 ## What you get
 
 Three new device managers, picked up by the standard `managerName`
@@ -149,6 +222,135 @@ print(MMCoreManager.get_available_adapters("/opt/micro-manager/lib/micro-manager
 core = MMCoreManager.get_core()
 print(MMCoreManager.get_available_devices_for_adapter("HamamatsuHam"))
 ```
+
+## Running fully headless on Raspberry Pi (Docker + prebuilt arm64 adapters)
+
+There are **no prebuilt Micro-Manager device adapters for arm64**, and the
+`pymmcore` wheel on PyPI has no `linux-aarch64` build. The
+[`build-mm-arm64.yml`](../.github/workflows/build-mm-arm64.yml) workflow
+solves the hard half: it cross-compiles `mmCoreAndDevices` for aarch64 in an
+emulated container and uploads **`micro-manager-arm64.tar.gz`** (~118 MB)
+containing
+
+```
+./micro-manager/lib/micro-manager/libmmgr_dal_*.so   ← the compiled adapters
+./DEVICE_INTERFACE_VERSION.txt                        ← MODULE_INTERFACE_VERSION the .so files were built against
+./ADAPTERS_BUILT.txt                                  ← which adapters made it (vendor-locked ones are skipped)
+```
+
+### The one gotcha: device-interface-version matching
+
+`pymmcore` **statically embeds its own copy of MMCore**. At runtime that
+embedded core loads the external `libmmgr_dal_*.so` adapters through the
+Micro-Manager **Device API**. The adapter's API version and pymmcore's
+embedded API version *must match*, or MMCore refuses the adapter with an
+*"interface version mismatch"* error. The artifact records its version in
+`DEVICE_INTERFACE_VERSION.txt` precisely so you can pin a compatible
+`pymmcore`.
+
+> **Safe rule:** build the adapters and `pymmcore` from the *same*
+> `mmCoreAndDevices` ref. The workflow builds adapters from `main`, so either
+> install a `pymmcore` release whose device API matches, or build `pymmcore`
+> from source (`--no-binary pymmcore`) so it compiles against the same tree.
+
+### Where to get the tarball
+
+* **Tagged release (recommended for Docker):** push a tag matching `mm-v*`
+  (e.g. `git tag mm-v1 && git push origin mm-v1`). The workflow's *Publish as
+  GitHub Release* step then attaches `micro-manager-arm64.tar.gz` as a stable,
+  unauthenticated download — ideal for `wget` during an image build:
+  `https://github.com/openUC2/ImSwitch/releases/download/mm-v1/micro-manager-arm64.tar.gz`
+* **Workflow artifact (ad-hoc):** for an untagged run, grab it from the
+  Actions UI or with `gh run download <run-id> -n micro-manager-arm64`. Note
+  artifacts are zipped (`micro-manager-arm64.zip` with the `.tar.gz` inside),
+  expire after ~90 days, and require auth — so not great for reproducible
+  builds.
+
+### How ImSwitch finds the adapters
+
+Extract the tarball so the adapters land at
+`/opt/micro-manager/lib/micro-manager/` — that path is already in
+`MMCoreManager`'s Linux discovery globs (`_MM2_LINUX_GLOBS`), so **no extra
+config is needed**. Setting `MICROMANAGER_PATH` to the same directory makes
+it explicit (and is what `install_micromanager_raspi.sh`'s smoke test
+expects).
+
+### Recipe A — bake it into the image (reproducible)
+
+Add a build script `docker/build-micromanager.sh`:
+
+```bash
+#!/usr/bin/env -S bash -eux
+# Only arm64 needs the prebuilt adapters; on amd64 just run `mmcore install`.
+[ "$TARGETPLATFORM" = "linux/arm64" ] || { echo "skip: not arm64"; exit 0; }
+
+MM_REF="${MM_REF:-mm-v1}"   # the release tag the adapters were published under
+cd /tmp
+wget -q "https://github.com/openUC2/ImSwitch/releases/download/${MM_REF}/micro-manager-arm64.tar.gz"
+mkdir -p /opt
+tar -xzf micro-manager-arm64.tar.gz -C /opt    # -> /opt/micro-manager/lib/micro-manager/*.so
+cat /opt/DEVICE_INTERFACE_VERSION.txt || true
+rm -f micro-manager-arm64.tar.gz
+
+# pymmcore has no aarch64 wheel on PyPI — build it from source so its embedded
+# MMCore matches the adapters' device interface version.
+apt-get update
+apt-get install -y --no-install-recommends build-essential swig python3-dev libboost-all-dev
+source /opt/imswitch/.venv/bin/activate
+uv pip install pymmcore --no-binary pymmcore
+uv pip install "pymmcore-plus[cli]>=0.10"
+
+# sanity check: embedded device API should match DEVICE_INTERFACE_VERSION.txt
+python3 -c "import pymmcore; print('pymmcore API:', pymmcore.CMMCore().getAPIVersionInfo())"
+
+apt-get remove -y build-essential swig
+apt -y autoremove && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*
+```
+
+Wire it into the `Dockerfile` after the deps layer and export the path:
+
+```dockerfile
+RUN --mount=type=bind,source=docker/build-micromanager.sh,target=/mnt/build/build-micromanager.sh \
+    /mnt/build/build-micromanager.sh
+ENV MICROMANAGER_PATH=/opt/micro-manager/lib/micro-manager
+```
+
+Then run headless and point a setup at an MMCore device (e.g. the always-present
+`DemoCamera`, or a real `.cfg`):
+
+```bash
+docker run -it --rm -p 8001:8001 -p 8002:8002 \
+  -e HEADLESS=1 -e HTTP_PORT=8001 \
+  -e CONFIG_PATH=/config -e DATA_PATH=/dataset \
+  -v ~/imswitch-config:/config -v ~/imswitch-data:/dataset \
+  --privileged ghcr.io/openuc2/imswitch-noqt-arm64:latest
+```
+
+(Use a setup JSON with `managerName: "MMCoreDetectorManager"` plus either
+`cfgPath`, or `adapterName: "DemoCamera"` / `deviceName: "DCam"` — see
+[`example_mmcore_demo.json`](../imswitch/_data/user_defaults/imcontrol_setups/example_mmcore_demo.json).)
+
+### Recipe B — mount at runtime (no image rebuild)
+
+If `pymmcore` + `pymmcore-plus` are **already in the image** (they must be —
+see the gotcha above; only the `.so` adapters live outside), keep the adapters
+on the host and bind-mount them:
+
+```bash
+# one-time, on the Pi host:
+sudo tar -xzf micro-manager-arm64.tar.gz -C /opt   # -> /opt/micro-manager/...
+
+docker run -it --rm -p 8001:8001 -p 8002:8002 \
+  -e HEADLESS=1 -e HTTP_PORT=8001 \
+  -e MICROMANAGER_PATH=/opt/micro-manager/lib/micro-manager \
+  -e CONFIG_PATH=/config -e DATA_PATH=/dataset \
+  -v /opt/micro-manager:/opt/micro-manager:ro \
+  -v ~/imswitch-config:/config -v ~/imswitch-data:/dataset \
+  --privileged ghcr.io/openuc2/imswitch-noqt-arm64:latest
+```
+
+Recipe A gives a turnkey headless box; Recipe B is handy while iterating on
+which adapter build you want without rebuilding the whole image.
 
 ## Raspberry Pi notes
 

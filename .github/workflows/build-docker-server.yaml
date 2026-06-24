@@ -42,6 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # We check out the PR's HEAD commit instead of its merge commit so that
+          # Docker container SHA tags will match git commit SHAs even before merge-ctr-imgs:
+          ref: ${{ github.event.pull_request.head.sha }}
           # Don't download unnecessary data:
           fetch-depth: 0
           filter: 'blob:none'
@@ -79,7 +82,7 @@ jobs:
         with:
           images: ${{ steps.image_registry_case.outputs.lowercase }}
           tags: |
-            type=sha # this sha doesn't appear to correspond to the git sha
+            type=sha
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

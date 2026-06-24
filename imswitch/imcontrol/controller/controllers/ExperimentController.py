@@ -1164,6 +1164,8 @@ class ExperimentController(ImConWidgetController):
                 _pixel_size = getattr(p, 'ashlar_pixel_size', 1.0)
                 _max_shift = getattr(p, 'ashlar_maximum_shift', 50.0)
                 _align_ch = getattr(p, 'ashlar_align_channel', 0)
+                _flip_x = bool(getattr(p, 'ashlar_flip_x', False))
+                _flip_y = bool(getattr(p, 'ashlar_flip_y', False))
                 _exp_dir = dirPath
 
                 def _auto_stitch():
@@ -1175,6 +1177,8 @@ class ExperimentController(ImConWidgetController):
                         maximumShift=_max_shift,
                         alignChannel=_align_ch,
                         experimentDir=_exp_dir,
+                        flipX=_flip_x,
+                        flipY=_flip_y,
                     )
 
                 threading.Thread(
@@ -2052,6 +2056,8 @@ class ExperimentController(ImConWidgetController):
         maximumShift: float = 50.0,
         alignChannel: int = 0,
         experimentDir: str = "",
+        flipX: bool = False,
+        flipY: bool = False,
     ) -> dict:
         """
         Schedule ashlarUC2 stitching for the last (or specified) experiment
@@ -2061,6 +2067,10 @@ class ExperimentController(ImConWidgetController):
         overview-scan async pattern.  Poll ``getOverviewAsyncStatus`` for
         completion; the result dict will contain ``outputDir`` on success.
 
+        Call this endpoint again with the same ``experimentDir`` and different
+        ``flipX``/``flipY`` values to redo stitching when the tile orientation
+        was incorrect (e.g. camera axis inverted relative to stage axis).
+
         Parameters
         ----------
         pixelSize     : physical pixel size in µm/pixel
@@ -2068,6 +2078,8 @@ class ExperimentController(ImConWidgetController):
         alignChannel  : channel index used for alignment (ashlar -c)
         experimentDir : absolute path to a specific experiment directory;
                         uses the most recent experiment when empty
+        flipX         : flip each tile horizontally (left↔right) before stitching
+        flipY         : flip each tile vertically (top↔bottom) before stitching
         """
         # Resolve which experiment directory to stitch before spawning the thread
         target_dir = experimentDir.strip() if experimentDir else ""
@@ -2107,14 +2119,20 @@ class ExperimentController(ImConWidgetController):
 
         thread = threading.Thread(
             target=self._runAshlarStitchingWorker,
-            args=(target_dir, resolved_pixel_size, maximumShift, alignChannel),
+            args=(target_dir, resolved_pixel_size, maximumShift, alignChannel, flipX, flipY),
             daemon=True,
             name="runAshlarStitching",
         )
         with self._overview_async_lock:
             self._overview_async_thread = thread
         thread.start()
-        return {"started": True, "task": "ashlar_stitching", "experimentDir": target_dir}
+        return {
+            "started": True,
+            "task": "ashlar_stitching",
+            "experimentDir": target_dir,
+            "flipX": flipX,
+            "flipY": flipY,
+        }
 
 
     def _runAshlarStitchingWorker(
@@ -2123,6 +2141,8 @@ class ExperimentController(ImConWidgetController):
         pixelSize: float,
         maximumShift: float,
         alignChannel: int,
+        flipX: bool = False,
+        flipY: bool = False,
     ) -> None:
         """
         Worker thread body for ashlar stitching.
@@ -2158,6 +2178,10 @@ class ExperimentController(ImConWidgetController):
             "--tile-size", "512",
             "--no-pyramid",  # pyramid generation OOM-kills large scans (rc=-9); generate pyramid separately if needed
         ]
+        if flipX:
+            cmd.append("--flip-x")
+        if flipY:
+            cmd.append("--flip-y")
         self._logger.info(f"Ashlar command: {' '.join(cmd)}")
 
         import threading, time

@@ -1320,7 +1320,6 @@ class ArkitektController(ImConWidgetController):
             )
 
         # Set up illumination if specified
-        original_illumination_state = None
         try:
             # Store original state to restore later
             laser_manager = self._master.lasersManager

@@ -10,6 +10,18 @@ gTIMEOUT = 100
 # Minimum distance (µm) Z is lifted out of the bottom before XY are homed, so the
 # stage cannot knock the objective into the sample during the homing sweep.
 MIN_SAFE_Z_LIFT_HOMING = 3000
+# Default TMC stepper-driver parameters. Applied on launch (when an axis is
+# TMC-configured) and used as the value the frontend reads back, since the
+# firmware currently has no reliable TMC read-back command.
+TMC_DEFAULTS = {
+    "msteps": 16,        # microsteps
+    "rms_current": 1200,  # mA
+    "sgthrs": 10,        # StallGuard threshold
+    "semin": 5,          # CoolStep lower threshold
+    "semax": 2,          # CoolStep upper threshold
+    "blank_time": 24,    # comparator blank time
+    "toff": 3,           # off time
+}
 class ESP32StageManager(PositionerManager):
     def __init__(self, positionerInfo, name, **lowLevelManagers):
         super().__init__(positionerInfo, name, initialPosition={axis: 0 for axis in positionerInfo.axes}, initialSpeed={axis: 0 for axis in positionerInfo.axes})
@@ -97,6 +109,22 @@ class ESP32StageManager(PositionerManager):
             "phase": "idle",
             "axes": {"Z": "idle", "X": "idle", "Y": "idle", "A": "idle"},
             "message": "",
+        }
+
+        # Z-stage synchronisation runtime state. The two Z motors can drift apart
+        # if one loses steps; this procedure drives Z into the mechanical stop to
+        # mechanically re-sync them. Default travel and direction come from config.
+        self._zSyncCancel = threading.Event()
+        self._zSyncThread = None
+        self._zSyncDefaultSteps = positionerInfo.managerProperties.get('zSyncSteps', 10000)
+        # 0 = derive 'out' direction from the Z home direction; otherwise force ±1.
+        self._zSyncDirection = positionerInfo.managerProperties.get('zSyncDirection', 0)
+        self._zSyncState = {
+            "active": False,
+            "cancelled": False,
+            "phase": "idle",
+            "message": "",
+            "steps": self._zSyncDefaultSteps,
         }
 
         # Setup homing coordinates and speed
@@ -196,6 +224,25 @@ class ESP32StageManager(PositionerManager):
         self.setupMotor(self.minA, self.maxA, self.stepSizes["A"], self.backlashA, "A")
 
         # Setup Motor drivers (TMC - if available)
+        # Cache the TMC settings per axis (config values override the defaults).
+        # This cache is the source of truth the frontend reads back, because the
+        # firmware has no reliable TMC read-back command. The values are pushed to
+        # the device below for any axis that is TMC-configured.
+        self._tmcSettings = {}
+        for _ax in ("X", "Y", "Z", "A"):
+            self._tmcSettings[_ax] = {
+                key: positionerInfo.managerProperties.get(f'{key}{_ax}', default)
+                for key, default in (
+                    ('msteps', TMC_DEFAULTS['msteps']),
+                    ('rms_current', TMC_DEFAULTS['rms_current']),
+                    ('sgthrs', TMC_DEFAULTS['sgthrs']),
+                    ('semin', TMC_DEFAULTS['semin']),
+                    ('semax', TMC_DEFAULTS['semax']),
+                    ('blank_time', TMC_DEFAULTS['blank_time']),
+                    ('toff', TMC_DEFAULTS['toff']),
+                )
+            }
+
         # Load TMC settings from config and apply to device if configured
         try:
             if positionerInfo.managerProperties.get('mstepsX') is not None:
@@ -339,6 +386,14 @@ class ESP32StageManager(PositionerManager):
 
     def setupMotorDriver(self, axis="X", msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
         self._motor.set_tmc_parameters(axis=axis, msteps=msteps, rms_current=rms_current, stall_value=stall_value, sgthrs=sgthrs, semin=semin, semax=semax, blank_time=blank_time, toff=toff, timeout=timeout)
+        # Remember what we applied so the frontend can read it back even though
+        # the firmware has no TMC read-back command.
+        cache = self._tmcSettings.setdefault(axis.upper(), dict(TMC_DEFAULTS))
+        for key, value in (('msteps', msteps), ('rms_current', rms_current),
+                           ('sgthrs', sgthrs), ('semin', semin), ('semax', semax),
+                           ('blank_time', blank_time), ('toff', toff)):
+            if value is not None:
+                cache[key] = value
 
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=gTIMEOUT, is_reduced=True):
         '''
@@ -952,6 +1007,146 @@ class ESP32StageManager(PositionerManager):
         self.__logger.info(f"Transport position set to {self.transportPositions}")
         return dict(self.transportPositions)
 
+    # ========================================================================
+    # Z-stage synchronisation (re-sync the two Z motors against a mechanical stop)
+    # ========================================================================
+
+    def isZStageSyncActive(self):
+        return self._zSyncState.get("active", False)
+
+    def getZStageSyncState(self):
+        return dict(self._zSyncState)
+
+    def _emitZSyncState(self, phase=None, message=None, active=None, cancelled=None):
+        """Update the Z-sync state dict and broadcast it to the frontend."""
+        if phase is not None:
+            self._zSyncState["phase"] = phase
+        if message is not None:
+            self._zSyncState["message"] = message
+        if active is not None:
+            self._zSyncState["active"] = active
+        if cancelled is not None:
+            self._zSyncState["cancelled"] = cancelled
+        try:
+            self._commChannel.sigZStageSyncState.emit(dict(self._zSyncState))
+        except Exception as e:
+            self.__logger.error(f"Could not emit Z-sync state: {e}")
+
+    def cancelZStageSync(self):
+        """Stop an in-progress Z-sync run and halt all motors."""
+        if not self._zSyncState.get("active", False):
+            return
+        self.__logger.info("Z-stage sync cancellation requested.")
+        self._zSyncCancel.set()
+        try:
+            self.stopAll()
+        except Exception as e:
+            self.__logger.error(f"stopAll during Z-sync cancel failed: {e}")
+
+    def zStageSyncProcedure(self, steps=None, speed=None, is_blocking=False):
+        """Re-synchronise the two Z motors against the mechanical stop.
+
+        Two stepper motors push the Z stage up together; if one loses steps they
+        desync. This drives Z 'out' (away from the home endstop) by a large
+        amount so both motors stall together at the mechanical end, backs off by
+        half, restores the limit switch and re-homes Z.
+
+        steps : magnitude (µm) of the 'out' travel (default from config, 10000).
+        The Z hard and soft limits are temporarily disabled and always restored,
+        even on cancel/error. Runs in a background thread unless is_blocking.
+        """
+        if self._zSyncState.get("active", False):
+            self.__logger.warning("Z-stage sync already in progress; ignoring start request.")
+            return
+        if steps is None:
+            steps = self._zSyncDefaultSteps
+        steps = abs(float(steps))
+        if speed is None:
+            speed = self.homeSpeedZ
+        # 'out' is away from the home endstop; an explicit config value overrides.
+        outSign = -1 if self.homeDirectionZ > 0 else 1
+        if self._zSyncDirection:
+            outSign = 1 if self._zSyncDirection > 0 else -1
+        outMove = outSign * steps
+
+        def threadFn(self):
+            self._zSyncCancel.clear()
+            self._zSyncState = {
+                "active": True,
+                "cancelled": False,
+                "phase": "starting",
+                "message": "Starting Z-stage synchronisation",
+                "steps": steps,
+            }
+            self._emitZSyncState()
+
+            def aborted():
+                if self._zSyncCancel.is_set():
+                    self._emitZSyncState(phase="cancelled", active=False, cancelled=True,
+                                         message="Z-stage sync cancelled")
+                    self.__logger.info("Z-stage sync cancelled.")
+                    return True
+                return False
+
+            restoreHard = self.hardLimitsEnabledZ
+            restoreSoft = self.limitZenabled
+            try:
+                # 1) disable the Z limits so we can drive into the mechanical stop
+                self._emitZSyncState(phase="disabling_limit", message="Disabling Z limit switch")
+                self.hardLimitsEnabledZ = False
+                self.limitZenabled = False
+                self._motor.set_hard_limits(axis="Z", enabled=False)
+                if aborted():
+                    return
+
+                # 2) drive Z out by the full amount (both motors stall together)
+                self._emitZSyncState(phase="moving_out",
+                                     message=f"Moving Z out by {steps:.0f} µm")
+                self.move(value=outMove, speed=speed, axis="Z", is_absolute=False, is_blocking=True)
+                if aborted():
+                    return
+
+                # 3) move back by half
+                self._emitZSyncState(phase="moving_back",
+                                     message=f"Moving Z back by {steps / 2:.0f} µm")
+                self.move(value=-outMove / 2.0, speed=speed, axis="Z", is_absolute=False, is_blocking=True)
+                if aborted():
+                    return
+
+                # 4) restore the limits before homing
+                self._emitZSyncState(phase="enabling_limit", message="Re-enabling Z limit switch")
+                self.hardLimitsEnabledZ = restoreHard
+                self.limitZenabled = restoreSoft
+                self._motor.set_hard_limits(axis="Z", enabled=restoreHard)
+                if aborted():
+                    return
+
+                # 5) home Z again to re-establish the reference
+                self._emitZSyncState(phase="homing", message="Homing Z axis")
+                self.home_z(isBlocking=True)
+
+                self._emitZSyncState(phase="done", active=False,
+                                     message="Z-stage synchronisation complete")
+                self.__logger.info("Z-stage sync procedure completed.")
+            except Exception as e:
+                self.__logger.error(f"Z-stage sync failed: {e}")
+                self._emitZSyncState(phase="error", active=False,
+                                     message=f"Z-stage sync failed: {e}")
+            finally:
+                # Safety: never leave the Z limits disabled.
+                try:
+                    self.hardLimitsEnabledZ = restoreHard
+                    self.limitZenabled = restoreSoft
+                    self._motor.set_hard_limits(axis="Z", enabled=restoreHard)
+                except Exception as e:
+                    self.__logger.error(f"Could not restore Z limits after sync: {e}")
+
+        if is_blocking:
+            threadFn(self)
+        else:
+            self._zSyncThread = threading.Thread(target=threadFn, args=(self,))
+            self._zSyncThread.start()
+
     def register_stagescan_callback(self, on_stagescan_complete_fct):
         self._motor.register_stagescan_callback(on_stagescan_complete_fct)
         
@@ -1248,30 +1443,36 @@ class ESP32StageManager(PositionerManager):
         """
         axis = axis.upper()
         result = {'axis': axis, 'success': False}
-        
+
+        # Start from the cached/applied settings (defaults if never set). The
+        # firmware has no reliable TMC read-back yet, so the cache is the source
+        # of truth; a successful device read (newer firmware) overrides it.
+        merged = dict(self._tmcSettings.get(axis, TMC_DEFAULTS))
         try:
-            # Get TMC settings from device via UC2-REST motor module
-            tmc_settings = self._motor.getTMCSettings(axis=axis)
-            
-            if tmc_settings:
-                result['settings'] = {
-                    'msteps': tmc_settings.get('msteps', 16),
-                    'rmsCurrent': tmc_settings.get('rms_current', 500),
-                    'sgthrs': tmc_settings.get('sgthrs', 10),
-                    'semin': tmc_settings.get('semin', 5),
-                    'semax': tmc_settings.get('semax', 2),
-                    'blankTime': tmc_settings.get('blank_time', 24),
-                    'toff': tmc_settings.get('toff', 3),
-                }
-                result['success'] = True
-                self.__logger.debug(f"Retrieved TMC settings for axis {axis}")
-            else:
-                result['error'] = "No TMC settings returned from device"
-                
+            device_settings = None
+            try:
+                device_settings = self._motor.getTMCSettings(axis=axis)
+            except Exception as e:
+                self.__logger.debug(f"Device TMC read-back unavailable for {axis}: {e}")
+            if device_settings:
+                merged.update({k: v for k, v in device_settings.items() if v is not None})
+
+            result['settings'] = {
+                'msteps': merged.get('msteps'),
+                'rmsCurrent': merged.get('rms_current'),
+                'sgthrs': merged.get('sgthrs'),
+                'semin': merged.get('semin'),
+                'semax': merged.get('semax'),
+                'blankTime': merged.get('blank_time'),
+                'toff': merged.get('toff'),
+            }
+            result['source'] = 'device' if device_settings else 'cache'
+            result['success'] = True
+            self.__logger.debug(f"Retrieved TMC settings for axis {axis} ({result['source']})")
         except Exception as e:
             result['error'] = str(e)
             self.__logger.error(f"Error getting TMC settings for axis {axis}: {e}")
-        
+
         return result
     
     def setTMCSettingsForAxis(self, axis: str, settings: dict) -> dict:

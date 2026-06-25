@@ -388,6 +388,21 @@ class UC2ConfigController(ImConWidgetController):
             self.__logger.error(f"getBusStatus failed: {e}")
             return {"status": "error", "message": str(e)}
 
+    @APIExport(runOnUIThread=False)
+    def getFirmwareInfo(self):
+        """
+        Identity of the USB-connected ESP32 master firmware.
+
+        :return: {name, version, date, author, pindef, isMaster, connected,
+                  serialport}. The build date and pindef are the most useful
+                  fields for telling boards/firmwares apart.
+        """
+        try:
+            return self._master.UC2ConfigManager.getFirmwareInfo()
+        except Exception as e:
+            self.__logger.error(f"getFirmwareInfo failed: {e}")
+            return {"status": "error", "message": str(e)}
+
     ''' Fan & board temperature '''
 
     @APIExport(runOnUIThread=False)

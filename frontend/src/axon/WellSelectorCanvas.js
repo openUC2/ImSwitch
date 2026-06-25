@@ -1456,11 +1456,16 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     //avoid strg
     if (e.ctrlKey) return;
 
-    // Shift+Click: add manual focus map point at clicked XY position
-    // Uses current Z from the position state
-    if (e.shiftKey && focusMapState?.config?.enabled) {
+    // Add a manual focus-map point at the clicked XY (uses the current stage Z).
+    // Triggered either by the "Place points on map" toggle in the Manual Focus
+    // Points menu (manualPlacementActive), or as a Shift+Click shortcut while
+    // focus mapping is enabled.
+    const focusPlacementArmed =
+      focusMapState?.manualPlacementActive ||
+      (e.shiftKey && focusMapState?.config?.enabled);
+    if (focusPlacementArmed) {
       const phyPos = calcPxPoint2PhyPoint(localPos);
-      const currentZ = positionState?.Z ?? 0;
+      const currentZ = positionState?.z ?? 0; // live position is lowercase z
       dispatch(
         focusMapSlice.addManualPoint({
           x: phyPos.x,

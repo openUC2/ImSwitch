@@ -131,6 +131,7 @@ const FocusMapDimension = () => {
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const showOverlayOnWellplate = useSelector(focusMapSlice.getShowOverlayOnWellplate);
+  const manualPlacementActive = useSelector(focusMapSlice.getManualPlacementActive);
 
   // Detect mutual exclusion: per-position AF enabled while Focus Map is also enabled
   const isAutoFocusPerPosition = parameterValue.autoFocus === true;
@@ -1139,7 +1140,30 @@ const FocusMapDimension = () => {
                 </TableContainer>
               )}
 
-              <Box sx={{ display: "flex", gap: 1 }}>
+              {manualPlacementActive && (
+                <Alert severity="info" sx={{ mb: 1 }}>
+                  Click on the wellplate / sample map to drop focus points (XY
+                  from the click, Z from the current stage). Click "Stop
+                  Placing" when done.
+                </Alert>
+              )}
+
+              <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                <Button
+                  size="small"
+                  variant={manualPlacementActive ? "contained" : "outlined"}
+                  color={manualPlacementActive ? "secondary" : "primary"}
+                  startIcon={<MyLocationIcon />}
+                  onClick={() =>
+                    dispatch(
+                      focusMapSlice.setManualPlacementActive(
+                        !manualPlacementActive,
+                      ),
+                    )
+                  }
+                >
+                  {manualPlacementActive ? "Stop Placing" : "Place on Map"}
+                </Button>
                 <Button
                   size="small"
                   variant="outlined"

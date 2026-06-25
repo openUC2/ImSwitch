@@ -406,10 +406,10 @@ const FocusMapDimension = () => {
     setGoToInProgress(key);
     try {
       await apiPositionerControllerMovePositioner({
-        axis: "X", dist: pt.x, isAbsolute: true, isBlocking: false, speed: 15000,
+        axis: "X", dist: pt.x, isAbsolute: true, isBlocking: true, speed: 15000,
       });
       await apiPositionerControllerMovePositioner({
-        axis: "Y", dist: pt.y, isAbsolute: true, isBlocking: false, speed: 15000,
+        axis: "Y", dist: pt.y, isAbsolute: true, isBlocking: true, speed: 15000,
       });
       if (pt.z != null) {
         await apiPositionerControllerMovePositioner({

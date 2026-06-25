@@ -10,17 +10,25 @@ gTIMEOUT = 100
 # Minimum distance (µm) Z is lifted out of the bottom before XY are homed, so the
 # stage cannot knock the objective into the sample during the homing sweep.
 MIN_SAFE_Z_LIFT_HOMING = 3000
-# Default TMC stepper-driver parameters. Applied on launch (when an axis is
-# TMC-configured) and used as the value the frontend reads back, since the
-# firmware currently has no reliable TMC read-back command.
+# Default TMC stepper-driver parameters. Applied on launch and used as the value
+# the frontend reads back (the firmware has no TMC read-back command we can use —
+# /tmc_get currently crashes the HAT, so we never query the device).
+#
+# These defaults favour MAX TORQUE / SPEED over silent running:
+#  - rms_current high (torque scales with current; raise toward the motor's rated
+#    RMS — ~1.2 A suits a typical NEMA17; too high overheats the driver/motor).
+#  - semin = 0 disables CoolStep, so the driver always delivers the full run
+#    current instead of throttling it back at low load (max holding/moving torque).
+#  - spreadCycle chopper (toff/blank_time) rather than stealthChop — set in
+#    firmware; stealthChop is quieter but gives less torque at speed.
 TMC_DEFAULTS = {
-    "msteps": 16,        # microsteps
-    "rms_current": 1200,  # mA
-    "sgthrs": 10,        # StallGuard threshold
-    "semin": 5,          # CoolStep lower threshold
-    "semax": 2,          # CoolStep upper threshold
-    "blank_time": 24,    # comparator blank time
-    "toff": 3,           # off time
+    "msteps": 16,         # microsteps (must match the stepSize calibration)
+    "rms_current": 1200,  # mA RMS — raise toward the motor's rated current for more torque
+    "sgthrs": 10,         # StallGuard threshold (sensorless homing)
+    "semin": 0,           # 0 = CoolStep OFF -> always full current (max torque)
+    "semax": 0,           # CoolStep upper threshold (unused when semin = 0)
+    "blank_time": 24,     # spreadCycle comparator blank time
+    "toff": 3,            # spreadCycle off time (chopper enabled)
 }
 class ESP32StageManager(PositionerManager):
     def __init__(self, positionerInfo, name, **lowLevelManagers):
@@ -113,12 +121,11 @@ class ESP32StageManager(PositionerManager):
 
         # Z-stage synchronisation runtime state. The two Z motors can drift apart
         # if one loses steps; this procedure drives Z into the mechanical stop to
-        # mechanically re-sync them. Default travel and direction come from config.
+        # mechanically re-sync them. The 'out' direction always follows the Z home
+        # direction; only the default travel distance comes from config.
         self._zSyncCancel = threading.Event()
         self._zSyncThread = None
         self._zSyncDefaultSteps = positionerInfo.managerProperties.get('zSyncSteps', 10000)
-        # 0 = derive 'out' direction from the Z home direction; otherwise force ±1.
-        self._zSyncDirection = positionerInfo.managerProperties.get('zSyncDirection', 0)
         self._zSyncState = {
             "active": False,
             "cancelled": False,
@@ -243,54 +250,14 @@ class ESP32StageManager(PositionerManager):
                 )
             }
 
-        # Load TMC settings from config and apply to device if configured
+        # Apply the cached TMC settings (config merged over TMC_DEFAULTS) to each
+        # axis on launch. TMC_DEFAULTS is the single source of defaults — there
+        # are no per-call hardcoded fallbacks to drift out of sync.
         try:
-            self.setupMotorDriver(
-                axis="X",
-                msteps=positionerInfo.managerProperties.get('mstepsX', 16),
-                rms_current=positionerInfo.managerProperties.get('rms_currentX', 500),
-                sgthrs=positionerInfo.managerProperties.get('sgthrsX', 10),
-                semin=positionerInfo.managerProperties.get('seminX', 5),
-                semax=positionerInfo.managerProperties.get('semaxX', 2),
-                blank_time=positionerInfo.managerProperties.get('blank_timeX', 24),
-                toff=positionerInfo.managerProperties.get('toffX', 3),
-                timeout=1
-            )
-            self.setupMotorDriver(
-                axis="Y",
-                msteps=positionerInfo.managerProperties.get('mstepsY', 16),
-                rms_current=positionerInfo.managerProperties.get('rms_currentY', 500),
-                sgthrs=positionerInfo.managerProperties.get('sgthrsY', 10),
-                semin=positionerInfo.managerProperties.get('seminY', 5),
-                semax=positionerInfo.managerProperties.get('semaxY', 2),
-                blank_time=positionerInfo.managerProperties.get('blank_timeY', 24),
-                toff=positionerInfo.managerProperties.get('toffY', 3),
-                timeout=1
-            )
-            self.setupMotorDriver(
-                axis="Z",
-                msteps=positionerInfo.managerProperties.get('mstepsZ', 16),
-                rms_current=positionerInfo.managerProperties.get('rms_currentZ', 500),
-                sgthrs=positionerInfo.managerProperties.get('sgthrsZ', 10),
-                semin=positionerInfo.managerProperties.get('seminZ', 5),
-                semax=positionerInfo.managerProperties.get('semaxZ', 2),
-                blank_time=positionerInfo.managerProperties.get('blank_timeZ', 24),
-                toff=positionerInfo.managerProperties.get('toffZ', 3),
-                timeout=1
-            )
-            self.setupMotorDriver(
-                axis="A",
-                msteps=positionerInfo.managerProperties.get('mstepsA', 16),
-                rms_current=positionerInfo.managerProperties.get('rms_currentA', 500),
-                sgthrs=positionerInfo.managerProperties.get('sgthrsA', 10),
-                semin=positionerInfo.managerProperties.get('seminA', 5),
-                semax=positionerInfo.managerProperties.get('semaxA', 2),
-                blank_time=positionerInfo.managerProperties.get('blank_timeA', 24),
-                toff=positionerInfo.managerProperties.get('toffA', 3),
-                timeout=1
-            )
+            for _ax in ("X", "Y", "Z", "A"):
+                self.setupMotorDriver(axis=_ax, timeout=1, **self._tmcSettings[_ax])
         except Exception as e:
-            self.__logger.warning(f"Could not load TMC settings from config: {e}")
+            self.__logger.warning(f"Could not apply TMC settings: {e}")
 
         # Dummy move to get the motor to the right position
         for iAxis in positionerInfo.axes:
@@ -1014,7 +981,8 @@ class ESP32StageManager(PositionerManager):
         return dict(self._zSyncState)
 
     def _emitZSyncState(self, phase=None, message=None, active=None, cancelled=None):
-        """Update the Z-sync state dict and broadcast it to the frontend."""
+        """Update the Z-sync state dict. The frontend reads this via periodic
+        polling of getZStageSyncState (no websocket signal)."""
         if phase is not None:
             self._zSyncState["phase"] = phase
         if message is not None:
@@ -1023,10 +991,6 @@ class ESP32StageManager(PositionerManager):
             self._zSyncState["active"] = active
         if cancelled is not None:
             self._zSyncState["cancelled"] = cancelled
-        try:
-            self._commChannel.sigZStageSyncState.emit(dict(self._zSyncState))
-        except Exception as e:
-            self.__logger.error(f"Could not emit Z-sync state: {e}")
 
     def cancelZStageSync(self):
         """Stop an in-progress Z-sync run and halt all motors."""
@@ -1059,14 +1023,17 @@ class ESP32StageManager(PositionerManager):
         steps = abs(float(steps))
         if speed is None:
             speed = self.homeSpeedZ
-        # 'out' is away from the home endstop; an explicit config value overrides.
+        # The 'out' direction follows the Z home direction.
         outSign = 1 if self.homeDirectionZ > 0 else -1
-        if self._zSyncDirection:
-            outSign = 1 if self._zSyncDirection > 0 else -1
         outMove = outSign * steps
 
         def threadFn(self):
             self._zSyncCancel.clear()
+            # Remember where Z was so we can return there after re-homing.
+            try:
+                zPosBefore = self.getPosition().get("Z", 0)
+            except Exception:
+                zPosBefore = self._position.get("Z", 0)
             self._zSyncState = {
                 "active": True,
                 "cancelled": False,
@@ -1120,6 +1087,14 @@ class ESP32StageManager(PositionerManager):
                 # 5) home Z again to re-establish the reference
                 self._emitZSyncState(phase="homing", message="Homing Z axis")
                 self.home_z(isBlocking=True)
+                if aborted():
+                    return
+
+                # 6) return to the Z position we started from
+                self._emitZSyncState(phase="restoring",
+                                     message=f"Returning to previous Z ({zPosBefore:.0f} um)")
+                self.move(value=zPosBefore, speed=speed, axis="Z",
+                          is_absolute=True, is_blocking=True)
 
                 self._emitZSyncState(phase="done", active=False,
                                      message="Z-stage synchronisation complete")
@@ -1432,24 +1407,17 @@ class ESP32StageManager(PositionerManager):
     
     def getTMCSettingsForAxis(self, axis: str) -> dict:
         """
-        Get TMC stepper driver settings for a specific axis from the device.
+        Get TMC stepper driver settings for a specific axis.
+
+        Read from the ImSwitch-side cache ONLY — we push TMC params to the device
+        on startup and never query it back, because /tmc_get currently crashes the
+        HAT. The cache holds the config values merged over TMC_DEFAULTS.
         """
         axis = axis.upper()
         result = {'axis': axis, 'success': False}
 
-        # Start from the cached/applied settings (defaults if never set). The
-        # firmware has no reliable TMC read-back yet, so the cache is the source
-        # of truth; a successful device read (newer firmware) overrides it.
         merged = dict(self._tmcSettings.get(axis, TMC_DEFAULTS))
         try:
-            device_settings = None
-            try:
-                device_settings = self._motor.getTMCSettings(axis=axis)
-            except Exception as e:
-                self.__logger.debug(f"Device TMC read-back unavailable for {axis}: {e}")
-            if device_settings:
-                merged.update({k: v for k, v in device_settings.items() if v is not None})
-
             result['settings'] = {
                 'msteps': merged.get('msteps'),
                 'rmsCurrent': merged.get('rms_current'),
@@ -1459,9 +1427,9 @@ class ESP32StageManager(PositionerManager):
                 'blankTime': merged.get('blank_time'),
                 'toff': merged.get('toff'),
             }
-            result['source'] = 'device' if device_settings else 'cache'
+            result['source'] = 'cache'
             result['success'] = True
-            self.__logger.debug(f"Retrieved TMC settings for axis {axis} ({result['source']})")
+            self.__logger.debug(f"Retrieved cached TMC settings for axis {axis}")
         except Exception as e:
             result['error'] = str(e)
             self.__logger.error(f"Error getting TMC settings for axis {axis}: {e}")

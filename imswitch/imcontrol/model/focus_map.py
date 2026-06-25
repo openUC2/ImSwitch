@@ -125,6 +125,7 @@ class FocusMap:
         self._fit_stats = FitStats()
         self._is_fitted = False
         self._constant_z: Optional[float] = None
+        self._plane_coeffs: Optional[np.ndarray] = None  # (a, b, c): z = a*x + b*y + c
 
     # ------------------------------------------------------------------
     # Grid generation
@@ -206,6 +207,7 @@ class FocusMap:
         self._interpolator = None
         self._is_fitted = False
         self._constant_z = None
+        self._plane_coeffs = None
         self._fit_stats = FitStats()
 
     @property
@@ -284,6 +286,12 @@ class FocusMap:
             bounds_z=(float(zs.min()), float(zs.max())),
         )
 
+        # Reset any representation from a previous fit so re-fitting (e.g. after
+        # adding points) can't leave a stale constant/plane shadowing the new one.
+        self._constant_z = None
+        self._plane_coeffs = None
+        self._interpolator = None
+
         # --- Single point: constant ---
         if n == 1:
             self._constant_z = float(zs[0])
@@ -296,12 +304,23 @@ class FocusMap:
                 self._logger.info(f"FocusMap [{self.group_id}]: 1 point → constant Z={self._constant_z:.3f}")
             return self._fit_stats
 
-        # --- 2-3 points: reject for 2D fit, allow constant ---
+        # --- 2-3 points: fit a tilted plane (least squares) ---
+        # A spline/RBF surface needs >= 4 points, but 3 non-collinear points
+        # define a plane exactly and 2 points define a ramp. lstsq returns the
+        # minimum-norm plane in degenerate (collinear / 2-point) cases, so a few
+        # manually-placed points still yield a useful tilted focus surface.
         if n < 4 and self.method != "constant":
-            raise ValueError(
-                f"FocusMap [{self.group_id}]: {n} points is insufficient for a 2D surface fit. "
-                f"Need 1 point (constant) or >= 4 points. Got {n}."
-            )
+            self._fit_plane(xs, ys, zs)
+            self._compute_fit_stats(xs, ys, zs, "plane",
+                                    fallback_used=True,
+                                    fallback_reason=f"{n} points -> planar fit (need >= 4 for {self.method})")
+            self._is_fitted = True
+            if self._logger:
+                self._logger.info(
+                    f"FocusMap [{self.group_id}]: {n} points -> planar (tilted) fit, "
+                    f"MAE={self._fit_stats.mean_abs_error:.4f}"
+                )
+            return self._fit_stats
 
         if n < 4 and self.method == "constant":
             self._constant_z = float(np.mean(zs))
@@ -370,6 +389,20 @@ class FocusMap:
 
         return self._fit_stats
 
+    def _fit_plane(self, xs: np.ndarray, ys: np.ndarray, zs: np.ndarray) -> None:
+        """Least-squares tilted plane: z = a*x + b*y + c.
+
+        Used for 2-3 points, where a spline/RBF surface is not defined. For 3
+        non-collinear points this is the exact interpolating plane; for 2 points
+        or collinear points np.linalg.lstsq returns the minimum-norm solution
+        (a sensible ramp / flat surface).
+        """
+        A = np.column_stack([xs, ys, np.ones_like(xs, dtype=float)])
+        coeffs, *_ = np.linalg.lstsq(A, zs, rcond=None)
+        self._plane_coeffs = coeffs
+        self._interpolator = None
+        self._constant_z = None
+
     def _fit_spline(self, xs: np.ndarray, ys: np.ndarray, zs: np.ndarray) -> None:
         """Fit using scipy griddata (linear interpolation) as a practical spline substitute."""
         # For scattered data, use RBF-based interpolator with thin-plate spline kernel
@@ -419,6 +452,10 @@ class FocusMap:
         """Raw interpolation without offset or clamping."""
         if self._constant_z is not None:
             return self._constant_z
+
+        if self._plane_coeffs is not None:
+            a, b, c = self._plane_coeffs
+            return float(a * x + b * y + c)
 
         if self._interpolator is not None:
             point = np.array([[x, y]])

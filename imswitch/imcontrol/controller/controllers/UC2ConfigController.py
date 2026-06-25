@@ -403,6 +403,16 @@ class UC2ConfigController(ImConWidgetController):
             self.__logger.error(f"getFirmwareInfo failed: {e}")
             return {"status": "error", "message": str(e)}
 
+    @APIExport(runOnUIThread=False)
+    def getMicroscopeStandName(self):
+        """Human-readable microscope stand model (default 'openUC2 FRAME')."""
+        try:
+            if getattr(self, "_setupInfo", None) is not None:
+                return {"name": self._setupInfo.getMicroscopeStandName()}
+        except Exception as e:
+            self.__logger.error(f"getMicroscopeStandName failed: {e}")
+        return {"name": "openUC2 FRAME"}
+
     ''' Fan & board temperature '''
 
     @APIExport(runOnUIThread=False)

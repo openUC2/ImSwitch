@@ -600,8 +600,8 @@ class PositionerController(ImConWidgetController):
         """Re-synchronise the two Z motors against the mechanical stop.
 
         Drives Z out by ``steps`` µm (default from config), backs off half,
-        restores the Z limit switch and re-homes Z. Progress is pushed to the
-        frontend via the sigZStageSyncState signal.
+        restores the Z limit switch, re-homes Z and returns to the prior Z.
+        The frontend tracks progress by polling getZStageSyncState.
         """
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]

@@ -116,8 +116,6 @@ class CommunicationChannel(SignalInterface):
 
     sigHomingState = Signal(dict)  # (homingStateDict) - per-axis frame-homing progress for the frontend
 
-    sigZStageSyncState = Signal(dict)  # (zSyncStateDict) - Z-stage motor re-sync progress for the frontend
-
     sigDiskFull = Signal(dict)  # (diskInfoDict) - storage is (nearly) full; tell the user to free space
 
     sigUpdateLaserPower = Signal(dict)  # (laserPowerDict) - updates laser power values from device callbacks

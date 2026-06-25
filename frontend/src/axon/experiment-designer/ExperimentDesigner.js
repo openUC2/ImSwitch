@@ -90,6 +90,7 @@ const ExperimentDesigner = () => {
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const focusMapConfig = useSelector(focusMapSlice.getFocusMapConfig);
+  const focusMapManualPoints = useSelector(focusMapSlice.getManualPoints);
   const parameterRange = useSelector(parameterRangeSlice.getParameterRangeState);
   const positionState = useSelector(positionSlice.getPositionState);
 
@@ -292,7 +293,23 @@ const ExperimentDesigner = () => {
       scanAreas: scanConfig.scanAreas,
       scanMetadata: scanConfig.metadata,
       pointList: coordinateCalculator.convertToBackendFormat(scanConfig, experimentState).pointList,
-      focusMap: focusMapConfig.enabled ? focusMapConfig : undefined,
+      focusMap: focusMapConfig.enabled
+        ? {
+            ...focusMapConfig,
+            // In manual-map mode, carry the manually placed points so the backend
+            // can autofocus-measure their Z (for any left as "auto") and fit BEFORE
+            // the tiled scan, instead of falling back to a tiled autofocus grid.
+            ...(focusMapConfig.use_manual_map && focusMapManualPoints?.length
+              ? {
+                  points: focusMapManualPoints.map((p) => ({
+                    x: p.x,
+                    y: p.y,
+                    ...(p.z == null ? {} : { z: p.z }),
+                  })),
+                }
+              : {}),
+          }
+        : undefined,
     };
 
     apiExperimentControllerStartWellplateExperiment(experimentRequest)

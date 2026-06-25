@@ -998,23 +998,28 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     ctx.lineWidth = 2;
     ctx.lineCap = "round";
 
-    // Draw measured grid points from computed results as black crosses
-    Object.values(results).forEach((group) => {
-      const points = group?.points || [];
-      points.forEach((pt) => {
-        if (pt.x == null || pt.y == null) return;
-        const px = calcPhy2Px(pt.x);
-        const py = calcPhy2Px(pt.y);
+    // Draw measured grid points from computed results as black crosses.
+    // In manual-map mode the per-region auto grid is not used, so skip these
+    // crosses (they otherwise clutter the map with a grid) — only the manual
+    // points below matter.
+    if (!focusMapState?.config?.use_manual_map) {
+      Object.values(results).forEach((group) => {
+        const points = group?.points || [];
+        points.forEach((pt) => {
+          if (pt.x == null || pt.y == null) return;
+          const px = calcPhy2Px(pt.x);
+          const py = calcPhy2Px(pt.y);
 
-        ctx.strokeStyle = "#000000";
-        ctx.beginPath();
-        ctx.moveTo(px - crossSize, py - crossSize);
-        ctx.lineTo(px + crossSize, py + crossSize);
-        ctx.moveTo(px + crossSize, py - crossSize);
-        ctx.lineTo(px - crossSize, py + crossSize);
-        ctx.stroke();
+          ctx.strokeStyle = "#000000";
+          ctx.beginPath();
+          ctx.moveTo(px - crossSize, py - crossSize);
+          ctx.lineTo(px + crossSize, py + crossSize);
+          ctx.moveTo(px + crossSize, py - crossSize);
+          ctx.lineTo(px - crossSize, py + crossSize);
+          ctx.stroke();
+        });
       });
-    });
+    }
 
     // Draw manual points as blue filled circles with white border
     if (focusMapManualPoints && focusMapManualPoints.length > 0) {
@@ -1465,15 +1470,17 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
       (e.shiftKey && focusMapState?.config?.enabled);
     if (focusPlacementArmed) {
       const phyPos = calcPxPoint2PhyPoint(localPos);
-      const currentZ = positionState?.z ?? 0; // live position is lowercase z
+      // Z is intentionally left null for map-placed points: a single stage Z is
+      // meaningless across the map. Z is filled in by autofocus during the
+      // "Measure Z & Fit" step (or the per-row autofocus icon) before the run.
       dispatch(
         focusMapSlice.addManualPoint({
           x: phyPos.x,
           y: phyPos.y,
-          z: currentZ,
+          z: null,
         })
       );
-      console.log(`Added focus map manual point: X=${phyPos.x}, Y=${phyPos.y}, Z=${currentZ}`);
+      console.log(`Added focus map manual point: X=${phyPos.x}, Y=${phyPos.y}, Z=auto`);
       return;
     }
 

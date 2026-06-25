@@ -245,54 +245,50 @@ class ESP32StageManager(PositionerManager):
 
         # Load TMC settings from config and apply to device if configured
         try:
-            if positionerInfo.managerProperties.get('mstepsX') is not None:
-                self.setupMotorDriver(
-                    axis="X",
-                    msteps=positionerInfo.managerProperties.get('mstepsX', 16),
-                    rms_current=positionerInfo.managerProperties.get('rms_currentX', 500),
-                    sgthrs=positionerInfo.managerProperties.get('sgthrsX', 10),
-                    semin=positionerInfo.managerProperties.get('seminX', 5),
-                    semax=positionerInfo.managerProperties.get('semaxX', 2),
-                    blank_time=positionerInfo.managerProperties.get('blank_timeX', 24),
-                    toff=positionerInfo.managerProperties.get('toffX', 3),
-                    timeout=1
-                )
-            if positionerInfo.managerProperties.get('mstepsY') is not None:
-                self.setupMotorDriver(
-                    axis="Y",
-                    msteps=positionerInfo.managerProperties.get('mstepsY', 16),
-                    rms_current=positionerInfo.managerProperties.get('rms_currentY', 500),
-                    sgthrs=positionerInfo.managerProperties.get('sgthrsY', 10),
-                    semin=positionerInfo.managerProperties.get('seminY', 5),
-                    semax=positionerInfo.managerProperties.get('semaxY', 2),
-                    blank_time=positionerInfo.managerProperties.get('blank_timeY', 24),
-                    toff=positionerInfo.managerProperties.get('toffY', 3),
-                    timeout=1
-                )
-            if positionerInfo.managerProperties.get('mstepsZ') is not None:
-                self.setupMotorDriver(
-                    axis="Z",
-                    msteps=positionerInfo.managerProperties.get('mstepsZ', 16),
-                    rms_current=positionerInfo.managerProperties.get('rms_currentZ', 500),
-                    sgthrs=positionerInfo.managerProperties.get('sgthrsZ', 10),
-                    semin=positionerInfo.managerProperties.get('seminZ', 5),
-                    semax=positionerInfo.managerProperties.get('semaxZ', 2),
-                    blank_time=positionerInfo.managerProperties.get('blank_timeZ', 24),
-                    toff=positionerInfo.managerProperties.get('toffZ', 3),
-                    timeout=1
-                )
-            if positionerInfo.managerProperties.get('mstepsA') is not None:
-                self.setupMotorDriver(
-                    axis="A",
-                    msteps=positionerInfo.managerProperties.get('mstepsA', 16),
-                    rms_current=positionerInfo.managerProperties.get('rms_currentA', 500),
-                    sgthrs=positionerInfo.managerProperties.get('sgthrsA', 10),
-                    semin=positionerInfo.managerProperties.get('seminA', 5),
-                    semax=positionerInfo.managerProperties.get('semaxA', 2),
-                    blank_time=positionerInfo.managerProperties.get('blank_timeA', 24),
-                    toff=positionerInfo.managerProperties.get('toffA', 3),
-                    timeout=1
-                )
+            self.setupMotorDriver(
+                axis="X",
+                msteps=positionerInfo.managerProperties.get('mstepsX', 16),
+                rms_current=positionerInfo.managerProperties.get('rms_currentX', 500),
+                sgthrs=positionerInfo.managerProperties.get('sgthrsX', 10),
+                semin=positionerInfo.managerProperties.get('seminX', 5),
+                semax=positionerInfo.managerProperties.get('semaxX', 2),
+                blank_time=positionerInfo.managerProperties.get('blank_timeX', 24),
+                toff=positionerInfo.managerProperties.get('toffX', 3),
+                timeout=1
+            )
+            self.setupMotorDriver(
+                axis="Y",
+                msteps=positionerInfo.managerProperties.get('mstepsY', 16),
+                rms_current=positionerInfo.managerProperties.get('rms_currentY', 500),
+                sgthrs=positionerInfo.managerProperties.get('sgthrsY', 10),
+                semin=positionerInfo.managerProperties.get('seminY', 5),
+                semax=positionerInfo.managerProperties.get('semaxY', 2),
+                blank_time=positionerInfo.managerProperties.get('blank_timeY', 24),
+                toff=positionerInfo.managerProperties.get('toffY', 3),
+                timeout=1
+            )
+            self.setupMotorDriver(
+                axis="Z",
+                msteps=positionerInfo.managerProperties.get('mstepsZ', 16),
+                rms_current=positionerInfo.managerProperties.get('rms_currentZ', 500),
+                sgthrs=positionerInfo.managerProperties.get('sgthrsZ', 10),
+                semin=positionerInfo.managerProperties.get('seminZ', 5),
+                semax=positionerInfo.managerProperties.get('semaxZ', 2),
+                blank_time=positionerInfo.managerProperties.get('blank_timeZ', 24),
+                toff=positionerInfo.managerProperties.get('toffZ', 3),
+                timeout=1
+            )
+            self.setupMotorDriver(
+                axis="A",
+                msteps=positionerInfo.managerProperties.get('mstepsA', 16),
+                rms_current=positionerInfo.managerProperties.get('rms_currentA', 500),
+                sgthrs=positionerInfo.managerProperties.get('sgthrsA', 10),
+                semin=positionerInfo.managerProperties.get('seminA', 5),
+                semax=positionerInfo.managerProperties.get('semaxA', 2),
+                blank_time=positionerInfo.managerProperties.get('blank_timeA', 24),
+                toff=positionerInfo.managerProperties.get('toffA', 3),
+                timeout=1
+            )
         except Exception as e:
             self.__logger.warning(f"Could not load TMC settings from config: {e}")
 
@@ -384,7 +380,7 @@ class ESP32StageManager(PositionerManager):
     def setupMotor(self, minPos, maxPos, stepSize, backlash, axis):
         self._motor.setup_motor(axis=axis, minPos=minPos, maxPos=maxPos, stepSize=stepSize, backlash=backlash)
 
-    def setupMotorDriver(self, axis="X", msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
+    def setupMotorDriver(self, axis="X", msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=0.1):
         self._motor.set_tmc_parameters(axis=axis, msteps=msteps, rms_current=rms_current, stall_value=stall_value, sgthrs=sgthrs, semin=semin, semax=semax, blank_time=blank_time, toff=toff, timeout=timeout)
         # Remember what we applied so the frontend can read it back even though
         # the firmware has no TMC read-back command.
@@ -1043,7 +1039,7 @@ class ESP32StageManager(PositionerManager):
         except Exception as e:
             self.__logger.error(f"stopAll during Z-sync cancel failed: {e}")
 
-    def zStageSyncProcedure(self, steps=None, speed=None, is_blocking=False):
+    def zStageSyncProcedure(self, steps=None, speed=None):
         """Re-synchronise the two Z motors against the mechanical stop.
 
         Two stepper motors push the Z stage up together; if one loses steps they
@@ -1064,7 +1060,7 @@ class ESP32StageManager(PositionerManager):
         if speed is None:
             speed = self.homeSpeedZ
         # 'out' is away from the home endstop; an explicit config value overrides.
-        outSign = -1 if self.homeDirectionZ > 0 else 1
+        outSign = 1 if self.homeDirectionZ > 0 else -1
         if self._zSyncDirection:
             outSign = 1 if self._zSyncDirection > 0 else -1
         outMove = outSign * steps
@@ -1141,11 +1137,8 @@ class ESP32StageManager(PositionerManager):
                 except Exception as e:
                     self.__logger.error(f"Could not restore Z limits after sync: {e}")
 
-        if is_blocking:
-            threadFn(self)
-        else:
-            self._zSyncThread = threading.Thread(target=threadFn, args=(self,))
-            self._zSyncThread.start()
+        self._zSyncThread = threading.Thread(target=threadFn, args=(self,))
+        self._zSyncThread.start()
 
     def register_stagescan_callback(self, on_stagescan_complete_fct):
         self._motor.register_stagescan_callback(on_stagescan_complete_fct)

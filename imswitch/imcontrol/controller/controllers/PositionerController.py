@@ -596,8 +596,7 @@ class PositionerController(ImConWidgetController):
     # ========================================================================
 
     @APIExport(runOnUIThread=True)
-    def startZStageSync(self, positionerName: Optional[str] = None, steps: Optional[float] = None,
-                        isBlocking: bool = False):
+    def startZStageSync(self, positionerName: Optional[str] = None, steps: Optional[float] = None):
         """Re-synchronise the two Z motors against the mechanical stop.
 
         Drives Z out by ``steps`` µm (default from config), backs off half,
@@ -611,7 +610,7 @@ class PositionerController(ImConWidgetController):
             self.__logger.warning(f"{positionerName} does not support Z-stage sync.")
             return {"success": False, "error": "Z-stage sync not supported"}
         self.__logger.debug(f"Starting Z-stage sync for positioner {positionerName} (steps={steps})")
-        manager.zStageSyncProcedure(steps=steps, is_blocking=isBlocking)
+        manager.zStageSyncProcedure(steps=steps)
         return {"success": True}
 
     @APIExport(runOnUIThread=False)

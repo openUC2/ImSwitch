@@ -255,6 +255,8 @@ class ESP32StageManager(PositionerManager):
         # are no per-call hardcoded fallbacks to drift out of sync.
         try:
             for _ax in ("X", "Y", "Z", "A"):
+                if positionerInfo.managerProperties.get(f"msteps{_ax}") is None:
+                    continue
                 self.setupMotorDriver(axis=_ax, timeout=1, **self._tmcSettings[_ax])
         except Exception as e:
             self.__logger.warning(f"Could not apply TMC settings: {e}")

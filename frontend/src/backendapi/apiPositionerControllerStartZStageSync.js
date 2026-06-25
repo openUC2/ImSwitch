@@ -6,10 +6,9 @@ import createAxiosInstance from "./createAxiosInstance";
 const apiPositionerControllerStartZStageSync = async ({
   positionerName = null,
   steps = null,
-  isBlocking = false,
 } = {}) => {
   const axiosInstance = createAxiosInstance();
-  const params = { isBlocking };
+  const params = {};
   if (positionerName) params.positionerName = positionerName;
   if (steps !== null && steps !== undefined && steps !== "") params.steps = steps;
   const response = await axiosInstance.get(

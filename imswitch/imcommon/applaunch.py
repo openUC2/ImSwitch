@@ -73,16 +73,36 @@ def start_jupyter_kernel_in_main_thread(moduleMainControllers):
 
 
 def keep_alive_loop(moduleMainControllers):
+    DISK_FULL_THRESHOLD = 0.95  # fraction of disk used before we warn + stop
     tDiskCheck = time.time()
     while True: # TODO: have webserver signal somehow?
         try:
             emit_queued()
             time.sleep(1)
-            if time.time() - tDiskCheck > 60 and dirtools.getDiskusage() > 0.9:
-                # if the storage is full or the user presses Ctrl+C, we want to stop the experiment
-                moduleMainControllers.mapping["imcontrol"]._ImConMainController__commChannel.sigExperimentStop.emit()
+            # Check disk usage at most once per minute (also throttles the popup).
+            if time.time() - tDiskCheck > 60:
                 tDiskCheck = time.time()
-                print("Disk usage is above 90%! Experiment stopped to avoid data loss.")
+                try:
+                    diskUsage = dirtools.getDiskusage()
+                except Exception:
+                    diskUsage = 0
+                if diskUsage > DISK_FULL_THRESHOLD:
+                    commChannel = moduleMainControllers.mapping["imcontrol"]._ImConMainController__commChannel
+                    # stop any running experiment to avoid data loss
+                    commChannel.sigExperimentStop.emit()
+                    # warn the user in the frontend (popup); throttled to once/min
+                    # by the 60 s guard above
+                    try:
+                        commChannel.sigDiskFull.emit({
+                            "usage": float(diskUsage),
+                            "percent": round(float(diskUsage) * 100, 1),
+                            "threshold": DISK_FULL_THRESHOLD,
+                            "message": "Disk almost full — delete data to keep acquiring.",
+                        })
+                    except Exception as e:
+                        print(f"Could not emit sigDiskFull: {e}")
+                    print(f"Disk usage is above {int(DISK_FULL_THRESHOLD * 100)}%! "
+                          "Experiment stopped to avoid data loss.")
 
         except KeyboardInterrupt:
             exitCode = 0

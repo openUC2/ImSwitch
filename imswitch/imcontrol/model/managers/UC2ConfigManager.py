@@ -82,6 +82,18 @@ class UC2ConfigManager(SignalInterface):
             pass
         return info
 
+    def setJoystickDirection(self, axis, inverted=False, timeout=1):
+        """Invert (or un-invert) the PS-controller joystick for one motor axis.
+
+        axis: "A"/"X"/"Y"/"Z" (or 0..3). Maps to motor.set_joystick_direction.
+        """
+        return self.ESP32.motor.set_joystick_direction(axis=axis, inverted=bool(inverted), timeout=timeout)
+
+    def getJoystickDirection(self, axis=None, timeout=1):
+        """Read joystick inversion. With axis=None returns a list of
+        {axis, inverted} for all axes; otherwise the bool for that axis."""
+        return self.ESP32.motor.get_joystick_direction(axis=axis, timeout=timeout)
+
     def interruptSerialCommunication(self):
         self.ESP32.serial.interruptCurrentSerialCommunication()
 

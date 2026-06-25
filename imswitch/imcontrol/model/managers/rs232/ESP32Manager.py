@@ -46,7 +46,7 @@ class ESP32Manager:
         # and/or only ever connect to the CANopen master (requireMaster), so a
         # motor/slave board is never picked during auto-discovery.
         device_id = rs232Info.managerProperties.get('deviceID', None)
-        require_master = rs232Info.managerProperties.get('requireMaster', True)
+        require_master = rs232Info.managerProperties.get('requireMaster', False)
 
         # initialize the ESP32 device adapter
         self.__logger.info(f"Initializing ESP32 device adapter with host: {self._host}, port: {self._port}, identity: {self._identity}, serialport: {self._serialport}, baudrate: {baudrate}, deviceID: {device_id}, requireMaster: {require_master}")

@@ -8,6 +8,7 @@ import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as tileStreamSlice from "../state/slices/TileStreamSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
 import * as homingSlice from "../state/slices/HomingSlice.js";
+import * as notificationSlice from "../state/slices/NotificationSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
 import * as focusLockSlice from "../state/slices/FocusLockSlice.js";
@@ -805,6 +806,26 @@ const WebSocketHandler = () => {
           }
         } catch (error) {
           console.error("Error in sigHomingState handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigDiskFull") {
+        // Storage is (nearly) full: warn the user with a persistent error snackbar.
+        try {
+          const info = dataJson.args?.p0 || {};
+          const pct = info.percent != null ? ` (${info.percent}% used)` : "";
+          dispatch(
+            notificationSlice.setNotification({
+              message:
+                (info.message ||
+                  "Disk almost full — delete data to keep acquiring.") + pct,
+              type: "error",
+              // null -> default 10 s error toast; the backend re-emits at most
+              // once per minute so the warning re-appears until space is freed.
+              autoHideDuration: null,
+            }),
+          );
+        } catch (error) {
+          console.error("Error in sigDiskFull handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateLaserPower") {

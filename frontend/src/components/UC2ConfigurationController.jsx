@@ -14,6 +14,7 @@ import {
   Button,
   Card,
   CardContent,
+  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -50,6 +51,8 @@ import {
 } from "../utils/configValidation";
 import ConfigurationPreviewDialog from "./ConfigurationPreviewDialog";
 import ConfigurationWizard from "./ConfigurationWizard";
+import apiUC2ConfigControllerGetFirmwareInfo from "../backendapi/apiUC2ConfigControllerGetFirmwareInfo";
+import apiUC2ConfigControllerGetMicroscopeStandName from "../backendapi/apiUC2ConfigControllerGetMicroscopeStandName";
 
 const TabPanel = ({ children, value, index, ...other }) => (
   <div
@@ -73,6 +76,8 @@ const UC2ConfigurationController = () => {
   const hostPort = connectionSettings.apiPort || "8000";
 
   const [showConfigWizard, setShowConfigWizard] = React.useState(false);
+  const [firmwareInfo, setFirmwareInfo] = React.useState(null);
+  const [standName, setStandName] = React.useState("");
   const [warningDialog, setWarningDialog] = React.useState({
     open: false,
     title: "",
@@ -248,6 +253,41 @@ const UC2ConfigurationController = () => {
   useEffect(() => {
     fetchAvailableSetups();
   }, [dispatch, fetchAvailableSetups]);
+
+  // Fetch the firmware identity of the USB-connected master (refresh when the
+  // connection state flips so a reconnect/board swap is reflected).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const info = await apiUC2ConfigControllerGetFirmwareInfo();
+        if (!cancelled) {
+          setFirmwareInfo(info && info.status === "error" ? null : info);
+        }
+      } catch (err) {
+        if (!cancelled) setFirmwareInfo(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [uc2Connected]);
+
+  // Fetch the configured microscope stand model (defaults to "openUC2 FRAME").
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiUC2ConfigControllerGetMicroscopeStandName();
+        if (!cancelled && res && res.name) setStandName(res.name);
+      } catch (err) {
+        // non-fatal
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (availableSetups.length > 0) {
@@ -773,6 +813,11 @@ const UC2ConfigurationController = () => {
         <Typography variant="body1" color="text.secondary">
           Configure and manage your UC2 microscope system configurations
         </Typography>
+        {standName && (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Microscope stand: <strong>{standName}</strong>
+          </Typography>
+        )}
       </Box>
 
       {/* Connection Status */}
@@ -809,6 +854,42 @@ const UC2ConfigurationController = () => {
           )}
         </Typography>
       </Alert>
+
+      {/* Firmware identity of the USB-connected master (build date + pindef are
+          the fields that matter for telling boards/firmwares apart). */}
+      {firmwareInfo &&
+        (firmwareInfo.name || firmwareInfo.date || firmwareInfo.pindef) && (
+          <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+            <Typography variant="subtitle2" gutterBottom>
+              Master Firmware
+            </Typography>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+              {firmwareInfo.name && (
+                <Chip size="small" label={`Name: ${firmwareInfo.name}`} />
+              )}
+              {firmwareInfo.version && (
+                <Chip size="small" label={`Version: ${firmwareInfo.version}`} />
+              )}
+              {firmwareInfo.date && (
+                <Chip size="small" label={`Build: ${firmwareInfo.date}`} />
+              )}
+              {firmwareInfo.pindef && (
+                <Chip
+                  size="small"
+                  color={firmwareInfo.isMaster ? "success" : "default"}
+                  label={`Pindef: ${firmwareInfo.pindef}`}
+                />
+              )}
+              {firmwareInfo.serialport && (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`Port: ${firmwareInfo.serialport}`}
+                />
+              )}
+            </Box>
+          </Paper>
+        )}
 
       <Paper>
         <Tabs

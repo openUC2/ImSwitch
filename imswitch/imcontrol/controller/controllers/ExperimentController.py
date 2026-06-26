@@ -2956,6 +2956,17 @@ class ExperimentController(ImConWidgetController):
         # ----------------------------------------------------------
         if config.use_manual_map:
             source_fm = self._find_reusable_manual_map()
+            # If manual XY points were supplied but no fitted manual map exists
+            # yet (Z still "auto"), measure them now by autofocus at the
+            # frontend-provided XY locations — instead of falling back to a tiled
+            # autofocus grid.
+            if source_fm is None and config.points:
+                self._logger.info(
+                    f"Focus map: measuring {len(config.points)} manual point(s) "
+                    f"by autofocus before the tiled scan"
+                )
+                self._measure_focus_map_from_points(config.points, config)
+                source_fm = self._find_reusable_manual_map()
             if source_fm is not None:
                 self._logger.info(
                     f"Focus map: reusing manual map [{source_fm.group_id}] "
@@ -3292,6 +3303,95 @@ class ExperimentController(ImConWidgetController):
                 self._logger.warning(f"Failed to save focus map artifacts: {e}")
 
         return fm.to_result().to_dict()
+
+    def _measure_focus_map_from_points(self, points: List[Dict[str, Any]],
+                                       config: "FocusMapConfig",
+                                       group_id: str = "manual",
+                                       group_name: str = "Manual Points") -> Dict[str, Any]:
+        """Drive to each manual XY point, autofocus to MEASURE Z, then fit.
+
+        Unlike ``computeFocusMapFromPoints`` (which fits already-known XYZ), this
+        measures Z at each point on the backend (blocking). A point that already
+        carries a numeric ``z`` is used as-is (autofocus skipped). The fitted
+        surface is stored under ``group_id`` so it is usable via use_manual_map.
+        """
+        fm = self.focus_map_manager.get_or_create(
+            group_id=group_id, group_name=group_name,
+            method=config.method, smoothing_factor=config.smoothing_factor,
+            z_offset=config.z_offset, clamp_enabled=config.clamp_enabled,
+            z_min=config.z_min, z_max=config.z_max,
+        )
+        fm.clear_points()
+        self._logger.info(f"Focus map [{group_id}]: measuring {len(points)} manual point(s)")
+
+        for i, pt in enumerate(points):
+            if self.focus_map_manager.abort_requested:
+                self._logger.warning(f"Focus map [{group_id}]: aborted at point {i+1}/{len(points)}")
+                break
+            try:
+                gx = float(pt.get("x"))
+                gy = float(pt.get("y"))
+            except (TypeError, ValueError):
+                continue
+            z_in = pt.get("z", None)
+            try:
+                self.move_stage_xy(posX=gx, posY=gy, relative=False)
+                if z_in is not None:
+                    best_z = float(z_in)  # user-provided Z; no autofocus needed
+                else:
+                    time.sleep(0.1)  # settle
+                    best_z = self.autofocus(
+                        mode=config.af_mode, af_range=config.af_range,
+                        af_resolution=config.af_resolution, af_cropsize=config.af_cropsize,
+                        af_algorithm=config.af_algorithm, af_settle_time=config.af_settle_time,
+                        af_static_offset=config.af_static_offset, af_two_stage=config.af_two_stage,
+                        af_n_gauss=config.af_n_gauss, illuminationChannel=config.af_illumination_channel,
+                        max_attempts=config.af_max_attempts, target_focus_setpoint=config.af_target_setpoint,
+                        af_software_method=config.af_software_method,
+                        af_hc_initial_step=config.af_hc_initial_step, af_hc_min_step=config.af_hc_min_step,
+                        af_hc_step_reduction=config.af_hc_step_reduction,
+                        af_hc_max_iterations=config.af_hc_max_iterations,
+                    )
+                    if best_z is None:
+                        best_z = self.mStage.getPosition().get("Z", 0)
+                        self._logger.warning(
+                            f"Focus map [{group_id}]: autofocus failed at ({gx:.1f}, {gy:.1f}), "
+                            f"using current Z={best_z:.3f}"
+                        )
+                fm.add_point(gx, gy, float(best_z))
+                time.sleep(0.3)
+            except Exception as e:
+                self._logger.error(f"Focus map [{group_id}]: failed at ({gx:.1f}, {gy:.1f}): {e}")
+
+        try:
+            stats = fm.fit()
+            self._logger.info(
+                f"Focus map [{group_id}]: measured+fitted {stats.method}, "
+                f"MAE={stats.mean_abs_error:.4f}, n={stats.n_points}"
+            )
+        except ValueError as e:
+            self._logger.error(f"Focus map [{group_id}]: fit failed: {e}")
+        return fm.to_result().to_dict()
+
+    @APIExport(requestType="POST")
+    def measureFocusMapFromPoints(self, focusMapConfig: Optional[FocusMapConfig] = None):
+        """Autofocus-measure Z at each manual point (focusMapConfig.points) and fit.
+
+        Blocking single call (the frontend awaits it) so the measurement runs and
+        completes on the backend rather than looping per-point from the browser.
+        Stores the fitted map under "manual"; enable "Use manual map for all
+        groups" to apply it during acquisition.
+        """
+        if focusMapConfig is None:
+            focusMapConfig = FocusMapConfig(enabled=True)
+        points = focusMapConfig.points or []
+        if not points:
+            return {"error": "No manual points provided (focusMapConfig.points is empty)"}
+        focusMapConfig.af_n_gauss = 0  # speed up AF during mapping (see computeFocusMap)
+        self._focus_map_config = focusMapConfig
+        self.focus_map_manager.clear_abort()
+        result = self._measure_focus_map_from_points(points, focusMapConfig)
+        return {"manual": result}
 
     @APIExport(requestType="GET")
     def getFocusMap(self, group_id: Optional[str] = None):

@@ -388,6 +388,69 @@ class UC2ConfigController(ImConWidgetController):
             self.__logger.error(f"getBusStatus failed: {e}")
             return {"status": "error", "message": str(e)}
 
+    @APIExport(runOnUIThread=False)
+    def getFirmwareInfo(self):
+        """
+        Identity of the USB-connected ESP32 master firmware.
+
+        :return: {name, version, date, author, pindef, isMaster, connected,
+                  serialport}. The build date and pindef are the most useful
+                  fields for telling boards/firmwares apart.
+        """
+        try:
+            return self._master.UC2ConfigManager.getFirmwareInfo()
+        except Exception as e:
+            self.__logger.error(f"getFirmwareInfo failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getMicroscopeStandName(self):
+        """Human-readable microscope stand model (default 'openUC2 FRAME')."""
+        try:
+            if getattr(self, "_setupInfo", None) is not None:
+                return {"name": self._setupInfo.getMicroscopeStandName()}
+        except Exception as e:
+            self.__logger.error(f"getMicroscopeStandName failed: {e}")
+        return {"name": "openUC2 FRAME"}
+
+    ''' PS-controller joystick direction '''
+
+    @APIExport(runOnUIThread=False)
+    def setJoystickDirection(self, axis: str = "X", inverted: bool = False):
+        """
+        Invert (or un-invert) the PS-controller joystick for one motor axis.
+
+        :param axis: Axis name ("A", "X", "Y", "Z").
+        :param inverted: True to reverse joystick movement for that axis.
+        """
+        try:
+            self._master.UC2ConfigManager.setJoystickDirection(axis=axis, inverted=inverted)
+            return {"status": "success", "axis": str(axis).upper(), "inverted": bool(inverted)}
+        except Exception as e:
+            self.__logger.error(f"setJoystickDirection failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getJoystickDirection(self):
+        """
+        Read the joystick inversion per axis.
+
+        :return: {"A": bool, "X": bool, "Y": bool, "Z": bool} (axes the device reports).
+        """
+        idx_to_name = {0: "A", 1: "X", 2: "Y", 3: "Z"}
+        result = {}
+        try:
+            raw = self._master.UC2ConfigManager.getJoystickDirection(axis=None)
+            if isinstance(raw, list):
+                for entry in raw:
+                    name = idx_to_name.get(entry.get("axis"))
+                    if name:
+                        result[name] = bool(entry.get("inverted", False))
+            return result
+        except Exception as e:
+            self.__logger.error(f"getJoystickDirection failed: {e}")
+            return {"status": "error", "message": str(e)}
+
     ''' Fan & board temperature '''
 
     @APIExport(runOnUIThread=False)

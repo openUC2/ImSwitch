@@ -195,6 +195,11 @@ class StreamWorker(Worker):
         # the shape changes. ``None`` until first use.
         self._u8_buf: Optional[np.ndarray] = None
         self._u16_tmp: Optional[np.ndarray] = None
+        # Right-shift used to map uint16 → uint8. 4 == 12-bit sensor (the common
+        # case). For >12-bit cameras (14/16-bit) a fixed >>4 overflows the uint8
+        # cast and the image "wraps"; we ratchet this up from the observed data
+        # max so deeper cameras scale correctly (never down, to avoid flicker).
+        self._u16_shift = 4
 
     def _u16_to_u8_no_alloc(self, src: np.ndarray) -> np.ndarray:
         """Convert ``src`` (uint16) → uint8 via ``>> 4`` without allocating.
@@ -215,11 +220,23 @@ class StreamWorker(Worker):
                 or self._u8_buf.shape != src.shape):
             self._u8_buf = np.empty(src.shape, dtype=np.uint8)
             self._u16_tmp = np.empty(src.shape, dtype=np.uint16)
+        # Pick a right-shift that maps the data into 0..255 without wrapping.
+        # >>4 is correct for a 12-bit sensor; for >12-bit data the uint8 cast
+        # would otherwise overflow (modulo-256 "wrapping"). Derive the minimum
+        # shift from the largest value seen (maxval >> shift <= 255) and ratchet
+        # it up only, so a deeper camera scales correctly without per-frame
+        # brightness flicker. The reduction runs on the already cropped+subsampled
+        # frame, so it is cheap.
+        maxval = int(src.max())
+        if maxval > 0:
+            needed = maxval.bit_length() - 8
+            if needed > self._u16_shift:
+                self._u16_shift = needed
         # Two passes over the data, zero allocations. ``np.right_shift``
         # requires matching dtypes for ``out``, hence the u16 scratch
         # buffer plus ``np.copyto`` with ``casting='unsafe'`` for the
         # truncation to u8.
-        np.right_shift(src, 4, out=self._u16_tmp)
+        np.right_shift(src, self._u16_shift, out=self._u16_tmp)
         np.copyto(self._u8_buf, self._u16_tmp, casting='unsafe')
         return self._u8_buf
 

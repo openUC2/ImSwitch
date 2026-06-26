@@ -8,6 +8,8 @@ import apiUC2ConfigControllerSetBusPower from "../backendapi/apiUC2ConfigControl
 import apiUC2ConfigControllerGetFanState from "../backendapi/apiUC2ConfigControllerGetFanState";
 import apiUC2ConfigControllerSetFanMode from "../backendapi/apiUC2ConfigControllerSetFanMode";
 import apiUC2ConfigControllerGetBoardTemperature from "../backendapi/apiUC2ConfigControllerGetBoardTemperature";
+import apiUC2ConfigControllerGetJoystickDirection from "../backendapi/apiUC2ConfigControllerGetJoystickDirection";
+import apiUC2ConfigControllerSetJoystickDirection from "../backendapi/apiUC2ConfigControllerSetJoystickDirection";
 import {
   Box,
   Typography,
@@ -45,6 +47,7 @@ import {
   AutoFixHigh as WizardIcon,
   Usb as UsbIcon,
   Bluetooth as BluetoothIcon,
+  Gamepad,
   LightbulbOutlined as LedIcon,
   Bolt as BoltIcon,
   Air as AirIcon,
@@ -89,6 +92,43 @@ const SystemUpdateController = () => {
   // UC2 Hardware Control toggle
   const [enableHardwareControl, setEnableHardwareControl] = useState(false);
 
+  // PS-controller joystick direction (per-axis inversion)
+  const JOYSTICK_AXES = ["X", "Y", "Z", "A"];
+  const [joystickDir, setJoystickDir] = useState({});
+  const [joystickBusy, setJoystickBusy] = useState(false);
+
+  const loadJoystickDir = async () => {
+    if (!isBackendConnected) return;
+    try {
+      const dirs = await apiUC2ConfigControllerGetJoystickDirection();
+      if (dirs && typeof dirs === "object" && !dirs.status) {
+        setJoystickDir(dirs);
+      }
+    } catch (e) {
+      // non-fatal; firmware may not report joystick state
+    }
+  };
+
+  const handleSetJoystick = async (axis, inverted) => {
+    // Optimistic update, then persist to the device.
+    setJoystickDir((prev) => ({ ...prev, [axis]: inverted }));
+    try {
+      setJoystickBusy(true);
+      await apiUC2ConfigControllerSetJoystickDirection(axis, inverted);
+    } catch (e) {
+      dispatch(
+        setNotification({
+          message: `Failed to set joystick direction for ${axis}: ${e.message || e}`,
+          type: "error",
+        }),
+      );
+      // revert on failure
+      setJoystickDir((prev) => ({ ...prev, [axis]: !inverted }));
+    } finally {
+      setJoystickBusy(false);
+    }
+  };
+
   // --- USB serial override state (lives inside UC2 Hardware Control card) ---
   const [serialPorts, setSerialPorts] = useState([]);
   const [overridePort, setOverridePort] = useState("");
@@ -119,6 +159,14 @@ const SystemUpdateController = () => {
   useEffect(() => {
     if (enableHardwareControl && isBackendConnected && serialPorts.length === 0) {
       loadSerialPorts();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enableHardwareControl, isBackendConnected]);
+
+  // Load joystick directions when hardware control becomes available.
+  useEffect(() => {
+    if (enableHardwareControl && isBackendConnected) {
+      loadJoystickDir();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enableHardwareControl, isBackendConnected]);
@@ -465,6 +513,36 @@ const SystemUpdateController = () => {
             >
               Bluetooth Pairing
             </Button>
+          </Box>
+
+          {/* Joystick direction (PS controller) */}
+          <Divider sx={{ my: 3 }} />
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+            <Gamepad color="action" fontSize="small" />
+            <Typography variant="subtitle2">Joystick Direction</Typography>
+          </Box>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            Invert the PS-controller joystick per axis if it drives the stage the
+            wrong way.
+          </Typography>
+          <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+            {JOYSTICK_AXES.map((axis) => (
+              <FormControlLabel
+                key={axis}
+                control={
+                  <Switch
+                    checked={!!joystickDir[axis]}
+                    disabled={
+                      !enableHardwareControl ||
+                      !isBackendConnected ||
+                      joystickBusy
+                    }
+                    onChange={(e) => handleSetJoystick(axis, e.target.checked)}
+                  />
+                }
+                label={`${axis} inverted`}
+              />
+            ))}
           </Box>
 
           {/* USB connection override */}

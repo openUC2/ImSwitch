@@ -591,6 +591,50 @@ class PositionerController(ImConWidgetController):
         self._master.positionersManager[positionerName].forceStop("all")
         return {"success": True}
 
+    # ========================================================================
+    # Z-stage synchronisation (re-sync the two Z motors against a mechanical stop)
+    # ========================================================================
+
+    @APIExport(runOnUIThread=True)
+    def startZStageSync(self, positionerName: Optional[str] = None, steps: Optional[float] = None):
+        """Re-synchronise the two Z motors against the mechanical stop.
+
+        Drives Z out by ``steps`` µm (default from config), backs off half,
+        restores the Z limit switch, re-homes Z and returns to the prior Z.
+        The frontend tracks progress by polling getZStageSyncState.
+        """
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if not hasattr(manager, 'zStageSyncProcedure'):
+            self.__logger.warning(f"{positionerName} does not support Z-stage sync.")
+            return {"success": False, "error": "Z-stage sync not supported"}
+        self.__logger.debug(f"Starting Z-stage sync for positioner {positionerName} (steps={steps})")
+        manager.zStageSyncProcedure(steps=steps)
+        return {"success": True}
+
+    @APIExport(runOnUIThread=False)
+    def cancelZStageSync(self, positionerName: Optional[str] = None):
+        """Stop an in-progress Z-stage sync run and halt all motors."""
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if hasattr(manager, 'cancelZStageSync'):
+            self.__logger.debug(f"Cancelling Z-stage sync for positioner {positionerName}")
+            manager.cancelZStageSync()
+            return {"success": True}
+        return {"success": False, "error": "Z-stage sync not supported"}
+
+    @APIExport(runOnUIThread=False)
+    def getZStageSyncState(self, positionerName: Optional[str] = None):
+        """Return the current Z-stage sync progress state."""
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if hasattr(manager, 'getZStageSyncState'):
+            return manager.getZStageSyncState()
+        return {"active": False, "phase": "idle", "message": "", "cancelled": False, "steps": 0}
+
     def saveTransportPosition(self, positionerName: str):
         """Persist the transport position to the setup JSON managerProperties.
 

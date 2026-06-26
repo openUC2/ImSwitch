@@ -528,9 +528,16 @@ const LiveViewComponent = ({
         }, canvas width: ${canvas.width})`,
       );
 
-      // Move to the calculated position
-      // Note: Y direction might need to be inverted depending on stage orientation
-      moveToPosition(-realX, -realY); // Inverting Y as microscope Y often goes opposite to image Y
+      // Sign mapping from image axes to stage axes (same convention as
+      // LiveViewControlWrapper): both inverted so the clicked feature moves to
+      // the centre. Flip the relevant constant per hardware if an axis goes the
+      // wrong way.
+      const IMAGE_TO_STAGE_SIGN_X = 1;
+      const IMAGE_TO_STAGE_SIGN_Y = 1;
+      moveToPosition(
+        IMAGE_TO_STAGE_SIGN_X * realX,
+        IMAGE_TO_STAGE_SIGN_Y * realY,
+      );
     },
     [onDoubleClick, getAdaptivePixelSize, moveToPosition, objectiveState.fovX],
   );

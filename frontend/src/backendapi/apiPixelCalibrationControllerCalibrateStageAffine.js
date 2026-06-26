@@ -4,7 +4,7 @@ import createAxiosInstance from './createAxiosInstance';
 const apiPixelCalibrationControllerCalibrateStageAffine = async ({
   detectorName = null,
   objectiveId = null,
-  stepSizeUm = 100.0,
+  stepSizeUm = 50.0,
   pattern = 'cross',
   nSteps = 4,
   backlashUm = 0.0,

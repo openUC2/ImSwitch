@@ -352,7 +352,7 @@ class PixelCalibrationController(LiveUpdatedController):
         self,
         detectorName: str = None,
         objectiveId: str = None,
-        stepSizeUm: float = 100.0,
+        stepSizeUm: float = 50.0,
         pattern: str = "cross",
         nSteps: int = 1,
         crop_size: int = 1024,
@@ -1106,6 +1106,7 @@ class PixelCalibrationClass:
 
         if mFrame.ndim > 2:
             mFrame = np.mean(mFrame, axis=2)
+            mFrame = (mFrame/np.max(mFrame) * 255).astype(np.uint8)
         cropped = np.array(nip.extract(mFrame, (crop_size, crop_size)))
         if returnFrameNumber:
             return cropped, cur_fn
@@ -1133,7 +1134,7 @@ class PixelCalibrationClass:
         step_size_um: float = 100.0,
         pattern: str = "cross",
         n_steps: int = 4,
-        settle_time: float = 0.2,
+        settle_time: float = 0.5,
         crop_size: int = 1024,
         isDEBUG: bool = False,
         backlash_um: float = 0.0,

@@ -42,7 +42,7 @@ const PixelCalibrationTab = () => {
   const [availableDetectors, setAvailableDetectors] = useState([]);
   // Objective: 'current' = active slot, '0', '1' (string so it survives the round-trip).
   const [objectiveId, setObjectiveId] = useState('current');
-  const [stepSizeUm, setStepSizeUm] = useState(100.0);
+  const [stepSizeUm, setStepSizeUm] = useState(50.0);
   const [pattern, setPattern] = useState('cross');
   const [nSteps, setNSteps] = useState(4);
   const [backlashUm, setBacklashUm] = useState(50.0);

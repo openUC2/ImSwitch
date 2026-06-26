@@ -906,8 +906,6 @@ class ESP32StageManager(PositionerManager):
                 # the safe lift (avoids re-introducing the collision risk at the new XY).
                 self._emitHomingState(phase="restoring_z", message="Restoring Z position")
                 restoreZ = self._zPositionPriorHoming
-                if abs(restoreZ) < abs(safeLift):
-                    restoreZ = safeLift
                 self.move(value=restoreZ, speed=self.homeSpeedZ, axis="Z",
                           is_absolute=True, is_blocking=True)
 

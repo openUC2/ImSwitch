@@ -203,8 +203,8 @@ class PixelCalibrationController(LiveUpdatedController):
         scale_x = float(metrics.get("scale_x_um_per_pixel", 1.0))
         scale_y = float(metrics.get("scale_y_um_per_pixel", 1.0))
         avg_pixel_size = (abs(scale_x) + abs(scale_y)) / 2.0
-        flip_x = scale_x > 0
-        flip_y = scale_y > 0
+        flip_x = scale_x < 0
+        flip_y = scale_y < 0
 
         if hasattr(detector, "setFlipImage"):
             try:

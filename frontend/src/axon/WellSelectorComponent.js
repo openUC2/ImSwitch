@@ -11,6 +11,8 @@ import InfoPopup from "./InfoPopup.js";
 import * as wellSelectorSlice from "../state/slices/WellSelectorSlice.js";
 import * as experimentSlice from "../state/slices/ExperimentSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
+import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js";
+import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
@@ -63,6 +65,27 @@ const WellSelectorComponent = () => {
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const positionState = useSelector(positionSlice.getPositionState);
+  const overviewRegState = useSelector(
+    overviewRegSlice.getOverviewRegistrationState,
+  );
+
+  // Toggle the Overview camera overlay (stitched overview image) on the plate
+  // map; lazily fetch the overlay data the first time it is switched on.
+  const handleToggleOverviewOverlay = async () => {
+    const next = !overviewRegState.overlayEnabled;
+    dispatch(overviewRegSlice.setOverlayEnabled(next));
+    const slides = overviewRegState.overlayData?.slides;
+    if (next && (!slides || Object.keys(slides).length === 0)) {
+      try {
+        const cam = overviewRegState.cameraName || "";
+        const layout = overviewRegState.layoutName || "Heidstar 4x Histosample";
+        const data = await apiGetOverviewOverlayData(cam, layout);
+        dispatch(overviewRegSlice.setOverlayData(data));
+      } catch (e) {
+        // best-effort; the Overview tab can load/refresh the overlay explicitly
+      }
+    }
+  };
 
   // Opening the wellplate view should refresh the objective state so the
   // current pixel size / FOV (which drives tiling, overlap and freehand step
@@ -423,6 +446,16 @@ const WellSelectorComponent = () => {
           <Tooltip title="Calibrate the stage offset: right-click the map where the camera currently is and choose 'We are here'." arrow>
             <Button size="small" variant="outlined" startIcon={<GpsFixedIcon />} onClick={() => handleCalibrateOffset()}>
               Calibrate
+            </Button>
+          </Tooltip>
+          <Tooltip title="Show/hide the Overview camera overlay (stitched overview image) on the plate map." arrow>
+            <Button
+              size="small"
+              variant={overviewRegState.overlayEnabled ? "contained" : "outlined"}
+              color="secondary"
+              onClick={handleToggleOverviewOverlay}
+            >
+              {overviewRegState.overlayEnabled ? "Overlay on" : "Overlay off"}
             </Button>
           </Tooltip>
         </Box>

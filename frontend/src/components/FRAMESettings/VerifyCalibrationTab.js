@@ -323,12 +323,12 @@ const VerifyCalibrationTab = () => {
 
             {/* D-pad */}
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 1 }}>
-              {dirBtn(<ArrowUpward />, `Move +${moveDistanceUm} µm in Y`, 0, moveDistanceUm)}
+              {dirBtn(<ArrowUpward />, `Move -${moveDistanceUm} µm in Y`, 0, -moveDistanceUm)}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                {dirBtn(<ArrowBack />, `Move -${moveDistanceUm} µm in X`, -moveDistanceUm, 0)}
-                {dirBtn(<ArrowForward />, `Move +${moveDistanceUm} µm in X`, moveDistanceUm, 0)}
+                {dirBtn(<ArrowBack />, `Move +${moveDistanceUm} µm in X`, moveDistanceUm, 0)}
+                {dirBtn(<ArrowForward />, `Move ${moveDistanceUm} µm in X`, -moveDistanceUm, 0)}
               </Box>
-              {dirBtn(<ArrowDownward />, `Move -${moveDistanceUm} µm in Y`, 0, -moveDistanceUm)}
+              {dirBtn(<ArrowDownward />, `Move +${moveDistanceUm} µm in Y`, 0, moveDistanceUm)}
             </Box>
 
             <Divider sx={{ my: 1.5 }} />

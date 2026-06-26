@@ -4,6 +4,7 @@ import { Tabs, Tab, Box } from "@mui/material";
 import SetLasersTab from "./FRAMESettings/SetLasersTab";
 import TestHomingTab from "./FRAMESettings/TestHomingTab";
 import FrameHomingTab from "./FRAMESettings/FrameHomingTab";
+import ZStageSyncTab from "./FRAMESettings/ZStageSyncTab";
 import PixelCalibrationTab from "./FRAMESettings/PixelCalibrationTab";
 import ManualPixelCalibrationTab from "./FRAMESettings/ManualPixelCalibrationTab";
 import VerifyCalibrationTab from "./FRAMESettings/VerifyCalibrationTab";
@@ -69,6 +70,7 @@ const FRAMESettings = () => {
         <Tab value="setLasers" label="Set Lasers" />
         <Tab value="testHoming" label="Test Homing" />
         <Tab value="frameHoming" label="Frame Homing & Transport" />
+        <Tab value="zStageSync" label="Z-Stage Sync" />
         {hasObjectiveController && (
           <Tab value="objective" label="Objective Controller" />
         )}
@@ -84,6 +86,7 @@ const FRAMESettings = () => {
         {selectedTab === "setLasers" && <SetLasersTab />}
         {selectedTab === "testHoming" && <TestHomingTab />}
         {selectedTab === "frameHoming" && <FrameHomingTab />}
+        {selectedTab === "zStageSync" && <ZStageSyncTab />}
         {hasObjectiveController && selectedTab === "objective" && (
           <ExtendedObjectiveController />
         )}

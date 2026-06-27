@@ -518,8 +518,8 @@ export const wellLayoutDevelopment = {
       name: "Slide4",
     },    
     {
-      x: 40750,
-      y: 68000,
+      x: 18400,
+      y: 12600+37000-9000,
       shape: "circle",
       radius: 1000,
       name: "calibration",

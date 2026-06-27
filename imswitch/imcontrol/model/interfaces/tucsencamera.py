@@ -457,6 +457,7 @@ class CameraTucsen:
             TUCAMVALUEINFO = TUCAM_VALUE_INFO(m_infoid.TUIDI_CAMERA_MODEL.value, 0, 0, 0)
             TUCAM_Dev_GetInfo(self.TUCAMOPEN.hIdxTUCam, pointer(TUCAMVALUEINFO))
             self.__logger.info('Camera Name:%#s' % TUCAMVALUEINFO.pText)
+            CameraName = TUCAMVALUEINFO.pText.decode('utf-8') if TUCAMVALUEINFO.pText else "Unknown"
             # Query the width using TUIDI_CURRENT_WIDTH (reports physical sensor pixels)
             TUCAMVALUE_WIDTH = TUCAM_VALUE_INFO(m_infoid.TUIDI_CURRENT_WIDTH.value, 0, 0, 0)
             TUCAM_Dev_GetInfo(self.TUCAMOPEN.hIdxTUCam, pointer(TUCAMVALUE_WIDTH))
@@ -493,7 +494,10 @@ class CameraTucsen:
             self.__logger.warning(f"Sensor info fallback: {e}")
             self.SensorWidth = 1500
             self.SensorHeight = 1500
-
+        if CameraName == "Libra 16":
+            self.SensorWidth = 1500
+            self.SensorHeight = 1500
+            self.__logger.debug("Libra 16 detected, overriding sensor dimensions to 1500x1500")
         self.shape = (self.SensorHeight, self.SensorWidth)
 
     def openPropertiesGUI(self):

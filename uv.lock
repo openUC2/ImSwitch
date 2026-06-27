@@ -2011,7 +2011,7 @@ requires-dist = [
     { name = "smbus", marker = "extra == 'lepmon'" },
     { name = "smbus2", marker = "extra == 'lepmon'" },
     { name = "tifffile", specifier = ">=2020.11.26" },
-    { name = "uc2-rest", specifier = ">=0.2.0.33" },
+    { name = "uc2-rest", specifier = ">=0.2.0.36" },
     { name = "unitelabs-cdk" },
     { name = "unitelabs-sila" },
     { name = "useq-schema" },

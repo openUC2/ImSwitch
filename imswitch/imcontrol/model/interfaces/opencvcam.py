@@ -8,13 +8,16 @@ from threading import Thread
 import collections
 
 class CameraOpenCV:
-    def __init__(self, cameraindex=0, isRGB=False, isAutoParameters=True):
+    def __init__(self, cameraindex=0, isRGB=False, isAutoParameters=True, flipImage=(False, False)):
         super().__init__()
         # we are aiming to interface with webcams or arducams
         self.__logger = initLogger(self, tryInheritParent=False)
 
         # many to be purged
         self.model = "CameraOpenCV"
+
+        # flip control: (flipY, flipX)
+        self.flipImage = flipImage
 
         # camera parameters
         self.blacklevel = 0
@@ -113,6 +116,10 @@ class CameraOpenCV:
     def set_pixel_format(self,format):
         self.pixelformat = format
         self.__logger.debug("Error setting pixelformat time in opencv camera")
+
+    def setFlipImage(self, flipY: bool, flipX: bool):
+        """Set flip settings applied to every captured frame."""
+        self.flipImage = (flipY, flipX)
 
     def getLast(self, is_resize=True, returnFrameNumber=False):
         # get frame and save
@@ -451,7 +458,12 @@ class CameraOpenCV:
                 if not isRGB and len(frame.shape) > 2:
                     frame = np.uint8(np.mean(frame, -1))
 
-                self.frame = np.flip(frame)
+                # Apply flip based on flipImage settings
+                if self.flipImage[0]:
+                    frame = np.flipud(frame)
+                if self.flipImage[1]:
+                    frame = np.fliplr(frame)
+                self.frame = frame
                 self.frame_buffer.append(self.frame)
 
             except Exception as e:

@@ -152,7 +152,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         initial_z_position = kwargs.get('initial_z_position', None)
         t_period = kwargs.get('t_period', 1)
         # Timing parameters from GUI (used for settle/exposure waits)
-        t_pre_s = kwargs.get('t_pre_s', 0.09)  # Pre-exposure settle time in seconds
+        t_pre_s = np.max((kwargs.get('t_pre_s', 0.09), 0.02))  # Pre-exposure settle time in seconds
         t_post_s = kwargs.get('t_post_s', 0.05)  # Post-exposure time in seconds
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points

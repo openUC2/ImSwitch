@@ -388,6 +388,69 @@ class UC2ConfigController(ImConWidgetController):
             self.__logger.error(f"getBusStatus failed: {e}")
             return {"status": "error", "message": str(e)}
 
+    @APIExport(runOnUIThread=False)
+    def getFirmwareInfo(self):
+        """
+        Identity of the USB-connected ESP32 master firmware.
+
+        :return: {name, version, date, author, pindef, isMaster, connected,
+                  serialport}. The build date and pindef are the most useful
+                  fields for telling boards/firmwares apart.
+        """
+        try:
+            return self._master.UC2ConfigManager.getFirmwareInfo()
+        except Exception as e:
+            self.__logger.error(f"getFirmwareInfo failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getMicroscopeStandName(self):
+        """Human-readable microscope stand model (default 'openUC2 FRAME')."""
+        try:
+            if getattr(self, "_setupInfo", None) is not None:
+                return {"name": self._setupInfo.getMicroscopeStandName()}
+        except Exception as e:
+            self.__logger.error(f"getMicroscopeStandName failed: {e}")
+        return {"name": "openUC2 FRAME"}
+
+    ''' PS-controller joystick direction '''
+
+    @APIExport(runOnUIThread=False)
+    def setJoystickDirection(self, axis: str = "X", inverted: bool = False):
+        """
+        Invert (or un-invert) the PS-controller joystick for one motor axis.
+
+        :param axis: Axis name ("A", "X", "Y", "Z").
+        :param inverted: True to reverse joystick movement for that axis.
+        """
+        try:
+            self._master.UC2ConfigManager.setJoystickDirection(axis=axis, inverted=inverted)
+            return {"status": "success", "axis": str(axis).upper(), "inverted": bool(inverted)}
+        except Exception as e:
+            self.__logger.error(f"setJoystickDirection failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getJoystickDirection(self):
+        """
+        Read the joystick inversion per axis.
+
+        :return: {"A": bool, "X": bool, "Y": bool, "Z": bool} (axes the device reports).
+        """
+        idx_to_name = {0: "A", 1: "X", 2: "Y", 3: "Z"}
+        result = {}
+        try:
+            raw = self._master.UC2ConfigManager.getJoystickDirection(axis=None)
+            if isinstance(raw, list):
+                for entry in raw:
+                    name = idx_to_name.get(entry.get("axis"))
+                    if name:
+                        result[name] = bool(entry.get("inverted", False))
+            return result
+        except Exception as e:
+            self.__logger.error(f"getJoystickDirection failed: {e}")
+            return {"status": "error", "message": str(e)}
+
     ''' Fan & board temperature '''
 
     @APIExport(runOnUIThread=False)
@@ -437,22 +500,34 @@ class UC2ConfigController(ImConWidgetController):
             return {}
 
     @APIExport(runOnUIThread=False)
-    def scan_canbus(self, timeout:int=5) -> dict:
+    def scan_canbus(self, timeout:int=5, probe_range:bool=False) -> dict:
         """
         Scan the CAN bus for connected devices.
 
+        Reachable nodes report their firmware ``build`` timestamp, ``fwVersion``
+        and ``mac`` (SDO-probed by the master); the master's own identity is in
+        the ``master`` key.
+
         :param timeout: Timeout for the scan in seconds (default: 5)
-        :return: List of detected CAN IDs
-        
+        :param probe_range: if True, also probe node-ids 1..127 to discover
+            freshly flashed / unrouted boards (reported with
+            deviceTypeStr "unrouted"). Use before reassigning a node by MAC.
+        :return: dict with scan results
+
         returns:
         {
+            "master": {"canId": 1, "build": "Jun 23 2026 06:18:16",
+                       "fwVersion": "UC2-ESP v2.0", "mac": "6C:C8:40:45:C1:B0"},
             "scan": [
                 {
                 "canId": 20,
                 "deviceType": 1,
                 "status": 0,
                 "deviceTypeStr": "laser",
-                "statusStr": "idle"
+                "statusStr": "idle",
+                "build": "Jun 23 2026 08:06:05",
+                "fwVersion": "UC2-ESP v2.0",
+                "mac": "D8:3B:DA:A4:4D:C8"
                 }
             ],
             "detected_ids": [20],
@@ -463,11 +538,18 @@ class UC2ConfigController(ImConWidgetController):
         try:
             if not hasattr(self._master.UC2ConfigManager, "ESP32") or not hasattr(self._master.UC2ConfigManager.ESP32, "can"):
                 self.__logger.error("CAN bus module not available in UC2 client")
-                return []
-
-            self.__logger.debug("Starting CAN bus scan...")
-            return_message = self._master.UC2ConfigManager.ESP32.can.scan(timeout=timeout)
-            scan_results = return_message[-1]
+                return {}
+            self.__logger.debug(f"Starting CAN bus scan (probe_range={probe_range})...")
+            can = self._master.UC2ConfigManager.ESP32.can
+            try:
+                return_message = can.scan(timeout=timeout, probe_range=probe_range)
+            except TypeError as e:
+                # Older uc2rest without probe_range support
+                self.__logger.error(e)
+                return_message = can.scan(timeout=timeout)
+            scan_results = return_message[-1] if isinstance(return_message, (list, tuple)) else return_message
+            if not isinstance(scan_results, dict):
+                scan_results = {}
             detected_ids = [device["canId"] for device in scan_results.get("scan", [])]
             scan_results["detected_ids"] = detected_ids
             self.__logger.info(f"Detected CAN devices: {detected_ids}")
@@ -476,6 +558,58 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Error scanning CAN bus: {e}")
             return {}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def reassignCANId(self, new_id:int, mac:str=None, target:int=None,
+                      expect_mac:str=None, timeout:int=5) -> dict:
+        """
+        Reassign a CAN node's id over the bus (no reflash / USB needed).
+
+        Identify the node EITHER by its MAC (``mac`` — recommended: the master
+        finds whichever id currently advertises that MAC, so you don't need to
+        know the current id) OR by its current id (``target``, optionally
+        guarded by ``expect_mac``). ``new_id`` is always the desired new id.
+
+        The device persists the new id to NVS and resets its CANopen comms, so
+        it reappears at ``new_id`` after ~0.3 s. Re-scan afterwards to confirm.
+
+        :param new_id: desired CAN id (1..127)
+        :param mac: target MAC "AA:BB:CC:DD:EE:FF" (preferred)
+        :param target: current CAN id of the node (alternative to ``mac``)
+        :param expect_mac: when using ``target``, verify the MAC before committing
+        :param timeout: command timeout in seconds
+        :return: firmware response, e.g. {"status":"ok","target":60,"newId":70,"mac":"..."}
+                 or {"status":"error","error":"MAC not found on bus","mac":"..."}
+        """
+        try:
+            if not hasattr(self._master.UC2ConfigManager, "ESP32") or not hasattr(self._master.UC2ConfigManager.ESP32, "can"):
+                return {"status": "error", "message": "CAN bus module not available"}
+            esp32 = self._master.UC2ConfigManager.ESP32
+
+            # Build the firmware command and post it directly, so this works
+            # regardless of the installed uc2rest version (only the firmware
+            # needs to understand "byMac").
+            payload = {"task": "/can_act", "setRemoteNodeId": int(new_id)}
+            if mac:
+                self.__logger.info(f"Reassigning node with MAC {mac} -> CAN id {new_id}")
+                payload["byMac"] = str(mac)
+            elif target is not None:
+                self.__logger.info(f"Reassigning node {target} -> CAN id {new_id}")
+                payload["target"] = int(target)
+                if expect_mac:
+                    payload["expectMac"] = str(expect_mac)
+            else:
+                return {"status": "error", "message": "provide either 'mac' or 'target'"}
+
+            resp = esp32.post_json("/can_act", payload, getReturn=True,
+                                   timeout=timeout, nResponses=1)
+            result = resp[-1] if isinstance(resp, (list, tuple)) and resp else resp
+            self.__logger.info(f"reassignCANId result: {result}")
+            return result if isinstance(result, dict) else {"status": "success", "response": result}
+
+        except Exception as e:
+            self.__logger.error(f"reassignCANId failed: {e}")
+            return {"status": "error", "message": str(e)}
 
     @APIExport(runOnUIThread=False)
     def get_canbus_devices(self, timeout:int=2):

@@ -28,6 +28,7 @@ import {
   Build,
   Article,
   School,
+  DesktopWindows,
 } from "@mui/icons-material";
 import { useDeveloperMode } from "../../utils/useDeveloperMode";
 
@@ -515,6 +516,16 @@ const SettingsMenu = ({ onNavigate }) => {
           <ListItemText
             primary="Start Intro Tour"
             secondary="Replay the guided first-run tour"
+          />
+        </MenuItem>
+
+        <MenuItem onClick={() => handleNavigationClick("DesktopApp")}>
+          <ListItemIcon>
+            <DesktopWindows fontSize="small" color="primary" />
+          </ListItemIcon>
+          <ListItemText
+            primary="Desktop App"
+            secondary="Install and uninstall PWA app"
           />
         </MenuItem>
 

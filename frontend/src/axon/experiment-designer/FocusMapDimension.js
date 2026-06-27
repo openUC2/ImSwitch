@@ -49,6 +49,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import SaveIcon from "@mui/icons-material/Save";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import CenterFocusStrongIcon from "@mui/icons-material/CenterFocusStrong";
+import HeightIcon from "@mui/icons-material/Height";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import GpsFixedIcon from "@mui/icons-material/GpsFixed";
@@ -72,6 +73,7 @@ import apiExperimentControllerClearFocusMap from "../../backendapi/apiExperiment
 import apiExperimentControllerGetFocusMapPreview from "../../backendapi/apiExperimentControllerGetFocusMapPreview";
 import apiExperimentControllerInterruptFocusMap from "../../backendapi/apiExperimentControllerInterruptFocusMap";
 import apiExperimentControllerComputeFocusMapFromPoints from "../../backendapi/apiExperimentControllerComputeFocusMapFromPoints";
+import apiExperimentControllerMeasureFocusMapFromPoints from "../../backendapi/apiExperimentControllerMeasureFocusMapFromPoints";
 import apiExperimentControllerSaveFocusMaps from "../../backendapi/apiExperimentControllerSaveFocusMaps";
 import apiExperimentControllerLoadFocusMaps from "../../backendapi/apiExperimentControllerLoadFocusMaps";
 import apiPositionerControllerMovePositioner from "../../backendapi/apiPositionerControllerMovePositioner";
@@ -131,6 +133,7 @@ const FocusMapDimension = () => {
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const showOverlayOnWellplate = useSelector(focusMapSlice.getShowOverlayOnWellplate);
+  const manualPlacementActive = useSelector(focusMapSlice.getManualPlacementActive);
 
   // Detect mutual exclusion: per-position AF enabled while Focus Map is also enabled
   const isAutoFocusPerPosition = parameterValue.autoFocus === true;
@@ -395,6 +398,122 @@ const FocusMapDimension = () => {
     },
     [parameterValue, results, dispatch]
   );
+
+  // ── Manual-point row actions ────────────────────────────────
+  // Move the stage to a manual point (XY always; Z only if it has been measured).
+  const handleGoToManualPoint = useCallback(async (pt, idx) => {
+    const key = `manual-${idx}`;
+    setGoToInProgress(key);
+    try {
+      await apiPositionerControllerMovePositioner({
+        axis: "X", dist: pt.x, isAbsolute: true, isBlocking: true, speed: 15000,
+      });
+      await apiPositionerControllerMovePositioner({
+        axis: "Y", dist: pt.y, isAbsolute: true, isBlocking: true, speed: 15000,
+      });
+      if (pt.z != null) {
+        await apiPositionerControllerMovePositioner({
+          axis: "Z", dist: pt.z, isAbsolute: true, isBlocking: false, speed: 15000,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to move to manual point:", err);
+    } finally {
+      setGoToInProgress(null);
+    }
+  }, []);
+
+  // Drive to a manual point's XY, run autofocus with the current settings, and
+  // return the measured Z.
+  const measureManualPointZ = useCallback(async (pt) => {
+    await apiPositionerControllerMovePositioner({
+      axis: "X", dist: pt.x, isAbsolute: true, isBlocking: false, speed: 15000,
+    });
+    await apiPositionerControllerMovePositioner({
+      axis: "Y", dist: pt.y, isAbsolute: true, isBlocking: false, speed: 15000,
+    });
+    await apiAutofocusControllerDoAutofocusBackground({
+      rangez: parameterValue.autoFocusRange ?? 100,
+      resolutionz: parameterValue.autoFocusResolution ?? 10,
+      nCropsize: parameterValue.autoFocusCropsize ?? 2048,
+      focusAlgorithm: parameterValue.autoFocusAlgorithm || "LAPE",
+      tSettle: parameterValue.autoFocusSettleTime ?? 0.1,
+      static_offset: parameterValue.autoFocusStaticOffset ?? 0,
+      twoStage: parameterValue.autoFocusTwoStage ?? false,
+    });
+    const afStatus = await waitForAutofocusComplete(500, 120000);
+    let newZ = afStatus?.currentZ ?? null;
+    if (newZ == null) {
+      const positions = await apiPositionerControllerGetPositions();
+      newZ = extractZFromPositions(positions) ?? pt.z ?? 0;
+    }
+    return newZ;
+  }, [parameterValue]);
+
+  // Autofocus a single manual point and store its measured Z.
+  const handleAutofocusManualPoint = useCallback(async (pt, idx) => {
+    const key = `manual-${idx}`;
+    setGoToInProgress(key);
+    try {
+      const newZ = await measureManualPointZ(pt);
+      dispatch(focusMapSlice.updateManualPointZ({ index: idx, z: newZ }));
+    } catch (err) {
+      console.error("Autofocus at manual point failed:", err);
+    } finally {
+      setGoToInProgress(null);
+    }
+  }, [measureManualPointZ, dispatch]);
+
+  // Measure Z (autofocus) at every manual point's XY and fit, then enable the
+  // manual map. The whole move→autofocus→fit loop runs on the BACKEND as one
+  // blocking call (the browser can't reliably sense per-point blocking), and a
+  // map-placed point (Z=null) gets its Z measured rather than guessed.
+  const handleMeasureAndFitManual = useCallback(async () => {
+    if (!manualPoints || manualPoints.length === 0) return;
+    dispatch(focusMapSlice.setFocusMapComputing({ isComputing: true, groupId: "manual" }));
+    dispatch(focusMapSlice.clearFocusMapError());
+    try {
+      const cfg = {
+        ...config,
+        // Strip a null Z so the backend autofocus-measures it; keep a real Z.
+        points: manualPoints.map((p) => ({
+          x: p.x,
+          y: p.y,
+          ...(p.z == null ? {} : { z: p.z }),
+        })),
+        // Autofocus params (same mapping as handleComputeAll).
+        af_range: parameterValue.autoFocusRange ?? 100,
+        af_resolution: parameterValue.autoFocusResolution ?? 10,
+        af_cropsize: parameterValue.autoFocusCropsize ?? 2048,
+        af_algorithm: parameterValue.autoFocusAlgorithm || "LAPE",
+        af_settle_time: parameterValue.autoFocusSettleTime ?? 0.1,
+        af_static_offset: parameterValue.autoFocusStaticOffset ?? 0,
+        af_n_gauss: 0,
+        af_illumination_channel: parameterValue.autoFocusIlluminationChannel || "",
+        af_mode: parameterValue.autoFocusMode || "software",
+        af_max_attempts: parameterValue.autofocus_max_attempts ?? 2,
+        af_target_setpoint: parameterValue.autofocus_target_focus_setpoint ?? null,
+      };
+      const data = await apiExperimentControllerMeasureFocusMapFromPoints(cfg);
+      const result = data?.manual;
+      if (result) {
+        dispatch(focusMapSlice.updateFocusMapGroupResult({ groupId: "manual", result }));
+        // Reflect the measured Z values back into the editable table.
+        if (Array.isArray(result.points)) {
+          result.points.forEach((rp, i) => {
+            if (rp && rp.z != null && i < manualPoints.length) {
+              dispatch(focusMapSlice.updateManualPointZ({ index: i, z: rp.z }));
+            }
+          });
+        }
+      }
+      dispatch(focusMapSlice.setFocusMapUseManualMap(true));
+    } catch (err) {
+      dispatch(focusMapSlice.setFocusMapError(err.message || "Measure & fit failed"));
+    } finally {
+      dispatch(focusMapSlice.setFocusMapComputing({ isComputing: false }));
+    }
+  }, [manualPoints, config, parameterValue, dispatch]);
 
   // Step Z up/down by a fixed amount (5 µm) and update the point
   const STEP_Z_SIZE = 5;
@@ -1111,12 +1230,13 @@ const FocusMapDimension = () => {
                             <TextField
                               type="number"
                               size="small"
-                              value={pt.z}
+                              value={pt.z ?? ""}
+                              placeholder="auto"
                               onChange={(e) =>
                                 dispatch(
                                   focusMapSlice.updateManualPointZ({
                                     index: idx,
-                                    z: parseFloat(e.target.value) || 0,
+                                    z: e.target.value === "" ? null : parseFloat(e.target.value),
                                   })
                                 )
                               }
@@ -1125,6 +1245,45 @@ const FocusMapDimension = () => {
                             />
                           </TableCell>
                           <TableCell align="right">
+                            <Tooltip title="Go to this position">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  disabled={goToInProgress === `manual-${idx}`}
+                                  onClick={() => handleGoToManualPoint(pt, idx)}
+                                >
+                                  <MyLocationIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Tooltip title="Use current stage Z">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  onClick={() =>
+                                    dispatch(
+                                      focusMapSlice.updateManualPointZ({
+                                        index: idx,
+                                        z: positionState?.z ?? 0,
+                                      })
+                                    )
+                                  }
+                                >
+                                  <HeightIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Tooltip title="Autofocus here (measure Z)">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  disabled={goToInProgress === `manual-${idx}`}
+                                  onClick={() => handleAutofocusManualPoint(pt, idx)}
+                                >
+                                  <CenterFocusStrongIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
                             <IconButton
                               size="small"
                               onClick={() => dispatch(focusMapSlice.removeManualPoint(idx))}
@@ -1139,7 +1298,30 @@ const FocusMapDimension = () => {
                 </TableContainer>
               )}
 
-              <Box sx={{ display: "flex", gap: 1 }}>
+              {manualPlacementActive && (
+                <Alert severity="info" sx={{ mb: 1 }}>
+                  Click on the wellplate / sample map to drop focus points. Only
+                  XY is recorded — Z is measured by autofocus when you press
+                  "Measure Z &amp; Fit". Click "Stop Placing" when done.
+                </Alert>
+              )}
+
+              <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                <Button
+                  size="small"
+                  variant={manualPlacementActive ? "contained" : "outlined"}
+                  color={manualPlacementActive ? "secondary" : "primary"}
+                  startIcon={<MyLocationIcon />}
+                  onClick={() =>
+                    dispatch(
+                      focusMapSlice.setManualPlacementActive(
+                        !manualPlacementActive,
+                      ),
+                    )
+                  }
+                >
+                  {manualPlacementActive ? "Stop Placing" : "Place on Map"}
+                </Button>
                 <Button
                   size="small"
                   variant="outlined"
@@ -1152,8 +1334,29 @@ const FocusMapDimension = () => {
                   <Button
                     size="small"
                     variant="contained"
+                    color="secondary"
+                    startIcon={
+                      ui.isComputing ? (
+                        <CircularProgress size={16} color="inherit" />
+                      ) : (
+                        <CenterFocusStrongIcon />
+                      )
+                    }
+                    disabled={ui.isComputing}
+                    title="Drive to each point, autofocus to measure Z, then fit and enable the manual map"
+                    onClick={handleMeasureAndFitManual}
+                  >
+                    Measure Z &amp; Fit
+                  </Button>
+                )}
+                {(manualPoints || []).length >= 3 &&
+                  !(manualPoints || []).some((p) => p.z == null) && (
+                  <Button
+                    size="small"
+                    variant="contained"
                     startIcon={<PlayArrowIcon />}
-                    title={!config.use_manual_map ? "Enable 'Use manual map for all groups' above to activate manual fitting" : ""}
+                    disabled={ui.isComputing}
+                    title="Fit using the Z values already in the table (no autofocus)"
                     onClick={async () => {
                       dispatch(focusMapSlice.setFocusMapComputing({ isComputing: true, groupId: "manual" }));
                       dispatch(focusMapSlice.clearFocusMapError());

@@ -256,6 +256,19 @@ class CameraTucsen:
     def _on_frame_callback(self, frame: np.ndarray, frame_id: int, timestamp: float):
         """Handle new frame from callback - similar to HIK camera"""
         try:
+            # On the first frame, reconcile SensorWidth/SensorHeight with the
+            # actual delivered frame dimensions.  The camera may apply internal
+            # binning that TUIDI_CURRENT_WIDTH/HEIGHT does not account for.
+            if frame is not None and (self.SensorHeight != frame.shape[0] or self.SensorWidth != frame.shape[1]):
+                self.__logger.info(
+                    f"Actual frame size {frame.shape[1]}x{frame.shape[0]} differs from "
+                    f"reported sensor size {self.SensorWidth}x{self.SensorHeight}; "
+                    "updating to match delivered frames."
+                )
+                self.SensorWidth = frame.shape[1]
+                self.SensorHeight = frame.shape[0]
+                self.shape = (self.SensorHeight, self.SensorWidth)
+
             self.frame_buffer.append(frame)
             self.global_frameid += 1
             # interestingly the camera produces frames with number of 8bit rollovers,
@@ -264,7 +277,6 @@ class CameraTucsen:
             # in a way we need to unwrap the frame id
             self.frameid_buffer.append(self.global_frameid)
             self._current_frame = frame
-
 
         except Exception as e:
             self.__logger.error(f"Frame handling error: {e}")
@@ -439,16 +451,53 @@ class CameraTucsen:
 
     def _get_sensor_info(self):
         """Get sensor info without allocating buffers (follow working code pattern)."""
+        # get the real sensor info from the camera properties, so that we can update the dimensions in case of binning or cropping
         try:
-            # Don't allocate buffers during initialization like the working code
-            # Just use default values that will be updated when frames are captured
-            self.SensorWidth = 3000  # From working code output
-            self.SensorHeight = 3000  # From working code output
-            self.__logger.info(f"Using default sensor dimensions: {self.SensorWidth} x {self.SensorHeight}")
+            m_infoid = TUCAM_IDINFO
+            TUCAMVALUEINFO = TUCAM_VALUE_INFO(m_infoid.TUIDI_CAMERA_MODEL.value, 0, 0, 0)
+            TUCAM_Dev_GetInfo(self.TUCAMOPEN.hIdxTUCam, pointer(TUCAMVALUEINFO))
+            self.__logger.info('Camera Name:%#s' % TUCAMVALUEINFO.pText)
+            CameraName = TUCAMVALUEINFO.pText.decode('utf-8') if TUCAMVALUEINFO.pText else "Unknown"
+            # Query the width using TUIDI_CURRENT_WIDTH (reports physical sensor pixels)
+            TUCAMVALUE_WIDTH = TUCAM_VALUE_INFO(m_infoid.TUIDI_CURRENT_WIDTH.value, 0, 0, 0)
+            TUCAM_Dev_GetInfo(self.TUCAMOPEN.hIdxTUCam, pointer(TUCAMVALUE_WIDTH))
+            self.SensorWidth = TUCAMVALUE_WIDTH.nValue
+            self.__logger.info(f"Sensor width (physical): {self.SensorWidth}")
+            # Query the height using TUIDI_CURRENT_HEIGHT (reports physical sensor pixels)
+            TUCAMVALUE_HEIGHT = TUCAM_VALUE_INFO(m_infoid.TUIDI_CURRENT_HEIGHT.value, 0, 0, 0)
+            TUCAM_Dev_GetInfo(self.TUCAMOPEN.hIdxTUCam, pointer(TUCAMVALUE_HEIGHT))
+            self.SensorHeight = TUCAMVALUE_HEIGHT.nValue
+            self.__logger.info(f"Sensor height (physical): {self.SensorHeight}")
+
+            # TUIDI_CURRENT_WIDTH/HEIGHT report the physical sensor size, not the
+            # output frame size.  If the camera has hardware binning active the
+            # delivered frames will be smaller.  Query the BIN attribute to get
+            # the actual output dimensions and correct the reported shape.
+            try:
+                bin_attr = TUCAM_BIN_ATTR()
+                ret = TUCAM_Cap_GetBIN(self.camera_handle, pointer(bin_attr))
+                self.__logger.info(
+                    f"BIN attr: enable={bin_attr.bEnable}, mode={bin_attr.nMode}, "
+                    f"w={bin_attr.nWidth}, h={bin_attr.nHeight} (ret={ret})"
+                )
+                if self._ok(ret) and bin_attr.bEnable and bin_attr.nWidth > 0 and bin_attr.nHeight > 0:
+                    self.SensorWidth = bin_attr.nWidth
+                    self.SensorHeight = bin_attr.nHeight
+                    self.__logger.info(
+                        f"Sensor dimensions adjusted for active binning (mode={bin_attr.nMode}): "
+                        f"{self.SensorWidth}x{self.SensorHeight}"
+                    )
+            except Exception as be:
+                self.__logger.debug(f"Could not query BIN attr: {be}")
+
         except Exception as e:
             self.__logger.warning(f"Sensor info fallback: {e}")
-            self.SensorWidth = 3000
-            self.SensorHeight = 3000
+            self.SensorWidth = 1500
+            self.SensorHeight = 1500
+        if CameraName == "Libra 16":
+            self.SensorWidth = 1500
+            self.SensorHeight = 1500
+            self.__logger.debug("Libra 16 detected, overriding sensor dimensions to 1500x1500")
         self.shape = (self.SensorHeight, self.SensorWidth)
 
     def openPropertiesGUI(self):
@@ -556,6 +605,21 @@ class CameraTucsen:
                 raise Exception(f"Buffer allocation failed: {ret}")
 
             self.__logger.info("Buffer allocated successfully")
+
+            # After allocation the SDK fills in the true output dimensions.
+            # Use them to correct SensorWidth/SensorHeight which may have been
+            # read from TUIDI_CURRENT_WIDTH/HEIGHT (physical sensor pixels) and
+            # therefore don't account for any internal scaling/binning.
+            if m_frame.usWidth > 0 and m_frame.usHeight > 0:
+                if self.SensorWidth != m_frame.usWidth or self.SensorHeight != m_frame.usHeight:
+                    self.__logger.info(
+                        f"Correcting sensor dimensions from allocated frame: "
+                        f"{m_frame.usWidth}x{m_frame.usHeight} "
+                        f"(was {self.SensorWidth}x{self.SensorHeight})"
+                    )
+                    self.SensorWidth = int(m_frame.usWidth)
+                    self.SensorHeight = int(m_frame.usHeight)
+                    self.shape = (self.SensorHeight, self.SensorWidth)
 
             # Start capture
             ret = TUCAM_Cap_Start(self.camera_handle, m_capmode.TUCCM_SEQUENCE.value)

@@ -53,6 +53,47 @@ class UC2ConfigManager(SignalInterface):
             # Older UC2-REST builds may not have .ping yet — fall back to flag.
             return self.isConnected()
 
+    def getFirmwareInfo(self, timeout=2):
+        """Identity of the USB-connected ESP32 master.
+
+        Returns {name, version, date, author, pindef, isMaster, connected,
+        serialport}. The build date and pindef are the fields that matter for
+        telling boards apart. Best-effort: returns a mostly-empty dict if the
+        firmware/serial layer is unavailable.
+        """
+        info = {}
+        try:
+            info = self.ESP32.state.get_firmware_info(timeout=timeout) or {}
+        except Exception as e:
+            self.__logger.debug(f"getFirmwareInfo via state failed: {e}")
+        # enrich with what mserial already captured at connect time (no round-trip)
+        try:
+            cached = getattr(self.ESP32.serial, "firmware_info", None) or {}
+            for k, v in cached.items():
+                if v and not info.get(k):
+                    info[k] = v
+        except Exception:
+            pass
+        try:
+            info["connected"] = bool(self.ESP32.serial.is_connected)
+            port = getattr(self.ESP32.serial, "serialport", None)
+            info["serialport"] = getattr(port, "device", port) if port else None
+        except Exception:
+            pass
+        return info
+
+    def setJoystickDirection(self, axis, inverted=False, timeout=1):
+        """Invert (or un-invert) the PS-controller joystick for one motor axis.
+
+        axis: "A"/"X"/"Y"/"Z" (or 0..3). Maps to motor.set_joystick_direction.
+        """
+        return self.ESP32.motor.set_joystick_direction(axis=axis, inverted=bool(inverted), timeout=timeout)
+
+    def getJoystickDirection(self, axis=None, timeout=1):
+        """Read joystick inversion. With axis=None returns a list of
+        {axis, inverted} for all axes; otherwise the bool for that axis."""
+        return self.ESP32.motor.get_joystick_direction(axis=axis, timeout=timeout)
+
     def interruptSerialCommunication(self):
         self.ESP32.serial.interruptCurrentSerialCommunication()
 

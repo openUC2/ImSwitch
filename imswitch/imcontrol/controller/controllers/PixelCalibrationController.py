@@ -203,8 +203,8 @@ class PixelCalibrationController(LiveUpdatedController):
         scale_x = float(metrics.get("scale_x_um_per_pixel", 1.0))
         scale_y = float(metrics.get("scale_y_um_per_pixel", 1.0))
         avg_pixel_size = (abs(scale_x) + abs(scale_y)) / 2.0
-        flip_x = scale_x > 0
-        flip_y = scale_y > 0
+        flip_x = scale_x < 0
+        flip_y = scale_y < 0
 
         if hasattr(detector, "setFlipImage"):
             try:
@@ -423,7 +423,12 @@ class PixelCalibrationController(LiveUpdatedController):
         """Request the running automatic calibration to abort at the next step."""
         if not self._calibrationProgress.get("running"):
             return {"success": False, "message": "No calibration is running."}
+        # stop all motors:
         self._calibrationAbort.set()
+        stage = self._master.positionersManager[
+            self._master.positionersManager.getAllDeviceNames()[0]
+        ]
+        stage.stopAll()
         self._calibrationProgress["message"] = "Stopping…"
         self._logger.info("Stop requested for automatic calibration")
         return {"success": True, "message": "Stop requested; calibration will abort shortly."}

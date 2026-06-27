@@ -226,6 +226,13 @@ const overviewRegistrationSlice = createSlice({
       pos[axis] = value;
       slot.stagePosition = pos;
     },
+    // Clear all registered slots (start the registration over). Keeps the rest
+    // of the config (layout, camera) intact; persist with "Save changes".
+    clearRegistrationConfigSlots: (state) => {
+      if (state.registrationConfig && state.registrationConfig.slots) {
+        state.registrationConfig.slots = {};
+      }
+    },
 
     // Loading / error
     setIsLoading: (state, action) => {
@@ -273,6 +280,7 @@ export const {
   setRegistrationConfig,
   updateRegistrationConfigSlot,
   updateRegistrationConfigSlotPosition,
+  clearRegistrationConfigSlots,
   setIsLoading,
   setError,
   resetWizard,

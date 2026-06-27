@@ -79,7 +79,8 @@ dependencies = [
     "opencv-contrib-python>=4.13.0.92",
     "ipympl>=0.9.2",
     "useq-schema",
-    "ashlarUC2"
+    "ashlarUC2", 
+    "uc2canopen>=0.1.4"
 ]
 
 [project.optional-dependencies]

@@ -1193,7 +1193,7 @@ class ExperimentController(ImConWidgetController):
     ########################################
     # Hardware-related functions
     ########################################
-    def acquire_frame(self, channel: str, frameSync: int = 1):
+    def acquire_frame(self, channel: str, frameSync: int = 2):
         self._logger.debug(f"Acquiring frame on channel {channel}")
 
         # Make timeout dependent on exposure time so long exposures don't

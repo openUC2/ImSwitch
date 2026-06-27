@@ -491,8 +491,8 @@ class CameraTucsen:
 
         except Exception as e:
             self.__logger.warning(f"Sensor info fallback: {e}")
-            self.SensorWidth = 3000
-            self.SensorHeight = 3000
+            self.SensorWidth = 1500
+            self.SensorHeight = 1500
 
         self.shape = (self.SensorHeight, self.SensorWidth)
 

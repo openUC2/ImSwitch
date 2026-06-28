@@ -114,6 +114,14 @@ RUN \
   --mount=type=cache,sharing=locked,target=/var/lib/apt \
   --mount=type=cache,target=/root/.cache/uv \
   uv sync --frozen
+
+# Install UC2-REST itself (from latest uc2-rest from github master using: uv pip install https://github.com/openUC2/UC2-REST/archive/refs/heads/master.zip --force-reinstall)
+RUN \
+  --mount=type=cache,sharing=locked,target=/var/cache/apt \
+  --mount=type=cache,sharing=locked,target=/var/lib/apt \
+  --mount=type=cache,target=/root/.cache/uv \
+  uv pip install https://github.com/openUC2/UC2-REST/archive/refs/heads/master.zip --force-reinstall
+
 # Place executables in the environment at the front of the path
 ENV PATH="/opt/imswitch/.venv/bin:$PATH"
 # Expose HTTP port and Jupyter server port

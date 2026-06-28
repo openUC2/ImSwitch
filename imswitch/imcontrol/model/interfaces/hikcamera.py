@@ -21,6 +21,12 @@ try:
 except Exception as e:
     print(e)
 
+# Grab-strategy constant — the Linux/Mac binding's headers don't export it.
+# 1 = LatestImagesOnly: the SDK keeps only the newest frame and clears the rest,
+# so a slow consumer (e.g. a busy autofocus/calibration loop holding the GIL)
+# cannot accumulate a FIFO backlog of stale frames in the SDK queue.
+MV_GrabStrategy_LatestImagesOnly = 1
+
 # Pixel format constants — 8-bit
 PixelType_Gvsp_Mono8 = 17301505
 PixelType_Gvsp_Mono8_Signed = 17301506
@@ -672,6 +678,20 @@ class CameraHIK:
                 raise RuntimeError(f"Re-register callback failed 0x{ret:x}")
             self._callback_registered = True
 
+        # Always serve the freshest frame: cap the SDK's internal node queue and
+        # request a latest-only strategy so a slow consumer can't build up a FIFO
+        # backlog of stale frames (the "frame build-up" that put grabs out of
+        # sync with the stage until a stream restart flushed it). Best-effort —
+        # older SDK builds may lack these — and reinforced by MV_CC_ClearImageBuffer
+        # in flushBuffer() before every synchronized grab. Must precede StartGrabbing.
+        try:
+            if hasattr(self.camera, "MV_CC_SetImageNodeNum"):
+                self.camera.MV_CC_SetImageNodeNum(3)
+            if hasattr(self.camera, "MV_CC_SetGrabStrategy"):
+                self.camera.MV_CC_SetGrabStrategy(MV_GrabStrategy_LatestImagesOnly)
+        except Exception as e:
+            self.__logger.debug(f"Set node num / grab strategy failed: {e}")
+
         try:
             ret = self.camera.MV_CC_StartGrabbing()
             if ret != 0:
@@ -844,8 +864,22 @@ class CameraHIK:
         return latest_frame
 
     def flushBuffer(self):
+        # Clear BOTH the SDK's internal frame queue AND our Python ring buffer.
+        # The SDK grabs OneByOne (FIFO): if our callback can't keep up — e.g. a
+        # busy autofocus/calibration loop holds the GIL during heavy compute —
+        # frames pile up in the SDK queue and getLast() then returns ever more
+        # STALE frames (the build-up that only a stream stop/start used to reset).
+        # MV_CC_ClearImageBuffer discards that backlog in place. We also drop the
+        # last-frame fallback so the next grab waits for a genuinely new frame.
+        try:
+            if self.camera is not None and hasattr(self.camera, "MV_CC_ClearImageBuffer"):
+                self.camera.MV_CC_ClearImageBuffer()
+        except Exception as e:
+            self.__logger.debug(f"MV_CC_ClearImageBuffer failed: {e}")
         self.frameid_buffer.clear()
         self.frame_buffer.clear()
+        self.lastFrameFromBuffer = None
+        self.lastFrameId = -1
 
     def getLastChunk(self):
         """Return *and clear* the entire ring‑buffer as a numpy stack."""

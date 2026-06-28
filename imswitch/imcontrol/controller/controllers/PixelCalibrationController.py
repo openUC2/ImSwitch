@@ -1158,8 +1158,7 @@ class PixelCalibrationClass:
             for k in ("exposure", "ExposureTime", "exposure_time", "Exposure"):
                 if k in params and params[k] is not None:
                     val = float(getattr(params[k], "value", params[k]))
-                    # Heuristic: values over 30 are almost certainly milliseconds.
-                    exposure_s = val / 1000.0 if val > 30 else val
+                    exposure_s = val / 1000.0
                     break
         except Exception:
             exposure_s = None
@@ -1176,8 +1175,11 @@ class PixelCalibrationClass:
         last_fn = -1
         cur_fn = None
         mFrame = None
+        iiter = 0 
         while True:
-            mFrame, cur_fn = self._detector.getLatestFrame(returnFrameNumber=True)
+            iiter += 1
+            mFrameTmp, cur_fn = self._detector.getLatestFrame(returnFrameNumber=True)
+            mFrame = mFrameTmp.copy()
             if last_fn == -1:
                 last_fn = cur_fn
             if time.time() - t0 > timeout_s:
@@ -1188,7 +1190,7 @@ class PixelCalibrationClass:
                 time.sleep(0.01)
             else:
                 break
-
+        # self._parent._logger.debug(f"Grabbed frame {cur_fn} after {iiter} iterations in {time.time() - t0:.2f}s")
         if mFrame.ndim > 2:
             mFrame = np.mean(mFrame, axis=2)
         cropped = np.array(nip.extract(mFrame, (crop_size, crop_size)))

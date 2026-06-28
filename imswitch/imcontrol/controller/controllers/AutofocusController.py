@@ -306,7 +306,12 @@ class AutofocusController(ImConWidgetController):
         Returns:
             dict with state information
         """
-        current_z, is_valid, error = self._getSafeCurrentZ()
+        if 0:
+            current_z, is_valid, error = self._getSafeCurrentZ()
+        else:
+            current_z = 0
+            is_valid = False
+            error = 1
         return {
             "state": self._getAutofocusState().value,
             "isRunning": self.isAutofusRunning,
@@ -791,6 +796,7 @@ class AutofocusController(ImConWidgetController):
                     binning=binning,
                     n_gauss=nGauss,
                     method=self._focusMethod,
+                    isDebug=False
                 )
 
                 # Emit signal with focus value and timestamp
@@ -812,7 +818,7 @@ class AutofocusController(ImConWidgetController):
 
         self.__logger.info("Live monitoring thread stopped")
 
-    def grabCameraFrame(self, frameSync: int = 1, returnFrameNumber: bool = False):
+    def grabCameraFrame(self, frameSync: int = 3, returnFrameNumber: bool = False):
         # ensure we get a fresh frame
         timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
         cTime = time.time()
@@ -986,10 +992,10 @@ class AutofocusController(ImConWidgetController):
                     import tifffile as tif
                     # Save raw frames as-is (preserve original datatype)
                     if frame.dtype == np.uint8 or frame.dtype == np.uint16:
-                        tif.imwrite("autofocus_frame_z.tif", frame, append=True)
+                        tif.imwrite("autofocus_frame_z.tif", frame[::4,::4], append=True)
                     else:
                         # For float or other types, convert to float32
-                        tif.imwrite("autofocus_frame_z.tif", frame.astype(np.float32), append=True)
+                        tif.imwrite("autofocus_frame_z.tif", frame.astype(np.float32)[::4,::4], append=True)
                 mProcessor.add_frame(frame, iz)
 
             # Block until all results arrive (event-based, not busy polling)
@@ -1296,16 +1302,9 @@ class FrameProcessor:
             binning=self.binning,
             n_gauss=self.nGauss,
             method=self.focusMethod,
+            isDebug=self.isDebug
         )
 
-        if self.isDebug:
-            try:
-                import tifffile as tif
-                tif.imwrite("autofocus_proc_frame.tif",
-                            np.asarray(img).astype(np.float32, copy=False),
-                            append=True)
-            except Exception:
-                pass
 
         return focus_value
 
@@ -1369,7 +1368,7 @@ class FrameProcessor:
 
 
 def _compute_focus_value_fast(img, crop_size=2048, binning=1, n_gauss=0,
-                               method="LAPE"):
+                               method="LAPE", isDebug=False):
     """
     Single fast pipeline used by FrameProcessor, hill-climbing, fast-sweep
     and live-monitoring paths.
@@ -1427,6 +1426,16 @@ def _compute_focus_value_fast(img, crop_size=2048, binning=1, n_gauss=0,
         if ksize % 2 == 0:
             ksize += 1
         gray_u8 = cv2.GaussianBlur(gray_u8, (ksize, ksize), float(n_gauss))
+
+    if isDebug:
+        try:
+            import tifffile as tif
+            tif.imwrite("autofocus_proc_frame.tif",
+                        np.asarray(gray_u8).astype(np.float32, copy=False),
+                        append=True)
+        except Exception:
+            pass
+
 
     # 6) Focus measure
     if method == "LAPE":

@@ -14,6 +14,8 @@ import {
   InputLabel,
   Divider,
   LinearProgress,
+  Checkbox,
+  FormControlLabel,
 } from '@mui/material';
 
 import LiveViewControlWrapper from '../../axon/LiveViewControlWrapper';
@@ -24,6 +26,7 @@ import apiPixelCalibrationControllerDiscardPendingCalibration from '../../backen
 import apiPixelCalibrationControllerGetAvailableDetectors from '../../backendapi/apiPixelCalibrationControllerGetAvailableDetectors';
 import apiPixelCalibrationControllerGetCalibrationProgress from '../../backendapi/apiPixelCalibrationControllerGetCalibrationProgress';
 import apiPixelCalibrationControllerStopCalibration from '../../backendapi/apiPixelCalibrationControllerStopCalibration';
+import apiPixelCalibrationControllerMeasureBacklash from '../../backendapi/apiPixelCalibrationControllerMeasureBacklash';
 import apiObjectiveControllerGetStatus from '../../backendapi/apiObjectiveControllerGetStatus';
 
 /**
@@ -46,6 +49,14 @@ const PixelCalibrationTab = () => {
   const [pattern, setPattern] = useState('cross');
   const [nSteps, setNSteps] = useState(4);
   const [backlashUm, setBacklashUm] = useState(50.0);
+
+  // --- backlash measurement ---
+  const [blAxis, setBlAxis] = useState('X');
+  const [blStepUm, setBlStepUm] = useState(20.0);
+  const [blNSteps, setBlNSteps] = useState(8);
+  const [blApply, setBlApply] = useState(false);
+  const [blRunning, setBlRunning] = useState(false);
+  const [blResult, setBlResult] = useState(null);
 
   // --- objective info ---
   const [objectiveInfo, setObjectiveInfo] = useState(null);
@@ -213,6 +224,41 @@ const PixelCalibrationTab = () => {
       await apiPixelCalibrationControllerStopCalibration();
     } catch (err) {
       setError(`Failed to stop: ${err.message}`);
+    }
+  };
+
+  const handleMeasureBacklash = async () => {
+    if (!detectorName) {
+      setError('Please select a detector.');
+      return;
+    }
+    try {
+      setError('');
+      setBlResult(null);
+      setBlRunning(true);
+      setStatus(`Measuring ${blAxis} backlash — the stage will scan back and forth…`);
+      const resp = await apiPixelCalibrationControllerMeasureBacklash({
+        axis: blAxis,
+        stepSizeUm: blStepUm,
+        nSteps: blNSteps,
+        detectorName,
+        applyToStage: blApply,
+      });
+      if (resp && resp.success === false) {
+        setError(resp.error || resp.message || 'Backlash measurement failed.');
+        setStatus('');
+      } else {
+        setBlResult(resp);
+        setStatus(
+          `Backlash ${resp.axis}: ${Number(resp.backlash_um).toFixed(1)} µm`
+          + (resp.applied ? ' (applied to stage).' : '.'),
+        );
+      }
+    } catch (err) {
+      setError(`Failed to measure backlash: ${err.message}`);
+      setStatus('');
+    } finally {
+      setBlRunning(false);
     }
   };
 
@@ -462,6 +508,103 @@ const PixelCalibrationTab = () => {
                     : (progress?.message || 'Working…')}
                 </Typography>
               </Box>
+            )}
+          </Paper>
+
+          {/* Backlash measurement */}
+          <Paper sx={{ p: 2, mb: 2 }}>
+            <Typography variant="h6" gutterBottom>
+              Measure backlash
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Camera-tracked reversing scan on one axis. Measure with the stage&apos;s
+              own backlash compensation disabled (config backlash = 0), otherwise this
+              reports the residual after compensation.
+            </Typography>
+
+            <Grid container spacing={2}>
+              <Grid item xs={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Axis</InputLabel>
+                  <Select
+                    value={blAxis}
+                    label="Axis"
+                    onChange={(e) => setBlAxis(e.target.value)}
+                  >
+                    <MenuItem value="X">X</MenuItem>
+                    <MenuItem value="Y">Y</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="Step size (µm)"
+                  type="number"
+                  value={blStepUm}
+                  onChange={(e) => setBlStepUm(parseFloat(e.target.value) || 0)}
+                  fullWidth
+                  inputProps={{ step: 5, min: 1 }}
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="Steps / direction"
+                  type="number"
+                  value={blNSteps}
+                  onChange={(e) => setBlNSteps(parseInt(e.target.value, 10) || 1)}
+                  fullWidth
+                  inputProps={{ step: 1, min: 2 }}
+                />
+              </Grid>
+              <Grid item xs={6} sx={{ display: 'flex', alignItems: 'center' }}>
+                <FormControlLabel
+                  control={(
+                    <Checkbox
+                      checked={blApply}
+                      onChange={(e) => setBlApply(e.target.checked)}
+                    />
+                  )}
+                  label="Apply to stage"
+                />
+              </Grid>
+            </Grid>
+
+            <Button
+              variant="outlined"
+              color="primary"
+              onClick={handleMeasureBacklash}
+              disabled={blRunning || loading || !detectorName}
+              fullWidth
+              sx={{ mt: 2 }}
+            >
+              {blRunning ? (
+                <>
+                  <CircularProgress size={20} sx={{ mr: 1, color: 'inherit' }} />
+                  Measuring…
+                </>
+              ) : (
+                'Measure backlash'
+              )}
+            </Button>
+
+            {blResult && (
+              <Alert
+                severity={Number(blResult.quality_min) >= 0.2 ? 'success' : 'warning'}
+                sx={{ mt: 2 }}
+                onClose={() => setBlResult(null)}
+              >
+                <Typography variant="body2">
+                  <strong>
+                    {blResult.axis} backlash: {Number(blResult.backlash_um).toFixed(1)} µm
+                  </strong>
+                  {blResult.applied ? ' — applied to stage.' : ''}
+                  <br />
+                  Scale {Number(blResult.scale_px_per_um).toFixed(3)} px/µm · fit residual{' '}
+                  {Number(blResult.residual_px_zero_backlash).toFixed(2)}→
+                  {Number(blResult.residual_px).toFixed(2)} px · min correlation{' '}
+                  {Number(blResult.quality_min).toFixed(2)}
+                </Typography>
+              </Alert>
             )}
           </Paper>
 

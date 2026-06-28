@@ -1168,6 +1168,9 @@ class PixelCalibrationClass:
         return max(2.0, (frameSync + 2) * exposure_s + 1.0)
 
     def _grab_image(self, crop_size: int = 1024, frameSync: int = 3, returnFrameNumber: bool = False):
+        # Flush first so the frame-counter wait below starts from a frame
+        # acquired after the (just-completed) move, not one buffered during it.
+        self._flush_camera_buffer()
         timeout_s = self._grab_timeout_s(frameSync)
         t0 = time.time()
         last_fn = -1
@@ -1204,9 +1207,33 @@ class PixelCalibrationClass:
         stage = self._parent._master.positionersManager[
             self._parent._master.positionersManager.getAllDeviceNames()[0]
         ]
-        stage.move(value=position_um, axis="XY", is_absolute=True, is_blocking=True)
+        # Move one axis at a time. A simultaneous multi-axis ("XY") move on the
+        # UC2 firmware does not reliably emit a per-command completion, so the
+        # blocking call can return *before* the stage has settled — and the
+        # orphaned late response then desyncs the serial stream for subsequent
+        # moves (the cause of "images grabbed at the wrong position" after the
+        # first calibration). Sequential single-axis blocking moves each get a
+        # clean completion, keeping the image grabs in sync with the stage.
+        stage.move(value=float(position_um[0]), axis="X", is_absolute=True, is_blocking=True)
+        stage.move(value=float(position_um[1]), axis="Y", is_absolute=True, is_blocking=True)
         if len(position_um) > 2:
-            stage.move(value=position_um[2], axis="Z", is_absolute=True, is_blocking=True)
+            stage.move(value=float(position_um[2]), axis="Z", is_absolute=True, is_blocking=True)
+
+    def _flush_camera_buffer(self):
+        """Drop frames buffered before/during a move so the next grab is post-move.
+
+        ``getLatestFrame`` returns the newest buffered frame, so on its own it is
+        not stale — but flushing guarantees the frame-counter wait in
+        ``_grab_image`` starts from a frame acquired *after* the stage settled,
+        which makes the grab robust even if a move returned a touch early.
+        """
+        for owner in (self._detector, getattr(self._detector, "_camera", None)):
+            if owner is not None and hasattr(owner, "flushBuffer"):
+                try:
+                    owner.flushBuffer()
+                    return
+                except Exception:
+                    pass
 
     # ---------- main routine ----------------------------------------------------
     def calibrate_affine(

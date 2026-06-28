@@ -33,7 +33,14 @@ import NanoImagingPack as nip
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport, initLogger
-from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import compute_affine_matrix, measure_pixel_shift, validate_calibration
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
+    compute_affine_matrix,
+    measure_pixel_shift,
+    validate_calibration,
+    high_pass_fft_template,
+    displacement_from_template,
+    fit_backlash_1d,
+)
 
 from ..basecontrollers import LiveUpdatedController
 
@@ -437,6 +444,81 @@ class PixelCalibrationController(LiveUpdatedController):
     def getCalibrationProgress(self):
         """Return the live progress of the automatic calibration for polling."""
         return _convert_to_native({"success": True, **self._calibrationProgress})
+
+    @APIExport(requestType="POST")
+    def measureBacklash(
+        self,
+        axis: str = "X",
+        stepSizeUm: float = 20.0,
+        nSteps: int = 8,
+        detectorName: str = None,
+        crop_size: int = 1024,
+        applyToStage: bool = False,
+    ):
+        """Measure one axis' backlash (µm) from a reversing, camera-tracked scan.
+
+        Synchronous: returns the estimate directly. When ``applyToStage`` is true
+        the value is pushed to the active positioner (which converts µm -> steps);
+        UC2-REST ``motor.py`` then applies it as a reversal overshoot from then on.
+        """
+        if detectorName is None or detectorName == "":
+            detectorName = self._defaultDetectorName()
+        axis = (axis or "X").upper()
+        if axis not in ("X", "Y"):
+            return {"success": False, "error": "axis must be 'X' or 'Y'"}
+        if detectorName not in self._master.detectorsManager.getAllDeviceNames():
+            return {"success": False, "error": f"Unknown detector '{detectorName}'"}
+        if self._calibrationProgress.get("running"):
+            return {"success": False, "error": "A calibration is already running. Stop it first."}
+
+        intensity_ok, reason = self._validateCameraIntensity(detectorName)
+        if not intensity_ok:
+            return {
+                "success": False,
+                "error": f"Camera intensity problem: {reason}. Adjust exposure/lighting first.",
+            }
+
+        self._calibrationAbort.clear()
+        try:
+            helper = PixelCalibrationClass(self, detectorName=detectorName)
+            result = helper.measure_backlash(
+                axis=axis, step_size_um=stepSizeUm, n_steps=nSteps, crop_size=crop_size,
+            )
+        except _CalibrationAborted:
+            return {"success": False, "message": "Backlash measurement aborted by user."}
+        except Exception as exc:
+            self._logger.error(f"Backlash measurement failed: {exc}", exc_info=True)
+            return {"success": False, "error": str(exc)}
+        finally:
+            self._calibrationProgress["running"] = False
+
+        applied = False
+        if applyToStage:
+            applied = self._applyBacklashToStage(axis, result["backlash_um"])
+        return _convert_to_native({"success": True, "applied": applied, **result})
+
+    def _applyBacklashToStage(self, axis: str, backlash_um: float) -> bool:
+        """Push a measured backlash (µm) to the active positioner, if supported."""
+        try:
+            stage = self._master.positionersManager[
+                self._master.positionersManager.getAllDeviceNames()[0]
+            ]
+        except Exception:
+            return False
+        if hasattr(stage, "setBacklash"):
+            try:
+                stage.setBacklash(axis, float(backlash_um))
+                self._logger.info(
+                    f"Applied backlash {backlash_um:.1f} µm to stage axis {axis}"
+                )
+                return True
+            except Exception as exc:
+                self._logger.warning(f"setBacklash failed: {exc}")
+        else:
+            self._logger.warning(
+                "Active positioner has no setBacklash(); measured backlash not applied."
+            )
+        return False
 
     def _calibrateStageAffineInThread(
         self,
@@ -1133,12 +1215,13 @@ class PixelCalibrationClass:
         step_size_um: float = 100.0,
         pattern: str = "cross",
         n_steps: int = 4,
-        settle_time: float = 0.2,
+        settle_time: float = 0.5,
         crop_size: int = 1024,
         isDEBUG: bool = False,
         backlash_um: float = 0.0,
+        hp_sigma: float = 10.0,
     ):
-        """Capture phase-correlation samples and compute an affine matrix."""
+        """Capture high-pass FFT tracking samples and compute an affine matrix."""
         if detector_name and detector_name != self._detectorName:
             self._detectorName = detector_name
         self._parent._logger.info(
@@ -1159,6 +1242,9 @@ class PixelCalibrationClass:
 
         time.sleep(settle_time)
         ref_image = self._grab_image(crop_size=crop_size)
+        # Build the high-pass FFT template from the reference once; every step
+        # correlates against it (illumination-robust, with an honest quality).
+        ref_template = high_pass_fft_template(np.array(ref_image), sigma=hp_sigma, pad=False)
 
         if pattern == "cross":
             offsets = [
@@ -1195,7 +1281,7 @@ class PixelCalibrationClass:
                 self._move_stage(target)
                 time.sleep(settle_time)
                 image = self._grab_image(crop_size=crop_size)
-                shift, corr = measure_pixel_shift(np.array(ref_image), np.array(image))
+                shift, corr = displacement_from_template(*ref_template, np.array(image))
                 pixel_shifts.append(shift)
                 stage_shifts.append([dx, dy])
                 correlations.append(corr)
@@ -1260,6 +1346,104 @@ class PixelCalibrationClass:
             "inlier_mask": inlier_mask,
             "starting_position": start_position,
         }
+
+    # ---------- backlash measurement -------------------------------------------
+    def measure_backlash(
+        self,
+        axis: str = "X",
+        step_size_um: float = 20.0,
+        n_steps: int = 8,
+        settle_time: float = 0.5,
+        crop_size: int = 1024,
+        hp_sigma: float = 10.0,
+    ):
+        """Estimate the backlash of one axis from a reversing, camera-tracked scan.
+
+        The stage approaches from the positive side down to ``-n_steps`` and then
+        reverses up to ``+n_steps`` (one direction reversal). The image is tracked
+        with the high-pass FFT tracker; the backlash is the value that best
+        linearises commanded-stage -> observed-image (see ``fit_backlash_1d``).
+
+        .. note:: Measure with the stage's own backlash compensation **disabled**
+            (config backlash = 0). With compensation enabled this reports the
+            *residual* backlash that remains after compensation.
+        """
+        axis = (axis or "X").upper()
+        if axis not in ("X", "Y"):
+            raise ValueError("axis must be 'X' or 'Y'")
+        ax_idx = 0 if axis == "X" else 1
+
+        start_position = self._get_stage_position()
+        self._parent._logger.info(
+            f"Backlash scan on {axis}: {n_steps} steps of {step_size_um} µm"
+        )
+
+        # Commanded offsets: 0 -> -N·d (approach), then reverse up to +N·d.
+        down = -step_size_um * np.arange(0, n_steps + 1)
+        up = -step_size_um * n_steps + step_size_um * np.arange(1, 2 * n_steps + 1)
+        commanded = np.concatenate([down, up])
+
+        self._parent._calibrationProgress.update(
+            {"running": True, "total": int(commanded.size), "step": 0,
+             "message": f"Backlash {axis}…", "detectorName": self._detectorName}
+        )
+
+        ref_template = None
+        pixel_shifts = []
+        qualities = []
+        try:
+            for idx, off in enumerate(commanded):
+                if self._parent._calibrationAbort.is_set():
+                    raise _CalibrationAborted()
+                target = start_position.copy()
+                target[ax_idx] = start_position[ax_idx] + float(off)
+                self._move_stage(target)
+                time.sleep(settle_time)
+                frame = np.array(self._grab_image(crop_size=crop_size))
+                if ref_template is None:
+                    ref_template = high_pass_fft_template(frame, sigma=hp_sigma, pad=False)
+                    pixel_shifts.append((0.0, 0.0))
+                    qualities.append(1.0)
+                else:
+                    shift, q = displacement_from_template(*ref_template, frame)
+                    pixel_shifts.append(shift)
+                    qualities.append(q)
+                self._parent._calibrationProgress.update(
+                    {"step": idx + 1,
+                     "message": f"Backlash {axis} {idx + 1}/{commanded.size}"}
+                )
+        finally:
+            try:
+                self._move_stage(start_position)
+            except Exception:  # pragma: no cover — best-effort recovery
+                pass
+            self._parent._calibrationProgress["running"] = False
+
+        pts = np.array(pixel_shifts, dtype=float)
+        pts_centered = pts - pts.mean(axis=0)
+        # Project onto the principal direction of image motion so the estimate is
+        # robust to camera rotation (image axes need not align with stage axes).
+        _, _, vt = np.linalg.svd(pts_centered, full_matrices=False)
+        image_pos = pts_centered @ vt[0]
+        fit = fit_backlash_1d(commanded, image_pos)
+
+        result = {
+            "axis": axis,
+            "backlash_um": float(fit["backlash"]),
+            "scale_px_per_um": float(abs(fit["scale"])),
+            "residual_px": float(fit["residual_std"]),
+            "residual_px_zero_backlash": float(fit["residual_std_zero"]),
+            "quality_min": float(np.min(qualities)) if qualities else 0.0,
+            "quality_mean": float(np.mean(qualities)) if qualities else 0.0,
+            "n_samples": int(commanded.size),
+            "step_size_um": float(step_size_um),
+        }
+        self._parent._logger.info(
+            f"Backlash {axis}: {result['backlash_um']:.1f} µm "
+            f"(residual {result['residual_px_zero_backlash']:.2f} -> "
+            f"{result['residual_px']:.2f} px, min corr {result['quality_min']:.2f})"
+        )
+        return result
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

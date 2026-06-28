@@ -306,12 +306,20 @@ class AutofocusController(ImConWidgetController):
         Returns:
             dict with state information
         """
-        if 0:
-            current_z, is_valid, error = self._getSafeCurrentZ()
-        else:
-            current_z = 0
-            is_valid = False
-            error = 1
+        # Cached Z position: read the stage manager's in-memory position (kept
+        # up to date by move commands and the async device callback) instead of
+        # issuing a blocking device round-trip on every status poll.
+        current_z = 0
+        is_valid = False
+        error = 1
+        try:
+            stages = getattr(self, "stages", None)
+            if stages is not None:
+                current_z = float(stages.position.get("Z", 0.0))
+                is_valid = True
+                error = 0
+        except Exception:
+            current_z, is_valid, error = 0, False, 1
         return {
             "state": self._getAutofocusState().value,
             "isRunning": self.isAutofusRunning,
@@ -819,6 +827,15 @@ class AutofocusController(ImConWidgetController):
         self.__logger.info("Live monitoring thread stopped")
 
     def grabCameraFrame(self, frameSync: int = 3, returnFrameNumber: bool = False):
+        # Drop frames buffered during the (just-completed) move so the
+        # frame-number wait below starts from a genuinely post-move frame. With
+        # the camera now storing owned copies (no SDK-buffer aliasing), this
+        # guarantees the grabbed frame matches the current stage position.
+        try:
+            if hasattr(self.camera, "flushBuffer"):
+                self.camera.flushBuffer()
+        except Exception:
+            pass
         # ensure we get a fresh frame
         timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
         cTime = time.time()

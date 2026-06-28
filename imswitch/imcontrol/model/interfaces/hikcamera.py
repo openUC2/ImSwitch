@@ -390,7 +390,15 @@ class CameraHIK:
     # C callback factory ---------------------------------------------------
     # ---------------------------------------------------------------------
     def _on_frame(self, frame: np.ndarray, fid: int, ts: int):
-        self.frame_buffer.append(frame)
+        # CRITICAL: `frame` is a zero-copy NumPy view over the SDK's capture
+        # buffer (see `_wrap_cb`), which the SDK overwrites in place for every
+        # subsequent frame. Storing the view directly makes every entry in the
+        # ring buffer alias the same continuously-overwritten memory, so
+        # getLast() / the debug stack return whatever the SDK wrote most
+        # recently — not the frame acquired at this fid. This is what made grabs
+        # appear "out of sync" with the stage unless the settle time was large.
+        # Store an owned, contiguous copy (NBuffer is small, so this is cheap).
+        self.frame_buffer.append(np.array(frame, copy=True))
         self.frameid_buffer.append(fid)
         self.frameNumber = fid
         self.timestamp   = ts

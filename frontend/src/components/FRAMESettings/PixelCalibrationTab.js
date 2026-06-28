@@ -14,8 +14,6 @@ import {
   InputLabel,
   Divider,
   LinearProgress,
-  Checkbox,
-  FormControlLabel,
 } from '@mui/material';
 
 import LiveViewControlWrapper from '../../axon/LiveViewControlWrapper';
@@ -27,6 +25,7 @@ import apiPixelCalibrationControllerGetAvailableDetectors from '../../backendapi
 import apiPixelCalibrationControllerGetCalibrationProgress from '../../backendapi/apiPixelCalibrationControllerGetCalibrationProgress';
 import apiPixelCalibrationControllerStopCalibration from '../../backendapi/apiPixelCalibrationControllerStopCalibration';
 import apiPixelCalibrationControllerMeasureBacklash from '../../backendapi/apiPixelCalibrationControllerMeasureBacklash';
+import apiPixelCalibrationControllerApplyBacklash from '../../backendapi/apiPixelCalibrationControllerApplyBacklash';
 import apiObjectiveControllerGetStatus from '../../backendapi/apiObjectiveControllerGetStatus';
 
 /**
@@ -54,9 +53,10 @@ const PixelCalibrationTab = () => {
   const [blAxis, setBlAxis] = useState('X');
   const [blStepUm, setBlStepUm] = useState(20.0);
   const [blNSteps, setBlNSteps] = useState(8);
-  const [blApply, setBlApply] = useState(false);
   const [blRunning, setBlRunning] = useState(false);
   const [blResult, setBlResult] = useState(null);
+  const [blManualUm, setBlManualUm] = useState('');
+  const [blApplying, setBlApplying] = useState(false);
 
   // --- objective info ---
   const [objectiveInfo, setObjectiveInfo] = useState(null);
@@ -242,23 +242,43 @@ const PixelCalibrationTab = () => {
         stepSizeUm: blStepUm,
         nSteps: blNSteps,
         detectorName,
-        applyToStage: blApply,
+        applyToStage: false,
       });
       if (resp && resp.success === false) {
         setError(resp.error || resp.message || 'Backlash measurement failed.');
         setStatus('');
       } else {
         setBlResult(resp);
-        setStatus(
-          `Backlash ${resp.axis}: ${Number(resp.backlash_um).toFixed(1)} µm`
-          + (resp.applied ? ' (applied to stage).' : '.'),
-        );
+        setBlManualUm(Number(resp.backlash_um).toFixed(1));
+        setStatus(`Measured ${resp.axis} backlash: ${Number(resp.backlash_um).toFixed(1)} µm — review, then Apply.`);
       }
     } catch (err) {
       setError(`Failed to measure backlash: ${err.message}`);
       setStatus('');
     } finally {
       setBlRunning(false);
+    }
+  };
+
+  const handleApplyBacklash = async (axis, um) => {
+    const value = Number(um);
+    if (!Number.isFinite(value)) {
+      setError('Enter a numeric backlash value.');
+      return;
+    }
+    try {
+      setError('');
+      setBlApplying(true);
+      const resp = await apiPixelCalibrationControllerApplyBacklash({ axis, backlashUm: value });
+      if (resp && resp.success === false) {
+        setError(resp.message || resp.error || 'Could not apply backlash.');
+      } else {
+        setStatus(resp.message || `Backlash ${value.toFixed(1)} µm applied to ${axis}.`);
+      }
+    } catch (err) {
+      setError(`Failed to apply backlash: ${err.message}`);
+    } finally {
+      setBlApplying(false);
     }
   };
 
@@ -511,19 +531,20 @@ const PixelCalibrationTab = () => {
             )}
           </Paper>
 
-          {/* Backlash measurement */}
+          {/* Backlash measurement + apply */}
           <Paper sx={{ p: 2, mb: 2 }}>
             <Typography variant="h6" gutterBottom>
-              Measure backlash
+              Backlash
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Camera-tracked reversing scan on one axis. Measure with the stage&apos;s
-              own backlash compensation disabled (config backlash = 0), otherwise this
-              reports the residual after compensation.
+              Camera-tracked reversing scan to measure one axis&apos; backlash, then
+              apply it to the stage (UC2 motor.py compensates it on every reversal).
+              Measure with the stage&apos;s own backlash compensation disabled
+              (config backlash = 0), otherwise this reports the residual.
             </Typography>
 
             <Grid container spacing={2}>
-              <Grid item xs={6}>
+              <Grid item xs={4}>
                 <FormControl fullWidth>
                   <InputLabel>Axis</InputLabel>
                   <Select
@@ -536,9 +557,9 @@ const PixelCalibrationTab = () => {
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid item xs={6}>
+              <Grid item xs={4}>
                 <TextField
-                  label="Step size (µm)"
+                  label="Step (µm)"
                   type="number"
                   value={blStepUm}
                   onChange={(e) => setBlStepUm(parseFloat(e.target.value) || 0)}
@@ -546,25 +567,14 @@ const PixelCalibrationTab = () => {
                   inputProps={{ step: 5, min: 1 }}
                 />
               </Grid>
-              <Grid item xs={6}>
+              <Grid item xs={4}>
                 <TextField
-                  label="Steps / direction"
+                  label="Steps / dir"
                   type="number"
                   value={blNSteps}
                   onChange={(e) => setBlNSteps(parseInt(e.target.value, 10) || 1)}
                   fullWidth
                   inputProps={{ step: 1, min: 2 }}
-                />
-              </Grid>
-              <Grid item xs={6} sx={{ display: 'flex', alignItems: 'center' }}>
-                <FormControlLabel
-                  control={(
-                    <Checkbox
-                      checked={blApply}
-                      onChange={(e) => setBlApply(e.target.checked)}
-                    />
-                  )}
-                  label="Apply to stage"
                 />
               </Grid>
             </Grid>
@@ -573,7 +583,7 @@ const PixelCalibrationTab = () => {
               variant="outlined"
               color="primary"
               onClick={handleMeasureBacklash}
-              disabled={blRunning || loading || !detectorName}
+              disabled={blRunning || blApplying || loading || !detectorName}
               fullWidth
               sx={{ mt: 2 }}
             >
@@ -592,20 +602,60 @@ const PixelCalibrationTab = () => {
                 severity={Number(blResult.quality_min) >= 0.2 ? 'success' : 'warning'}
                 sx={{ mt: 2 }}
                 onClose={() => setBlResult(null)}
+                action={(
+                  <Button
+                    color="inherit"
+                    size="small"
+                    disabled={blApplying}
+                    onClick={() => handleApplyBacklash(blResult.axis, blResult.backlash_um)}
+                  >
+                    Apply to stage
+                  </Button>
+                )}
               >
                 <Typography variant="body2">
                   <strong>
                     {blResult.axis} backlash: {Number(blResult.backlash_um).toFixed(1)} µm
                   </strong>
-                  {blResult.applied ? ' — applied to stage.' : ''}
                   <br />
-                  Scale {Number(blResult.scale_px_per_um).toFixed(3)} px/µm · fit residual{' '}
+                  Scale {Number(blResult.scale_px_per_um).toFixed(3)} px/µm · residual{' '}
                   {Number(blResult.residual_px_zero_backlash).toFixed(2)}→
-                  {Number(blResult.residual_px).toFixed(2)} px · min correlation{' '}
+                  {Number(blResult.residual_px).toFixed(2)} px · min corr{' '}
                   {Number(blResult.quality_min).toFixed(2)}
                 </Typography>
               </Alert>
             )}
+
+            <Divider sx={{ my: 2 }}>or set manually</Divider>
+
+            <Grid container spacing={1} alignItems="center">
+              <Grid item xs={7}>
+                <TextField
+                  label={`Backlash ${blAxis} (µm)`}
+                  type="number"
+                  value={blManualUm}
+                  onChange={(e) => setBlManualUm(e.target.value)}
+                  fullWidth
+                  size="small"
+                  inputProps={{ step: 5, min: 0 }}
+                />
+              </Grid>
+              <Grid item xs={5}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  fullWidth
+                  disabled={blApplying || blManualUm === ''}
+                  onClick={() => handleApplyBacklash(blAxis, blManualUm)}
+                >
+                  {blApplying ? (
+                    <CircularProgress size={20} sx={{ color: 'inherit' }} />
+                  ) : (
+                    'Apply'
+                  )}
+                </Button>
+              </Grid>
+            </Grid>
           </Paper>
 
           {/* Pending calibration review */}

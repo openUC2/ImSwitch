@@ -136,6 +136,11 @@ class HikCamManager(DetectorManager):
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         return self._camera.getLast(returnFrameNumber=returnFrameNumber)
 
+    def flushBuffer(self):
+        """Drop buffered frames so the next grab is guaranteed post-move/-settle."""
+        if hasattr(self._camera, "flushBuffer"):
+            self._camera.flushBuffer()
+
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
         If the parameter doesn't exist, i.e. the parameters field doesn't

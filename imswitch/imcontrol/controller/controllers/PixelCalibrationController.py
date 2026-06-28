@@ -520,6 +520,31 @@ class PixelCalibrationController(LiveUpdatedController):
             )
         return False
 
+    @APIExport(requestType="POST")
+    def applyBacklash(self, axis: str = "X", backlashUm: float = 0.0):
+        """Apply a known backlash (µm) to the active positioner for one axis.
+
+        Unlike ``measureBacklash`` this performs no stage motion — it just pushes
+        the value to the positioner (converted µm -> steps), where UC2-REST
+        motor.py applies it as a reversal overshoot. Use it to apply a measured
+        value on demand, or to set a known value by hand.
+        """
+        axis = (axis or "X").upper()
+        if axis not in ("X", "Y", "Z", "A"):
+            return {"success": False, "error": "axis must be one of X/Y/Z/A"}
+        applied = self._applyBacklashToStage(axis, float(backlashUm))
+        return {
+            "success": bool(applied),
+            "applied": bool(applied),
+            "axis": axis,
+            "backlashUm": float(backlashUm),
+            "message": (
+                f"Backlash {backlashUm:.1f} µm applied to axis {axis}."
+                if applied else
+                "Active positioner has no setBacklash(); not applied."
+            ),
+        }
+
     def _calibrateStageAffineInThread(
         self,
         detectorName: str,
@@ -1260,13 +1285,20 @@ class PixelCalibrationClass:
         start_position = self._get_stage_position()
         self._parent._logger.info(f"Starting position: {start_position[:2]} µm")
 
-        # Backlash compensation: move away in X and Y, then back to start
+        # Backlash take-up: pre-load the mechanical slack in the SAME direction
+        # as the first measurement move, so that move doesn't begin with a
+        # direction reversal (which the backlash would otherwise corrupt by up to
+        # one backlash distance). We approach `start` from the opposite side, so
+        # the final leg of this pre-move travels in the first-step direction.
         if backlash_um > 0:
-            self._parent._logger.info(f"Backlash compensation: {backlash_um} µm in X and Y")
-            backlash_target = start_position + np.array([backlash_um, backlash_um, 0])
-            self._move_stage(backlash_target)
+            # cross starts with +X (then +Y); grid starts at the (-,-) corner.
+            first_dir = np.array([-1.0, -1.0, 0.0]) if pattern == "grid" else np.array([1.0, 1.0, 0.0])
+            self._parent._logger.info(
+                f"Backlash take-up: {backlash_um} µm, loading slack in direction {first_dir[:2]}"
+            )
+            self._move_stage(start_position - first_dir * backlash_um)
             time.sleep(settle_time)
-            self._move_stage(start_position)
+            self._move_stage(start_position)  # final leg travels in +first_dir
             time.sleep(settle_time)
 
         time.sleep(settle_time)

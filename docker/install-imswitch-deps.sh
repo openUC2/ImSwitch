@@ -20,9 +20,6 @@ uv sync --frozen --no-install-project
 # Reinstall psygnal from source to work around binary-wheel ABI issues
 uv pip install psygnal --no-binary :all:
 
-# ensure we have the latest uc2-rest from github master
-uv pip install https://github.com/openUC2/UC2-REST/archive/refs/heads/master.zip --force-reinstall
-
 # Clean up build-only tools
 apt-get remove -y \
   build-essential \

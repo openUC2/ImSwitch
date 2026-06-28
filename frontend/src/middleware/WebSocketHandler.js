@@ -392,11 +392,10 @@ const WebSocketHandler = () => {
       secure: protocol === "https", // Enable secure connection for HTTPS
     });
 
-    //listen to all
-    socket.on("*", (packet) => {
-      const [eventName, data] = packet.data;
-      console.log(`WebSocket received event: ${eventName}`, data);
-    });
+    // NOTE: a catch-all `socket.on("*")` that console.log'd every event used to
+    // live here. It logged EVERY frame (with its full base64 payload, 18×/s),
+    // which pegged the CPU — especially with DevTools open. Removed for
+    // performance; re-add behind an explicit debug flag if needed.
 
     // Listen for a connection confirmation
     socket.on("connect", () => {
@@ -434,6 +433,14 @@ const WebSocketHandler = () => {
 
     // Listen for binary frame events (UC2F packets)
     // UNIFIED HANDLING: Both binary and JPEG frames use 'frame' event with complete MessagePack encoding
+    // Throttle for the per-frame Redux updates. The live image is delivered to
+    // the canvas imperatively (CustomEvent) every frame; the Redux slice — which
+    // ~23 components subscribe to — is only refreshed at this rate so the whole
+    // app does not re-render at the stream FPS. Backpressure (frame_ack) is
+    // unaffected: every frame is still acknowledged below.
+    let lastFrameReduxTs = 0;
+    const FRAME_REDUX_THROTTLE_MS = 333; // ~3 Hz for HUD/latency/snapshot consumers
+
     socket.on("frame", (payload, ack) => {
       let metadata = null;
       let frameData = null;
@@ -493,8 +500,13 @@ const WebSocketHandler = () => {
           frameData = payload;
         }
 
-        // Update Redux with current frame ID (unified field name)
-        if (metadata && metadata.frame_id !== undefined) {
+        // Per-frame Redux updates are throttled (see above); the live canvas is
+        // fed every frame via CustomEvents instead, so it still runs at full FPS.
+        const nowTs = Date.now();
+        const doReduxUpdate = nowTs - lastFrameReduxTs > FRAME_REDUX_THROTTLE_MS;
+        if (doReduxUpdate) lastFrameReduxTs = nowTs;
+
+        if (doReduxUpdate && metadata && metadata.frame_id !== undefined) {
           dispatch(liveStreamSlice.setCurrentFrameId(metadata.frame_id));
         }
 
@@ -503,7 +515,7 @@ const WebSocketHandler = () => {
           metadata &&
           (metadata.protocol === "binary" || metadata.format === "binary")
         ) {
-          // Binary frame - dispatch to UC2F parser
+          // Binary frame - dispatch to UC2F parser (imperative, every frame)
           window.dispatchEvent(
             new CustomEvent("uc2:frame", {
               detail: {
@@ -516,18 +528,25 @@ const WebSocketHandler = () => {
           metadata &&
           (metadata.protocol === "jpeg" || metadata.format === "jpeg")
         ) {
-          // JPEG frame - store the base64 string in Redux. Consumers
-          // render it as <img src={`data:image/jpeg;base64,${...}`}>.
-          dispatch(liveStreamSlice.setLiveViewImage(frameData));
-          dispatch(liveStreamSlice.setImageFormat("jpeg"));
+          // Live render: deliver the frame imperatively EVERY frame so the canvas
+          // stays at full FPS without re-rendering the whole React tree.
+          window.dispatchEvent(
+            new CustomEvent("uc2:jpeg-frame", { detail: { image: frameData } }),
+          );
 
-          if (metadata.pixel_size) {
-            dispatch(liveStreamSlice.setPixelSize(metadata.pixel_size));
-          }
-          if (metadata.server_timestamp) {
-            const latency =
-              (Date.now() / 1000 - metadata.server_timestamp) * 1000;
-            dispatch(liveStreamSlice.updateLatency(latency));
+          // Redux mirror for HUD / snapshot consumers — THROTTLED (~3 Hz). This
+          // is what used to re-render ~23 components on every frame.
+          if (doReduxUpdate) {
+            dispatch(liveStreamSlice.setLiveViewImage(frameData));
+            dispatch(liveStreamSlice.setImageFormat("jpeg"));
+            if (metadata.pixel_size) {
+              dispatch(liveStreamSlice.setPixelSize(metadata.pixel_size));
+            }
+            if (metadata.server_timestamp) {
+              const latency =
+                (Date.now() / 1000 - metadata.server_timestamp) * 1000;
+              dispatch(liveStreamSlice.updateLatency(latency));
+            }
           }
         } else if (frameData) {
           // No metadata - fallback to binary frame
@@ -662,10 +681,8 @@ const WebSocketHandler = () => {
           // Support both legacy image_id and new frame_id
           const frameId = dataJson.frame_id ?? dataJson.image_id;
           if (ack && typeof ack === "function") {
-            console.log("Acknowledging JPEG image frame");
             ack();
           } else {
-            console.log("Emitting frame_ack for JPEG image");
             socket.emit("frame_ack", { frame_id: frameId });
           }
 
@@ -766,8 +783,7 @@ const WebSocketHandler = () => {
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateMotorPosition") {
-        console.log("sigUpdateMotorPosition received:", dataJson);
-        //parse
+        // (per-position console.logs removed — they fire on every motor update)
         try {
           const parsedArgs = dataJson.args.p0;
           const positionerKeys = Object.keys(parsedArgs);
@@ -775,8 +791,6 @@ const WebSocketHandler = () => {
           if (positionerKeys.length > 0) {
             const key = positionerKeys[0];
             const correctedPositions = parsedArgs[key];
-
-            console.log("Parsed positions:", correctedPositions);
 
             // Build position update object, filtering out undefined values
             const positionUpdate = Object.fromEntries(
@@ -787,8 +801,6 @@ const WebSocketHandler = () => {
                 a: correctedPositions.A,
               }).filter(([_, value]) => value !== undefined),
             );
-
-            console.log("Position update to dispatch:", positionUpdate);
 
             //update redux state
             dispatch(positionSlice.setPosition(positionUpdate));

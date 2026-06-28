@@ -479,8 +479,11 @@ class PixelCalibrationController(LiveUpdatedController):
             }
 
         self._calibrationAbort.clear()
+        helper = None
         try:
             helper = PixelCalibrationClass(self, detectorName=detectorName)
+            # Software-trigger acquisition: each grab is exposed after its move.
+            helper._begin_triggered_acquisition()
             result = helper.measure_backlash(
                 axis=axis, step_size_um=stepSizeUm, n_steps=nSteps, crop_size=crop_size,
             )
@@ -490,6 +493,8 @@ class PixelCalibrationController(LiveUpdatedController):
             self._logger.error(f"Backlash measurement failed: {exc}", exc_info=True)
             return {"success": False, "error": str(exc)}
         finally:
+            if helper is not None:
+                helper._end_triggered_acquisition()
             self._calibrationProgress["running"] = False
 
         applied = False
@@ -557,10 +562,13 @@ class PixelCalibrationController(LiveUpdatedController):
         backlashUm: float = 0.0,
     ):
         key = self._makeKey(detectorName, objectiveId)
+        helper = None
         try:
             # Measure on the raw, unflipped sensor so the computed flip is absolute.
             self._resetDetectorFlip(detectorName)
             helper = PixelCalibrationClass(self, detectorName=detectorName)
+            # Software-trigger acquisition: each grab is exposed after its move.
+            helper._begin_triggered_acquisition()
             result = helper.calibrate_affine(
                 backlash_um=backlashUm,
                 detector_name=detectorName,
@@ -602,6 +610,8 @@ class PixelCalibrationController(LiveUpdatedController):
             self._calibrationProgress["message"] = f"Failed: {exc}"
             return None
         finally:
+            if helper is not None:
+                helper._end_triggered_acquisition()
             self._calibrationProgress["running"] = False
             # The new flip is only applied once the user accepts the pending
             # result; until then, restore the previously-active calibration so
@@ -1192,6 +1202,17 @@ class PixelCalibrationClass:
         return max(2.0, (frameSync + 2) * exposure_s + 1.0)
 
     def _grab_image(self, crop_size: int = 1024, frameSync: int = 3, returnFrameNumber: bool = False):
+        # Deterministic path: during a triggered run, fire a software trigger and
+        # use the frame it produces — guaranteed exposed after the move/settle.
+        if getattr(self, "_useTriggeredGrab", False) and hasattr(self._detector, "snapSync"):
+            mFrame = self._detector.snapSync(timeout=2.0)
+            if mFrame is None:
+                mFrame = self._detector.getLatestFrame(returnFrameNumber=False)
+            cur_fn = self._detector.getFrameNumber() if hasattr(self._detector, "getFrameNumber") else -1
+            if mFrame.ndim > 2:
+                mFrame = np.mean(mFrame, axis=2)
+            cropped = np.array(nip.extract(mFrame, (crop_size, crop_size)))
+            return (cropped, cur_fn) if returnFrameNumber else cropped
         # Flush first so the frame-counter wait below starts from a frame
         # acquired after the (just-completed) move, not one buffered during it.
         self._flush_camera_buffer()
@@ -1261,6 +1282,39 @@ class PixelCalibrationClass:
                     return
                 except Exception:
                     pass
+
+    def _begin_triggered_acquisition(self):
+        """Switch the camera to software trigger so each grab is exposed post-move.
+
+        Free-running acquisition buffers frames asynchronously, so a grab can
+        return a frame from before the stage settled. Software trigger removes
+        that ambiguity. No-op (returns False) if the detector can't trigger.
+        """
+        det = self._detector
+        if not hasattr(det, "snapSync") or not hasattr(det, "setTriggerSource"):
+            self._useTriggeredGrab = False
+            return False
+        try:
+            ok = bool(det.setTriggerSource("software"))
+        except Exception as exc:
+            self._parent._logger.warning(f"Could not enable software trigger: {exc}")
+            ok = False
+        self._useTriggeredGrab = ok
+        if ok:
+            self._parent._logger.info("Calibration: camera in software-trigger mode (in-sync grabs)")
+        return ok
+
+    def _end_triggered_acquisition(self):
+        """Restore continuous (free-run) acquisition for the live view."""
+        if not getattr(self, "_useTriggeredGrab", False):
+            return
+        self._useTriggeredGrab = False
+        try:
+            if hasattr(self._detector, "setTriggerSource"):
+                self._detector.setTriggerSource("continuous")
+                self._parent._logger.info("Calibration: camera restored to continuous mode")
+        except Exception as exc:
+            self._parent._logger.warning(f"Could not restore continuous mode: {exc}")
 
     # ---------- main routine ----------------------------------------------------
     def calibrate_affine(

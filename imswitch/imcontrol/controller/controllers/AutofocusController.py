@@ -826,7 +826,49 @@ class AutofocusController(ImConWidgetController):
 
         self.__logger.info("Live monitoring thread stopped")
 
+    def _beginTriggeredAcquisition(self):
+        """Switch the camera to software trigger for in-sync, post-move grabs.
+
+        Free-running (continuous) acquisition buffers frames asynchronously, so a
+        grab can return a frame exposed before the stage settled. In software
+        trigger mode each frame is exposed in response to an explicit trigger we
+        fire after the move — eliminating the lag. Returns True if active.
+        """
+        cam = getattr(self, "camera", None)
+        if cam is None or not hasattr(cam, "snapSync") or not hasattr(cam, "setTriggerSource"):
+            self._useTriggeredGrab = False
+            return False
+        try:
+            ok = bool(cam.setTriggerSource("software"))
+        except Exception as e:
+            self.__logger.warning(f"Could not enable software trigger: {e}")
+            ok = False
+        self._useTriggeredGrab = ok
+        if ok:
+            self.__logger.info("Autofocus: camera in software-trigger mode (in-sync grabs)")
+        return ok
+
+    def _endTriggeredAcquisition(self):
+        """Restore continuous (free-run) acquisition for the live view."""
+        if not getattr(self, "_useTriggeredGrab", False):
+            return
+        self._useTriggeredGrab = False
+        try:
+            if getattr(self, "camera", None) is not None and hasattr(self.camera, "setTriggerSource"):
+                self.camera.setTriggerSource("continuous")
+                self.__logger.info("Autofocus: camera restored to continuous mode")
+        except Exception as e:
+            self.__logger.warning(f"Could not restore continuous mode: {e}")
+
     def grabCameraFrame(self, frameSync: int = 3, returnFrameNumber: bool = False):
+        # Deterministic path: during a triggered scan, fire a software trigger and
+        # return the frame it produces — guaranteed exposed after the move/settle.
+        if getattr(self, "_useTriggeredGrab", False) and hasattr(self.camera, "snapSync"):
+            mFrame = self.camera.snapSync(timeout=2.0)
+            if returnFrameNumber:
+                getFN = getattr(self.camera, "getFrameNumber", None)
+                return mFrame, (getFN() if callable(getFN) else -1)
+            return mFrame
         # Drop frames buffered during the (just-completed) move so the
         # frame-number wait below starts from a genuinely post-move frame. With
         # the camera now storing owned copies (no SDK-buffer aliasing), this
@@ -873,6 +915,8 @@ class AutofocusController(ImConWidgetController):
             self.__logger.info(f"Starting autofocus - Stage 1: Coarse scan (range=±{rangez}, resolution={resolutionz}), defocus={defocusz}, axis={axis}, tSettle={tSettle}, nGauss={nGauss}, nCropsize={nCropsize}, focusAlgorithm={focusAlgorithm}, static_offset={static_offset}, twoStage={twoStage}")
             self._setAutofocusState(AutofocusState.SCANNING)
             self._commChannel.sigAutoFocusRunning.emit(True)
+            # Acquire via software trigger so each frame is exposed after its move.
+            self._beginTriggeredAcquisition()
             # Stage 1: Coarse scan
             best_z_coarse = self._doSingleAutofocusScan(rangez, resolutionz, defocusz, axis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset)
 
@@ -928,6 +972,9 @@ class AutofocusController(ImConWidgetController):
             self._setAutofocusState(AutofocusState.ERROR)
             self._commChannel.sigAutoFocusRunning.emit(False)
             return None
+        finally:
+            # Always restore continuous mode so the live view resumes.
+            self._endTriggeredAcquisition()
 
     def _doSingleAutofocusScan(self, rangez:float, resolutionz:float, defocusz:float, axis:str, tSettle:float, isDebug:bool, nGauss:int, nCropsize:int, focusAlgorithm:str, static_offset:float, center_position:float=None):
         """

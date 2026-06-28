@@ -678,19 +678,18 @@ class CameraHIK:
                 raise RuntimeError(f"Re-register callback failed 0x{ret:x}")
             self._callback_registered = True
 
-        # Always serve the freshest frame: cap the SDK's internal node queue and
-        # request a latest-only strategy so a slow consumer can't build up a FIFO
-        # backlog of stale frames (the "frame build-up" that put grabs out of
-        # sync with the stage until a stream restart flushed it). Best-effort —
-        # older SDK builds may lack these — and reinforced by MV_CC_ClearImageBuffer
-        # in flushBuffer() before every synchronized grab. Must precede StartGrabbing.
+        # Cap the SDK's internal node queue so the free-running (continuous) live
+        # view can't build up a large FIFO backlog of stale frames. NOTE:
+        # MV_CC_SetGrabStrategy(LatestImagesOnly) is NOT usable here — in callback
+        # mode the SDK rejects it with MV_E_CALLORDER (0x80000003) and pushes every
+        # frame regardless. Deterministic, in-sync grabs for autofocus/calibration
+        # are instead done via software trigger (see snapSoftwareTrigger). Must
+        # precede StartGrabbing.
         try:
             if hasattr(self.camera, "MV_CC_SetImageNodeNum"):
-                self.camera.MV_CC_SetImageNodeNum(3)
-            if hasattr(self.camera, "MV_CC_SetGrabStrategy"):
-                self.camera.MV_CC_SetGrabStrategy(MV_GrabStrategy_LatestImagesOnly)
+                self.camera.MV_CC_SetImageNodeNum(2)
         except Exception as e:
-            self.__logger.debug(f"Set node num / grab strategy failed: {e}")
+            self.__logger.debug(f"Set node num failed: {e}")
 
         try:
             ret = self.camera.MV_CC_StartGrabbing()
@@ -1042,6 +1041,28 @@ class CameraHIK:
             self.__logger.error(f"Software trigger failed! ret [0x{ret:x}]")
             return False
         return True
+
+    def snapSoftwareTrigger(self, timeout: float = 2.0):
+        """Fire one software trigger and return the frame it produces.
+
+        Requires the camera to already be in software-trigger mode
+        (``setTriggerSource('software')``). Because the frame is exposed *in
+        response to* the trigger, the returned image is guaranteed to be acquired
+        AFTER this call — i.e. after the stage move/settle — which eliminates the
+        free-run buffer lag that otherwise desyncs grabs from the stage. We flush
+        first so no pre-trigger frame can be mistaken for the triggered one.
+        """
+        self.flushBuffer()
+        prev_id = self.frameNumber
+        if not self.send_trigger():
+            return self.getLast()
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if self.frame_buffer and self.frameid_buffer[-1] != prev_id:
+                return self.frame_buffer[-1]
+            time.sleep(0.003)
+        self.__logger.warning("snapSoftwareTrigger: timed out waiting for triggered frame")
+        return self.frame_buffer[-1] if self.frame_buffer else None
 
     def openPropertiesGUI(self):
         pass

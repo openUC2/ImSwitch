@@ -242,6 +242,77 @@ def example_3_multi_position_timelapse(controller):
     print(f"Statistics saved to {stats_file}")
 
 
+class FrameAnalyzer:
+    """Minimal analyzer matching the pymmcore-plus event-driven pattern."""
+
+    def run(self, img):
+        """Run analysis on a freshly acquired frame and return the result."""
+        if img is None:
+            return None
+        # Replace with real analysis (segmentation, focus metric, etc.)
+        return {
+            'mean': float(img.mean()),
+            'std': float(img.std()),
+        }
+
+
+def example_3b_frame_ready_callback(controller):
+    """Example 3b: Event-driven acquisition via the frameReady callback.
+
+    This is the direct ImSwitch equivalent of the pymmcore-plus pattern::
+
+        mmc.mda.events.frameReady.connect(self._on_frame_ready)
+
+        def _on_frame_ready(self, img: np.ndarray, event: MDAEvent) -> None:
+            self._results = self._analyzer.run(img)
+
+    Instead of registering a post-event hook, we connect a callback to
+    ``controller.mda_manager.events.frameReady``.  The callback fires as soon as
+    each frame is acquired and receives ``(img, event)`` - the image plus the
+    originating ``MDAEvent`` with its index/metadata.
+    """
+    if not HAS_USEQ:
+        return
+
+    analyzer = FrameAnalyzer()
+    results = []
+
+    def on_frame_ready(img, event):
+        """Connected to events.frameReady; runs the analyzer on each frame."""
+        res = analyzer.run(img)
+        results.append((dict(event.index), res))
+        controller._logger.info(f"frameReady {dict(event.index)} -> {res}")
+
+    # The engine that emits frameReady is controller.mda_manager. Make sure it
+    # is registered with the hardware managers before running.
+    engine = controller.mda_manager
+    if not engine._detector_manager:
+        engine.register(
+            detector_manager=controller._master.detectorsManager,
+            positioners_manager=controller._master.positionersManager,
+            lasers_manager=controller._master.lasersManager,
+            autofocus_manager=getattr(controller._master, 'autofocusManager', None),
+        )
+
+    # Connect the callback (pymmcore-plus style)
+    engine.events.frameReady.connect(on_frame_ready)
+
+    sequence = MDASequence(
+        channels=[Channel(config="DAPI", exposure=50.0)],
+        z_plan=ZRangeAround(range=10.0, step=2.0),
+        time_plan=TIntervalLoops(interval=30.0, loops=5),
+    )
+
+    try:
+        engine.run_mda(sequence)
+    finally:
+        # Disconnect when done so the callback isn't fired by later runs
+        engine.events.frameReady.disconnect(on_frame_ready)
+
+    print(f"Collected {len(results)} analysis results via frameReady")
+    return results
+
+
 def example_4_shared_protocol():
     """
     Example 4: Protocol that works with both ImSwitch and pymmcore-plus.

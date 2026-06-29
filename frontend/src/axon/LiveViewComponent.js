@@ -40,26 +40,22 @@ const LiveViewComponent = ({
     lastTime: performance.now(),
   });
 
-  // Track FPS for JPEG stream (triggered on each new frame)
+  // Track FPS for the JPEG stream. Frames are counted in the uc2:jpeg-frame
+  // listener below (Redux now updates only ~3 Hz, so we can't infer FPS from it).
   useEffect(() => {
-    if (!liveStreamState.liveViewImage) return;
-
-    const counter = fpsCounterRef.current;
-    counter.frames++;
-
-    const now = performance.now();
-    const elapsed = now - counter.lastTime;
-
-    // Update FPS every second
-    if (elapsed >= 1000) {
-      const fps = Math.round((counter.frames * 1000) / elapsed);
-      dispatch(liveViewSlice.setStats({ fps, bps: 0 })); // bps not available for JPEG
-
-      // Reset counters
-      counter.frames = 0;
-      counter.lastTime = now;
-    }
-  }, [liveStreamState.liveViewImage, dispatch]);
+    const id = setInterval(() => {
+      const counter = fpsCounterRef.current;
+      const now = performance.now();
+      const elapsed = now - counter.lastTime;
+      if (elapsed >= 1000) {
+        const fps = Math.round((counter.frames * 1000) / elapsed);
+        dispatch(liveViewSlice.setStats({ fps, bps: 0 })); // bps not available for JPEG
+        counter.frames = 0;
+        counter.lastTime = now;
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [dispatch]);
   const prevDimensionsRef = useRef({ width: 0, height: 0 }); // Track dimensions to avoid redundant callbacks
   const histogramCounterRef = useRef(0); // Counter for throttling histogram computation
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -118,68 +114,41 @@ const LiveViewComponent = ({
     }
   }, [dispatch, liveStreamState.showHistogram]);
 
-  // Optimized intensity windowing - proper scientific image processing
-  const applyIntensityWindowing = useCallback(
-    (image, minVal, maxVal) => {
-      const canvas = canvasRef.current;
-      if (!canvas || !image) return;
-
-      canvas.width = image.width;
-      canvas.height = image.height;
-
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(image, 0, 0);
-
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const data = imageData.data;
-
-      // Calculate the intensity range
-      const range = Math.max(1, maxVal - minVal); // Avoid division by zero
-      const scale = 255.0 / range;
-
-      // Apply linear intensity windowing: [minVal, maxVal] → [0, 255]
-      // Preserve color by mapping the pixel luminance and scaling RGB channels proportionally.
-      for (let i = 0; i < data.length; i += 4) {
-        const r = data[i];
-        const g = data[i + 1];
-        const b = data[i + 2];
-
-        // Compute perceptual luminance from RGB
-        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-
-        // Map luminance through the window [minVal, maxVal] -> [0,255]
-        let mappedLum;
-        if (lum <= minVal) {
-          mappedLum = 0;
-        } else if (lum >= maxVal) {
-          mappedLum = 255;
-        } else {
-          mappedLum = (lum - minVal) * scale;
-        }
-
-        // If original luminance > 0, scale RGB channels proportionally to preserve colour
-        if (lum > 0) {
-          const factor = mappedLum / lum;
-          data[i] = Math.min(255, Math.max(0, Math.round(r * factor)));
-          data[i + 1] = Math.min(255, Math.max(0, Math.round(g * factor)));
-          data[i + 2] = Math.min(255, Math.max(0, Math.round(b * factor)));
-        } else {
-          // Fallback: if luminance is zero, write mappedLum as grayscale
-          const v = Math.round(mappedLum);
-          data[i] = v;
-          data[i + 1] = v;
-          data[i + 2] = v;
-        }
-        // Alpha channel (i + 3) remains unchanged
+  // Linear intensity windowing applied IN PLACE to the already-drawn canvas.
+  // Only invoked when the window is non-default ([0,255] is an identity map),
+  // so the common live-preview case skips this full-frame pass entirely.
+  const windowCanvasInPlace = useCallback((minVal, maxVal) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    const range = Math.max(1, maxVal - minVal); // avoid division by zero
+    const scale = 255.0 / range;
+    // Map luminance through [minVal, maxVal] -> [0,255], scaling RGB to keep colour.
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      let mappedLum;
+      if (lum <= minVal) mappedLum = 0;
+      else if (lum >= maxVal) mappedLum = 255;
+      else mappedLum = (lum - minVal) * scale;
+      if (lum > 0) {
+        const factor = mappedLum / lum;
+        data[i] = Math.min(255, Math.max(0, Math.round(r * factor)));
+        data[i + 1] = Math.min(255, Math.max(0, Math.round(g * factor)));
+        data[i + 2] = Math.min(255, Math.max(0, Math.round(b * factor)));
+      } else {
+        const v = Math.round(mappedLum);
+        data[i] = v;
+        data[i + 1] = v;
+        data[i + 2] = v;
       }
-
-      ctx.putImageData(imageData, 0, 0);
-
-      // Compute histogram after rendering (for JPEG streams)
-      computeHistogramFromCanvas();
-    },
-    [computeHistogramFromCanvas],
-  );
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }, []);
 
   // Monitor container size changes
   useEffect(() => {
@@ -227,29 +196,13 @@ const LiveViewComponent = ({
     [containerSize],
   );
 
-  // Legacy pixel-perfect intensity scaling (for compatibility)
-  const applyPixelIntensityScaling = useCallback(
-    (image, minVal, maxVal) => {
-      // This method is now deprecated - use applyIntensityWindowing instead
-      return applyIntensityWindowing(image, minVal, maxVal);
-    },
-    [applyIntensityWindowing],
-  );
-  // Apply responsive sizing to the image
+  // Apply responsive sizing (canvas CSS box) for the given frame dimensions.
+  // Pure layout — no pixel work, no decoding.
   const applyResponsiveSizing = useCallback(
-    (image) => {
-      if (!image) return;
+    (imgWidth, imgHeight) => {
+      if (!imgWidth || !imgHeight) return;
 
-      // Get display dimensions based on current container size
-      const displayDimensions = getDisplayDimensions(image.width, image.height);
-
-      // Calculate display scale factor for scale bar based on actual display size
-      // Apply proper intensity windowing (scientific image processing)
-      applyIntensityWindowing(
-        image,
-        liveStreamState.minVal,
-        liveStreamState.maxVal,
-      );
+      const displayDimensions = getDisplayDimensions(imgWidth, imgHeight);
 
       setCanvasStyle({
         width: `${displayDimensions.width}px`,
@@ -262,200 +215,136 @@ const LiveViewComponent = ({
       // Notify parent of image dimensions only if they changed
       if (
         onImageLoad &&
-        (image.width !== prevDimensionsRef.current.width ||
-          image.height !== prevDimensionsRef.current.height)
+        (imgWidth !== prevDimensionsRef.current.width ||
+          imgHeight !== prevDimensionsRef.current.height)
       ) {
-        prevDimensionsRef.current = {
-          width: image.width,
-          height: image.height,
-        };
-        onImageLoad(image.width, image.height);
+        prevDimensionsRef.current = { width: imgWidth, height: imgHeight };
+        onImageLoad(imgWidth, imgHeight);
       }
     },
-    [
-      applyIntensityWindowing,
-      getDisplayDimensions,
-      liveStreamState.minVal,
-      liveStreamState.maxVal,
-      containerSize,
-      onImageLoad,
-    ],
+    [getDisplayDimensions, onImageLoad],
   );
 
-  // Load and process image when it changes.
-  // Uses createImageBitmap when available (Chrome/Firefox) so JPEG decode
-  // runs off the main thread, reducing per-frame jank at high frame rates.
-  // Falls back to the classic HTMLImageElement path for older browsers.
-  useEffect(() => {
-    const src = liveStreamState.liveViewImage;
-    if (!src) {
-      setImageLoaded(false);
-      setCanvasStyle({});
+  // ── Efficient JPEG render path ──────────────────────────────────────────
+  // Decode each base64 JPEG ONCE via createImageBitmap (off the main thread)
+  // and blit it with drawImage — replacing the old path that built several
+  // <img src="data:image/jpeg;base64,…"> per frame and ran an always-on
+  // per-pixel intensity loop, which pegged the CPU. Frames are coalesced: while
+  // one frame is decoding we keep only the most recent incoming frame, so no
+  // backlog builds up. This is render-side only — the socket frame_ack
+  // backpressure is untouched.
+  const latestB64Ref = useRef(null);
+  const decodingRef = useRef(false);
+  const lastDimsRef = useRef({ width: 0, height: 0 });
+
+  const decodeAndDraw = useCallback(() => {
+    if (decodingRef.current) return; // a decode is in flight; it picks up the latest
+    const b64 = latestB64Ref.current;
+    if (!b64) return;
+    decodingRef.current = true;
+
+    let blob;
+    try {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      blob = new Blob([bytes], { type: "image/jpeg" });
+    } catch (e) {
+      decodingRef.current = false;
       return;
     }
 
-    // Allow in-flight async work to be cancelled if the image changes again
-    // before the decode finishes (rapid-fire frames at high FPS).
-    let cancelled = false;
-
-    // Build the data-URL for both paths.  liveViewImage is always a base64
-    // string (normalised in WebSocketHandler for the msgpack path).
-    const dataUrl = `data:image/jpeg;base64,${src}`;
-
-    if (typeof createImageBitmap !== 'undefined') {
-      // ── Fast path: off-thread JPEG decode via createImageBitmap ──────────
-      // atob + Uint8Array copy is ~0.5 ms for 500 KB; cheaper than the old
-      // synchronous main-thread decode that the img.src path used to trigger.
-      try {
-        const binaryStr = atob(src);
-        const bytes = new Uint8Array(binaryStr.length);
-        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-        const blob = new Blob([bytes], { type: 'image/jpeg' });
-
-        createImageBitmap(blob)
-          .then((bitmap) => {
-            if (cancelled) { bitmap.close(); return; }
-            try {
-              const canvas = canvasRef.current;
-              if (canvas) {
-                canvas.width = bitmap.width;
-                canvas.height = bitmap.height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(bitmap, 0, 0);
-              }
-              // applyResponsiveSizing accepts any object with .width/.height
-              // that drawImage() can consume — ImageBitmap qualifies.
-              applyResponsiveSizing(bitmap);
-              setImageLoaded(true);
-            } catch (error) {
-              console.error('Error processing image (createImageBitmap):', error);
-              setImageLoaded(false);
-              setCanvasStyle({});
-            } finally {
-              bitmap.close();
-            }
-          })
-          .catch((err) => {
-            if (cancelled) return;
-            console.error('createImageBitmap failed, falling back to img:', err);
-            // ── Fallback inside the fast path ──────────────────────────────
-            const img = new Image();
-            img.onload = () => {
-              if (cancelled) return;
-              try {
-                const canvas = canvasRef.current;
-                if (canvas) {
-                  canvas.width = img.width;
-                  canvas.height = img.height;
-                  const ctx = canvas.getContext('2d');
-                  ctx.drawImage(img, 0, 0);
-                }
-                applyResponsiveSizing(img);
-                setImageLoaded(true);
-              } catch (error) {
-                console.error('Error processing image:', error);
-                setImageLoaded(false);
-                setCanvasStyle({});
-              }
-            };
-            img.onerror = () => { if (!cancelled) { setImageLoaded(false); setCanvasStyle({}); } };
-            img.src = dataUrl;
-          });
-      } catch (atobError) {
-        // src was not valid base64 (e.g. a blob URL from a future optimisation)
-        console.error('atob failed:', atobError);
-        setImageLoaded(false);
-        setCanvasStyle({});
-      }
-    } else {
-      // ── Slow path: HTMLImageElement (legacy browsers) ──────────────────
-      const img = new Image();
-      img.onload = () => {
-        if (cancelled) return;
+    // Promise.resolve().then(...) so a missing createImageBitmap (old browsers /
+    // jsdom test env) becomes a rejected promise handled below, not a throw.
+    Promise.resolve()
+      .then(() => createImageBitmap(blob))
+      .then((bitmap) => {
         try {
           const canvas = canvasRef.current;
           if (canvas) {
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0);
+            if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+              canvas.width = bitmap.width;
+              canvas.height = bitmap.height;
+            }
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(bitmap, 0, 0);
+
+            // Intensity windowing only when a non-default window is set
+            // (a [0,255] window is identity → skip the full-frame pass).
+            if (liveStreamState.minVal > 0 || liveStreamState.maxVal < 255) {
+              windowCanvasInPlace(liveStreamState.minVal, liveStreamState.maxVal);
+            }
+            // Histogram (throttled internally; only when the panel is open).
+            computeHistogramFromCanvas();
+
+            if (
+              bitmap.width !== lastDimsRef.current.width ||
+              bitmap.height !== lastDimsRef.current.height
+            ) {
+              lastDimsRef.current = { width: bitmap.width, height: bitmap.height };
+              applyResponsiveSizing(bitmap.width, bitmap.height);
+            }
+            if (!imageLoaded) setImageLoaded(true);
           }
-          applyResponsiveSizing(img);
-          setImageLoaded(true);
-        } catch (error) {
-          console.error('Error processing image:', error);
-          setImageLoaded(false);
-          setCanvasStyle({});
+        } finally {
+          bitmap.close();
         }
-      };
-      img.onerror = () => {
-        if (!cancelled) {
-          console.error('Error loading image');
-          setImageLoaded(false);
-          setCanvasStyle({});
+      })
+      .catch((err) => console.error("createImageBitmap failed:", err))
+      .finally(() => {
+        decodingRef.current = false;
+        // A newer frame arrived during decode → render it now (coalesced).
+        if (latestB64Ref.current && latestB64Ref.current !== b64) {
+          decodeAndDraw();
         }
-      };
-      img.src = dataUrl;
-    }
-
-    return () => { cancelled = true; };
-  }, [liveStreamState.liveViewImage, applyResponsiveSizing]);
-
-  // Reapply sizing when container size changes
-  useEffect(() => {
-    if (imageLoaded && liveStreamState.liveViewImage) {
-      const img = new Image();
-      img.onload = () => applyResponsiveSizing(img);
-      img.src = `data:image/jpeg;base64,${liveStreamState.liveViewImage}`;
-    }
-  }, [
-    containerSize,
-    imageLoaded,
-    liveStreamState.liveViewImage,
-    applyResponsiveSizing,
-  ]);
-
-  // Update intensity windowing when min/max values change
-  useEffect(() => {
-    if (imageLoaded && liveStreamState.liveViewImage) {
-      // Re-apply intensity windowing when intensity values change
-      const img = new Image();
-      img.onload = () => {
-        applyIntensityWindowing(
-          img,
-          liveStreamState.minVal,
-          liveStreamState.maxVal,
-        );
-      };
-      img.src = `data:image/jpeg;base64,${liveStreamState.liveViewImage}`;
-    }
+      });
   }, [
     liveStreamState.minVal,
     liveStreamState.maxVal,
+    windowCanvasInPlace,
+    computeHistogramFromCanvas,
+    applyResponsiveSizing,
     imageLoaded,
-    liveStreamState.liveViewImage,
-    applyIntensityWindowing,
   ]);
 
-  // Handle container resize to maintain aspect ratio
+  // Keep a ref to the latest decodeAndDraw so the mount-once frame listener
+  // always uses the current one (which closes over min/max) without re-binding.
+  const decodeRef = useRef(decodeAndDraw);
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    decodeRef.current = decodeAndDraw;
+  }, [decodeAndDraw]);
 
-    const resizeObserver = new ResizeObserver(() => {
-      // Reprocess the image when container size changes
-      if (liveStreamState.liveViewImage && imageLoaded) {
-        const img = new Image();
-        img.onload = () => {
-          applyResponsiveSizing(img);
-        };
-        img.src = `data:image/jpeg;base64,${liveStreamState.liveViewImage}`;
-      }
-    });
+  // Live render path: each JPEG frame arrives as an imperative CustomEvent
+  // (dispatched by WebSocketHandler), NOT through Redux — so the canvas runs at
+  // full FPS while the React tree does not re-render per frame.
+  useEffect(() => {
+    const onFrame = (e) => {
+      const image = e.detail && e.detail.image;
+      if (!image) return;
+      latestB64Ref.current = image;
+      fpsCounterRef.current.frames++;
+      decodeRef.current();
+    };
+    window.addEventListener("uc2:jpeg-frame", onFrame);
+    return () => window.removeEventListener("uc2:jpeg-frame", onFrame);
+  }, []);
 
-    resizeObserver.observe(container);
-    return () => resizeObserver.disconnect();
-  }, [liveStreamState.liveViewImage, imageLoaded, applyResponsiveSizing]);
+  // Reset the canvas when the stream stops (Redux liveViewImage cleared). The
+  // Redux mirror is throttled, but this only needs to fire on stop.
+  useEffect(() => {
+    if (!liveStreamState.liveViewImage) {
+      latestB64Ref.current = null;
+      setImageLoaded(false);
+      setCanvasStyle({});
+    }
+  }, [liveStreamState.liveViewImage]);
+
+  // Re-apply responsive sizing when the container resizes — no re-decode needed.
+  useEffect(() => {
+    if (lastDimsRef.current.width && lastDimsRef.current.height) {
+      applyResponsiveSizing(lastDimsRef.current.width, lastDimsRef.current.height);
+    }
+  }, [containerSize, applyResponsiveSizing]);
 
   // Handle intensity range change
   const handleRangeChange = (event, newValue) => {
@@ -613,9 +502,16 @@ const LiveViewComponent = ({
         }, canvas width: ${canvas.width})`,
       );
 
-      // Move to the calculated position
-      // Note: Y direction might need to be inverted depending on stage orientation
-      moveToPosition(-realX, -realY); // Inverting Y as microscope Y often goes opposite to image Y
+      // Sign mapping from image axes to stage axes (same convention as
+      // LiveViewControlWrapper): both inverted so the clicked feature moves to
+      // the centre. Flip the relevant constant per hardware if an axis goes the
+      // wrong way.
+      const IMAGE_TO_STAGE_SIGN_X = 1;
+      const IMAGE_TO_STAGE_SIGN_Y = 1;
+      moveToPosition(
+        IMAGE_TO_STAGE_SIGN_X * realX,
+        IMAGE_TO_STAGE_SIGN_Y * realY,
+      );
     },
     [onDoubleClick, getAdaptivePixelSize, moveToPosition, objectiveState.fovX],
   );
@@ -641,19 +537,20 @@ const LiveViewComponent = ({
         overflow: "hidden",
       }}
     >
-      {/* Canvas for intensity-scaled image */}
-      {liveStreamState.liveViewImage ? (
-        <canvas
-          ref={canvasRef}
-          style={{
-            ...canvasStyle,
-            display: imageLoaded ? canvasStyle.display : "none",
-            cursor: adaptivePixelSize ? "crosshair" : "default",
-          }}
-          onClick={handleCanvasClick}
-          onDoubleClick={handleCanvasDoubleClick}
-        />
-      ) : (
+      {/* Canvas is always mounted so the imperative uc2:jpeg-frame listener can
+          draw into it immediately; it stays hidden until the first frame is
+          decoded (then imageLoaded flips it visible). */}
+      <canvas
+        ref={canvasRef}
+        style={{
+          ...canvasStyle,
+          display: imageLoaded ? canvasStyle.display : "none",
+          cursor: adaptivePixelSize ? "crosshair" : "default",
+        }}
+        onClick={handleCanvasClick}
+        onDoubleClick={handleCanvasDoubleClick}
+      />
+      {!imageLoaded && (
         <Box
           sx={{
             display: "flex",

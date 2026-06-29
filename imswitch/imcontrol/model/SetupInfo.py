@@ -714,10 +714,13 @@ class EtSTEDInfo:
 
 @dataclass(frozen=False)
 class MicroscopeStandInfo:
-    managerName: str
+    name: str = "openUC2 FRAME"
+    """ Human-readable model of the microscope stand (default: openUC2 FRAME). """
+
+    managerName: Optional[str] = None
     """ Name of the manager to use. """
 
-    rs232device: str
+    rs232device: Optional[str] = None
     """ Name of the rs232 device to use. """
 
 
@@ -909,6 +912,19 @@ class SetupInfo:
                 ManagerClass = entry_point.load()
                 ManagerDataClass = make_dataclass(entry_point.name.split("_info")[0], [(entry_point.name, ManagerClass)])
                 setattr(self, entry_point.name.split("_info")[0], field(default_factory=ManagerDataClass))
+
+    def getMicroscopeStandName(self):
+        """ Human-readable microscope stand model.
+
+        Falls back to "openUC2 FRAME" when no stand (or no name) is configured,
+        since most setups leave ``microscopeStand`` as null.
+        """
+        stand = getattr(self, "microscopeStand", None)
+        if stand is not None:
+            name = getattr(stand, "name", None)
+            if name:
+                return name
+        return "openUC2 FRAME"
 
     def getDevice(self, deviceName):
         """ Returns the DeviceInfo for a specific device.

@@ -266,6 +266,12 @@ const ParameterEditorComponent = () => {
                   </option>
                 ))}
               </select>
+              {Number(parameterValue.speed) > 20000 && (
+                <div style={{ color: "#d32f2f", fontSize: "12px", marginTop: 4 }}>
+                  ⚠ Speeds above 20000 µm/s are highly unreliable — the stage may
+                  lose steps and accuracy.
+                </div>
+              )}
             </td>
           </tr>
 

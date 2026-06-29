@@ -14,6 +14,8 @@ class PositionerController(ImConWidgetController):
         super().__init__(*args, **kwargs)
 
         self.settingAttr = False
+        self._hasHomedSinceStartup = False
+        self._homingRecommendationDismissed = False
 
         self.__logger = initLogger(self, tryInheritParent=True)
 
@@ -39,7 +41,27 @@ class PositionerController(ImConWidgetController):
         # This is the primary mechanism for keeping metadata in sync with hardware state
         self._commChannel.sigUpdateMotorPosition.connect(self._onMotorPositionUpdate)
 
+        # Register a homing-state callback for managers that support it (ESP32). The
+        # firmware "home" messages mark that homing has occurred; the per-axis
+        # progress itself is emitted by the manager via sigHomingState.
+        for pName, pManager in self._master.positionersManager:
+            if hasattr(pManager, 'register_homing_callback'):
+                try:
+                    pManager.register_homing_callback(self._onHomingDeviceUpdate)
+                except Exception as e:
+                    self.__logger.error(f"Could not register homing callback for {pName}: {e}")
+
         # Connect PositionerWidget signals
+    def _onHomingDeviceUpdate(self, isHomed):
+        """Firmware home-status callback (best-effort).
+
+        Fired by the ESP32 home module with an isHomed[] array whenever a home
+        message arrives. Used only to flag that homing has happened; authoritative
+        per-axis progress is broadcast by the manager via sigHomingState.
+        """
+        self._hasHomedSinceStartup = True
+        self._homingRecommendationDismissed = False
+
     def closeEvent(self):
         self._master.positionersManager.execOnAll(
             lambda p: [p.setPosition(0, axis) for axis in p.axes],
@@ -158,8 +180,25 @@ class PositionerController(ImConWidgetController):
                                                                homeEndstoppolarity=homeEndstoppolarity, 
                                                                homeEndposRelease=homeEndposRelease, 
                                                                homeTimeout=homeTimeout)
+        self._hasHomedSinceStartup = True
+        self._homingRecommendationDismissed = False
         #self.updatePosition(positionerName, axis)
         #self._commChannel.sigUpdateMotorPosition.emit(self.getPos()) # Not needed as it will be pushed asynchronously from the esp via signal
+
+    @APIExport(runOnUIThread=False)
+    def getHomingStatus(self):
+        return {
+            "hasHomedSinceStartup": self._hasHomedSinceStartup,
+            "homingRecommendationDismissed": self._homingRecommendationDismissed
+        }
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def dismissHomingRecommendation(self):
+        self._homingRecommendationDismissed = True
+        return {
+            "success": True,
+            "homingRecommendationDismissed": self._homingRecommendationDismissed
+        }
 
     @APIExport()
     def stopAxis(self, positionerName=None, axis="X"):
@@ -455,6 +494,180 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self.__logger.debug(f"Moving to sample loading position for positioner {positionerName}")
         self._master.positionersManager[positionerName].moveToSampleLoadingPosition(speed=speed, is_blocking=is_blocking)
+
+    # ========================================================================
+    # Frame homing (collision-safe Z-first global homing) and transport position
+    # ========================================================================
+
+    @APIExport(runOnUIThread=True)
+    def startFrameHoming(self, positionerName: Optional[str] = None, isBlocking: bool = False):
+        """Run the collision-safe global homing procedure (Z first, lift, then XY).
+
+        Per-axis progress is pushed to the frontend via the sigHomingState signal.
+        """
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if not hasattr(manager, 'frameHomingProcedure'):
+            self.__logger.warning(f"{positionerName} does not support frame homing.")
+            return {"success": False, "error": "Frame homing not supported"}
+        self.__logger.debug(f"Starting frame homing for positioner {positionerName}")
+        manager.frameHomingProcedure(is_blocking=isBlocking)
+        self._hasHomedSinceStartup = True
+        self._homingRecommendationDismissed = False
+        return {"success": True}
+
+    @APIExport(runOnUIThread=False)
+    def cancelFrameHoming(self, positionerName: Optional[str] = None):
+        """Cancel an in-progress frame-homing run."""
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if hasattr(manager, 'cancelFrameHoming'):
+            self.__logger.debug(f"Cancelling frame homing for positioner {positionerName}")
+            manager.cancelFrameHoming()
+            return {"success": True}
+        return {"success": False, "error": "Frame homing not supported"}
+
+    @APIExport(runOnUIThread=False)
+    def getFrameHomingState(self, positionerName: Optional[str] = None):
+        """Return the current frame-homing progress state."""
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if hasattr(manager, 'getFrameHomingState'):
+            return manager.getFrameHomingState()
+        return {"active": False, "axes": {}, "phase": "idle", "message": "", "cancelled": False}
+
+    @APIExport(runOnUIThread=True)
+    def moveToTransportPosition(self, positionerName: Optional[str] = None, speed: float = 10000, isBlocking: bool = True):
+        """Move the stage to the stored transportation (locking) position."""
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if not hasattr(manager, 'moveToTransportPosition'):
+            return {"success": False, "error": "Transport position not supported"}
+        self.__logger.debug(f"Moving to transport position for positioner {positionerName}")
+        manager.moveToTransportPosition(speed=speed, is_blocking=isBlocking)
+        return {"success": True}
+
+    @APIExport(runOnUIThread=False)
+    def getTransportPosition(self, positionerName: Optional[str] = None):
+        """Return the stored transportation position (A/X/Y/Z)."""
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if hasattr(manager, 'getTransportPositions'):
+            return manager.getTransportPositions()
+        return {}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setTransportPosition(self, positionerName: Optional[str] = None, useCurrent: bool = True,
+                             a: Optional[float] = None, x: Optional[float] = None,
+                             y: Optional[float] = None, z: Optional[float] = None):
+        """Store the transportation position and persist it to the setup JSON.
+
+        With ``useCurrent=True`` the current stage pose is snapshotted; otherwise
+        the provided ``a``/``x``/``y``/``z`` values are used.
+        """
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if not hasattr(manager, 'setTransportPositions'):
+            return {"success": False, "error": "Transport position not supported"}
+        if useCurrent:
+            positions = manager.setTransportPositions(None)
+        else:
+            positions = manager.setTransportPositions({"A": a, "X": x, "Y": y, "Z": z})
+        self.saveTransportPosition(positionerName=positionerName)
+        return {"success": True, "transportPosition": positions}
+
+    @APIExport(runOnUIThread=True)
+    def stopAllAxes(self, positionerName: Optional[str] = None):
+        """Immediately stop all axes of the positioner."""
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self.__logger.debug(f"Stopping all axes for positioner {positionerName}")
+        self._master.positionersManager[positionerName].forceStop("all")
+        return {"success": True}
+
+    # ========================================================================
+    # Z-stage synchronisation (re-sync the two Z motors against a mechanical stop)
+    # ========================================================================
+
+    @APIExport(runOnUIThread=True)
+    def startZStageSync(self, positionerName: Optional[str] = None, steps: Optional[float] = None):
+        """Re-synchronise the two Z motors against the mechanical stop.
+
+        Drives Z out by ``steps`` µm (default from config), backs off half,
+        restores the Z limit switch, re-homes Z and returns to the prior Z.
+        The frontend tracks progress by polling getZStageSyncState.
+        """
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if not hasattr(manager, 'zStageSyncProcedure'):
+            self.__logger.warning(f"{positionerName} does not support Z-stage sync.")
+            return {"success": False, "error": "Z-stage sync not supported"}
+        self.__logger.debug(f"Starting Z-stage sync for positioner {positionerName} (steps={steps})")
+        manager.zStageSyncProcedure(steps=steps)
+        return {"success": True}
+
+    @APIExport(runOnUIThread=False)
+    def cancelZStageSync(self, positionerName: Optional[str] = None):
+        """Stop an in-progress Z-stage sync run and halt all motors."""
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if hasattr(manager, 'cancelZStageSync'):
+            self.__logger.debug(f"Cancelling Z-stage sync for positioner {positionerName}")
+            manager.cancelZStageSync()
+            return {"success": True}
+        return {"success": False, "error": "Z-stage sync not supported"}
+
+    @APIExport(runOnUIThread=False)
+    def getZStageSyncState(self, positionerName: Optional[str] = None):
+        """Return the current Z-stage sync progress state."""
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        manager = self._master.positionersManager[positionerName]
+        if hasattr(manager, 'getZStageSyncState'):
+            return manager.getZStageSyncState()
+        return {"active": False, "phase": "idle", "message": "", "cancelled": False, "steps": 0}
+
+    def saveTransportPosition(self, positionerName: str):
+        """Persist the transport position to the setup JSON managerProperties.
+
+        Mirrors ``saveStageOffset``: writes ``transportPosition{A,X,Y,Z}`` into the
+        positioner's managerProperties and re-serialises the setup file.
+        """
+        try:
+            if positionerName is None:
+                self.__logger.warning("Cannot save transport position: positionerName is None")
+                return
+            if not hasattr(self, '_setupInfo') or self._setupInfo is None:
+                self.__logger.warning("Cannot save transport position: _setupInfo not available")
+                return
+            if not hasattr(self._setupInfo, 'positioners') or positionerName not in self._setupInfo.positioners:
+                self.__logger.warning(f"Positioner {positionerName} not found in setupInfo.positioners")
+                return
+            manager = self._master.positionersManager[positionerName]
+            positionerInfo = self._setupInfo.positioners[positionerName]
+            if hasattr(manager, 'transportPositions'):
+                for ax in ("A", "X", "Y", "Z"):
+                    if ax in manager.transportPositions:
+                        positionerInfo.managerProperties["transportPosition" + ax] = float(
+                            manager.transportPositions[ax]
+                        )
+            mOptions, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(mOptions, self._setupInfo)
+            self.__logger.info(
+                f"Saved transport position for {positionerName}: {manager.transportPositions}"
+            )
+        except Exception as e:
+            self.__logger.error(f"Could not save transport position: {e}")
+            import traceback
+            traceback.print_exc()
 
 _attrCategory = 'Positioner'
 _positionAttr = 'Position'

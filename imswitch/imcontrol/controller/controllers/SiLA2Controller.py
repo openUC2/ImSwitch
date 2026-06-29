@@ -216,10 +216,10 @@ if HAS_CDK:
         @sila.UnobservableCommand()
         async def snap_image(
             self,
-            detector_name: str = "",
+            detector_name: str=  None, # str = "",
             exposure_time_ms: float = -1.0,
             gain: float = -1.0,
-        ) -> str:
+        ) -> str: # -> np.ndarray:
             """Capture a single frame as a base64-encoded PNG.
 
             Args:
@@ -247,6 +247,13 @@ if HAS_CDK:
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")
                 return base64.b64encode(buf.getvalue()).decode("ascii")
+                import cv2
+                image = cv2.imdecode(np.frombuffer(frame, np.uint8), cv2.IMREAD_COLOR)
+                if image is None:
+                    raise ValueError("Failed to decode image from snapshot bytes.")
+
+                # logger.info(f"Snapshot captured: {image.shape[1]}x{image.shape[0]} px")
+                return image
             except Exception as e:
                 self._logger.error(f"SiLA2 snap_image failed: {e}")
                 return ""

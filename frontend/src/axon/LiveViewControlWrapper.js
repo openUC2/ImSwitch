@@ -50,6 +50,10 @@ const pulse = keyframes`
  * @param {function} onImageLoad - Callback when image dimensions change: (width, height)
  * @param {React.ReactNode} overlayContent - Optional overlay content to render on top of the viewer
  * @param {boolean} enableStageMovement - Enable default double-click stage movement behavior (default: true)
+ * @param {boolean} enableZoomPan - Wrap the viewer in the zoom/pan shell (default: true).
+ *   Set to false for precise single-click workflows (e.g. pixel calibration marking):
+ *   the react-zoom-pan-pinch panning layer otherwise intercepts pointer events and
+ *   swallows the click, so the viewer is rendered directly and clicks reach the canvas.
  */
 const LiveViewControlWrapper = ({
   useFastMode = true,
@@ -57,6 +61,7 @@ const LiveViewControlWrapper = ({
   onImageLoad,
   overlayContent,
   enableStageMovement = true,
+  enableZoomPan = true,
 }) => {
   const dispatch = useDispatch();
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
@@ -151,33 +156,37 @@ const LiveViewControlWrapper = ({
     if (!enableStageMovement) return;
 
     try {
-      // Calculate real-world position from pixel coordinates
-      // Use the actual image dimensions and center coordinates properly
+      // FOV (microns) for the full frame; derive FOV-Y from the aspect ratio
+      // when only fovX is known.
       const fovX = objectiveState.fovX || 1000; // fallback FOV in microns
-      const fovY = objectiveState.fovY || (fovX * imageHeight) / imageWidth; // calculate FOV Y based on aspect ratio
+      const fovY = objectiveState.fovY || (fovX * imageHeight) / imageWidth;
 
-      // Calculate the center of the image
-      const centerX = imageWidth / 2;
-      const centerY = imageHeight / 2;
+      // Offset of the click from the image centre as a fraction of the frame
+      // (-0.5 .. 0.5), then scaled by the FOV to get the µm offset of the
+      // clicked feature from the current centre.
+      const relativeX = (pixelX - imageWidth / 2) / imageWidth;
+      const relativeY = (pixelY - imageHeight / 2) / imageHeight;
 
-      // Calculate relative movement from image center
-      const relativeX = (pixelX - centerX) / imageWidth; // -0.5 to 0.5
-      const relativeY = (pixelY - centerY) / imageHeight; // -0.5 to 0.5
+      // Sign mapping from image axes to stage axes. To bring the clicked point
+      // to the centre, the stage must move opposite to the click offset, so
+      // BOTH default to -1 (previously X was not inverted while Y was, which
+      // made diagonal clicks move along the wrong direction). These signs are
+      // hardware-dependent (camera mirroring / stage wiring): flip the relevant
+      // constant if that axis goes the wrong way. The robust long-term source is
+      // the affine calibration flip (SetupInfo.getFlipFromAffineMatrix).
+      const IMAGE_TO_STAGE_SIGN_X = 1;
+      const IMAGE_TO_STAGE_SIGN_Y = 1;
 
-      // Convert to microns
-      const moveX = relativeX * fovX;
-      const moveY = relativeY * fovY;
+      const moveX = IMAGE_TO_STAGE_SIGN_X * relativeX * fovX;
+      const moveY = IMAGE_TO_STAGE_SIGN_Y * relativeY * fovY;
 
       console.log(
-        `Image: ${imageWidth}x${imageHeight}, Click: (${pixelX}, ${pixelY}), Center: (${centerX}, ${centerY})`,
-      );
-      console.log(
-        `Relative: (${relativeX.toFixed(3)}, ${relativeY.toFixed(
-          3,
-        )}), Moving stage by: X=${moveX.toFixed(2)}µm, Y=${moveY.toFixed(2)}µm`,
+        `Image: ${imageWidth}x${imageHeight}, Click: (${pixelX}, ${pixelY}), ` +
+          `relative: (${relativeX.toFixed(3)}, ${relativeY.toFixed(3)}), ` +
+          `moving stage by X=${moveX.toFixed(2)}µm, Y=${moveY.toFixed(2)}µm`,
       );
 
-      // Move stage to the clicked position (relative movement)
+      // Move stage so the clicked feature ends up at the centre (relative move).
       await apiPositionerControllerMovePositioner({
         axis: "X",
         dist: moveX,
@@ -187,7 +196,7 @@ const LiveViewControlWrapper = ({
 
       await apiPositionerControllerMovePositioner({
         axis: "Y",
-        dist: -moveY, // Invert Y as microscope Y often goes opposite to image Y
+        dist: moveY,
         isAbsolute: false,
         isBlocking: false,
       });
@@ -446,7 +455,7 @@ const LiveViewControlWrapper = ({
           }}
         />
 
-        {liveViewState.isStreamRunning ? (
+        {liveViewState.isStreamRunning && enableZoomPan ? (
           <TransformWrapper
             key={`zoom-shell-${liveStreamState.imageFormat}-${liveViewState.isStreamRunning}`}
             initialScale={1}

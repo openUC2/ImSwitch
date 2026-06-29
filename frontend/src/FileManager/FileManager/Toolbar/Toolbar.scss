@@ -121,6 +121,10 @@
       background-color: rgb(0 0 0 / 100%);
       border-radius: 3px;
     }
+
+    &.active {
+      color: $primary-color;
+    }
   }
 
   .item-separator {

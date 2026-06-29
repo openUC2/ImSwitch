@@ -48,7 +48,6 @@ dependencies = [
     "fastapi >= 0.86.0",
     "uvicorn[standard] >= 0.19.0",
     "matplotlib == 3.9.2",
-    "opencv-python-headless",
     "aiortc >= 1.9.0",
     "jupyter",
     "python-multipart >= 0.0.5",
@@ -70,16 +69,18 @@ dependencies = [
     "msgpack>=1.0.4",
     "esptool",
     "av==13.1.0",
-    "uc2-rest>=0.2.0.33",
+    "uc2-rest==0.2.0.36",
     "unitelabs-sila",
     "unitelabs-cdk",
     "mikro-next>=1",
     "pip>=26.1",
+    "opencv-python-headless>=4.13.0.92",
     "opencv-contrib-python-headless>=4.13.0.92",
     "opencv-contrib-python>=4.13.0.92",
-    "opencv-python>=4.13.0.92",
     "ipympl>=0.9.2",
-    "ashlarUC2 @ git+https://github.com/Franzili/ashlarUC2.git"
+    "useq-schema",
+    "ashlarUC2",
+    "uc2canopen>=0.1.4",
 ]
 
 [project.optional-dependencies]
@@ -140,6 +141,9 @@ imswitch-provisioner = "imswitch.imcontrol.model.jupyter_connection:ExistingProv
 # The compiled (mypyc) version forbids subclassing which ImSwitch requires.
 # See https://github.com/pyapp-kit/psygnal/issues/330
 no-binary-package = ["psygnal"]
+
+[tool.uv.sources]
+ashlarUC2 = { git = "https://github.com/Franzili/ashlarUC2.git", rev = "7135e18eadd438bf76a6017b858ffdcb7c4fb5d4" }
 
 [tool.ruff]
 # Exclude directories

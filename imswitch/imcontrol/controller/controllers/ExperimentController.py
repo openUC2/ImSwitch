@@ -27,6 +27,7 @@ except Exception:
 
 # Import OME writers from new io location
 from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths
+from imswitch.imcontrol.model.io.frame_save_worker import FrameSaveWorker
 from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ExperimentPerformanceMode,
     ExperimentNormalMode,
@@ -73,6 +74,20 @@ class ExperimentController(ImConWidgetController):
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
         self.mda_manager = MDASequenceManager()
+
+        # Background frame-save worker. ``save_frame_ome`` and the
+        # individual-TIFF path it dispatches to used to call into
+        # ``ome_writer.write_frame`` / ``tifffile.imwrite`` *on the
+        # workflow thread*, which blocked the next stage step for
+        # 20–100 ms per frame at 9 MP (more for stitched/individual
+        # TIFFs, much more for a slow SD/USB target). Now we just
+        # queue the write here and the worker thread does the I/O.
+        # The queue is bounded so a slow disk back-pressures the
+        # acquisition loop instead of silently consuming RAM.
+        self._frame_saver = FrameSaveWorker(
+            name="ExperimentFrameSaver",
+            maxsize=32,
+        )
 
         # set default values
         self.SPEED_Y = self.SPEED_Y_default = 20000
@@ -1139,8 +1154,26 @@ class ExperimentController(ImConWidgetController):
             context.on("progress", sendProgress)
             context.on("rgb_stack", sendProgress)
 
+            # Activate deterministic triggered acquisition for every acquire_frame()
+            # call in the workflow.  Falls back to freerun frame-number polling
+            # transparently when the detector does not support software triggers.
+            self._beginTriggeredAcquisition()
+
             # Start the workflow
             self.workflow_manager.start_workflow(wf, context)
+
+            # Restore continuous mode once the workflow thread finishes —
+            # including abort/stop paths — by joining the thread in a daemon.
+            _trigger_cleanup_thread = self.workflow_manager.current_thread
+
+            def _restore_freerun():
+                if _trigger_cleanup_thread is not None:
+                    _trigger_cleanup_thread.join()
+                self._endTriggeredAcquisition()
+
+            threading.Thread(
+                target=_restore_freerun, daemon=True, name="TriggeredAcqCleanup"
+            ).start()
 
             # Auto-trigger Ashlar stitching once the workflow thread finishes,
             # guaranteeing all individual TIFFs are on disk before stitching starts.
@@ -1178,37 +1211,153 @@ class ExperimentController(ImConWidgetController):
     ########################################
     # Hardware-related functions
     ########################################
-    def acquire_frame(self, channel: str, frameSync: int = 1):
-        self._logger.debug(f"Acquiring frame on channel {channel}")
 
-        # Make timeout dependent on exposure time so long exposures don't
-        # prematurely abort.  The camera needs at least (frameSync+1) frame
-        # periods to deliver a fresh frame after an illumination / gain change.
+    def _getExposureTimeSec(self) -> float:
+        """Return the current detector exposure time in seconds (best effort).
+
+        Priority order:
+        1. DetectorManager.getParameter("exposure") — returns ms, clean API.
+        2. _camera.exposure_time raw attribute — µs, camera-specific fallback.
+        3. Hard-coded 0.1 s safe default.
+        """
         try:
-            exposure_s = self.mDetector.getLatestFrame.__self__._camera.exposure_time / 1e6
+            exp_ms = self.mDetector.getParameter("exposure")
+            if exp_ms is not None and float(exp_ms) > 0:
+                return float(exp_ms) / 1000.0
         except Exception:
-            exposure_s = 0.1
+            pass
+        try:
+            return self.mDetector._camera.exposure_time / 1e6
+        except Exception:
+            return 0.1
+
+    def _beginTriggeredAcquisition(self) -> bool:
+        """Switch the detector to software-trigger mode for deterministic post-move grabs.
+
+        In continuous (free-run) mode the camera ring-buffer may hold frames
+        captured before the stage finished settling, so getLatestFrame() can
+        return a stale frame.  In software-trigger mode every exposure is
+        initiated by an explicit trigger fired *after* the stage move, making
+        the returned frame guaranteed to be post-move.
+
+        Returns True when the camera was successfully switched to software-
+        trigger mode; False when the camera does not support it (graceful
+        degradation — callers fall back to the frame-number polling path).
+        """
+        if not hasattr(self.mDetector, "setTriggerSource") or not hasattr(self.mDetector, "snapSync"):
+            self._useTriggeredGrab = False
+            return False
+        try:
+            ok = bool(self.mDetector.setTriggerSource("software"))
+        except Exception as e:
+            self._logger.warning(f"Could not enable software trigger: {e}")
+            ok = False
+        self._useTriggeredGrab = ok
+        if ok:
+            self._logger.info("ExperimentController: camera in software-trigger mode (deterministic grabs)")
+        else:
+            self._logger.warning("ExperimentController: software trigger not supported, using freerun fallback")
+        return ok
+
+    def _endTriggeredAcquisition(self) -> None:
+        """Restore continuous (free-run) acquisition after a triggered sequence.
+
+        Safe to call even when _beginTriggeredAcquisition() was not called or
+        returned False — it is a no-op in that case.
+        """
+        if not getattr(self, "_useTriggeredGrab", False):
+            return
+        self._useTriggeredGrab = False
+        try:
+            if hasattr(self.mDetector, "setTriggerSource"):
+                self.mDetector.setTriggerSource("continuous")
+                self._logger.info("ExperimentController: camera restored to continuous mode")
+        except Exception as e:
+            self._logger.warning(f"Could not restore continuous mode: {e}")
+
+    def grabCameraFrame(self, frameSync: int = 2, returnFrameNumber: bool = False):
+        """Return a single camera frame guaranteed to be captured after this call.
+
+        Fast path — software trigger (when _beginTriggeredAcquisition succeeded):
+            Flushes the ring-buffer, fires one software trigger via
+            detector.snapSync(), and returns exactly the frame that results.
+            No pre-trigger frame can slip through.
+
+        Fallback path — freerun frame-number polling:
+            Flushes the ring-buffer, then polls getLatestFrame() until the
+            frame-number has advanced by at least ``frameSync`` counts.
+            Timeout is proportional to the current exposure time so long
+            exposures do not abort prematurely.
+
+        Args:
+            frameSync: Minimum frame-ID increment to wait for in the fallback
+                path.  2 is a safe default; increase if the illumination/gain
+                change takes more than one frame period to settle.
+            returnFrameNumber: When True, return a ``(frame, frame_number)``
+                tuple instead of just the frame array.
+        """
+        # ── Fast path: triggered grab ─────────────────────────────────────
+        if getattr(self, "_useTriggeredGrab", False) and hasattr(self.mDetector, "snapSync"):
+            mFrame = self.mDetector.snapSync(timeout=max(2.0, self._getExposureTimeSec() * 4 + 1.0))
+            if returnFrameNumber:
+                fn = self.mDetector.getFrameNumber() if hasattr(self.mDetector, "getFrameNumber") else -1
+                return mFrame, fn
+            return mFrame
+
+        # ── Fallback path: flush + frame-number polling ───────────────────
+        # Discard frames captured before this call (e.g. during a stage move)
+        # so the very next frame we receive is post-move.
+        try:
+            if hasattr(self.mDetector, "flushBuffer"):
+                self.mDetector.flushBuffer()
+        except Exception:
+            pass
+
+        exposure_s = self._getExposureTimeSec()
         timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
         cTime = time.time()
-
         lastFrameNumber = -1
+        currentFrameNumber = -1
         mFrame = None
+
         while True:
-            # get frame and frame number to get one that is newer than the one with illumination off eventually
             mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
             if lastFrameNumber == -1:
-                # first round
+                # Anchor: remember the frame number at the start of the wait.
                 lastFrameNumber = currentFrameNumber
             if time.time() - cTime > timeoutFrameRequest:
-                # in case exposure time is too long we need break at one point
+                # Timeout — return whatever we have rather than blocking forever.
                 if mFrame is None:
                     mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
+                self._logger.warning(
+                    f"grabCameraFrame: timed out after {timeoutFrameRequest:.1f}s "
+                    f"(exposure={exposure_s*1000:.0f}ms, frameSync={frameSync})"
+                )
                 break
             if currentFrameNumber <= lastFrameNumber + frameSync:
-                time.sleep(0.01)  # off-load CPU
+                time.sleep(0.01)  # yield CPU while waiting
             else:
                 break
+
+        if returnFrameNumber:
+            return mFrame, currentFrameNumber
         return mFrame
+
+    def acquire_frame(self, channel: str, frameSync: int = 2):
+        """Acquire a single frame deterministically.
+
+        Delegates entirely to grabCameraFrame().  When software-trigger mode
+        was activated via _beginTriggeredAcquisition(), the frame is guaranteed
+        to have been exposed after this call (atomic fire-and-return).
+        Otherwise the freerun fallback is used (flush + frame-number wait).
+
+        Args:
+            channel: Illumination channel name (used for logging only; the
+                caller is expected to have already configured illumination).
+            frameSync: Passed through to grabCameraFrame's fallback path.
+        """
+        self._logger.debug(f"Acquiring frame on channel {channel}")
+        return self.grabCameraFrame(frameSync=frameSync)
 
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
         # Set gain and exposure via the shared attribute signal.
@@ -1556,7 +1705,7 @@ class ExperimentController(ImConWidgetController):
         # only collapse to grayscale for non-RGB detectors that nonetheless
         # hand us a 3-channel frame.
         if img.ndim == 3 and img.shape[2] == 3 and not getattr(self, 'isRGB', False):
-            img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype)
+            img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(img.dtype) # TODO: Is this common sense @Franzili?
 
         # Get tile index to identify the correct OME writer
         position_center_index = kwargs.get("position_center_index")
@@ -1607,38 +1756,74 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.debug(f"Could not enrich OME metadata from MetadataHub: {e}")
 
-        try:
-            # Get file_writers list from context
-            file_writers = context.get_object("file_writers")
-            if file_writers is None or position_center_index >= len(file_writers):
-                self._logger.error(f"No OME writer found for tile index {position_center_index}")
-                metadata["frame_saved"] = False
-                return
+        # Resolve the writer for this tile *before* we hand work to
+        # the background saver — pulling from ``context`` on the
+        # worker thread would be a lifetime hazard.
+        file_writers = context.get_object("file_writers")
+        if file_writers is None or position_center_index >= len(file_writers):
+            self._logger.error(
+                f"No OME writer found for tile index {position_center_index}"
+            )
+            metadata["frame_saved"] = False
+            metadata.pop("result", None)
+            return
+        ome_writer = file_writers[position_center_index]
 
-            # Write frame using the specific OME writer from the list
-            ome_writer = file_writers[position_center_index]
-            chunk_info = ome_writer.write_frame(img, ome_metadata)
+        # Copy the frame so the camera SDK ring buffer can be reused
+        # while the background thread writes. Skipping this is the
+        # textbook way to end up with torn frames in the output stack.
+        # ~5–10 ms for 9 MP on a Pi 5 — much cheaper than the inline
+        # write it replaces.
+        try:
+            img_copy = img.copy()
+        except Exception as copy_err:
+            self._logger.error(f"Frame copy failed: {copy_err}")
+            metadata["frame_saved"] = False
+            metadata.pop("result", None)
+            return
+
+        # The on_success callback runs on the saver thread. Keep it
+        # cheap — signal emission is already thread-safe (see
+        # noqt.SignalInstance.emit which run_coroutine_threadsafe's
+        # the broadcast onto the shared event loop).
+        def _on_success(chunk_info):
             if ome_writer.store:
                 data_path = dirtools.UserFileDirs.getValidatedDataPath()
-                self.setOmeZarrUrl(ome_writer.store.split(data_path)[-1])  # Update OME-Zarr URL in context
-            # Emit signal for frontend updates if Zarr chunk was written
+                self.setOmeZarrUrl(
+                    ome_writer.store.split(data_path)[-1]
+                )
             if chunk_info and "rel_chunk" in chunk_info:
-                sigZarrDict = {
+                self.sigUpdateOMEZarrStore.emit({
                     "event": "zarr_chunk",
                     "path": chunk_info["rel_chunk"],
-                    "zarr": str(self.getOmeZarrUrl())
-                }
-                self.sigUpdateOMEZarrStore.emit(sigZarrDict)
+                    "zarr": str(self.getOmeZarrUrl()),
+                })
 
-            metadata["frame_saved"] = True
-        except Exception as e:
-            self._logger.error(f"Error saving OME frame: {e}")
-            metadata["frame_saved"] = False
+        def _on_error(err):
+            self._logger.error(f"Error saving OME frame: {err}")
 
-        # Release the frame reference now that it has been saved (or failed).
-        # Without this, the numpy array stays alive in the metadata dict which
-        # is stored in WorkflowContext.data for every step, causing unbounded
-        # RAM growth during long wellplate experiments.
+        # Queue the write. ``submit`` BLOCKS when the queue is full,
+        # which is intentional: it lets a slow disk back-pressure the
+        # acquisition loop rather than silently dropping frames.
+        # maxsize=32 (see __init__) caps peak RAM at ~32 × frame_size.
+        self._frame_saver.submit(
+            ome_writer.write_frame,
+            img_copy,
+            ome_metadata,
+            on_success=_on_success,
+            on_error=_on_error,
+        )
+
+        # The frame is in the saver's queue or already on disk by the
+        # time this method returns; either way it's "saved" from the
+        # workflow's perspective. (If the actual disk write later
+        # fails, ``_on_error`` logs it.)
+        metadata["frame_saved"] = True
+
+        # Release the workflow's reference to the frame. We already
+        # made our own copy above; without this pop the array stays
+        # alive in WorkflowContext.data for every step, causing
+        # unbounded RAM growth during long wellplate experiments.
         metadata.pop("result", None)
 
         '''
@@ -1922,6 +2107,29 @@ class ExperimentController(ImConWidgetController):
 
         # Set LED status to idle
         self.set_led_status("idle")
+
+        # Drain any frame writes that are still queued on the
+        # background saver — the workflow has stopped producing new
+        # frames, so this should normally be a brief wait. Bounded so
+        # that a stuck disk doesn't hang stopExperiment forever; if
+        # the timeout fires, the saver thread keeps running in the
+        # background and the writes still eventually land on disk.
+        try:
+            if getattr(self, "_frame_saver", None) is not None:
+                pending = self._frame_saver.pending()
+                if pending:
+                    self._logger.info(
+                        f"Draining {pending} pending frame write(s)…"
+                    )
+                drained = self._frame_saver.flush(timeout=30.0)
+                if not drained:
+                    self._logger.warning(
+                        f"Frame saver still has "
+                        f"{self._frame_saver.pending()} pending write(s) "
+                        f"after 30 s — they will complete in the background."
+                    )
+        except Exception as e:
+            self._logger.debug(f"Frame saver flush failed: {e}")
 
         # If nothing was running, return appropriate message
         if not results:
@@ -2847,6 +3055,17 @@ class ExperimentController(ImConWidgetController):
         # ----------------------------------------------------------
         if config.use_manual_map:
             source_fm = self._find_reusable_manual_map()
+            # If manual XY points were supplied but no fitted manual map exists
+            # yet (Z still "auto"), measure them now by autofocus at the
+            # frontend-provided XY locations — instead of falling back to a tiled
+            # autofocus grid.
+            if source_fm is None and config.points:
+                self._logger.info(
+                    f"Focus map: measuring {len(config.points)} manual point(s) "
+                    f"by autofocus before the tiled scan"
+                )
+                self._measure_focus_map_from_points(config.points, config)
+                source_fm = self._find_reusable_manual_map()
             if source_fm is not None:
                 self._logger.info(
                     f"Focus map: reusing manual map [{source_fm.group_id}] "
@@ -3183,6 +3402,95 @@ class ExperimentController(ImConWidgetController):
                 self._logger.warning(f"Failed to save focus map artifacts: {e}")
 
         return fm.to_result().to_dict()
+
+    def _measure_focus_map_from_points(self, points: List[Dict[str, Any]],
+                                       config: "FocusMapConfig",
+                                       group_id: str = "manual",
+                                       group_name: str = "Manual Points") -> Dict[str, Any]:
+        """Drive to each manual XY point, autofocus to MEASURE Z, then fit.
+
+        Unlike ``computeFocusMapFromPoints`` (which fits already-known XYZ), this
+        measures Z at each point on the backend (blocking). A point that already
+        carries a numeric ``z`` is used as-is (autofocus skipped). The fitted
+        surface is stored under ``group_id`` so it is usable via use_manual_map.
+        """
+        fm = self.focus_map_manager.get_or_create(
+            group_id=group_id, group_name=group_name,
+            method=config.method, smoothing_factor=config.smoothing_factor,
+            z_offset=config.z_offset, clamp_enabled=config.clamp_enabled,
+            z_min=config.z_min, z_max=config.z_max,
+        )
+        fm.clear_points()
+        self._logger.info(f"Focus map [{group_id}]: measuring {len(points)} manual point(s)")
+
+        for i, pt in enumerate(points):
+            if self.focus_map_manager.abort_requested:
+                self._logger.warning(f"Focus map [{group_id}]: aborted at point {i+1}/{len(points)}")
+                break
+            try:
+                gx = float(pt.get("x"))
+                gy = float(pt.get("y"))
+            except (TypeError, ValueError):
+                continue
+            z_in = pt.get("z", None)
+            try:
+                self.move_stage_xy(posX=gx, posY=gy, relative=False)
+                if z_in is not None:
+                    best_z = float(z_in)  # user-provided Z; no autofocus needed
+                else:
+                    time.sleep(0.1)  # settle
+                    best_z = self.autofocus(
+                        mode=config.af_mode, af_range=config.af_range,
+                        af_resolution=config.af_resolution, af_cropsize=config.af_cropsize,
+                        af_algorithm=config.af_algorithm, af_settle_time=config.af_settle_time,
+                        af_static_offset=config.af_static_offset, af_two_stage=config.af_two_stage,
+                        af_n_gauss=config.af_n_gauss, illuminationChannel=config.af_illumination_channel,
+                        max_attempts=config.af_max_attempts, target_focus_setpoint=config.af_target_setpoint,
+                        af_software_method=config.af_software_method,
+                        af_hc_initial_step=config.af_hc_initial_step, af_hc_min_step=config.af_hc_min_step,
+                        af_hc_step_reduction=config.af_hc_step_reduction,
+                        af_hc_max_iterations=config.af_hc_max_iterations,
+                    )
+                    if best_z is None:
+                        best_z = self.mStage.getPosition().get("Z", 0)
+                        self._logger.warning(
+                            f"Focus map [{group_id}]: autofocus failed at ({gx:.1f}, {gy:.1f}), "
+                            f"using current Z={best_z:.3f}"
+                        )
+                fm.add_point(gx, gy, float(best_z))
+                time.sleep(0.3)
+            except Exception as e:
+                self._logger.error(f"Focus map [{group_id}]: failed at ({gx:.1f}, {gy:.1f}): {e}")
+
+        try:
+            stats = fm.fit()
+            self._logger.info(
+                f"Focus map [{group_id}]: measured+fitted {stats.method}, "
+                f"MAE={stats.mean_abs_error:.4f}, n={stats.n_points}"
+            )
+        except ValueError as e:
+            self._logger.error(f"Focus map [{group_id}]: fit failed: {e}")
+        return fm.to_result().to_dict()
+
+    @APIExport(requestType="POST")
+    def measureFocusMapFromPoints(self, focusMapConfig: Optional[FocusMapConfig] = None):
+        """Autofocus-measure Z at each manual point (focusMapConfig.points) and fit.
+
+        Blocking single call (the frontend awaits it) so the measurement runs and
+        completes on the backend rather than looping per-point from the browser.
+        Stores the fitted map under "manual"; enable "Use manual map for all
+        groups" to apply it during acquisition.
+        """
+        if focusMapConfig is None:
+            focusMapConfig = FocusMapConfig(enabled=True)
+        points = focusMapConfig.points or []
+        if not points:
+            return {"error": "No manual points provided (focusMapConfig.points is empty)"}
+        focusMapConfig.af_n_gauss = 0  # speed up AF during mapping (see computeFocusMap)
+        self._focus_map_config = focusMapConfig
+        self.focus_map_manager.clear_abort()
+        result = self._measure_focus_map_from_points(points, focusMapConfig)
+        return {"manual": result}
 
     @APIExport(requestType="GET")
     def getFocusMap(self, group_id: Optional[str] = None):

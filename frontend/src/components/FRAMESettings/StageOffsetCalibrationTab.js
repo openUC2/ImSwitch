@@ -947,6 +947,21 @@ const StageOffsetCalibrationTab = () => {
         position to the known physical coordinate.
       </Typography>
 
+      <Alert severity="info" sx={{ mb: 2 }}>
+        <Typography variant="body2">
+          <strong>What this does:</strong> it anchors the stage&apos;s device
+          coordinates to a known physical reference so absolute moves and known
+          well-plate / chart layouts line up with the real sample.
+        </Typography>
+        <Typography variant="body2" sx={{ mt: 1 }}>
+          <strong>Step 1 — Insert slide &amp; start scan:</strong> put the reference
+          slide in, then raster-scan a small area; the heatmap shows where the
+          reference feature (e.g. a bright hole) is.<br />
+          <strong>Step 2 — Review &amp; accept:</strong> click the feature on the
+          heatmap to pick it (or accept the brightest), then store the offset.
+        </Typography>
+      </Alert>
+
       {!homingAck && (
         <Alert
           severity="warning"

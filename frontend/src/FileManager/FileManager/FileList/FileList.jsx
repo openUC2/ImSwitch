@@ -13,6 +13,7 @@ const FileList = ({
   onRename,
   onFileOpen,
   onOpenWithVizarr,
+  onOpenInNapari,
   onRefresh,
   enableFilePreview,
   triggerAction,
@@ -32,7 +33,7 @@ const FileList = ({
     selectedFileIndexes,
     clickPosition,
     isSelectionCtx,
-  } = useFileList(onRefresh, enableFilePreview, triggerAction, onFileOpen, onOpenWithVizarr);
+  } = useFileList(onRefresh, enableFilePreview, triggerAction, onFileOpen, onOpenWithVizarr, onOpenInNapari);
 
   const contextMenuRef = useDetectOutsideClick(() => setVisible(false));
 

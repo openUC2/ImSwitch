@@ -359,6 +359,15 @@ class FocusMapConfig(BaseModel):
         description="List of scan area dicts with areaId, areaName, bounds (minX/maxX/minY/maxY)",
     )
 
+    # Manually-placed focus points. When present (and use_manual_map), the backend
+    # drives to each XY and autofocuses to measure Z (instead of a grid), then
+    # fits the "manual" map. Each item is {x, y} (z is measured); a provided
+    # numeric z is used as-is and autofocus is skipped for that point.
+    points: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Manual focus points [{x, y, z?}]; Z is autofocus-measured when missing/null",
+    )
+
 
 class Experiment(BaseModel):
     name: str

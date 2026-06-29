@@ -1,8 +1,10 @@
+import { useState } from "react";
 import Loader from "../components/Loader/Loader";
 import Toolbar from "./Toolbar/Toolbar";
 import NavigationPane from "./NavigationPane/NavigationPane";
 import BreadCrumb from "./BreadCrumb/BreadCrumb";
 import FileList from "./FileList/FileList";
+import MetadataPane from "./MetadataPane/MetadataPane";
 import Actions from "./Actions/Actions";
 import { FilesProvider } from "../contexts/FilesContext";
 import { FileNavigationProvider } from "../contexts/FileNavigationContext";
@@ -33,6 +35,7 @@ const FileManager = ({
   onRefresh,
   onFileOpen = () => {},
   onOpenWithVizarr = null,
+  onOpenInNapari = null,
   onError = () => {},
   layout = "grid",
   enableFilePreview = true,
@@ -44,6 +47,7 @@ const FileManager = ({
   initialPath = "/",
 }) => {
   const triggerAction = useTriggerAction();
+  const [showMetadataPane, setShowMetadataPane] = useState(true);
   const {
     containerRef,
     colSizes,
@@ -71,6 +75,8 @@ const FileManager = ({
                   onLayoutChange={onLayoutChange}
                   onRefresh={onRefresh}
                   triggerAction={triggerAction}
+                  showMetadataPane={showMetadataPane}
+                  onToggleMetadataPane={() => setShowMetadataPane((v) => !v)}
                 />
                 <section
                   ref={containerRef}
@@ -93,7 +99,11 @@ const FileManager = ({
 
                   <div
                     className="folders-preview"
-                    style={{ width: colSizes.col2 + "%" }}
+                    style={{
+                      width: showMetadataPane
+                        ? `calc(${colSizes.col2}% - 280px)`
+                        : colSizes.col2 + "%",
+                    }}
                   >
                     <BreadCrumb />
                     <FileList
@@ -101,11 +111,20 @@ const FileManager = ({
                       onRename={onRename}
                       onFileOpen={onFileOpen}
                       onOpenWithVizarr={onOpenWithVizarr}
+                      onOpenInNapari={onOpenInNapari}
                       onRefresh={onRefresh}
                       enableFilePreview={enableFilePreview}
                       triggerAction={triggerAction}
                     />
                   </div>
+
+                  {showMetadataPane && (
+                    <div className="metadata-pane-container">
+                      <MetadataPane
+                        onClose={() => setShowMetadataPane(false)}
+                      />
+                    </div>
+                  )}
                 </section>
 
                 <Actions
@@ -118,6 +137,8 @@ const FileManager = ({
                   filePreviewPath={filePreviewPath}
                   acceptedFileTypes={acceptedFileTypes}
                   triggerAction={triggerAction}
+                  onOpenWithVizarr={onOpenWithVizarr}
+                  onOpenInNapari={onOpenInNapari}
                 />
               </LayoutProvider>
             </ClipBoardProvider>
@@ -156,6 +177,7 @@ FileManager.propTypes = {
   onRefresh: PropTypes.func,
   onFileOpen: PropTypes.func,
   onOpenWithVizarr: PropTypes.func,
+  onOpenInNapari: PropTypes.func,
   onError: PropTypes.func,
   layout: PropTypes.oneOf(["grid", "list"]),
   maxFileSize: PropTypes.number,

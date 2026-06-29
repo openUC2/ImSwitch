@@ -164,6 +164,108 @@ class ArkitektController(ImConWidgetController):
 
         self.arkitekt_app.run_detached()
 
+    # ────────────────────────────────────────────────────────────────────────
+    # Deterministic frame-acquisition helpers (same pattern as ExperimentController)
+    # ────────────────────────────────────────────────────────────────────────
+
+    def _getExposureTimeSec(self) -> float:
+        """Return current detector exposure time in seconds (best effort)."""
+        try:
+            exp_ms = self.mDetector.getParameter("exposure")
+            if exp_ms is not None and float(exp_ms) > 0:
+                return float(exp_ms) / 1000.0
+        except Exception:
+            pass
+        try:
+            return self.mDetector._camera.exposure_time / 1e6
+        except Exception:
+            return 0.1
+
+    def _beginTriggeredAcquisition(self) -> bool:
+        """Switch the detector to software-trigger mode for deterministic post-move grabs.
+
+        Returns True when successful; False when the detector does not support
+        it (graceful degradation to freerun fallback).
+        """
+        if not hasattr(self.mDetector, "setTriggerSource") or not hasattr(self.mDetector, "snapSync"):
+            self._useTriggeredGrab = False
+            return False
+        try:
+            ok = bool(self.mDetector.setTriggerSource("software"))
+        except Exception as e:
+            self._logger.warning(f"Could not enable software trigger: {e}")
+            ok = False
+        self._useTriggeredGrab = ok
+        if ok:
+            self._logger.info("ArkitektController: camera in software-trigger mode (deterministic grabs)")
+        else:
+            self._logger.warning("ArkitektController: software trigger not supported, using freerun fallback")
+        return ok
+
+    def _endTriggeredAcquisition(self) -> None:
+        """Restore continuous (free-run) acquisition — safe to call unconditionally."""
+        if not getattr(self, "_useTriggeredGrab", False):
+            return
+        self._useTriggeredGrab = False
+        try:
+            if hasattr(self.mDetector, "setTriggerSource"):
+                self.mDetector.setTriggerSource("continuous")
+                self._logger.info("ArkitektController: camera restored to continuous mode")
+        except Exception as e:
+            self._logger.warning(f"Could not restore continuous mode: {e}")
+
+    def grabCameraFrame(self, frameSync: int = 2, returnFrameNumber: bool = False):
+        """Return a single camera frame guaranteed to be captured after this call.
+
+        Fast path (triggered): fires one software trigger via mDetector.snapSync()
+        and returns exactly the resulting frame.
+
+        Fallback (freerun): flushes ring-buffer, then polls by frame-number until
+        the counter advances by frameSync counts.  Timeout is exposure-time-scaled.
+        """
+        # ── Fast path ────────────────────────────────────────────────────────
+        if getattr(self, "_useTriggeredGrab", False) and hasattr(self.mDetector, "snapSync"):
+            mFrame = self.mDetector.snapSync(timeout=max(2.0, self._getExposureTimeSec() * 4 + 1.0))
+            if returnFrameNumber:
+                fn = self.mDetector.getFrameNumber() if hasattr(self.mDetector, "getFrameNumber") else -1
+                return mFrame, fn
+            return mFrame
+
+        # ── Fallback path ────────────────────────────────────────────────────
+        try:
+            if hasattr(self.mDetector, "flushBuffer"):
+                self.mDetector.flushBuffer()
+        except Exception:
+            pass
+
+        exposure_s = self._getExposureTimeSec()
+        timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
+        cTime = time.time()
+        lastFrameNumber = -1
+        currentFrameNumber = -1
+        mFrame = None
+
+        while True:
+            mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
+            if lastFrameNumber == -1:
+                lastFrameNumber = currentFrameNumber
+            if time.time() - cTime > timeoutFrameRequest:
+                if mFrame is None:
+                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
+                self._logger.warning(
+                    f"grabCameraFrame: timed out after {timeoutFrameRequest:.1f}s "
+                    f"(exposure={exposure_s*1000:.0f}ms, frameSync={frameSync})"
+                )
+                break
+            if currentFrameNumber <= lastFrameNumber + frameSync:
+                time.sleep(0.01)
+            else:
+                break
+
+        if returnFrameNumber:
+            return mFrame, currentFrameNumber
+        return mFrame
+
     def moveToSampleLoadingPosition(
         self, speed: float = 10000, is_blocking: bool = True
     ):
@@ -250,43 +352,21 @@ class ArkitektController(ImConWidgetController):
     
     @APIExport(runOnUIThread=False)
     def acquireFrame(self, frameSync: int = 3) -> Generator[Image, None, None]:
-        """Acquire a single frame
+        """Acquire a single frame from the detector.
+
+        Uses grabCameraFrame() which prefers software-trigger mode (deterministic)
+        and falls back to freerun frame-number polling when unsupported.
 
         Args:
-            frameSync (int): Number of frames to skip to ensure a fresh frame is acquired.
-                Default is 3.
+            frameSync (int): Passed to grabCameraFrame fallback path.
         Returns:
-            numpy.ndarray: Acquired image frame as a NumPy array.
+            Generator[Image]: Single Arkitekt Image yielded once.
         """
-        # Start acquisition if the detector is not already running
-        if not self.mDetector._running:
-            self.mDetector.startAcquisition()
-            time.sleep(0.3)  # give the camera a moment to deliver its first frame
-
-        timeoutFrameRequest = 3  # seconds
-        cTime = time.time()
-        lastFrameNumber = -1
-        mFrame = None
-        currentFrameNumber = -1
-        while True:
-            mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
-            if lastFrameNumber == -1:
-                lastFrameNumber = currentFrameNumber
-            if time.time() - cTime > timeoutFrameRequest:
-                if mFrame is None:
-                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
-                break
-            if currentFrameNumber <= lastFrameNumber + frameSync:
-                time.sleep(0.01)
-            else:
-                break
-
-        if mFrame is None:
-            self._logger.error("acquireFrame: detector returned no frame within timeout")
-            return
-
+        mFrame, currentFrameNumber = self.grabCameraFrame(frameSync=frameSync, returnFrameNumber=True)
+        # Ensure channel axis required by from_array_like
         if len(mFrame.shape) == 2:
             mFrame = np.expand_dims(mFrame, axis=-1)
+        # Convert to Arkitekt image format
         image = from_array_like(
             xr.DataArray(
                 mFrame,
@@ -414,33 +494,8 @@ class ArkitektController(ImConWidgetController):
         return 1
 
     def acquire_frame(self, frameSync: int = 3):
-
-        # ensure we get a fresh frame; scale timeout to exposure so long
-        # exposures do not prematurely abort
-        try:
-            exposure_s = self.mDetector.getLatestFrame.__self__._camera.exposure_time / 1e6
-        except Exception:
-            exposure_s = 0.1
-        timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
-        cTime = time.time()
-
-        lastFrameNumber=-1
-        while(1):
-            # get frame and frame number to get one that is newer than the one with illumination off eventually
-            mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
-            if lastFrameNumber==-1:
-                # first round
-                lastFrameNumber = currentFrameNumber
-            if time.time()-cTime> timeoutFrameRequest:
-                # in case exposure time is too long we need break at one point
-                if mFrame is None:
-                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
-                break
-            if currentFrameNumber <= lastFrameNumber+frameSync:
-                time.sleep(0.01) # off-load CPU
-            else:
-                break
-        return mFrame
+        """Acquire a single frame — delegates to grabCameraFrame()."""
+        return self.grabCameraFrame(frameSync=frameSync)
 
     @APIExport(runOnUIThread=False)
     def runTileScan(

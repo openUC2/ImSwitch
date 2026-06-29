@@ -1154,8 +1154,26 @@ class ExperimentController(ImConWidgetController):
             context.on("progress", sendProgress)
             context.on("rgb_stack", sendProgress)
 
+            # Activate deterministic triggered acquisition for every acquire_frame()
+            # call in the workflow.  Falls back to freerun frame-number polling
+            # transparently when the detector does not support software triggers.
+            self._beginTriggeredAcquisition()
+
             # Start the workflow
             self.workflow_manager.start_workflow(wf, context)
+
+            # Restore continuous mode once the workflow thread finishes —
+            # including abort/stop paths — by joining the thread in a daemon.
+            _trigger_cleanup_thread = self.workflow_manager.current_thread
+
+            def _restore_freerun():
+                if _trigger_cleanup_thread is not None:
+                    _trigger_cleanup_thread.join()
+                self._endTriggeredAcquisition()
+
+            threading.Thread(
+                target=_restore_freerun, daemon=True, name="TriggeredAcqCleanup"
+            ).start()
 
             # Auto-trigger Ashlar stitching once the workflow thread finishes,
             # guaranteeing all individual TIFFs are on disk before stitching starts.
@@ -1197,37 +1215,153 @@ class ExperimentController(ImConWidgetController):
     ########################################
     # Hardware-related functions
     ########################################
-    def acquire_frame(self, channel: str, frameSync: int = 2):
-        self._logger.debug(f"Acquiring frame on channel {channel}")
 
-        # Make timeout dependent on exposure time so long exposures don't
-        # prematurely abort.  The camera needs at least (frameSync+1) frame
-        # periods to deliver a fresh frame after an illumination / gain change.
+    def _getExposureTimeSec(self) -> float:
+        """Return the current detector exposure time in seconds (best effort).
+
+        Priority order:
+        1. DetectorManager.getParameter("exposure") — returns ms, clean API.
+        2. _camera.exposure_time raw attribute — µs, camera-specific fallback.
+        3. Hard-coded 0.1 s safe default.
+        """
         try:
-            exposure_s = self.mDetector.getLatestFrame.__self__._camera.exposure_time / 1e6
+            exp_ms = self.mDetector.getParameter("exposure")
+            if exp_ms is not None and float(exp_ms) > 0:
+                return float(exp_ms) / 1000.0
         except Exception:
-            exposure_s = 0.1
+            pass
+        try:
+            return self.mDetector._camera.exposure_time / 1e6
+        except Exception:
+            return 0.1
+
+    def _beginTriggeredAcquisition(self) -> bool:
+        """Switch the detector to software-trigger mode for deterministic post-move grabs.
+
+        In continuous (free-run) mode the camera ring-buffer may hold frames
+        captured before the stage finished settling, so getLatestFrame() can
+        return a stale frame.  In software-trigger mode every exposure is
+        initiated by an explicit trigger fired *after* the stage move, making
+        the returned frame guaranteed to be post-move.
+
+        Returns True when the camera was successfully switched to software-
+        trigger mode; False when the camera does not support it (graceful
+        degradation — callers fall back to the frame-number polling path).
+        """
+        if not hasattr(self.mDetector, "setTriggerSource") or not hasattr(self.mDetector, "snapSync"):
+            self._useTriggeredGrab = False
+            return False
+        try:
+            ok = bool(self.mDetector.setTriggerSource("software"))
+        except Exception as e:
+            self._logger.warning(f"Could not enable software trigger: {e}")
+            ok = False
+        self._useTriggeredGrab = ok
+        if ok:
+            self._logger.info("ExperimentController: camera in software-trigger mode (deterministic grabs)")
+        else:
+            self._logger.warning("ExperimentController: software trigger not supported, using freerun fallback")
+        return ok
+
+    def _endTriggeredAcquisition(self) -> None:
+        """Restore continuous (free-run) acquisition after a triggered sequence.
+
+        Safe to call even when _beginTriggeredAcquisition() was not called or
+        returned False — it is a no-op in that case.
+        """
+        if not getattr(self, "_useTriggeredGrab", False):
+            return
+        self._useTriggeredGrab = False
+        try:
+            if hasattr(self.mDetector, "setTriggerSource"):
+                self.mDetector.setTriggerSource("continuous")
+                self._logger.info("ExperimentController: camera restored to continuous mode")
+        except Exception as e:
+            self._logger.warning(f"Could not restore continuous mode: {e}")
+
+    def grabCameraFrame(self, frameSync: int = 2, returnFrameNumber: bool = False):
+        """Return a single camera frame guaranteed to be captured after this call.
+
+        Fast path — software trigger (when _beginTriggeredAcquisition succeeded):
+            Flushes the ring-buffer, fires one software trigger via
+            detector.snapSync(), and returns exactly the frame that results.
+            No pre-trigger frame can slip through.
+
+        Fallback path — freerun frame-number polling:
+            Flushes the ring-buffer, then polls getLatestFrame() until the
+            frame-number has advanced by at least ``frameSync`` counts.
+            Timeout is proportional to the current exposure time so long
+            exposures do not abort prematurely.
+
+        Args:
+            frameSync: Minimum frame-ID increment to wait for in the fallback
+                path.  2 is a safe default; increase if the illumination/gain
+                change takes more than one frame period to settle.
+            returnFrameNumber: When True, return a ``(frame, frame_number)``
+                tuple instead of just the frame array.
+        """
+        # ── Fast path: triggered grab ─────────────────────────────────────
+        if getattr(self, "_useTriggeredGrab", False) and hasattr(self.mDetector, "snapSync"):
+            mFrame = self.mDetector.snapSync(timeout=max(2.0, self._getExposureTimeSec() * 4 + 1.0))
+            if returnFrameNumber:
+                fn = self.mDetector.getFrameNumber() if hasattr(self.mDetector, "getFrameNumber") else -1
+                return mFrame, fn
+            return mFrame
+
+        # ── Fallback path: flush + frame-number polling ───────────────────
+        # Discard frames captured before this call (e.g. during a stage move)
+        # so the very next frame we receive is post-move.
+        try:
+            if hasattr(self.mDetector, "flushBuffer"):
+                self.mDetector.flushBuffer()
+        except Exception:
+            pass
+
+        exposure_s = self._getExposureTimeSec()
         timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
         cTime = time.time()
-
         lastFrameNumber = -1
+        currentFrameNumber = -1
         mFrame = None
+
         while True:
-            # get frame and frame number to get one that is newer than the one with illumination off eventually
             mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
             if lastFrameNumber == -1:
-                # first round
+                # Anchor: remember the frame number at the start of the wait.
                 lastFrameNumber = currentFrameNumber
             if time.time() - cTime > timeoutFrameRequest:
-                # in case exposure time is too long we need break at one point
+                # Timeout — return whatever we have rather than blocking forever.
                 if mFrame is None:
                     mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
+                self._logger.warning(
+                    f"grabCameraFrame: timed out after {timeoutFrameRequest:.1f}s "
+                    f"(exposure={exposure_s*1000:.0f}ms, frameSync={frameSync})"
+                )
                 break
             if currentFrameNumber <= lastFrameNumber + frameSync:
-                time.sleep(0.01)  # off-load CPU
+                time.sleep(0.01)  # yield CPU while waiting
             else:
                 break
+
+        if returnFrameNumber:
+            return mFrame, currentFrameNumber
         return mFrame
+
+    def acquire_frame(self, channel: str, frameSync: int = 2):
+        """Acquire a single frame deterministically.
+
+        Delegates entirely to grabCameraFrame().  When software-trigger mode
+        was activated via _beginTriggeredAcquisition(), the frame is guaranteed
+        to have been exposed after this call (atomic fire-and-return).
+        Otherwise the freerun fallback is used (flush + frame-number wait).
+
+        Args:
+            channel: Illumination channel name (used for logging only; the
+                caller is expected to have already configured illumination).
+            frameSync: Passed through to grabCameraFrame's fallback path.
+        """
+        self._logger.debug(f"Acquiring frame on channel {channel}")
+        return self.grabCameraFrame(frameSync=frameSync)
 
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
         # Set gain and exposure via the shared attribute signal.

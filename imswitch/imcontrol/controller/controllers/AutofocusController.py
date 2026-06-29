@@ -306,7 +306,20 @@ class AutofocusController(ImConWidgetController):
         Returns:
             dict with state information
         """
-        current_z, is_valid, error = self._getSafeCurrentZ()
+        # Cached Z position: read the stage manager's in-memory position (kept
+        # up to date by move commands and the async device callback) instead of
+        # issuing a blocking device round-trip on every status poll.
+        current_z = 0
+        is_valid = False
+        error = 1
+        try:
+            stages = getattr(self, "stages", None)
+            if stages is not None:
+                current_z = float(stages.position.get("Z", 0.0))
+                is_valid = True
+                error = 0
+        except Exception:
+            current_z, is_valid, error = 0, False, 1
         return {
             "state": self._getAutofocusState().value,
             "isRunning": self.isAutofusRunning,
@@ -791,6 +804,7 @@ class AutofocusController(ImConWidgetController):
                     binning=binning,
                     n_gauss=nGauss,
                     method=self._focusMethod,
+                    isDebug=False
                 )
 
                 # Emit signal with focus value and timestamp
@@ -812,7 +826,58 @@ class AutofocusController(ImConWidgetController):
 
         self.__logger.info("Live monitoring thread stopped")
 
-    def grabCameraFrame(self, frameSync: int = 1, returnFrameNumber: bool = False):
+    def _beginTriggeredAcquisition(self):
+        """Switch the camera to software trigger for in-sync, post-move grabs.
+
+        Free-running (continuous) acquisition buffers frames asynchronously, so a
+        grab can return a frame exposed before the stage settled. In software
+        trigger mode each frame is exposed in response to an explicit trigger we
+        fire after the move — eliminating the lag. Returns True if active.
+        """
+        cam = getattr(self, "camera", None)
+        if cam is None or not hasattr(cam, "snapSync") or not hasattr(cam, "setTriggerSource"):
+            self._useTriggeredGrab = False
+            return False
+        try:
+            ok = bool(cam.setTriggerSource("software"))
+        except Exception as e:
+            self.__logger.warning(f"Could not enable software trigger: {e}")
+            ok = False
+        self._useTriggeredGrab = ok
+        if ok:
+            self.__logger.info("Autofocus: camera in software-trigger mode (in-sync grabs)")
+        return ok
+
+    def _endTriggeredAcquisition(self):
+        """Restore continuous (free-run) acquisition for the live view."""
+        if not getattr(self, "_useTriggeredGrab", False):
+            return
+        self._useTriggeredGrab = False
+        try:
+            if getattr(self, "camera", None) is not None and hasattr(self.camera, "setTriggerSource"):
+                self.camera.setTriggerSource("continuous")
+                self.__logger.info("Autofocus: camera restored to continuous mode")
+        except Exception as e:
+            self.__logger.warning(f"Could not restore continuous mode: {e}")
+
+    def grabCameraFrame(self, frameSync: int = 3, returnFrameNumber: bool = False):
+        # Deterministic path: during a triggered scan, fire a software trigger and
+        # return the frame it produces — guaranteed exposed after the move/settle.
+        if getattr(self, "_useTriggeredGrab", False) and hasattr(self.camera, "snapSync"):
+            mFrame = self.camera.snapSync(timeout=2.0)
+            if returnFrameNumber:
+                getFN = getattr(self.camera, "getFrameNumber", None)
+                return mFrame, (getFN() if callable(getFN) else -1)
+            return mFrame
+        # Drop frames buffered during the (just-completed) move so the
+        # frame-number wait below starts from a genuinely post-move frame. With
+        # the camera now storing owned copies (no SDK-buffer aliasing), this
+        # guarantees the grabbed frame matches the current stage position.
+        try:
+            if hasattr(self.camera, "flushBuffer"):
+                self.camera.flushBuffer()
+        except Exception:
+            pass
         # ensure we get a fresh frame
         timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
         cTime = time.time()
@@ -850,6 +915,8 @@ class AutofocusController(ImConWidgetController):
             self.__logger.info(f"Starting autofocus - Stage 1: Coarse scan (range=±{rangez}, resolution={resolutionz}), defocus={defocusz}, axis={axis}, tSettle={tSettle}, nGauss={nGauss}, nCropsize={nCropsize}, focusAlgorithm={focusAlgorithm}, static_offset={static_offset}, twoStage={twoStage}")
             self._setAutofocusState(AutofocusState.SCANNING)
             self._commChannel.sigAutoFocusRunning.emit(True)
+            # Acquire via software trigger so each frame is exposed after its move.
+            self._beginTriggeredAcquisition()
             # Stage 1: Coarse scan
             best_z_coarse = self._doSingleAutofocusScan(rangez, resolutionz, defocusz, axis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset)
 
@@ -905,6 +972,9 @@ class AutofocusController(ImConWidgetController):
             self._setAutofocusState(AutofocusState.ERROR)
             self._commChannel.sigAutoFocusRunning.emit(False)
             return None
+        finally:
+            # Always restore continuous mode so the live view resumes.
+            self._endTriggeredAcquisition()
 
     def _doSingleAutofocusScan(self, rangez:float, resolutionz:float, defocusz:float, axis:str, tSettle:float, isDebug:bool, nGauss:int, nCropsize:int, focusAlgorithm:str, static_offset:float, center_position:float=None):
         """
@@ -986,10 +1056,10 @@ class AutofocusController(ImConWidgetController):
                     import tifffile as tif
                     # Save raw frames as-is (preserve original datatype)
                     if frame.dtype == np.uint8 or frame.dtype == np.uint16:
-                        tif.imwrite("autofocus_frame_z.tif", frame, append=True)
+                        tif.imwrite("autofocus_frame_z.tif", frame[::4,::4], append=True)
                     else:
                         # For float or other types, convert to float32
-                        tif.imwrite("autofocus_frame_z.tif", frame.astype(np.float32), append=True)
+                        tif.imwrite("autofocus_frame_z.tif", frame.astype(np.float32)[::4,::4], append=True)
                 mProcessor.add_frame(frame, iz)
 
             # Block until all results arrive (event-based, not busy polling)
@@ -1296,16 +1366,9 @@ class FrameProcessor:
             binning=self.binning,
             n_gauss=self.nGauss,
             method=self.focusMethod,
+            isDebug=self.isDebug
         )
 
-        if self.isDebug:
-            try:
-                import tifffile as tif
-                tif.imwrite("autofocus_proc_frame.tif",
-                            np.asarray(img).astype(np.float32, copy=False),
-                            append=True)
-            except Exception:
-                pass
 
         return focus_value
 
@@ -1369,7 +1432,7 @@ class FrameProcessor:
 
 
 def _compute_focus_value_fast(img, crop_size=2048, binning=1, n_gauss=0,
-                               method="LAPE"):
+                               method="LAPE", isDebug=False):
     """
     Single fast pipeline used by FrameProcessor, hill-climbing, fast-sweep
     and live-monitoring paths.
@@ -1427,6 +1490,16 @@ def _compute_focus_value_fast(img, crop_size=2048, binning=1, n_gauss=0,
         if ksize % 2 == 0:
             ksize += 1
         gray_u8 = cv2.GaussianBlur(gray_u8, (ksize, ksize), float(n_gauss))
+
+    if isDebug:
+        try:
+            import tifffile as tif
+            tif.imwrite("autofocus_proc_frame.tif",
+                        np.asarray(gray_u8).astype(np.float32, copy=False),
+                        append=True)
+        except Exception:
+            pass
+
 
     # 6) Focus measure
     if method == "LAPE":

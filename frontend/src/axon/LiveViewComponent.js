@@ -40,26 +40,22 @@ const LiveViewComponent = ({
     lastTime: performance.now(),
   });
 
-  // Track FPS for JPEG stream (triggered on each new frame)
+  // Track FPS for the JPEG stream. Frames are counted in the uc2:jpeg-frame
+  // listener below (Redux now updates only ~3 Hz, so we can't infer FPS from it).
   useEffect(() => {
-    if (!liveStreamState.liveViewImage) return;
-
-    const counter = fpsCounterRef.current;
-    counter.frames++;
-
-    const now = performance.now();
-    const elapsed = now - counter.lastTime;
-
-    // Update FPS every second
-    if (elapsed >= 1000) {
-      const fps = Math.round((counter.frames * 1000) / elapsed);
-      dispatch(liveViewSlice.setStats({ fps, bps: 0 })); // bps not available for JPEG
-
-      // Reset counters
-      counter.frames = 0;
-      counter.lastTime = now;
-    }
-  }, [liveStreamState.liveViewImage, dispatch]);
+    const id = setInterval(() => {
+      const counter = fpsCounterRef.current;
+      const now = performance.now();
+      const elapsed = now - counter.lastTime;
+      if (elapsed >= 1000) {
+        const fps = Math.round((counter.frames * 1000) / elapsed);
+        dispatch(liveViewSlice.setStats({ fps, bps: 0 })); // bps not available for JPEG
+        counter.frames = 0;
+        counter.lastTime = now;
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [dispatch]);
   const prevDimensionsRef = useRef({ width: 0, height: 0 }); // Track dimensions to avoid redundant callbacks
   const histogramCounterRef = useRef(0); // Counter for throttling histogram computation
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -311,17 +307,37 @@ const LiveViewComponent = ({
     imageLoaded,
   ]);
 
-  // New frame from the backend → keep only the latest and (re)start a decode.
+  // Keep a ref to the latest decodeAndDraw so the mount-once frame listener
+  // always uses the current one (which closes over min/max) without re-binding.
+  const decodeRef = useRef(decodeAndDraw);
   useEffect(() => {
-    if (liveStreamState.liveViewImage) {
-      latestB64Ref.current = liveStreamState.liveViewImage;
-      decodeAndDraw();
-    } else {
+    decodeRef.current = decodeAndDraw;
+  }, [decodeAndDraw]);
+
+  // Live render path: each JPEG frame arrives as an imperative CustomEvent
+  // (dispatched by WebSocketHandler), NOT through Redux — so the canvas runs at
+  // full FPS while the React tree does not re-render per frame.
+  useEffect(() => {
+    const onFrame = (e) => {
+      const image = e.detail && e.detail.image;
+      if (!image) return;
+      latestB64Ref.current = image;
+      fpsCounterRef.current.frames++;
+      decodeRef.current();
+    };
+    window.addEventListener("uc2:jpeg-frame", onFrame);
+    return () => window.removeEventListener("uc2:jpeg-frame", onFrame);
+  }, []);
+
+  // Reset the canvas when the stream stops (Redux liveViewImage cleared). The
+  // Redux mirror is throttled, but this only needs to fire on stop.
+  useEffect(() => {
+    if (!liveStreamState.liveViewImage) {
       latestB64Ref.current = null;
       setImageLoaded(false);
       setCanvasStyle({});
     }
-  }, [liveStreamState.liveViewImage, decodeAndDraw]);
+  }, [liveStreamState.liveViewImage]);
 
   // Re-apply responsive sizing when the container resizes — no re-decode needed.
   useEffect(() => {
@@ -521,19 +537,20 @@ const LiveViewComponent = ({
         overflow: "hidden",
       }}
     >
-      {/* Canvas for intensity-scaled image */}
-      {liveStreamState.liveViewImage ? (
-        <canvas
-          ref={canvasRef}
-          style={{
-            ...canvasStyle,
-            display: imageLoaded ? canvasStyle.display : "none",
-            cursor: adaptivePixelSize ? "crosshair" : "default",
-          }}
-          onClick={handleCanvasClick}
-          onDoubleClick={handleCanvasDoubleClick}
-        />
-      ) : (
+      {/* Canvas is always mounted so the imperative uc2:jpeg-frame listener can
+          draw into it immediately; it stays hidden until the first frame is
+          decoded (then imageLoaded flips it visible). */}
+      <canvas
+        ref={canvasRef}
+        style={{
+          ...canvasStyle,
+          display: imageLoaded ? canvasStyle.display : "none",
+          cursor: adaptivePixelSize ? "crosshair" : "default",
+        }}
+        onClick={handleCanvasClick}
+        onDoubleClick={handleCanvasDoubleClick}
+      />
+      {!imageLoaded && (
         <Box
           sx={{
             display: "flex",

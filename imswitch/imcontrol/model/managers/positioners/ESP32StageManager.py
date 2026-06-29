@@ -349,6 +349,28 @@ class ESP32StageManager(PositionerManager):
     def setupMotor(self, minPos, maxPos, stepSize, backlash, axis):
         self._motor.setup_motor(axis=axis, minPos=minPos, maxPos=maxPos, stepSize=stepSize, backlash=backlash)
 
+    def setBacklash(self, axis, backlashUm):
+        """Set an axis' backlash from a value in microns (e.g. a camera measurement).
+
+        Converts microns to hardware steps with the configured per-axis step size
+        and pushes it to the motor, which applies it as a reversal overshoot. The
+        cached ``backlash<Axis>`` is updated so a later ``setupMotor`` keeps it.
+        Note: the value is *not* written back to the saved config here.
+        """
+        axis = str(axis).upper()
+        stepSize = self.stepSizes.get(axis, 1) or 1
+        backlashSteps = int(round(float(backlashUm) / stepSize))
+        self._motor.set_backlash(axis=axis, backlash=backlashSteps)
+        if axis == "X":
+            self.backlashX = backlashSteps
+        elif axis == "Y":
+            self.backlashY = backlashSteps
+        elif axis == "Z":
+            self.backlashZ = backlashSteps
+        elif axis == "A":
+            self.backlashA = backlashSteps
+        return {"axis": axis, "backlashUm": float(backlashUm), "backlashSteps": backlashSteps}
+
     def setupMotorDriver(self, axis="X", msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=0.1):
         self._motor.set_tmc_parameters(axis=axis, msteps=msteps, rms_current=rms_current, stall_value=stall_value, sgthrs=sgthrs, semin=semin, semax=semax, blank_time=blank_time, toff=toff, timeout=timeout)
         # Remember what we applied so the frontend can read it back even though

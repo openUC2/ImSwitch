@@ -48,7 +48,7 @@ class ESP32StageManager(PositionerManager):
         self.stageOffsetPositions["Z"] = positionerInfo.stageOffsets.get('stageOffsetPositionZ',0)
         self.stageOffsetPositions["A"] = positionerInfo.stageOffsets.get('stageOffsetPositionA',0)
 
-        # Calibrated stepsizes in steps/µm
+        # Calibrated stepsizes in µm/step
         self.stepSizes = {}
         self.stepSizes["X"] = positionerInfo.managerProperties.get('stepsizeX', 1)
         self.stepSizes["Y"] = positionerInfo.managerProperties.get('stepsizeY', 1)

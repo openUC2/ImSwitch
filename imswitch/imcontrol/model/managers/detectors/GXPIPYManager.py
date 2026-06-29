@@ -179,6 +179,7 @@ class GXPIPYManager(DetectorManager):
                 raise ValueError(f'Invalid trigger source "{source}"')
         except Exception as e:
             self.__logger.error(f'Failed to set trigger source to {source}: {e}')
+        return True
 
 
     def getChunk(self):

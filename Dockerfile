@@ -77,9 +77,15 @@ ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib
 ENV LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32
 ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 
+# Install Micro-Manager, which is a large dependency that changes infrequently. This is done in a separate container image layer to avoid re-installing it when the ImSwitch repository changes.
+RUN --mount=type=bind,source=docker/build-micromanager.sh,target=/mnt/build/build-micromanager.sh \
+    /mnt/build/build-micromanager.sh
+ENV MICROMANAGER_PATH=/opt/micro-manager/lib/micro-manager
+
 # Larger slowly-changing dependencies are installed in a separate container image layer before the
 # rapidly-changing ImSwitch repository:
 RUN --mount=type=bind,source=docker/build-imswitch-deps.sh,target=/mnt/build/build-imswitch-deps.sh --mount=type=bind,source=./pyproject.toml,target=/mnt/ImSwitch/pyproject.toml --mount=type=bind,source=./uv.lock,target=/mnt/ImSwitch/uv.lock /mnt/build/build-imswitch-deps.sh
+
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Question(ethanjli): if we're copying the ImSwitch & UC2-REST repositories from local files using

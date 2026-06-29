@@ -189,7 +189,7 @@ class HikCamManager(DetectorManager):
         self.__logger.debug(f'Setting trigger source to {source}')
         self._camera.setTriggerSource(source)
         self.parameters['trigger_source'].value = source
-        True
+        return True
 
     def getChunk(self):
         try:

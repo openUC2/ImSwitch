@@ -9,7 +9,6 @@ from imswitch.imcommon.model import (
     ostools,
     initLogger,
     generateAPI,
-    generateUI,
     generateShortcuts,
     SharedAttributes,
 )
@@ -230,16 +229,6 @@ class ImConMainController(MainController):
             f" is not included in your currently active"
             f" hardware setup file.",
         )
-        self.__apiui = None
-        uiObjs = mainView.widgets
-        self.__apiui = generateUI(
-            uiObjs,
-            missingAttributeErrorMsg=lambda attr: f"The imcontrol API does either not have any"
-            f" method {attr}, or the widget that defines it"
-            f" is not included in your currently active"
-            f" hardware setup file.",
-        )
-
         # Connect LiveViewController stream signal to noqt signal handler in headless mode
         if "LiveView" in self.controllers:
             try:
@@ -257,7 +246,7 @@ class ImConMainController(MainController):
 
         self.__logger.debug("Start ImSwitch Server")
         self._serverWorker = ImSwitchServer(
-            self.__api, self.__apiui, setupInfo, master=self.__masterController,
+            self.__api, setupInfo, master=self.__masterController,
         )
         self._thread = threading.Thread(target=self._serverWorker.run)
         self._thread.start()

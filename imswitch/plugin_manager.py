@@ -6,8 +6,6 @@ Replacement for the old ``createAPI()`` / ``_uiapi`` machinery in
 ``ImSwitchServer.py``. Loads plugins from two sources, validates them
 against the manifest schema, instantiates one controller per plugin, and
 mounts both backend routes and frontend bundles onto the FastAPI app.
-
-Design goals
 ------------
 1. **One source of truth** — the plugin manifest. The host never has to
    read the controller's source to learn about the plugin.
@@ -21,13 +19,6 @@ Design goals
    ``/api/plugins`` with a ``status`` of ``"error"`` and a human-readable
    message; it never crashes the host.
 
-Back-compat (Phase 1 of the migration plan)
--------------------------------------------
-While both the v1 ``@UIExport`` mechanism and this manager coexist, the
-manager **also appends** a v1-shaped record to ``_ui_manifests`` for every
-loaded plugin, so the existing React shell (which already reads
-``/api/plugins`` and looks for ``remote``/``scope``/``exposed``) keeps
-working without a frontend change.
 """
 from __future__ import annotations
 
@@ -87,15 +78,11 @@ class PluginManager:
     FastAPI app.
     """
 
-    def __init__(self, master, setup_info, socket_app=None,
-                 legacy_manifest_sink: Optional[list] = None):
-        self._log         = initLogger(self)
-        self._master      = master
-        self._setup_info  = setup_info
-        self._socket_app  = socket_app
-        # Optional list to receive v1-shaped manifest records for back-compat
-        # with the existing /api/plugins endpoint.
-        self._legacy_sink = legacy_manifest_sink
+    def __init__(self, master, setup_info, socket_app=None):
+        self._log        = initLogger(self)
+        self._master     = master
+        self._setup_info = setup_info
+        self._socket_app = socket_app
         self._plugins: Dict[str, LoadedPlugin] = {}
         self._errors:  List[Dict[str, str]]    = []
 
@@ -138,10 +125,6 @@ class PluginManager:
             self._log.info("mounted plugin %r at %s (ui=%s)",
                            plugin.manifest.name, plugin.mount,
                            plugin.ui_dir is not None)
-            # Back-compat: also publish a v1-shaped record so the existing
-            # /api/plugins endpoint keeps serving us.
-            if self._legacy_sink is not None:
-                self._legacy_sink.append(self._legacy_record(plugin))
 
     def manifest_list(self) -> List[Dict[str, Any]]:
         """v2 manifest payload (richer than the v1 list)."""
@@ -319,7 +302,7 @@ class PluginManager:
         names = mgr.getAllDeviceNames()
         return names[0] if names else None
 
-    # ── errors / back-compat ───────────────────────────────────────────────
+    # ── errors ─────────────────────────────────────────────────────────────
     def _record_error(self, source: str, exc: Exception) -> None:
         self._log.error("plugin %s failed to load:\n%s",
                         source, traceback.format_exc())
@@ -328,53 +311,3 @@ class PluginManager:
             "error":   f"{type(exc).__name__}: {exc}",
         })
 
-    @staticmethod
-    def _legacy_record(plugin: LoadedPlugin) -> Dict[str, Any]:
-        """Build a manifest entry that *both* the v1 and v2 React shells
-        understand.
-
-        Schema overview:
-
-        * ``name``, ``icon``, ``scope``, ``exposed`` — v1 fields the
-          existing shell already reads.
-        * ``remote_entry`` — absolute URL path (rooted under the FastAPI
-          app's ``root_path``) the v2 shell uses with Module Federation.
-        * ``api_base`` / ``socket_ns`` — v2 fields for the new loader.
-
-        The existing v1 frontend prepends
-        ``${hostIP}:${apiPort}/imswitch/api`` to its ``remote`` field. We
-        expose ``remote_entry`` as an absolute path (``/imswitch/plugin/...``)
-        instead, and let the updated shell (see
-        ``frontend/src/App.jsx``) prefer it over the legacy fields when
-        present.
-        """
-        ui = plugin.manifest.ui
-        has_ui = plugin.ui_dir is not None
-        remote_entry = f"{plugin.mount}/ui/remoteEntry.js" if has_ui else None
-        return {
-            "name":         plugin.manifest.name,
-            "display_name": plugin.manifest.display_name,
-            "version":      plugin.manifest.version,
-            "status":       "ok",
-            # menu metadata
-            "icon":         ui.menu_icon,
-            "label":        ui.menu_label,
-            "group":        ui.menu_group,
-            "order":        ui.order,
-            "menu": {
-                "label": ui.menu_label,
-                "icon":  ui.menu_icon,
-                "group": ui.menu_group,
-                "order": ui.order,
-            },
-            # module federation
-            "scope":        ui.scope,
-            "exposed":      ui.exposed if ui.exposed.startswith("./") else f"./{ui.exposed}",
-            "remote_entry": remote_entry,
-            # API + socket
-            "api_base":     f"{plugin.mount}/api",
-            "socket_ns":    f"{plugin.mount}",
-            # legacy keys (kept so older shells don't crash)
-            "path":         str(plugin.ui_dir) if has_ui else "",
-            "url":          f"{plugin.mount}/ui/index.html" if has_ui else None,
-        }

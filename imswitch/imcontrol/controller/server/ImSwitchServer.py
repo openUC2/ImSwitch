@@ -63,8 +63,6 @@ except:print("Could not mount /imcontrol ui static files since directory is miss
 app.mount("/images", StaticFiles(directory=images_dir), name="images") # serve images for GUI
 # provide data path via static files
 app.mount("/data", StaticFiles(directory=dirtools.UserFileDirs.getValidatedDataPath()), name="data")  # serve user data files
-# manifests for the react app
-_ui_manifests = []
 
 
 if IS_SSL:
@@ -500,11 +498,10 @@ class ServerThread(threading.Thread):
             print("Server is stopping...")
 class ImSwitchServer(Worker):
 
-    def __init__(self, api, uiapi, setupInfo, master=None):
+    def __init__(self, api, setupInfo, master=None):
         super().__init__()
 
         self._api = api
-        self._uiapi = uiapi
         self._setupInfo = setupInfo
         self._master = master
         self._paused = False
@@ -524,19 +521,12 @@ class ImSwitchServer(Worker):
         app.include_router(api_router)
 
         # ── v2 plugin system ────────────────────────────────────────────
-        # Discover plugins from (a) the "imswitch.plugins" entry-point
-        # group and (b) $IMSWITCH_PLUGIN_DIR. The PluginManager mounts
-        # each plugin's APIRouter at /plugin/<name>/api and serves its
-        # built React bundle at /plugin/<name>/ui. It also appends a
-        # v1-shaped manifest record to ``_ui_manifests`` so the existing
-        # /api/plugins endpoint keeps working unchanged.
         try:
             from imswitch.plugin_manager import PluginManager
             self._plugin_manager = PluginManager(
-                master              = self._master,
-                setup_info          = self._setupInfo,
-                socket_app          = socket_app,
-                legacy_manifest_sink= _ui_manifests,
+                master     = self._master,
+                setup_info = self._setupInfo,
+                socket_app = socket_app,
             )
             self._plugin_manager.discover()
             self._plugin_manager.attach_to_app(app)
@@ -607,17 +597,6 @@ class ImSwitchServer(Worker):
 
         return {"url": jupyter_url}
 
-    @api_router.get("/plugins")
-    def get_plugins():
-        """
-        Returns a list of available plugins
-        """
-        plugins = []
-        for f in _ui_manifests:
-            plugin = f
-            plugins.append(plugin)
-        return {"plugins": plugins}
-
     @api_router.get("/hostname")
     def get_hostname():
         """
@@ -657,22 +636,6 @@ class ImSwitchServer(Worker):
                         return func(*args, **kwargs)
             return wrapper
 
-        def includeUIAPI(str, func):
-            # based on UIExport decorator, only get is supported
-
-
-            if hasattr(func, '_UIExport') and func._UIExport:
-                @app.get(str)
-                @wraps(func)
-                async def wrapper(*args, **kwargs):
-                    return func(*args, **kwargs)
-            else:
-                @app.get(str)
-                @wraps(func)
-                async def wrapper(*args, **kwargs):
-                    return func(*args, **kwargs)
-            return wrapper
-
         # add APIExport decorated functions to the fastAPI
         for f in functions:
             func = api_dict[f]
@@ -681,37 +644,6 @@ class ImSwitchServer(Worker):
             else:
                 module = func.__module__.split('.')[-1]
             self.func = includeAPI("/"+module+"/"+f, func)
-
-        # add UIExport decorated functions to the fastAPI under /externUI
-        if self._uiapi is None: return # we are on QT mode
-        uiapi_dict = self._uiapi._asdict()
-        functions = uiapi_dict.keys()
-        for f in functions:
-            func = uiapi_dict[f]
-            if hasattr(func, 'module'):
-                module = func.module
-            else:
-                module = func.__module__.split('.')[-1]
-            meta = getattr(func, "_ui_meta", None)
-            mount = f"/plugin/{meta['name']}"
-            # self.func = includeUIAPI(mount, func)
-            _ui_manifests.append({
-                "name": meta["name"],
-                "icon": meta["icon"],
-                "path": meta["path"],
-                "exposed": "Widget",
-                "scope": "lightsheet_plugin",
-                "url": os.path.join(mount,"index.html"),
-                "remote": os.path.join(mount,"remoteEntry.js")
-            })
-            # only if the mount exists:
-            self.__logger.debug(f"Mounting {mount} to {os.path.join(meta['path'])}")
-            if os.path.exists(os.path.join(meta["path"])):
-                app.mount(
-                    mount,
-                    StaticFiles(directory=os.path.join(meta["path"])),
-                    name=meta["name"],
-                )
 
     @api_router.get("/UC2ConfigController/is_connected")
     def is_connected():

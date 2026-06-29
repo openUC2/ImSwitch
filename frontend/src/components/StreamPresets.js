@@ -54,6 +54,7 @@ import {
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
+import * as laserSlice from "../state/slices/LaserSlice.js";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
 
 import apiLiveViewControllerSetStreamParameters from "../backendapi/apiLiveViewControllerSetStreamParameters";
@@ -98,7 +99,9 @@ const readPresets = () => {
 const writePresets = (presets) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(presets || []));
-  } catch (_e) { /* quota or disabled — silently ignore */ }
+  } catch (_e) {
+    /* quota or disabled — silently ignore */
+  }
 };
 
 const StreamPresets = () => {
@@ -106,7 +109,9 @@ const StreamPresets = () => {
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
-  const { ip: hostIP, apiPort: hostPort } = useSelector(getConnectionSettingsState);
+  const { ip: hostIP, apiPort: hostPort } = useSelector(
+    getConnectionSettingsState,
+  );
 
   const [presets, setPresets] = useState(readPresets);
   const [saveOpen, setSaveOpen] = useState(false);
@@ -130,7 +135,7 @@ const StreamPresets = () => {
   // everything" but the user can untick sections that shouldn't be captured
   // in the new preset (e.g. illumination, streaming protocol).
   const [saveSections, setSaveSections] = useState({
-    streaming: true,    // imageFormat + streamSettings + snap/record format
+    streaming: true, // imageFormat + streamSettings + snap/record format
     exposureGain: true,
     objective: true,
     illumination: true,
@@ -141,21 +146,27 @@ const StreamPresets = () => {
   const [saveApplyObjectiveZ, setSaveApplyObjectiveZ] = useState(false);
 
   // Keep storage in sync when presets list mutates.
-  useEffect(() => { writePresets(presets); }, [presets]);
+  useEffect(() => {
+    writePresets(presets);
+  }, [presets]);
 
   // Snapshot of "what the user would save right now."
-  const currentSnapshot = useMemo(() => ({
-    currentDetector: liveViewState.detectors?.[liveViewState.activeTab] ?? null,
-    imageFormat: liveStreamState.imageFormat,
-    streamSettings: liveStreamState.streamSettings,
-    snapFormat: liveViewState.snapFormat,
-    recordFormat: liveViewState.recordFormat,
-    objective: {
-      currentObjective: objectiveState.currentObjective,
-      name: objectiveState.objectivName,
-      pixelsize: objectiveState.pixelsize,
-    },
-  }), [liveStreamState, liveViewState, objectiveState]);
+  const currentSnapshot = useMemo(
+    () => ({
+      currentDetector:
+        liveViewState.detectors?.[liveViewState.activeTab] ?? null,
+      imageFormat: liveStreamState.imageFormat,
+      streamSettings: liveStreamState.streamSettings,
+      snapFormat: liveViewState.snapFormat,
+      recordFormat: liveViewState.recordFormat,
+      objective: {
+        currentObjective: objectiveState.currentObjective,
+        name: objectiveState.objectivName,
+        pixelsize: objectiveState.pixelsize,
+      },
+    }),
+    [liveStreamState, liveViewState, objectiveState],
+  );
 
   /** Fetch current exposure/gain from the backend so we can store them too. */
   const fetchExposureGain = async () => {
@@ -199,18 +210,24 @@ const StreamPresets = () => {
                 `${hostIP}:${hostPort}/imswitch/api/LaserController/getLaserValue?laserName=${enc}`,
               );
               if (v.ok) power = await v.json();
-            } catch (_e) { /* per-laser non-fatal */ }
+            } catch (_e) {
+              /* per-laser non-fatal */
+            }
             try {
               const a = await fetch(
                 `${hostIP}:${hostPort}/imswitch/api/LaserController/getLaserActive?laserName=${enc}`,
               );
               if (a.ok) enabled = await a.json();
-            } catch (_e) { /* per-laser non-fatal */ }
+            } catch (_e) {
+              /* per-laser non-fatal */
+            }
             result.lasers.push({ name, power, enabled });
           }
         }
       }
-    } catch (_e) { /* no laser controller — leave lasers empty */ }
+    } catch (_e) {
+      /* no laser controller — leave lasers empty */
+    }
 
     // --- LEDs ---
     // LEDController only exposes setLEDValue/setLEDActive — there are no value
@@ -224,17 +241,26 @@ const StreamPresets = () => {
       if (namesRes.ok) {
         const names = await namesRes.json();
         if (Array.isArray(names)) {
-          result.leds = names.map((name) => ({ name, intensity: null, enabled: null }));
+          result.leds = names.map((name) => ({
+            name,
+            intensity: null,
+            enabled: null,
+          }));
         }
       }
-    } catch (_e) { /* no LED controller — leave leds empty */ }
+    } catch (_e) {
+      /* no LED controller — leave leds empty */
+    }
 
     return result;
   };
 
   const handleSave = async () => {
     const name = newName.trim();
-    if (!name) { setError("Please enter a name for the preset."); return; }
+    if (!name) {
+      setError("Please enter a name for the preset.");
+      return;
+    }
     setError("");
 
     // Conditionally fetch what the user opted-in to.
@@ -255,12 +281,18 @@ const StreamPresets = () => {
       // ambiguous, e.g. exposure=null could mean "unknown" instead of "skip").
       sections: { ...saveSections },
       // Detector
-      currentDetector: saveSections.streaming ? currentSnapshot.currentDetector : null,
+      currentDetector: saveSections.streaming
+        ? currentSnapshot.currentDetector
+        : null,
       // Frontend state snapshot
       imageFormat: saveSections.streaming ? currentSnapshot.imageFormat : null,
-      streamSettings: saveSections.streaming ? currentSnapshot.streamSettings : null,
+      streamSettings: saveSections.streaming
+        ? currentSnapshot.streamSettings
+        : null,
       snapFormat: saveSections.streaming ? currentSnapshot.snapFormat : null,
-      recordFormat: saveSections.streaming ? currentSnapshot.recordFormat : null,
+      recordFormat: saveSections.streaming
+        ? currentSnapshot.recordFormat
+        : null,
       // Detector exposure/gain state
       exposure,
       gain,
@@ -310,15 +342,25 @@ const StreamPresets = () => {
         try {
           const pre = await apiLiveViewControllerGetStreamParameters();
           activeBefore = Object.keys(pre?.current_active_protocols || {});
-        } catch (_e) { /* ignore — best effort */ }
+        } catch (_e) {
+          /* ignore — best effort */
+        }
         // Stop every detector that the backend reports as actively streaming.
         for (const det of activeBefore) {
-          try { await apiLiveViewControllerStopLiveView(det); } catch (_e) { /* ignore */ }
+          try {
+            await apiLiveViewControllerStopLiveView(det);
+          } catch (_e) {
+            /* ignore */
+          }
         }
         // Fallback: backend didn't report anything but Redux thought it was
         // running — stop the first active one anyway.
         if (activeBefore.length === 0 && wasStreamRunning) {
-          try { await apiLiveViewControllerStopLiveView(); } catch (_e) { /* ignore */ }
+          try {
+            await apiLiveViewControllerStopLiveView();
+          } catch (_e) {
+            /* ignore */
+          }
           wasStreamRunning = true;
         } else {
           wasStreamRunning = wasStreamRunning || activeBefore.length > 0;
@@ -373,19 +415,25 @@ const StreamPresets = () => {
             await apiLiveViewControllerSetStreamParameters("binary", {
               compression_algorithm: bin.compression?.algorithm,
               compression_level: bin.compression?.level,
-              subsampling_factor: bin.subsampling?.factor ?? bin.subsampling_factor ?? 4,
+              subsampling_factor:
+                bin.subsampling?.factor ?? bin.subsampling_factor ?? 4,
               throttle_ms: bin.throttle_ms ?? 100,
             });
-          } catch (_e) { /* non-fatal */ }
+          } catch (_e) {
+            /* non-fatal */
+          }
         }
         if (jpg?.enabled) {
           try {
             await apiLiveViewControllerSetStreamParameters("jpeg", {
               jpeg_quality: jpg.quality,
-              subsampling_factor: jpg.subsampling?.factor ?? jpg.subsampling_factor ?? 1,
+              subsampling_factor:
+                jpg.subsampling?.factor ?? jpg.subsampling_factor ?? 1,
               throttle_ms: jpg.throttle_ms ?? 100,
             });
-          } catch (_e) { /* non-fatal */ }
+          } catch (_e) {
+            /* non-fatal */
+          }
         }
         // MJPEG defaults use the same knobs as JPEG; the worker class
         // is different on the backend but the StreamParams overlap.
@@ -401,7 +449,9 @@ const StreamPresets = () => {
                 1,
               throttle_ms: mjp.throttle_ms ?? jpg?.throttle_ms ?? 100,
             });
-          } catch (_e) { /* non-fatal */ }
+          } catch (_e) {
+            /* non-fatal */
+          }
         }
       }
 
@@ -419,14 +469,18 @@ const StreamPresets = () => {
           await fetch(
             `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorExposureTime?exposureTime=${preset.exposure}`,
           );
-        } catch (_e) { /* non-fatal */ }
+        } catch (_e) {
+          /* non-fatal */
+        }
       }
       if (sec.exposureGain && preset.gain != null) {
         try {
           await fetch(
             `${hostIP}:${hostPort}/imswitch/api/SettingsController/setDetectorGain?gain=${preset.gain}`,
           );
-        } catch (_e) { /* non-fatal */ }
+        } catch (_e) {
+          /* non-fatal */
+        }
       }
 
       // 4) Objective slot. `applyObjectiveZ` controls whether the backend
@@ -434,9 +488,18 @@ const StreamPresets = () => {
       if (sec.objective && preset.objective?.currentObjective != null) {
         try {
           const skipZ = !preset.applyObjectiveZ;
-          await apiObjectiveControllerMoveToObjective(preset.objective.currentObjective, skipZ);
-          dispatch(objectiveSlice.setCurrentObjective(preset.objective.currentObjective));
-        } catch (_e) { /* non-fatal */ }
+          await apiObjectiveControllerMoveToObjective(
+            preset.objective.currentObjective,
+            skipZ,
+          );
+          dispatch(
+            objectiveSlice.setCurrentObjective(
+              preset.objective.currentObjective,
+            ),
+          );
+        } catch (_e) {
+          /* non-fatal */
+        }
       }
 
       // 5) Illumination (lasers + LEDs). Each call is wrapped individually so
@@ -444,7 +507,7 @@ const StreamPresets = () => {
       // rest of the preset from applying. Failures are collected and surfaced
       // as a single warning at the end.
       const illuErrors = [];
-      const illu = sec.illumination ? (preset.illumination || {}) : {};
+      const illu = sec.illumination ? preset.illumination || {} : {};
       for (const laser of illu.lasers || []) {
         if (!laser?.name) continue;
         const enc = encodeURIComponent(laser.name);
@@ -454,6 +517,12 @@ const StreamPresets = () => {
               `${hostIP}:${hostPort}/imswitch/api/LaserController/setLaserValue?laserName=${enc}&value=${laser.power}`,
             );
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            dispatch(
+              laserSlice.setLaserPower({
+                laserName: laser.name,
+                power: Number(laser.power),
+              }),
+            );
           } catch (e) {
             illuErrors.push(`laser ${laser.name} power: ${e.message || e}`);
           }
@@ -464,6 +533,12 @@ const StreamPresets = () => {
               `${hostIP}:${hostPort}/imswitch/api/LaserController/setLaserActive?laserName=${enc}&active=${laser.enabled}`,
             );
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            dispatch(
+              laserSlice.setLaserEnabled({
+                laserName: laser.name,
+                enabled: !!laser.enabled,
+              }),
+            );
           } catch (e) {
             illuErrors.push(`laser ${laser.name} active: ${e.message || e}`);
           }
@@ -501,21 +576,28 @@ const StreamPresets = () => {
       // setStreamParameters auto-restart) is what guarantees the new stream
       // is bound to the *preset's* detector, not the previously-active one.
       if (sec.streaming && wasStreamRunning) {
-        const proto = preset.imageFormat
-          || liveStreamState.imageFormat
-          || "jpeg";
+        const proto =
+          preset.imageFormat || liveStreamState.imageFormat || "jpeg";
         const det = preset.currentDetector || null;
         try {
-          const result = await apiLiveViewControllerStartLiveView(det, proto, null);
+          const result = await apiLiveViewControllerStartLiveView(
+            det,
+            proto,
+            null,
+          );
           dispatch(liveViewSlice.setIsStreamRunning(true));
           if (result?.params && det) {
-            dispatch(liveStreamSlice.updateDetectorSettings({
-              detectorName: det,
-              settings: result.params,
-            }));
+            dispatch(
+              liveStreamSlice.updateDetectorSettings({
+                detectorName: det,
+                settings: result.params,
+              }),
+            );
           }
         } catch (e) {
-          illuErrors.push(`startLiveView(${det || "default"}, ${proto}): ${e.message || e}`);
+          illuErrors.push(
+            `startLiveView(${det || "default"}, ${proto}): ${e.message || e}`,
+          );
         }
       }
 
@@ -529,7 +611,7 @@ const StreamPresets = () => {
         const currentProtocol = fresh?.current_protocol || preset.imageFormat;
         const merged = {
           binary: {
-            enabled: protos.binary?.is_active ?? (currentProtocol === "binary"),
+            enabled: protos.binary?.is_active ?? currentProtocol === "binary",
             compression: {
               algorithm: protos.binary?.compression_algorithm ?? "lz4",
               level: protos.binary?.compression_level ?? 0,
@@ -538,13 +620,13 @@ const StreamPresets = () => {
             throttle_ms: protos.binary?.throttle_ms ?? 100,
           },
           jpeg: {
-            enabled: protos.jpeg?.is_active ?? (currentProtocol === "jpeg"),
+            enabled: protos.jpeg?.is_active ?? currentProtocol === "jpeg",
             quality: protos.jpeg?.jpeg_quality ?? 85,
             subsampling: { factor: protos.jpeg?.subsampling_factor ?? 1 },
             throttle_ms: protos.jpeg?.throttle_ms ?? 100,
           },
           webrtc: {
-            enabled: protos.webrtc?.is_active ?? (currentProtocol === "webrtc"),
+            enabled: protos.webrtc?.is_active ?? currentProtocol === "webrtc",
             max_width: protos.webrtc?.max_width ?? 1280,
             throttle_ms: protos.webrtc?.throttle_ms ?? 33,
             subsampling_factor: protos.webrtc?.subsampling_factor ?? 1,
@@ -559,7 +641,9 @@ const StreamPresets = () => {
         if (currentProtocol) {
           dispatch(liveStreamSlice.setImageFormat(currentProtocol));
         }
-      } catch (_e) { /* ignore */ }
+      } catch (_e) {
+        /* ignore */
+      }
 
       if (illuErrors.length > 0) {
         setError(
@@ -626,18 +710,22 @@ const StreamPresets = () => {
     setEditError("");
     const { exposure, gain } = await fetchExposureGain();
     const illumination = await fetchIlluminationState();
-    setEditDraft((d) => (d ? {
-      ...d,
-      currentDetector: currentSnapshot.currentDetector,
-      imageFormat: currentSnapshot.imageFormat,
-      streamSettings: currentSnapshot.streamSettings,
-      snapFormat: currentSnapshot.snapFormat,
-      recordFormat: currentSnapshot.recordFormat,
-      objective: currentSnapshot.objective,
-      exposure,
-      gain,
-      illumination,
-    } : d));
+    setEditDraft((d) =>
+      d
+        ? {
+            ...d,
+            currentDetector: currentSnapshot.currentDetector,
+            imageFormat: currentSnapshot.imageFormat,
+            streamSettings: currentSnapshot.streamSettings,
+            snapFormat: currentSnapshot.snapFormat,
+            recordFormat: currentSnapshot.recordFormat,
+            objective: currentSnapshot.objective,
+            exposure,
+            gain,
+            illumination,
+          }
+        : d,
+    );
   };
 
   /** Validate the draft. Returns an error string or "" if OK. */
@@ -656,7 +744,11 @@ const StreamPresets = () => {
       }
     }
     for (const l of d.illumination?.leds || []) {
-      if (l?.intensity != null && l.intensity !== "" && Number.isNaN(Number(l.intensity))) {
+      if (
+        l?.intensity != null &&
+        l.intensity !== "" &&
+        Number.isNaN(Number(l.intensity))
+      ) {
         return `LED "${l.name}" intensity must be a number.`;
       }
     }
@@ -689,9 +781,14 @@ const StreamPresets = () => {
   /** Save (overwrite same id). */
   const handleEditSave = () => {
     const err = validateDraft(editDraft);
-    if (err) { setEditError(err); return; }
+    if (err) {
+      setEditError(err);
+      return;
+    }
     const normalized = normalizeDraft(editDraft);
-    setPresets((prev) => prev.map((p) => (p.id === normalized.id ? normalized : p)));
+    setPresets((prev) =>
+      prev.map((p) => (p.id === normalized.id ? normalized : p)),
+    );
     setInfo(`Updated preset "${normalized.name}".`);
     closeEdit();
   };
@@ -699,7 +796,10 @@ const StreamPresets = () => {
   /** Save As New (new id). Prompts for confirmation if the name collides. */
   const handleEditSaveAsNew = () => {
     const err = validateDraft(editDraft);
-    if (err) { setEditError(err); return; }
+    if (err) {
+      setEditError(err);
+      return;
+    }
     const normalized = normalizeDraft(editDraft);
     const clone = {
       ...normalized,
@@ -752,14 +852,31 @@ const StreamPresets = () => {
           Stream Presets
         </Typography>
         <Tooltip title="Frontend-only macros for objective, exposure, gain and livestream parameters">
-          <Chip label={`${presets.length} saved`} size="small" variant="outlined" />
+          <Chip
+            label={`${presets.length} saved`}
+            size="small"
+            variant="outlined"
+          />
         </Tooltip>
       </Stack>
 
-      {error && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError("")}>{error}</Alert>}
-      {info && <Alert severity="success" sx={{ mb: 1 }} onClose={() => setInfo("")}>{info}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError("")}>
+          {error}
+        </Alert>
+      )}
+      {info && (
+        <Alert severity="success" sx={{ mb: 1 }} onClose={() => setInfo("")}>
+          {info}
+        </Alert>
+      )}
 
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1, flexWrap: "wrap" }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
+        sx={{ mb: 1, flexWrap: "wrap" }}
+      >
         <FormControl size="small" sx={{ minWidth: 200, flexGrow: 1 }}>
           <InputLabel>Saved preset</InputLabel>
           <Select
@@ -774,8 +891,12 @@ const StreamPresets = () => {
             )}
             {presets.map((p) => {
               const hasIllu =
-                (p.illumination?.lasers || []).some((l) => l?.power != null || l?.enabled) ||
-                (p.illumination?.leds || []).some((l) => l?.intensity != null || l?.enabled);
+                (p.illumination?.lasers || []).some(
+                  (l) => l?.power != null || l?.enabled,
+                ) ||
+                (p.illumination?.leds || []).some(
+                  (l) => l?.intensity != null || l?.enabled,
+                );
               return (
                 <MenuItem key={p.id} value={p.id}>
                   {p.name}
@@ -786,7 +907,11 @@ const StreamPresets = () => {
                   {hasIllu && (
                     <IlluminationIcon
                       fontSize="inherit"
-                      sx={{ ml: 0.75, verticalAlign: "middle", color: "warning.main" }}
+                      sx={{
+                        ml: 0.75,
+                        verticalAlign: "middle",
+                        color: "warning.main",
+                      }}
                     />
                   )}
                 </MenuItem>
@@ -835,51 +960,111 @@ const StreamPresets = () => {
             size="small"
             variant="outlined"
             startIcon={<SaveIcon />}
-            onClick={() => { setNewName(""); setError(""); setSaveOpen(true); }}
+            onClick={() => {
+              setNewName("");
+              setError("");
+              setSaveOpen(true);
+            }}
           >
             Save current
           </Button>
         </Tooltip>
       </Stack>
 
-      <Dialog open={saveOpen} onClose={() => setSaveOpen(false)} fullWidth maxWidth="xs">
+      <Dialog
+        open={saveOpen}
+        onClose={() => setSaveOpen(false)}
+        fullWidth
+        maxWidth="xs"
+      >
         <DialogTitle>Save current settings as preset</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Stored locally in your browser only. The following parameters will be saved:
+            Stored locally in your browser only. The following parameters will
+            be saved:
           </Typography>
           <Box sx={{ mb: 2, p: 1, bgcolor: "action.hover", borderRadius: 1 }}>
             <Stack spacing={0.75}>
               <Stack direction="row" spacing={1} flexWrap="wrap">
-                <Chip size="small" color="primary" variant="outlined" label={`Detector: ${currentSnapshot.currentDetector || "(none)"}`} />
-                <Chip size="small" label={`Protocol: ${currentSnapshot.imageFormat || "?"}`} />
+                <Chip
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                  label={`Detector: ${currentSnapshot.currentDetector || "(none)"}`}
+                />
+                <Chip
+                  size="small"
+                  label={`Protocol: ${currentSnapshot.imageFormat || "?"}`}
+                />
               </Stack>
               {currentSnapshot.streamSettings?.jpeg?.enabled && (
                 <Stack direction="row" spacing={1} flexWrap="wrap">
-                  <Chip size="small" label={`JPEG quality: ${currentSnapshot.streamSettings.jpeg.quality ?? "?"}`} />
-                  <Chip size="small" label={`JPEG subsample: ×${currentSnapshot.streamSettings.jpeg.subsampling?.factor ?? currentSnapshot.streamSettings.jpeg.subsampling_factor ?? "?"}`} />
-                  <Chip size="small" label={`JPEG throttle: ${currentSnapshot.streamSettings.jpeg.throttle_ms ?? "?"}ms`} />
+                  <Chip
+                    size="small"
+                    label={`JPEG quality: ${currentSnapshot.streamSettings.jpeg.quality ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`JPEG subsample: ×${currentSnapshot.streamSettings.jpeg.subsampling?.factor ?? currentSnapshot.streamSettings.jpeg.subsampling_factor ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`JPEG throttle: ${currentSnapshot.streamSettings.jpeg.throttle_ms ?? "?"}ms`}
+                  />
                 </Stack>
               )}
               {currentSnapshot.streamSettings?.binary?.enabled && (
                 <Stack direction="row" spacing={1} flexWrap="wrap">
-                  <Chip size="small" label={`Codec: ${currentSnapshot.streamSettings.binary.compression?.algorithm ?? "?"} L${currentSnapshot.streamSettings.binary.compression?.level ?? "?"}`} />
-                  <Chip size="small" label={`Bin subsample: ×${currentSnapshot.streamSettings.binary.subsampling?.factor ?? "?"}`} />
-                  <Chip size="small" label={`Bin throttle: ${currentSnapshot.streamSettings.binary.throttle_ms ?? "?"}ms`} />
+                  <Chip
+                    size="small"
+                    label={`Codec: ${currentSnapshot.streamSettings.binary.compression?.algorithm ?? "?"} L${currentSnapshot.streamSettings.binary.compression?.level ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`Bin subsample: ×${currentSnapshot.streamSettings.binary.subsampling?.factor ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`Bin throttle: ${currentSnapshot.streamSettings.binary.throttle_ms ?? "?"}ms`}
+                  />
                 </Stack>
               )}
               {currentSnapshot.streamSettings?.webrtc?.enabled && (
                 <Stack direction="row" spacing={1} flexWrap="wrap">
-                  <Chip size="small" label={`WebRTC max-w: ${currentSnapshot.streamSettings.webrtc.max_width ?? "?"}`} />
-                  <Chip size="small" label={`WebRTC subsample: ×${currentSnapshot.streamSettings.webrtc.subsampling_factor ?? "?"}`} />
-                  <Chip size="small" label={`WebRTC throttle: ${currentSnapshot.streamSettings.webrtc.throttle_ms ?? "?"}ms`} />
+                  <Chip
+                    size="small"
+                    label={`WebRTC max-w: ${currentSnapshot.streamSettings.webrtc.max_width ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`WebRTC subsample: ×${currentSnapshot.streamSettings.webrtc.subsampling_factor ?? "?"}`}
+                  />
+                  <Chip
+                    size="small"
+                    label={`WebRTC throttle: ${currentSnapshot.streamSettings.webrtc.throttle_ms ?? "?"}ms`}
+                  />
                 </Stack>
               )}
               <Stack direction="row" spacing={1} flexWrap="wrap">
-                <Chip size="small" label={`Objective: ${currentSnapshot.objective?.name || `#${currentSnapshot.objective?.currentObjective ?? "?"}`}`} />
-                <Chip size="small" label={`Snap: ${currentSnapshot.snapFormat}`} variant="outlined" />
-                <Chip size="small" label={`Rec: ${currentSnapshot.recordFormat}`} variant="outlined" />
-                <Chip size="small" label="exposure + gain (fetched on save)" variant="outlined" />
+                <Chip
+                  size="small"
+                  label={`Objective: ${currentSnapshot.objective?.name || `#${currentSnapshot.objective?.currentObjective ?? "?"}`}`}
+                />
+                <Chip
+                  size="small"
+                  label={`Snap: ${currentSnapshot.snapFormat}`}
+                  variant="outlined"
+                />
+                <Chip
+                  size="small"
+                  label={`Rec: ${currentSnapshot.recordFormat}`}
+                  variant="outlined"
+                />
+                <Chip
+                  size="small"
+                  label="exposure + gain (fetched on save)"
+                  variant="outlined"
+                />
                 <Chip
                   size="small"
                   icon={<IlluminationIcon />}
@@ -909,7 +1094,12 @@ const StreamPresets = () => {
                   <Checkbox
                     size="small"
                     checked={saveSections.streaming}
-                    onChange={(e) => setSaveSections((s) => ({ ...s, streaming: e.target.checked }))}
+                    onChange={(e) =>
+                      setSaveSections((s) => ({
+                        ...s,
+                        streaming: e.target.checked,
+                      }))
+                    }
                   />
                 }
                 label="Streaming / protocol"
@@ -919,7 +1109,12 @@ const StreamPresets = () => {
                   <Checkbox
                     size="small"
                     checked={saveSections.exposureGain}
-                    onChange={(e) => setSaveSections((s) => ({ ...s, exposureGain: e.target.checked }))}
+                    onChange={(e) =>
+                      setSaveSections((s) => ({
+                        ...s,
+                        exposureGain: e.target.checked,
+                      }))
+                    }
                   />
                 }
                 label="Exposure + gain"
@@ -929,7 +1124,12 @@ const StreamPresets = () => {
                   <Checkbox
                     size="small"
                     checked={saveSections.objective}
-                    onChange={(e) => setSaveSections((s) => ({ ...s, objective: e.target.checked }))}
+                    onChange={(e) =>
+                      setSaveSections((s) => ({
+                        ...s,
+                        objective: e.target.checked,
+                      }))
+                    }
                   />
                 }
                 label="Objective"
@@ -939,7 +1139,12 @@ const StreamPresets = () => {
                   <Checkbox
                     size="small"
                     checked={saveSections.illumination}
-                    onChange={(e) => setSaveSections((s) => ({ ...s, illumination: e.target.checked }))}
+                    onChange={(e) =>
+                      setSaveSections((s) => ({
+                        ...s,
+                        illumination: e.target.checked,
+                      }))
+                    }
                   />
                 }
                 label="Illumination"
@@ -964,11 +1169,19 @@ const StreamPresets = () => {
             )}
           </Box>
 
-          {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+          {error && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {error}
+            </Alert>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSaveOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleSave} disabled={!newName.trim()}>
+          <Button
+            variant="contained"
+            onClick={handleSave}
+            disabled={!newName.trim()}
+          >
             Save
           </Button>
         </DialogActions>
@@ -1027,12 +1240,15 @@ const StreamPresets = () => {
                   type="number"
                   label="Objective slot"
                   value={editDraft.objective?.currentObjective ?? ""}
-                  onChange={(e) => patchDraft({
-                    objective: {
-                      ...(editDraft.objective || {}),
-                      currentObjective: e.target.value === "" ? null : Number(e.target.value),
-                    },
-                  })}
+                  onChange={(e) =>
+                    patchDraft({
+                      objective: {
+                        ...(editDraft.objective || {}),
+                        currentObjective:
+                          e.target.value === "" ? null : Number(e.target.value),
+                      },
+                    })
+                  }
                   inputProps={{ step: 1, min: 0 }}
                   sx={{ flex: 1 }}
                 />
@@ -1043,7 +1259,9 @@ const StreamPresets = () => {
                   <Switch
                     size="small"
                     checked={!!editDraft.applyObjectiveZ}
-                    onChange={(e) => patchDraft({ applyObjectiveZ: e.target.checked })}
+                    onChange={(e) =>
+                      patchDraft({ applyObjectiveZ: e.target.checked })
+                    }
                   />
                 }
                 label={
@@ -1056,27 +1274,48 @@ const StreamPresets = () => {
               {(editDraft.illumination?.lasers?.length ?? 0) > 0 && (
                 <>
                   <Divider textAlign="left">
-                    <Typography variant="caption" color="text.secondary">Lasers</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Lasers
+                    </Typography>
                   </Divider>
                   <Stack spacing={1}>
                     {editDraft.illumination.lasers.map((l, i) => (
-                      <Stack key={`l-${l.name}-${i}`} direction="row" spacing={1} alignItems="center">
-                        <Chip size="small" label={l.name} sx={{ minWidth: 120 }} />
+                      <Stack
+                        key={`l-${l.name}-${i}`}
+                        direction="row"
+                        spacing={1}
+                        alignItems="center"
+                      >
+                        <Chip
+                          size="small"
+                          label={l.name}
+                          sx={{ minWidth: 120 }}
+                        />
                         <TextField
                           size="small"
                           type="number"
                           label="Power"
                           value={l.power ?? ""}
-                          onChange={(e) => patchDraftLaser(i, { power: e.target.value })}
+                          onChange={(e) =>
+                            patchDraftLaser(i, { power: e.target.value })
+                          }
                           inputProps={{ step: "any" }}
                           sx={{ flex: 1 }}
                         />
-                        <Stack direction="row" alignItems="center" spacing={0.5}>
-                          <Typography variant="caption" color="text.secondary">On</Typography>
+                        <Stack
+                          direction="row"
+                          alignItems="center"
+                          spacing={0.5}
+                        >
+                          <Typography variant="caption" color="text.secondary">
+                            On
+                          </Typography>
                           <Switch
                             size="small"
                             checked={!!l.enabled}
-                            onChange={(e) => patchDraftLaser(i, { enabled: e.target.checked })}
+                            onChange={(e) =>
+                              patchDraftLaser(i, { enabled: e.target.checked })
+                            }
                           />
                         </Stack>
                       </Stack>
@@ -1088,27 +1327,48 @@ const StreamPresets = () => {
               {(editDraft.illumination?.leds?.length ?? 0) > 0 && (
                 <>
                   <Divider textAlign="left">
-                    <Typography variant="caption" color="text.secondary">LEDs</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      LEDs
+                    </Typography>
                   </Divider>
                   <Stack spacing={1}>
                     {editDraft.illumination.leds.map((l, i) => (
-                      <Stack key={`d-${l.name}-${i}`} direction="row" spacing={1} alignItems="center">
-                        <Chip size="small" label={l.name} sx={{ minWidth: 120 }} />
+                      <Stack
+                        key={`d-${l.name}-${i}`}
+                        direction="row"
+                        spacing={1}
+                        alignItems="center"
+                      >
+                        <Chip
+                          size="small"
+                          label={l.name}
+                          sx={{ minWidth: 120 }}
+                        />
                         <TextField
                           size="small"
                           type="number"
                           label="Intensity"
                           value={l.intensity ?? ""}
-                          onChange={(e) => patchDraftLed(i, { intensity: e.target.value })}
+                          onChange={(e) =>
+                            patchDraftLed(i, { intensity: e.target.value })
+                          }
                           inputProps={{ step: "any" }}
                           sx={{ flex: 1 }}
                         />
-                        <Stack direction="row" alignItems="center" spacing={0.5}>
-                          <Typography variant="caption" color="text.secondary">On</Typography>
+                        <Stack
+                          direction="row"
+                          alignItems="center"
+                          spacing={0.5}
+                        >
+                          <Typography variant="caption" color="text.secondary">
+                            On
+                          </Typography>
                           <Switch
                             size="small"
                             checked={!!l.enabled}
-                            onChange={(e) => patchDraftLed(i, { enabled: e.target.checked })}
+                            onChange={(e) =>
+                              patchDraftLed(i, { enabled: e.target.checked })
+                            }
                           />
                         </Stack>
                       </Stack>
@@ -1124,22 +1384,31 @@ const StreamPresets = () => {
         <DialogActions>
           <Button onClick={closeEdit}>Cancel</Button>
           <Button onClick={handleEditSaveAsNew}>Save As New</Button>
-          <Button variant="contained" onClick={handleEditSave}>Save</Button>
+          <Button variant="contained" onClick={handleEditSave}>
+            Save
+          </Button>
         </DialogActions>
       </Dialog>
 
       {/* ----- Overwrite-on-collision confirmation -------------------- */}
-      <Dialog open={!!overwriteConfirm} onClose={() => setOverwriteConfirm(null)}>
+      <Dialog
+        open={!!overwriteConfirm}
+        onClose={() => setOverwriteConfirm(null)}
+      >
         <DialogTitle>Overwrite existing preset?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            A preset named <strong>{overwriteConfirm?.name}</strong> already exists.
-            Saving as new will replace it. Continue?
+            A preset named <strong>{overwriteConfirm?.name}</strong> already
+            exists. Saving as new will replace it. Continue?
           </DialogContentText>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOverwriteConfirm(null)}>Cancel</Button>
-          <Button color="warning" variant="contained" onClick={confirmOverwriteAsNew}>
+          <Button
+            color="warning"
+            variant="contained"
+            onClick={confirmOverwriteAsNew}
+          >
             Overwrite
           </Button>
         </DialogActions>

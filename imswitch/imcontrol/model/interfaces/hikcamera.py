@@ -21,6 +21,12 @@ try:
 except Exception as e:
     print(e)
 
+# Grab-strategy constant — the Linux/Mac binding's headers don't export it.
+# 1 = LatestImagesOnly: the SDK keeps only the newest frame and clears the rest,
+# so a slow consumer (e.g. a busy autofocus/calibration loop holding the GIL)
+# cannot accumulate a FIFO backlog of stale frames in the SDK queue.
+MV_GrabStrategy_LatestImagesOnly = 1
+
 # Pixel format constants — 8-bit
 PixelType_Gvsp_Mono8 = 17301505
 PixelType_Gvsp_Mono8_Signed = 17301506
@@ -390,7 +396,15 @@ class CameraHIK:
     # C callback factory ---------------------------------------------------
     # ---------------------------------------------------------------------
     def _on_frame(self, frame: np.ndarray, fid: int, ts: int):
-        self.frame_buffer.append(frame)
+        # CRITICAL: `frame` is a zero-copy NumPy view over the SDK's capture
+        # buffer (see `_wrap_cb`), which the SDK overwrites in place for every
+        # subsequent frame. Storing the view directly makes every entry in the
+        # ring buffer alias the same continuously-overwritten memory, so
+        # getLast() / the debug stack return whatever the SDK wrote most
+        # recently — not the frame acquired at this fid. This is what made grabs
+        # appear "out of sync" with the stage unless the settle time was large.
+        # Store an owned, contiguous copy (NBuffer is small, so this is cheap).
+        self.frame_buffer.append(np.array(frame, copy=True))
         self.frameid_buffer.append(fid)
         self.frameNumber = fid
         self.timestamp   = ts
@@ -664,6 +678,19 @@ class CameraHIK:
                 raise RuntimeError(f"Re-register callback failed 0x{ret:x}")
             self._callback_registered = True
 
+        # Cap the SDK's internal node queue so the free-running (continuous) live
+        # view can't build up a large FIFO backlog of stale frames. NOTE:
+        # MV_CC_SetGrabStrategy(LatestImagesOnly) is NOT usable here — in callback
+        # mode the SDK rejects it with MV_E_CALLORDER (0x80000003) and pushes every
+        # frame regardless. Deterministic, in-sync grabs for autofocus/calibration
+        # are instead done via software trigger (see snapSoftwareTrigger). Must
+        # precede StartGrabbing.
+        try:
+            if hasattr(self.camera, "MV_CC_SetImageNodeNum"):
+                self.camera.MV_CC_SetImageNodeNum(2)
+        except Exception as e:
+            self.__logger.debug(f"Set node num failed: {e}")
+
         try:
             ret = self.camera.MV_CC_StartGrabbing()
             if ret != 0:
@@ -836,8 +863,22 @@ class CameraHIK:
         return latest_frame
 
     def flushBuffer(self):
+        # Clear BOTH the SDK's internal frame queue AND our Python ring buffer.
+        # The SDK grabs OneByOne (FIFO): if our callback can't keep up — e.g. a
+        # busy autofocus/calibration loop holds the GIL during heavy compute —
+        # frames pile up in the SDK queue and getLast() then returns ever more
+        # STALE frames (the build-up that only a stream stop/start used to reset).
+        # MV_CC_ClearImageBuffer discards that backlog in place. We also drop the
+        # last-frame fallback so the next grab waits for a genuinely new frame.
+        try:
+            if self.camera is not None and hasattr(self.camera, "MV_CC_ClearImageBuffer"):
+                self.camera.MV_CC_ClearImageBuffer()
+        except Exception as e:
+            self.__logger.debug(f"MV_CC_ClearImageBuffer failed: {e}")
         self.frameid_buffer.clear()
         self.frame_buffer.clear()
+        self.lastFrameFromBuffer = None
+        self.lastFrameId = -1
 
     def getLastChunk(self):
         """Return *and clear* the entire ring‑buffer as a numpy stack."""
@@ -1000,6 +1041,28 @@ class CameraHIK:
             self.__logger.error(f"Software trigger failed! ret [0x{ret:x}]")
             return False
         return True
+
+    def snapSoftwareTrigger(self, timeout: float = 2.0):
+        """Fire one software trigger and return the frame it produces.
+
+        Requires the camera to already be in software-trigger mode
+        (``setTriggerSource('software')``). Because the frame is exposed *in
+        response to* the trigger, the returned image is guaranteed to be acquired
+        AFTER this call — i.e. after the stage move/settle — which eliminates the
+        free-run buffer lag that otherwise desyncs grabs from the stage. We flush
+        first so no pre-trigger frame can be mistaken for the triggered one.
+        """
+        self.flushBuffer()
+        prev_id = self.frameNumber
+        if not self.send_trigger():
+            return self.getLast()
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if self.frame_buffer and self.frameid_buffer[-1] != prev_id:
+                return self.frame_buffer[-1]
+            time.sleep(0.003)
+        self.__logger.warning("snapSoftwareTrigger: timed out waiting for triggered frame")
+        return self.frame_buffer[-1] if self.frame_buffer else None
 
     def openPropertiesGUI(self):
         pass

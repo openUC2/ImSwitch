@@ -136,6 +136,32 @@ class HikCamManager(DetectorManager):
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         return self._camera.getLast(returnFrameNumber=returnFrameNumber)
 
+    def flushBuffer(self):
+        """Drop buffered frames so the next grab is guaranteed post-move/-settle."""
+        if hasattr(self._camera, "flushBuffer"):
+            self._camera.flushBuffer()
+
+    def setTriggerSource(self, source):
+        """Switch acquisition mode: 'continuous' (free run) or 'software' (triggered)."""
+        if hasattr(self._camera, "setTriggerSource"):
+            return self._camera.setTriggerSource(source)
+        return False
+
+    def snapSync(self, timeout: float = 2.0):
+        """Fire a software trigger and return the resulting (post-move) frame.
+
+        Requires software-trigger mode (``setTriggerSource('software')``). Returns
+        None if the camera does not support triggered snaps.
+        """
+        if hasattr(self._camera, "snapSoftwareTrigger"):
+            return self._camera.snapSoftwareTrigger(timeout=timeout)
+        return None
+
+    def getFrameNumber(self):
+        if hasattr(self._camera, "getFrameNumber"):
+            return self._camera.getFrameNumber()
+        return -1
+
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
         If the parameter doesn't exist, i.e. the parameters field doesn't

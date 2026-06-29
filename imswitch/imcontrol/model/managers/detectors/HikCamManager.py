@@ -141,6 +141,11 @@ class HikCamManager(DetectorManager):
         if hasattr(self._camera, "flushBuffer"):
             self._camera.flushBuffer()
 
+    def setTriggerSource(self, source):
+        """Switch acquisition mode: 'continuous' (free run) or 'software' (triggered)."""
+        if hasattr(self._camera, "setTriggerSource"):
+            return self._camera.setTriggerSource(source)
+        return False
 
     def snapSync(self, timeout: float = 2.0):
         """Fire a software trigger and return the resulting (post-move) frame.

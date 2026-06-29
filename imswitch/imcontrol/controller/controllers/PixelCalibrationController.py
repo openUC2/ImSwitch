@@ -1231,6 +1231,8 @@ class PixelCalibrationClass:
             if time.time() - t0 > timeout_s:
                 if mFrame is None:
                     mFrame = self._detector.getLatestFrame(returnFrameNumber=False)
+                    if mFrame is None:
+                        raise RuntimeError("Triggered grab failed: detector returned no frame")
                 break
             if cur_fn <= last_fn + frameSync:
                 time.sleep(0.01)
@@ -1576,4 +1578,4 @@ class PixelCalibrationClass:
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import os
+

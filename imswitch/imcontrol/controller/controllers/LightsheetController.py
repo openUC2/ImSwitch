@@ -417,6 +417,111 @@ class LightsheetController(ImConWidgetController):
             "storageFormat": storage.value
         }
 
+    # ────────────────────────────────────────────────────────────────────────
+    # Deterministic frame-acquisition helpers
+    # The same pattern used in ExperimentController / AutofocusController:
+    # software-trigger mode guarantees every frame was exposed *after* the
+    # stage finished moving.  Falls back to freerun polling transparently.
+    # ────────────────────────────────────────────────────────────────────────
+
+    def _getExposureTimeSec(self) -> float:
+        """Return current detector exposure time in seconds (best effort)."""
+        try:
+            exp_ms = self.detector.getParameter("exposure")
+            if exp_ms is not None and float(exp_ms) > 0:
+                return float(exp_ms) / 1000.0
+        except Exception:
+            pass
+        try:
+            return self.detector._camera.exposure_time / 1e6
+        except Exception:
+            return 0.1
+
+    def _beginTriggeredAcquisition(self) -> bool:
+        """Switch the detector to software-trigger mode for deterministic post-move grabs.
+
+        Returns True when successful; False when the detector does not support
+        it (graceful degradation to freerun fallback).
+        """
+        if not hasattr(self.detector, "setTriggerSource") or not hasattr(self.detector, "snapSync"):
+            self._useTriggeredGrab = False
+            return False
+        try:
+            ok = bool(self.detector.setTriggerSource("software"))
+        except Exception as e:
+            self._logger.warning(f"Could not enable software trigger: {e}")
+            ok = False
+        self._useTriggeredGrab = ok
+        if ok:
+            self._logger.info("LightsheetController: camera in software-trigger mode (deterministic grabs)")
+        else:
+            self._logger.warning("LightsheetController: software trigger not supported, using freerun fallback")
+        return ok
+
+    def _endTriggeredAcquisition(self) -> None:
+        """Restore continuous (free-run) acquisition — safe to call unconditionally."""
+        if not getattr(self, "_useTriggeredGrab", False):
+            return
+        self._useTriggeredGrab = False
+        try:
+            if hasattr(self.detector, "setTriggerSource"):
+                self.detector.setTriggerSource("continuous")
+                self._logger.info("LightsheetController: camera restored to continuous mode")
+        except Exception as e:
+            self._logger.warning(f"Could not restore continuous mode: {e}")
+
+    def grabCameraFrame(self, frameSync: int = 2, returnFrameNumber: bool = False):
+        """Return a single camera frame guaranteed to be captured after this call.
+
+        Fast path (triggered): fires one software trigger via detector.snapSync()
+        and returns exactly the resulting frame.
+
+        Fallback (freerun): flushes ring-buffer, then polls by frame-number until
+        the counter advances by frameSync counts.  Timeout is exposure-time-scaled.
+        """
+        # ── Fast path ────────────────────────────────────────────────────────
+        if getattr(self, "_useTriggeredGrab", False) and hasattr(self.detector, "snapSync"):
+            mFrame = self.detector.snapSync(timeout=max(2.0, self._getExposureTimeSec() * 4 + 1.0))
+            if returnFrameNumber:
+                fn = self.detector.getFrameNumber() if hasattr(self.detector, "getFrameNumber") else -1
+                return mFrame, fn
+            return mFrame
+
+        # ── Fallback path ────────────────────────────────────────────────────
+        try:
+            if hasattr(self.detector, "flushBuffer"):
+                self.detector.flushBuffer()
+        except Exception:
+            pass
+
+        exposure_s = self._getExposureTimeSec()
+        timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
+        cTime = time.time()
+        lastFrameNumber = -1
+        currentFrameNumber = -1
+        mFrame = None
+
+        while True:
+            mFrame, currentFrameNumber = self.detector.getLatestFrame(returnFrameNumber=True)
+            if lastFrameNumber == -1:
+                lastFrameNumber = currentFrameNumber
+            if time.time() - cTime > timeoutFrameRequest:
+                if mFrame is None:
+                    mFrame = self.detector.getLatestFrame(returnFrameNumber=False)
+                self._logger.warning(
+                    f"grabCameraFrame: timed out after {timeoutFrameRequest:.1f}s "
+                    f"(exposure={exposure_s*1000:.0f}ms, frameSync={frameSync})"
+                )
+                break
+            if currentFrameNumber <= lastFrameNumber + frameSync:
+                time.sleep(0.01)
+            else:
+                break
+
+        if returnFrameNumber:
+            return mFrame, currentFrameNumber
+        return mFrame
+
     def _stepAcquireThread(self, params: LightsheetScanParameters, totalZSteps: int, totalXYTiles: int):
         """Background thread for step-acquire scanning with tiling and timelapse support."""
         self._logger.info(f"Starting step-acquire scan: Z={params.minPos} to {params.maxPos}, step={params.stepSize}")
@@ -551,6 +656,11 @@ class LightsheetController(ImConWidgetController):
             # Start detector acquisition
             self.detector.startAcquisition()
 
+            # Activate deterministic triggered acquisition: every grabCameraFrame()
+            # call in the Z-loop will fire an explicit trigger after the stage settles.
+            # Falls back silently to freerun polling if unsupported.
+            self._beginTriggeredAcquisition()
+
             frameCounter = 0
             totalFrames = totalZSteps * totalXYTiles * params.timepoints
 
@@ -583,13 +693,8 @@ class LightsheetController(ImConWidgetController):
                         self.stages.move(value=zPos, axis=params.axis, is_absolute=True, is_blocking=True)
                         time.sleep(0.05)  # Short settling time
 
-                        # Acquire frame
-                        frame = None
-                        for attempt in range(2):
-                            frame = self.detector.getLatestFrame()
-                            if frame is not None and frame.shape[0] > 0:
-                                break
-                            time.sleep(0.02)
+                        # Acquire frame (triggered grab or freerun fallback)
+                        frame = self.grabCameraFrame()
 
                         if frame is not None:
                             # Convert to 2D if needed
@@ -684,6 +789,8 @@ class LightsheetController(ImConWidgetController):
             self._scanStatus.errorMessage = str(e)
 
         finally:
+            # Restore continuous mode regardless of how the scan ended.
+            self._endTriggeredAcquisition()
             self._scanStatus.isRunning = False
             self._scanStatus.progress = 100.0
             self._emitScanStatus()

@@ -92,6 +92,7 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  TextField,
 } from "@mui/material";
 import IconButton from "@mui/material/IconButton";
 import CloseIcon from "@mui/icons-material/Close";
@@ -211,6 +212,7 @@ function App() {
   const [files, setFiles] = useState([]);
   const [homingDialogOpen, setHomingDialogOpen] = useState(false);
   const [homingDialogBusy, setHomingDialogBusy] = useState(false);
+  const [napariCommandDialog, setNapariCommandDialog] = useState({ open: false, command: "" });
 
   useBackendControllerCapabilities({
     hostIP,
@@ -396,11 +398,11 @@ function App() {
         .then(() => notify("success", "Copied napari command to clipboard"))
         .catch(() => {
           console.log(command);
-          notify("warning", "Copy failed — command logged to console");
+          setNapariCommandDialog({ open: true, command });
         });
     } else {
       console.log(command);
-      notify("info", "Clipboard unavailable — command logged to console");
+      setNapariCommandDialog({ open: true, command });
     }
   };
 
@@ -558,6 +560,36 @@ function App() {
           <WebSocketHandler />
           <OnboardingTour selectedPlugin={selectedPlugin} />
           <CssBaseline />
+
+          <Dialog
+            open={napariCommandDialog.open}
+            onClose={() => setNapariCommandDialog({ open: false, command: "" })}
+            fullWidth
+            maxWidth="sm"
+          >
+            <DialogTitle>Napari Command</DialogTitle>
+            <DialogContent>
+              <DialogContentText sx={{ mb: 2 }}>
+                Clipboard is not available in this context. Copy the command below manually:
+              </DialogContentText>
+              <TextField
+                fullWidth
+                multiline
+                value={napariCommandDialog.command}
+                onChange={(e) =>
+                  setNapariCommandDialog((prev) => ({ ...prev, command: e.target.value }))
+                }
+                inputProps={{ spellCheck: false }}
+                variant="outlined"
+                size="small"
+              />
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setNapariCommandDialog({ open: false, command: "" })}>
+                Close
+              </Button>
+            </DialogActions>
+          </Dialog>
 
           <Dialog
             open={homingDialogOpen}

@@ -3,6 +3,17 @@
 [ "$TARGETPLATFORM" = "linux/arm64" ] || { echo "skip: not arm64"; exit 0; }
 
 MM_REF="${MM_REF:-mm-v1}"   # the release tag the adapters were published under
+
+# Install tools needed for downloading/unzipping adapters and building pymmcore.
+apt-get update
+apt-get install -y --no-install-recommends \
+	build-essential \
+	swig \
+	python3-dev \
+	libboost-all-dev \
+	wget \
+	unzip
+
 cd /tmp
 wget -q "https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitch-master/micro-manager-arm64.zip"
 mkdir -p /opt
@@ -12,8 +23,6 @@ rm -f micro-manager-arm64.zip
 
 # pymmcore has no aarch64 wheel on PyPI — build it from source so its embedded
 # MMCore matches the adapters' device interface version.
-apt-get update
-apt-get install -y --no-install-recommends build-essential swig python3-dev libboost-all-dev
 source /opt/imswitch/.venv/bin/activate
 uv pip install pymmcore --no-binary pymmcore
 uv pip install "pymmcore-plus[cli]>=0.10"

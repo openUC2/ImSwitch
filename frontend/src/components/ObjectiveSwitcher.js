@@ -11,10 +11,17 @@ import {
   Typography,
 } from "@mui/material";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
+import * as laserSlice from "../state/slices/LaserSlice.js";
+import * as stormSlice from "../state/slices/STORMSlice.js";
+import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
 import { setNotification } from "../state/slices/NotificationSlice.js";
 import { useDispatch, useSelector } from "react-redux";
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 import apiObjectiveControllerMoveToObjective from "../backendapi/apiObjectiveControllerMoveToObjective.js";
+import {
+  rememberObjectiveIllumination,
+  restoreObjectiveIllumination,
+} from "../middleware/objectiveIlluminationPresets.js";
 
 const OBJECTIVE_SWITCH_TIMEOUT_MS = 15000;
 
@@ -29,6 +36,7 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const isSwitchingRef = useRef(false);
 
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+  const laserState = useSelector(laserSlice.getLaserState);
   const name0 = objectiveState.availableObjectivesNames?.[0] || "Obj 1";
   const name1 = objectiveState.availableObjectivesNames?.[1] || "Obj 2";
   const mag0 = objectiveState.availableObjectiveMagnifications?.[0];
@@ -89,11 +97,35 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
     }
 
     try {
+      await rememberObjectiveIllumination({
+        objectiveSlot: objectiveState.currentObjective,
+        laserState,
+        hostIP,
+        hostPort,
+      });
       setIsSwitching(true);
       setPendingSlot(slot);
       setCurrentSlot(null);
       const skipZ = !zLevelingEnabled;
       await apiObjectiveControllerMoveToObjective(slot, skipZ);
+      const restoreResult = await restoreObjectiveIllumination({
+        objectiveSlot: slot,
+        hostIP,
+        hostPort,
+        dispatch,
+        laserSlice,
+        stormSlice,
+        detectorParametersSlice,
+      });
+
+      if (restoreResult.errors.length > 0) {
+        dispatch(
+          setNotification({
+            message: `Objective switched, but some illumination values could not be restored: ${restoreResult.errors.join("; ")}`,
+            type: "warning",
+          }),
+        );
+      }
 
       clearSwitchTimeout();
       switchTimeoutRef.current = setTimeout(() => {

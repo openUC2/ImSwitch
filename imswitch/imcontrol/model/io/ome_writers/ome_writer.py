@@ -470,7 +470,7 @@ class OMEWriter:
         # before the stitcher opens its output file inside it.
         os.makedirs(self.file_paths.base_dir, exist_ok=True)
         stitched_tiff_path = os.path.join(self.file_paths.base_dir, "stitched.ome.tif")
-        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True, isRGB=self.isRGB)
+        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True, isRGB=self.isRGB, nx=self.nx, ny=self.ny, tile_w=self.tile_w, tile_h=self.tile_h)
         self.tiff_stitcher.start()
         if self.logger:
             self.logger.debug(f"TIFF stitcher initialized: {stitched_tiff_path}")

@@ -26,7 +26,7 @@ import MotorSettingsController from "./components/MotorSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
 import LargeFovScanController from "./components/OpenLayers.js";
 import SocketView from "./components/SocketView.js";
-import MMCoreController from "./components/MMCoreController.js";
+import MMCoreController from "./components/MMCoreController.jsx";
 
 import TimelapseController from "./components/TimelapseController.js";
 import STORMControllerArkitekt from "./components/STORMControllerArkitekt.js";

@@ -17,7 +17,7 @@ apt-get install -y --no-install-recommends \
 cd /tmp
 wget -q "https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitch-master/micro-manager-arm64.zip"
 mkdir -p /opt
-unzip micro-manager-arm64.zip -C /opt    # -> /opt/micro-manager/lib/micro-manager/*.so
+unzip -q micro-manager-arm64.zip -d /opt    # -> /opt/micro-manager/lib/micro-manager/*.so
 cat /opt/DEVICE_INTERFACE_VERSION.txt || true
 rm -f micro-manager-arm64.zip
 

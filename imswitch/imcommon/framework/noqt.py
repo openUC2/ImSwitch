@@ -74,7 +74,6 @@ _client_frame_lock = threading.Lock()
 # Event loop reference - will be set by ImSwitchServer
 _shared_event_loop = None
 
-
 class SignalInterface(abstract.SignalInterface):
     """Base implementation of abstract.SignalInterface."""
     def __init__(self) -> None:
@@ -199,7 +198,7 @@ class SignalInstance(psygnal.SignalInstance):
                 ready_clients = get_ready_clients(_client_ack_frame_id, _client_sent_frame_id)
 
                 if not ready_clients:
-                    # print("No clients ready for new frame, dropping frame to avoid buildup")
+                    # No client within MAX_FRAME_LAG → backpressure drop.
                     return
 
                 # Thread-safe emission using the shared event loop
@@ -257,8 +256,6 @@ class SignalInstance(psygnal.SignalInstance):
                             sio.emit(event, frame_payload, to=sid),
                             _shared_event_loop
                         )
-
-
         except Exception as e:
             print(f"Error handling stream frame: {e}")
 
@@ -484,7 +481,6 @@ async def frame_ack(sid, data):
     """Client explicitly acknowledges frame processing complete"""
     with _client_frame_lock:
         _client_ack_frame_id[sid] = data.get('frame_id', None)  # Unified field name
-        # print(f"Client {sid} acknowledged frame", data)
 
 
 # Function to set the shared event loop (called by ImSwitchServer)

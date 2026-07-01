@@ -114,6 +114,10 @@ class CommunicationChannel(SignalInterface):
 
     sigUpdateMotorPosition = Signal(list)  # # TODO: Just forcely update the positoin in the GUI
 
+    sigHomingState = Signal(dict)  # (homingStateDict) - per-axis frame-homing progress for the frontend
+
+    sigDiskFull = Signal(dict)  # (diskInfoDict) - storage is (nearly) full; tell the user to free space
+
     sigUpdateLaserPower = Signal(dict)  # (laserPowerDict) - updates laser power values from device callbacks
 
     sigUpdateCANDevices = Signal(list)  # (canDevicesList) - updates CAN device scan results from callbacks

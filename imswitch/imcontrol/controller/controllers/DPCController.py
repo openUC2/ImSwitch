@@ -174,31 +174,123 @@ class DPCController(ImConWidgetController):
             timeout=.2
         )
 
-    def _get_fresh_frame(self, timeout: float = 1.0, nFrameSync: int = 2) -> Optional[np.ndarray]:
-        """Get a fresh frame with frame sync (like ExperimentController)"""
+    # ────────────────────────────────────────────────────────────────────────
+    # Deterministic frame-acquisition helpers (same pattern as ExperimentController)
+    # In software-trigger mode every DPC exposure is fired *after* the LED
+    # pattern is set, guaranteeing no stale pre-pattern frame can slip through.
+    # ────────────────────────────────────────────────────────────────────────
+
+    def _getExposureTimeSec(self) -> float:
+        """Return current detector exposure time in seconds (best effort)."""
+        try:
+            exp_ms = self.detector.getParameter("exposure")
+            if exp_ms is not None and float(exp_ms) > 0:
+                return float(exp_ms) / 1000.0
+        except Exception:
+            pass
+        try:
+            return self.detector._camera.exposure_time / 1e6
+        except Exception:
+            return 0.1
+
+    def _beginTriggeredAcquisition(self) -> bool:
+        """Switch the detector to software-trigger mode for deterministic post-LED-change grabs.
+
+        DPC captures one frame per LED half-illumination pattern.  In software-
+        trigger mode every exposure is initiated *after* setHalves() returns, so
+        no pre-pattern photons reach the sensor.  Falls back transparently to the
+        freerun frame-number polling path when the detector does not support it.
+
+        Returns True when the camera was successfully switched.
+        """
+        if not hasattr(self.detector, "setTriggerSource") or not hasattr(self.detector, "snapSync"):
+            self._useTriggeredGrab = False
+            return False
+        try:
+            ok = bool(self.detector.setTriggerSource("software"))
+        except Exception as e:
+            self._logger.warning(f"Could not enable software trigger: {e}")
+            ok = False
+        self._useTriggeredGrab = ok
+        if ok:
+            self._logger.info("DPCController: camera in software-trigger mode (deterministic grabs)")
+        else:
+            self._logger.warning("DPCController: software trigger not supported, using freerun fallback")
+        return ok
+
+    def _endTriggeredAcquisition(self) -> None:
+        """Restore continuous (free-run) acquisition — safe to call unconditionally."""
+        if not getattr(self, "_useTriggeredGrab", False):
+            return
+        self._useTriggeredGrab = False
+        try:
+            if hasattr(self.detector, "setTriggerSource"):
+                self.detector.setTriggerSource("continuous")
+                self._logger.info("DPCController: camera restored to continuous mode")
+        except Exception as e:
+            self._logger.warning(f"Could not restore continuous mode: {e}")
+
+    def grabCameraFrame(self, frameSync: int = 2, returnFrameNumber: bool = False):
+        """Return a single camera frame guaranteed to be captured after this call.
+
+        Fast path (triggered): fires one software trigger via detector.snapSync()
+        and returns exactly the resulting frame — ideal for DPC because the LED
+        pattern is already stable before the trigger fires.
+
+        Fallback (freerun): flushes ring-buffer, then polls by frame-number until
+        the counter advances by frameSync counts.  Timeout is exposure-time-scaled.
+        """
+        # ── Fast path ────────────────────────────────────────────────────────
+        if getattr(self, "_useTriggeredGrab", False) and hasattr(self.detector, "snapSync"):
+            mFrame = self.detector.snapSync(timeout=max(2.0, self._getExposureTimeSec() * 4 + 1.0))
+            if returnFrameNumber:
+                fn = self.detector.getFrameNumber() if hasattr(self.detector, "getFrameNumber") else -1
+                return mFrame, fn
+            return mFrame
+
+        # ── Fallback path ────────────────────────────────────────────────────
+        try:
+            if hasattr(self.detector, "flushBuffer"):
+                self.detector.flushBuffer()
+        except Exception:
+            pass
+
+        exposure_s = self._getExposureTimeSec()
+        timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
         cTime = time.time()
         lastFrameNumber = -1
+        currentFrameNumber = -1
+        mFrame = None
 
         while True:
-            # Get frame and frame number to ensure fresh frame
             mFrame, currentFrameNumber = self.detector.getLatestFrame(returnFrameNumber=True)
-
             if lastFrameNumber == -1:
-                # First round
                 lastFrameNumber = currentFrameNumber
-
-            if time.time() - cTime > timeout:
-                # Timeout - use whatever we have
+            if time.time() - cTime > timeoutFrameRequest:
                 if mFrame is None:
                     mFrame = self.detector.getLatestFrame(returnFrameNumber=False)
+                self._logger.warning(
+                    f"grabCameraFrame: timed out after {timeoutFrameRequest:.1f}s "
+                    f"(exposure={exposure_s*1000:.0f}ms, frameSync={frameSync})"
+                )
                 break
-
-            if currentFrameNumber <= lastFrameNumber + nFrameSync:
-                time.sleep(0.01)  # Off-load CPU
+            if currentFrameNumber <= lastFrameNumber + frameSync:
+                time.sleep(0.01)
             else:
                 break
 
+        if returnFrameNumber:
+            return mFrame, currentFrameNumber
         return mFrame
+
+    def _get_fresh_frame(self, timeout: float = 1.0, nFrameSync: int = 2) -> Optional[np.ndarray]:
+        """Get a fresh frame — delegates to grabCameraFrame() for deterministic acquisition.
+
+        The ``timeout`` parameter is kept for API compatibility but is no longer
+        used directly; grabCameraFrame() derives the timeout from the current
+        exposure time automatically.
+        """
+        return self.grabCameraFrame(frameSync=nFrameSync)
 
     def _capture_dpc_stack(self):
         """Capture 4 images with different LED patterns"""
@@ -420,6 +512,10 @@ class DPCController(ImConWidgetController):
             # Ensure camera is running
             self._ensure_camera_running()
 
+            # Activate software-trigger mode so each grabCameraFrame() fires
+            # exactly one exposure *after* the LED pattern is settled.
+            self._beginTriggeredAcquisition()
+
             # Clear processing queue
             while not self._processing_queue.empty():
                 try:
@@ -466,6 +562,9 @@ class DPCController(ImConWidgetController):
             if self._reconstruction_thread is not None:
                 self._reconstruction_thread.join(timeout=2.0)
                 self._reconstruction_thread = None
+
+            # Restore continuous acquisition mode after DPC session.
+            self._endTriggeredAcquisition()
 
             self._state.is_processing = False
             self._state.is_paused = False

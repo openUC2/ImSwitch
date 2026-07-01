@@ -37,7 +37,7 @@ class UC2ConfigManager(SignalInterface):
         return self.ESP32.config.loadDefaultConfig()
     '''
     def closeSerial(self):
-        return self.ESP32.closeSerial()
+        return self.ESP32.serial.closeSerial()
 
     def isConnected(self):
         try:
@@ -52,6 +52,47 @@ class UC2ConfigManager(SignalInterface):
         except Exception:
             # Older UC2-REST builds may not have .ping yet — fall back to flag.
             return self.isConnected()
+
+    def getFirmwareInfo(self, timeout=2):
+        """Identity of the USB-connected ESP32 master.
+
+        Returns {name, version, date, author, pindef, isMaster, connected,
+        serialport}. The build date and pindef are the fields that matter for
+        telling boards apart. Best-effort: returns a mostly-empty dict if the
+        firmware/serial layer is unavailable.
+        """
+        info = {}
+        try:
+            info = self.ESP32.state.get_firmware_info(timeout=timeout) or {}
+        except Exception as e:
+            self.__logger.debug(f"getFirmwareInfo via state failed: {e}")
+        # enrich with what mserial already captured at connect time (no round-trip)
+        try:
+            cached = getattr(self.ESP32.serial, "firmware_info", None) or {}
+            for k, v in cached.items():
+                if v and not info.get(k):
+                    info[k] = v
+        except Exception:
+            pass
+        try:
+            info["connected"] = bool(self.ESP32.serial.is_connected)
+            port = getattr(self.ESP32.serial, "serialport", None)
+            info["serialport"] = getattr(port, "device", port) if port else None
+        except Exception:
+            pass
+        return info
+
+    def setJoystickDirection(self, axis, inverted=False, timeout=1):
+        """Invert (or un-invert) the PS-controller joystick for one motor axis.
+
+        axis: "A"/"X"/"Y"/"Z" (or 0..3). Maps to motor.set_joystick_direction.
+        """
+        return self.ESP32.motor.set_joystick_direction(axis=axis, inverted=bool(inverted), timeout=timeout)
+
+    def getJoystickDirection(self, axis=None, timeout=1):
+        """Read joystick inversion. With axis=None returns a list of
+        {axis, inverted} for all axes; otherwise the bool for that axis."""
+        return self.ESP32.motor.get_joystick_direction(axis=axis, timeout=timeout)
 
     def interruptSerialCommunication(self):
         self.ESP32.serial.interruptCurrentSerialCommunication()
@@ -135,6 +176,68 @@ class UC2ConfigManager(SignalInterface):
             device_id (_type_): _description_
         """
         self.ESP32.can.reboot_remote(can_address=device_id, isBlocking=True, timeout=1)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # CAN-bus power & emergency-stop (safety)
+    # ──────────────────────────────────────────────────────────────────────
+    def setBusPower(self, enable=True):
+        """Enable (default) / disable the high-current CAN-bus power that feeds
+        the slaves. Maps to ESP32.state.set_power."""
+        return self.ESP32.state.set_power(int(bool(enable)))
+
+    def getBusPower(self):
+        """Current CAN-bus power state: 1=ON, 0=OFF, or None if unavailable."""
+        try:
+            return int(self.ESP32.state.get_power())
+        except Exception:
+            return None
+
+    def getEstop(self):
+        """E-stop diagnostics dict {estopPolarity, estopRaw, estopActive}."""
+        try:
+            return self.ESP32.state.get_estop()
+        except Exception:
+            return {}
+
+    def isEmergencyActive(self):
+        """Last known emergency-stop state as reported by the firmware (cached,
+        no serial round-trip)."""
+        try:
+            return bool(self.ESP32.state.is_emergency_active())
+        except Exception:
+            return False
+
+    def registerEmergencyCallback(self, callbackfct):
+        """Register a callback invoked on emergency (E-stop) events. The callback
+        receives the firmware "emergency" dict, e.g.
+        {"active":1,"reason":"estop","msg":"..."}."""
+        try:
+            self.ESP32.state.register_emergency_callback(callbackfct)
+            return True
+        except Exception as e:
+            self.__logger.error(f"Could not register emergency callback: {e}")
+            return False
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Fan & board temperature
+    # ──────────────────────────────────────────────────────────────────────
+    def getFan(self, blocking=True):
+        """Fan state dict {mode,wiper,manual,rpm,stalled,kick,tempC,curve}."""
+        try:
+            return self.ESP32.fan.get_fan(blocking=blocking)
+        except Exception:
+            return {}
+
+    def setFanMode(self, mode="auto", wiper=None):
+        """Set fan mode 'auto'|'manual'|'off'. wiper 0-127 used for 'manual'."""
+        return self.ESP32.fan.set_mode(mode=mode, wiper=wiper)
+
+    def getTemperature(self):
+        """Board/air temperatures {pcb,air,esp,pcb_ok,air_ok}."""
+        try:
+            return self.ESP32.fan.get_temp()
+        except Exception:
+            return {}
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

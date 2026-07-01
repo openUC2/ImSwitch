@@ -73,7 +73,7 @@ setup(
         "msgpack>=1.0.4",
         "esptool", 
         "omero-py",
-        "uc2-rest>=0.2.0.33", 
+        "uc2-rest>=0.2.0.36", 
         "unitelabs-sila", 
         "unitelabs-cdk",
         "ashlarUC2 @ git+https://github.com/Franzili/ashlarUC2",

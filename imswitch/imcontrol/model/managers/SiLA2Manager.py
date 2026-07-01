@@ -213,6 +213,7 @@ class SiLA2Manager:
         )
         connector_config.cloud_server_endpoint.port = 443
         connector_config.cloud_server_endpoint.tls = True
+        connector_config.sila_server.uuid = "" # TODO: Load from settings info  / UUID 4  https://docs.unitelabs.io/connector-development/guides/configuration
 
         app = Connector(connector_config)
         self._connector = app

@@ -10,11 +10,11 @@ import InfoPopup from "./InfoPopup.js";
 
 import * as wellSelectorSlice from "../state/slices/WellSelectorSlice.js";
 import * as experimentSlice from "../state/slices/ExperimentSlice.js";
-import * as positionSlice from "../state/slices/PositionSlice.js"; 
-import * as overviewRegSlice from '../state/slices/OverviewRegistrationSlice.js';
+import * as positionSlice from "../state/slices/PositionSlice.js";
+import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js";
+import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
-import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 import LabwareSelectionPanel from "../components/LabwareSelectionPanel.jsx";
 
@@ -22,28 +22,31 @@ import {
   Button,
   Typography,
   Box,
-  Input,
   TextField,
   Select,
   MenuItem,
   FormControl,
   InputLabel,
-  FormHelperText,
-  FormControlLabel,
-  ButtonGroup,
-  Slider,
+  Tooltip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
 } from "@mui/material";
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import PlaceIcon from "@mui/icons-material/Place";
+import HighlightAltIcon from "@mui/icons-material/HighlightAlt";
+import RadioButtonCheckedIcon from "@mui/icons-material/RadioButtonChecked";
+import GestureIcon from "@mui/icons-material/Gesture";
+import PanToolIcon from "@mui/icons-material/PanTool";
+import ScatterPlotIcon from "@mui/icons-material/ScatterPlot";
+import AddLocationIcon from "@mui/icons-material/AddLocation";
+import GpsFixedIcon from "@mui/icons-material/GpsFixed";
 
 //##################################################################################
 const WellSelectorComponent = () => {
   //local state
-  const [wellLayoutFileList, setWellLayoutFileList] = useState([
+  const [wellLayoutFileList] = useState([
     "image/test.json",//TODO remove test
     "image/test1.json",//TODO remove test
   ]);
@@ -62,7 +65,27 @@ const WellSelectorComponent = () => {
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const positionState = useSelector(positionSlice.getPositionState);
-  const overviewRegState = useSelector(overviewRegSlice.getOverviewRegistrationState);
+  const overviewRegState = useSelector(
+    overviewRegSlice.getOverviewRegistrationState,
+  );
+
+  // Toggle the Overview camera overlay (stitched overview image) on the plate
+  // map; lazily fetch the overlay data the first time it is switched on.
+  const handleToggleOverviewOverlay = async () => {
+    const next = !overviewRegState.overlayEnabled;
+    dispatch(overviewRegSlice.setOverlayEnabled(next));
+    const slides = overviewRegState.overlayData?.slides;
+    if (next && (!slides || Object.keys(slides).length === 0)) {
+      try {
+        const cam = overviewRegState.cameraName || "";
+        const layout = overviewRegState.layoutName || "Heidstar 4x Histosample";
+        const data = await apiGetOverviewOverlayData(cam, layout);
+        dispatch(overviewRegSlice.setOverlayData(data));
+      } catch (e) {
+        // best-effort; the Overview tab can load/refresh the overlay explicitly
+      }
+    }
+  };
 
   // Opening the wellplate view should refresh the objective state so the
   // current pixel size / FOV (which drives tiling, overlap and freehand step
@@ -72,11 +95,6 @@ const WellSelectorComponent = () => {
     fetchObjectiveControllerGetStatus(dispatch);
   }, [dispatch]);
 
-
-  //##################################################################################
-  const handleOpenOverviewWizard = () => {
-    dispatch(overviewRegSlice.setWizardOpen(true));
-  };
 
   // Convert the current freehand polygon (drawn on the canvas) into
   // experiment scan points using the current FOV and area-scan overlap.
@@ -250,11 +268,12 @@ const WellSelectorComponent = () => {
     // Get current position from Redux state
     const currentX = positionState.x;
     const currentY = positionState.y;
-    
+    const currentZ = positionState.z;
     // Create a new point with current position
     dispatch(experimentSlice.createPoint({
       x: currentX,
       y: currentY,
+      z: currentZ,
       name: `Position ${experimentState.pointList.length + 1}`,
       shape: ""
     }));
@@ -275,46 +294,6 @@ const WellSelectorComponent = () => {
       infoPopupRef.current.showMessage("Right-click on the map where you are and select 'We are here' to calibrate the stage offset.");
     }
   }
-
-  //##################################################################################
-  const handleLayoutOffsetXChange = (event) => {
-    const value = parseFloat(event.target.value);
-    dispatch(wellSelectorSlice.setLayoutOffsetX(value));
-    
-    // Re-apply the current layout with new offset
-    handleLayoutChange({ target: { value: experimentState.wellLayout.name } });
-  };
-
-  //##################################################################################
-  const handleLayoutOffsetYChange = (event) => {
-    const value = parseFloat(event.target.value);
-    dispatch(wellSelectorSlice.setLayoutOffsetY(value));
-    
-    // Re-apply the current layout with new offset
-    handleLayoutChange({ target: { value: experimentState.wellLayout.name } });
-  };
-
-  //##################################################################################
-  const handleAreaSelectSnakescanChange = (event) => {
-    dispatch(wellSelectorSlice.setAreaSelectSnakescan(event.target.checked));
-  };
-
-  //##################################################################################
-  const handleAreaSelectOverlapChange = (event) => {
-    const value = parseFloat(event.target.value);
-    dispatch(wellSelectorSlice.setAreaSelectOverlap(value));
-  };
-
-  //##################################################################################
-  const handleCupSelectShapeChange = (event) => {
-    dispatch(wellSelectorSlice.setCupSelectShape(event.target.value));
-  };
-
-  //##################################################################################
-  const handleCupSelectOverlapChange = (event) => {
-    const value = parseFloat(event.target.value);
-    dispatch(wellSelectorSlice.setCupSelectOverlap(value));
-  };
 
   //##################################################################################
   const handleMoveCameraSpeedXYChange = (event) => {
@@ -417,86 +396,70 @@ const WellSelectorComponent = () => {
 
       </div>
 
-      {/* MODE */}
-      <div
-        style={{
-          marginBottom: "10px",
+      {/* MODE — selection tools + stage actions, with explanatory icons + tooltips */}
+      <Box
+        sx={{
+          mb: 1.5,
           display: "flex",
+          flexWrap: "wrap",
           justifyContent: "center",
           alignItems: "center",
+          gap: 1,
         }}
       >
-        <ButtonGroup>
-          <Button
-            variant="contained"
-            style={{}}
-            onClick={() => handleModeChange(Mode.SINGLE_SELECT)}
-            disabled={wellSelectorState.mode == Mode.SINGLE_SELECT}
-          >
-            SINGLE select
-          </Button>
+        {/* Selection / interaction modes (active one is filled) */}
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+          {[
+            { mode: Mode.SINGLE_SELECT, label: "Single", icon: <PlaceIcon />, tip: "Single point — click the map to add one imaging position." },
+            { mode: Mode.AREA_SELECT, label: "Area", icon: <HighlightAltIcon />, tip: "Area — drag a rectangle to tile-scan a whole region." },
+            { mode: Mode.CUP_SELECT, label: "Well", icon: <RadioButtonCheckedIcon />, tip: "Well — click wells to image the entire well." },
+            { mode: Mode.FREEHAND_DRAW, label: "Freehand", icon: <GestureIcon />, tip: "Freehand — draw a closed region, then press Convert to fill it with scan points." },
+            { mode: Mode.MOVE_CAMERA, label: "Move", icon: <PanToolIcon />, tip: "Move camera — click the map to drive the stage to that point." },
+          ].map((b) => (
+            <Tooltip key={b.label} title={b.tip} arrow>
+              <Button
+                size="small"
+                startIcon={b.icon}
+                variant={wellSelectorState.mode === b.mode ? "contained" : "outlined"}
+                onClick={() => handleModeChange(b.mode)}
+              >
+                {b.label}
+              </Button>
+            </Tooltip>
+          ))}
+        </Box>
 
-          <Button
-            variant="contained"
-            style={{}}
-            onClick={() => handleModeChange(Mode.AREA_SELECT)}
-            disabled={wellSelectorState.mode == Mode.AREA_SELECT}
-          >
-            AREA select
-          </Button>
-
-          <Button
-            variant="contained"
-            style={{}}
-            onClick={() => handleModeChange(Mode.CUP_SELECT)}
-            disabled={wellSelectorState.mode == Mode.CUP_SELECT}
-          >
-            Well select
-          </Button>
-
-          <Button
-            variant="contained"
-            style={{}}
-            onClick={() => handleModeChange(Mode.MOVE_CAMERA)}
-            disabled={wellSelectorState.mode == Mode.MOVE_CAMERA}
-          >
-            MOVE CAMERA
-          </Button>
-
-          <Button
-            variant="contained"
-            style={{}}
-            onClick={() => handleModeChange(Mode.FREEHAND_DRAW)}
-            disabled={wellSelectorState.mode == Mode.FREEHAND_DRAW}
-          >
-            FREEHAND DRAW
-          </Button>
-
-          <Button
-            variant="contained"
-            style={{}}
-            onClick={handleConvertFreehandToPoints}
-          >
-            CONVERT FREEHAND TO SCAN POINTS
-          </Button>
-
-          <Button
-            variant="contained"
-            style={{}}
-            onClick={() => handleAddCurrentPosition()}
-          >
-            ADD CURRENT POSITION
-          </Button>
-
-          <Button
-            variant="contained"
-            style={{}}
-            onClick={() => handleCalibrateOffset()}
-          >
-            CALIBRATE OFFSET
-          </Button>
-        </ButtonGroup>
-      </div>
+        {/* Stage actions */}
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+          {wellSelectorState.mode === Mode.FREEHAND_DRAW && (
+            <Tooltip title="Convert the drawn freehand region into tiled scan points." arrow>
+              <Button size="small" variant="outlined" color="secondary" startIcon={<ScatterPlotIcon />} onClick={handleConvertFreehandToPoints}>
+                Convert
+              </Button>
+            </Tooltip>
+          )}
+          <Tooltip title="Add the current stage XYZ as a new position." arrow>
+            <Button size="small" variant="outlined" startIcon={<AddLocationIcon />} onClick={() => handleAddCurrentPosition()}>
+              Add current
+            </Button>
+          </Tooltip>
+          <Tooltip title="Calibrate the stage offset: right-click the map where the camera currently is and choose 'We are here'." arrow>
+            <Button size="small" variant="outlined" startIcon={<GpsFixedIcon />} onClick={() => handleCalibrateOffset()}>
+              Calibrate
+            </Button>
+          </Tooltip>
+          <Tooltip title="Show/hide the Overview camera overlay (stitched overview image) on the plate map." arrow>
+            <Button
+              size="small"
+              variant={overviewRegState.overlayEnabled ? "contained" : "outlined"}
+              color="secondary"
+              onClick={handleToggleOverviewOverlay}
+            >
+              {overviewRegState.overlayEnabled ? "Overlay on" : "Overlay off"}
+            </Button>
+          </Tooltip>
+        </Box>
+      </Box>
 
       {/* MOVE CAMERA speed controls – only shown when MOVE_CAMERA mode is active */}
       {wellSelectorState.mode === Mode.MOVE_CAMERA && (
@@ -511,7 +474,13 @@ const WellSelectorComponent = () => {
             value={wellSelectorState.moveCameraSpeedXY ?? 20000}
             onChange={handleMoveCameraSpeedXYChange}
             inputProps={{ min: 1, step: 1000 }}
-            sx={{ width: 160 }}
+            error={(parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000}
+            helperText={
+              (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000
+                ? "⚠ >20000 µm/s is highly unreliable (may lose steps/accuracy)"
+                : " "
+            }
+            sx={{ width: 230 }}
           />
           <TextField
             label="Z Speed (µm/s)"

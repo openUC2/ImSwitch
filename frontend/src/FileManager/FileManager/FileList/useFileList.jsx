@@ -2,7 +2,7 @@ import { BiRename, BiSelectMultiple } from "react-icons/bi";
 import { BsCopy, BsFolderPlus, BsGrid, BsScissors } from "react-icons/bs";
 import { FaListUl, FaRegFile, FaRegPaste } from "react-icons/fa6";
 import { FiRefreshCw } from "react-icons/fi";
-import { MdOutlineDelete, MdOutlineFileDownload, MdOutlineFileUpload, MdOpenWith, MdViewInAr } from "react-icons/md";
+import { MdOutlineDelete, MdOutlineFileDownload, MdOutlineFileUpload, MdOpenWith, MdViewInAr, MdContentCopy } from "react-icons/md";
 import { PiFolderOpen } from "react-icons/pi";
 import { useClipBoard } from "../../contexts/ClipboardContext";
 import { useEffect, useState } from "react";
@@ -31,7 +31,7 @@ const canOpenWithVizarr = (file) => {
   return name.endsWith(".zarr") || name.endsWith(".ome.zarr");
 };
 
-const useFileList = (onRefresh, enableFilePreview, triggerAction, onFileOpen, onOpenWithVizarr) => {
+const useFileList = (onRefresh, enableFilePreview, triggerAction, onFileOpen, onOpenWithVizarr, onOpenInNapari) => {
   const [selectedFileIndexes, setSelectedFileIndexes] = useState([]);
   const [visible, setVisible] = useState(false);
   const [isSelectionCtx, setIsSelectionCtx] = useState(false);
@@ -50,6 +50,8 @@ const useFileList = (onRefresh, enableFilePreview, triggerAction, onFileOpen, on
       setCurrentPath(lastSelectedFile.path);
       setSelectedFileIndexes([]);
       setSelectedFiles([]);
+    } else if (lastSelectedFile.isImage) {
+      triggerAction.show("imagePreview");
     } else {
       enableFilePreview && triggerAction.show("previewFile");
     }
@@ -67,6 +69,14 @@ const useFileList = (onRefresh, enableFilePreview, triggerAction, onFileOpen, on
   const handleOpenWithVizarr = () => {
     if (lastSelectedFile && canOpenWithVizarr(lastSelectedFile) && onOpenWithVizarr) {
       onOpenWithVizarr(lastSelectedFile);
+    }
+    setVisible(false);
+  };
+
+  // Handler for copying a `napari --plugin openuc2-processor <url>` command
+  const handleOpenInNapari = () => {
+    if (lastSelectedFile && onOpenInNapari) {
+      onOpenInNapari(lastSelectedFile);
     }
     setVisible(false);
   };
@@ -186,6 +196,13 @@ const useFileList = (onRefresh, enableFilePreview, triggerAction, onFileOpen, on
       icon: <MdViewInAr size={18} />,
       onClick: handleOpenWithVizarr,
       hidden: !canOpenWithVizarr(lastSelectedFile) || selectedFiles.length > 1 || !onOpenWithVizarr,
+      divider: !onOpenInNapari,
+    },
+    {
+      title: "Open in napari",
+      icon: <MdContentCopy size={17} />,
+      onClick: handleOpenInNapari,
+      hidden: !onOpenInNapari || selectedFiles.length > 1,
       divider: true,
     },
     {

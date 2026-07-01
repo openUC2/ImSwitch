@@ -7,6 +7,8 @@ import * as experimentStateSlice from "../state/slices/ExperimentStateSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as tileStreamSlice from "../state/slices/TileStreamSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
+import * as homingSlice from "../state/slices/HomingSlice.js";
+import * as notificationSlice from "../state/slices/NotificationSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
 import * as focusLockSlice from "../state/slices/FocusLockSlice.js";
@@ -32,6 +34,7 @@ import { decode as msgpackDecode } from "@msgpack/msgpack";
 // Import API to check livestream status
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive.js";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout";
+import fetchLaserRuntimeState from "./fetchLaserRuntimeState.js";
 
 const isWebSocketDebugEnabled = () =>
   typeof window !== "undefined" && Boolean(window.__IMSWITCH_DEBUG_WEBSOCKET__);
@@ -45,6 +48,7 @@ const WebSocketHandler = () => {
   const connectionCheckRef = useRef(null);
   const lastEspReconnectAttemptRef = useRef(0);
   const espReconnectInFlightRef = useRef(false);
+  const illuminationSyncInFlightRef = useRef(false);
 
   // Per-instance server capabilities (each tab has its own)
   const serverCapabilitiesRef = useRef({
@@ -170,6 +174,62 @@ const WebSocketHandler = () => {
       return false;
     }
   }, [dispatch]);
+
+  // Sync laser power/enabled state with backend on every reconnect.
+  // This keeps illumination controls in sync after backend restarts.
+  const syncIlluminationState = useCallback(async () => {
+    if (!hostIP || !hostPort) {
+      return;
+    }
+
+    if (illuminationSyncInFlightRef.current) {
+      return;
+    }
+
+    const parameterRangeState = store.getState().parameterRangeState;
+    const sources = Array.isArray(parameterRangeState?.illuSources)
+      ? parameterRangeState.illuSources
+      : [];
+    const kinds = Array.isArray(parameterRangeState?.illuSourceKinds)
+      ? parameterRangeState.illuSourceKinds
+      : [];
+
+    if (sources.length === 0) {
+      return;
+    }
+
+    illuminationSyncInFlightRef.current = true;
+
+    try {
+      const runtimeStates = await fetchLaserRuntimeState({
+        hostIP,
+        hostPort,
+        sources,
+        kinds,
+      });
+
+      runtimeStates.forEach(({ laserName, power, enabled, ok, error }) => {
+        if (!ok && error) {
+          console.warn(
+            `[WebSocket] Failed to sync laser state for ${laserName}:`,
+            error,
+          );
+        }
+
+        dispatch(
+          laserSlice.setLaserState({
+            laserName,
+            power,
+            enabled,
+          }),
+        );
+      });
+
+      console.log("[WebSocket] Illumination state synced on reconnect.");
+    } finally {
+      illuminationSyncInFlightRef.current = false;
+    }
+  }, [dispatch, hostIP, hostPort]);
 
   // WebSocket connection test
   const testWebSocketConnection = useCallback(
@@ -332,11 +392,10 @@ const WebSocketHandler = () => {
       secure: protocol === "https", // Enable secure connection for HTTPS
     });
 
-    //listen to all
-    socket.on("*", (packet) => {
-      const [eventName, data] = packet.data;
-      console.log(`WebSocket received event: ${eventName}`, data);
-    });
+    // NOTE: a catch-all `socket.on("*")` that console.log'd every event used to
+    // live here. It logged EVERY frame (with its full base64 payload, 18×/s),
+    // which pegged the CPU — especially with DevTools open. Removed for
+    // performance; re-add behind an explicit debug flag if needed.
 
     // Listen for a connection confirmation
     socket.on("connect", () => {
@@ -353,6 +412,8 @@ const WebSocketHandler = () => {
       syncLivestreamStatus().then((isActive) => {
         console.log(`[WebSocket] Livestream status synced: ${isActive}`);
       });
+
+      syncIlluminationState();
     });
 
     // Listen for server capabilities
@@ -372,6 +433,14 @@ const WebSocketHandler = () => {
 
     // Listen for binary frame events (UC2F packets)
     // UNIFIED HANDLING: Both binary and JPEG frames use 'frame' event with complete MessagePack encoding
+    // Throttle for the per-frame Redux updates. The live image is delivered to
+    // the canvas imperatively (CustomEvent) every frame; the Redux slice — which
+    // ~23 components subscribe to — is only refreshed at this rate so the whole
+    // app does not re-render at the stream FPS. Backpressure (frame_ack) is
+    // unaffected: every frame is still acknowledged below.
+    let lastFrameReduxTs = 0;
+    const FRAME_REDUX_THROTTLE_MS = 333; // ~3 Hz for HUD/latency/snapshot consumers
+
     socket.on("frame", (payload, ack) => {
       let metadata = null;
       let frameData = null;
@@ -407,28 +476,8 @@ const WebSocketHandler = () => {
               return;
             }
           } else if (decoded.image) {
-            // JPEG frame.  The backend sends raw bytes (msgpack 'bin' type)
-            // since §4.A.  All existing UI consumers expect a base64 string,
-            // so we re-encode here.  Cost: < 1 ms for a 500 KB JPEG on a
-            // laptop; net win because the Pi 5 saves ~0.5 ms by not running
-            // Python's base64.b64encode on every frame.
-            if (typeof decoded.image === 'string') {
-              // Legacy / mixed backend already supplied a base64 string.
-              frameData = decoded.image;
-            } else {
-              const raw = decoded.image instanceof Uint8Array
-                ? decoded.image
-                : new Uint8Array(decoded.image);
-              // Build the binary string in 32 KB chunks to stay well within
-              // the JS call-stack limit for Function.apply argument lists.
-              const CHUNK = 0x8000;
-              let binary = '';
-              for (let i = 0; i < raw.length; i += CHUNK) {
-                binary += String.fromCharCode.apply(
-                  null, raw.subarray(i, Math.min(i + CHUNK, raw.length)));
-              }
-              frameData = btoa(binary);
-            }
+            // JPEG frame — base64 string from the backend.
+            frameData = decoded.image;
           }
         } else if (Array.isArray(payload) && payload.length === 2) {
           // Legacy format: [packed_metadata, frameData]
@@ -451,8 +500,13 @@ const WebSocketHandler = () => {
           frameData = payload;
         }
 
-        // Update Redux with current frame ID (unified field name)
-        if (metadata && metadata.frame_id !== undefined) {
+        // Per-frame Redux updates are throttled (see above); the live canvas is
+        // fed every frame via CustomEvents instead, so it still runs at full FPS.
+        const nowTs = Date.now();
+        const doReduxUpdate = nowTs - lastFrameReduxTs > FRAME_REDUX_THROTTLE_MS;
+        if (doReduxUpdate) lastFrameReduxTs = nowTs;
+
+        if (doReduxUpdate && metadata && metadata.frame_id !== undefined) {
           dispatch(liveStreamSlice.setCurrentFrameId(metadata.frame_id));
         }
 
@@ -461,7 +515,7 @@ const WebSocketHandler = () => {
           metadata &&
           (metadata.protocol === "binary" || metadata.format === "binary")
         ) {
-          // Binary frame - dispatch to UC2F parser
+          // Binary frame - dispatch to UC2F parser (imperative, every frame)
           window.dispatchEvent(
             new CustomEvent("uc2:frame", {
               detail: {
@@ -474,20 +528,25 @@ const WebSocketHandler = () => {
           metadata &&
           (metadata.protocol === "jpeg" || metadata.format === "jpeg")
         ) {
-          // JPEG frame - update Redux (base64 image)
-          dispatch(liveStreamSlice.setLiveViewImage(frameData));
-          dispatch(liveStreamSlice.setImageFormat("jpeg"));
+          // Live render: deliver the frame imperatively EVERY frame so the canvas
+          // stays at full FPS without re-rendering the whole React tree.
+          window.dispatchEvent(
+            new CustomEvent("uc2:jpeg-frame", { detail: { image: frameData } }),
+          );
 
-          // Update pixel size if available
-          if (metadata.pixel_size) {
-            dispatch(liveStreamSlice.setPixelSize(metadata.pixel_size));
-          }
-
-          // Track latency if server timestamp is available
-          if (metadata.server_timestamp) {
-            const latency =
-              (Date.now() / 1000 - metadata.server_timestamp) * 1000; // Convert to ms
-            dispatch(liveStreamSlice.updateLatency(latency));
+          // Redux mirror for HUD / snapshot consumers — THROTTLED (~3 Hz). This
+          // is what used to re-render ~23 components on every frame.
+          if (doReduxUpdate) {
+            dispatch(liveStreamSlice.setLiveViewImage(frameData));
+            dispatch(liveStreamSlice.setImageFormat("jpeg"));
+            if (metadata.pixel_size) {
+              dispatch(liveStreamSlice.setPixelSize(metadata.pixel_size));
+            }
+            if (metadata.server_timestamp) {
+              const latency =
+                (Date.now() / 1000 - metadata.server_timestamp) * 1000;
+              dispatch(liveStreamSlice.updateLatency(latency));
+            }
           }
         } else if (frameData) {
           // No metadata - fallback to binary frame
@@ -505,12 +564,10 @@ const WebSocketHandler = () => {
         return;
       }
 
-      // Send acknowledgement to enable flow control
-      // This tells the server we're ready for the next frame
+      // Send acknowledgement to enable flow control (after processing).
       if (ack && typeof ack === "function") {
         ack();
       } else {
-        // Fallback: emit explicit acknowledgement event with unified field name
         socket.emit("frame_ack", { frame_id: metadata?.frame_id });
       }
     });
@@ -624,10 +681,8 @@ const WebSocketHandler = () => {
           // Support both legacy image_id and new frame_id
           const frameId = dataJson.frame_id ?? dataJson.image_id;
           if (ack && typeof ack === "function") {
-            console.log("Acknowledging JPEG image frame");
             ack();
           } else {
-            console.log("Emitting frame_ack for JPEG image");
             socket.emit("frame_ack", { frame_id: frameId });
           }
 
@@ -728,8 +783,7 @@ const WebSocketHandler = () => {
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateMotorPosition") {
-        console.log("sigUpdateMotorPosition received:", dataJson);
-        //parse
+        // (per-position console.logs removed — they fire on every motor update)
         try {
           const parsedArgs = dataJson.args.p0;
           const positionerKeys = Object.keys(parsedArgs);
@@ -737,8 +791,6 @@ const WebSocketHandler = () => {
           if (positionerKeys.length > 0) {
             const key = positionerKeys[0];
             const correctedPositions = parsedArgs[key];
-
-            console.log("Parsed positions:", correctedPositions);
 
             // Build position update object, filtering out undefined values
             const positionUpdate = Object.fromEntries(
@@ -750,13 +802,42 @@ const WebSocketHandler = () => {
               }).filter(([_, value]) => value !== undefined),
             );
 
-            console.log("Position update to dispatch:", positionUpdate);
-
             //update redux state
             dispatch(positionSlice.setPosition(positionUpdate));
           }
         } catch (error) {
           console.error("Error in sigUpdateMotorPosition handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigHomingState") {
+        // Per-axis frame-homing progress: {active, cancelled, phase, axes, message}
+        try {
+          const homingState = dataJson.args?.p0;
+          if (homingState) {
+            dispatch(homingSlice.setHomingState(homingState));
+          }
+        } catch (error) {
+          console.error("Error in sigHomingState handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigDiskFull") {
+        // Storage is (nearly) full: warn the user with a persistent error snackbar.
+        try {
+          const info = dataJson.args?.p0 || {};
+          const pct = info.percent != null ? ` (${info.percent}% used)` : "";
+          dispatch(
+            notificationSlice.setNotification({
+              message:
+                (info.message ||
+                  "Disk almost full — delete data to keep acquiring.") + pct,
+              type: "error",
+              // null -> default 10 s error toast; the backend re-emits at most
+              // once per minute so the warning re-appears until space is freed.
+              autoHideDuration: null,
+            }),
+          );
+        } catch (error) {
+          console.error("Error in sigDiskFull handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateLaserPower") {
@@ -932,6 +1013,18 @@ const WebSocketHandler = () => {
           }
         } catch (error) {
           console.error("Error in sigUSBFlashStatusUpdate handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigBusStatusUpdate") {
+        // Handle CAN-bus power / emergency-stop (E-stop) status changes
+        console.log("sigBusStatusUpdate received:", dataJson);
+        try {
+          const busStatus = dataJson.args?.p0;
+          if (busStatus) {
+            dispatch(uc2Slice.setBusStatus(busStatus));
+          }
+        } catch (error) {
+          console.error("Error in sigBusStatusUpdate handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigStorageStatusUpdate") {
@@ -1320,7 +1413,7 @@ const WebSocketHandler = () => {
       socket.disconnect();
       socket.close();
     };
-  }, [dispatch, connectionSettingsState, syncLivestreamStatus]);
+  }, [dispatch, connectionSettingsState, syncLivestreamStatus, syncIlluminationState]);
 
   // Global UC2 connection monitoring (periodic checks with pause functionality)
   useEffect(() => {

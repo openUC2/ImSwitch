@@ -480,9 +480,22 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
       //calc neighbors
       let neighborPointList = [];
-      
+
+      // Pre-computed scan positions (e.g. a freehand region converted to scan
+      // points) ride along on the point itself in physical µm. Draw each one as
+      // a full-FOV tile so the individual scan points inside the group are
+      // visible — otherwise the shape/wellMode branches below find nothing to
+      // render and the converted region shows up as empty.
+      if (Array.isArray(itPoint.neighborPointList) && itPoint.neighborPointList.length > 0) {
+        neighborPointList = itPoint.neighborPointList.map((pos) => ({
+          x: calcPhy2Px(pos.x),
+          y: calcPhy2Px(pos.y),
+          iX: pos.iX,
+          iY: pos.iY,
+        }));
+
       // Check for new well-based patterns first
-      if (itPoint.wellMode === "center_only") {
+      } else if (itPoint.wellMode === "center_only") {
         // Find wells that intersect with this point and return their centers
         const intersectingWells = wsUtils.findWellsAtPosition(itPoint, experimentState.wellLayout);
         const centerPositions = wsUtils.generateWellCenterPositions(intersectingWells, experimentState.wellLayout);
@@ -985,23 +998,28 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     ctx.lineWidth = 2;
     ctx.lineCap = "round";
 
-    // Draw measured grid points from computed results as black crosses
-    Object.values(results).forEach((group) => {
-      const points = group?.points || [];
-      points.forEach((pt) => {
-        if (pt.x == null || pt.y == null) return;
-        const px = calcPhy2Px(pt.x);
-        const py = calcPhy2Px(pt.y);
+    // Draw measured grid points from computed results as black crosses.
+    // In manual-map mode the per-region auto grid is not used, so skip these
+    // crosses (they otherwise clutter the map with a grid) — only the manual
+    // points below matter.
+    if (!focusMapState?.config?.use_manual_map) {
+      Object.values(results).forEach((group) => {
+        const points = group?.points || [];
+        points.forEach((pt) => {
+          if (pt.x == null || pt.y == null) return;
+          const px = calcPhy2Px(pt.x);
+          const py = calcPhy2Px(pt.y);
 
-        ctx.strokeStyle = "#000000";
-        ctx.beginPath();
-        ctx.moveTo(px - crossSize, py - crossSize);
-        ctx.lineTo(px + crossSize, py + crossSize);
-        ctx.moveTo(px + crossSize, py - crossSize);
-        ctx.lineTo(px - crossSize, py + crossSize);
-        ctx.stroke();
+          ctx.strokeStyle = "#000000";
+          ctx.beginPath();
+          ctx.moveTo(px - crossSize, py - crossSize);
+          ctx.lineTo(px + crossSize, py + crossSize);
+          ctx.moveTo(px + crossSize, py - crossSize);
+          ctx.lineTo(px - crossSize, py + crossSize);
+          ctx.stroke();
+        });
       });
-    });
+    }
 
     // Draw manual points as blue filled circles with white border
     if (focusMapManualPoints && focusMapManualPoints.length > 0) {
@@ -1443,19 +1461,26 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     //avoid strg
     if (e.ctrlKey) return;
 
-    // Shift+Click: add manual focus map point at clicked XY position
-    // Uses current Z from the position state
-    if (e.shiftKey && focusMapState?.config?.enabled) {
+    // Add a manual focus-map point at the clicked XY (uses the current stage Z).
+    // Triggered either by the "Place points on map" toggle in the Manual Focus
+    // Points menu (manualPlacementActive), or as a Shift+Click shortcut while
+    // focus mapping is enabled.
+    const focusPlacementArmed =
+      focusMapState?.manualPlacementActive ||
+      (e.shiftKey && focusMapState?.config?.enabled);
+    if (focusPlacementArmed) {
       const phyPos = calcPxPoint2PhyPoint(localPos);
-      const currentZ = positionState?.Z ?? 0;
+      // Z is intentionally left null for map-placed points: a single stage Z is
+      // meaningless across the map. Z is filled in by autofocus during the
+      // "Measure Z & Fit" step (or the per-row autofocus icon) before the run.
       dispatch(
         focusMapSlice.addManualPoint({
           x: phyPos.x,
           y: phyPos.y,
-          z: currentZ,
+          z: null,
         })
       );
-      console.log(`Added focus map manual point: X=${phyPos.x}, Y=${phyPos.y}, Z=${currentZ}`);
+      console.log(`Added focus map manual point: X=${phyPos.x}, Y=${phyPos.y}, Z=auto`);
       return;
     }
 

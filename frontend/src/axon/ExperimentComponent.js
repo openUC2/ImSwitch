@@ -82,7 +82,16 @@ const ExperimentComponent = () => {
     };
   }, []); // Empty dependency array ensures this runs once on mount
 
-  // Fetch current detector exposure/gain on mount and apply as defaults
+  // Read the live detector exposure/gain and apply them to ALL channels.
+  // NOTE: this intentionally only runs when the user clicks "Use Current Camera
+  // Settings". It must NOT run automatically on mount: the per-channel
+  // exposure/gain values live in `parameterValue.exposureTimes` / `.gains`
+  // (arrays, persisted via redux-persist). Overwriting them on every mount with
+  // the single live detector value is what made per-channel exposure snap back
+  // to 100 ms / gain 0 whenever the WellPlate view was reopened or the page
+  // reloaded. Leaving the stored arrays untouched lets ChannelsDimension keep
+  // (and persist) whatever the user set — including the result of
+  // "auto exposure once".
   const fetchAndApplyCameraSettings = () => {
     const api = createAxiosInstance();
     api.get("/SettingsController/getDetectorParameters")
@@ -99,10 +108,6 @@ const ExperimentComponent = () => {
         console.warn("Could not fetch detector parameters:", err);
       });
   };
-
-  useEffect(() => {
-    fetchAndApplyCameraSettings();
-  }, []); // Run once on mount
 
   //##################################################################################
   const handleStart = () => {

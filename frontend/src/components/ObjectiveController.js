@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { Paper, Grid, Button, Typography, TextField, Box } from "@mui/material";
+import { Paper, Grid, Button, Typography, TextField, Box, Tooltip, Alert } from "@mui/material";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper";
 import ObjectiveCalibrationWizard from "./ObjectiveCalibrationWizard";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
@@ -595,6 +595,42 @@ const ExtendedObjectiveController = () => {
           <Typography variant="subtitle1" gutterBottom>
             Objective Positions
           </Typography>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              Two objectives sit in two slots on a motorised revolver. To switch
+              between them the revolver moves along its <strong>A / X axis</strong> to
+              each slot's stored position, and the <strong>Z (focus)</strong> moves to
+              each objective's par-focal height so the sample stays in focus.
+            </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'center', my: 1 }}>
+              <svg viewBox="0 0 360 130" width="100%" style={{ maxWidth: 360 }} role="img"
+                aria-label="Revolver with two objective slots along the X/A axis and a Z focus axis">
+                {/* X/A axis */}
+                <line x1="20" y1="40" x2="340" y2="40" stroke="currentColor" strokeWidth="1.5" opacity="0.6" />
+                <polygon points="340,40 332,36 332,44" fill="currentColor" opacity="0.6" />
+                <text x="300" y="30" fill="currentColor" fontSize="11" opacity="0.8">A / X axis</text>
+                {/* Slot 1 (Obj 1 @ X0) */}
+                <circle cx="110" cy="40" r="16" fill="none" stroke="#2e9b57" strokeWidth="2.5" />
+                <line x1="110" y1="40" x2="110" y2="70" stroke="#2e9b57" strokeWidth="2" strokeDasharray="3,3" />
+                <text x="110" y="92" fill="#2e9b57" fontSize="12" fontWeight="bold" textAnchor="middle">Obj 1</text>
+                <text x="110" y="106" fill="currentColor" fontSize="10" textAnchor="middle" opacity="0.8">X0 / Z0</text>
+                {/* Slot 2 (Obj 2 @ X1) */}
+                <circle cx="250" cy="40" r="16" fill="none" stroke="#3f7fd0" strokeWidth="2.5" />
+                <line x1="250" y1="40" x2="250" y2="70" stroke="#3f7fd0" strokeWidth="2" strokeDasharray="3,3" />
+                <text x="250" y="92" fill="#3f7fd0" fontSize="12" fontWeight="bold" textAnchor="middle">Obj 2</text>
+                <text x="250" y="106" fill="currentColor" fontSize="10" textAnchor="middle" opacity="0.8">X1 / Z1</text>
+                {/* Z axis */}
+                <line x1="320" y1="58" x2="320" y2="120" stroke="currentColor" strokeWidth="1.5" opacity="0.6" />
+                <polygon points="320,120 316,112 324,112" fill="currentColor" opacity="0.6" />
+                <text x="328" y="100" fill="currentColor" fontSize="11" opacity="0.8">Z focus</text>
+              </svg>
+            </Box>
+            <Typography variant="caption" color="text.secondary">
+              <strong>Position 1/2</strong> = the revolver X position for each objective.
+              <strong> Focus 1/2</strong> = the par-focal Z for each objective. Use
+              "Set Current as…" after manually driving the revolver/focus to the right spot.
+            </Typography>
+          </Alert>
           <Grid container spacing={2}>
             {/* X0 */}
             <Grid item xs={12} md={6} lg={3}>
@@ -620,38 +656,46 @@ const ExtendedObjectiveController = () => {
                   fullWidth
                   sx={{ my: 1 }}
                 />
-                <Button
-                  variant="contained"
-                  onClick={() => handleSetX0(objectiveState.manualX0)}
-                  fullWidth
-                  sx={{ mb: 1 }}
-                >
-                  Set Position 1
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => handleSetCurrentAs("x0")}
-                  fullWidth
-                  sx={{ mb: 1 }}
-                >
-                  Set Current as Position 1
-                </Button>
-                <Button
-                  variant="outlined"
-                  color="secondary"
-                  onClick={() => handleSwitchObjective(0, true)}
-                  fullWidth
-                >
-                  Switch to Objective 1
-                </Button>
-                <Button
-                  variant="outlined"
-                  color="secondary"
-                  onClick={() => handleSwitchObjective(0, false)}
-                  fullWidth
-                >
-                  Switch to Objective 1 (incl. Z)
-                </Button>
+                <Tooltip title="Store the typed value as objective 1's revolver X (A-axis) position.">
+                  <Button
+                    variant="contained"
+                    onClick={() => handleSetX0(objectiveState.manualX0)}
+                    fullWidth
+                    sx={{ mb: 1 }}
+                  >
+                    Set Position 1
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Use the revolver's current X position as objective 1's position (drive there first, then click).">
+                  <Button
+                    variant="outlined"
+                    onClick={() => handleSetCurrentAs("x0")}
+                    fullWidth
+                    sx={{ mb: 1 }}
+                  >
+                    Set Current as Position 1
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Move the revolver to objective 1's X position only (keeps current focus).">
+                  <Button
+                    variant="outlined"
+                    color="secondary"
+                    onClick={() => handleSwitchObjective(0, true)}
+                    fullWidth
+                  >
+                    Switch to Objective 1
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Move the revolver to objective 1 AND its par-focal Z (Focus 1) so the sample stays in focus.">
+                  <Button
+                    variant="outlined"
+                    color="secondary"
+                    onClick={() => handleSwitchObjective(0, false)}
+                    fullWidth
+                  >
+                    Switch to Objective 1 (incl. Z)
+                  </Button>
+                </Tooltip>
               </Box>
             </Grid>
             {/* X1 */}
@@ -679,38 +723,46 @@ const ExtendedObjectiveController = () => {
                   fullWidth
                   sx={{ my: 1 }}
                 />
-                <Button
-                  variant="contained"
-                  onClick={() => handleSetX1(objectiveState.manualX1)}
-                  fullWidth
-                  sx={{ mb: 1 }}
-                >
-                  Set Position 2
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => handleSetCurrentAs("x1")}
-                  fullWidth
-                  sx={{ mb: 1 }}
-                >
-                  Set Current as Position 2
-                </Button>
-                <Button
-                  variant="outlined"
-                  color="secondary"
-                  onClick={() => handleSwitchObjective(1, true)}
-                  fullWidth
-                >
-                  Switch to Objective 2
-                </Button>
-                <Button
-                  variant="outlined"
-                  color="secondary"
-                  onClick={() => handleSwitchObjective(1, false)}
-                  fullWidth
-                >
-                  Switch to Objective 2 (incl. Z)
-                </Button>
+                <Tooltip title="Store the typed value as objective 2's revolver X (A-axis) position.">
+                  <Button
+                    variant="contained"
+                    onClick={() => handleSetX1(objectiveState.manualX1)}
+                    fullWidth
+                    sx={{ mb: 1 }}
+                  >
+                    Set Position 2
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Use the revolver's current X position as objective 2's position (drive there first, then click).">
+                  <Button
+                    variant="outlined"
+                    onClick={() => handleSetCurrentAs("x1")}
+                    fullWidth
+                    sx={{ mb: 1 }}
+                  >
+                    Set Current as Position 2
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Move the revolver to objective 2's X position only (keeps current focus).">
+                  <Button
+                    variant="outlined"
+                    color="secondary"
+                    onClick={() => handleSwitchObjective(1, true)}
+                    fullWidth
+                  >
+                    Switch to Objective 2
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Move the revolver to objective 2 AND its par-focal Z (Focus 2) so the sample stays in focus.">
+                  <Button
+                    variant="outlined"
+                    color="secondary"
+                    onClick={() => handleSwitchObjective(1, false)}
+                    fullWidth
+                  >
+                    Switch to Objective 2 (incl. Z)
+                  </Button>
+                </Tooltip>
               </Box>
             </Grid>
             )}
@@ -738,21 +790,25 @@ const ExtendedObjectiveController = () => {
                   fullWidth
                   sx={{ my: 1 }}
                 />
-                <Button
-                  variant="contained"
-                  onClick={() => handleSetZ0(manualZ0)}
-                  fullWidth
-                  sx={{ mb: 1 }}
-                >
-                  Set Focus 1
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => handleSetCurrentAs("z0")}
-                  fullWidth
-                >
-                  Set Current as Focus 1
-                </Button>
+                <Tooltip title="Store the typed Z height that makes objective 1 par-focal (in focus).">
+                  <Button
+                    variant="contained"
+                    onClick={() => handleSetZ0(manualZ0)}
+                    fullWidth
+                    sx={{ mb: 1 }}
+                  >
+                    Set Focus 1
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Focus on the sample with objective 1, then click to store the current Z as its par-focal focus.">
+                  <Button
+                    variant="outlined"
+                    onClick={() => handleSetCurrentAs("z0")}
+                    fullWidth
+                  >
+                    Set Current as Focus 1
+                  </Button>
+                </Tooltip>
               </Box>
             </Grid>
             {/* Z1 */}
@@ -780,21 +836,25 @@ const ExtendedObjectiveController = () => {
                   fullWidth
                   sx={{ my: 1 }}
                 />
-                <Button
-                  variant="contained"
-                  onClick={() => handleSetZ1(manualZ1)}
-                  fullWidth
-                  sx={{ mb: 1 }}
-                >
-                  Set Focus 2
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => handleSetCurrentAs("z1")}
-                  fullWidth
-                >
-                  Set Current as Focus 2
-                </Button>
+                <Tooltip title="Store the typed Z height that makes objective 2 par-focal (in focus).">
+                  <Button
+                    variant="contained"
+                    onClick={() => handleSetZ1(manualZ1)}
+                    fullWidth
+                    sx={{ mb: 1 }}
+                  >
+                    Set Focus 2
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Focus on the sample with objective 2, then click to store the current Z as its par-focal focus.">
+                  <Button
+                    variant="outlined"
+                    onClick={() => handleSetCurrentAs("z1")}
+                    fullWidth
+                  >
+                    Set Current as Focus 2
+                  </Button>
+                </Tooltip>
               </Box>
             </Grid>
             )}

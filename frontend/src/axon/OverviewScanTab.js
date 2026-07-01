@@ -23,6 +23,7 @@ import {
 import RefreshIcon from "@mui/icons-material/Refresh";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import SaveIcon from "@mui/icons-material/Save";
+import DeleteIcon from "@mui/icons-material/Delete";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 
 import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js";
@@ -133,6 +134,24 @@ const OverviewScanTab = () => {
     } catch (e) {
       setLocalError("Save failed: " + e.message);
     }
+  };
+
+  // Reset the registered-slot list to start the registration over. Clears the
+  // slots and the overlay locally; the change is persisted with "Save changes".
+  const handleClearList = () => {
+    if (
+      slotEntries.length > 0 &&
+      !window.confirm(
+        "Clear all registered slots and start anew? (Use 'Save changes' afterwards to persist.)"
+      )
+    ) {
+      return;
+    }
+    setLocalError(null);
+    dispatch(overviewRegSlice.clearRegistrationConfigSlots());
+    dispatch(overviewRegSlice.setOverlayData({}));
+    dispatch(overviewRegSlice.setOverlayEnabled(false));
+    setLocalInfo("Slot list cleared. Re-register slots, then Save changes.");
   };
 
   const handleRunScan = async () => {
@@ -335,15 +354,27 @@ const OverviewScanTab = () => {
             <Typography variant="subtitle1">
               Registered slots ({slotEntries.length})
             </Typography>
-            <Button
-              size="small"
-              variant="contained"
-              startIcon={<SaveIcon />}
-              onClick={handleSaveConfig}
-              disabled={!config}
-            >
-              Save changes
-            </Button>
+            <Stack direction="row" spacing={1}>
+              <Button
+                size="small"
+                variant="outlined"
+                color="warning"
+                startIcon={<DeleteIcon />}
+                onClick={handleClearList}
+                disabled={!config || slotEntries.length === 0}
+              >
+                Clear list
+              </Button>
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<SaveIcon />}
+                onClick={handleSaveConfig}
+                disabled={!config}
+              >
+                Save changes
+              </Button>
+            </Stack>
           </Stack>
           <Divider sx={{ mb: 1 }} />
           {slotEntries.length === 0 ? (

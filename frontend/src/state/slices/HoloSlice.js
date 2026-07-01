@@ -26,10 +26,14 @@ const initialHoloState = {
   roiSize: 256, // square ROI size in pixels
 
   // Image processing parameters
-  colorChannel: "green", // "red", "green", "blue", "white"
+  colorChannel: "red", // "red", "green", "blue", "white"
   flipX: false,
   flipY: false,
   rotation: 0, // 0, 90, 180, 270 degrees
+
+  // Display raw hologram (reconstruct at dz=0) instead of the slider dz
+  showRaw: false,
+
 
   // Processing rate
   updateFreq: 10.0, // Hz (processing framerate)
@@ -57,6 +61,22 @@ const initialHoloState = {
   // MJPEG stream URLs
   rawStreamUrl: null,
   processedStreamUrl: null,
+
+  // Background normalization (live divide)
+  bgEnabled: false, // divide the live frame by the stored background
+  hasBackground: false, // a background image is stored in the backend
+  backgroundUrl: null, // base64 data URL preview of the stored background
+  backgroundMeta: null, // { mode, num_frames, width, height, timestamp }
+
+  // High-quality refinement (button press)
+  refineMethod: "phase_retrieval", // "phase_retrieval" | "tv"
+  refineIterations: 30,
+  refineSupportThreshold: 0.5,
+  refineTvWeight: 0.05,
+  isRefining: false, // a refinement is currently running
+  refinedAmplitudeUrl: null, // base64 data URL of the reconstructed amplitude
+  refinedPhaseUrl: null, // base64 data URL of the reconstructed phase
+  refineView: "amplitude", // which result to show: "amplitude" | "phase"
 };
 
 // Create slice
@@ -137,7 +157,10 @@ const holoSlice = createSlice({
     setRotation: (state, action) => {
       state.rotation = action.payload;
     },
-    
+    setShowRaw: (state, action) => {
+      state.showRaw = action.payload;
+    },
+
     // Processing rate
     setUpdateFreq: (state, action) => {
       state.updateFreq = action.payload;
@@ -180,7 +203,47 @@ const holoSlice = createSlice({
     setProcessedStreamUrl: (state, action) => {
       state.processedStreamUrl = action.payload;
     },
-    
+
+    // Background normalization
+    setBgEnabled: (state, action) => {
+      state.bgEnabled = action.payload;
+    },
+    setHasBackground: (state, action) => {
+      state.hasBackground = action.payload;
+    },
+    setBackgroundUrl: (state, action) => {
+      state.backgroundUrl = action.payload;
+    },
+    setBackgroundMeta: (state, action) => {
+      state.backgroundMeta = action.payload;
+    },
+
+    // High-quality refinement
+    setRefineMethod: (state, action) => {
+      state.refineMethod = action.payload;
+    },
+    setRefineIterations: (state, action) => {
+      state.refineIterations = action.payload;
+    },
+    setRefineSupportThreshold: (state, action) => {
+      state.refineSupportThreshold = action.payload;
+    },
+    setRefineTvWeight: (state, action) => {
+      state.refineTvWeight = action.payload;
+    },
+    setIsRefining: (state, action) => {
+      state.isRefining = action.payload;
+    },
+    setRefinedAmplitudeUrl: (state, action) => {
+      state.refinedAmplitudeUrl = action.payload;
+    },
+    setRefinedPhaseUrl: (state, action) => {
+      state.refinedPhaseUrl = action.payload;
+    },
+    setRefineView: (state, action) => {
+      state.refineView = action.payload;
+    },
+
     // Bulk parameter update
     updateHoloParams: (state, action) => {
       const params = action.payload;
@@ -227,6 +290,7 @@ export const {
   setFlipX,
   setFlipY,
   setRotation,
+  setShowRaw,
   setUpdateFreq,
   setFrameSize,
   setLastProcessTime,
@@ -238,6 +302,18 @@ export const {
   setIsLoadingImage,
   setRawStreamUrl,
   setProcessedStreamUrl,
+  setBgEnabled,
+  setHasBackground,
+  setBackgroundUrl,
+  setBackgroundMeta,
+  setRefineMethod,
+  setRefineIterations,
+  setRefineSupportThreshold,
+  setRefineTvWeight,
+  setIsRefining,
+  setRefinedAmplitudeUrl,
+  setRefinedPhaseUrl,
+  setRefineView,
   updateHoloParams,
   resetRoiToCenter,
   resetState,

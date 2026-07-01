@@ -67,12 +67,11 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     liveMonitoringCropsize,
   } = autofocusState;
 
-
   // Fetch backend autofocus status on mount and periodically
   const fetchAutofocusStatus = useCallback(async () => {
     try {
       const response = await fetch(
-        `${hostIP}:${hostPort}/imswitch/api/AutofocusController/getAutofocusStatus`
+        `${hostIP}:${hostPort}/imswitch/api/AutofocusController/getAutofocusStatus`,
         //setTimeout({ method: "GET" }, 5000)
       );
       if (response.ok) {
@@ -97,7 +96,7 @@ const AutofocusController = ({ hostIP, hostPort }) => {
   // Fetch status on mount
   useEffect(() => {
     fetchAutofocusStatus();
-  }, []);
+  }, [fetchAutofocusStatus]);
 
   // Periodic status sync while running
   useEffect(() => {
@@ -120,10 +119,22 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     }
   }, [liveFocusValue]);
 
+  const isPositiveFiniteNumber = (value) => Number.isFinite(value) && value > 0;
+
   const handleStart = async () => {
     // Prevent double-clicks
     if (isRunning || isStarting) {
       console.warn("Autofocus already running or starting");
+      return;
+    }
+
+    if (
+      autofocusMode !== "hillClimbing" &&
+      (!isPositiveFiniteNumber(rangeZ) || !isPositiveFiniteNumber(resolutionZ))
+    ) {
+      setPositionError(
+        "Range Z and Resolution Z must be valid numbers greater than 0.",
+      );
       return;
     }
 
@@ -268,9 +279,20 @@ const AutofocusController = ({ hostIP, hostPort }) => {
             <Grid item xs={4}>
               <TextField
                 label="Range Z"
+                type="number"
                 value={rangeZ}
-                onChange={(e) =>
-                  dispatch(autofocusSlice.setRangeZ(e.target.value))
+                onChange={(e) => {
+                  const parsed = parseFloat(e.target.value);
+                  if (isPositiveFiniteNumber(parsed)) {
+                    dispatch(autofocusSlice.setRangeZ(parsed));
+                  }
+                }}
+                inputProps={{ step: 0.1, min: 0.1 }}
+                error={!isPositiveFiniteNumber(rangeZ)}
+                helperText={
+                  isPositiveFiniteNumber(rangeZ)
+                    ? ""
+                    : "Please enter a number greater than 0"
                 }
                 fullWidth
               />
@@ -278,9 +300,20 @@ const AutofocusController = ({ hostIP, hostPort }) => {
             <Grid item xs={4}>
               <TextField
                 label="Resolution Z"
+                type="number"
                 value={resolutionZ}
-                onChange={(e) =>
-                  dispatch(autofocusSlice.setResolutionZ(e.target.value))
+                onChange={(e) => {
+                  const parsed = parseFloat(e.target.value);
+                  if (isPositiveFiniteNumber(parsed)) {
+                    dispatch(autofocusSlice.setResolutionZ(parsed));
+                  }
+                }}
+                inputProps={{ step: 0.1, min: 0.1 }}
+                error={!isPositiveFiniteNumber(resolutionZ)}
+                helperText={
+                  isPositiveFiniteNumber(resolutionZ)
+                    ? ""
+                    : "Please enter a number greater than 0"
                 }
                 fullWidth
               />
@@ -357,7 +390,6 @@ const AutofocusController = ({ hostIP, hostPort }) => {
             </Grid>
           </>
         )}
-
 
         {/* Advanced Parameters Section */}
         <Grid item xs={12}>

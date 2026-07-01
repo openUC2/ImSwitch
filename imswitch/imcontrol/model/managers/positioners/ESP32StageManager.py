@@ -261,6 +261,27 @@ class ESP32StageManager(PositionerManager):
         except Exception as e:
             self.__logger.warning(f"Could not apply TMC settings: {e}")
 
+        # Load joystick-direction inversion per axis from config. The key
+        # ``joystickInverted<AXIS>`` maps directly to managerProperties so the
+        # same JSON field that holds TMC / homing parameters also holds these.
+        self._joystickSettings: dict = {}
+        for _ax in ("A", "X", "Y", "Z"):
+            self._joystickSettings[_ax] = bool(
+                positionerInfo.managerProperties.get(f'joystickInverted{_ax}', False)
+            )
+        # Apply only axes that have an explicit entry in the config (same
+        # guard used for TMC) so a factory-default config does not spam the
+        # device with unnecessary writes.
+        try:
+            for _ax in ("A", "X", "Y", "Z"):
+                if positionerInfo.managerProperties.get(f'joystickInverted{_ax}') is None:
+                    continue
+                self._motor.set_joystick_direction(
+                    axis=_ax, inverted=self._joystickSettings[_ax], timeout=1
+                )
+        except Exception as e:
+            self.__logger.warning(f"Could not apply joystick direction settings: {e}")
+
         # Dummy move to get the motor to the right position
         for iAxis in positionerInfo.axes:
             self.move(value=-1, speed=1000, axis=iAxis, is_absolute=False, is_blocking=True, isEnable=True, timeout=0.2)
@@ -924,11 +945,9 @@ class ESP32StageManager(PositionerManager):
                 if aborted():
                     return
 
-                # Step 7: restore Z to its previous height, but never drop it below
-                # the safe lift (avoids re-introducing the collision risk at the new XY).
+                # Step 7: restore Z to its previous height
                 self._emitHomingState(phase="restoring_z", message="Restoring Z position")
-                restoreZ = self._zPositionPriorHoming
-                self.move(value=restoreZ, speed=self.homeSpeedZ, axis="Z",
+                self.move(value=self._zPositionPriorHoming, speed=self.homeSpeedZ, axis="Z",
                           is_absolute=True, is_blocking=True)
 
                 self._emitHomingState(phase="done", active=False, message="Frame homing complete")
@@ -1488,6 +1507,34 @@ class ESP32StageManager(PositionerManager):
         
         return result
     
+    def getJoystickDirectionSettings(self) -> dict:
+        """Return the in-memory joystick inversion cache.
+
+        Returns {"A": bool, "X": bool, "Y": bool, "Z": bool}.
+        Read from cache only — no device round-trip required.
+        """
+        return {ax: bool(self._joystickSettings.get(ax, False))
+                for ax in ("A", "X", "Y", "Z")}
+
+    def setJoystickDirectionSettings(self, axis: str, inverted: bool) -> dict:
+        """Update the joystick inversion for one axis in-memory and on the device.
+
+        :param axis:     Axis name ("A", "X", "Y", or "Z").
+        :param inverted: True to reverse joystick movement for that axis.
+        :return:         {success, axis, inverted} or {success, error}.
+        """
+        axis = axis.upper()
+        result = {"axis": axis, "inverted": bool(inverted), "success": False}
+        try:
+            self._motor.set_joystick_direction(axis=axis, inverted=bool(inverted), timeout=1)
+            self._joystickSettings[axis] = bool(inverted)
+            result["success"] = True
+            self.__logger.info(f"Joystick direction set: axis={axis}, inverted={inverted}")
+        except Exception as e:
+            result["error"] = str(e)
+            self.__logger.error(f"setJoystickDirectionSettings failed for axis {axis}: {e}")
+        return result
+
     def setGlobalMotorSettings(self, settings: dict) -> dict:
         """
         Set global motor settings (axis order, CoreXY, enable, etc.)

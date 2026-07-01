@@ -415,16 +415,27 @@ class UC2ConfigController(ImConWidgetController):
 
     ''' PS-controller joystick direction '''
 
-    @APIExport(runOnUIThread=False)
+    @APIExport(runOnUIThread=False, requestType="POST")
     def setJoystickDirection(self, axis: str = "X", inverted: bool = False):
         """
         Invert (or un-invert) the PS-controller joystick for one motor axis.
+        Updates the in-memory cache in the stage manager and persists the new
+        value to the JSON setup file so the setting survives a restart.
 
         :param axis: Axis name ("A", "X", "Y", "Z").
         :param inverted: True to reverse joystick movement for that axis.
         """
         try:
-            self._master.UC2ConfigManager.setJoystickDirection(axis=axis, inverted=inverted)
+            # Update device + stage-manager cache (single source of truth).
+            if self.stages is not None and hasattr(self.stages, "setJoystickDirectionSettings"):
+                result = self.stages.setJoystickDirectionSettings(axis=axis, inverted=inverted)
+                if not result.get("success"):
+                    return {"status": "error", "message": result.get("error", "unknown")}
+            else:
+                # Fallback: direct device call when stages are unavailable.
+                self._master.UC2ConfigManager.setJoystickDirection(axis=axis, inverted=inverted)
+            # Persist the updated settings to the JSON config.
+            self._saveJoystickSettings()
             return {"status": "success", "axis": str(axis).upper(), "inverted": bool(inverted)}
         except Exception as e:
             self.__logger.error(f"setJoystickDirection failed: {e}")
@@ -435,21 +446,65 @@ class UC2ConfigController(ImConWidgetController):
         """
         Read the joystick inversion per axis.
 
-        :return: {"A": bool, "X": bool, "Y": bool, "Z": bool} (axes the device reports).
+        Reads from the in-memory stage-manager cache (no device round-trip).
+        This endpoint is intended for frontend initialisation: call it once on
+        page load to reflect the persisted config state without querying the
+        device. Falls back to a live device query if the cache is unavailable.
+
+        :return: {"status": "ok", "axes": {"A": bool, "X": bool, "Y": bool, "Z": bool}}
         """
-        idx_to_name = {0: "A", 1: "X", 2: "Y", 3: "Z"}
-        result = {}
         try:
+            # Prefer the in-memory cache (populated from config on startup).
+            if self.stages is not None and hasattr(self.stages, "getJoystickDirectionSettings"):
+                axes = self.stages.getJoystickDirectionSettings()
+                return {"status": "ok", "axes": axes}
+            # Fallback: live device query.
+            idx_to_name = {0: "A", 1: "X", 2: "Y", 3: "Z"}
             raw = self._master.UC2ConfigManager.getJoystickDirection(axis=None)
+            axes = {}
             if isinstance(raw, list):
                 for entry in raw:
                     name = idx_to_name.get(entry.get("axis"))
                     if name:
-                        result[name] = bool(entry.get("inverted", False))
-            return result
+                        axes[name] = bool(entry.get("inverted", False))
+            return {"status": "ok", "axes": axes}
         except Exception as e:
             self.__logger.error(f"getJoystickDirection failed: {e}")
             return {"status": "error", "message": str(e)}
+
+    def _saveJoystickSettings(self):
+        """Persist the current joystick inversion cache to the JSON setup file.
+
+        Follows the same pattern as ``saveMotorSettings`` — reads the current
+        in-memory cache from the stage manager and writes the per-axis
+        ``joystickInverted<AXIS>`` keys into ``managerProperties``.
+        """
+        try:
+            if self.stages is None or not hasattr(self.stages, "getJoystickDirectionSettings"):
+                self.__logger.warning("Cannot save joystick settings: stages not available")
+                return
+            if not hasattr(self, "_setupInfo") or self._setupInfo is None:
+                self.__logger.warning("Cannot save joystick settings: _setupInfo not available")
+                return
+
+            positionerName = self.stages._name
+            joystick = self.stages.getJoystickDirectionSettings()
+            props_update = {f'joystickInverted{ax}': bool(v) for ax, v in joystick.items()}
+
+            if hasattr(self._setupInfo, "positioners") and positionerName in self._setupInfo.positioners:
+                for key, value in props_update.items():
+                    self._setupInfo.positioners[positionerName].managerProperties[key] = value
+
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                mOptions, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(mOptions, self._setupInfo)
+                self.__logger.info(f"Joystick settings saved for positioner '{positionerName}'")
+            else:
+                self.__logger.warning(
+                    f"Positioner '{positionerName}' not found in setupInfo.positioners"
+                )
+        except Exception as e:
+            self.__logger.error(f"Could not save joystick settings: {e}")
 
     ''' Fan & board temperature '''
 
@@ -3309,6 +3364,15 @@ class UC2ConfigController(ImConWidgetController):
                             motorSettings[f'toff{ax}'] = tmc.get('toff', 3)
                     except Exception as e:
                         self.__logger.warning(f"Could not fetch TMC settings for axis {ax}: {e}")
+
+            # Always save joystick direction settings from the in-memory cache.
+            if hasattr(self.stages, "getJoystickDirectionSettings"):
+                try:
+                    joystick = self.stages.getJoystickDirectionSettings()
+                    for ax, inv in joystick.items():
+                        motorSettings[f'joystickInverted{ax}'] = bool(inv)
+                except Exception as e:
+                    self.__logger.warning(f"Could not fetch joystick settings: {e}")
             
             # Update setupInfo and save to config file
             if hasattr(self, '_setupInfo') and self._setupInfo is not None:

@@ -64,6 +64,7 @@ class StageCenterCalibrationController(ImConWidgetController):
         self._samples: list[tuple[float, float, float]] = []
         self._scan_meta: dict = {}
         self._run_mutex = Mutex()
+        self._useTriggeredGrab: bool = False
         # Restore the last heatmap from disk so the tab repopulates after a
         # frontend reload.
         self._restoreLatestHeatmap()
@@ -109,8 +110,66 @@ class StageCenterCalibrationController(ImConWidgetController):
         except Exception:
             return True
 
+    def _beginTriggeredAcquisition(self) -> bool:
+        """Switch the camera to software trigger for in-sync, post-move grabs.
+
+        Free-running acquisition buffers frames asynchronously, so a grab can
+        return a frame exposed before the stage settled. In software-trigger
+        mode each frame is exposed in response to an explicit trigger fired
+        after the move. Returns ``True`` when active, ``False`` when the
+        detector does not support software triggering (fallback stays active).
+        """
+        detector = self.getDetector()
+        if not hasattr(detector, "snapSync") or not hasattr(detector, "setTriggerSource"):
+            self._useTriggeredGrab = False
+            return False
+        try:
+            ok = bool(detector.setTriggerSource("software"))
+        except Exception as e:
+            self._logger.warning(f"Could not enable software trigger: {e}")
+            ok = False
+        self._useTriggeredGrab = ok
+        if ok:
+            self._logger.info("Calibration: camera in software-trigger mode (in-sync grabs)")
+        return ok
+
+    def _endTriggeredAcquisition(self) -> None:
+        """Restore continuous (free-run) acquisition after a triggered scan."""
+        if not self._useTriggeredGrab:
+            return
+        self._useTriggeredGrab = False
+        try:
+            detector = self.getDetector()
+            if hasattr(detector, "setTriggerSource"):
+                detector.setTriggerSource("continuous")
+                self._logger.info("Calibration: camera restored to continuous mode")
+        except Exception as e:
+            self._logger.warning(f"Could not restore continuous mode: {e}")
+
+    def _grabFrame(self):
+        """Return one camera frame.
+
+        Triggered path (preferred): fire a software trigger via ``snapSync``
+        so the exposure is guaranteed to happen after the stage settled.
+
+        Fallback: flush any buffered frames and return the latest frame from
+        ``getLatestFrame`` (original behaviour, used when the detector does
+        not support software triggering).
+        """
+        detector = self.getDetector()
+        # Triggered path.
+        if self._useTriggeredGrab and hasattr(detector, "snapSync"):
+            return detector.snapSync(timeout=2.0)
+        # Fallback: discard frames accumulated during the move, then grab.
+        try:
+            if hasattr(detector, "flushBuffer"):
+                detector.flushBuffer()
+        except Exception:
+            pass
+        return detector.getLatestFrame()
+
     def _grabMeanFrame(self) -> Optional[float]:
-        frame = self.getDetector().getLatestFrame()
+        frame = self._grabFrame()
         if frame is None or getattr(frame, "size", 0) == 0:
             return None
         # Subsample heavily for speed (every 20th pixel in each direction).
@@ -124,7 +183,7 @@ class StageCenterCalibrationController(ImConWidgetController):
         start_x: float,
         start_y: float,
         exposure_time_us: int = 3000,
-        speed: int = 5000,
+        speed: int = 15000,
         step_um: float = 250.0,
         max_radius_um: float = 5000.0,
         brightness_factor: float = 1.4,  # kept for backward-compat / stage-2
@@ -280,6 +339,10 @@ class StageCenterCalibrationController(ImConWidgetController):
                       step_um: float, max_r: float,
                       move_to_brightest: bool = True) -> None:
         try:
+            # Prefer software-triggered grabs so each frame is exposed after
+            # the stage has finished its move. Falls back to getLatestFrame
+            # transparently when the detector does not support triggering.
+            self._beginTriggeredAcquisition()
             stage = self.getStage()
             stage.move(axis="XY", value=(cx,cy), is_absolute=True, is_blocking=True)
 
@@ -329,6 +392,7 @@ class StageCenterCalibrationController(ImConWidgetController):
 
             self._persistLatestHeatmap()
         finally:
+            self._endTriggeredAcquisition()
             self._is_running = False
 
     # ----------------------------- result --------------------------------

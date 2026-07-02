@@ -42,6 +42,7 @@ class UC2ConfigController(ImConWidgetController):
     sigUSBFlashStatusUpdate = Signal(object)  # Emits USB flash status updates
     sigCameraTrigger = Signal(object)  # Emits camera trigger events from hardware
     sigBusStatusUpdate = Signal(object)  # Emits CAN-bus power / emergency-stop status changes
+    sigCollisionStatusUpdate = Signal(object)  # Emits collision-detector events/state (GPIO slave)
 
 
     def __init__(self, *args, **kwargs):
@@ -88,6 +89,13 @@ class UC2ConfigController(ImConWidgetController):
 
         # register emergency-stop callback (CAN-bus power / E-stop button)
         self.registerEmergencyCallback()
+
+        # collision detector (GPIO slave): latched crash state + optional
+        # armed auto-stop of all motors
+        self._collisionArmed = False
+        self._collisionLatched = False
+        self._lastCollisionEvent = None
+        self.registerCollisionCallback()
 
         # register the callbacks for emitting serial-related signals
         if hasattr(self._master.UC2ConfigManager, "ESP32"):
@@ -345,6 +353,178 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Could not register emergency callback: {e}")
 
+    def registerCollisionCallback(self):
+        """
+        Register a callback for collision-detector events from the GPIO slave.
+
+        The CANopen master pushes an unsolicited frame on every collision
+        trip/clear edge:
+            {"gpio":{"event":1,"node":60,"trip":1,"estop":0,
+                     "filtered":2365,"raw":2937,...}}
+        On trip we latch the crash state (cleared only by resetCollisionAlarm)
+        and — if armed via armCollisionProtection — immediately stop ALL
+        motors. The event is always forwarded to the frontend via
+        sigCollisionStatusUpdate.
+        """
+        def collision_callback(event):
+            try:
+                tripped = bool(event.get("trip", 0))
+                self._lastCollisionEvent = event
+                stopped = False
+                if tripped:
+                    # Latch: stays set until the user confirms the situation
+                    # is cleared via resetCollisionAlarm().
+                    self._collisionLatched = True
+                    if self._collisionArmed:
+                        # turn off power 
+                        self.setBusPower(enable=False)
+                        stopped = self._stopAllMotors()
+                        self.__logger.warning(
+                            f"COLLISION detected (filtered={event.get('filtered')}) — "
+                            f"motors stopped: {stopped}")
+                    else:
+                        self.__logger.warning(
+                            f"COLLISION detected (filtered={event.get('filtered')}) — "
+                            "auto-stop not armed")
+                self.sigCollisionStatusUpdate.emit(self._collisionStateDict(
+                    event=event, motorsStopped=stopped))
+            except Exception as e:
+                self.__logger.error(f"Error in collision_callback: {e}")
+
+        try:
+            registered = self._master.UC2ConfigManager.registerCollisionCallback(collision_callback)
+            if registered:
+                self.__logger.debug("Collision callback registered successfully")
+            else:
+                self.__logger.debug("Collision callback not registered (gpio module unavailable)")
+        except Exception as e:
+            self.__logger.error(f"Could not register collision callback: {e}")
+
+    def _stopAllMotors(self):
+        """Immediately stop every positioner. Returns True if at least one
+        stop command went out."""
+        anyStopped = False
+        try:
+            for name in self._master.positionersManager.getAllDeviceNames():
+                try:
+                    p = self._master.positionersManager[name]
+                    if hasattr(p, "stopAll"):
+                        p.stopAll()
+                    elif hasattr(p, "forceStop"):
+                        for ax in getattr(p, "axes", []):
+                            p.forceStop(ax)
+                    else:
+                        continue
+                    anyStopped = True
+                except Exception as e:
+                    self.__logger.error(f"Could not stop positioner {name}: {e}")
+        except Exception as e:
+            self.__logger.error(f"_stopAllMotors failed: {e}")
+        return anyStopped
+
+    def _collisionStateDict(self, event=None, motorsStopped=False):
+        return {
+            "trip": bool((event or self._lastCollisionEvent or {}).get("trip", 0)),
+            "latched": self._collisionLatched,
+            "armed": self._collisionArmed,
+            "motorsStopped": motorsStopped,
+            "event": event or self._lastCollisionEvent,
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+
+    ''' Collision detector (GPIO slave) '''
+
+    @APIExport(runOnUIThread=False)
+    def getGpioStatus(self):
+        """
+        Poll the collision detector on the GPIO slave (SDO reads over CAN).
+
+        :return: {"mean": rolling average (calibration source), "filtered",
+                  "raw", "reference", "threshold", "sensitivity",
+                  "trip", "estop"} plus the software crash state
+                  {"latched", "armed"}.
+        """
+        try:
+            status = self._master.UC2ConfigManager.getGpioStatus() or {}
+            status["latched"] = self._collisionLatched
+            status["armed"] = self._collisionArmed
+            return status
+        except Exception as e:
+            self.__logger.error(f"getGpioStatus failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getCollisionState(self):
+        """Software crash state without touching the CAN bus:
+        {"trip", "latched", "armed", "event", "timestamp"}."""
+        return self._collisionStateDict()
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionThreshold(self, threshold: int):
+        """Deviation band (ADC counts) around the reference; persisted on the
+        slave in NVS."""
+        try:
+            return self._master.UC2ConfigManager.setCollisionThreshold(int(threshold))
+        except Exception as e:
+            self.__logger.error(f"setCollisionThreshold failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionSensitivity(self, sensitivity: int):
+        """Consecutive out-of-band samples (50 Hz) required to trip/clear —
+        rejects single-sample spikes. Persisted on the slave in NVS."""
+        try:
+            return self._master.UC2ConfigManager.setCollisionSensitivity(int(sensitivity))
+        except Exception as e:
+            self.__logger.error(f"setCollisionSensitivity failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionReference(self, reference: int):
+        """Explicitly set the idle baseline (ADC counts) — typically the
+        polled "mean" value. Persisted on the slave in NVS."""
+        try:
+            return self._master.UC2ConfigManager.setCollisionReference(int(reference))
+        except Exception as e:
+            self.__logger.error(f"setCollisionReference failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def calibrateCollisionReference(self):
+        """Tell the slave to take its CURRENT rolling mean as the new
+        reference. Call while the system is idle and collision-free."""
+        try:
+            return self._master.UC2ConfigManager.calibrateCollisionReference()
+        except Exception as e:
+            self.__logger.error(f"calibrateCollisionReference failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def armCollisionProtection(self, arm: bool = True):
+        """
+        Arm/disarm automatic motor stop on collision. While armed, a pushed
+        collision event immediately stops ALL positioners; the crash state
+        latches until resetCollisionAlarm() is called.
+        """
+        self._collisionArmed = bool(arm)
+        self.__logger.info(f"Collision auto-stop {'ARMED' if self._collisionArmed else 'disarmed'}")
+        state = self._collisionStateDict()
+        self.sigCollisionStatusUpdate.emit(state)
+        return state
+
+    @APIExport(runOnUIThread=False)
+    def resetCollisionAlarm(self):
+        """
+        Clear the latched crash state after the user has verified the
+        situation is resolved. Does not move any motor — homing (as the
+        position reference is lost after a crash) is the user's decision.
+        """
+        self._collisionLatched = False
+        self.__logger.info("Collision alarm reset by user")
+        state = self._collisionStateDict()
+        self.sigCollisionStatusUpdate.emit(state)
+        return state
+
     ''' CAN-bus power & emergency-stop (safety) '''
 
     @APIExport(runOnUIThread=False)
@@ -415,16 +595,27 @@ class UC2ConfigController(ImConWidgetController):
 
     ''' PS-controller joystick direction '''
 
-    @APIExport(runOnUIThread=False)
+    @APIExport(runOnUIThread=False, requestType="GET")
     def setJoystickDirection(self, axis: str = "X", inverted: bool = False):
         """
         Invert (or un-invert) the PS-controller joystick for one motor axis.
+        Updates the in-memory cache in the stage manager and persists the new
+        value to the JSON setup file so the setting survives a restart.
 
         :param axis: Axis name ("A", "X", "Y", "Z").
         :param inverted: True to reverse joystick movement for that axis.
         """
         try:
-            self._master.UC2ConfigManager.setJoystickDirection(axis=axis, inverted=inverted)
+            # Update device + stage-manager cache (single source of truth).
+            if self.stages is not None and hasattr(self.stages, "setJoystickDirectionSettings"):
+                result = self.stages.setJoystickDirectionSettings(axis=axis, inverted=inverted)
+                if not result.get("success"):
+                    return {"status": "error", "message": result.get("error", "unknown")}
+            else:
+                # Fallback: direct device call when stages are unavailable.
+                self._master.UC2ConfigManager.setJoystickDirection(axis=axis, inverted=inverted)
+            # Persist the updated settings to the JSON config.
+            self._saveJoystickSettings()
             return {"status": "success", "axis": str(axis).upper(), "inverted": bool(inverted)}
         except Exception as e:
             self.__logger.error(f"setJoystickDirection failed: {e}")
@@ -435,21 +626,65 @@ class UC2ConfigController(ImConWidgetController):
         """
         Read the joystick inversion per axis.
 
-        :return: {"A": bool, "X": bool, "Y": bool, "Z": bool} (axes the device reports).
+        Reads from the in-memory stage-manager cache (no device round-trip).
+        This endpoint is intended for frontend initialisation: call it once on
+        page load to reflect the persisted config state without querying the
+        device. Falls back to a live device query if the cache is unavailable.
+
+        :return: {"status": "ok", "axes": {"A": bool, "X": bool, "Y": bool, "Z": bool}}
         """
-        idx_to_name = {0: "A", 1: "X", 2: "Y", 3: "Z"}
-        result = {}
         try:
+            # Prefer the in-memory cache (populated from config on startup).
+            if self.stages is not None and hasattr(self.stages, "getJoystickDirectionSettings"):
+                axes = self.stages.getJoystickDirectionSettings()
+                return {"status": "ok", "axes": axes}
+            # Fallback: live device query.
+            idx_to_name = {0: "A", 1: "X", 2: "Y", 3: "Z"}
             raw = self._master.UC2ConfigManager.getJoystickDirection(axis=None)
+            axes = {}
             if isinstance(raw, list):
                 for entry in raw:
                     name = idx_to_name.get(entry.get("axis"))
                     if name:
-                        result[name] = bool(entry.get("inverted", False))
-            return result
+                        axes[name] = bool(entry.get("inverted", False))
+            return {"status": "ok", "axes": axes}
         except Exception as e:
             self.__logger.error(f"getJoystickDirection failed: {e}")
             return {"status": "error", "message": str(e)}
+
+    def _saveJoystickSettings(self):
+        """Persist the current joystick inversion cache to the JSON setup file.
+
+        Follows the same pattern as ``saveMotorSettings`` — reads the current
+        in-memory cache from the stage manager and writes the per-axis
+        ``joystickInverted<AXIS>`` keys into ``managerProperties``.
+        """
+        try:
+            if self.stages is None or not hasattr(self.stages, "getJoystickDirectionSettings"):
+                self.__logger.warning("Cannot save joystick settings: stages not available")
+                return
+            if not hasattr(self, "_setupInfo") or self._setupInfo is None:
+                self.__logger.warning("Cannot save joystick settings: _setupInfo not available")
+                return
+
+            positionerName = self.stages._name
+            joystick = self.stages.getJoystickDirectionSettings()
+            props_update = {f'joystickInverted{ax}': bool(v) for ax, v in joystick.items()}
+
+            if hasattr(self._setupInfo, "positioners") and positionerName in self._setupInfo.positioners:
+                for key, value in props_update.items():
+                    self._setupInfo.positioners[positionerName].managerProperties[key] = value
+
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                mOptions, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(mOptions, self._setupInfo)
+                self.__logger.info(f"Joystick settings saved for positioner '{positionerName}'")
+            else:
+                self.__logger.warning(
+                    f"Positioner '{positionerName}' not found in setupInfo.positioners"
+                )
+        except Exception as e:
+            self.__logger.error(f"Could not save joystick settings: {e}")
 
     ''' Fan & board temperature '''
 
@@ -3309,6 +3544,15 @@ class UC2ConfigController(ImConWidgetController):
                             motorSettings[f'toff{ax}'] = tmc.get('toff', 3)
                     except Exception as e:
                         self.__logger.warning(f"Could not fetch TMC settings for axis {ax}: {e}")
+
+            # Always save joystick direction settings from the in-memory cache.
+            if hasattr(self.stages, "getJoystickDirectionSettings"):
+                try:
+                    joystick = self.stages.getJoystickDirectionSettings()
+                    for ax, inv in joystick.items():
+                        motorSettings[f'joystickInverted{ax}'] = bool(inv)
+                except Exception as e:
+                    self.__logger.warning(f"Could not fetch joystick settings: {e}")
             
             # Update setupInfo and save to config file
             if hasattr(self, '_setupInfo') and self._setupInfo is not None:

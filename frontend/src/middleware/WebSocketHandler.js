@@ -1027,6 +1027,37 @@ const WebSocketHandler = () => {
           console.error("Error in sigBusStatusUpdate handler:", error);
         }
         //----------------------------------------------
+      } else if (dataJson.name === "sigCollisionStatusUpdate") {
+        // Collision detector (GPIO slave): trip/clear events, arm/reset state
+        console.log("sigCollisionStatusUpdate received:", dataJson);
+        try {
+          const collisionStatus = dataJson.args?.p0;
+          if (collisionStatus) {
+            dispatch(uc2Slice.setCollisionStatus(collisionStatus));
+            // Global toast on a fresh trip so the user is warned even when
+            // the Frame Settings > Collision Detection tab is not open. The
+            // tab itself shows the full crash dialog with the reset flow.
+            if (collisionStatus.trip && collisionStatus.latched) {
+              const sensorVal = collisionStatus.event?.filtered;
+              dispatch(
+                notificationSlice.setNotification({
+                  message:
+                    "Collision detected!" +
+                    (sensorVal !== undefined ? ` (sensor=${sensorVal})` : "") +
+                    (collisionStatus.motorsStopped
+                      ? " All motors stopped."
+                      : " Auto-stop was NOT armed.") +
+                    " Inspect the stage and reset the alarm in Frame Settings > Collision Detection.",
+                  type: "error",
+                  autoHideDuration: null,
+                }),
+              );
+            }
+          }
+        } catch (error) {
+          console.error("Error in sigCollisionStatusUpdate handler:", error);
+        }
+        //----------------------------------------------
       } else if (dataJson.name === "sigStorageStatusUpdate") {
         if (isWebSocketDebugEnabled()) {
           console.log(

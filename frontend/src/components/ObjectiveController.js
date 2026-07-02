@@ -1,9 +1,21 @@
 import React, { useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { Paper, Grid, Button, Typography, TextField, Box, Tooltip, Alert } from "@mui/material";
+import {
+  Paper,
+  Grid,
+  Button,
+  Typography,
+  TextField,
+  Box,
+  Tooltip,
+  Alert,
+} from "@mui/material";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper";
 import ObjectiveCalibrationWizard from "./ObjectiveCalibrationWizard";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
+import * as laserSlice from "../state/slices/LaserSlice.js";
+import * as stormSlice from "../state/slices/STORMSlice.js";
+import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
 import { useTheme } from "@mui/material/styles";
@@ -21,6 +33,10 @@ import apiObjectiveControllerSetMoveSpeed from "../backendapi/apiObjectiveContro
 
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 import fetchObjectiveControllerGetCurrentObjective from "../middleware/fetchObjectiveControllerGetCurrentObjective.js";
+import {
+  rememberObjectiveIllumination,
+  restoreObjectiveIllumination,
+} from "../middleware/objectiveIlluminationPresets.js";
 
 const ExtendedObjectiveController = () => {
   // Get connection settings from Redux
@@ -33,6 +49,7 @@ const ExtendedObjectiveController = () => {
 
   // Access global Redux state
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+  const laserState = useSelector(laserSlice.getLaserState);
   ////const State = useSelector(Slice.getState);
 
   // Access state from Redux instead of local state
@@ -104,7 +121,7 @@ const ExtendedObjectiveController = () => {
   };
 
   // Switch objective (slot should be 0 or 1)
-  const handleSwitchObjective = (slot, skipZ) => {
+  const handleSwitchObjective = async (slot, skipZ) => {
     // Warn user if the target positions have not been configured yet
     const x0 = objectiveState.posX0;
     const x1 = objectiveState.posX1;
@@ -122,14 +139,28 @@ const ExtendedObjectiveController = () => {
       );
       // return;
     }
-    apiObjectiveControllerMoveToObjective(slot, skipZ)
-      .then((data) => {
-        dispatch(objectiveSlice.setCurrentObjective(slot)); //setCurrentObjective(slot);
-        refreshStatus();
-      })
-      .catch((err) => {
-        console.error(`Error switching to objective ${slot}:`, err);
+    try {
+      await rememberObjectiveIllumination({
+        objectiveSlot: objectiveState.currentObjective,
+        laserState,
+        hostIP,
+        hostPort,
       });
+      await apiObjectiveControllerMoveToObjective(slot, skipZ);
+      await restoreObjectiveIllumination({
+        objectiveSlot: slot,
+        hostIP,
+        hostPort,
+        dispatch,
+        laserSlice,
+        stormSlice,
+        detectorParametersSlice,
+      });
+      dispatch(objectiveSlice.setCurrentObjective(slot)); //setCurrentObjective(slot);
+      refreshStatus();
+    } catch (err) {
+      console.error(`Error switching to objective ${slot}:`, err);
+    }
   };
 
   const movePositioner = (dist, axis = "A") => {
@@ -171,7 +202,8 @@ const ExtendedObjectiveController = () => {
       console.error("Move speed must be a positive number");
       return;
     }
-    if (!window.confirm(`Set objective switch speed to ${numericValue}?`)) return;
+    if (!window.confirm(`Set objective switch speed to ${numericValue}?`))
+      return;
     apiObjectiveControllerSetMoveSpeed(numericValue)
       .then(() => {
         dispatch(objectiveSlice.setMoveSpeed(numericValue));
@@ -179,7 +211,6 @@ const ExtendedObjectiveController = () => {
       })
       .catch((err) => console.error("Error setting move speed:", err));
   };
-
 
   const handleSetCurrentAs = async (which) => {
     apiPositionerControllerGetPositions()
@@ -263,106 +294,113 @@ const ExtendedObjectiveController = () => {
                 </Typography>
               </Grid>
             )}
-            {[0, 1].filter((slot) => slot === 0 || slot1Configured).map((slot) => (
-              <Grid item xs={12} md={6} key={slot}>
-                <Box sx={{ border: "1px solid #ddd", borderRadius: 2, p: 2 }}>
-                  <Typography variant="subtitle2" gutterBottom>
-                    <b>
-                      Slot {slot} —{" "}
-                      {objectiveState.availableObjectivesNames?.[slot] ||
-                        `Obj ${slot + 1}`}
-                    </b>
-                  </Typography>
-                  <Typography variant="body2">
-                    Magnification:{" "}
-                    {objectiveState.availableObjectiveMagnifications?.[slot] ??
-                      "—"}{" "}
-                    &nbsp;| NA:{" "}
-                    {objectiveState.availableObjectiveNAs?.[slot] ?? "—"}{" "}
-                    &nbsp;| Pixelsize:{" "}
-                    {objectiveState.availableObjectivePixelSizes?.[slot] ?? "—"}{" "}
-                    µm/px
-                  </Typography>
-                  <Box
-                    sx={{ display: "flex", gap: 1, mt: 1, flexWrap: "wrap" }}
-                  >
-                    <TextField
-                      label="Name"
-                      size="small"
-                      value={editMeta[slot]?.name ?? ""}
-                      placeholder={
-                        objectiveState.availableObjectivesNames?.[slot] || ""
-                      }
-                      onChange={(e) =>
-                        setEditMeta((p) => ({
-                          ...p,
-                          [slot]: { ...p[slot], name: e.target.value },
-                        }))
-                      }
-                      sx={{ width: 110 }}
-                    />
-                    <TextField
-                      label="Magnification"
-                      size="small"
-                      type="number"
-                      value={editMeta[slot]?.magnification ?? ""}
-                      placeholder={String(
-                        objectiveState.availableObjectiveMagnifications?.[
-                          slot
-                        ] ?? "",
-                      )}
-                      onChange={(e) =>
-                        setEditMeta((p) => ({
-                          ...p,
-                          [slot]: { ...p[slot], magnification: e.target.value },
-                        }))
-                      }
-                      sx={{ width: 110 }}
-                    />
-                    <TextField
-                      label="NA"
-                      size="small"
-                      type="number"
-                      value={editMeta[slot]?.NA ?? ""}
-                      placeholder={String(
-                        objectiveState.availableObjectiveNAs?.[slot] ?? "",
-                      )}
-                      onChange={(e) =>
-                        setEditMeta((p) => ({
-                          ...p,
-                          [slot]: { ...p[slot], NA: e.target.value },
-                        }))
-                      }
-                      sx={{ width: 80 }}
-                    />
-                    <TextField
-                      label="Pixelsize"
-                      size="small"
-                      type="number"
-                      value={editMeta[slot]?.pixelsize ?? ""}
-                      placeholder={String(
-                        objectiveState.availableObjectivePixelSizes?.[slot] ??
-                          "",
-                      )}
-                      onChange={(e) =>
-                        setEditMeta((p) => ({
-                          ...p,
-                          [slot]: { ...p[slot], pixelsize: e.target.value },
-                        }))
-                      }
-                      sx={{ width: 90 }}
-                    />
-                    <Button
-                      variant="contained"
-                      size="small"
-                      onClick={() => handleSaveObjectiveMeta(slot)}
+            {[0, 1]
+              .filter((slot) => slot === 0 || slot1Configured)
+              .map((slot) => (
+                <Grid item xs={12} md={6} key={slot}>
+                  <Box sx={{ border: "1px solid #ddd", borderRadius: 2, p: 2 }}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      <b>
+                        Slot {slot} —{" "}
+                        {objectiveState.availableObjectivesNames?.[slot] ||
+                          `Obj ${slot + 1}`}
+                      </b>
+                    </Typography>
+                    <Typography variant="body2">
+                      Magnification:{" "}
+                      {objectiveState.availableObjectiveMagnifications?.[
+                        slot
+                      ] ?? "—"}{" "}
+                      &nbsp;| NA:{" "}
+                      {objectiveState.availableObjectiveNAs?.[slot] ?? "—"}{" "}
+                      &nbsp;| Pixelsize:{" "}
+                      {objectiveState.availableObjectivePixelSizes?.[slot] ??
+                        "—"}{" "}
+                      µm/px
+                    </Typography>
+                    <Box
+                      sx={{ display: "flex", gap: 1, mt: 1, flexWrap: "wrap" }}
                     >
-                      Save
-                    </Button>
+                      <TextField
+                        label="Name"
+                        size="small"
+                        value={editMeta[slot]?.name ?? ""}
+                        placeholder={
+                          objectiveState.availableObjectivesNames?.[slot] || ""
+                        }
+                        onChange={(e) =>
+                          setEditMeta((p) => ({
+                            ...p,
+                            [slot]: { ...p[slot], name: e.target.value },
+                          }))
+                        }
+                        sx={{ width: 110 }}
+                      />
+                      <TextField
+                        label="Magnification"
+                        size="small"
+                        type="number"
+                        value={editMeta[slot]?.magnification ?? ""}
+                        placeholder={String(
+                          objectiveState.availableObjectiveMagnifications?.[
+                            slot
+                          ] ?? "",
+                        )}
+                        onChange={(e) =>
+                          setEditMeta((p) => ({
+                            ...p,
+                            [slot]: {
+                              ...p[slot],
+                              magnification: e.target.value,
+                            },
+                          }))
+                        }
+                        sx={{ width: 110 }}
+                      />
+                      <TextField
+                        label="NA"
+                        size="small"
+                        type="number"
+                        value={editMeta[slot]?.NA ?? ""}
+                        placeholder={String(
+                          objectiveState.availableObjectiveNAs?.[slot] ?? "",
+                        )}
+                        onChange={(e) =>
+                          setEditMeta((p) => ({
+                            ...p,
+                            [slot]: { ...p[slot], NA: e.target.value },
+                          }))
+                        }
+                        sx={{ width: 80 }}
+                      />
+                      <TextField
+                        label="Pixelsize"
+                        size="small"
+                        type="number"
+                        value={editMeta[slot]?.pixelsize ?? ""}
+                        placeholder={String(
+                          objectiveState.availableObjectivePixelSizes?.[slot] ??
+                            "",
+                        )}
+                        onChange={(e) =>
+                          setEditMeta((p) => ({
+                            ...p,
+                            [slot]: { ...p[slot], pixelsize: e.target.value },
+                          }))
+                        }
+                        sx={{ width: 90 }}
+                      />
+                      <Button
+                        variant="contained"
+                        size="small"
+                        onClick={() => handleSaveObjectiveMeta(slot)}
+                      >
+                        Save
+                      </Button>
+                    </Box>
                   </Box>
-                </Box>
-              </Grid>
-            ))}
+                </Grid>
+              ))}
           </Grid>
         </Grid>
 
@@ -598,37 +636,151 @@ const ExtendedObjectiveController = () => {
           <Alert severity="info" sx={{ mb: 2 }}>
             <Typography variant="body2" sx={{ mb: 1 }}>
               Two objectives sit in two slots on a motorised revolver. To switch
-              between them the revolver moves along its <strong>A / X axis</strong> to
-              each slot's stored position, and the <strong>Z (focus)</strong> moves to
-              each objective's par-focal height so the sample stays in focus.
+              between them the revolver moves along its{" "}
+              <strong>A / X axis</strong> to each slot's stored position, and
+              the <strong>Z (focus)</strong> moves to each objective's par-focal
+              height so the sample stays in focus.
             </Typography>
-            <Box sx={{ display: 'flex', justifyContent: 'center', my: 1 }}>
-              <svg viewBox="0 0 360 130" width="100%" style={{ maxWidth: 360 }} role="img"
-                aria-label="Revolver with two objective slots along the X/A axis and a Z focus axis">
+            <Box sx={{ display: "flex", justifyContent: "center", my: 1 }}>
+              <svg
+                viewBox="0 0 360 130"
+                width="100%"
+                style={{ maxWidth: 360 }}
+                role="img"
+                aria-label="Revolver with two objective slots along the X/A axis and a Z focus axis"
+              >
                 {/* X/A axis */}
-                <line x1="20" y1="40" x2="340" y2="40" stroke="currentColor" strokeWidth="1.5" opacity="0.6" />
-                <polygon points="340,40 332,36 332,44" fill="currentColor" opacity="0.6" />
-                <text x="300" y="30" fill="currentColor" fontSize="11" opacity="0.8">A / X axis</text>
+                <line
+                  x1="20"
+                  y1="40"
+                  x2="340"
+                  y2="40"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  opacity="0.6"
+                />
+                <polygon
+                  points="340,40 332,36 332,44"
+                  fill="currentColor"
+                  opacity="0.6"
+                />
+                <text
+                  x="300"
+                  y="30"
+                  fill="currentColor"
+                  fontSize="11"
+                  opacity="0.8"
+                >
+                  A / X axis
+                </text>
                 {/* Slot 1 (Obj 1 @ X0) */}
-                <circle cx="110" cy="40" r="16" fill="none" stroke="#2e9b57" strokeWidth="2.5" />
-                <line x1="110" y1="40" x2="110" y2="70" stroke="#2e9b57" strokeWidth="2" strokeDasharray="3,3" />
-                <text x="110" y="92" fill="#2e9b57" fontSize="12" fontWeight="bold" textAnchor="middle">Obj 1</text>
-                <text x="110" y="106" fill="currentColor" fontSize="10" textAnchor="middle" opacity="0.8">X0 / Z0</text>
+                <circle
+                  cx="110"
+                  cy="40"
+                  r="16"
+                  fill="none"
+                  stroke="#2e9b57"
+                  strokeWidth="2.5"
+                />
+                <line
+                  x1="110"
+                  y1="40"
+                  x2="110"
+                  y2="70"
+                  stroke="#2e9b57"
+                  strokeWidth="2"
+                  strokeDasharray="3,3"
+                />
+                <text
+                  x="110"
+                  y="92"
+                  fill="#2e9b57"
+                  fontSize="12"
+                  fontWeight="bold"
+                  textAnchor="middle"
+                >
+                  Obj 1
+                </text>
+                <text
+                  x="110"
+                  y="106"
+                  fill="currentColor"
+                  fontSize="10"
+                  textAnchor="middle"
+                  opacity="0.8"
+                >
+                  X0 / Z0
+                </text>
                 {/* Slot 2 (Obj 2 @ X1) */}
-                <circle cx="250" cy="40" r="16" fill="none" stroke="#3f7fd0" strokeWidth="2.5" />
-                <line x1="250" y1="40" x2="250" y2="70" stroke="#3f7fd0" strokeWidth="2" strokeDasharray="3,3" />
-                <text x="250" y="92" fill="#3f7fd0" fontSize="12" fontWeight="bold" textAnchor="middle">Obj 2</text>
-                <text x="250" y="106" fill="currentColor" fontSize="10" textAnchor="middle" opacity="0.8">X1 / Z1</text>
+                <circle
+                  cx="250"
+                  cy="40"
+                  r="16"
+                  fill="none"
+                  stroke="#3f7fd0"
+                  strokeWidth="2.5"
+                />
+                <line
+                  x1="250"
+                  y1="40"
+                  x2="250"
+                  y2="70"
+                  stroke="#3f7fd0"
+                  strokeWidth="2"
+                  strokeDasharray="3,3"
+                />
+                <text
+                  x="250"
+                  y="92"
+                  fill="#3f7fd0"
+                  fontSize="12"
+                  fontWeight="bold"
+                  textAnchor="middle"
+                >
+                  Obj 2
+                </text>
+                <text
+                  x="250"
+                  y="106"
+                  fill="currentColor"
+                  fontSize="10"
+                  textAnchor="middle"
+                  opacity="0.8"
+                >
+                  X1 / Z1
+                </text>
                 {/* Z axis */}
-                <line x1="320" y1="58" x2="320" y2="120" stroke="currentColor" strokeWidth="1.5" opacity="0.6" />
-                <polygon points="320,120 316,112 324,112" fill="currentColor" opacity="0.6" />
-                <text x="328" y="100" fill="currentColor" fontSize="11" opacity="0.8">Z focus</text>
+                <line
+                  x1="320"
+                  y1="58"
+                  x2="320"
+                  y2="120"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  opacity="0.6"
+                />
+                <polygon
+                  points="320,120 316,112 324,112"
+                  fill="currentColor"
+                  opacity="0.6"
+                />
+                <text
+                  x="328"
+                  y="100"
+                  fill="currentColor"
+                  fontSize="11"
+                  opacity="0.8"
+                >
+                  Z focus
+                </text>
               </svg>
             </Box>
             <Typography variant="caption" color="text.secondary">
-              <strong>Position 1/2</strong> = the revolver X position for each objective.
-              <strong> Focus 1/2</strong> = the par-focal Z for each objective. Use
-              "Set Current as…" after manually driving the revolver/focus to the right spot.
+              <strong>Position 1/2</strong> = the revolver X position for each
+              objective.
+              <strong> Focus 1/2</strong> = the par-focal Z for each objective.
+              Use "Set Current as…" after manually driving the revolver/focus to
+              the right spot.
             </Typography>
           </Alert>
           <Grid container spacing={2}>
@@ -700,71 +852,77 @@ const ExtendedObjectiveController = () => {
             </Grid>
             {/* X1 */}
             {slot1Configured && (
-            <Grid item xs={12} md={6} lg={3}>
-              <Box
-                sx={{ border: "1px solid #eee", borderRadius: 2, p: 2, mb: 2 }}
-              >
-                <Typography variant="body1">
-                  <b>
-                    Position 2 (
-                    {objectiveState.availableObjectivesNames?.[1] || "Obj 2"}):
-                  </b>{" "}
-                  {objectiveState.posX1 !== null
-                    ? objectiveState.posX1
-                    : "Unknown"}
-                </Typography>
-                <TextField
-                  label="Set Position 2"
-                  value={objectiveState.manualX1}
-                  onChange={(e) =>
-                    dispatch(objectiveSlice.setManualX1(e.target.value))
-                  }
-                  size="small"
-                  fullWidth
-                  sx={{ my: 1 }}
-                />
-                <Tooltip title="Store the typed value as objective 2's revolver X (A-axis) position.">
-                  <Button
-                    variant="contained"
-                    onClick={() => handleSetX1(objectiveState.manualX1)}
+              <Grid item xs={12} md={6} lg={3}>
+                <Box
+                  sx={{
+                    border: "1px solid #eee",
+                    borderRadius: 2,
+                    p: 2,
+                    mb: 2,
+                  }}
+                >
+                  <Typography variant="body1">
+                    <b>
+                      Position 2 (
+                      {objectiveState.availableObjectivesNames?.[1] || "Obj 2"}
+                      ):
+                    </b>{" "}
+                    {objectiveState.posX1 !== null
+                      ? objectiveState.posX1
+                      : "Unknown"}
+                  </Typography>
+                  <TextField
+                    label="Set Position 2"
+                    value={objectiveState.manualX1}
+                    onChange={(e) =>
+                      dispatch(objectiveSlice.setManualX1(e.target.value))
+                    }
+                    size="small"
                     fullWidth
-                    sx={{ mb: 1 }}
-                  >
-                    Set Position 2
-                  </Button>
-                </Tooltip>
-                <Tooltip title="Use the revolver's current X position as objective 2's position (drive there first, then click).">
-                  <Button
-                    variant="outlined"
-                    onClick={() => handleSetCurrentAs("x1")}
-                    fullWidth
-                    sx={{ mb: 1 }}
-                  >
-                    Set Current as Position 2
-                  </Button>
-                </Tooltip>
-                <Tooltip title="Move the revolver to objective 2's X position only (keeps current focus).">
-                  <Button
-                    variant="outlined"
-                    color="secondary"
-                    onClick={() => handleSwitchObjective(1, true)}
-                    fullWidth
-                  >
-                    Switch to Objective 2
-                  </Button>
-                </Tooltip>
-                <Tooltip title="Move the revolver to objective 2 AND its par-focal Z (Focus 2) so the sample stays in focus.">
-                  <Button
-                    variant="outlined"
-                    color="secondary"
-                    onClick={() => handleSwitchObjective(1, false)}
-                    fullWidth
-                  >
-                    Switch to Objective 2 (incl. Z)
-                  </Button>
-                </Tooltip>
-              </Box>
-            </Grid>
+                    sx={{ my: 1 }}
+                  />
+                  <Tooltip title="Store the typed value as objective 2's revolver X (A-axis) position.">
+                    <Button
+                      variant="contained"
+                      onClick={() => handleSetX1(objectiveState.manualX1)}
+                      fullWidth
+                      sx={{ mb: 1 }}
+                    >
+                      Set Position 2
+                    </Button>
+                  </Tooltip>
+                  <Tooltip title="Use the revolver's current X position as objective 2's position (drive there first, then click).">
+                    <Button
+                      variant="outlined"
+                      onClick={() => handleSetCurrentAs("x1")}
+                      fullWidth
+                      sx={{ mb: 1 }}
+                    >
+                      Set Current as Position 2
+                    </Button>
+                  </Tooltip>
+                  <Tooltip title="Move the revolver to objective 2's X position only (keeps current focus).">
+                    <Button
+                      variant="outlined"
+                      color="secondary"
+                      onClick={() => handleSwitchObjective(1, true)}
+                      fullWidth
+                    >
+                      Switch to Objective 2
+                    </Button>
+                  </Tooltip>
+                  <Tooltip title="Move the revolver to objective 2 AND its par-focal Z (Focus 2) so the sample stays in focus.">
+                    <Button
+                      variant="outlined"
+                      color="secondary"
+                      onClick={() => handleSwitchObjective(1, false)}
+                      fullWidth
+                    >
+                      Switch to Objective 2 (incl. Z)
+                    </Button>
+                  </Tooltip>
+                </Box>
+              </Grid>
             )}
             {/* Z0 */}
             <Grid item xs={12} md={6} lg={3}>
@@ -813,50 +971,56 @@ const ExtendedObjectiveController = () => {
             </Grid>
             {/* Z1 */}
             {slot1Configured && (
-            <Grid item xs={12} md={6} lg={3}>
-              <Box
-                sx={{ border: "1px solid #eee", borderRadius: 2, p: 2, mb: 2 }}
-              >
-                <Typography variant="body1">
-                  <b>
-                    Focus 2 (
-                    {objectiveState.availableObjectivesNames?.[1] || "Obj 2"}):
-                  </b>{" "}
-                  {objectiveState.posZ1 !== null
-                    ? objectiveState.posZ1
-                    : "Unknown"}
-                </Typography>
-                <TextField
-                  label="Set Focus 2"
-                  value={manualZ1}
-                  onChange={(e) =>
-                    dispatch(objectiveSlice.setManualZ1(e.target.value))
-                  }
-                  size="small"
-                  fullWidth
-                  sx={{ my: 1 }}
-                />
-                <Tooltip title="Store the typed Z height that makes objective 2 par-focal (in focus).">
-                  <Button
-                    variant="contained"
-                    onClick={() => handleSetZ1(manualZ1)}
+              <Grid item xs={12} md={6} lg={3}>
+                <Box
+                  sx={{
+                    border: "1px solid #eee",
+                    borderRadius: 2,
+                    p: 2,
+                    mb: 2,
+                  }}
+                >
+                  <Typography variant="body1">
+                    <b>
+                      Focus 2 (
+                      {objectiveState.availableObjectivesNames?.[1] || "Obj 2"}
+                      ):
+                    </b>{" "}
+                    {objectiveState.posZ1 !== null
+                      ? objectiveState.posZ1
+                      : "Unknown"}
+                  </Typography>
+                  <TextField
+                    label="Set Focus 2"
+                    value={manualZ1}
+                    onChange={(e) =>
+                      dispatch(objectiveSlice.setManualZ1(e.target.value))
+                    }
+                    size="small"
                     fullWidth
-                    sx={{ mb: 1 }}
-                  >
-                    Set Focus 2
-                  </Button>
-                </Tooltip>
-                <Tooltip title="Focus on the sample with objective 2, then click to store the current Z as its par-focal focus.">
-                  <Button
-                    variant="outlined"
-                    onClick={() => handleSetCurrentAs("z1")}
-                    fullWidth
-                  >
-                    Set Current as Focus 2
-                  </Button>
-                </Tooltip>
-              </Box>
-            </Grid>
+                    sx={{ my: 1 }}
+                  />
+                  <Tooltip title="Store the typed Z height that makes objective 2 par-focal (in focus).">
+                    <Button
+                      variant="contained"
+                      onClick={() => handleSetZ1(manualZ1)}
+                      fullWidth
+                      sx={{ mb: 1 }}
+                    >
+                      Set Focus 2
+                    </Button>
+                  </Tooltip>
+                  <Tooltip title="Focus on the sample with objective 2, then click to store the current Z as its par-focal focus.">
+                    <Button
+                      variant="outlined"
+                      onClick={() => handleSetCurrentAs("z1")}
+                      fullWidth
+                    >
+                      Set Current as Focus 2
+                    </Button>
+                  </Tooltip>
+                </Box>
+              </Grid>
             )}
           </Grid>
         </Grid>

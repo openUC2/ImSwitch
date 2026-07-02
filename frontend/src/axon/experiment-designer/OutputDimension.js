@@ -52,6 +52,7 @@ const OutputDimension = () => {
   if (parameterValue.ome_write_tiff) activeFormats.push("OME-TIFF");
   if (parameterValue.ome_write_stitched_tiff) activeFormats.push("Stitched TIFF");
   if (parameterValue.ome_write_individual_tiffs) activeFormats.push("Individual TIFFs");
+  if (parameterValue.ome_write_ashlar_stitch && parameterValue.ome_write_individual_tiffs) activeFormats.push("Ashlar Stitch");
 
   // Update summary when formats change
   useEffect(() => {
@@ -75,14 +76,14 @@ const OutputDimension = () => {
       key: "ome_write_zarr",
       label: "OME-Zarr",
       description: "Cloud-optimized chunked format. Best for large datasets, remote access, and parallel processing.",
-      recommended: true,
+      recommended: false,
       value: parameterValue.ome_write_zarr,
       onChange: (checked) => dispatch(experimentSlice.setOmeWriteZarr(checked)),
     },
     {
       key: "ome_write_tiff",
       label: "OME-TIFF",
-      description: "Standard microscopy format with full metadata. Compatible with ImageJ, FIJI, and other analysis software.",
+      description: "Single multi-dimensional hyperstack (TCZYX) with full OME metadata. Opens directly in ImageJ/FIJI via Bio-Formats.",
       recommended: false,
       value: parameterValue.ome_write_tiff,
       onChange: (checked) => dispatch(experimentSlice.setOmeWriteTiff(checked)),
@@ -99,7 +100,7 @@ const OutputDimension = () => {
       key: "ome_write_individual_tiffs",
       label: "Individual TIFFs",
       description: "Separate TIFF file per tile with position-based naming. Useful for distributed processing.",
-      recommended: false,
+      recommended: true,
       value: parameterValue.ome_write_individual_tiffs,
       onChange: (checked) => dispatch(experimentSlice.setOmeWriteIndividualTiffs(checked)),
     },
@@ -387,6 +388,158 @@ const OutputDimension = () => {
             ⚠️ No output format selected. Images will only be displayed but not saved.
           </Typography>
         </Box>
+      )}
+
+      <Divider sx={{ my: 3 }} />
+
+      {/* Post-processing: stitching. The plain "Stitched OME-TIFF" toggle above
+          composites tiles by stage coordinates on the fly; Ashlar instead runs
+          a feature-based registration after acquisition for seam-free mosaics. */}
+      <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600 }}>
+        Post-Processing: Stitching
+      </Typography>
+
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "flex-start",
+          p: 2,
+          border: `1px solid ${
+            parameterValue.ome_write_ashlar_stitch
+              ? theme.palette.primary.main
+              : theme.palette.divider
+          }`,
+          borderRadius: 1,
+          backgroundColor: parameterValue.ome_write_ashlar_stitch
+            ? alpha(theme.palette.primary.main, 0.04)
+            : "transparent",
+        }}
+      >
+        <Switch
+          checked={parameterValue.ome_write_ashlar_stitch && parameterValue.ome_write_individual_tiffs || false}
+          onChange={(e) =>
+            dispatch(experimentSlice.setOmeWriteAshlarStitch(e.target.checked))
+          }
+          sx={{ mr: 1.5, mt: -0.5 }}
+        />
+        <Box sx={{ flex: 1 }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              Ashlar Stitching (feature-based)
+            </Typography>
+            {parameterValue.ome_write_ashlar_stitch  && parameterValue.ome_write_individual_tiffs &&  (
+              <CheckCircleIcon
+                sx={{ fontSize: 16, color: theme.palette.success.main, ml: "auto" }}
+              />
+            )}
+          </Box>
+          <Typography variant="caption" color="textSecondary">
+            Runs Ashlar after acquisition to register overlapping tiles by image
+            features, producing a high-quality seam-free mosaic. Complements the
+            stage-coordinate "Stitched OME-TIFF" option above. Only available when 
+          "Individual TIFFs" are enabled.
+          </Typography>
+        </Box>
+      </Box>
+
+      {parameterValue.ome_write_ashlar_stitch && parameterValue.ome_write_individual_tiffs && (
+        <>
+          {/* Timing expectation — stitching runs in the background and can be
+              slow for large mosaics; make that explicit so users don't think
+              the acquisition has hung. */}
+          <Box
+            sx={{
+              mt: 1.5,
+              p: 1.5,
+              borderRadius: 1,
+              backgroundColor: alpha(theme.palette.warning.main, 0.08),
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 1,
+            }}
+          >
+            <WarningAmberIcon
+              sx={{ fontSize: 16, color: theme.palette.warning.main, mt: 0.25 }}
+            />
+            <Typography variant="caption" color="textSecondary">
+              Ashlar starts automatically once all tiles are written and runs in
+              the background. Depending on the number of tiles and channels it may
+              take several minutes until the fully stitched image is available.
+            </Typography>
+          </Box>
+
+          {/* Ashlar parameters */}
+          <Box sx={{ mt: 2, display: "flex", gap: 2, flexWrap: "wrap" }}>
+            <Box sx={{ flex: "1 1 140px" }}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Pixel Size
+                </Typography>
+                <Tooltip title="Physical pixel size (µm/px) used by Ashlar to convert stage coordinates into pixel offsets." arrow>
+                  <InfoIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
+              <TextField
+                type="number"
+                size="small"
+                fullWidth
+                value={parameterValue.ashlar_pixel_size ?? 1.0}
+                onChange={(e) =>
+                  dispatch(experimentSlice.setAshlarPixelSize(Number(e.target.value)))
+                }
+                InputProps={{
+                  endAdornment: <Typography variant="caption" sx={{ ml: 1 }}>µm/px</Typography>,
+                }}
+                inputProps={{ min: 0, step: 0.01 }}
+              />
+            </Box>
+
+            <Box sx={{ flex: "1 1 140px" }}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Maximum Shift
+                </Typography>
+                <Tooltip title="Maximum per-tile corrective shift Ashlar is allowed to apply during alignment (ashlar -m)." arrow>
+                  <InfoIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
+              <TextField
+                type="number"
+                size="small"
+                fullWidth
+                value={parameterValue.ashlar_maximum_shift ?? 50.0}
+                onChange={(e) =>
+                  dispatch(experimentSlice.setAshlarMaximumShift(Number(e.target.value)))
+                }
+                InputProps={{
+                  endAdornment: <Typography variant="caption" sx={{ ml: 1 }}>µm</Typography>,
+                }}
+                inputProps={{ min: 0, step: 1 }}
+              />
+            </Box>
+
+            <Box sx={{ flex: "1 1 140px" }}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Align Channel
+                </Typography>
+                <Tooltip title="Zero-based channel index Ashlar uses to align tiles (ashlar -c). Pick a channel with strong, stable features." arrow>
+                  <InfoIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
+              <TextField
+                type="number"
+                size="small"
+                fullWidth
+                value={parameterValue.ashlar_align_channel ?? 0}
+                onChange={(e) =>
+                  dispatch(experimentSlice.setAshlarAlignChannel(Number(e.target.value)))
+                }
+                inputProps={{ min: 0, step: 1 }}
+              />
+            </Box>
+          </Box>
+        </>
       )}
 
       {/* Advanced Settings */}

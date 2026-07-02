@@ -79,7 +79,7 @@ const ChannelBlock = ({
   kind = "default",
   kindParams = {},
   onKindParamChange = () => {},
-  ringMaxRadius = 3,
+  ringMaxRadius = 4,
 }) => {
   const theme = useTheme();
   const isSynthetic = kind === "ring" || kind === "dpc";

@@ -26,6 +26,8 @@ import MotorSettingsController from "./components/MotorSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
 import LargeFovScanController from "./components/OpenLayers.js";
 import SocketView from "./components/SocketView.js";
+import MMCoreController from "./components/MMCoreController.jsx";
+
 import TimelapseController from "./components/TimelapseController.js";
 import STORMControllerArkitekt from "./components/STORMControllerArkitekt.js";
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
@@ -778,6 +780,8 @@ function App() {
               )}
               {selectedPlugin === "LightSheet" && <LightsheetController />}
               {selectedPlugin === "Timelapse" && <TimelapseController />}
+              {selectedPlugin === "MMCore" && <MMCoreController />}
+
               {selectedPlugin === "WiFi" && <WiFiController />}
               {plugins.map(
                 (p) =>

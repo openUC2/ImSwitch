@@ -56,6 +56,7 @@ function ConnectionSettings() {
   // Get connection status from Redux state
   const uc2State = useSelector(uc2Slice.getUc2State);
   const isBackendConnected = uc2State.backendConnected; // Backend API reachable
+  const isApiConnected = uc2State.apiConnected; // Expected API endpoint reachable
   const isHardwareConnected = uc2State.uc2Connected; // UC2 hardware connected
 
   // Get WebSocket connection status from Redux state
@@ -109,7 +110,6 @@ function ConnectionSettings() {
   // Connection test state
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-
 
   // Advanced settings accordion state
   const [advancedSettingsExpanded, setAdvancedSettingsExpanded] =
@@ -364,6 +364,7 @@ function ConnectionSettings() {
           {/* horizontal ConnectionGraph */}
           <ConnectionGraphHorizontal
             isBackendConnected={isBackendConnected}
+            isApiConnected={isApiConnected}
             websocketTestStatus={websocketTestStatus}
             isHardwareConnected={isHardwareConnected}
             hasRunConnectionTest={hasRunConnectionTest}
@@ -464,7 +465,6 @@ function ConnectionSettings() {
               </Box>
             </AccordionDetails>
           </Accordion>
-
 
           {/* Current Configuration Preview */}
           {hasConnectionSettings && (

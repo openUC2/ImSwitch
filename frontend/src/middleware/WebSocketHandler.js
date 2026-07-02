@@ -70,11 +70,12 @@ const WebSocketHandler = () => {
       // Skip monitoring if backend connection is not configured
       if (!ip || !port) {
         dispatch(uc2Slice.setBackendConnected(false));
+        dispatch(uc2Slice.setApiConnected(false));
         dispatch(uc2Slice.setUc2Connected(false));
         return false;
       }
 
-      // ── Schritt 1: Backend API erreichbar und korrekt antwortend ──
+      // ── Step 1: Backend API reachable and responding correctly ──
       const apiBase = `${ip}:${port}/imswitch/api/UC2ConfigController`;
       const versionBase = `${ip}:${port}/imswitch/api`;
       let backendAlive = false;
@@ -125,6 +126,7 @@ const WebSocketHandler = () => {
       } catch (error) {
         backendAlive = false;
       }
+      dispatch(uc2Slice.setApiConnected(backendAlive));
       dispatch(uc2Slice.setBackendConnected(backendAlive));
 
       // ── Schritt 2: ESP32/UART hardware connectivity ──
@@ -538,7 +540,8 @@ const WebSocketHandler = () => {
         // Per-frame Redux updates are throttled (see above); the live canvas is
         // fed every frame via CustomEvents instead, so it still runs at full FPS.
         const nowTs = Date.now();
-        const doReduxUpdate = nowTs - lastFrameReduxTs > FRAME_REDUX_THROTTLE_MS;
+        const doReduxUpdate =
+          nowTs - lastFrameReduxTs > FRAME_REDUX_THROTTLE_MS;
         if (doReduxUpdate) lastFrameReduxTs = nowTs;
 
         if (doReduxUpdate && metadata && metadata.frame_id !== undefined) {
@@ -1023,7 +1026,12 @@ const WebSocketHandler = () => {
             // Auto-advance to completion step on terminal states.
             // "cancelled" is treated as terminal so the UI unblocks even
             // when the user aborted a stuck flash via cancelUSBFlash.
-            const terminalStates = ["success", "failed", "warning", "cancelled"];
+            const terminalStates = [
+              "success",
+              "failed",
+              "warning",
+              "cancelled",
+            ];
             if (terminalStates.includes(flashStatus.status)) {
               if (
                 flashStatus.status === "success" ||
@@ -1479,7 +1487,12 @@ const WebSocketHandler = () => {
       socket.disconnect();
       socket.close();
     };
-  }, [dispatch, connectionSettingsState, syncLivestreamStatus, syncIlluminationState]);
+  }, [
+    dispatch,
+    connectionSettingsState,
+    syncLivestreamStatus,
+    syncIlluminationState,
+  ]);
 
   // Global UC2 connection monitoring (periodic checks with pause functionality)
   useEffect(() => {

@@ -219,6 +219,43 @@ class UC2ConfigManager(SignalInterface):
             return False
 
     # ──────────────────────────────────────────────────────────────────────
+    # GPIO slave / collision detector (CAN node, default id 60)
+    # ──────────────────────────────────────────────────────────────────────
+    def registerCollisionCallback(self, callbackfct):
+        """Register a callback invoked on asynchronously pushed GPIO events
+        (collision trip/clear, E-stop edge on the GPIO slave). The callback
+        receives the event dict, e.g. {"event":1,"trip":1,"filtered":2365,...}."""
+        try:
+            self.ESP32.gpio.register_collision_callback(callbackfct)
+            return True
+        except Exception as e:
+            self.__logger.error(f"Could not register collision callback: {e}")
+            return False
+
+    def getGpioStatus(self, node=None, timeout=1):
+        """Poll the collision detector: {mean, filtered, raw, reference,
+        threshold, sensitivity, trip, estop}. Triggers SDO reads on the CAN
+        bus — the slave never broadcasts sensor values on its own."""
+        try:
+            return self.ESP32.gpio.get_status(node=node, timeout=timeout)
+        except Exception as e:
+            self.__logger.error(f"getGpioStatus failed: {e}")
+            return {}
+
+    def setCollisionThreshold(self, threshold, node=None):
+        return self.ESP32.gpio.set_threshold(threshold, node=node)
+
+    def setCollisionSensitivity(self, sensitivity, node=None):
+        return self.ESP32.gpio.set_sensitivity(sensitivity, node=node)
+
+    def setCollisionReference(self, reference, node=None):
+        return self.ESP32.gpio.set_reference(reference, node=node)
+
+    def calibrateCollisionReference(self, node=None):
+        """Slave takes its current rolling mean as the new reference (NVS)."""
+        return self.ESP32.gpio.calibrate(node=node)
+
+    # ──────────────────────────────────────────────────────────────────────
     # Fan & board temperature
     # ──────────────────────────────────────────────────────────────────────
     def getFan(self, blocking=True):

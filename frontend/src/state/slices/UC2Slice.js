@@ -24,6 +24,13 @@ const initialState = {
   emergencyActive: false, // hardware E-stop currently asserted
   emergencyInfo: null, // { reason, msg, timestamp } from the last emergency event
 
+  // Collision detector (GPIO slave) — pushed via sigCollisionStatusUpdate
+  collisionTrip: false, // sensor currently out-of-band (live)
+  collisionLatched: false, // crash latched until user reset
+  collisionArmed: false, // auto motor-stop armed
+  collisionEvent: null, // last raw event dict from the firmware
+  collisionTimestamp: null,
+
   // Config file editing
   selectedFileForEdit: "",
   editorJson: null,
@@ -112,6 +119,17 @@ const uc2Slice = createSlice({
           timestamp: s.timestamp ?? new Date().toISOString(),
         };
       }
+    },
+
+    // Collision detector — merge a {trip, latched, armed, event, timestamp}
+    // snapshot (from sigCollisionStatusUpdate or a getCollisionState poll)
+    setCollisionStatus: (state, action) => {
+      const s = action.payload || {};
+      if (s.trip !== undefined) state.collisionTrip = !!s.trip;
+      if (s.latched !== undefined) state.collisionLatched = !!s.latched;
+      if (s.armed !== undefined) state.collisionArmed = !!s.armed;
+      if (s.event !== undefined) state.collisionEvent = s.event;
+      state.collisionTimestamp = s.timestamp ?? new Date().toISOString();
     },
 
     // Config file editing
@@ -212,6 +230,7 @@ export const {
   setUc2Connected,
   setBusPower,
   setBusStatus,
+  setCollisionStatus,
   setSelectedFileForEdit,
   setEditorJson,
   setEditorJsonText,

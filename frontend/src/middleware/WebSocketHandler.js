@@ -74,17 +74,53 @@ const WebSocketHandler = () => {
         return false;
       }
 
-      // ── Schritt 1: Backend API erreichbar ──
+      // ── Schritt 1: Backend API erreichbar und korrekt antwortend ──
       const apiBase = `${ip}:${port}/imswitch/api/UC2ConfigController`;
+      const versionBase = `${ip}:${port}/imswitch/api`;
       let backendAlive = false;
+
+      const readBooleanJsonResponse = async (response) => {
+        const contentType = response.headers.get("content-type") || "";
+        if (!contentType.toLowerCase().includes("application/json")) {
+          throw new Error(
+            `Unexpected response type: ${contentType || "unknown"}`,
+          );
+        }
+
+        const data = await response.json();
+        if (typeof data !== "boolean") {
+          throw new Error("Unexpected JSON payload for connection check");
+        }
+
+        return data;
+      };
+
+      const readVersionJsonResponse = async (response) => {
+        const contentType = response.headers.get("content-type") || "";
+        if (!contentType.toLowerCase().includes("application/json")) {
+          throw new Error(
+            `Unexpected response type: ${contentType || "unknown"}`,
+          );
+        }
+
+        const data = await response.json();
+        if (!data || typeof data.version !== "string" || !data.version) {
+          throw new Error("Unexpected version payload for connection check");
+        }
+
+        return data.version;
+      };
+
       try {
-        console.debug(`[Check 1] Backend liveness: ${apiBase}/is_connected`);
+        console.debug(`[Check 1] Backend version: ${versionBase}/version`);
         const livenessResponse = await fetchWithTimeout(
-          `${apiBase}/is_connected`,
+          `${versionBase}/version`,
           { method: "GET" },
           5000,
         );
-        backendAlive = livenessResponse.ok;
+        backendAlive = livenessResponse.ok
+          ? Boolean(await readVersionJsonResponse(livenessResponse))
+          : false;
         console.debug(`[Check 1] Backend alive: ${backendAlive}`);
       } catch (error) {
         backendAlive = false;
@@ -104,8 +140,7 @@ const WebSocketHandler = () => {
             5000,
           );
           if (hwResponse.ok) {
-            const data = await hwResponse.json();
-            hardwareConnected = data === true;
+            hardwareConnected = await readBooleanJsonResponse(hwResponse);
           }
           console.debug(
             `[Check 2] Hardware (ESP32/UART) connected: ${hardwareConnected}`,

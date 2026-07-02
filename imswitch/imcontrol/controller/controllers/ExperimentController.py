@@ -191,7 +191,7 @@ class ExperimentController(ImConWidgetController):
             # A ring of radius r needs r LEDs from the centre to the edge,
             # so max usable radius is (min(N) - 1) // 2.  For an 8×8 matrix
             # this gives 3 (rings at radii 0,1,2,3 → 4 distinct rings).
-            _max_ring_radius = max(0, (min(_nx, _ny) - 1) // 2)
+            _max_ring_radius = 4# TODO:Hardcoded max(0, (min(_nx, _ny) - 1) // 2)
             self.ExperimentParams.ledMatrixInfo = {
                 "nLedsX": _nx,
                 "nLedsY": _ny,
@@ -1177,7 +1177,7 @@ class ExperimentController(ImConWidgetController):
 
             # Auto-trigger Ashlar stitching once the workflow thread finishes,
             # guaranteeing all individual TIFFs are on disk before stitching starts.
-            if p.ome_write_ashlar_stitch:
+            if p.ome_write_ashlar_stitch and p.ome_write_individual_tiffs:
                 _wf_thread = self.workflow_manager.current_thread
                 _pixel_size = getattr(p, 'ashlar_pixel_size', 1.0)
                 _max_shift = getattr(p, 'ashlar_maximum_shift', 50.0)

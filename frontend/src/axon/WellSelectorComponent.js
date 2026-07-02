@@ -7,7 +7,6 @@ import * as wsUtils from "./WellSelectorUtils.js";
 
 import InfoPopup from "./InfoPopup.js";
 
-
 import * as wellSelectorSlice from "../state/slices/WellSelectorSlice.js";
 import * as experimentSlice from "../state/slices/ExperimentSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
@@ -47,15 +46,15 @@ import GpsFixedIcon from "@mui/icons-material/GpsFixed";
 const WellSelectorComponent = () => {
   //local state
   const [wellLayoutFileList] = useState([
-    "image/test.json",//TODO remove test
-    "image/test1.json",//TODO remove test
+    "image/test.json", //TODO remove test
+    "image/test1.json", //TODO remove test
   ]);
 
   // Pending layout switch awaiting user confirmation when pointList is non-empty
   const [pendingLayoutEvent, setPendingLayoutEvent] = useState(null);
 
   //child ref
-  const childRef = useRef();//canvas 
+  const childRef = useRef(); //canvas
   const infoPopupRef = useRef();
 
   //redux dispatcher
@@ -95,7 +94,6 @@ const WellSelectorComponent = () => {
     fetchObjectiveControllerGetStatus(dispatch);
   }, [dispatch]);
 
-
   // Convert the current freehand polygon (drawn on the canvas) into
   // experiment scan points using the current FOV and area-scan overlap.
   const handleConvertFreehandToPoints = () => {
@@ -110,7 +108,7 @@ const WellSelectorComponent = () => {
     if (!positions || positions.length === 0) {
       if (infoPopupRef.current) {
         infoPopupRef.current.showMessage(
-          "Draw a closed freehand region first (FREEHAND mode, click+drag)."
+          "Draw a closed freehand region first (FREEHAND mode, click+drag).",
         );
       }
       return;
@@ -139,16 +137,15 @@ const WellSelectorComponent = () => {
           iX: 0,
           iY: 0,
         })),
-      })
+      }),
     );
     childRef.current.clearFreehand && childRef.current.clearFreehand();
     if (infoPopupRef.current) {
       infoPopupRef.current.showMessage(
-        `Created 1 freehand region with ${positions.length} scan position(s).`
+        `Created 1 freehand region with ${positions.length} scan position(s).`,
       );
     }
   };
-
 
   //##################################################################################
   const handleModeChange = (mode) => {
@@ -216,24 +213,24 @@ const WellSelectorComponent = () => {
     const offsetY = wellSelectorState.layoutOffsetY || 0;
 
     //check defaults
-    if (event.target.value === "Default") {
+    if (event.target.value === "Blank" || event.target.value === "Default") {
       wellLayout = wsUtils.wellLayoutDefault;
     } else if (event.target.value === "Heidstar 4x Histosample") {
       wellLayout = wsUtils.wellLayoutDevelopment;
-   } else if (event.target.value === "Wellplate 384") {
+    } else if (event.target.value === "Wellplate 384") {
       // Generate 384 layout with offsets
       wellLayout = wsUtils.generateWellLayout384({
         offsetX: offsetX,
-        offsetY: offsetY
+        offsetY: offsetY,
       });
     } else if (event.target.value === "DEP Chip") {
       // Generate DEP Chip layout with offsets
       wellLayout = wsUtils.generateWellLayoutDEPChip({
         offsetX: offsetX,
-        offsetY: offsetY
+        offsetY: offsetY,
       });
     } else if (event.target.value === "Ropod") {
-      wellLayout = wsUtils.ropodLayout;      
+      wellLayout = wsUtils.ropodLayout;
     } else {
       //donwload layout
       apiDownloadJson(event.target.value) // Pass the JSON file path
@@ -241,11 +238,13 @@ const WellSelectorComponent = () => {
           console.log("apiDownloadJson", data);
           //handle layout
           //TODO
-        //set popup
-        if (infoPopupRef.current) {
-          infoPopupRef.current.showMessage("TODO impl me");
-        } 
-          console.error("-----------------------------------------------TODO impl me------------------------------------------------------------");
+          //set popup
+          if (infoPopupRef.current) {
+            infoPopupRef.current.showMessage("TODO impl me");
+          }
+          console.error(
+            "-----------------------------------------------TODO impl me------------------------------------------------------------",
+          );
         })
         .catch((err) => {
           //handle error if needed
@@ -258,7 +257,6 @@ const WellSelectorComponent = () => {
     // Apply offsets to the layout
     wellLayout = wsUtils.applyLayoutOffset(wellLayout, offsetX, offsetY);
 
-
     //set new layout
     dispatch(experimentSlice.setWellLayout(wellLayout));
   };
@@ -270,17 +268,21 @@ const WellSelectorComponent = () => {
     const currentY = positionState.y;
     const currentZ = positionState.z;
     // Create a new point with current position
-    dispatch(experimentSlice.createPoint({
-      x: currentX,
-      y: currentY,
-      z: currentZ,
-      name: `Position ${experimentState.pointList.length + 1}`,
-      shape: ""
-    }));
-    
+    dispatch(
+      experimentSlice.createPoint({
+        x: currentX,
+        y: currentY,
+        z: currentZ,
+        name: `Position ${experimentState.pointList.length + 1}`,
+        shape: "",
+      }),
+    );
+
     // Show confirmation message
     if (infoPopupRef.current) {
-      infoPopupRef.current.showMessage(`Added position: X=${currentX}, Y=${currentY}`);
+      infoPopupRef.current.showMessage(
+        `Added position: X=${currentX}, Y=${currentY}`,
+      );
     }
   };
 
@@ -291,9 +293,11 @@ const WellSelectorComponent = () => {
     // This uses the clicked position as the known position and transmits it to the backend
     // via the setStageOffsetAxis API (single source of truth for offsets).
     if (infoPopupRef.current) {
-      infoPopupRef.current.showMessage("Right-click on the map where you are and select 'We are here' to calibrate the stage offset.");
+      infoPopupRef.current.showMessage(
+        "Right-click on the map where you are and select 'We are here' to calibrate the stage offset.",
+      );
     }
-  }
+  };
 
   //##################################################################################
   const handleMoveCameraSpeedXYChange = (event) => {
@@ -314,22 +318,21 @@ const WellSelectorComponent = () => {
   //##################################################################################
   return (
     <div style={{ border: "0px solid #eee", padding: "10px" }}>
+      {/* Opentrons-style labware selection (loadName + well chips + condition labels) */}
+      <LabwareSelectionPanel defaultExpanded={false} />
 
-        {/* Opentrons-style labware selection (loadName + well chips + condition labels) */}
-        <LabwareSelectionPanel defaultExpanded={false} />
+      {/* LAYOUT */}
+      {/* WellSelectorComponent with mode passed as prop width: "100%", height: "100%", display: "block"*/}
+      <WellSelectorCanvas ref={childRef} style={{}} />
 
-        {/* LAYOUT */}
-            {/* WellSelectorComponent with mode passed as prop width: "100%", height: "100%", display: "block"*/}
-            <WellSelectorCanvas ref={childRef} style={{}} />
+      {/* PARAMETER*/}
+      {/* Add a little spacer between the wellselector and layout */}
+      <div style={{ height: "16px" }} />
 
-{/* PARAMETER*/}
-{/* Add a little spacer between the wellselector and layout */}
-<div style={{ height: "16px" }} />
-
-{/* PARAMETER */}
-{/* Add a little spacer between the wellselector and layout */}
-<div style={{ marginBottom: "15px" }}>
-<div/>
+      {/* PARAMETER */}
+      {/* Add a little spacer between the wellselector and layout */}
+      <div style={{ marginBottom: "15px" }}>
+        <div />
         <FormControl>
           <InputLabel>Layout</InputLabel>
           <Select
@@ -337,45 +340,54 @@ const WellSelectorComponent = () => {
             value={experimentState.wellLayout.name}
             onChange={handleLayoutChange}
           >
-            {/* current layout */}
-            <MenuItem
-              style={{ backgroundColor: "primary.main" }}
-              value={experimentState.wellLayout.name}
-            >
-              {experimentState.wellLayout.name}
-            </MenuItem>
             {/* hard coded layouts */}
-            <MenuItem value="Default">Default</MenuItem>
-            <MenuItem value="Heidstar 4x Histosample">4 Slide Heidstar</MenuItem>
-            <MenuItem value="Ropod">Ropod</MenuItem>  
+            <MenuItem value="Blank">Blank</MenuItem>
+            <MenuItem value="Heidstar 4x Histosample">
+              4 Slide Heidstar
+            </MenuItem>
+            <MenuItem value="Ropod">Ropod</MenuItem>
             <MenuItem value="Wellplate 384">Wellplate 384</MenuItem>
             <MenuItem value="DEP Chip">DEP Chip (8x6)</MenuItem>
             {/* online layouts */}
-            {wellLayoutFileList.map((file, index) => (
+            {wellLayoutFileList.map((file) => (
               <MenuItem value={file}>{file}</MenuItem>
             ))}
           </Select>
         </FormControl>
 
         {/* VIEW - All controls in one row */}
-        <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
-          <Button 
-            variant="contained" 
+        <Box
+          sx={{
+            display: "flex",
+            gap: 1,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <Button
+            variant="contained"
             size="small"
             onClick={() => handleResetView()}
           >
             Reset View
           </Button>
 
-          <Button 
-            variant="contained" 
+          <Button
+            variant="contained"
             size="small"
             onClick={() => handleResetHistory()}
           >
             Reset History
           </Button>
 
-          <label style={{ fontSize: "14px", display: "flex", alignItems: "center", gap: "4px" }}>
+          <label
+            style={{
+              fontSize: "14px",
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+            }}
+          >
             <input
               type="checkbox"
               checked={wellSelectorState.showOverlap}
@@ -384,7 +396,14 @@ const WellSelectorComponent = () => {
             Show Overlap
           </label>
 
-          <label style={{ fontSize: "14px", display: "flex", alignItems: "center", gap: "4px" }}>
+          <label
+            style={{
+              fontSize: "14px",
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+            }}
+          >
             <input
               type="checkbox"
               checked={wellSelectorState.showShape}
@@ -393,7 +412,6 @@ const WellSelectorComponent = () => {
             Show Shape
           </label>
         </Box>
-
       </div>
 
       {/* MODE — selection tools + stage actions, with explanatory icons + tooltips */}
@@ -410,17 +428,44 @@ const WellSelectorComponent = () => {
         {/* Selection / interaction modes (active one is filled) */}
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
           {[
-            { mode: Mode.SINGLE_SELECT, label: "Single", icon: <PlaceIcon />, tip: "Single point — click the map to add one imaging position." },
-            { mode: Mode.AREA_SELECT, label: "Area", icon: <HighlightAltIcon />, tip: "Area — drag a rectangle to tile-scan a whole region." },
-            { mode: Mode.CUP_SELECT, label: "Well", icon: <RadioButtonCheckedIcon />, tip: "Well — click wells to image the entire well." },
-            { mode: Mode.FREEHAND_DRAW, label: "Freehand", icon: <GestureIcon />, tip: "Freehand — draw a closed region, then press Convert to fill it with scan points." },
-            { mode: Mode.MOVE_CAMERA, label: "Move", icon: <PanToolIcon />, tip: "Move camera — click the map to drive the stage to that point." },
+            {
+              mode: Mode.SINGLE_SELECT,
+              label: "Single",
+              icon: <PlaceIcon />,
+              tip: "Single point — click the map to add one imaging position.",
+            },
+            {
+              mode: Mode.AREA_SELECT,
+              label: "Area",
+              icon: <HighlightAltIcon />,
+              tip: "Area — drag a rectangle to tile-scan a whole region.",
+            },
+            {
+              mode: Mode.CUP_SELECT,
+              label: "Well",
+              icon: <RadioButtonCheckedIcon />,
+              tip: "Well — click wells to image the entire well.",
+            },
+            {
+              mode: Mode.FREEHAND_DRAW,
+              label: "Freehand",
+              icon: <GestureIcon />,
+              tip: "Freehand — draw a closed region, then press Convert to fill it with scan points.",
+            },
+            {
+              mode: Mode.MOVE_CAMERA,
+              label: "Move",
+              icon: <PanToolIcon />,
+              tip: "Move camera — click the map to drive the stage to that point.",
+            },
           ].map((b) => (
             <Tooltip key={b.label} title={b.tip} arrow>
               <Button
                 size="small"
                 startIcon={b.icon}
-                variant={wellSelectorState.mode === b.mode ? "contained" : "outlined"}
+                variant={
+                  wellSelectorState.mode === b.mode ? "contained" : "outlined"
+                }
                 onClick={() => handleModeChange(b.mode)}
               >
                 {b.label}
@@ -432,26 +477,53 @@ const WellSelectorComponent = () => {
         {/* Stage actions */}
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
           {wellSelectorState.mode === Mode.FREEHAND_DRAW && (
-            <Tooltip title="Convert the drawn freehand region into tiled scan points." arrow>
-              <Button size="small" variant="outlined" color="secondary" startIcon={<ScatterPlotIcon />} onClick={handleConvertFreehandToPoints}>
+            <Tooltip
+              title="Convert the drawn freehand region into tiled scan points."
+              arrow
+            >
+              <Button
+                size="small"
+                variant="outlined"
+                color="secondary"
+                startIcon={<ScatterPlotIcon />}
+                onClick={handleConvertFreehandToPoints}
+              >
                 Convert
               </Button>
             </Tooltip>
           )}
           <Tooltip title="Add the current stage XYZ as a new position." arrow>
-            <Button size="small" variant="outlined" startIcon={<AddLocationIcon />} onClick={() => handleAddCurrentPosition()}>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<AddLocationIcon />}
+              onClick={() => handleAddCurrentPosition()}
+            >
               Add current
             </Button>
           </Tooltip>
-          <Tooltip title="Calibrate the stage offset: right-click the map where the camera currently is and choose 'We are here'." arrow>
-            <Button size="small" variant="outlined" startIcon={<GpsFixedIcon />} onClick={() => handleCalibrateOffset()}>
+          <Tooltip
+            title="Calibrate the stage offset: right-click the map where the camera currently is and choose 'We are here'."
+            arrow
+          >
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<GpsFixedIcon />}
+              onClick={() => handleCalibrateOffset()}
+            >
               Calibrate
             </Button>
           </Tooltip>
-          <Tooltip title="Show/hide the Overview camera overlay (stitched overview image) on the plate map." arrow>
+          <Tooltip
+            title="Show/hide the Overview camera overlay (stitched overview image) on the plate map."
+            arrow
+          >
             <Button
               size="small"
-              variant={overviewRegState.overlayEnabled ? "contained" : "outlined"}
+              variant={
+                overviewRegState.overlayEnabled ? "contained" : "outlined"
+              }
               color="secondary"
               onClick={handleToggleOverviewOverlay}
             >
@@ -463,7 +535,16 @@ const WellSelectorComponent = () => {
 
       {/* MOVE CAMERA speed controls – only shown when MOVE_CAMERA mode is active */}
       {wellSelectorState.mode === Mode.MOVE_CAMERA && (
-        <Box sx={{ display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", mb: 1, mt: 1 }}>
+        <Box
+          sx={{
+            display: "flex",
+            gap: 2,
+            alignItems: "center",
+            flexWrap: "wrap",
+            mb: 1,
+            mt: 1,
+          }}
+        >
           <Typography variant="body2" sx={{ fontWeight: 600 }}>
             Move Camera Speed:
           </Typography>
@@ -474,7 +555,9 @@ const WellSelectorComponent = () => {
             value={wellSelectorState.moveCameraSpeedXY ?? 20000}
             onChange={handleMoveCameraSpeedXYChange}
             inputProps={{ min: 1, step: 1000 }}
-            error={(parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000}
+            error={
+              (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000
+            }
             helperText={
               (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000
                 ? "⚠ >20000 µm/s is highly unreliable (may lose steps/accuracy)"
@@ -494,7 +577,7 @@ const WellSelectorComponent = () => {
         </Box>
       )}
 
-      <InfoPopup ref={infoPopupRef}/>
+      <InfoPopup ref={infoPopupRef} />
 
       {/* Confirm before swapping layout (clears existing points) */}
       <Dialog
@@ -504,15 +587,19 @@ const WellSelectorComponent = () => {
         <DialogTitle>Switch layout?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            Switching to <strong>{pendingLayoutEvent?.target?.value}</strong> will
-            remove all {experimentState?.pointList?.length || 0} point(s) from the
-            current experiment, since their coordinates are tied to the old
-            layout. Continue?
+            Switching to <strong>{pendingLayoutEvent?.target?.value}</strong>{" "}
+            will remove all {experimentState?.pointList?.length || 0} point(s)
+            from the current experiment, since their coordinates are tied to the
+            old layout. Continue?
           </DialogContentText>
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCancelLayoutChange}>Cancel</Button>
-          <Button onClick={handleConfirmLayoutChange} color="error" variant="contained">
+          <Button
+            onClick={handleConfirmLayoutChange}
+            color="error"
+            variant="contained"
+          >
             Switch and clear
           </Button>
         </DialogActions>

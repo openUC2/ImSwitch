@@ -16,6 +16,7 @@ const initialState = {
 
   // Connection status (IMPORTANT: Two different types!)
   backendConnected: false, // Backend API reachable (enables UI functions)
+  apiConnected: false, // Expected API endpoint reachable and returning valid data
   uc2Connected: false, // UC2 hardware connected to backend
 
   // CAN-bus power & emergency-stop (safety) — busPower: 1=on, 0=off, null=unknown
@@ -96,6 +97,9 @@ const uc2Slice = createSlice({
     // Connection status setters
     setBackendConnected: (state, action) => {
       state.backendConnected = action.payload;
+    },
+    setApiConnected: (state, action) => {
+      state.apiConnected = action.payload;
     },
     setUc2Connected: (state, action) => {
       state.uc2Connected = action.payload;
@@ -227,6 +231,7 @@ export const {
   addSerialLogEntry,
   clearSerialLog,
   setBackendConnected,
+  setApiConnected,
   setUc2Connected,
   setBusPower,
   setBusStatus,

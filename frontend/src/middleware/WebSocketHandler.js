@@ -70,25 +70,63 @@ const WebSocketHandler = () => {
       // Skip monitoring if backend connection is not configured
       if (!ip || !port) {
         dispatch(uc2Slice.setBackendConnected(false));
+        dispatch(uc2Slice.setApiConnected(false));
         dispatch(uc2Slice.setUc2Connected(false));
         return false;
       }
 
-      // ── Schritt 1: Backend API erreichbar ──
+      // ── Step 1: Backend API reachable and responding correctly ──
       const apiBase = `${ip}:${port}/imswitch/api/UC2ConfigController`;
+      const versionBase = `${ip}:${port}/imswitch/api`;
       let backendAlive = false;
+
+      const readBooleanJsonResponse = async (response) => {
+        const contentType = response.headers.get("content-type") || "";
+        if (!contentType.toLowerCase().includes("application/json")) {
+          throw new Error(
+            `Unexpected response type: ${contentType || "unknown"}`,
+          );
+        }
+
+        const data = await response.json();
+        if (typeof data !== "boolean") {
+          throw new Error("Unexpected JSON payload for connection check");
+        }
+
+        return data;
+      };
+
+      const readVersionJsonResponse = async (response) => {
+        const contentType = response.headers.get("content-type") || "";
+        if (!contentType.toLowerCase().includes("application/json")) {
+          throw new Error(
+            `Unexpected response type: ${contentType || "unknown"}`,
+          );
+        }
+
+        const data = await response.json();
+        if (!data || typeof data.version !== "string" || !data.version) {
+          throw new Error("Unexpected version payload for connection check");
+        }
+
+        return data.version;
+      };
+
       try {
-        console.debug(`[Check 1] Backend liveness: ${apiBase}/is_connected`);
+        console.debug(`[Check 1] Backend version: ${versionBase}/version`);
         const livenessResponse = await fetchWithTimeout(
-          `${apiBase}/is_connected`,
+          `${versionBase}/version`,
           { method: "GET" },
           5000,
         );
-        backendAlive = livenessResponse.ok;
+        backendAlive = livenessResponse.ok
+          ? Boolean(await readVersionJsonResponse(livenessResponse))
+          : false;
         console.debug(`[Check 1] Backend alive: ${backendAlive}`);
       } catch (error) {
         backendAlive = false;
       }
+      dispatch(uc2Slice.setApiConnected(backendAlive));
       dispatch(uc2Slice.setBackendConnected(backendAlive));
 
       // ── Schritt 2: ESP32/UART hardware connectivity ──
@@ -104,8 +142,7 @@ const WebSocketHandler = () => {
             5000,
           );
           if (hwResponse.ok) {
-            const data = await hwResponse.json();
-            hardwareConnected = data === true;
+            hardwareConnected = await readBooleanJsonResponse(hwResponse);
           }
           console.debug(
             `[Check 2] Hardware (ESP32/UART) connected: ${hardwareConnected}`,
@@ -319,16 +356,31 @@ const WebSocketHandler = () => {
   useEffect(() => {
     const handleManualConnectionCheck = async (event) => {
       console.log("Manual connection check triggered (HTTP + WebSocket)");
-      const { ip, port, websocketPort } = event.detail || {};
+      const { requestId, ip, port, websocketPort } = event.detail || {};
 
-      // Test HTTP connection first
-      const httpResult = await checkUc2Connection(ip, port);
+      let httpResult = false;
+      let wsResult = null;
 
-      // Test WebSocket connection if websocketPort is provided
-      if (websocketPort) {
-        const wsResult = await testWebSocketConnection(ip, websocketPort);
-        console.log(
-          `Connection test results - HTTP: ${httpResult}, WebSocket: ${wsResult}`,
+      try {
+        // Test HTTP connection first
+        httpResult = await checkUc2Connection(ip, port);
+
+        // Test WebSocket connection if websocketPort is provided
+        if (websocketPort) {
+          wsResult = await testWebSocketConnection(ip, websocketPort);
+          console.log(
+            `Connection test results - HTTP: ${httpResult}, WebSocket: ${wsResult}`,
+          );
+        }
+      } finally {
+        window.dispatchEvent(
+          new CustomEvent("imswitch:checkConnectionResult", {
+            detail: {
+              requestId,
+              httpResult,
+              wsResult,
+            },
+          }),
         );
       }
     };
@@ -503,7 +555,8 @@ const WebSocketHandler = () => {
         // Per-frame Redux updates are throttled (see above); the live canvas is
         // fed every frame via CustomEvents instead, so it still runs at full FPS.
         const nowTs = Date.now();
-        const doReduxUpdate = nowTs - lastFrameReduxTs > FRAME_REDUX_THROTTLE_MS;
+        const doReduxUpdate =
+          nowTs - lastFrameReduxTs > FRAME_REDUX_THROTTLE_MS;
         if (doReduxUpdate) lastFrameReduxTs = nowTs;
 
         if (doReduxUpdate && metadata && metadata.frame_id !== undefined) {
@@ -988,7 +1041,12 @@ const WebSocketHandler = () => {
             // Auto-advance to completion step on terminal states.
             // "cancelled" is treated as terminal so the UI unblocks even
             // when the user aborted a stuck flash via cancelUSBFlash.
-            const terminalStates = ["success", "failed", "warning", "cancelled"];
+            const terminalStates = [
+              "success",
+              "failed",
+              "warning",
+              "cancelled",
+            ];
             if (terminalStates.includes(flashStatus.status)) {
               if (
                 flashStatus.status === "success" ||
@@ -1418,8 +1476,8 @@ const WebSocketHandler = () => {
 
     socket.onclose = () => {
       console.log("WebSocket closed");
-      //update redux state
-      dispatch(webSocketSlice.resetState());
+      // Keep last manual test result visible; only mark live connection as down.
+      dispatch(webSocketSlice.setConnected(false));
     };
 
     // Listen for disconnect events
@@ -1444,7 +1502,12 @@ const WebSocketHandler = () => {
       socket.disconnect();
       socket.close();
     };
-  }, [dispatch, connectionSettingsState, syncLivestreamStatus, syncIlluminationState]);
+  }, [
+    dispatch,
+    connectionSettingsState,
+    syncLivestreamStatus,
+    syncIlluminationState,
+  ]);
 
   // Global UC2 connection monitoring (periodic checks with pause functionality)
   useEffect(() => {

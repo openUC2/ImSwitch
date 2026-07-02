@@ -14,6 +14,7 @@ function StepLabel({ step, label }) {
 
 export default function ConnectionGraphHorizontal({
   isBackendConnected,
+  isApiConnected,
   websocketTestStatus,
   isHardwareConnected,
   hasRunConnectionTest,
@@ -30,7 +31,7 @@ export default function ConnectionGraphHorizontal({
 
   const apiColor = !hasRunConnectionTest
     ? neutralColor
-    : isBackendConnected
+    : (isApiConnected ?? isBackendConnected)
       ? successColor
       : failedColor;
 

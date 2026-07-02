@@ -16,6 +16,7 @@ import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as stormSlice from "../state/slices/STORMSlice.js";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
+import { setNotification } from "../state/slices/NotificationSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
 import { useTheme } from "@mui/material/styles";
@@ -23,9 +24,7 @@ import { useTheme } from "@mui/material/styles";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
 import apiObjectiveControllerSetPositions from "../backendapi/apiObjectiveControllerSetPositions.js";
 import apiObjectiveControllerCalibrateObjective from "../backendapi/apiObjectiveControllerCalibrateObjective.js";
-import apiObjectiveControllerGetCurrentObjective from "../backendapi/apiObjectiveControllerGetCurrentObjective.js";
 import apiObjectiveControllerMoveToObjective from "../backendapi/apiObjectiveControllerMoveToObjective.js";
-import apiObjectiveControllerGetStatus from "../backendapi/apiObjectiveControllerGetStatus.js";
 import apiPositionerControllerGetPositions from "../backendapi/apiPositionerControllerGetPositions.js";
 import apiSettingsControllerGetDetectorNames from "../backendapi/apiSettingsControllerGetDetectorNames.js";
 import apiObjectiveControllerSetObjectiveParameters from "../backendapi/apiObjectiveControllerSetObjectiveParameters.js";
@@ -122,22 +121,18 @@ const ExtendedObjectiveController = () => {
 
   // Switch objective (slot should be 0 or 1)
   const handleSwitchObjective = async (slot, skipZ) => {
-    // Warn user if the target positions have not been configured yet
-    const x0 = objectiveState.posX0;
-    const x1 = objectiveState.posX1;
-    const positionsConfigured =
-      x0 !== null &&
-      x0 !== undefined &&
-      x0 !== 0 &&
-      x1 !== null &&
-      x1 !== undefined &&
-      x1 !== 0;
-    if (!positionsConfigured) {
-      alert(
-        "Objective positions (X0 / X1) are not configured yet.\n" +
-          "Please use the Calibration Wizard to set them before switching.",
+    // Use backend-derived slotConfigured as the source of truth.
+    const isTargetSlotConfigured =
+      objectiveState.slotConfigured?.[slot] !== false;
+    if (!isTargetSlotConfigured) {
+      dispatch(
+        setNotification({
+          message:
+            "Target objective slot is not configured yet. Please set objective name and magnification (or use the calibration flow) before switching.",
+          type: "warning",
+        }),
       );
-      // return;
+      return;
     }
     try {
       await rememberObjectiveIllumination({

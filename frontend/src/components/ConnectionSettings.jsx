@@ -63,6 +63,10 @@ function ConnectionSettings() {
   const webSocketState = useSelector(webSocketSlice.getWebSocketState);
   const websocketTestStatus = webSocketState.testStatus;
   const isWebSocketConnected = webSocketState.connected;
+  const effectiveWebSocketStatus =
+    websocketTestStatus === "idle" && isWebSocketConnected
+      ? "success"
+      : websocketTestStatus;
 
   // Smart fallbacks for empty values
   const getSmartDefaults = () => {
@@ -390,7 +394,7 @@ function ConnectionSettings() {
           <ConnectionGraphHorizontal
             isBackendConnected={isBackendConnected}
             isApiConnected={isApiConnected}
-            websocketTestStatus={websocketTestStatus}
+            websocketTestStatus={effectiveWebSocketStatus}
             isHardwareConnected={isHardwareConnected}
             hasRunConnectionTest={hasRunConnectionTest}
             hasWebsocketPort={Boolean(websocketPort)}
@@ -549,8 +553,12 @@ function ConnectionSettings() {
                         }/imswitch/socket.io`}
                       />
                       <Chip
-                        label={getWebSocketStatusLabel(websocketTestStatus)}
-                        color={getWebSocketStatusColor(websocketTestStatus)}
+                        label={getWebSocketStatusLabel(
+                          effectiveWebSocketStatus,
+                        )}
+                        color={getWebSocketStatusColor(
+                          effectiveWebSocketStatus,
+                        )}
                         size="small"
                         variant="outlined"
                       />

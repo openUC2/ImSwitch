@@ -1461,8 +1461,8 @@ const WebSocketHandler = () => {
 
     socket.onclose = () => {
       console.log("WebSocket closed");
-      //update redux state
-      dispatch(webSocketSlice.resetState());
+      // Keep last manual test result visible; only mark live connection as down.
+      dispatch(webSocketSlice.setConnected(false));
     };
 
     // Listen for disconnect events

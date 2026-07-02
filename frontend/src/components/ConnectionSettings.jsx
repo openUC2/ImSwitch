@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { setNotification } from "../state/slices/NotificationSlice.js";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -110,6 +110,7 @@ function ConnectionSettings() {
   // Connection test state
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const pendingManualTestIdRef = useRef(null);
 
   // Advanced settings accordion state
   const [advancedSettingsExpanded, setAdvancedSettingsExpanded] =
@@ -183,6 +184,8 @@ function ConnectionSettings() {
     try {
       setIsTestingConnection(true);
       setHasRunConnectionTest(true);
+      const requestId = `manual-${Date.now()}`;
+      pendingManualTestIdRef.current = requestId;
 
       const fullIP = `${hostProtocol}${hostIP}`;
 
@@ -190,24 +193,15 @@ function ConnectionSettings() {
       window.dispatchEvent(
         new CustomEvent("imswitch:checkConnection", {
           detail: {
+            requestId,
             ip: fullIP,
             port: apiPort,
             websocketPort: websocketPort,
           },
         }),
       );
-
-      // Give it a moment to complete both tests
-      setTimeout(() => {
-        setIsTestingConnection(false);
-        dispatch(
-          setNotification({
-            message: "Connection tests completed - check status indicators",
-            type: "info",
-          }),
-        );
-      }, 5000);
     } catch (e) {
+      pendingManualTestIdRef.current = null;
       dispatch(
         setNotification({
           message: "Error testing connection!",
@@ -217,6 +211,37 @@ function ConnectionSettings() {
       setIsTestingConnection(false);
     }
   };
+
+  useEffect(() => {
+    const handleConnectionCheckResult = (event) => {
+      const { requestId } = event.detail || {};
+      if (!requestId || requestId !== pendingManualTestIdRef.current) {
+        return;
+      }
+
+      pendingManualTestIdRef.current = null;
+      setIsTestingConnection(false);
+
+      dispatch(
+        setNotification({
+          message: "Connection tests completed - check status indicators",
+          type: "info",
+        }),
+      );
+    };
+
+    window.addEventListener(
+      "imswitch:checkConnectionResult",
+      handleConnectionCheckResult,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "imswitch:checkConnectionResult",
+        handleConnectionCheckResult,
+      );
+    };
+  }, [dispatch]);
 
   // Handler for saving settings only (no automatic test)
   const handleSave = async () => {

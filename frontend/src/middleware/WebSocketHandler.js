@@ -356,16 +356,31 @@ const WebSocketHandler = () => {
   useEffect(() => {
     const handleManualConnectionCheck = async (event) => {
       console.log("Manual connection check triggered (HTTP + WebSocket)");
-      const { ip, port, websocketPort } = event.detail || {};
+      const { requestId, ip, port, websocketPort } = event.detail || {};
 
-      // Test HTTP connection first
-      const httpResult = await checkUc2Connection(ip, port);
+      let httpResult = false;
+      let wsResult = null;
 
-      // Test WebSocket connection if websocketPort is provided
-      if (websocketPort) {
-        const wsResult = await testWebSocketConnection(ip, websocketPort);
-        console.log(
-          `Connection test results - HTTP: ${httpResult}, WebSocket: ${wsResult}`,
+      try {
+        // Test HTTP connection first
+        httpResult = await checkUc2Connection(ip, port);
+
+        // Test WebSocket connection if websocketPort is provided
+        if (websocketPort) {
+          wsResult = await testWebSocketConnection(ip, websocketPort);
+          console.log(
+            `Connection test results - HTTP: ${httpResult}, WebSocket: ${wsResult}`,
+          );
+        }
+      } finally {
+        window.dispatchEvent(
+          new CustomEvent("imswitch:checkConnectionResult", {
+            detail: {
+              requestId,
+              httpResult,
+              wsResult,
+            },
+          }),
         );
       }
     };

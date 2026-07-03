@@ -91,9 +91,13 @@ class UC2ConfigController(ImConWidgetController):
         self.registerEmergencyCallback()
 
         # collision detector (GPIO slave): latched crash state + optional
-        # armed auto-stop of all motors
+        # armed auto-stop of all motors. A crash also cuts bus power (see
+        # collision_callback), so recovery requires the user to reset the
+        # alarm (restores power) AND run a safe frame-homing before the stage
+        # position can be trusted again — tracked by _collisionRequiresHoming.
         self._collisionArmed = False
         self._collisionLatched = False
+        self._collisionRequiresHoming = False
         self._lastCollisionEvent = None
         self.registerCollisionCallback()
 
@@ -373,15 +377,17 @@ class UC2ConfigController(ImConWidgetController):
                 stopped = False
                 if tripped:
                     # Latch: stays set until the user confirms the situation
-                    # is cleared via resetCollisionAlarm().
+                    # is cleared via resetCollisionAlarm(). A crash always
+                    # invalidates the stage position → require safe homing.
                     self._collisionLatched = True
+                    self._collisionRequiresHoming = True
                     if self._collisionArmed:
-                        # turn off power 
+                        # Cut bus power AND stop motors immediately.
                         self.setBusPower(enable=False)
                         stopped = self._stopAllMotors()
                         self.__logger.warning(
                             f"COLLISION detected (filtered={event.get('filtered')}) — "
-                            f"motors stopped: {stopped}")
+                            f"bus power cut, motors stopped: {stopped}")
                     else:
                         self.__logger.warning(
                             f"COLLISION detected (filtered={event.get('filtered')}) — "
@@ -427,6 +433,7 @@ class UC2ConfigController(ImConWidgetController):
             "trip": bool((event or self._lastCollisionEvent or {}).get("trip", 0)),
             "latched": self._collisionLatched,
             "armed": self._collisionArmed,
+            "requiresHoming": self._collisionRequiresHoming,
             "motorsStopped": motorsStopped,
             "event": event or self._lastCollisionEvent,
             "timestamp": datetime.datetime.now().isoformat(),
@@ -439,15 +446,16 @@ class UC2ConfigController(ImConWidgetController):
         """
         Poll the collision detector on the GPIO slave (SDO reads over CAN).
 
-        :return: {"mean": rolling average (calibration source), "filtered",
-                  "raw", "reference", "threshold", "sensitivity",
-                  "trip", "estop"} plus the software crash state
-                  {"latched", "armed"}.
+        :return: {"mode" (0=auto/1=manual), "mean"/"baseline", "sigma",
+                  "deviation", "filtered", "raw", "reference", "threshold",
+                  "sensitivity", "trip", "estop"} plus the software crash
+                  state {"latched", "armed", "requiresHoming"}.
         """
         try:
             status = self._master.UC2ConfigManager.getGpioStatus() or {}
             status["latched"] = self._collisionLatched
             status["armed"] = self._collisionArmed
+            status["requiresHoming"] = self._collisionRequiresHoming
             return status
         except Exception as e:
             self.__logger.error(f"getGpioStatus failed: {e}")
@@ -492,11 +500,27 @@ class UC2ConfigController(ImConWidgetController):
     @APIExport(runOnUIThread=False)
     def calibrateCollisionReference(self):
         """Tell the slave to take its CURRENT rolling mean as the new
-        reference. Call while the system is idle and collision-free."""
+        reference. MANUAL mode only. Call while idle and collision-free."""
         try:
             return self._master.UC2ConfigManager.calibrateCollisionReference()
         except Exception as e:
             self.__logger.error(f"calibrateCollisionReference failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionMode(self, mode: str = "auto"):
+        """
+        Select the collision-detection algorithm on the slave (persisted NVS):
+          "auto"   — adaptive baseline + robust-sigma z-score. Parameter-free:
+                     tracks a slowly drifting background and trips on a fast
+                     deflection. Recommended; no calibration needed.
+          "manual" — fixed reference +/- threshold. Deterministic; requires the
+                     reference to be calibrated to the idle level.
+        """
+        try:
+            return self._master.UC2ConfigManager.setCollisionMode(mode)
+        except Exception as e:
+            self.__logger.error(f"setCollisionMode failed: {e}")
             return {"status": "error", "message": str(e)}
 
     @APIExport(runOnUIThread=False)
@@ -513,14 +537,37 @@ class UC2ConfigController(ImConWidgetController):
         return state
 
     @APIExport(runOnUIThread=False)
-    def resetCollisionAlarm(self):
+    def resetCollisionAlarm(self, restorePower: bool = True):
         """
         Clear the latched crash state after the user has verified the
-        situation is resolved. Does not move any motor — homing (as the
-        position reference is lost after a crash) is the user's decision.
+        situation is resolved. By default this also restores CAN-bus power
+        (which a collision cuts) so the stage can move again — but it does
+        NOT move any motor. The `requiresHoming` flag stays set: the position
+        reference is lost after a crash, so a safe frame-homing must be run
+        (and confirmed via confirmSafeHoming) before normal operation.
         """
         self._collisionLatched = False
-        self.__logger.info("Collision alarm reset by user")
+        if restorePower:
+            try:
+                self.setBusPower(enable=True)
+            except Exception as e:
+                self.__logger.error(f"Could not restore bus power on reset: {e}")
+        self.__logger.info(
+            "Collision alarm reset by user (bus power restored=%s); safe homing still required"
+            % bool(restorePower))
+        state = self._collisionStateDict()
+        self.sigCollisionStatusUpdate.emit(state)
+        return state
+
+    @APIExport(runOnUIThread=False)
+    def confirmSafeHoming(self):
+        """
+        Clear the `requiresHoming` flag after a safe frame-homing has been
+        completed following a crash. Call this once the stage has been
+        re-homed and its position is trustworthy again.
+        """
+        self._collisionRequiresHoming = False
+        self.__logger.info("Collision post-crash homing confirmed by user")
         state = self._collisionStateDict()
         self.sigCollisionStatusUpdate.emit(state)
         return state

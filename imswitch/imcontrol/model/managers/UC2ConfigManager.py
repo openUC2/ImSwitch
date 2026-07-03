@@ -251,8 +251,13 @@ class UC2ConfigManager(SignalInterface):
     def setCollisionReference(self, reference, node=None):
         return self.ESP32.gpio.set_reference(reference, node=node)
 
+    def setCollisionMode(self, mode, node=None):
+        """Detection mode: 'auto' (adaptive, parameter-free) or 'manual'."""
+        return self.ESP32.gpio.set_mode(mode, node=node)
+
     def calibrateCollisionReference(self, node=None):
-        """Slave takes its current rolling mean as the new reference (NVS)."""
+        """Slave takes its current rolling mean as the new reference (NVS).
+        MANUAL mode only — AUTO tracks the baseline itself."""
         return self.ESP32.gpio.calibrate(node=node)
 
     # ──────────────────────────────────────────────────────────────────────

@@ -6,10 +6,13 @@ import {
   Grid,
   Paper,
   Alert,
+  AlertTitle,
   Chip,
   TextField,
   Switch,
   FormControlLabel,
+  ToggleButton,
+  ToggleButtonGroup,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -26,68 +29,67 @@ import { getUc2State } from "../../state/slices/UC2Slice";
 import apiUC2ConfigControllerGetGpioStatus from "../../backendapi/apiUC2ConfigControllerGetGpioStatus";
 import apiUC2ConfigControllerSetCollisionThreshold from "../../backendapi/apiUC2ConfigControllerSetCollisionThreshold";
 import apiUC2ConfigControllerSetCollisionSensitivity from "../../backendapi/apiUC2ConfigControllerSetCollisionSensitivity";
+import apiUC2ConfigControllerSetCollisionMode from "../../backendapi/apiUC2ConfigControllerSetCollisionMode";
 import apiUC2ConfigControllerCalibrateCollisionReference from "../../backendapi/apiUC2ConfigControllerCalibrateCollisionReference";
 import apiUC2ConfigControllerArmCollisionProtection from "../../backendapi/apiUC2ConfigControllerArmCollisionProtection";
 import apiUC2ConfigControllerResetCollisionAlarm from "../../backendapi/apiUC2ConfigControllerResetCollisionAlarm";
+import apiUC2ConfigControllerConfirmSafeHoming from "../../backendapi/apiUC2ConfigControllerConfirmSafeHoming";
 
 /**
  * CollisionDetectionTab — microscope collision sensor (GPIO CAN slave)
  *
- * The sensor idles at a reference ADC value; a collision deviates from it
- * (rising OR falling). The slave confirms a collision over N consecutive
- * samples (spike rejection) and pushes ONE event over CAN; the backend
- * forwards it here via the sigCollisionStatusUpdate socket signal.
+ * Two detection modes on the slave:
+ *  - AUTO (default, recommended): adaptive baseline + robust-sigma z-score.
+ *    Parameter-free — tracks a slowly drifting background and trips on a fast
+ *    deflection. No calibration.
+ *  - MANUAL: fixed reference +/- threshold, needs calibrating to the idle level.
  *
- * This tab:
- *  - polls the rolling mean (~1 s) for live display and calibration
- *  - shows a live OK / COLLISION indicator (socket-driven, async)
- *  - lets the user set the current mean as the reference ("Calibrate")
- *  - exposes threshold (deviation band) and sensitivity (sample count)
- *  - arms automatic stop-all-motors on collision
- *  - pops a crash dialog that must be manually reset after inspection
+ * Collision events are pushed async over CAN and reach the frontend via the
+ * sigCollisionStatusUpdate socket signal. A crash cuts bus power and (if armed)
+ * stops all motors; recovery requires reset (restores power) + a safe frame
+ * homing, tracked by requiresHoming.
  */
 const POLL_INTERVAL_MS = 1000;
+const MODE_AUTO = 0;
+const MODE_MANUAL = 1;
 
 const CollisionDetectionTab = () => {
   const uc2State = useSelector(getUc2State);
   const collisionLatched = uc2State?.collisionLatched ?? false;
   const collisionTrip = uc2State?.collisionTrip ?? false;
   const collisionArmedLive = uc2State?.collisionArmed ?? false;
+  const collisionRequiresHoming = uc2State?.collisionRequiresHoming ?? false;
   const collisionEvent = uc2State?.collisionEvent ?? null;
 
-  // Polled hardware status
-  const [status, setStatus] = useState(null); // {mean, filtered, raw, reference, ...}
+  const [status, setStatus] = useState(null);
   const [pollError, setPollError] = useState(null);
   const [pollingPaused, setPollingPaused] = useState(false);
 
-  // Editable settings (local input state; committed on button press)
   const [thresholdInput, setThresholdInput] = useState("");
   const [sensitivityInput, setSensitivityInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null);
 
-  // Crash popup: shown when a latched collision arrives, dismissed only via
-  // "Reset alarm" (or plain close, which re-opens on the next latched event).
   const [crashDialogOpen, setCrashDialogOpen] = useState(false);
   const lastLatchedRef = useRef(false);
 
   useEffect(() => {
-    if (collisionLatched && !lastLatchedRef.current) {
-      setCrashDialogOpen(true);
-    }
+    if (collisionLatched && !lastLatchedRef.current) setCrashDialogOpen(true);
     lastLatchedRef.current = collisionLatched;
   }, [collisionLatched]);
 
-  // ── Poll the rolling mean ────────────────────────────────────────────
+  const mode = status?.mode ?? MODE_AUTO;
+  const isAuto = mode === MODE_AUTO;
+
+  // ── Poll ─────────────────────────────────────────────────────────────
   const pollStatus = useCallback(async () => {
     try {
       const s = await apiUC2ConfigControllerGetGpioStatus();
-      if (s && typeof s === "object" && !s.status) {
+      if (s && typeof s === "object" && !s.message) {
         setStatus(s);
         setPollError(null);
-        // Seed the inputs once so the user edits live values
-        setThresholdInput((prev) => (prev === "" ? String(s.threshold ?? "") : prev));
-        setSensitivityInput((prev) => (prev === "" ? String(s.sensitivity ?? "") : prev));
+        setThresholdInput((p) => (p === "" ? String(s.threshold ?? "") : p));
+        setSensitivityInput((p) => (p === "" ? String(s.sensitivity ?? "") : p));
       } else if (s && s.message) {
         setPollError(s.message);
       }
@@ -108,16 +110,24 @@ const CollisionDetectionTab = () => {
     setBusy(true);
     setFeedback(null);
     try {
-      const r = await fn();
+      await fn();
       setFeedback({ severity: "success", text: successMsg });
       await pollStatus();
-      return r;
     } catch (error) {
       setFeedback({ severity: "error", text: String(error) });
-      return null;
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleModeChange = (_e, newMode) => {
+    if (newMode === null) return;
+    withBusy(
+      () => apiUC2ConfigControllerSetCollisionMode(newMode === MODE_MANUAL ? "manual" : "auto"),
+      newMode === MODE_MANUAL
+        ? "Switched to MANUAL (fixed reference + threshold)"
+        : "Switched to AUTO (adaptive, parameter-free)",
+    );
   };
 
   const handleCalibrate = () =>
@@ -142,26 +152,32 @@ const CollisionDetectionTab = () => {
     withBusy(
       () => apiUC2ConfigControllerArmCollisionProtection(event.target.checked),
       event.target.checked
-        ? "Auto-stop ARMED — motors stop immediately on collision"
+        ? "Auto-stop ARMED — a collision cuts bus power and stops all motors"
         : "Auto-stop disarmed",
     );
 
   const handleResetAlarm = () =>
     withBusy(async () => {
-      const r = await apiUC2ConfigControllerResetCollisionAlarm();
+      await apiUC2ConfigControllerResetCollisionAlarm();
       setCrashDialogOpen(false);
-      return r;
-    }, "Collision alarm reset");
+    }, "Collision alarm reset — bus power restored. Run safe frame homing next.");
 
-  // ── Derived display values ───────────────────────────────────────────
+  const handleConfirmHoming = () =>
+    withBusy(
+      () => apiUC2ConfigControllerConfirmSafeHoming(),
+      "Safe homing confirmed — collision recovery complete",
+    );
+
+  // ── Derived display ──────────────────────────────────────────────────
   const mean = status?.mean;
+  const baseline = status?.baseline ?? status?.mean;
+  const sigma = status?.sigma;
+  const deviation = status?.deviation;
   const reference = status?.reference;
   const threshold = status?.threshold;
-  const deviation =
-    mean !== undefined && reference !== undefined
-      ? Math.abs(mean - reference)
-      : null;
   const tripped = collisionTrip || !!status?.trip;
+  // AUTO trip band ≈ max(K·sigma, floor); K=10, floor=40 in firmware.
+  const autoBand = sigma !== undefined ? Math.max(10 * sigma, 40) : undefined;
 
   return (
     <Box>
@@ -169,11 +185,27 @@ const CollisionDetectionTab = () => {
         Collision Detection
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Resistive collision sensor on the CAN GPIO node. Calibrate the idle
-        reference while the microscope is collision-free, then set how far
-        (threshold) and for how many consecutive samples (sensitivity) the
-        signal must deviate before a collision event fires.
+        Resistive collision sensor on the CAN GPIO node. In Automatic mode the
+        detector tracks the (slowly drifting) idle level itself and trips on a
+        fast deflection — no calibration required.
       </Typography>
+
+      {/* ── Post-crash recovery ────────────────────────────────────── */}
+      {collisionRequiresHoming && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={handleConfirmHoming} disabled={busy}>
+              HOMING DONE
+            </Button>
+          }
+        >
+          <AlertTitle>Safe homing required</AlertTitle>
+          A collision invalidated the stage position. Run{" "}
+          <b>Frame Homing &amp; Transport</b>, then confirm here to complete recovery.
+        </Alert>
+      )}
 
       {/* ── Status banner ─────────────────────────────────────────── */}
       {collisionLatched ? (
@@ -190,9 +222,8 @@ const CollisionDetectionTab = () => {
           Collision detected{collisionEvent?.filtered !== undefined
             ? ` (sensor=${collisionEvent.filtered})`
             : ""}
-          . Motors {collisionArmedLive ? "were stopped" : "were NOT auto-stopped (not armed)"}.
-          Inspect the stage, clear the obstruction, then reset the alarm.
-          Consider re-homing — positions may be lost after a crash.
+          . {collisionArmedLive ? "Bus power cut, motors stopped." : "Auto-stop was NOT armed."}{" "}
+          Inspect the stage, clear the obstruction, then reset (restores power).
         </Alert>
       ) : (
         <Alert
@@ -200,11 +231,23 @@ const CollisionDetectionTab = () => {
           icon={tripped ? <WarningAmberIcon /> : <CheckCircleIcon />}
           sx={{ mb: 2 }}
         >
-          {tripped
-            ? "Sensor currently out of band (not latched)"
-            : "No collision — sensor within idle band"}
+          {tripped ? "Sensor currently out of band" : "No collision — sensor within idle band"}
         </Alert>
       )}
+
+      {/* ── Mode selector ─────────────────────────────────────────── */}
+      <Box sx={{ mb: 2 }}>
+        <ToggleButtonGroup
+          value={mode}
+          exclusive
+          onChange={handleModeChange}
+          size="small"
+          disabled={busy}
+        >
+          <ToggleButton value={MODE_AUTO}>Automatic (recommended)</ToggleButton>
+          <ToggleButton value={MODE_MANUAL}>Manual</ToggleButton>
+        </ToggleButtonGroup>
+      </Box>
 
       <Grid container spacing={2}>
         {/* ── Live values ───────────────────────────────────────────── */}
@@ -222,37 +265,49 @@ const CollisionDetectionTab = () => {
             {status && (
               <Grid container spacing={1}>
                 <Grid item xs={6}>
-                  <Tooltip title="Slow rolling average — the calibration source. Freezes while a collision is in progress.">
-                    <Typography variant="body2">
-                      Rolling mean: <b>{mean}</b>
-                    </Typography>
-                  </Tooltip>
-                </Grid>
-                <Grid item xs={6}>
                   <Typography variant="body2">
                     Filtered: <b>{status.filtered}</b>
                   </Typography>
                 </Grid>
                 <Grid item xs={6}>
-                  <Typography variant="body2">
-                    Reference: <b>{reference}</b>
-                  </Typography>
+                  <Tooltip title={isAuto ? "Adaptive baseline (tracks slow drift)" : "Rolling mean — calibration source"}>
+                    <Typography variant="body2">
+                      {isAuto ? "Baseline" : "Mean"}: <b>{isAuto ? baseline : mean}</b>
+                    </Typography>
+                  </Tooltip>
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="body2">
                     Deviation:{" "}
                     <Chip
                       size="small"
-                      label={deviation !== null ? `${deviation} / ${threshold}` : "-"}
+                      label={
+                        deviation !== undefined
+                          ? `${deviation} / ${isAuto ? (autoBand ?? "?") : threshold}`
+                          : "-"
+                      }
                       color={
-                        deviation !== null && threshold !== undefined
-                          ? deviation > threshold
+                        deviation !== undefined
+                          ? deviation > (isAuto ? (autoBand ?? Infinity) : threshold)
                             ? "error"
                             : "success"
                           : "default"
                       }
                     />
                   </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  {isAuto ? (
+                    <Tooltip title="Robust noise scale (sigma). Trip band = max(10·sigma, 40).">
+                      <Typography variant="body2">
+                        Noise σ: <b>{sigma}</b>
+                      </Typography>
+                    </Tooltip>
+                  ) : (
+                    <Typography variant="body2">
+                      Reference: <b>{reference}</b>
+                    </Typography>
+                  )}
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="body2">
@@ -273,15 +328,23 @@ const CollisionDetectionTab = () => {
                 </Grid>
               </Grid>
             )}
-            <Button
-              variant="contained"
-              sx={{ mt: 2 }}
-              onClick={handleCalibrate}
-              disabled={busy || collisionLatched}
-              fullWidth
-            >
-              Calibrate — use current mean ({mean ?? "…"}) as reference
-            </Button>
+            {!isAuto && (
+              <Button
+                variant="contained"
+                sx={{ mt: 2 }}
+                onClick={handleCalibrate}
+                disabled={busy || collisionLatched}
+                fullWidth
+              >
+                Calibrate — use current mean ({mean ?? "…"}) as reference
+              </Button>
+            )}
+            {isAuto && (
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: "block" }}>
+                Automatic mode needs no calibration — the baseline and noise
+                scale adapt continuously.
+              </Typography>
+            )}
           </Paper>
         </Grid>
 
@@ -289,66 +352,57 @@ const CollisionDetectionTab = () => {
         <Grid item xs={12} md={6}>
           <Paper sx={{ p: 2 }}>
             <Typography variant="subtitle1" gutterBottom>
-              Detection settings
+              {isAuto ? "Protection" : "Detection settings"}
             </Typography>
-            <Grid container spacing={1} alignItems="center">
-              <Grid item xs={8}>
-                <TextField
-                  label="Threshold (ADC counts)"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={thresholdInput}
-                  onChange={(e) => setThresholdInput(e.target.value)}
-                  helperText="Allowed deviation from the reference"
-                />
-              </Grid>
-              <Grid item xs={4}>
-                <Button
-                  variant="outlined"
-                  onClick={handleApplyThreshold}
-                  disabled={busy || thresholdInput === ""}
-                  fullWidth
-                >
-                  Apply
-                </Button>
-              </Grid>
-              <Grid item xs={8}>
-                <TextField
-                  label="Sensitivity (samples)"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={sensitivityInput}
-                  onChange={(e) => setSensitivityInput(e.target.value)}
-                  helperText="Consecutive samples @50 Hz to confirm (spike rejection)"
-                />
-              </Grid>
-              <Grid item xs={4}>
-                <Button
-                  variant="outlined"
-                  onClick={handleApplySensitivity}
-                  disabled={busy || sensitivityInput === ""}
-                  fullWidth
-                >
-                  Apply
-                </Button>
-              </Grid>
-            </Grid>
 
-            <Box sx={{ mt: 2 }}>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={collisionArmedLive}
-                    onChange={handleArmToggle}
-                    color="error"
-                    disabled={busy}
+            {!isAuto && (
+              <Grid container spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Grid item xs={8}>
+                  <TextField
+                    label="Threshold (ADC counts)"
+                    type="number"
+                    size="small"
+                    fullWidth
+                    value={thresholdInput}
+                    onChange={(e) => setThresholdInput(e.target.value)}
+                    helperText="Allowed deviation from the reference"
                   />
-                }
-                label="Arm auto-stop: stop ALL motors immediately on collision"
-              />
-            </Box>
+                </Grid>
+                <Grid item xs={4}>
+                  <Button variant="outlined" onClick={handleApplyThreshold} disabled={busy || thresholdInput === ""} fullWidth>
+                    Apply
+                  </Button>
+                </Grid>
+                <Grid item xs={8}>
+                  <TextField
+                    label="Sensitivity (samples)"
+                    type="number"
+                    size="small"
+                    fullWidth
+                    value={sensitivityInput}
+                    onChange={(e) => setSensitivityInput(e.target.value)}
+                    helperText="Consecutive samples @50 Hz to confirm (spike rejection)"
+                  />
+                </Grid>
+                <Grid item xs={4}>
+                  <Button variant="outlined" onClick={handleApplySensitivity} disabled={busy || sensitivityInput === ""} fullWidth>
+                    Apply
+                  </Button>
+                </Grid>
+              </Grid>
+            )}
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={collisionArmedLive}
+                  onChange={handleArmToggle}
+                  color="error"
+                  disabled={busy}
+                />
+              }
+              label="Arm auto-stop: a collision cuts bus power and stops ALL motors"
+            />
 
             {feedback && (
               <Alert severity={feedback.severity} sx={{ mt: 1 }}>
@@ -367,30 +421,22 @@ const CollisionDetectionTab = () => {
         <DialogContent>
           <DialogContentText>
             The collision sensor detected a crash
-            {collisionEvent?.filtered !== undefined
-              ? ` (sensor value ${collisionEvent.filtered})`
-              : ""}
-            .{" "}
+            {collisionEvent?.filtered !== undefined ? ` (sensor value ${collisionEvent.filtered})` : ""}.{" "}
             {collisionArmedLive
-              ? "All motors have been stopped."
+              ? "Bus power was cut and all motors stopped."
               : "Auto-stop was not armed — check the stage immediately."}
             <br />
             <br />
-            Please inspect the microscope, remove the obstruction and verify
-            the stage can move freely. Reset the alarm only once the
-            situation is cleared. Re-homing is recommended, since motor
-            positions may no longer be trustworthy.
+            Recovery: inspect the microscope and remove the obstruction, then
+            reset the alarm (this restores bus power). Afterwards run a safe{" "}
+            <b>Frame Homing &amp; Transport</b> — motor positions are no longer
+            trustworthy after a crash.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCrashDialogOpen(false)}>Close</Button>
-          <Button
-            variant="contained"
-            color="error"
-            onClick={handleResetAlarm}
-            disabled={busy}
-          >
-            Situation cleared — reset alarm
+          <Button variant="contained" color="error" onClick={handleResetAlarm} disabled={busy}>
+            Situation cleared — reset &amp; restore power
           </Button>
         </DialogActions>
       </Dialog>

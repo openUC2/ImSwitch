@@ -28,6 +28,7 @@ const initialState = {
   collisionTrip: false, // sensor currently out-of-band (live)
   collisionLatched: false, // crash latched until user reset
   collisionArmed: false, // auto motor-stop armed
+  collisionRequiresHoming: false, // safe frame-homing needed after a crash
   collisionEvent: null, // last raw event dict from the firmware
   collisionTimestamp: null,
 
@@ -128,6 +129,8 @@ const uc2Slice = createSlice({
       if (s.trip !== undefined) state.collisionTrip = !!s.trip;
       if (s.latched !== undefined) state.collisionLatched = !!s.latched;
       if (s.armed !== undefined) state.collisionArmed = !!s.armed;
+      if (s.requiresHoming !== undefined)
+        state.collisionRequiresHoming = !!s.requiresHoming;
       if (s.event !== undefined) state.collisionEvent = s.event;
       state.collisionTimestamp = s.timestamp ?? new Date().toISOString();
     },

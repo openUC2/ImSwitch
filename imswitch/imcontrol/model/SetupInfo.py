@@ -254,6 +254,7 @@ class ObjectiveInfo:
     magnifications: List
     objectiveNames: List
     objectivePositions: List
+    zPositions: List = field(default_factory=lambda: [0, 0])
     homeDirection: int = -1
     homePolarity: int = 1
     homeSpeed: int = 20000

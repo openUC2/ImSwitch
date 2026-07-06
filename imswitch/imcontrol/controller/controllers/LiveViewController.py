@@ -246,6 +246,17 @@ class StreamWorker(Worker):
         self._logger.info(f"StreamWorker started with update period {self._updatePeriod}s")
         frameReadAttempts = 0
         last_detector_frame_number = -1
+        # Transport-side latency metrics, exposed via getStreamDiagnostics():
+        # if the camera-side stats stay fresh but emit_ms/fps_emit here degrade,
+        # the buildup is in encode/socket; if BOTH look healthy while the browser
+        # lags, the buildup is in the frontend.
+        self.stats = {
+            "frames_emitted": 0,
+            "emit_ms_avg": 0.0,   # encode + socket emit cost per frame
+            "emit_ms_max": 0.0,
+            "fps_emit": 0.0,      # achieved outgoing frame rate
+            "_last_emit_t": None,
+        }
         while self._running:
             try:
                 self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it
@@ -274,7 +285,20 @@ class StreamWorker(Worker):
 
                     last_detector_frame_number = detector_frame_number
 
+                    _t0 = time.time()
                     frameResult = self._captureAndEmit(frame, detector_frame_number)
+                    _dt_ms = (time.time() - _t0) * 1000.0
+                    st = self.stats
+                    st["frames_emitted"] += 1
+                    st["emit_ms_avg"] = _dt_ms if st["frames_emitted"] == 1 \
+                        else 0.95 * st["emit_ms_avg"] + 0.05 * _dt_ms
+                    if _dt_ms > st["emit_ms_max"]:
+                        st["emit_ms_max"] = _dt_ms
+                    if st["_last_emit_t"] is not None and _t0 > st["_last_emit_t"]:
+                        _inst = 1.0 / (_t0 - st["_last_emit_t"])
+                        st["fps_emit"] = _inst if st["fps_emit"] == 0.0 \
+                            else 0.95 * st["fps_emit"] + 0.05 * _inst
+                    st["_last_emit_t"] = _t0
                     self._last_frame_time = time.time()
 
                     # Only stop on explicit failure, not on None frames
@@ -1560,13 +1584,51 @@ class LiveViewController(LiveUpdatedController):
         }
 
     @APIExport()
+    def getStreamDiagnostics(self, detectorName: Optional[str] = None) -> Dict[str, Any]:
+        """Latency metrics for the live-stream pipeline, split by stage.
+
+        Poll this while the live view runs (and lags) to localise frame build-up:
+
+        * ``camera.sdk_lag_ms_now/avg`` growing  -> backlog in the camera SDK /
+          driver queue, i.e. upstream of Python.
+        * ``camera.latest_frame_age_ms`` small but the browser lags -> buildup is
+          downstream: check ``worker.emit_ms_avg`` / ``worker.fps_emit`` (encode +
+          socket); if those are healthy too, the backlog is in the frontend.
+        * ``camera.frame_gaps`` growing = SDK drops frames when its queue is full
+          (keeps latency bounded); zero gaps with growing lag = unbounded FIFO.
+        """
+        names = ([detectorName] if detectorName
+                 else (list(self._activeStreams.keys())
+                       or list(self._master.detectorsManager.getAllDeviceNames())))
+        out: Dict[str, Any] = {}
+        for name in names:
+            entry: Dict[str, Any] = {}
+            try:
+                detector = self._master.detectorsManager[name]
+                if hasattr(detector, "getStreamDiagnostics"):
+                    entry["camera"] = detector.getStreamDiagnostics()
+                elif hasattr(getattr(detector, "_camera", None), "getStreamDiagnostics"):
+                    entry["camera"] = detector._camera.getStreamDiagnostics()
+            except Exception as e:
+                entry["camera_error"] = str(e)
+            if name in self._activeStreams:
+                protocol, worker = self._activeStreams[name]
+                entry["protocol"] = protocol
+                worker_stats = getattr(worker, "stats", None)
+                if isinstance(worker_stats, dict):
+                    entry["worker"] = {k: v for k, v in worker_stats.items()
+                                       if not k.startswith("_")}
+            out[name] = entry
+        return out
+
+    @APIExport()
     def getCurrentStreamProtocol(self, detectorName: Optional[str] = None) -> Dict[str, Any]:
         """
         Get the current streaming protocol for a specific detector.
-        
+
         Args:
             detectorName: Name of detector (None = first available or first active)
-        
+
         Returns:
             Dictionary with current protocol information
         """

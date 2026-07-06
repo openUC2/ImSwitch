@@ -3054,19 +3054,33 @@ class ExperimentController(ImConWidgetController):
         # groups by interpolation instead of measuring a new grid.
         # ----------------------------------------------------------
         if config.use_manual_map:
-            source_fm = self._find_reusable_manual_map()
-            # If manual XY points were supplied but no fitted manual map exists
-            # yet (Z still "auto"), measure them now by autofocus at the
-            # frontend-provided XY locations — instead of falling back to a tiled
-            # autofocus grid.
-            if source_fm is None and config.points:
+            # Explicit manual points supplied for THIS run are the source of
+            # truth.  Measure/fit them fresh under "manual" so that a map left
+            # over from a previous acquisition — an automatic "global"/per-area
+            # map, or an earlier "manual" fit made with a *different* set of
+            # points — can never override the points the user just placed.
+            # Without this, _find_reusable_manual_map() would happily return the
+            # stale map (its preference order is manual→global→any fitted) and
+            # the freshly supplied config.points would be silently ignored.
+            if config.points:
                 self._logger.info(
-                    f"Focus map: measuring {len(config.points)} manual point(s) "
-                    f"by autofocus before the tiled scan"
+                    f"Focus map: (re)measuring {len(config.points)} supplied manual "
+                    f"point(s) before the tiled scan (overriding any stale map)"
                 )
+                self.focus_map_manager.clear("manual")
                 self._measure_focus_map_from_points(config.points, config)
+                source_fm = self.focus_map_manager.get("manual")
+                # Drop stale per-area maps so the fresh manual surface is actually
+                # interpolated onto every area below, instead of being shadowed by
+                # the "already fitted" skip-guard in the loop.
+                for area in areas:
+                    self.focus_map_manager.clear(area["areaId"])
+            else:
+                # Classic reuse workflow: no points supplied this run, so reuse a
+                # previously fitted manual/global template as-is.
                 source_fm = self._find_reusable_manual_map()
-            if source_fm is not None:
+
+            if source_fm is not None and source_fm.is_fitted:
                 self._logger.info(
                     f"Focus map: reusing manual map [{source_fm.group_id}] "
                     f"for {len(areas)} group(s) via interpolation"
@@ -3434,11 +3448,11 @@ class ExperimentController(ImConWidgetController):
                 continue
             z_in = pt.get("z", None)
             try:
-                self.move_stage_xy(posX=gx, posY=gy, relative=False)
                 if z_in is not None:
                     best_z = float(z_in)  # user-provided Z; no autofocus needed
                 else:
-                    time.sleep(0.1)  # settle
+                    self.move_stage_xy(posX=gx, posY=gy, relative=False)
+                    time.sleep(0.4)  # settle
                     best_z = self.autofocus(
                         mode=config.af_mode, af_range=config.af_range,
                         af_resolution=config.af_resolution, af_cropsize=config.af_cropsize,

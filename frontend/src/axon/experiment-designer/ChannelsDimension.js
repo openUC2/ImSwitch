@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+} from "react";
 import { useDispatch, useSelector } from "react-redux";
 import createAxiosInstance from "../../backendapi/createAxiosInstance";
 import {
@@ -578,7 +584,11 @@ const ChannelsDimension = () => {
     ? parameterValue.exposureTimes
     : [];
   const gains = Array.isArray(parameterValue.gains) ? parameterValue.gains : [];
-  const channelEnabledForExperiment = Array.isArray(parameterValue.channelEnabledForExperiment) ? parameterValue.channelEnabledForExperiment : [];
+  const channelEnabledForExperiment = Array.isArray(
+    parameterValue.channelEnabledForExperiment,
+  )
+    ? parameterValue.channelEnabledForExperiment
+    : [];
 
   // Merge synthetic channels AFTER the conventional sources into one flat list
   // so the render loop and all index-based handlers below stay unchanged. The
@@ -591,28 +601,39 @@ const ChannelsDimension = () => {
   // Otherwise the init effect below (deps: [illuSources]) sees a new array
   // every render and re-dispatches setIllumination on a loop → React
   // "Maximum update depth exceeded".
-  const { illuSources, illuSourceKinds, laserMinValues, laserMaxValues } = useMemo(() => {
-    const dSources = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
-    const dKinds = Array.isArray(parameterRange.illuSourceKinds) ? parameterRange.illuSourceKinds : [];
-    const dMin = Array.isArray(parameterRange.illuSourceMinIntensities) ? parameterRange.illuSourceMinIntensities : [];
-    const dMax = Array.isArray(parameterRange.illuSourceMaxIntensities) ? parameterRange.illuSourceMaxIntensities : [];
-    const synth = Array.isArray(parameterRange.syntheticChannels) ? parameterRange.syntheticChannels : [];
-    return {
-      illuSources: [...dSources, ...synth.map((s) => s.name)],
-      illuSourceKinds: [
-        ...dSources.map((_, i) => dKinds[i] || "default"),
-        ...synth.map((s) => s.kind || "default"),
-      ],
-      laserMinValues: [...dMin, ...synth.map(() => 0)],
-      laserMaxValues: [...dMax, ...synth.map(() => 255)],
-    };
-  }, [
-    parameterRange.illuSources,
-    parameterRange.illuSourceKinds,
-    parameterRange.illuSourceMinIntensities,
-    parameterRange.illuSourceMaxIntensities,
-    parameterRange.syntheticChannels,
-  ]);
+  const { illuSources, illuSourceKinds, laserMinValues, laserMaxValues } =
+    useMemo(() => {
+      const dSources = Array.isArray(parameterRange.illuSources)
+        ? parameterRange.illuSources
+        : [];
+      const dKinds = Array.isArray(parameterRange.illuSourceKinds)
+        ? parameterRange.illuSourceKinds
+        : [];
+      const dMin = Array.isArray(parameterRange.illuSourceMinIntensities)
+        ? parameterRange.illuSourceMinIntensities
+        : [];
+      const dMax = Array.isArray(parameterRange.illuSourceMaxIntensities)
+        ? parameterRange.illuSourceMaxIntensities
+        : [];
+      const synth = Array.isArray(parameterRange.syntheticChannels)
+        ? parameterRange.syntheticChannels
+        : [];
+      return {
+        illuSources: [...dSources, ...synth.map((s) => s.name)],
+        illuSourceKinds: [
+          ...dSources.map((_, i) => dKinds[i] || "default"),
+          ...synth.map((s) => s.kind || "default"),
+        ],
+        laserMinValues: [...dMin, ...synth.map(() => 0)],
+        laserMaxValues: [...dMax, ...synth.map(() => 255)],
+      };
+    }, [
+      parameterRange.illuSources,
+      parameterRange.illuSourceKinds,
+      parameterRange.illuSourceMinIntensities,
+      parameterRange.illuSourceMaxIntensities,
+      parameterRange.syntheticChannels,
+    ]);
   // Per-channel kind-specific params dict from the experiment slice.  Object
   // shape: { [channelName]: { radius?, intensityR?, intensityG?, intensityB? } }.
   const illuminationParams =
@@ -1060,6 +1081,11 @@ const ChannelsDimension = () => {
     }));
   };
 
+  // Count channels that are currently included in the experiment.
+  const selectedChannelsCount = (channelEnabledForExperiment || []).filter(
+    Boolean,
+  ).length;
+
   return (
     <Box sx={{ display: "flex", flexDirection: "column" }}>
       {/* Header with actions */}
@@ -1072,8 +1098,7 @@ const ChannelsDimension = () => {
         }}
       >
         <Typography variant="body2" color="textSecondary">
-          {illuSources.length}{" "}
-          {illuSources.length === 1 ? "channel" : "channels"} selected
+          {selectedChannelsCount}/{illuSources.length} channels selected
           <Tooltip
             title={
               "Each channel has two toggles:\n" +
@@ -1183,7 +1208,7 @@ const ChannelsDimension = () => {
               minIntensity={laserMinValues[idx] ?? 0}
               maxIntensity={laserMaxValues[idx] ?? 1023}
               isEnabled={laserData.enabled}
-              isIncludedInExperiment={channelEnabledForExperiment[idx] ?? true}
+              isIncludedInExperiment={channelEnabledForExperiment[idx] ?? false}
               isExpanded={expandedChannels[idx] ?? idx === 0}
               onToggleExpand={() => toggleChannelExpand(idx)}
               onIntensityChange={(val) => handleIntensityChange(idx, val)}

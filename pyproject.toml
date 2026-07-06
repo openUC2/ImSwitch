@@ -79,7 +79,7 @@ dependencies = [
     "opencv-contrib-python>=4.13.0.92",
     "ipympl>=0.9.2",
     "useq-schema",
-    "ashlarUC2",
+    "ashlarUC2>=1.18.5",
     "uc2canopen>=0.1.4",
 ]
 
@@ -92,9 +92,6 @@ Lepmon = [
     "smbus",
     "RPi.GPIO",
     "luma.oled",
-]
-Ashlar = [
-    "ashlarUC2 @ git+https://github.com/Franzili/ashlarUC2",
 ]
 imjoy = [
     "imjoy-rpc==0.5.59",
@@ -139,8 +136,6 @@ imswitch-provisioner = "imswitch.imcontrol.model.jupyter_connection:ExistingProv
 # See https://github.com/pyapp-kit/psygnal/issues/330
 no-binary-package = ["psygnal"]
 
-[tool.uv.sources]
-ashlarUC2 = { git = "https://github.com/Franzili/ashlarUC2.git", rev = "7135e18eadd438bf76a6017b858ffdcb7c4fb5d4" }
 
 [tool.ruff]
 # Exclude directories

@@ -12,6 +12,7 @@ import DetectorTriggerController from "./components/DetectorTriggerController.js
 import ExtendedLEDMatrixController from "./components/ExtendedLEDMatrixController.jsx";
 import FlowStopController from "./components/FlowStopController.js";
 import FocusLockController from "./components/FocusLockController.js";
+import I2CSensorController from "./components/I2CSensorController.jsx";
 import HoloController from "./components/HoloController.js";
 import OffAxisHoloController from "./components/OffAxisHoloController.js";
 import DPCController from "./components/DPCController.js";
@@ -570,6 +571,7 @@ function App() {
             <DialogTitle>Napari Command</DialogTitle>
             <DialogContent>
               <DialogContentText sx={{ mb: 2 }}>
+                Install the napari plugin using: "pip install openuc2-processor"
                 Clipboard is not available in this context. Copy the command below manually:
               </DialogContentText>
               <TextField
@@ -699,6 +701,7 @@ function App() {
               )}
               {selectedPlugin === "Stresstest" && <StresstestController />}
               {selectedPlugin === "FocusLock" && <FocusLockController />}
+              {selectedPlugin === "I2CSensor" && <I2CSensorController />}
               {selectedPlugin === "AcceptanceTest" && (
                 <AcceptanceTestComponent />
               )}

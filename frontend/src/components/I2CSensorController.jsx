@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useDispatch, useSelector } from "react-redux";
 import {
   Paper,
   Grid,
@@ -13,10 +14,8 @@ import {
   Chip,
   Stack,
 } from "@mui/material";
-import { decode as msgpackDecode } from "@msgpack/msgpack";
 import { Line } from "react-chartjs-2";
 import "../utils/chartSetup"; // Global Chart.js registration
-import { useWebSocket } from "../context/WebSocketContext";
 
 import apiI2CSensorControllerStartPolling from "../backendapi/apiI2CSensorControllerStartPolling.js";
 import apiI2CSensorControllerStopPolling from "../backendapi/apiI2CSensorControllerStopPolling.js";
@@ -26,10 +25,8 @@ import apiI2CSensorControllerGetBuffer from "../backendapi/apiI2CSensorControlle
 import apiI2CSensorControllerGetLatest from "../backendapi/apiI2CSensorControllerGetLatest.js";
 
 const MAX_POINTS = 50; // rolling window length (matches backend bufferSize)
-const SIGNAL_NAME = "sigI2CSensorUpdate";
 
 export default function I2CSensorController() {
-  const socket = useWebSocket();
 
   const [samples, setSamples] = useState([]); // rolling array of records
   const [running, setRunning] = useState(false);
@@ -37,6 +34,9 @@ export default function I2CSensorController() {
   const [periodInput, setPeriodInput] = useState(10);
   const [csvPath, setCsvPath] = useState("");
   const [error, setError] = useState(null);
+
+  // Receive live sensor updates pushed from the backend via Redux slice
+  const sensorData = useSelector((state) => state.i2cState.sensorData);
 
   // Keep a ref mirror so the socket callback can append without stale closure.
   const samplesRef = useRef([]);
@@ -46,6 +46,13 @@ export default function I2CSensorController() {
     samplesRef.current = next;
     setSamples(next);
   }, []);
+
+  // Forward every Redux slice update into the rolling samples array
+  useEffect(() => {
+    if (sensorData && Object.keys(sensorData).length > 0) {
+      appendSample(sensorData);
+    }
+  }, [sensorData, appendSample]);
 
   // ── Initial load: status + existing buffer ────────────────────────────
   useEffect(() => {
@@ -74,24 +81,6 @@ export default function I2CSensorController() {
     };
   }, []);
 
-  // ── Live push: subscribe to the backend signal over Socket.IO ─────────
-  useEffect(() => {
-    if (!socket) return;
-    const handler = (raw) => {
-      try {
-        const msg = msgpackDecode(raw);
-        if (!msg || msg.name !== SIGNAL_NAME) return;
-        // args = { <paramName>: record }; take the single record dict.
-        const args = msg.args || {};
-        const record = Array.isArray(args) ? args[0] : Object.values(args)[0];
-        appendSample(record);
-      } catch (e) {
-        // ignore non-msgpack / unrelated frames
-      }
-    };
-    socket.on("signal_msgpack", handler);
-    return () => socket.off("signal_msgpack", handler);
-  }, [socket, appendSample]);
 
   // ── Controls ──────────────────────────────────────────────────────────
   const handleStart = async () => {

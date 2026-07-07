@@ -391,6 +391,20 @@ export const APP_REGISTRY = {
     pluginId: "FocusLock",
   },
 
+  i2cSensor: {
+    id: "i2cSensor",
+    name: "Environmental Sensors",
+    description:
+      "Continuously logs temperature, humidity and light from I2C sensors (SHT45, TSL2591) on the CAN GPIO slave. Live rolling plot + CSV logging.",
+    category: APP_CATEGORIES.APPS,
+    icon: ThermostatIcon,
+    enabled: false,
+    essential: false,
+    keywords: ["i2c", "sensor", "temperature", "humidity", "light", "lux",
+      "environment", "sht45", "tsl2591", "logging"],
+    pluginId: "I2CSensor",
+  },
+
   acceptanceTest: {
     id: "acceptanceTest",
     name: "Acceptance Test",

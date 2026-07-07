@@ -18,18 +18,23 @@ import {
   CircularProgress,
   Divider,
   FormControl,
+  FormControlLabel,
   Grid,
   IconButton,
   InputLabel,
   MenuItem,
   Select,
   Stack,
+  Switch,
   TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import PhotoCameraIcon from "@mui/icons-material/PhotoCamera";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import SaveIcon from "@mui/icons-material/Save";
+import ThermostatIcon from "@mui/icons-material/Thermostat";
 
 import apiMMCoreControllerGetMMCoreDetectors from "../backendapi/apiMMCoreControllerGetMMCoreDetectors";
 import apiMMCoreControllerGetMMCoreParameters from "../backendapi/apiMMCoreControllerGetMMCoreParameters";
@@ -37,13 +42,21 @@ import apiMMCoreControllerSetMMCoreParameter from "../backendapi/apiMMCoreContro
 import apiMMCoreControllerSnapMMCoreToDisk from "../backendapi/apiMMCoreControllerSnapMMCoreToDisk";
 import apiMMCoreControllerGetMMCoreSnapStatus from "../backendapi/apiMMCoreControllerGetMMCoreSnapStatus";
 import apiMMCoreControllerGetLastSnapPreviewUrl from "../backendapi/apiMMCoreControllerGetLastSnapPreview";
+import apiMMCoreControllerGetMMCoreTemperature from "../backendapi/apiMMCoreControllerGetMMCoreTemperature";
+import apiMMCoreControllerSaveMMCoreSettings from "../backendapi/apiMMCoreControllerSaveMMCoreSettings";
+import apiMMCoreControllerResetMMCoreSettings from "../backendapi/apiMMCoreControllerResetMMCoreSettings";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
+import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
 
 // Names that mean the same as "Exposure" so we hide the duplicate field in the
 // generic editor (we render a friendlier Exposure-in-seconds box separately).
 const EXPOSURE_KEY_RE = /posure/i;
+
+// Exposures at/above this length (seconds) auto-stop the live stream before
+// applying/snapping, to avoid the circular-buffer race and free the camera.
+const LONG_EXPOSURE_STOP_LIVE_S = 10;
 
 function formatElapsed(ms) {
   if (!ms || ms < 0) return "0s";
@@ -56,22 +69,45 @@ function formatElapsed(ms) {
   return `${s}s`;
 }
 
+function formatLimits(min, max) {
+  const hasMin = min !== null && min !== undefined;
+  const hasMax = max !== null && max !== undefined;
+  if (hasMin && hasMax) return `range ${min}–${max}`;
+  if (hasMin) return `min ${min}`;
+  if (hasMax) return `max ${max}`;
+  return "";
+}
+
 const ParameterField = React.memo(function ParameterField({ param, onChange, disabled }) {
-  const { name, type, value, editable, options, units } = param;
+  const { name, type, value, editable, options, units, min, max } = param;
   const isDisabled = disabled || !editable;
 
-  // For list/boolean (explicit menu selections) we commit immediately. For
-  // number/text inputs we keep a local editing state and only call the API
-  // on blur or Enter — committing per-keystroke wedged the UI on long-haul
-  // POST round-trips, and the user wants explicit "Apply" semantics.
+  // For number/text inputs we keep a local editing state and only call the API
+  // on blur or Enter. `pending` marks the window between commit and the
+  // server's echo so the sync effect below doesn't briefly flash the OLD
+  // server value back into the box (the "optimistic accept" fix).
   const [draft, setDraft] = useState(value ?? "");
   const [dirty, setDirty] = useState(false);
+  const [pending, setPending] = useState(false);
 
   // Sync incoming server state into the input only when the user is NOT
-  // mid-edit, so a refresh after a snap doesn't blow away their typing.
+  // mid-edit and NOT waiting on a commit, so a refresh doesn't clobber typing
+  // and a just-sent value isn't reverted before the server confirms it.
   useEffect(() => {
-    if (!dirty) setDraft(value ?? "");
-  }, [value, dirty]);
+    if (!dirty && !pending) setDraft(value ?? "");
+  }, [value, dirty, pending]);
+
+  const commitValue = async (toSend) => {
+    // Optimistically show the new value; reconcile when the server responds.
+    setDraft(toSend);
+    setDirty(false);
+    setPending(true);
+    try {
+      await onChange(name, toSend);
+    } finally {
+      setPending(false);
+    }
+  };
 
   if (type === "list") {
     return (
@@ -79,8 +115,8 @@ const ParameterField = React.memo(function ParameterField({ param, onChange, dis
         <InputLabel>{name}</InputLabel>
         <Select
           label={name}
-          value={value ?? ""}
-          onChange={(e) => onChange(name, e.target.value)}
+          value={pending || dirty ? draft : (value ?? "")}
+          onChange={(e) => commitValue(e.target.value)}
         >
           {(options || []).map((opt) => (
             <MenuItem key={opt} value={opt}>
@@ -93,13 +129,14 @@ const ParameterField = React.memo(function ParameterField({ param, onChange, dis
   }
 
   if (type === "boolean") {
+    const boolStr = (pending || dirty ? draft : value) ? "true" : "false";
     return (
       <FormControl size="small" fullWidth disabled={isDisabled}>
         <InputLabel>{name}</InputLabel>
         <Select
           label={name}
-          value={value ? "true" : "false"}
-          onChange={(e) => onChange(name, e.target.value === "true")}
+          value={boolStr}
+          onChange={(e) => commitValue(e.target.value === "true")}
         >
           <MenuItem value="true">True</MenuItem>
           <MenuItem value="false">False</MenuItem>
@@ -120,9 +157,13 @@ const ParameterField = React.memo(function ParameterField({ param, onChange, dis
       }
       toSend = num;
     }
-    setDirty(false);
-    await onChange(name, toSend);
+    await commitValue(toSend);
   };
+
+  const limitsText = formatLimits(min, max);
+  const numberInputProps = {};
+  if (min !== null && min !== undefined) numberInputProps.min = min;
+  if (max !== null && max !== undefined) numberInputProps.max = max;
 
   // number / unknown — render as text field with apply-on-blur
   return (
@@ -133,7 +174,12 @@ const ParameterField = React.memo(function ParameterField({ param, onChange, dis
       type={type === "number" ? "number" : "text"}
       value={draft}
       disabled={isDisabled}
-      helperText={dirty ? "Press Enter or click outside to apply" : " "}
+      inputProps={type === "number" ? numberInputProps : undefined}
+      helperText={
+        dirty
+          ? "Press Enter or click outside to apply"
+          : limitsText || " "
+      }
       FormHelperTextProps={{ sx: { minHeight: "1.2em", m: 0 } }}
       onChange={(e) => {
         setDraft(e.target.value);
@@ -169,6 +215,11 @@ const MMCoreController = () => {
   const [activeJob, setActiveJob] = useState(null);
   const [recentJobs, setRecentJobs] = useState([]);
   const pollRef = useRef(null);
+
+  // Expert/base parameter view + persistence UI state.
+  const [showExpert, setShowExpert] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [statusMsg, setStatusMsg] = useState(null);
 
   // Passive live view — only shown if a stream is already running elsewhere.
   const [liveActive, setLiveActive] = useState(false);
@@ -244,9 +295,27 @@ const MMCoreController = () => {
   // ----------------------------------------------------------------------
   // Parameter mutation
   // ----------------------------------------------------------------------
+  // Optimistically reflect a parameter change in the local tree so the whole
+  // panel updates immediately, then reconcile with the server's echoed value.
+  const applyOptimistic = useCallback((name, value) => {
+    setTree((prev) => {
+      if (!prev?.groups) return prev;
+      return {
+        ...prev,
+        groups: prev.groups.map((g) => ({
+          ...g,
+          parameters: (g.parameters || []).map((p) =>
+            p.name === name ? { ...p, value } : p,
+          ),
+        })),
+      };
+    });
+  }, []);
+
   const handleParamChange = useCallback(
     async (name, value) => {
       if (!detectorName) return;
+      applyOptimistic(name, value);
       try {
         const updated = await apiMMCoreControllerSetMMCoreParameter({
           detectorName,
@@ -256,10 +325,68 @@ const MMCoreController = () => {
         setTree(updated);
       } catch (e) {
         setLoadError(`Failed to set ${name}: ${e?.message || e}`);
+        // Reconcile back to the device's real state on failure.
+        refreshParameters();
       }
     },
-    [detectorName],
+    [detectorName, applyOptimistic, refreshParameters],
   );
+
+  // ----------------------------------------------------------------------
+  // Temperature polling (lightweight, independent of the parameter tree)
+  // ----------------------------------------------------------------------
+  const [temperature, setTemperature] = useState(null);
+  useEffect(() => {
+    if (!detectorName) return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const t = await apiMMCoreControllerGetMMCoreTemperature(detectorName);
+        if (!cancelled) setTemperature(t);
+      } catch {
+        /* ignore — temperature is best-effort */
+      }
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [detectorName]);
+
+  // ----------------------------------------------------------------------
+  // Persisted settings: save current state / reset to factory defaults
+  // ----------------------------------------------------------------------
+  const onSaveSettings = useCallback(async () => {
+    if (!detectorName) return;
+    setSettingsBusy(true);
+    setStatusMsg(null);
+    try {
+      await apiMMCoreControllerSaveMMCoreSettings({ detectorName });
+      setStatusMsg("Settings saved — they will be re-applied on next startup.");
+      refreshParameters();
+    } catch (e) {
+      setLoadError(`Failed to save settings: ${e?.message || e}`);
+    } finally {
+      setSettingsBusy(false);
+    }
+  }, [detectorName, refreshParameters]);
+
+  const onResetSettings = useCallback(async () => {
+    if (!detectorName) return;
+    setSettingsBusy(true);
+    setStatusMsg(null);
+    try {
+      const updated = await apiMMCoreControllerResetMMCoreSettings({ detectorName });
+      setTree(updated);
+      setStatusMsg("Reset to factory defaults and cleared saved settings.");
+    } catch (e) {
+      setLoadError(`Failed to reset settings: ${e?.message || e}`);
+    } finally {
+      setSettingsBusy(false);
+    }
+  }, [detectorName]);
 
   // ----------------------------------------------------------------------
   // Snap-to-disk + polling
@@ -296,10 +423,30 @@ const MMCoreController = () => {
 
   useEffect(() => () => stopPolling(), []);
 
+  // Stop any running live stream when the requested exposure is long enough
+  // that keeping the continuous acquisition alive would race the snap.
+  const maybeStopLiveForLongExposure = useCallback(
+    async (expSec) => {
+      if (!liveActive) return;
+      if (!Number.isFinite(expSec) || expSec < LONG_EXPOSURE_STOP_LIVE_S) return;
+      try {
+        await apiLiveViewControllerStopLiveView(detectorName || null);
+        setLiveActive(false);
+        setStatusMsg(
+          `Live view stopped automatically for the ${expSec}s exposure.`,
+        );
+      } catch (e) {
+        setLoadError(`Could not stop live view: ${e?.message || e}`);
+      }
+    },
+    [liveActive, detectorName],
+  );
+
   const onApplyExposure = async () => {
     if (!detectorName) return;
     const expSecParsed = parseFloat(exposureSec);
     if (!Number.isFinite(expSecParsed) || expSecParsed <= 0) return;
+    await maybeStopLiveForLongExposure(expSecParsed);
     try {
       const updated = await apiMMCoreControllerSetMMCoreParameter({
         detectorName,
@@ -319,6 +466,7 @@ const MMCoreController = () => {
       Number.isFinite(expSecParsed) && expSecParsed > 0
         ? expSecParsed * 1000
         : undefined;
+    await maybeStopLiveForLongExposure(expSecParsed);
     try {
       const job = await apiMMCoreControllerSnapMMCoreToDisk({
         detectorName,
@@ -344,10 +492,24 @@ const MMCoreController = () => {
       .map((group) => ({
         name: group.name,
         parameters: (group.parameters || []).filter(
-          (p) => !EXPOSURE_KEY_RE.test(p.name),
+          (p) =>
+            !EXPOSURE_KEY_RE.test(p.name) &&
+            (showExpert || !p.advanced),
         ),
       }))
       .filter((g) => g.parameters.length > 0);
+  }, [tree, showExpert]);
+
+  // Count of expert-only parameters currently hidden, for the toggle label.
+  const hiddenExpertCount = useMemo(() => {
+    if (!tree?.groups) return 0;
+    let n = 0;
+    for (const g of tree.groups) {
+      for (const p of g.parameters || []) {
+        if (!EXPOSURE_KEY_RE.test(p.name) && p.advanced) n += 1;
+      }
+    }
+    return n;
   }, [tree]);
 
   const isJobRunning =
@@ -399,6 +561,12 @@ const MMCoreController = () => {
         </Alert>
       )}
 
+      {statusMsg && (
+        <Alert severity="info" sx={{ mb: 2 }} onClose={() => setStatusMsg(null)}>
+          {statusMsg}
+        </Alert>
+      )}
+
       {detectors.length === 0 ? (
         <Alert severity="info">
           No MMCore detectors are registered in this setup. Add an
@@ -425,7 +593,7 @@ const MMCoreController = () => {
                     </Select>
                   </FormControl>
                 </Grid>
-                <Grid item xs={6} md={3}>
+                <Grid item xs={6} md={2}>
                   <Typography variant="body2" color="text.secondary">
                     Sensor
                   </Typography>
@@ -433,13 +601,36 @@ const MMCoreController = () => {
                     {tree?.sensorWidth ?? "?"} × {tree?.sensorHeight ?? "?"}
                   </Typography>
                 </Grid>
-                <Grid item xs={6} md={3}>
+                <Grid item xs={6} md={2}>
                   <Typography variant="body2" color="text.secondary">
                     Model
                   </Typography>
                   <Typography variant="body2" noWrap>
                     {tree?.model ?? "—"}
                   </Typography>
+                </Grid>
+                <Grid item xs={6} md={2}>
+                  <Typography variant="body2" color="text.secondary">
+                    Temperature
+                  </Typography>
+                  <Stack direction="row" spacing={0.5} alignItems="center">
+                    <ThermostatIcon
+                      fontSize="small"
+                      color={
+                        temperature?.temperatureC == null
+                          ? "disabled"
+                          : "primary"
+                      }
+                    />
+                    <Typography variant="body2">
+                      {temperature?.temperatureC != null
+                        ? `${temperature.temperatureC}°C`
+                        : "—"}
+                      {temperature?.temperatureSetpointC != null
+                        ? ` / set ${temperature.temperatureSetpointC}°C`
+                        : ""}
+                    </Typography>
+                  </Stack>
                 </Grid>
                 <Grid item xs={12} md={2} sx={{ textAlign: "right" }}>
                   <Tooltip title="Reload parameters from device">
@@ -679,6 +870,73 @@ const MMCoreController = () => {
                     />
                   </Box>
                 </Box>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Parameter toolbar: expert toggle + persistence controls */}
+          <Card>
+            <CardContent>
+              <Stack
+                direction={{ xs: "column", sm: "row" }}
+                spacing={2}
+                alignItems={{ xs: "flex-start", sm: "center" }}
+                justifyContent="space-between"
+              >
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={showExpert}
+                      onChange={(e) => setShowExpert(e.target.checked)}
+                    />
+                  }
+                  label={
+                    showExpert
+                      ? "Expert parameters"
+                      : `Expert parameters${
+                          hiddenExpertCount ? ` (${hiddenExpertCount} hidden)` : ""
+                        }`
+                  }
+                />
+                <Stack direction="row" spacing={1}>
+                  <Tooltip title="Persist the current camera settings to the setup file so they are re-applied on the next startup">
+                    <span>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<SaveIcon />}
+                        onClick={onSaveSettings}
+                        disabled={settingsBusy || !detectorName}
+                      >
+                        Save settings
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  <Tooltip title="Restore the camera to its factory defaults and clear any saved settings">
+                    <span>
+                      <Button
+                        variant="outlined"
+                        color="warning"
+                        size="small"
+                        startIcon={<RestartAltIcon />}
+                        onClick={onResetSettings}
+                        disabled={settingsBusy || !detectorName}
+                      >
+                        Reset to default
+                      </Button>
+                    </span>
+                  </Tooltip>
+                </Stack>
+              </Stack>
+              {tree?.hasSavedSettings && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ mt: 1, display: "block" }}
+                >
+                  Saved settings are active for this camera and will be
+                  re-applied on startup.
+                </Typography>
               )}
             </CardContent>
           </Card>

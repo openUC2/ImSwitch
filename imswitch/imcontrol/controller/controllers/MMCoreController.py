@@ -6,6 +6,7 @@ a background thread so the request doesn't block on multi-minute exposures.
 """
 import datetime
 import io
+import json
 import os
 import threading
 import time
@@ -41,6 +42,15 @@ class SetParametersRequest(BaseModel):
     values: Dict[str, Any]
 
 
+class SaveSettingsRequest(BaseModel):
+    detectorName: Optional[str] = None
+    values: Optional[Dict[str, Any]] = None
+
+
+class DetectorNameRequest(BaseModel):
+    detectorName: Optional[str] = None
+
+
 class SnapRequest(BaseModel):
     detectorName: Optional[str] = None
     exposureMs: Optional[float] = None
@@ -68,6 +78,52 @@ class MMCoreController(ImConWidgetController):
         self._snapImages: Dict[str, np.ndarray] = {}
         self._snapImageOrder: List[str] = []
         self._maxCachedSnaps = 4
+
+        # Re-apply any camera settings persisted from a previous session.
+        try:
+            self._applySavedSettingsOnStartup()
+        except Exception:
+            self._logger.error("Failed to apply saved MMCore settings", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Persistence (dedicated `mmcoreSettings` section in the setup JSON)
+    # ------------------------------------------------------------------
+    def _savedPropertiesFor(self, detectorName: str) -> Dict[str, Any]:
+        """Return the persisted {property: value} dict for a detector (or {})."""
+        settings = getattr(self._setupInfo, "mmcoreSettings", None)
+        if settings is None:
+            return {}
+        try:
+            return dict(settings.savedProperties.get(detectorName, {}) or {})
+        except Exception:
+            return {}
+
+    def _hasSavedSettings(self, detectorName: str) -> bool:
+        return bool(self._savedPropertiesFor(detectorName))
+
+    def _applySavedSettingsOnStartup(self) -> None:
+        settings = getattr(self._setupInfo, "mmcoreSettings", None)
+        if settings is None:
+            return
+        for detectorName in self.getMMCoreDetectors():
+            saved = self._savedPropertiesFor(detectorName)
+            if not saved:
+                continue
+            try:
+                _, detector = self._getDetector(detectorName)
+                applied = detector.applySavedProperties(saved)
+                self._logger.info(
+                    f"Applied {len(applied)} saved MMCore setting(s) to '{detectorName}'"
+                )
+            except Exception:
+                self._logger.warning(
+                    f"Could not apply saved settings to '{detectorName}'", exc_info=True
+                )
+
+    def _persistSetupInfo(self) -> None:
+        import imswitch.imcontrol.model.configfiletools as configfiletools
+        mOptions, _ = configfiletools.loadOptions()
+        configfiletools.saveSetupInfo(mOptions, self._setupInfo)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -117,9 +173,18 @@ class MMCoreController(ImConWidgetController):
             "model": status.get("model"),
             "sensorWidth": status.get("sensorWidth"),
             "sensorHeight": status.get("sensorHeight"),
+            "currentWidth": status.get("currentWidth"),
+            "currentHeight": status.get("currentHeight"),
             "pixelSizeUm": status.get("pixelSizeUm"),
             "binning": status.get("binning"),
             "supportedBinnings": status.get("supportedBinnings"),
+            "temperatureC": status.get("temperatureC"),
+            "temperatureSetpointC": status.get("temperatureSetpointC"),
+            "exposureMs": status.get("exposureMs"),
+            "hasSavedSettings": self._hasSavedSettings(detector.name),
+            # Each parameter entry now carries advanced/min/max metadata that
+            # getCameraStatus() injected, so the frontend can render limits and
+            # collapse expert parameters.
             "groups": [
                 {"name": g, "parameters": groups[g]} for g in order
             ],
@@ -180,6 +245,106 @@ class MMCoreController(ImConWidgetController):
         _, detector = self._getDetector(body.detectorName)
         for name, value in body.values.items():
             detector.setParameter(name, value)
+        return self._serialize_parameters(detector)
+
+    # ------------------------------------------------------------------
+    # Temperature
+    # ------------------------------------------------------------------
+    @APIExport()
+    def getMMCoreTemperature(self, detectorName: Optional[str] = None) -> Dict[str, Any]:
+        """Return the current sensor temperature and setpoint in °C."""
+        _, detector = self._getDetector(detectorName)
+        return {
+            "detectorName": detector.name,
+            "temperatureC": detector.getTemperatureC(),
+            "temperatureSetpointC": detector.getTemperatureSetpointC(),
+        }
+
+    # ------------------------------------------------------------------
+    # Persisted settings (save / reset to default)
+    # ------------------------------------------------------------------
+    @APIExport()
+    def getMMCoreSettings(self, detectorName: Optional[str] = None) -> Dict[str, Any]:
+        """Return the persisted settings for the detector plus its factory defaults."""
+        _, detector = self._getDetector(detectorName)
+        return {
+            "detectorName": detector.name,
+            "savedProperties": self._savedPropertiesFor(detector.name),
+            "factoryDefaults": detector.getFactoryDefaults(),
+        }
+
+    @APIExport(requestType="POST")
+    def saveMMCoreSettings(self, body: SaveSettingsRequest) -> Dict[str, Any]:
+        """Persist the camera's current editable parameters to the setup JSON.
+
+        Body schema (JSON): ``{"detectorName": str|null, "values": {name: value}|null}``.
+        When ``values`` is omitted, the current device state (all editable
+        parameters) is captured. The settings are re-applied automatically on
+        the next ImSwitch startup.
+        """
+        from imswitch.imcontrol.model.SetupInfo import MMCoreSettingsInfo
+
+        _, detector = self._getDetector(body.detectorName)
+
+        if body.values:
+            toSave = dict(body.values)
+        else:
+            # Snapshot editable parameters that differ from the device's own
+            # factory defaults — keeps the persisted set minimal and avoids
+            # re-applying noise (and failure-prone selectors) on startup.
+            status = detector.getCameraStatus()
+            defaults = detector.getFactoryDefaults()
+            toSave = {}
+            for name, info in status.get("parameters", {}).items():
+                if not info.get("editable"):
+                    continue
+                value = info.get("value")
+                default = defaults.get(name)
+                if default is not None and str(value) == str(default):
+                    continue
+                toSave[name] = value
+
+        if getattr(self._setupInfo, "mmcoreSettings", None) is None:
+            self._setupInfo.mmcoreSettings = MMCoreSettingsInfo()
+        self._setupInfo.mmcoreSettings.savedProperties[detector.name] = toSave
+
+        try:
+            self._persistSetupInfo()
+        except Exception as exc:
+            self._logger.error("Failed to persist MMCore settings", exc_info=True)
+            raise HTTPException(
+                status_code=500, detail=f"Could not save settings: {exc}"
+            ) from exc
+
+        return {
+            "detectorName": detector.name,
+            "saved": True,
+            "savedProperties": toSave,
+        }
+
+    @APIExport(requestType="POST")
+    def resetMMCoreSettings(self, body: DetectorNameRequest = None) -> Dict[str, Any]:
+        """Reset the camera to factory defaults and drop any persisted settings.
+
+        Restores every editable property to the value captured at manager init
+        and removes the detector's entry from the persisted ``mmcoreSettings``.
+        Accepts an optional ``{"detectorName": str}`` body.
+        """
+        detectorName = getattr(body, "detectorName", None) if body else None
+        _, detector = self._getDetector(detectorName)
+
+        applied = detector.resetToFactoryDefaults()
+
+        settings = getattr(self._setupInfo, "mmcoreSettings", None)
+        if settings is not None and detector.name in settings.savedProperties:
+            settings.savedProperties.pop(detector.name, None)
+            try:
+                self._persistSetupInfo()
+            except Exception:
+                self._logger.error(
+                    "Failed to persist cleared MMCore settings", exc_info=True
+                )
+
         return self._serialize_parameters(detector)
 
     # ------------------------------------------------------------------
@@ -405,13 +570,31 @@ class MMCoreController(ImConWidgetController):
             base = f"{iso}-{micro}_{safeDetector}{descPart}"
             fullPath = os.path.join(folder, base + ".tif")
 
+            # Embed the full MMCore property snapshot as JSON metadata so the
+            # capture is fully reproducible from the file alone.
+            try:
+                metadata = detector.getMetadataSnapshot()
+            except Exception:
+                metadata = {}
+            metadata.update(
+                {
+                    "exposure_ms": currentExposure,
+                    "detector": detector.name,
+                    "timestamp": now.isoformat(),
+                }
+            )
+            try:
+                description = json.dumps(metadata, default=str)
+            except Exception:
+                description = (
+                    f"MMCore long-exposure snap: exposure_ms={currentExposure:.3f}, "
+                    f"detector={detector.name}"
+                )
+
             tifffile.imwrite(
                 fullPath,
                 image,
-                description=(
-                    f"MMCore long-exposure snap: exposure_ms={currentExposure:.3f}, "
-                    f"detector={detector.name}"
-                ),
+                description=description,
             )
 
             try:

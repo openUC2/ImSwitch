@@ -59,6 +59,7 @@ import detectorParametersReducer from "./slices/DetectorParametersSlice";
 import backendCapabilitiesReducer from "./slices/BackendCapabilitiesSlice";
 import onboardingReducer from "./slices/OnboardingSlice";
 import homingReducer from "./slices/HomingSlice";
+import i2cReducer from "./slices/I2CSensorSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -177,6 +178,7 @@ const rootReducer = combineReducers({
   detectorParametersState: detectorParametersReducer,
   backendCapabilities: backendCapabilitiesReducer,
   onboardingState: onboardingReducer,
+  i2cState: i2cReducer,
 });
 
 //#####################################################################################

@@ -12,6 +12,7 @@ import * as notificationSlice from "../state/slices/NotificationSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
 import * as focusLockSlice from "../state/slices/FocusLockSlice.js";
+import * as i2cSlice from "../state/slices/I2CSensorSlice.js";
 import * as mazeGameSlice from "../state/slices/MazeGameSlice.js";
 import * as autofocusSlice from "../state/slices/AutofocusSlice.js";
 import * as opticalFlowSlice from "../state/slices/OpticalFlowSlice.js";
@@ -1305,6 +1306,38 @@ const WebSocketHandler = () => {
         } catch (error) {
           console.error("Error parsing focus lock state signal:", error);
         }
+      } else if (dataJson.name === "sigI2CSensorUpdate") {
+        let sensorData = dataJson.args?.p0 || dataJson.args || {};
+        // Handle I2C sensor updates - updated for new library format
+        try {
+          if (typeof sensorData === "object") {
+            dispatch(i2cSlice.updateSensorData(sensorData));
+          }
+        } catch (error) {
+          console.error("Error parsing I2C sensor update signal:", error);
+        }
+      
+        /*
+          // ── Live push: subscribe to the backend signal over Socket.IO ─────────
+          useEffect(() => {
+            if (!socket) return;
+            const handler = (raw) => {
+              try {
+                const msg = msgpackDecode(raw);
+                if (!msg || msg.name !== SIGNAL_NAME) return;
+                // args = { <paramName>: record }; take the single record dict.
+                const args = msg.args || {};
+                const record = Array.isArray(args) ? args[0] : Object.values(args)[0];
+                appendSample(record);
+              } catch (e) {
+                // ignore non-msgpack / unrelated frames
+              }
+            };
+            socket.on("signal_msgpack", handler);
+            return () => socket.off("signal_msgpack", handler);
+          }, [socket, appendSample]);
+        */
+
       } else if (dataJson.name === "sigCalibrationProgress") {
         //console.log("sigCalibrationProgress", dataJson);
         // Handle calibration progress updates - updated for new library format

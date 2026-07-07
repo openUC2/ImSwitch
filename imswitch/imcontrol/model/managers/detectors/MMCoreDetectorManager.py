@@ -60,6 +60,12 @@ def _is_internal_property(prop: str) -> bool:
     return False
 
 
+class Camera():
+    SensorWidth = 1024
+    SensorHeight = 1024
+    isRGB = False
+    exposure_time = 10.0
+
 class MMCoreDetectorManager(DetectorManager):
     """Detector manager backed by a Micro-Manager camera device."""
 
@@ -72,7 +78,7 @@ class MMCoreDetectorManager(DetectorManager):
         device_name = self._props.get("deviceName")
         adapter_path = self._props.get("adapterPath")
         adapter_paths = [adapter_path] if adapter_path else None
-
+        self._camera = Camera()
         self._label: str = self._props.get("deviceLabel", "Camera")
 
         if cfg_path:
@@ -106,6 +112,11 @@ class MMCoreDetectorManager(DetectorManager):
             self._core.snap()
             full_shape = (int(self._core.getImageWidth()), int(self._core.getImageHeight()))
 
+        # keep compatibility 
+        self._camera.SensorWidth = 1024
+        self._camera.SensorHeight = 1024       
+        self.pixelSize = [1.0, 1, 1]
+
         # Binning options
         supported_binnings: List[int] = self._read_supported_binnings()
 
@@ -136,6 +147,8 @@ class MMCoreDetectorManager(DetectorManager):
             parameters=parameters,
             croppable=True,
         )
+        #
+        self._logger.info(f"MMCoreDetectorManager '{name}' initialized for device '{self._label}'")
 
     # ------------------------------------------------------------------
     # Parameter discovery helpers
@@ -334,6 +347,8 @@ class MMCoreDetectorManager(DetectorManager):
             )
             if exposure_key is not None:
                 self.parameters[exposure_key].value = actual
+            self._camera.exposure_time = self.parameters[exposure_key].value 
+
             return self.parameters
 
         if name in self.parameters:
@@ -372,6 +387,12 @@ class MMCoreDetectorManager(DetectorManager):
 
     def finalize(self) -> None:
         self.stopAcquisition()
+
+    def setPixelSizeUm(self, pixelSizeUm: List[float]) -> None:
+        # MMCore cameras don't support changing the pixel size on the fly.
+        # Ignore the request and log a warning.
+        self.pixelSize = [1.0, pixelSizeUm, pixelSizeUm]
+
 
 
 # Copyright (C) 2020-2026 ImSwitch developers

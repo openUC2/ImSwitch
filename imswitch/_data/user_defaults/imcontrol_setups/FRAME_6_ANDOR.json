@@ -141,8 +141,8 @@
             "forScanning": true,
             "resetOnClose": true,
             "stageOffsets": {
-                "stageOffsetPositionX": -103067.86983366935,
-                "stageOffsetPositionY": -82526.94745463709,
+                "stageOffsetPositionX": -8687.194220430101,
+                "stageOffsetPositionY": 2079.593413978495,
                 "stageOffsetPositionZ": 0.0,
                 "stageOffsetPositionA": 0.0
             }
@@ -185,10 +185,15 @@
             1000.0,
             31300.0
         ],
+        "zPositions": [
+            0,
+            0
+        ],
         "homeDirection": 1,
         "homePolarity": 0,
         "homeSpeed": 20000,
         "homeAcceleration": 200000,
+        "moveSpeed": 20000,
         "calibrateOnStart": false,
         "active": true
     },
@@ -230,7 +235,6 @@
     "ledPresets": {},
     "defaultLEDPresetForScan": null,
     "laserPresets": {},
-    "stageOffsets": {},
     "defaultLaserPresetForScan": null,
     "availableWidgets": [
         "Settings",
@@ -247,10 +251,11 @@
         "LiveView",
         "LEDMatrix",
         "StageCenterCalibration",
-        "MMCore", 
+        "MMCore",
         "Experiment",
         "Objective"
     ],
+    "stageOffsets": {},
     "mct": null,
     "Flatfield": null,
     "pyroServerInfo": null,

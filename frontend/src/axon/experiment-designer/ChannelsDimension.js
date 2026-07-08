@@ -40,10 +40,7 @@ import * as laserSlice from "../../state/slices/LaserSlice";
 import * as detectorParametersSlice from "../../state/slices/DetectorParametersSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 import fetchLaserControllerCurrentValues from "../../middleware/fetchLaserControllerCurrentValues";
-import {
-  SUPPORTED_GAIN_VALUES,
-  normalizeGainValue,
-} from "../../constants/cameraGainValues";
+import { normalizeGainValue } from "../../constants/cameraGainValues";
 import apiLEDMatrixControllerSetRing from "../../backendapi/apiLEDMatrixControllerSetRing";
 import apiLEDMatrixControllerSetHalves from "../../backendapi/apiLEDMatrixControllerSetHalves";
 
@@ -543,16 +540,24 @@ const ChannelBlock = ({
                 </Tooltip>
               </Box>
               <FormControl size="small" fullWidth>
-                <Select
+                <TextField
+                  type="number"
+                  size="small"
                   value={gain}
-                  onChange={(e) => onGainChange(e.target.value)}
-                >
-                  {SUPPORTED_GAIN_VALUES.map((val) => (
-                    <MenuItem key={val} value={val}>
-                      {val}
-                    </MenuItem>
-                  ))}
-                </Select>
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    // Allow the field to be cleared while typing; commit numbers.
+                    if (v === "") {
+                      onGainChange(0);
+                      return;
+                    }
+                    const n = Number(v);
+                    if (Number.isFinite(n)) {
+                      onGainChange(Math.min(300, Math.max(0, n)));
+                    }
+                  }}
+                  inputProps={{ min: 0, max: 300, step: 1 }}
+                />
               </FormControl>
             </Box>
           </Box>
@@ -1315,6 +1320,54 @@ const ChannelsDimension = () => {
                 <MenuItem value="off">Per-Frame Toggle</MenuItem>
               </Select>
             </FormControl>
+          </Box>
+
+          {/* CAN-bus power darkness — cut bus power around every exposure */}
+          <Box
+            sx={{
+              mb: 2,
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+            }}
+          >
+            <Box sx={{ pr: 1 }}>
+              <Box sx={{ display: "flex", alignItems: "center", mb: 0.25 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Cut CAN-bus power during exposure
+                </Typography>
+                <Tooltip
+                  title={
+                    "Turns the high-current CAN-bus power OFF around every exposure, producing complete darkness (even indicator LEDs go dark). " +
+                    "The camera stays powered. Adds a ~2 s settle before and after each frame. " +
+                    "Use for luminescence / very low-light long exposures. Motors keep their position across the power cycle."
+                  }
+                  arrow
+                >
+                  <InfoOutlinedIcon
+                    sx={{
+                      fontSize: 14,
+                      ml: 0.5,
+                      color: "text.disabled",
+                      cursor: "help",
+                    }}
+                  />
+                </Tooltip>
+              </Box>
+              <Typography variant="caption" color="textSecondary">
+                Complete darkness for luminescence / low-light exposures.
+              </Typography>
+            </Box>
+            <Switch
+              size="small"
+              checked={!!parameterValue.busPowerDarkness}
+              onChange={(e) =>
+                dispatch(
+                  experimentSlice.setBusPowerDarkness(e.target.checked),
+                )
+              }
+              inputProps={{ "aria-label": "Cut CAN-bus power during exposure" }}
+            />
           </Box>
 
           <Typography variant="caption" color="textSecondary">

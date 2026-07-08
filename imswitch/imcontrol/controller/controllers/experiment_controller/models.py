@@ -243,6 +243,17 @@ class ParameterValue(BaseModel):
         "auto",
         description="Illumination mode: 'auto' (single channel stays on), 'on' (always on), 'off' (per-frame toggle)",
     )
+    busPowerDarkness: bool = Field(
+        False,
+        description="Cut the CAN-bus power (complete darkness) around every "
+                    "exposure. For low-light/luminescence imaging where even "
+                    "indicator LEDs must be off during the exposure.",
+    )
+    busPowerSettleTime: float = Field(
+        2.0,
+        description="Seconds to wait after cutting and after restoring CAN-bus "
+                    "power when busPowerDarkness is enabled.",
+    )
     # Synthetic LED-matrix channels (ring/DPC), kept SEPARATE from the
     # conventional `illumination` list above.  This is the single source of
     # truth for ring/DPC acquisition – the backend merges enabled entries into

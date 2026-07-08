@@ -911,6 +911,17 @@ class ExperimentController(ImConWidgetController):
             f"activeChannels={p.n_active_channels}, keepOn={keepIlluminationOn}"
         )
 
+        # CAN-bus power darkness: when enabled, every exposure is wrapped by a
+        # bus-power OFF → settle → grab → bus-power ON → settle sequence so the
+        # frame is exposed in complete darkness (see acquire_frame).
+        self._busPowerDarkness = bool(getattr(p, "busPowerDarkness", False))
+        self._busPowerSettle = float(getattr(p, "busPowerSettleTime", 2.0) or 0.0)
+        if self._busPowerDarkness:
+            self._logger.info(
+                f"CAN-bus power darkness ENABLED (settle={self._busPowerSettle:.1f}s "
+                f"each side of every exposure)"
+            )
+
         # check if we want to use performance mode
         self.ExperimentParams.performanceMode = p.performanceMode
         performanceMode = p.performanceMode
@@ -1130,8 +1141,23 @@ class ExperimentController(ImConWidgetController):
             # Use the accumulated workflow steps and file writers
             workflowSteps = all_workflow_steps
             file_writers = all_file_writers
+            # Per-step timing log for the post-experiment violin plot. Reset for
+            # each experiment run; populated from the workflow "completed" events
+            # (the workflow context itself is cleared when it finishes).
+            self._step_timings = []
+
             # Create workflow progress handler
             def sendProgress(payload):
+                try:
+                    if isinstance(payload, dict) and payload.get("status") == "completed":
+                        self._step_timings.append({
+                            "name": payload.get("name", "step"),
+                            "pre_time": float(payload.get("pre_time", 0.0) or 0.0),
+                            "main_time": float(payload.get("main_time", 0.0) or 0.0),
+                            "post_time": float(payload.get("post_time", 0.0) or 0.0),
+                        })
+                except Exception:
+                    pass
                 self.sigExperimentWorkflowUpdate.emit(payload)
 
             # Create workflow and context
@@ -1166,10 +1192,14 @@ class ExperimentController(ImConWidgetController):
             # including abort/stop paths — by joining the thread in a daemon.
             _trigger_cleanup_thread = self.workflow_manager.current_thread
 
+            _timing_plot_dir = dirPath
+
             def _restore_freerun():
                 if _trigger_cleanup_thread is not None:
                     _trigger_cleanup_thread.join()
                 self._endTriggeredAcquisition()
+                # Export a per-step timing violin plot alongside the data.
+                self._export_step_timings_plot(_timing_plot_dir)
 
             threading.Thread(
                 target=_restore_freerun, daemon=True, name="TriggeredAcqCleanup"
@@ -1275,6 +1305,93 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.warning(f"Could not restore continuous mode: {e}")
 
+    @staticmethod
+    def _categorize_step(name: str) -> str:
+        """Group a workflow step name into a coarse category for the timing
+        violin plot."""
+        n = (name or "").strip().lower()
+        if "autofocus" in n or "focus map" in n:
+            return "Autofocus"
+        if "acquire" in n or "snap" in n:
+            return "Acquire"
+        if n.startswith("move") or "z offset" in n or "→ z" in n or "z →" in n:
+            return "Move"
+        if "illumination" in n or "laser" in n or "led" in n:
+            return "Illumination"
+        if "save" in n or "finaliz" in n or "writer" in n:
+            return "Save"
+        if "wait" in n or "timepoint" in n:
+            return "Wait"
+        return "Other"
+
+    def _export_step_timings_plot(self, out_dir: str) -> None:
+        """Render a violin plot of per-step wall-clock durations (grouped by
+        category) and save it as ``step_timings_violin.png`` in ``out_dir``.
+
+        Best-effort: any failure (no data, matplotlib missing, unwritable dir)
+        is logged and swallowed so it never affects the experiment outcome.
+        """
+        timings = list(getattr(self, "_step_timings", []) or [])
+        if not timings or not out_dir:
+            return
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            # Bucket total step durations (pre+main+post) by category.
+            buckets: Dict[str, List[float]] = {}
+            for t in timings:
+                total = (t.get("pre_time", 0.0) + t.get("main_time", 0.0)
+                         + t.get("post_time", 0.0))
+                cat = self._categorize_step(t.get("name", ""))
+                buckets.setdefault(cat, []).append(total)
+
+            # Keep a stable, meaningful category order.
+            order = ["Move", "Autofocus", "Illumination", "Acquire", "Save",
+                     "Wait", "Other"]
+            labels = [c for c in order if c in buckets]
+            data = [buckets[c] for c in labels]
+            if not data:
+                return
+
+            fig, ax = plt.subplots(figsize=(max(6, 1.4 * len(labels)), 5))
+            positions = list(range(1, len(labels) + 1))
+            # Violins need >1 point; fall back to a scatter for single-sample
+            # categories so they still render.
+            multi_idx = [i for i, d in enumerate(data) if len(d) > 1]
+            if multi_idx:
+                ax.violinplot([data[i] for i in multi_idx],
+                              positions=[positions[i] for i in multi_idx],
+                              showmeans=True, showextrema=True)
+            for i, d in enumerate(data):
+                jitter = np.random.uniform(-0.08, 0.08, size=len(d))
+                ax.scatter(np.full(len(d), positions[i]) + jitter, d,
+                           s=12, alpha=0.5, color="tab:blue")
+
+            ax.set_xticks(positions)
+            ax.set_xticklabels(
+                [f"{c}\n(n={len(buckets[c])})" for c in labels])
+            ax.set_ylabel("Step duration (s)")
+            total_steps = len(timings)
+            total_time = sum(
+                t.get("pre_time", 0.0) + t.get("main_time", 0.0)
+                + t.get("post_time", 0.0) for t in timings)
+            ax.set_title(
+                f"Per-step timing — {total_steps} steps, "
+                f"{total_time:.1f}s total")
+            ax.grid(True, axis="y", alpha=0.3)
+            fig.tight_layout()
+
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, "step_timings_violin.png")
+            fig.savefig(out_path, dpi=150)
+            plt.close(fig)
+            self._logger.info(f"Saved step-timing violin plot → {out_path}")
+        except Exception as e:
+            self._logger.warning(f"Could not export step-timing plot: {e}",
+                                 exc_info=True)
+
     def grabCameraFrame(self, frameSync: int = 2, returnFrameNumber: bool = False):
         """Return a single camera frame guaranteed to be captured after this call.
 
@@ -1357,7 +1474,46 @@ class ExperimentController(ImConWidgetController):
             frameSync: Passed through to grabCameraFrame's fallback path.
         """
         self._logger.debug(f"Acquiring frame on channel {channel}")
+
+        # CAN-bus power darkness: cut bus power (→ complete darkness), let it
+        # settle, expose, then restore power and settle again. Wraps each frame
+        # so long luminescence exposures see zero stray light. Motors keep their
+        # position across the power cycle, so no re-homing is needed.
+        if getattr(self, "_busPowerDarkness", False):
+            settle = getattr(self, "_busPowerSettle", 2.0)
+            self._setBusPower(False)
+            if settle > 0:
+                time.sleep(settle)
+            try:
+                frame = self.grabCameraFrame(frameSync=frameSync)
+            finally:
+                self._setBusPower(True)
+                if settle > 0:
+                    time.sleep(settle)
+            return frame
+
         return self.grabCameraFrame(frameSync=frameSync)
+
+    def _setBusPower(self, enable: bool) -> None:
+        """Enable/disable the high-current CAN-bus power that feeds the slaves.
+
+        Best-effort: routed through the UC2Config controller. Logged and
+        swallowed when UC2Config/ESP32 is unavailable (e.g. simulation) so the
+        acquisition is never aborted by a missing bus."""
+        try:
+            uc2 = self._master.getController('UC2Config')
+        except Exception:
+            uc2 = None
+        if uc2 is None or not hasattr(uc2, "setBusPower"):
+            self._logger.warning(
+                "Bus-power darkness requested but UC2Config.setBusPower is "
+                "unavailable — skipping.")
+            return
+        try:
+            uc2.setBusPower(enable=bool(enable))
+            self._logger.debug(f"CAN-bus power {'ON' if enable else 'OFF'}")
+        except Exception as e:
+            self._logger.warning(f"setBusPower({enable}) failed: {e}")
 
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
         # Set gain and exposure via the shared attribute signal.

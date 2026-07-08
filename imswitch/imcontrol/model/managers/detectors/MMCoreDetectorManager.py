@@ -438,6 +438,121 @@ class MMCoreDetectorManager(DetectorManager):
         except Exception:
             self._logger.debug("Could not clear circular buffer on stop", exc_info=True)
 
+    def flushBuffer(self) -> None:
+        """Alias for :meth:`flushBuffers` — ExperimentController.grabCameraFrame
+        calls the singular name."""
+        self.flushBuffers()
+
+    def getFrameNumber(self) -> int:
+        """Monotonic frame counter, incremented on every snap/buffer read.
+
+        Used by ExperimentController.grabCameraFrame's ``returnFrameNumber``
+        path and the free-run frame-sync fallback."""
+        return int(self._frameNunber)
+
+    # ------------------------------------------------------------------
+    # Software-triggered single-shot acquisition
+    # ------------------------------------------------------------------
+    # These make the detector compatible with ExperimentController's
+    # deterministic-grab machinery (_beginTriggeredAcquisition + snapSync),
+    # which previously never activated for MMCore/Andor. In software-trigger
+    # mode every exposure is an explicit, blocking snap — ideal for very long
+    # exposures (minutes), where the free-run frame-number polling path is
+    # both flaky and effectively blocking anyway.
+    def setTriggerSource(self, source: str) -> bool:
+        """Switch between deterministic single-shot ("software"/"internal") and
+        continuous live ("continuous") acquisition.
+
+        Returns True on success so ExperimentController activates the
+        triggered fast-path.
+        """
+        src = str(source).strip().lower()
+        if src in ("software", "internal", "int", "swtrigger"):
+            # Stop the live sequence so subsequent snaps take fresh, exclusive
+            # exposures with the current parameters (MMCore forbids snap() while
+            # a sequence is running).
+            try:
+                self.stopAcquisition()
+            except Exception:
+                self._logger.debug("stopAcquisition during setTriggerSource failed",
+                                   exc_info=True)
+            # Best-effort: put the camera adapter into an internal/software
+            # trigger mode if it exposes such a property. Harmless no-op when
+            # the property (or an allowed value) is absent.
+            self._try_set_trigger_property(("Internal", "Software"))
+            return True
+        # Any other value -> restore continuous live acquisition.
+        self._try_set_trigger_property(("Internal",))
+        try:
+            self.startAcquisition()
+        except Exception:
+            self._logger.debug("startAcquisition during setTriggerSource failed",
+                               exc_info=True)
+        return True
+
+    def _try_set_trigger_property(self, preferred_values) -> None:
+        """Best-effort set of a trigger-mode property on the camera adapter.
+
+        Different MMCore adapters name this differently ("TriggerMode",
+        "Trigger", "Trigger Source", ...); many Andor configs have no such
+        property at all (internal trigger is the only mode). We try a few
+        common names and silently give up if none apply."""
+        candidate_props = ("TriggerMode", "Trigger", "Trigger Source", "TriggerSource")
+        for prop in candidate_props:
+            try:
+                if not self._core.hasProperty(self._label, prop):
+                    continue
+                allowed = []
+                try:
+                    allowed = [str(a) for a in
+                               self._core.getAllowedPropertyValues(self._label, prop)]
+                except Exception:
+                    allowed = []
+                target = None
+                for want in preferred_values:
+                    if not allowed:
+                        target = want
+                        break
+                    for a in allowed:
+                        if a.strip().lower() == want.strip().lower():
+                            target = a
+                            break
+                    if target is not None:
+                        break
+                if target is not None:
+                    self._core.setProperty(self._label, prop, str(target))
+                return
+            except Exception:
+                self._logger.debug(f"Could not set trigger property {prop}",
+                                   exc_info=True)
+
+    def snapSync(self, timeout: float = None) -> np.ndarray:
+        """Fire one exposure and block until the resulting frame is available.
+
+        Stops any running continuous sequence first (so the returned frame is a
+        fresh, deterministic exposure taken *after* this call, not a stale
+        buffered one), then performs a blocking ``core.snap()``. The snap blocks
+        for the full exposure time, so this works for arbitrarily long
+        exposures. ``timeout`` is accepted for API compatibility; MMCore's snap
+        is synchronous and governs its own timing.
+        """
+        try:
+            if self._core.isSequenceRunning():
+                self.stopAcquisition()
+        except Exception:
+            self._logger.debug("snapSync: failed to stop running sequence",
+                               exc_info=True)
+        try:
+            # CMMCorePlus.snap() does snapImage()+getImage() and returns the
+            # numpy array. It blocks for the whole exposure.
+            image = np.asarray(self._core.snap())
+            self._frameNunber += 1
+            return image
+        except Exception:
+            self._logger.error("snapSync: failed to snap a frame from MMCore",
+                               exc_info=True)
+            return np.zeros(self._shape, dtype=np.uint16)
+
     def crop(self, hpos: int, vpos: int, hsize: int, vsize: int) -> None:
         try:
             self._core.setROI(self._label, int(hpos), int(vpos), int(hsize), int(vsize))
@@ -473,6 +588,39 @@ class MMCoreDetectorManager(DetectorManager):
     # ------------------------------------------------------------------
     # Parameter / binning / lifecycle
     # ------------------------------------------------------------------
+    def _resolve_param_key(self, name):
+        """Map a logical/loosely-cased parameter name onto the actual MMCore
+        property key stored in ``self.parameters``.
+
+        Callers like ``SettingsController.setDetectorGain`` pass lowercase
+        logical names ("gain"), but MMCore adapters use device-specific,
+        case-sensitive property names (Andor: "Gain" / "Pre-Amp-Gain" / ...).
+        Returns the resolved key, or ``None`` if nothing matches.
+        """
+        if not isinstance(name, str):
+            return None
+        if name in self.parameters:
+            return name
+        lname = name.strip().lower()
+        # Case-insensitive exact match (handles "gain" -> "Gain").
+        for key in self.parameters:
+            if key.strip().lower() == lname:
+                return key
+        # Gain family: try the common Andor/EM aliases, then any gain-ish key.
+        if "gain" in lname:
+            candidates = (
+                "gain", "pre-amp-gain", "pre-amp gain", "preampgain",
+                "emgain", "em gain", "gain multiplier", "sensitivity",
+            )
+            for cand in candidates:
+                for key in self.parameters:
+                    if key.strip().lower() == cand:
+                        return key
+            for key in self.parameters:
+                if "gain" in key.strip().lower():
+                    return key
+        return None
+
     def setParameter(self, name, value):
         # Accept any case variant of Exposure/exposure/exposureTime from callers.
         # The base class lowercases names containing "posure" to "exposure",
@@ -494,6 +642,21 @@ class MMCoreDetectorManager(DetectorManager):
             # NB: no need to mirror into self._camera.exposure_time — the proxy
             # reads it live from the core (in microseconds).
             return self.parameters
+
+        # Resolve loosely-cased/logical names (e.g. "gain") to the real MMCore
+        # property key before the exact-match lookup below. Without this, a
+        # SettingsController.setDetectorGain(None, gain) call would fall through
+        # to super() and raise "Non-existent parameter gain" on the Andor.
+        if isinstance(name, str) and name not in self.parameters:
+            resolved = self._resolve_param_key(name)
+            if resolved is not None:
+                name = resolved
+            else:
+                self._logger.warning(
+                    f"MMCore detector has no property matching '{name}'; "
+                    f"ignoring setParameter."
+                )
+                return self.parameters
 
         if name in self.parameters:
             try:
@@ -545,6 +708,11 @@ class MMCoreDetectorManager(DetectorManager):
                 pass
         if name in self.parameters:
             return self.parameters[name].value
+        # Resolve loosely-cased/logical names (e.g. "gain" -> "Gain") so
+        # callers reading gain back don't hit a spurious AttributeError.
+        resolved = self._resolve_param_key(name)
+        if resolved is not None:
+            return self.parameters[resolved].value
         raise AttributeError(f'Non-existent parameter "{name}" specified')
 
     def setBinning(self, binning: int) -> None:

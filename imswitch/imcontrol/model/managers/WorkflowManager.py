@@ -168,8 +168,18 @@ class WorkflowStep:
             total_time = pre_time + post_time + main_time
             self.__logger.info(f"Step {self.name} ({self.step_id}) completed in {total_time:.2f}s (pre: {pre_time:.2f}s, main: {main_time:.2f}s, post: {post_time:.2f}s)")
 
-        # Emit event that step completed
-        context.emit_event("progress", {"status": "completed", "step_id": context.current_step_index, "name": self.name, "total_step_number": context.total_step_number})
+        # Emit event that step completed. Include the per-phase timings so
+        # listeners (e.g. ExperimentController) can build a timing report — the
+        # context data itself is cleared when the workflow finishes.
+        context.emit_event("progress", {
+            "status": "completed",
+            "step_id": context.current_step_index,
+            "name": self.name,
+            "total_step_number": context.total_step_number,
+            "pre_time": metadata.get("pre_time", 0.0),
+            "main_time": metadata.get("main_time", 0.0),
+            "post_time": metadata.get("post_time", 0.0),
+        })
         return  metadata
 
 class Workflow:

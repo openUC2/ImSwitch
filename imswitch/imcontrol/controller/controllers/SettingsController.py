@@ -800,11 +800,16 @@ class SettingsController(ImConWidgetController):
         else:
             def execFunc(f):
                 self._master.detectorsManager.execOn(detectorName, f)
-
-        execFunc(
-            lambda c: (c.setParameter(parameterName, value) and
-                       self.updateParamsFromDetector(detector=c))
-        )
+        try:
+            execFunc(
+                lambda c: (c.setParameter(parameterName, value) and
+                        self.updateParamsFromDetector(detector=c))
+            )
+        except Exception:
+            self._logger.warning(
+                f"Failed to set parameter '{parameterName}' for detector '{detectorName}'",
+                exc_info=True,
+            )
         self.updateSharedAttrs()
 
         self._emit_detector_parameters_if_changed(force=True)

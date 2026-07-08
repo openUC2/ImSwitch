@@ -142,7 +142,7 @@
             "resetOnClose": true,
             "stageOffsets": {
                 "stageOffsetPositionX": -8687.194220430101,
-                "stageOffsetPositionY": -82526.94745463709,
+                "stageOffsetPositionY": 2079.593413978495,
                 "stageOffsetPositionZ": 0.0,
                 "stageOffsetPositionA": 0.0
             }
@@ -158,6 +158,22 @@
                 "baudrate_": 115200,
                 "baudrate": 921600,
                 "debug": true
+            }
+        }
+    },
+    "mmcoreSettings": {
+        "savedProperties": {
+            "Andor": {
+                "Advanced | Snap Image Additional Delay (ms)": 0.0,
+                "CCDTemperatureSetPoint": -70.0,
+                "CountConvertWavelength": 0.0,
+                "Exposure": 10.0,
+                "Gain": 300.0,
+                "ReadoutMode": "1.000 MHz",
+                "Shutter Closing Time": 27.0,
+                "Shutter Opening Time": 27.0,
+                "SpuriousNoiseFilterThreshold": 0.0,
+                "TimeOut": 10000.0
             }
         }
     },

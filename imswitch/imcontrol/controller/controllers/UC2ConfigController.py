@@ -491,8 +491,8 @@ class UC2ConfigController(ImConWidgetController):
         laser/LED example is left with a placeholder device name the user
         edits via setPtzAction (device names are setup-specific)."""
         return {
-            "preset_call:1": {"action": "objective", "params": {"slot": 0}},
-            "preset_call:2": {"action": "objective", "params": {"slot": 1}},
+            "preset_set": {"action": "objective", "params": {"slot": 0}},
+            "preset_call": {"action": "objective", "params": {"slot": 1}},
             "iris_open":     {"action": "snap",      "params": {}},
             # Example LED binding — set the real device name for your setup:
             #   setPtzAction("aux_on:4",  "led", {"name":"LED", "value":512, "active":True})

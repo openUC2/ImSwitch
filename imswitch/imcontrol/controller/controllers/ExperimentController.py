@@ -1343,7 +1343,7 @@ class ExperimentController(ImConWidgetController):
             return mFrame, currentFrameNumber
         return mFrame
 
-    def acquire_frame(self, channel: str, frameSync: int = 2):
+    def acquire_frame(self, channel: str, frameSync: int = 0):
         """Acquire a single frame deterministically.
 
         Delegates entirely to grabCameraFrame().  When software-trigger mode

@@ -191,6 +191,8 @@ class Workflow:
         except Exception as e:
             print("Error in step: "+step.name)
             print(e)
+            # print the full stack trace
+            traceback.print_exc()
             context.emit_event("progress", {"status": "failed", "error": str(e), "traceback": traceback.format_exc()})
             # stop the workflow if an exception occurs
             return context

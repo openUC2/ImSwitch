@@ -375,6 +375,9 @@ class MMCoreDetectorManager(DetectorManager):
         # a one-shot snap.
         try:
             if self._core.getRemainingImageCount() > 0:
+                if returnFrameNumber:
+                    self._frameNunber += 1
+                    return np.asarray(self._core.getLastImage()), self._frameNunber
                 return np.asarray(self._core.getLastImage())
         except Exception:
             pass

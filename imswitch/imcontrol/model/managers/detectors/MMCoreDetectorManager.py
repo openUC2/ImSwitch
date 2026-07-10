@@ -32,6 +32,7 @@ provided.
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -226,6 +227,29 @@ class MMCoreDetectorManager(DetectorManager):
         self._running = False
         self._frameNunber = 0
 
+        # Concurrency + trigger-mode state.
+        #
+        # ``_grabLock`` serializes ALL access to the MMCore core object across
+        # threads (the live-view StreamWorker polling getLatestFrame vs. an
+        # experiment thread firing snapSync). Without it the Andor adapter
+        # raises DRV_ACQUIRING (20072) when two snaps overlap.
+        #
+        # ``_triggerMode`` is the single source of truth for who owns the
+        # camera:
+        #   * "continuous" (default) — live view; getLatestFrame reads the
+        #     circular buffer.
+        #   * "software" — an experiment owns the camera and fires explicit
+        #     snapSync() exposures. getLatestFrame then NEVER touches the
+        #     hardware; it just replays the last cached frame so the live view
+        #     keeps displaying without competing for the sensor.
+        #
+        # ``_latestFrame`` caches the most recent frame (from either the live
+        # buffer or a snapSync) so the live view has something to show even
+        # while the experiment holds the camera.
+        self._grabLock = threading.RLock()
+        self._triggerMode = "continuous"
+        self._latestFrame: Optional[np.ndarray] = None
+
         super().__init__(
             detectorInfo,
             name,
@@ -339,70 +363,82 @@ class MMCoreDetectorManager(DetectorManager):
     # ------------------------------------------------------------------
     # Frame access
     # ------------------------------------------------------------------
-    def getLatestFrame(self, returnFrameNumber=False) -> np.ndarray:
-        # Two cases:
-        #   1) A continuous sequence acquisition is running (live mode). We
-        #      MUST NOT call snap() — MMCore raises "This operation can not
-        #      be executed while sequence acquisition is running". Read from
-        #      the circular buffer instead.
-        #   2) No sequence is running (idle, or just after stopAcquisition).
-        #      Take a one-shot snap.
-        try:
-            sequence_running = bool(self._core.isSequenceRunning()) # True if a continuous sequence is running (e.g. Live Stream), False otherwise
-        except Exception:
-            sequence_running = False
-
-        if sequence_running:
-            try:
-                if self._core.getRemainingImageCount() > 0: # TODO: Should this be a while loop? If there is no frame in the buffer we will return an empty frame
-                    md = pymmcore.Metadata()
-                    # Pop the next image array from the buffer and populate the metadata object
-                    # (popNextImageMD mutates the 'md' object passed to it)
-                    frame = self._core.popNextImageMD(md)
-                    if md.HasTag(pymmcore.g_Keyword_Metadata_ImageNumber):
-                        image_number = md.GetSingleTag(pymmcore.g_Keyword_Metadata_ImageNumber).GetValue()
-                        self._frameNunber = int(image_number)
-                    else:
-                        self._frameNunber += 1
-                    if returnFrameNumber:
-                        return frame, self._frameNunber
-                    return frame
-            except Exception:
-                self._logger.debug(
-                    "Failed to read latest image from sequence buffer",
-                    exc_info=True,
-                )
-            # No frame in the buffer yet — return a placeholder rather than
-            # blocking the live-view loop.
-            if returnFrameNumber:
-                return np.zeros(self._shape, dtype=np.uint16), -1
-            return np.zeros(self._shape, dtype=np.uint16)
-
-        # No sequence: try the most recent buffered frame, then fall back to
-        # a one-shot snap.
-        try:
-            if self._core.getRemainingImageCount() > 0:
-                if returnFrameNumber:
-                    self._frameNunber += 1
-                    return np.asarray(self._core.getLastImage()), self._frameNunber
-                return np.asarray(self._core.getLastImage())
-        except Exception:
-            pass
-        try:
-            # CMMCorePlus.snap() returns the numpy array directly (it does
-            # snapImage() + getImage() under the hood). Calling getImage()
-            # again on top fails on the Andor adapter with
-            # "Camera image buffer read failed".
-            image = np.asarray(self._core.snap())
+    def _store_latest(self, frame: np.ndarray, number: Optional[int] = None) -> None:
+        """Cache the most recent frame + its frame number."""
+        self._latestFrame = frame
+        if number is not None:
+            self._frameNunber = int(number)
+        else:
             self._frameNunber += 1
-            if returnFrameNumber:
-                return image, self._frameNunber
-            return image
-        except Exception:
-            self._logger.error("Failed to snap a frame from MMCore", exc_info=True)
-            if returnFrameNumber:
-                return np.zeros(self._shape, dtype=np.uint16), -1
-            return np.zeros(self._shape, dtype=np.uint16)
+
+    def _return_stored(self, returnFrameNumber: bool):
+        """Return the cached frame (or a black placeholder if none yet)."""
+        frame = self._latestFrame
+        if frame is None:
+            placeholder = np.zeros(self._shape, dtype=np.uint16)
+            return (placeholder, -1) if returnFrameNumber else placeholder
+        return (frame, self._frameNunber) if returnFrameNumber else frame
+
+    def getLatestFrame(self, returnFrameNumber=False) -> np.ndarray:
+        """Return the most recent frame for display / non-deterministic reads.
+
+        This method NEVER fires a new exposure while the camera is owned by an
+        experiment (``_triggerMode == "software"``). In that mode it simply
+        replays the last cached frame (updated by ``snapSync``), so the
+        live-view poll loop can't compete with the experiment for the sensor —
+        that competition was what produced the Andor DRV_ACQUIRING (20072)
+        crashes and the endless ``Frame number: -1`` spam.
+
+        In continuous (live) mode it drains the circular buffer down to the
+        NEWEST frame (discarding stale FIFO frames) so live view never
+        accumulates latency. Only when the camera is genuinely idle (no live
+        sequence, not in software mode) does it fall back to a single snap.
+        """
+        # ── Software-trigger mode: replay cache, touch no hardware ──────────
+        if self._triggerMode == "software":
+            return self._return_stored(returnFrameNumber)
+
+        with self._grabLock:
+            try:
+                sequence_running = bool(self._core.isSequenceRunning())
+            except Exception:
+                sequence_running = False
+
+            if sequence_running:
+                # Drain to the newest frame; keep only the last one.
+                newest = None
+                newest_num = None
+                try:
+                    while self._core.getRemainingImageCount() > 0:
+                        md = pymmcore.Metadata()
+                        # popNextImageMD pops the OLDEST image and fills md.
+                        newest = self._core.popNextImageMD(md)
+                        if md.HasTag(pymmcore.g_Keyword_Metadata_ImageNumber):
+                            newest_num = int(
+                                md.GetSingleTag(
+                                    pymmcore.g_Keyword_Metadata_ImageNumber
+                                ).GetValue()
+                            )
+                        else:
+                            newest_num = self._frameNunber + 1
+                except Exception:
+                    self._logger.debug(
+                        "Failed to drain sequence buffer", exc_info=True)
+                if newest is not None:
+                    self._store_latest(np.asarray(newest), newest_num)
+                # Return the cached latest whether or not a new frame arrived,
+                # so live view shows a stable image instead of black flicker.
+                return self._return_stored(returnFrameNumber)
+
+            # Idle (no live sequence, not software mode): single fresh snap so
+            # occasional on-demand callers still get real data. Lock-guarded.
+            try:
+                image = np.asarray(self._core.snap())
+                self._store_latest(image)
+            except Exception:
+                self._logger.error(
+                    "Failed to snap a frame from MMCore", exc_info=True)
+            return self._return_stored(returnFrameNumber)
 
     def getChunk(self) -> np.ndarray:
         frames = []
@@ -426,24 +462,34 @@ class MMCoreDetectorManager(DetectorManager):
     # Acquisition control
     # ------------------------------------------------------------------
     def startAcquisition(self) -> None:
-        if not self._core.isSequenceRunning():
-            self._core.startContinuousSequenceAcquisition(0)
-            self._running = True
+        # Safety rule: while an experiment owns the camera (software-trigger
+        # mode) we must NOT start a competing continuous sequence — that is the
+        # exact collision that crashed the Andor. Live view still works: it
+        # replays cached frames via getLatestFrame() in software mode.
+        if getattr(self, "_triggerMode", "continuous") == "software":
+            self._logger.debug(
+                "startAcquisition ignored — camera in software-trigger mode")
+            return
+        with self._grabLock:
+            if not self._core.isSequenceRunning():
+                self._core.startContinuousSequenceAcquisition(0)
+                self._running = True
 
     def stopAcquisition(self) -> None:
         # Stop the continuous sequence AND clear the circular buffer, so a
         # subsequent snap() reads a fresh exposure taken with the current
         # parameters rather than a stale frame left over from live view.
-        try:
-            if self._core.isSequenceRunning():
-                self._core.stopSequenceAcquisition()
-            self._running = False
-        except Exception:
-            self._logger.warning("Failed to stop MMCore acquisition", exc_info=True)
-        try:
-            self._core.clearCircularBuffer()
-        except Exception:
-            self._logger.debug("Could not clear circular buffer on stop", exc_info=True)
+        with self._grabLock:
+            try:
+                if self._core.isSequenceRunning():
+                    self._core.stopSequenceAcquisition()
+                self._running = False
+            except Exception:
+                self._logger.warning("Failed to stop MMCore acquisition", exc_info=True)
+            try:
+                self._core.clearCircularBuffer()
+            except Exception:
+                self._logger.debug("Could not clear circular buffer on stop", exc_info=True)
 
     def flushBuffer(self) -> None:
         """Alias for :meth:`flushBuffers` — ExperimentController.grabCameraFrame
@@ -474,28 +520,45 @@ class MMCoreDetectorManager(DetectorManager):
         triggered fast-path.
         """
         src = str(source).strip().lower()
-        if src in ("software", "internal", "int", "swtrigger"):
-            # Stop the live sequence so subsequent snaps take fresh, exclusive
-            # exposures with the current parameters (MMCore forbids snap() while
-            # a sequence is running).
+        with self._grabLock:
+            if src in ("software", "internal", "int", "swtrigger"):
+                # Take ownership: from now on getLatestFrame() replays the cache
+                # and never touches the sensor; only snapSync() exposes.
+                self._triggerMode = "software"
+                # Stop the live sequence so snaps take fresh, exclusive
+                # exposures (MMCore forbids snap() while a sequence runs).
+                try:
+                    if self._core.isSequenceRunning():
+                        self._core.stopSequenceAcquisition()
+                    self._running = False
+                except Exception:
+                    self._logger.debug(
+                        "setTriggerSource: stop sequence failed", exc_info=True)
+                try:
+                    self._core.clearCircularBuffer()
+                except Exception:
+                    pass
+                # Best-effort: put the camera adapter into an internal/software
+                # trigger mode if it exposes such a property. Harmless no-op
+                # when the property (or an allowed value) is absent.
+                self._try_set_trigger_property(("Internal", "Software"))
+                self._logger.info(
+                    "MMCore: software-trigger mode ON "
+                    "(live view now replays cached frames)")
+                return True
+
+            # Any other value -> restore continuous live acquisition.
+            self._triggerMode = "continuous"
+            self._try_set_trigger_property(("Internal",))
             try:
-                self.stopAcquisition()
+                if not self._core.isSequenceRunning():
+                    self._core.startContinuousSequenceAcquisition(0)
+                    self._running = True
             except Exception:
-                self._logger.debug("stopAcquisition during setTriggerSource failed",
-                                   exc_info=True)
-            # Best-effort: put the camera adapter into an internal/software
-            # trigger mode if it exposes such a property. Harmless no-op when
-            # the property (or an allowed value) is absent.
-            self._try_set_trigger_property(("Internal", "Software"))
+                self._logger.debug(
+                    "setTriggerSource: start sequence failed", exc_info=True)
+            self._logger.info("MMCore: continuous live mode restored")
             return True
-        # Any other value -> restore continuous live acquisition.
-        self._try_set_trigger_property(("Internal",))
-        try:
-            self.startAcquisition()
-        except Exception:
-            self._logger.debug("startAcquisition during setTriggerSource failed",
-                               exc_info=True)
-        return True
 
     def _try_set_trigger_property(self, preferred_values) -> None:
         """Best-effort set of a trigger-mode property on the camera adapter.
@@ -536,29 +599,70 @@ class MMCoreDetectorManager(DetectorManager):
     def snapSync(self, timeout: float = None) -> np.ndarray:
         """Fire one exposure and block until the resulting frame is available.
 
-        Stops any running continuous sequence first (so the returned frame is a
-        fresh, deterministic exposure taken *after* this call, not a stale
-        buffered one), then performs a blocking ``core.snap()``. The snap blocks
-        for the full exposure time, so this works for arbitrarily long
-        exposures. ``timeout`` is accepted for API compatibility; MMCore's snap
-        is synchronous and governs its own timing.
+        The single deterministic-grab primitive used by the ExperimentController
+        for every acquisition. It:
+
+        1. Takes ``_grabLock`` so no live-view poll can touch the sensor
+           concurrently (that overlap is what raised Andor DRV_ACQUIRING/20072).
+        2. Makes sure no sequence acquisition is still running and clears any
+           stale buffered frames.
+        3. Runs ``core.snap()`` in a worker thread and waits up to
+           ``timeout`` seconds. The snap blocks for the full exposure, so the
+           timeout is derived from the current exposure (× 4 + 5 s margin) when
+           not given — long (multi-minute) exposures therefore never time out
+           spuriously, while a genuinely stuck camera is not waited on forever.
+        4. Caches the frame as the latest so the live view can display it.
         """
-        try:
-            if self._core.isSequenceRunning():
-                self.stopAcquisition()
-        except Exception:
-            self._logger.debug("snapSync: failed to stop running sequence",
-                               exc_info=True)
-        try:
-            # CMMCorePlus.snap() does snapImage()+getImage() and returns the
-            # numpy array. It blocks for the whole exposure.
-            image = np.asarray(self._core.snap())
-            self._frameNunber += 1
-            return image
-        except Exception:
-            self._logger.error("snapSync: failed to snap a frame from MMCore",
-                               exc_info=True)
-            return np.zeros(self._shape, dtype=np.uint16)
+        with self._grabLock:
+            # (2) Ensure the sensor is free before triggering.
+            try:
+                if self._core.isSequenceRunning():
+                    self._core.stopSequenceAcquisition()
+                    self._running = False
+            except Exception:
+                self._logger.debug("snapSync: failed to stop running sequence",
+                                   exc_info=True)
+            try:
+                self._core.clearCircularBuffer()
+            except Exception:
+                pass
+
+            # (3) Derive a generous, exposure-proportional timeout.
+            if timeout is None or timeout <= 0:
+                try:
+                    exp_s = float(self._core.getExposure()) / 1000.0
+                except Exception:
+                    exp_s = 0.1
+                timeout = max(5.0, exp_s * 4.0 + 5.0)
+
+            result: Dict[str, Any] = {}
+
+            def _worker():
+                try:
+                    # CMMCorePlus.snap() does snapImage()+getImage() and returns
+                    # the numpy array; it blocks for the whole exposure.
+                    result["img"] = np.asarray(self._core.snap())
+                except Exception as e:  # noqa: BLE001 - reported to caller below
+                    result["err"] = e
+
+            th = threading.Thread(target=_worker, name="MMCoreSnapSync",
+                                  daemon=True)
+            th.start()
+            th.join(timeout)
+
+            if th.is_alive():
+                self._logger.error(
+                    f"snapSync: timed out after {timeout:.1f}s waiting for the "
+                    f"camera — returning last cached frame.")
+                return self._return_stored(False)
+
+            if "img" in result:
+                self._store_latest(result["img"])
+                return result["img"]
+
+            self._logger.error(
+                f"snapSync: snap failed ({result.get('err')})")
+            return self._return_stored(False)
 
     def crop(self, hpos: int, vpos: int, hsize: int, vsize: int) -> None:
         try:

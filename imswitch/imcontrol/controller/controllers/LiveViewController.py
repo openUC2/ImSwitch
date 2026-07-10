@@ -267,7 +267,6 @@ class StreamWorker(Worker):
 
                     if isinstance(result, tuple) and len(result) == 2:
                         frame, detector_frame_number = result
-                        print("Frame number:", detector_frame_number, " at time: ", time.time())
                     else:
                         frame = result
                         detector_frame_number = None

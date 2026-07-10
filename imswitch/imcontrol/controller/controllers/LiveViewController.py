@@ -264,8 +264,10 @@ class StreamWorker(Worker):
                 if (time.time() - self._last_frame_time) >= self._updatePeriod:  # TODO: and  imswitch.__is_stream_ready_for_sending__
                     # Get frame with actual detector frame number
                     result = self._detector.getLatestFrame(returnFrameNumber=True)
+
                     if isinstance(result, tuple) and len(result) == 2:
                         frame, detector_frame_number = result
+                        print("Frame number:", detector_frame_number, " at time: ", time.time())
                     else:
                         frame = result
                         detector_frame_number = None

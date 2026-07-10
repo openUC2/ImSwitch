@@ -44,7 +44,7 @@ from .DetectorManager import (
     DetectorNumberParameter,
     DetectorParameter,
 )
-
+import pymmcore 
 
 # Property names we never expose through the parameter UI – internal MMCore
 # bookkeeping or things that would confuse the generic editor.
@@ -348,15 +348,22 @@ class MMCoreDetectorManager(DetectorManager):
         #   2) No sequence is running (idle, or just after stopAcquisition).
         #      Take a one-shot snap.
         try:
-            sequence_running = bool(self._core.isSequenceRunning())
+            sequence_running = bool(self._core.isSequenceRunning()) # True if a continuous sequence is running (e.g. Live Stream), False otherwise
         except Exception:
             sequence_running = False
 
         if sequence_running:
             try:
-                if self._core.getRemainingImageCount() > 0:
-                    frame = np.asarray(self._core.getLastImage())
-                    self._frameNunber += 1
+                if self._core.getRemainingImageCount() > 0: # TODO: Should this be a while loop? If there is no frame in the buffer we will return an empty frame
+                    md = pymmcore.Metadata()
+                    # Pop the next image array from the buffer and populate the metadata object
+                    # (popNextImageMD mutates the 'md' object passed to it)
+                    frame = self._core.popNextImageMD(md)
+                    if md.HasTag(pymmcore.g_Keyword_Metadata_ImageNumber):
+                        image_number = md.GetSingleTag(pymmcore.g_Keyword_Metadata_ImageNumber).GetValue()
+                        self._frameNunber = int(image_number)
+                    else:
+                        self._frameNunber += 1
                     if returnFrameNumber:
                         return frame, self._frameNunber
                     return frame

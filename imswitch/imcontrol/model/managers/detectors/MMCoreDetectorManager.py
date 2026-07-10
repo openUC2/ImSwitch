@@ -33,6 +33,7 @@ provided.
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -250,6 +251,12 @@ class MMCoreDetectorManager(DetectorManager):
         self._triggerMode = "continuous"
         self._latestFrame: Optional[np.ndarray] = None
 
+        # Rolling measurement of how fast the CAMERA actually delivers frames
+        # into MMCore's circular buffer (frames popped / wall-clock). This is
+        # the true camera rate, independent of our poll/encode rate — use it to
+        # tell "the camera is slow" (cameraFps low) from "downstream is slow".
+        self._camStats: Dict[str, Any] = {"fps": 0.0, "delivered": 0, "last_t": None}
+
         super().__init__(
             detectorInfo,
             name,
@@ -371,6 +378,22 @@ class MMCoreDetectorManager(DetectorManager):
         else:
             self._frameNunber += 1
 
+    def _update_camera_fps(self, popped: int) -> None:
+        """Update the rolling estimate of the true camera delivery rate from
+        the number of frames drained in this poll."""
+        if popped <= 0:
+            return
+        now = time.time()
+        st = self._camStats
+        st["delivered"] += popped
+        last_t = st["last_t"]
+        if last_t is not None:
+            dt = now - last_t
+            if dt > 0:
+                inst = popped / dt
+                st["fps"] = inst if st["fps"] == 0.0 else 0.8 * st["fps"] + 0.2 * inst
+        st["last_t"] = now
+
     def _return_stored(self, returnFrameNumber: bool):
         """Return the cached frame (or a black placeholder if none yet)."""
         frame = self._latestFrame
@@ -408,24 +431,34 @@ class MMCoreDetectorManager(DetectorManager):
                 # Drain to the newest frame; keep only the last one.
                 newest = None
                 newest_num = None
+                popped = 0
                 try:
                     while self._core.getRemainingImageCount() > 0:
                         md = pymmcore.Metadata()
                         # popNextImageMD pops the OLDEST image and fills md.
                         newest = self._core.popNextImageMD(md)
+                        popped += 1
                         if md.HasTag(pymmcore.g_Keyword_Metadata_ImageNumber):
-                            newest_num = int(
-                                md.GetSingleTag(
-                                    pymmcore.g_Keyword_Metadata_ImageNumber
-                                ).GetValue()
-                            )
-                        else:
-                            newest_num = self._frameNunber + 1
+                            try:
+                                newest_num = int(
+                                    md.GetSingleTag(
+                                        pymmcore.g_Keyword_Metadata_ImageNumber
+                                    ).GetValue()
+                                )
+                            except Exception:
+                                newest_num = None
                 except Exception:
                     self._logger.debug(
                         "Failed to drain sequence buffer", exc_info=True)
                 if newest is not None:
+                    # Without a camera ImageNumber tag, advance by the number of
+                    # frames actually drained (not just +1) so the counter
+                    # reflects true throughput.
+                    if newest_num is None:
+                        newest_num = self._frameNunber + popped
                     self._store_latest(np.asarray(newest), newest_num)
+                # Measure real camera delivery rate from frames actually drained.
+                self._update_camera_fps(popped)
                 # Return the cached latest whether or not a new frame arrived,
                 # so live view shows a stable image instead of black flicker.
                 return self._return_stored(returnFrameNumber)
@@ -472,8 +505,51 @@ class MMCoreDetectorManager(DetectorManager):
             return
         with self._grabLock:
             if not self._core.isSequenceRunning():
+                # Reset the delivery-rate meter for this live session.
+                self._camStats = {"fps": 0.0, "delivered": 0, "last_t": None}
                 self._core.startContinuousSequenceAcquisition(0)
                 self._running = True
+                self._logAcquisitionTiming()
+
+    def _logAcquisitionTiming(self) -> None:
+        """Log the exposure + the camera properties that actually govern the
+        continuous frame rate. When live FPS is far below ``1000/exposure_ms``,
+        the culprit is almost always one of these (slow readout/pixel-clock, or
+        Overlap/Frame-Transfer disabled) — not ImSwitch. Read-only; best-effort.
+        """
+        try:
+            exp = float(self._core.getExposure())
+        except Exception:
+            exp = None
+        # Substring needles — Andor prefixes property names (e.g.
+        # "Andor sCMOS: ReadoutTime"), so exact matching misses them.
+        needles = (
+            "readout", "framerate", "frame rate", "frames per second",
+            "overlap", "frametransfer", "frame transfer", "pixel clock",
+            "pixelclock", "hsspeed", "vsspeed", "amplifier",
+            "acquisitionmode", "acquisition mode", "sensor readout",
+        )
+        found: Dict[str, Any] = {}
+        try:
+            names = list(self._core.getDevicePropertyNames(self._label))
+        except Exception:
+            names = []
+        for name in names:
+            low = name.lower()
+            if any(n in low for n in needles):
+                try:
+                    found[name] = self._core.getProperty(self._label, name)
+                except Exception:
+                    pass
+        expected = f"{1000.0 / exp:.0f}" if exp else "?"
+        self._logger.info(
+            f"MMCore continuous acquisition started (exposure={exp} ms, "
+            f"theoretical max ≈ {expected} fps). Frame-rate-governing camera "
+            f"properties: {found or '(none exposed by adapter)'}. If the live "
+            f"FPS is far below that, enable Overlap/FrameTransfer and select the "
+            f"fastest readout rate in the camera's Expert settings — the "
+            f"exposure alone does not set the frame rate."
+        )
 
     def stopAcquisition(self) -> None:
         # Stop the continuous sequence AND clear the circular buffer, so a
@@ -551,9 +627,9 @@ class MMCoreDetectorManager(DetectorManager):
             self._triggerMode = "continuous"
             self._try_set_trigger_property(("Internal",))
             try:
-                if not self._core.isSequenceRunning():
-                    self._core.startContinuousSequenceAcquisition(0)
-                    self._running = True
+                # startAcquisition() now that _triggerMode is continuous — it
+                # resets the FPS meter and logs the acquisition timing.
+                self.startAcquisition()
             except Exception:
                 self._logger.debug(
                     "setTriggerSource: start sequence failed", exc_info=True)
@@ -914,6 +990,11 @@ class MMCoreDetectorManager(DetectorManager):
             diag["exposureMs"] = float(self._core.getExposure())
         except Exception:
             diag["exposureMs"] = None
+        # True camera delivery rate (frames the sensor actually pushes into the
+        # circular buffer per second). If this is far below 1000/exposureMs the
+        # bottleneck is the camera/readout config, NOT the ImSwitch pipeline.
+        diag["cameraFps"] = round(float(self._camStats.get("fps", 0.0)), 2)
+        diag["framesDelivered"] = int(self._camStats.get("delivered", 0))
         temp = self.getTemperatureC()
         if temp is not None:
             diag["temperatureC"] = temp

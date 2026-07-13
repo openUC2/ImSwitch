@@ -208,6 +208,12 @@ class GalvoScannerManager(ABC):
         self._is_scanning = False
         self._current_frame = 0
         self._current_line = 0
+
+        # Parking: where to send the beam when a scan stops. Defaults to the
+        # center of the 12-bit DAC range (2048, 2048). Configurable from the UI.
+        self._park_x = int(props.get('park_x', 2048))
+        self._park_y = int(props.get('park_y', 2048))
+        self._park_on_stop = bool(props.get('park_on_stop', True))
         
         # Affine transform for camera-to-galvo mapping
         self._affine_transform = AffineTransform()
@@ -310,13 +316,50 @@ class GalvoScannerManager(ABC):
     def update_config(self, **kwargs) -> None:
         """
         Update the scan configuration.
-        
+
         Args:
             **kwargs: Configuration parameters to update
         """
         for key, value in kwargs.items():
             if hasattr(self._config, key) and value is not None:
                 setattr(self._config, key, value)
+
+    # ========================
+    # Parking
+    # ========================
+
+    def get_park_config(self) -> Dict[str, Any]:
+        """Return the current parking configuration."""
+        return {
+            'park_x': self._park_x,
+            'park_y': self._park_y,
+            'park_on_stop': self._park_on_stop,
+        }
+
+    def set_park_config(self, park_x: int = None, park_y: int = None,
+                        park_on_stop: bool = None) -> Dict[str, Any]:
+        """
+        Update the parking configuration.
+
+        Args:
+            park_x: Park X position in DAC counts (0-4095)
+            park_y: Park Y position in DAC counts (0-4095)
+            park_on_stop: Whether to move to the park position when a scan stops
+        """
+        if park_x is not None:
+            self._park_x = max(0, min(4095, int(park_x)))
+        if park_y is not None:
+            self._park_y = max(0, min(4095, int(park_y)))
+        if park_on_stop is not None:
+            self._park_on_stop = bool(park_on_stop)
+        return self.get_park_config()
+
+    def park(self, timeout: int = 1) -> Dict[str, Any]:
+        """
+        Move the beam to the configured park position. Subclasses that talk to
+        hardware should override this; the base implementation is a no-op.
+        """
+        return {"status": "park_not_supported"}
 
     def get_config_dict(self) -> Dict[str, Any]:
         """

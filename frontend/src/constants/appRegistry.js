@@ -30,6 +30,7 @@ import {
   // Coding-specific icons
   MenuBook as MenuBookIcon,
   Psychology as PsychologyIcon,
+  Map as MapIcon,
 } from "@mui/icons-material";
 
 /**
@@ -207,6 +208,29 @@ export const APP_REGISTRY = {
       "processing",
     ],
     pluginId: "STORMArkitekt",
+  },
+
+  stageMap: {
+    id: "stageMap",
+    name: "Stage Map",
+    description:
+      "Google-Maps-style live sample map (like MicroMagellan): tiles are captured wherever the stage stops and stitched into a growing multi-channel overview. Export as stitched OME-TIFF.",
+    category: APP_CATEGORIES.APPS,
+    icon: MapIcon,
+    enabled: false,
+    essential: false,
+    keywords: [
+      "stage",
+      "map",
+      "stitching",
+      "mosaic",
+      "magellan",
+      "overview",
+      "navigation",
+      "tiles",
+    ],
+    pluginId: "StageMap",
+    requiredControllers: ["StageMapController"],
   },
 
   demoController: {

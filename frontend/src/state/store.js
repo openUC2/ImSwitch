@@ -57,6 +57,7 @@ import storageReducer from "./slices/StorageSlice";
 import goniometerReducer from "./slices/GoniometerSlice";
 import detectorParametersReducer from "./slices/DetectorParametersSlice";
 import backendCapabilitiesReducer from "./slices/BackendCapabilitiesSlice";
+import stageMapReducer from "./slices/StageMapSlice";
 import onboardingReducer from "./slices/OnboardingSlice";
 import homingReducer from "./slices/HomingSlice";
 import i2cReducer from "./slices/I2CSensorSlice";
@@ -177,6 +178,7 @@ const rootReducer = combineReducers({
   goniometerState: goniometerReducer,
   detectorParametersState: detectorParametersReducer,
   backendCapabilities: backendCapabilitiesReducer,
+  stageMapState: stageMapReducer, // runtime-only stage map tiles (not persisted)
   onboardingState: onboardingReducer,
   i2cState: i2cReducer,
 });

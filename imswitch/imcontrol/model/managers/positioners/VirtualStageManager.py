@@ -106,8 +106,19 @@ class VirtualStageManager(PositionerManager):
         # frame as ESP32StageManager.getPosition().
         allPositionsDict = self._positioner.get_position()
         corrected = {}
+        
         for ax in ("A", "X", "Y", "Z"):
             if ax in allPositionsDict:
+                # apply stepsizes 
+                if ax == "X":
+                    corrected[ax] = float(allPositionsDict[ax]) / self.stepsizeX - float(self.stageOffsetPositions.get(ax, 0))
+                elif ax == "Y":
+                    corrected[ax] = float(allPositionsDict[ax]) / self.stepsizeY - float(self.stageOffsetPositions.get(ax, 0))
+                elif ax == "Z":
+                    corrected[ax] = float(allPositionsDict[ax]) / self.stepsizeZ - float(self.stageOffsetPositions.get(ax, 0))
+                elif ax == "A":
+                    corrected[ax] = float(allPositionsDict[ax]) / self.stepsizeA - float(self.stageOffsetPositions.get(ax, 0))
+            else:
                 corrected[ax] = float(allPositionsDict[ax]) - float(self.stageOffsetPositions.get(ax, 0))
         emitDict = {"VirtualStage": corrected}
         try: self._commChannel.sigUpdateMotorPosition.emit(emitDict)

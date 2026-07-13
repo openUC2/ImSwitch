@@ -44,6 +44,7 @@ import VizarrViewer from "./components/VizarrViewer.jsx";
 import { JupyterProvider } from "./context/JupyterContext.js";
 import { PWAProvider } from "./context/PWAContext.js";
 import DemoController from "./components/DemoController.js";
+import StageMapController from "./components/StageMapController.jsx";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
 import GalvoScannerController from "./components/GalvoScannerController.jsx";
 import ShitScopeComponent from "./components/ShitScopeComponent.js";
@@ -795,6 +796,7 @@ function App() {
                   ),
               )}
               {selectedPlugin === "DemoController" && <DemoController />}
+              {selectedPlugin === "StageMap" && <StageMapController />}
               {selectedPlugin === "CompositeAcquisition" && (
                 <CompositeAcquisitionComponent />
               )}

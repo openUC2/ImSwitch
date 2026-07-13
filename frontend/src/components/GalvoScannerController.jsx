@@ -27,6 +27,8 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import SendIcon from '@mui/icons-material/Send';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import ScatterPlotIcon from '@mui/icons-material/ScatterPlot';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import { useSelector, useDispatch } from 'react-redux';
 import { getConnectionSettingsState } from '../state/slices/ConnectionSettingsSlice';
 import {
@@ -58,8 +60,56 @@ import {
   apiGetGalvoScannerStatus,
   apiStartGalvoScan,
   apiStopGalvoScan,
+  apiGetGalvoParkConfig,
+  apiSetGalvoParkConfig,
+  apiParkGalvo,
 } from '../backendapi/apiGalvoScannerController';
 import GalvoArbitraryPointsTab from './GalvoArbitraryPointsTab';
+
+/**
+ * Rich, human-readable explanations for each scan parameter, shown as hover
+ * tooltips next to the corresponding field.
+ */
+const PARAM_TOOLTIPS = {
+  nx: 'Number of samples (pixels) acquired per horizontal line. Higher = more X resolution but slower lines.',
+  ny: 'Number of lines per frame (Y resolution). Higher = more Y resolution but slower frames.',
+  x_min: 'Left edge of the scan in DAC counts (0–4095). Maps to the galvo X mirror voltage.',
+  x_max: 'Right edge of the scan in DAC counts (0–4095).',
+  y_min: 'Top edge of the scan in DAC counts (0–4095).',
+  y_max: 'Bottom edge of the scan in DAC counts (0–4095).',
+  sample_period_us:
+    'Dwell time per sample in microseconds. 0 = go as fast as the DAC/loop allows. Larger = slower scan, brighter/less noisy pixels.',
+  frame_count: 'Number of frames to acquire, then stop. 0 = scan continuously until you press Stop.',
+  bidirectional:
+    'Scan both sweep directions: even lines left→right, odd lines right→left. Roughly doubles frame rate but needs correct phase/settle to avoid a zig-zag offset.',
+  pre_samples:
+    'Blanking samples emitted at the start of each line before imaging begins — lets the mirror reach constant velocity. Increase if the left edge is smeared.',
+  fly_samples:
+    'Fly-back samples between lines (cosine-eased) while the mirror returns for the next line. Increase if lines tear or overshoot.',
+  line_settle_samples:
+    'Extra settle samples held after the fly-back before the next line starts. Increase if the start of each line is distorted.',
+  trig_delay_us:
+    'Delay between updating the galvo position and emitting the pixel trigger. NOTE: not yet consumed by the current scanner core.',
+  trig_width_us:
+    'Width of the camera/pixel trigger pulse. NOTE: not yet consumed by the current scanner core.',
+  enable_trigger: 'Emit the pixel/line trigger output during the scan. 0 = off, 1 = on.',
+  apply_x_lut:
+    'Apply a per-column X lookup table to linearize the mirror. 0 = off, 1 = on (requires an uploaded LUT).',
+  park_x: 'X position (DAC counts, 0–4095) the beam moves to when a scan stops.',
+  park_y: 'Y position (DAC counts, 0–4095) the beam moves to when a scan stops.',
+};
+
+/**
+ * An info icon with a hover tooltip, intended as a TextField endAdornment.
+ */
+const InfoTip = ({ text }) => (
+  <Tooltip title={text} placement="top" arrow enterTouchDelay={0}>
+    <InfoOutlinedIcon
+      fontSize="small"
+      sx={{ color: 'text.disabled', cursor: 'help', ml: 0.5 }}
+    />
+  </Tooltip>
+);
 
 /**
  * GalvoScannerController - Control panel for galvo mirror scanners
@@ -92,6 +142,13 @@ const GalvoScannerController = () => {
   const statusMessage = galvoState?.statusMessage || '';
   const autoRefresh = galvoState?.autoRefresh || false;
 
+  // Parking config (local component state; persisted server-side via the manager)
+  const [parkConfig, setParkConfigState] = useState({
+    park_x: 2048,
+    park_y: 2048,
+    park_on_stop: true,
+  });
+
   // ========================
   // API Functions
   // ========================
@@ -116,6 +173,44 @@ const GalvoScannerController = () => {
       }
     } catch (err) {
       console.error('Failed to fetch config:', err);
+    }
+  }, [hostIP, hostPort, selectedScanner, dispatch]);
+
+  const fetchParkConfig = useCallback(async () => {
+    if (!selectedScanner) return;
+    try {
+      const data = await apiGetGalvoParkConfig(hostIP, hostPort, selectedScanner);
+      if (!data.error) {
+        setParkConfigState({
+          park_x: data.park_x ?? 2048,
+          park_y: data.park_y ?? 2048,
+          park_on_stop: data.park_on_stop ?? true,
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch park config:', err);
+    }
+  }, [hostIP, hostPort, selectedScanner]);
+
+  const saveParkConfig = useCallback(async (partial) => {
+    const next = { ...parkConfig, ...partial };
+    setParkConfigState(next);
+    if (!selectedScanner) return;
+    try {
+      await apiSetGalvoParkConfig(hostIP, hostPort, selectedScanner, partial);
+    } catch (err) {
+      console.error('Failed to save park config:', err);
+    }
+  }, [hostIP, hostPort, selectedScanner, parkConfig]);
+
+  const parkNow = useCallback(async () => {
+    if (!selectedScanner) return;
+    try {
+      await apiParkGalvo(hostIP, hostPort, selectedScanner);
+      dispatch(setStatusMessage('Beam parked'));
+      setTimeout(() => dispatch(clearStatusMessage()), 2000);
+    } catch (err) {
+      dispatch(setError(`Failed to park: ${err.message}`));
     }
   }, [hostIP, hostPort, selectedScanner, dispatch]);
 
@@ -206,8 +301,9 @@ const GalvoScannerController = () => {
     if (selectedScanner) {
       fetchConfig();
       fetchStatus();
+      fetchParkConfig();
     }
-  }, [selectedScanner, fetchConfig, fetchStatus]);
+  }, [selectedScanner, fetchConfig, fetchStatus, fetchParkConfig]);
 
   useEffect(() => {
     if (autoRefresh) {
@@ -522,6 +618,7 @@ const GalvoScannerController = () => {
                   value={config.nx}
                   onChange={handleConfigChange('nx')}
                   inputProps={{ min: 1, max: 4096 }}
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.nx} /> }}
                 />
               </Grid>
               <Grid item xs={6}>
@@ -533,6 +630,7 @@ const GalvoScannerController = () => {
                   value={config.ny}
                   onChange={handleConfigChange('ny')}
                   inputProps={{ min: 1, max: 4096 }}
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.ny} /> }}
                 />
               </Grid>
             </Grid>
@@ -635,6 +733,7 @@ const GalvoScannerController = () => {
                   value={config.sample_period_us}
                   onChange={handleConfigChange('sample_period_us')}
                   inputProps={{ min: 0 }}
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.sample_period_us} /> }}
                   helperText="0 = max speed"
                 />
               </Grid>
@@ -647,7 +746,8 @@ const GalvoScannerController = () => {
                   value={config.frame_count}
                   onChange={handleConfigChange('frame_count')}
                   inputProps={{ min: 0 }}
-                  helperText="0 = infinite"
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.frame_count} /> }}
+                  helperText="0 = infinite (raster over CAN is always continuous)"
                 />
               </Grid>
             </Grid>
@@ -659,7 +759,12 @@ const GalvoScannerController = () => {
                   onChange={() => dispatch(toggleBidirectional())}
                 />
               }
-              label="Bidirectional Scanning"
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  Bidirectional Scanning
+                  <InfoTip text={PARAM_TOOLTIPS.bidirectional} />
+                </Box>
+              }
               sx={{ mt: 1 }}
             />
 
@@ -687,7 +792,8 @@ const GalvoScannerController = () => {
                   value={config.pre_samples}
                   onChange={handleConfigChange('pre_samples')}
                   inputProps={{ min: 0 }}
-                  helperText="Pre-scan samples"
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.pre_samples} /> }}
+                  helperText="Pre-scan blanking samples"
                 />
               </Grid>
               <Grid item xs={6}>
@@ -699,6 +805,7 @@ const GalvoScannerController = () => {
                   value={config.fly_samples}
                   onChange={handleConfigChange('fly_samples')}
                   inputProps={{ min: 0 }}
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.fly_samples} /> }}
                   helperText="Fly-back samples"
                 />
               </Grid>
@@ -711,7 +818,8 @@ const GalvoScannerController = () => {
                   value={config.trig_delay_us}
                   onChange={handleConfigChange('trig_delay_us')}
                   inputProps={{ min: 0 }}
-                  helperText="Trigger delay"
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.trig_delay_us} /> }}
+                  helperText="Trigger delay (core: TODO)"
                 />
               </Grid>
               <Grid item xs={6}>
@@ -723,7 +831,8 @@ const GalvoScannerController = () => {
                   value={config.trig_width_us}
                   onChange={handleConfigChange('trig_width_us')}
                   inputProps={{ min: 0 }}
-                  helperText="Trigger width"
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.trig_width_us} /> }}
+                  helperText="Trigger width (core: TODO)"
                 />
               </Grid>
               <Grid item xs={6}>
@@ -735,7 +844,8 @@ const GalvoScannerController = () => {
                   value={config.line_settle_samples}
                   onChange={handleConfigChange('line_settle_samples')}
                   inputProps={{ min: 0 }}
-                  helperText="Line settling"
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.line_settle_samples} /> }}
+                  helperText="Line settling samples"
                 />
               </Grid>
               <Grid item xs={6}>
@@ -747,6 +857,7 @@ const GalvoScannerController = () => {
                   value={config.enable_trigger}
                   onChange={handleConfigChange('enable_trigger')}
                   inputProps={{ min: 0, max: 1 }}
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.enable_trigger} /> }}
                   helperText="0=off, 1=on"
                 />
               </Grid>
@@ -759,10 +870,67 @@ const GalvoScannerController = () => {
                   value={config.apply_x_lut}
                   onChange={handleConfigChange('apply_x_lut')}
                   inputProps={{ min: 0, max: 1 }}
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.apply_x_lut} /> }}
                   helperText="0=off, 1=on"
                 />
               </Grid>
             </Grid>
+          </Paper>
+
+          {/* Parking Position */}
+          <Paper sx={{ p: 2, mb: 2 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              <CenterFocusStrongIcon sx={{ mr: 1, verticalAlign: 'middle', fontSize: 20 }} />
+              Parking Position
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+              Where the beam is sent when a scan stops. Default is the center (2048, 2048).
+            </Typography>
+            <Grid container spacing={2}>
+              <Grid item xs={6}>
+                <TextField
+                  label="Park X"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={parkConfig.park_x}
+                  onChange={(e) => saveParkConfig({ park_x: Number(e.target.value) })}
+                  inputProps={{ min: 0, max: 4095 }}
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.park_x} /> }}
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="Park Y"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={parkConfig.park_y}
+                  onChange={(e) => saveParkConfig({ park_y: Number(e.target.value) })}
+                  inputProps={{ min: 0, max: 4095 }}
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.park_y} /> }}
+                />
+              </Grid>
+            </Grid>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 1 }}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={parkConfig.park_on_stop}
+                    onChange={(e) => saveParkConfig({ park_on_stop: e.target.checked })}
+                  />
+                }
+                label="Park on stop"
+              />
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<CenterFocusStrongIcon />}
+                onClick={parkNow}
+              >
+                Park now
+              </Button>
+            </Box>
           </Paper>
 
           {/* Apply & Start Button */}

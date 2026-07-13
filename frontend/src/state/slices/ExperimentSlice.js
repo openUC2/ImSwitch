@@ -93,6 +93,9 @@ const initialExperimentState = {
     is_snakescan: false, // Enable snakescan pattern (alternating row directions)
     // Illumination mode
     keepIlluminationOn: "auto", // "auto" = on for single channel, off for multi | "on" = always keep on | "off" = per-frame toggle
+    // Cut CAN-bus power (complete darkness) around every exposure. For
+    // low-light / luminescence imaging where indicator LEDs must be off.
+    busPowerDarkness: false,
     // Per-channel kind-specific params (radius/RGB) keyed by channel name.
     // Drives LED-matrix synthetic channels ("ring" / "dpc"); ignored for
     // "default" channels.  Example shape:
@@ -346,6 +349,9 @@ const experimentSlice = createSlice({
       console.log("setKeepIlluminationOn", action.payload);
       state.parameterValue.keepIlluminationOn = action.payload;
     },
+    setBusPowerDarkness: (state, action) => {
+      state.parameterValue.busPowerDarkness = action.payload;
+    },
     // Wholesale replace the per-channel kind-specific params dict.  Used
     // when hydrating from a preset or resetting the whole channel config.
     setIlluminationParams: (state, action) => {
@@ -586,6 +592,7 @@ export const {
   setReturnToOrigin,
   setOverrideZWithCurrentZ,
   setKeepIlluminationOn,
+  setBusPowerDarkness,
   setIlluminationParams,
   setIlluminationParamsForChannel,
   createPoint,

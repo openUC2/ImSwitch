@@ -25,6 +25,7 @@ import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 import * as storageSlice from "../state/slices/StorageSlice.js";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
+import * as stageMapSlice from "../state/slices/StageMapSlice.js";
 import { fetchAvailableControllers } from "../state/slices/BackendCapabilitiesSlice";
 
 import { io } from "socket.io-client";
@@ -1155,6 +1156,29 @@ const WebSocketHandler = () => {
             "Error in sigDetectorParametersUpdated handler:",
             error,
           );
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigStageMapTileAdded") {
+        // New stitched-map tile from StageMapController: {id, x, y, widthUm,
+        // heightUm, channel, image (base64 jpeg preview)}
+        try {
+          const tile = dataJson.args?.p0;
+          if (tile && tile.image) {
+            dispatch(stageMapSlice.addTile(tile));
+          }
+        } catch (error) {
+          console.error("Error in sigStageMapTileAdded handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigStageMapStatus") {
+        // Stage map runtime status (isRunning, tileCount, channels, FOV, ...)
+        try {
+          const mapStatus = dataJson.args?.p0;
+          if (mapStatus) {
+            dispatch(stageMapSlice.setStatus(mapStatus));
+          }
+        } catch (error) {
+          console.error("Error in sigStageMapStatus handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateOMEZarrStore") {

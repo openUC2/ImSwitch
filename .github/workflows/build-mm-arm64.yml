@@ -1,0 +1,140 @@
+name: Build Micro-Manager adapters (arm64) & test pymmcore-plus integration
+
+on:
+  push:
+    branches: [feat/pymmcore-integration]
+    tags: ["mm-v*"]
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Run the Python integration tests on x86_64 with the DemoCamera adapter
+  # downloaded by `mmcore install`.
+  # ---------------------------------------------------------------------
+  test-x86:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system libs needed by ImSwitch runtime deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0
+
+      - name: Install ImSwitch + pymmcore-plus
+        # The test path goes through imswitch/imcontrol/_test/__init__.py which
+        # eagerly imports Options/ViewSetupInfo, dragging in dataclasses-json,
+        # psygnal, h5py, etc. Mirroring test.yml: install with full deps.
+        run: |
+          python -m pip install --upgrade pip
+          # The arkitekt-next[all] extra in dependencies pulls a pytest plugin
+          # that needs a running arkitekt server; disable it with -p no:arkitekt_next at runtime.
+          pip install .
+          # Force pure-Python psygnal (compiled flavour forbids subclassing —
+          # see comment in test.yml).
+          pip uninstall -y psygnal || true
+          pip install "psygnal==0.11.1"
+          python -c "import psygnal.utils; psygnal.utils.decompile()"
+          pip install pytest "pymmcore-plus[cli]>=0.10"
+
+      - name: Download Micro-Manager DemoCamera adapter
+        run: |
+          mmcore install
+          mmcore list
+
+      - name: Run MMCore manager tests
+        run: |
+          pytest imswitch/imcontrol/_test/unit/test_mmcore_managers.py \
+            -p no:arkitekt_next -v --tb=short
+
+  # ---------------------------------------------------------------------
+  # Build mmCoreAndDevices for arm64 in an emulated container, then
+  # publish the resulting .so files as a workflow artifact / GH release.
+  # ---------------------------------------------------------------------
+  build-arm64:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU for arm64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Determine Micro-Manager source ref
+        id: mm
+        run: |
+          # Pin to a known-good tag so device interface version stays stable.
+          echo "ref=main" >> "$GITHUB_OUTPUT"
+
+      - name: Build inside arm64 container
+        uses: uraimo/run-on-arch-action@v3
+        with:
+          arch: aarch64
+          distro: ubuntu22.04
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          dockerRunArgs: |
+            --volume "${{ github.workspace }}:/work"
+          install: |
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -qq -y \
+              git build-essential autoconf automake libtool autoconf-archive \
+              pkg-config swig python3-dev libboost-all-dev \
+              libusb-1.0-0-dev libudev-dev curl ca-certificates
+          run: |
+            set -euxo pipefail
+            cd /work
+            # mmCoreAndDevices itself is a CMake-only submodule with no
+            # autotools entry point. The classic ./autogen.sh + ./configure
+            # build path lives in the *parent* micro-manager repo, which
+            # references mmCoreAndDevices as a submodule.
+            git clone --depth 1 --branch ${{ steps.mm.outputs.ref }} \
+              https://github.com/micro-manager/micro-manager.git mm-src
+            cd mm-src
+            git submodule update --init --recursive --depth 1
+            ./autogen.sh
+            # --without-java skips the Java SWIG bindings; --disable-java-app
+            # skips the Java AcqEngine/MMStudio build. Headless ImSwitch only
+            # needs the C++ MMCore + device adapters.
+            ./configure --prefix=/work/mm-out --without-java --disable-java-app
+            make -j"$(nproc)"
+            make install
+            cd /work
+            # Record the device interface version so consumers can pin pymmcore-plus
+            # to a compatible release.
+            grep "MODULE_INTERFACE_VERSION" \
+              mm-src/mmCoreAndDevices/MMDevice/MMDeviceConstants.h \
+              > /work/DEVICE_INTERFACE_VERSION.txt || true
+            mkdir -p artifact/micro-manager/lib/micro-manager
+            cp -a /work/mm-out/lib/micro-manager/. artifact/micro-manager/lib/micro-manager/
+            cp -f /work/DEVICE_INTERFACE_VERSION.txt artifact/ 2>/dev/null || true
+            # List the adapters we managed to build (vendor-locked ones
+            # without arm64 SDKs are silently skipped by the build).
+            find artifact/micro-manager/lib/micro-manager -name "*.so" \
+              | sed 's|.*/libmmgr_dal_||; s|\.so.*||' | sort \
+              > artifact/ADAPTERS_BUILT.txt || true
+            cat artifact/ADAPTERS_BUILT.txt || true
+            tar -C artifact -czf micro-manager-arm64.tar.gz .
+            ls -lh micro-manager-arm64.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: micro-manager-arm64
+          path: micro-manager-arm64.tar.gz
+          if-no-files-found: error
+
+      - name: Publish as GitHub Release
+        if: startsWith(github.ref, 'refs/tags/mm-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: micro-manager-arm64.tar.gz
+          fail_on_unmatched_files: true

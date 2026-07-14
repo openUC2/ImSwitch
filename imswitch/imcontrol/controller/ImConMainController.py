@@ -88,7 +88,7 @@ class ImConMainController(MainController):
                 self.__masterController, "sila2Manager"
             ):
                 self.__logger.warning(
-                    "SiLA2Manager unavailable; skipping SiLA2Controller."
+                    "SiLa2Manager unavailable; skipping SiLA2Controller."
                 )
                 continue
 

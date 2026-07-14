@@ -27,6 +27,30 @@ except ImportError:
 # Feature classes
 # ---------------------------------------------------------------------------
 
+import dataclasses
+import typing
+
+# Define the MICROMETER unit constraint in the style of units.py
+MICROMETER = sila.constraints.Unit(
+    label="µm",
+    components=[sila.constraints.UnitComponent(unit=sila.constraints.SIUnit.METER, exponent=1)],
+    factor=1e-6,
+)
+
+@dataclasses.dataclass
+class StagePosition(sila.CustomDataType):
+    """
+    XYZ coordinates of the microscope stage.
+
+    Attributes:
+      X: Position along X in micrometers.
+      Y: Position along Y in micrometers.
+      Z: Position along Z in micrometers.
+    """
+    X: typing.Annotated[float, MICROMETER]
+    Y: typing.Annotated[float, MICROMETER]
+    Z: typing.Annotated[float, MICROMETER]
+    
 if HAS_CDK:
 
     class StageControlFeature(sila.Feature):
@@ -58,24 +82,45 @@ if HAS_CDK:
             if p is None:
                 return "0,0,0"
             pos = p.getPosition()
-            return f"{pos.get('X', 0)},{pos.get('Y', 0)},{pos.get('Z', 0)}"
+            return f"{pos.get('X', 0)},{pos.get('Y', 0)},{pos.get('Z', 0)}" #TODO
 
+        @sila.UnobservableProperty()
+        async def get_stage_position_ul(self) -> StagePosition:
+            """Retrieve the current XYZ position of the stage.
+
+            Returns:
+              StagePosition: Current stage coordinates in micrometers.
+            """
+            p = self._get_positioner()
+            if p is None:
+                return StagePosition(X=0.0, Y=0.0, Z=0.0)
+            pos = p.getPosition()
+            return StagePosition(
+                X=float(pos.get("X", 0.0)),
+                Y=float(pos.get("Y", 0.0)),
+                Z=float(pos.get("Z", 0.0)),
+            )
+            
         @sila.ObservableProperty()
-        async def subscribe_stage_position(self) -> sila.Stream[str]:
+        async def subscribe_stage_position(self) -> sila.Stream[StagePosition]:
             """Stream the current XYZ position of the stage at 2 Hz.
 
             Returns:
-              StagePosition: Comma-separated X,Y,Z coordinates in micrometers.
+              StagePosition: Streamed stage coordinates in micrometers.
             """
             while True:
                 p = self._get_positioner()
                 if p is not None:
                     pos = p.getPosition()
-                    yield f"{pos.get('X', 0)},{pos.get('Y', 0)},{pos.get('Z', 0)}"
+                    yield StagePosition(
+                        X=float(pos.get("X", 0.0)),
+                        Y=float(pos.get("Y", 0.0)),
+                        Z=float(pos.get("Z", 0.0)),
+                    )
                 else:
-                    yield "0,0,0"
+                    yield StagePosition(X=0.0, Y=0.0, Z=0.0)
                 await asyncio.sleep(0.5)
-
+                
         @sila.UnobservableCommand()
         async def move_stage_to(
             self,
@@ -113,11 +158,47 @@ if HAS_CDK:
                 return False
 
         @sila.UnobservableCommand()
+        async def move_stage_to_ul(
+            self,
+            x_um: typing.Annotated[float, MICROMETER],
+            y_um: typing.Annotated[float, MICROMETER],
+            z_um: typing.Annotated[float, MICROMETER] = 0.0,
+            speed: float = 10000.0,
+            is_blocking: bool = True,
+        ) -> bool:
+            """Move the stage to an absolute XYZ position.
+
+            Args:
+              x_um: Target X in micrometers.
+              y_um: Target Y in micrometers.
+              z_um: Target Z in micrometers.
+              speed: Movement speed in units per second.
+              is_blocking: Wait for movement to complete.
+
+            Returns:
+              Result: True if successful.
+            """
+            p = self._get_positioner()
+            if p is None:
+                self._logger.error("SiLA2 move_stage_to: no positioner available")
+                return False
+            try:
+                p.move(value=(x_um, y_um), axis="XY", is_absolute=True,
+                       is_blocking=is_blocking, speed=(speed, speed))
+                if z_um != 0.0:
+                    p.move(value=z_um, axis="Z", is_absolute=True,
+                           is_blocking=is_blocking, speed=speed)
+                return True
+            except Exception as e:
+                self._logger.error(f"SiLA2 move_stage_to failed: {e}")
+                return False
+
+        @sila.UnobservableCommand()
         async def move_stage_relative(
             self,
-            dx_um: float = 0.0,
-            dy_um: float = 0.0,
-            dz_um: float = 0.0,
+            dx_um: typing.Annotated[float, MICROMETER] = 0.0,
+            dy_um: typing.Annotated[float, MICROMETER] = 0.0,
+            dz_um: typing.Annotated[float, MICROMETER] = 0.0,
             speed: float = 10000.0,
             is_blocking: bool = True,
         ) -> bool:
@@ -148,7 +229,7 @@ if HAS_CDK:
             except Exception as e:
                 self._logger.error(f"SiLA2 move_stage_relative failed: {e}")
                 return False
-
+            
         @sila.UnobservableCommand()
         async def home_stage(self, is_blocking: bool = True) -> bool:
             """Home the stage to the loading position.
@@ -216,16 +297,17 @@ if HAS_CDK:
         @sila.UnobservableCommand()
         async def snap_image(
             self,
-            detector_name: str=  None, # str = "",
+            detector_name: str="", # str = "",
             exposure_time_ms: float = -1.0,
             gain: float = -1.0,
-        ) -> str: # -> np.ndarray:
+            subsampling: int = 4,
+        ) -> str:
             """Capture a single frame as a base64-encoded PNG.
 
             Args:
               detector_name: Name of detector (empty = first available).
-              exposure_time_ms: Exposure time in ms (-1 = use current).
-              gain: Camera gain (-1 = use current).
+              exposure_time_ms: Exposure time in ms (-1.0 = use current).
+              gain: Camera gain (-1.0 = use current).
 
             Returns:
               FrameBase64: Base64-encoded PNG image data.
@@ -240,6 +322,8 @@ if HAS_CDK:
                 if gain >= 0:
                     detector.setParameter("gain", gain)
                 frame = detector.getLatestFrame()
+                if subsampling==0: subsampling=4
+                frame = frame[::subsampling, ::subsampling]  # Subsample for faster transfer
                 if frame is None:
                     return ""
                 from PIL import Image as PILImage
@@ -258,6 +342,96 @@ if HAS_CDK:
                 self._logger.error(f"SiLA2 snap_image failed: {e}")
                 return ""
 
+        @sila.UnobservableCommand()
+        async def snap_image_ul(
+            self,
+            detector_name: str = "",
+            exposure_time_ms: float = -1.0,
+            gain: float = -1.0,
+            width: int = 0,
+            height: int = 0,
+            save: bool = False,
+        ) -> tuple[
+            typing.Annotated[int, sila.constraints.MinimalInclusive(value=1)],
+            typing.Annotated[int, sila.constraints.MinimalInclusive(value=1)],
+            str,
+            typing.Annotated[bytes, sila.constraints.ContentType("image", "jpeg")],
+        ]:
+            """Capture a single frame, optionally scale/save it, and return its metadata and bytes.
+
+            Args:
+              detector_name: Name of detector (empty = first available).
+              exposure_time_ms: Exposure time in ms (-1 = use current).
+              gain: Camera gain (-1 = use current).
+              width: Maximum width bound in pixels (0 to disable).
+              height: Maximum height bound in pixels (0 to disable).
+              save: Whether to save the snapshot to disk.
+
+            Returns:
+              Width: Snapshot width in pixels (after any downscaling).
+              Height: Snapshot height in pixels (after any downscaling).
+              FilePath: File path where the snapshot was saved (or empty string if not saved).
+              ImageBytes: Raw JPEG bytes of the snapshot.
+            """
+            detector = self._get_detector(detector_name)
+            if detector is None:
+                self._logger.error("SiLA2 snap_image: no detector available")
+                raise ValueError("No detector available.")
+
+            try:
+                # Apply exposure and gain if requested
+                if exposure_time_ms > 0:
+                    detector.setParameter("exposure", exposure_time_ms)
+                if gain >= 0:
+                    detector.setParameter("gain", gain)
+
+                # Capture raw frame
+                frame = detector.getLatestFrame()
+                if frame is None:
+                    raise ValueError("Failed to capture frame from detector.")
+
+                # Process the frame into a PIL Image
+                from PIL import Image as PILImage
+                img = PILImage.fromarray(np.array(frame))
+
+                # Handle aspect-ratio preserving downscaling bounds if requested
+                orig_width, orig_height = img.size
+                if (width > 0 and orig_width > width) or (height > 0 and orig_height > height):
+                    max_w = width if width > 0 else orig_width
+                    max_h = height if height > 0 else orig_height
+                    img.thumbnail((max_w, max_h), PILImage.Resampling.LANCZOS)
+
+                out_width, out_height = img.size
+
+                # Convert to JPEG bytes
+                buf = io.BytesIO()
+                # If image is in indexed/grayscale or other modes, ensure compatibility
+                if img.mode not in ("L", "RGB"):
+                    img = img.convert("RGB")
+                img.save(buf, format="JPEG", quality=95)
+                jpg_bytes = buf.getvalue()
+
+                # Save to disk if requested
+                file_path_str = ""
+                if save:
+                    import tempfile
+                    from pathlib import Path
+                    
+                    # Store snapshots in a subfolder inside the temporary directory
+                    out_dir = Path(tempfile.gettempdir()) / "imswitch_snapshots"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    file_path = out_dir / f"snap_{int(asyncio.get_event_loop().time())}.jpg"
+                    img.save(file_path, format="JPEG", quality=95)
+                    file_path_str = str(file_path)
+                    self._logger.info(f"Snapshot saved to {file_path_str}")
+
+                return out_width, out_height, file_path_str, jpg_bytes
+
+            except Exception as e:
+                self._logger.error(f"SiLA2 snap_image failed: {e}")
+                raise
+            
         @sila.UnobservableCommand()
         async def set_illumination(
             self,
@@ -439,13 +613,13 @@ if HAS_CDK:
 # ---------------------------------------------------------------------------
 
 
-class SiLA2Controller(ImConWidgetController):
+class SiLa2Controller(ImConWidgetController):
     """Controller for the SiLA2 integration in ImSwitch."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
-        self._logger.debug("Initializing SiLA2Controller")
+        self._logger.debug("Initializing SiLa2Controller")
 
         if not HAS_CDK:
             self._logger.warning("unitelabs-cdk not installed; SiLA2 disabled.")
@@ -461,8 +635,11 @@ class SiLA2Controller(ImConWidgetController):
         manager.register_feature(StageControlFeature(self._master, self._logger))
         manager.register_feature(ImagingControlFeature(self._master, self._logger))
         manager.register_feature(ExperimentControlFeature(self._master, self._logger))
+        # TODO: 
+        # Go to Loading position 
+        
         manager.start_server()
-        self._logger.info("SiLA2Controller initialized – server starting")
+        self._logger.info("SiLa2Controller initialized – server starting")
 
     # ------------------------------------------------------------------
     # API-exported helpers (accessible via ImSwitch REST API as well)

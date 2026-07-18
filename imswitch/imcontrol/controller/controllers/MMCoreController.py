@@ -58,6 +58,10 @@ class SnapRequest(BaseModel):
     saveFormat: str = "tiff"
 
 
+class CancelSnapRequest(BaseModel):
+    jobId: str
+
+
 def _is_mmcore_detector(detector) -> bool:
     return type(detector).__name__ == _MMCORE_MANAGER_NAME
 
@@ -78,6 +82,8 @@ class MMCoreController(ImConWidgetController):
         self._snapImages: Dict[str, np.ndarray] = {}
         self._snapImageOrder: List[str] = []
         self._maxCachedSnaps = 4
+        # Per-job cancel events so the frontend can abort in-flight snaps.
+        self._cancelEvents: Dict[str, threading.Event] = {}
 
         # Re-apply any camera settings persisted from a previous session.
         try:
@@ -397,12 +403,14 @@ class MMCoreController(ImConWidgetController):
             "error": None,
             "fileName": body.fileName,
         }
+        cancelEvent = threading.Event()
         with self._jobsLock:
             self._jobs[jobId] = job
+            self._cancelEvents[jobId] = cancelEvent
 
         thread = threading.Thread(
             target=self._runSnapJob,
-            args=(jobId, detector, body.exposureMs, body.fileName),
+            args=(jobId, detector, body.exposureMs, body.fileName, cancelEvent),
             daemon=True,
             name=f"MMCoreSnap-{jobId[:8]}",
         )
@@ -428,6 +436,32 @@ class MMCoreController(ImConWidgetController):
         """Return all snap jobs (running + recent)."""
         with self._jobsLock:
             return [dict(j) for j in self._jobs.values()]
+
+    @APIExport(requestType="POST")
+    def cancelMMCoreSnap(self, body: CancelSnapRequest) -> Dict[str, Any]:
+        """Cancel a pending or running snap job.
+
+        Sets the cancel flag for the background thread; it will stop the
+        sequence acquisition and mark the job as ``'cancelled'`` within one
+        poll cycle (~50 ms). Jobs that are already ``'done'``, ``'error'``, or
+        ``'cancelled'`` are returned unchanged.
+
+        Body schema (JSON): ``{"jobId": str}``.
+        """
+        with self._jobsLock:
+            job = self._jobs.get(body.jobId)
+            if job is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Job '{body.jobId}' not found"
+                )
+            if job["state"] not in ("pending", "running"):
+                return dict(job)
+            event = self._cancelEvents.get(body.jobId)
+
+        if event is not None:
+            event.set()
+
+        return self.getMMCoreSnapStatus(body.jobId)
 
     @APIExport()
     def getLastSnapPreview(self, jobId: str) -> Response:
@@ -497,6 +531,7 @@ class MMCoreController(ImConWidgetController):
         detector,
         exposureMs: Optional[float],
         fileName: Optional[str],
+        cancelEvent: threading.Event,
     ):
         core = detector._core
         label = detector._label
@@ -546,12 +581,43 @@ class MMCoreController(ImConWidgetController):
             except Exception:
                 pass
 
-            # Blocking snap — this is the long part.
-            # NB: CMMCorePlus.snap() returns the numpy array directly
-            # (snapImage() + getImage() under the hood). Calling getImage()
-            # again on top fails on the Andor adapter with
-            # "Camera image buffer read failed".
-            image = np.asarray(core.snap())
+            # Use startSequenceAcquisition(1) instead of the blocking
+            # core.snap() / snapImage().  snapImage() holds the Python GIL for
+            # the entire exposure because many camera adapters (Andor, etc.)
+            # perform the hardware wait inside the C extension without releasing
+            # it — that freezes the FastAPI thread pool and makes the server
+            # unresponsive for the full exposure duration.
+            #
+            # startSequenceAcquisition() returns immediately; we poll with a
+            # short sleep so the GIL is released on every iteration, the event
+            # loop stays live, and the cancel flag can be honoured.
+            core.startSequenceAcquisition(1, 0, True)
+            _cancelled = False
+            try:
+                while core.getRemainingImageCount() == 0:
+                    if cancelEvent.is_set():
+                        _cancelled = True
+                        break
+                    time.sleep(0.05)
+            finally:
+                # Always stop the sequence — harmless if it already finished.
+                try:
+                    if core.isSequenceRunning():
+                        core.stopSequenceAcquisition()
+                except Exception:
+                    pass
+
+            if _cancelled:
+                finished = time.time()
+                self._updateJob(
+                    jobId,
+                    state="cancelled",
+                    finishedAt=finished,
+                    elapsedMs=int((finished - started) * 1000),
+                )
+                return
+
+            image = np.asarray(core.popNextImage())
 
             # Save to disk using the same convention as RecordingController.snap
             data_root = dirtools.UserFileDirs.getValidatedDataPath()
@@ -644,6 +710,9 @@ class MMCoreController(ImConWidgetController):
                     core.setProperty(label, "TimeOut", str(previousTimeout))
                 except Exception:
                     self._logger.debug("Could not restore MMCore TimeOut", exc_info=True)
+            # Drop the cancel event so the dict doesn't grow unbounded.
+            with self._jobsLock:
+                self._cancelEvents.pop(jobId, None)
 
 
 # Copyright (C) 2020-2026 ImSwitch developers

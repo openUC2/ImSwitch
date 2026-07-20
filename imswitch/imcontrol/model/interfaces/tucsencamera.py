@@ -494,7 +494,7 @@ class CameraTucsen:
             self.__logger.warning(f"Sensor info fallback: {e}")
             self.SensorWidth = 1500
             self.SensorHeight = 1500
-        if CameraName == "Libra 16":
+        if False and CameraName == "Libra 16":
             self.SensorWidth = 1500
             self.SensorHeight = 1500
             self.__logger.debug("Libra 16 detected, overriding sensor dimensions to 1500x1500")
@@ -759,7 +759,32 @@ class CameraTucsen:
     def setBinning(self, binning=1):
         try:
             self.binning = binning
-            # TODO: apply via Tucsen API if available for your model
+            bin_attr = TUCAM_BIN_ATTR()
+            if binning <= 1:
+                # Normal mode: disable hardware binning (1x1)
+                bin_attr.bEnable = 0
+                bin_attr.nMode = 0
+                bin_attr.nWidth = 0
+                bin_attr.nHeight = 0
+            else:
+                # Sensitive/hardware-binning mode: nMode = bin factor (e.g. 2 = 2x2)
+                bin_attr.bEnable = 1
+                bin_attr.nMode = binning
+                bin_attr.nWidth = 0   # SDK fills in the output dimensions
+                bin_attr.nHeight = 0
+            ret = TUCAM_Cap_SetBIN(self.camera_handle, bin_attr)
+            if not self._ok(ret):
+                self.__logger.warning(f"TUCAM_Cap_SetBIN returned {ret} for binning={binning}")
+            else:
+                self.__logger.info(f"Binning set to {binning}x{binning} (bEnable={bin_attr.bEnable})")
+                # Re-query sensor dimensions to reflect the new output size
+                self._get_sensor_info()
+
+            capa = TUCAM_CAPA_ATTR()
+            capa.idCapa = TUCAM_IDCAPA.TUIDC_RESOLUTION.value
+            TUCAM_Capa_GetAttr(self.TUCAMOPEN.hIdxTUCam, pointer(capa))
+            TUCAM_Capa_SetValue(self.TUCAMOPEN.hIdxTUCam, capa.idCapa, 1)
+
         except Exception as e:
             self.__logger.error(f"Failed to set binning: {e}")
 

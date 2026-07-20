@@ -81,7 +81,7 @@
                 "enableauto": false,
                 "stepsizeXDocu": "200*16 per revolution at 1 pitch",
                 "stepsizeX": 0.3125,
-                "stepsizeY": 0.3125,
+                "stepsizeY": -0.3125,
                 "stepsizeA": 0.3125,
                 "stepsizeZ": 0.3125,
                 "homeSpeedX": 20000,
@@ -110,10 +110,10 @@
                 "homeOnStartZ": 0,
                 "homeOnStartA": 0,
                 "safePositionZHoming": -5000,
-                "initialSpeedX": 20000,
-                "initialSpeedY": 20000,
-                "initialSpeedZ": 20000.0,
-                "initialSpeedA": 20000.0,
+                "initialSpeedX": 10000,
+                "initialSpeedY": 10000,
+                "initialSpeedZ": 10000,
+                "initialSpeedA": 10000,
                 "frameHomeOnStart": 0,
                 "maxSpeedX": 10000,
                 "maxSpeedY": 10000,
@@ -128,7 +128,11 @@
                 "homeEndposReleaseZ": -10000,
                 "homeTimeoutZ": 20000,
                 "homeEndposReleaseA": 0,
-                "homeTimeoutA": 20000
+                "homeTimeoutA": 20000,
+                "joystickInvertedA": false,
+                "joystickInvertedX": false,
+                "joystickInvertedY": false,
+                "joystickInvertedZ": false
             },
             "axes": [
                 "X",
@@ -141,8 +145,8 @@
             "forScanning": true,
             "resetOnClose": true,
             "stageOffsets": {
-                "stageOffsetPositionX": -8687.194220430101,
-                "stageOffsetPositionY": 2079.593413978495,
+                "stageOffsetPositionX": -2296.910324039186,
+                "stageOffsetPositionY": -2514.2375655702476,
                 "stageOffsetPositionZ": 0.0,
                 "stageOffsetPositionA": 0.0
             }
@@ -165,10 +169,12 @@
         "savedProperties": {
             "Andor": {
                 "Advanced | Snap Image Additional Delay (ms)": 0.0,
-                "CCDTemperatureSetPoint": -70.0,
+                "BaselineClamp": "Disabled",
+                "Binning": "8",
+                "CCDTemperatureSetPoint": -100.0,
                 "CountConvertWavelength": 0.0,
-                "Exposure": 10.0,
-                "Gain": 300.0,
+                "Exposure": 90000.0,
+                "Gain": 1000.0,
                 "ReadoutMode": "1.000 MHz",
                 "Shutter Closing Time": 27.0,
                 "Shutter Opening Time": 27.0,
@@ -228,7 +234,46 @@
     "Workflow": null,
     "FlowStop": null,
     "Lepmon": null,
-    "PixelCalibration": null,
+    "PixelCalibration": {
+        "affineCalibrations": {
+            "Andor::1": {
+                "affine_matrix": [
+                    [
+                        13.0,
+                        0.0,
+                        0.0
+                    ],
+                    [
+                        0.0,
+                        13.0,
+                        0.0
+                    ]
+                ],
+                "metrics": {
+                    "scale_x_um_per_pixel": 13,
+                    "scale_y_um_per_pixel": 13,
+                    "rotation_deg": 0,
+                    "method": "manual_edit",
+                    "quality": "manual"
+                },
+                "timestamp": "2026-07-11T19:49:15",
+                "detector_name": "Andor",
+                "objective_id": "1"
+            }
+        },
+        "defaultAffineMatrix": [
+            [
+                1.0,
+                0.0,
+                0.0
+            ],
+            [
+                0.0,
+                1.0,
+                0.0
+            ]
+        ]
+    },
     "experiment": null,
     "uc2Config": null,
     "ism": null,
@@ -269,7 +314,8 @@
         "StageCenterCalibration",
         "MMCore",
         "Experiment",
-        "Objective"
+        "Objective",
+        "I2CSensor"
     ],
     "stageOffsets": {},
     "mct": null,

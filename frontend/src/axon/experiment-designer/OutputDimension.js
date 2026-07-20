@@ -246,9 +246,9 @@ const OutputDimension = () => {
             <Box sx={{ flex: 1 }}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.5 }}>
                 <Typography variant="caption" sx={{ fontWeight: 500 }}>
-                  tPre (Settle Time)
+                  tPre (Settle After Move)
                 </Typography>
-                <Tooltip title="Time before exposure starts. Allows stage vibrations to settle and illumination to stabilize after switching." arrow>
+                <Tooltip title="Settle time applied AFTER the final stage move (and after illumination switching), before the exposure starts. In normal mode this now runs after the stage stops in every illumination mode — including 'keep illumination on' — to damp vibration before capture." arrow>
                   <InfoIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
                 </Tooltip>
               </Box>
@@ -264,7 +264,7 @@ const OutputDimension = () => {
                 inputProps={{ min: 0, step: 10 }}
               />
               <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: "block" }}>
-                Time before exposure (stage settling, illumination activation)
+                Settle after the final move (damps vibration before exposure)
               </Typography>
             </Box>
 

@@ -93,7 +93,13 @@ class ExperimentController(ImConWidgetController):
         self.SPEED_Y = self.SPEED_Y_default = 20000
         self.SPEED_X = self.SPEED_X_default = 20000
         self.SPEED_Z = self.SPEED_Z_default = 10000
-        self.ACCELERATION = 1000000
+        self.ACCELERATION = self.ACCELERATION_default = 1000000
+        self.ACCELERATION_Z = self.ACCELERATION_Z_default = 1000000
+        # Global Z focus offset updated at runtime by autofocus during an
+        # experiment. Capture Z-moves add this on top of their base Z so the
+        # measured focus is actually applied (see move_stage_z / autofocus).
+        # Reset to 0.0 at the start of every experiment.
+        self._experiment_af_offset = 0.0
 
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
@@ -939,6 +945,18 @@ class ExperimentController(ImConWidgetController):
         else:
             self.SPEED_Z = p.z_speed
 
+        # Stage acceleration (XY/Z) from the frontend; falls back to the
+        # __init__ defaults when the request leaves them unset (<= 0). XY is
+        # consumed by move_stage_xy, Z by move_stage_z.
+        _accel = getattr(p, "acceleration", 0) or 0
+        self.ACCELERATION = _accel if _accel > 0 else self.ACCELERATION_default
+        _accel_z = getattr(p, "z_acceleration", 0) or 0
+        self.ACCELERATION_Z = _accel_z if _accel_z > 0 else self.ACCELERATION_Z_default
+
+        # Reset the runtime autofocus Z offset for this experiment so a value
+        # left over from a previous run never leaks into a new acquisition.
+        self._experiment_af_offset = 0.0
+
         # Autofocus and timepoint values are read from `p` (ParameterValue)
         # directly via ExecutionContext.to_kwargs(); no local aliases needed.
         # gains/exposures were already built parallel to illuSources (including
@@ -1038,6 +1056,22 @@ class ExperimentController(ImConWidgetController):
         os.makedirs(dirPath, exist_ok=True)
         self._last_experiment_dir = dirPath
         mFileName = f"{timeStamp}_{exp_name}"
+
+        # I2C environmental sensor logging (optional). Probe once; if a sensor
+        # controller is present, enable a per-experiment sidecar CSV alongside
+        # the OME data and embed readings in per-frame metadata. All I2C
+        # handling is a silent no-op when no controller is configured.
+        self._i2c_csv_path = None
+        self._i2c_last_snapshot = None
+        self._i2c_last_read_ts = None
+        self._i2c_read_seq = 0
+        self._i2c_logged_seq = -1
+        try:
+            if self._read_i2c_snapshot(min_interval_s=0.0) is not None:
+                self._i2c_csv_path = os.path.join(dirPath, "i2c_sensor_log.csv")
+                self._logger.info(f"I2C sensor logging enabled → {self._i2c_csv_path}")
+        except Exception:
+            pass
 
         workflowSteps = []
         file_writers = []  # Initialize outside the loop for context storage
@@ -1912,6 +1946,23 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.debug(f"Could not enrich OME metadata from MetadataHub: {e}")
 
+        # Environmental (I2C) sensor snapshot alongside the frame, when an I2C
+        # sensor controller is configured. Throttled hardware read + optional
+        # sidecar-CSV logging (one row per fresh read). No-op otherwise.
+        try:
+            i2c_reading = self._read_i2c_snapshot()
+            if i2c_reading and i2c_reading.get("ok"):
+                for _k in ("temperature_c", "humidity_pct", "lux", "ch0_full", "ch1_ir"):
+                    _v = i2c_reading.get(_k)
+                    if _v is not None:
+                        ome_metadata[f"i2c_{_k}"] = _v
+                _seq = getattr(self, "_i2c_read_seq", 0)
+                if _seq != getattr(self, "_i2c_logged_seq", -1):
+                    self._i2c_logged_seq = _seq
+                    self._log_i2c_row(i2c_reading, ome_metadata.get("time_index", 0))
+        except Exception:
+            pass
+
         # Resolve the writer for this tile *before* we hand work to
         # the background saver — pulling from ``context`` on the
         # worker thread would be a lifetime hazard.
@@ -2153,12 +2204,48 @@ class ExperimentController(ImConWidgetController):
         #self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
         return (posX, posY) # TODO: Need to adjust in case of relative move
 
-    def move_stage_z(self, posZ: float, relative: bool = False, maxSpeedZ=5000):
+    def move_stage_z(self, posZ: float, relative: bool = False, maxSpeedZ=5000,
+                     apply_af_offset: bool = False):
+        # When apply_af_offset is set (used by the per-plane capture moves in
+        # the acquisition workflow), add the runtime autofocus Z offset on top
+        # of the absolute target so the measured focus is actually applied to
+        # acquisitions instead of being overwritten by this absolute move.
+        if apply_af_offset and not relative:
+            posZ = posZ + float(getattr(self, "_experiment_af_offset", 0.0))
         self._logger.info(f"Moving stage to Z={posZ}")
-        self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, maxSpeedZ)), axis="Z", is_absolute=not relative, is_blocking=True)
+        self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, maxSpeedZ)), axis="Z", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION_Z)
         #newPosition = self.mStage.getPosition()
         #self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
         return posZ # TODO: Need to adjust in case of relative move
+
+    def update_af_offset(self, context=None, metadata=None, expected_z: float = 0.0,
+                         apply_global_offset: bool = True, **kwargs):
+        """Post-func for the Autofocus workflow step: store the global Z offset.
+
+        Reads the measured focus Z from ``metadata["result"]`` (the return value
+        of the preceding ``autofocus`` main-func) and records
+        ``measured - expected_z`` as ``self._experiment_af_offset``. Every
+        capture Z-move in the acquisition workflow adds this offset (via
+        ``move_stage_z(apply_af_offset=True)``), so the measured focus is
+        actually applied to acquisitions instead of being discarded by the next
+        absolute Z-move. Leaves the previous offset untouched if autofocus
+        failed (result is None) or when apply_global_offset is False.
+        """
+        if not apply_global_offset:
+            return None
+        measured = (metadata or {}).get("result")
+        if measured is None:
+            self._logger.debug("Autofocus returned no Z; keeping previous global offset.")
+            return None
+        try:
+            self._experiment_af_offset = float(measured) - float(expected_z)
+            self._logger.info(
+                f"Autofocus global Z offset updated to {self._experiment_af_offset:+.2f} µm "
+                f"(measured={float(measured):.2f}, expected base={float(expected_z):.2f})"
+            )
+        except Exception as e:
+            self._logger.debug(f"Could not update autofocus global Z offset: {e}")
+        return self._experiment_af_offset
 
     def set_detector_parameter(self, parameter: str, value: Any):
         """Set a detector parameter."""
@@ -2687,9 +2774,79 @@ class ExperimentController(ImConWidgetController):
                     except Exception as e:
                         self._logger.debug(f"Could not turn off laser {laser_name}: {e}")
 
+            # Also clear the LED matrix/ring so a leftover ring/DPC pattern from
+            # a previous acquisition does not survive into this scan. Normal
+            # mode previously only reset the lasers here (performance mode reset
+            # the matrix separately); this brings normal mode to parity.
+            # set_led_matrix_pattern self-guards when no matrix is configured.
+            if getattr(self, "_ledMatrix", None) is not None:
+                self.set_led_matrix_pattern(kind="off", settle_s=0)
+
             self._logger.debug("All illumination sources switched off before scan")
         except Exception as e:
             self._logger.warning(f"Error switching off illumination: {e}")
+
+    def _read_i2c_snapshot(self, min_interval_s: float = 1.0) -> Optional[Dict[str, Any]]:
+        """Read the latest I2C environmental sensor values, or None.
+
+        Returns the reading dict from
+        ``I2CSensorController.getLatestI2CSensorValues()`` (keys such as
+        ``temperature_c`` / ``humidity_pct`` / ``lux``), or ``None`` when no
+        I2C sensor controller is configured or the read fails.
+
+        Reads are throttled: within ``min_interval_s`` of the last read the
+        cached snapshot is returned instead of hitting the hardware again, so
+        embedding this per-frame never bottlenecks a fast raster scan. Never
+        raises.
+        """
+        import time as _time
+        now = _time.monotonic()
+        cached = getattr(self, "_i2c_last_snapshot", None)
+        last_ts = getattr(self, "_i2c_last_read_ts", None)
+        if cached is not None and last_ts is not None and (now - last_ts) < min_interval_s:
+            return cached
+        try:
+            i2c = self._master.getController('I2CSensor')
+        except Exception:
+            i2c = None
+        reading = None
+        if i2c is not None:
+            try:
+                reading = i2c.getLatestI2CSensorValues()
+            except Exception as e:
+                self._logger.debug(f"I2C sensor read failed: {e}")
+                reading = None
+        self._i2c_last_snapshot = reading
+        self._i2c_last_read_ts = now
+        self._i2c_read_seq = getattr(self, "_i2c_read_seq", 0) + 1
+        return reading
+
+    def _log_i2c_row(self, reading: Dict[str, Any], time_index: int = 0) -> None:
+        """Append one environmental-sensor row to the experiment sidecar CSV.
+
+        No-op when no CSV path has been set up for this experiment (i.e. no
+        I2C controller was detected at start) or the reading is empty.
+        """
+        csv_path = getattr(self, "_i2c_csv_path", None)
+        if not csv_path or not reading:
+            return
+        try:
+            import csv as _csv
+            write_header = not os.path.exists(csv_path)
+            with open(csv_path, "a", newline="") as fh:
+                writer = _csv.writer(fh)
+                if write_header:
+                    writer.writerow([
+                        "datetime", "timestamp", "time_index",
+                        "temperature_c", "humidity_pct", "lux", "ch0_full", "ch1_ir",
+                    ])
+                writer.writerow([
+                    reading.get("datetime"), reading.get("timestamp"), time_index,
+                    reading.get("temperature_c"), reading.get("humidity_pct"),
+                    reading.get("lux"), reading.get("ch0_full"), reading.get("ch1_ir"),
+                ])
+        except Exception as e:
+            self._logger.debug(f"Could not append I2C sensor CSV row: {e}")
 
     # -------------------------------------------------------------------------
     # internal helpers

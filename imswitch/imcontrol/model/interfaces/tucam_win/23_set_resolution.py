@@ -131,11 +131,9 @@ class Tucam():
         capa = TUCAM_CAPA_ATTR()
         capa.idCapa = TUCAM_IDCAPA.TUIDC_RESOLUTION.value
         TUCAM_Capa_GetAttr(self.TUCAMOPEN.hIdxTUCam, pointer(capa))
-        count = capa.nValMax - capa.nValMin + 1
-        for i in range(count):
-            TUCAM_Capa_SetValue(self.TUCAMOPEN.hIdxTUCam, capa.idCapa, i)
-            self.ShowAverageGray()
-
+        TUCAM_Capa_SetValue(self.TUCAMOPEN.hIdxTUCam, capa.idCapa, 0) # Set to RESOLUTION over SENSITIVE mode (1)
+        print("Set camera resolution to %d x %d" %(capa.nValMin, capa.nValMax))
+        
 if __name__ == '__main__':
     demo = Tucam()
     demo.OpenCamera(0)

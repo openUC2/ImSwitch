@@ -18,6 +18,7 @@ import {
   Tooltip,
   Switch,
   FormControlLabel,
+  CircularProgress,
 } from "@mui/material";
 import {
   PlayArrow,
@@ -62,18 +63,45 @@ export default function StreamControls({
   const [snapFileName, setSnapFileName] = useState("");
   const [overlayOpen, setOverlayOpen] = useState(false);
   const [fijiInfoOpen, setFijiInfoOpen] = useState(false);
+  // Track an in-flight snap so we can disable the buttons and show progress.
+  // Snapping is allowed even when the live stream is off (e.g. long-exposure
+  // experiments), in which case the request can take a while to return.
+  const [isSnapping, setIsSnapping] = useState(false);
 
-  // Wrap snap & download to show a one-time Fiji hint for TIFF files
+  // Wrap snap to track the in-flight state so the button shows progress and is
+  // guarded against double-clicks. Works whether or not the live stream is
+  // running (the backend arms the camera on demand for long-exposure snaps).
+  const handleSnap = useCallback(
+    async (fileName, format) => {
+      if (isSnapping) return;
+      setIsSnapping(true);
+      try {
+        await onSnap(fileName, format);
+      } finally {
+        setIsSnapping(false);
+      }
+    },
+    [isSnapping, onSnap],
+  );
+
+  // Wrap snap & download to show a one-time Fiji hint for TIFF files, and to
+  // track the in-flight state (see handleSnap).
   const handleSnapAndDownload = useCallback(
-    (fileName, format) => {
+    async (fileName, format) => {
+      if (isSnapping) return;
       // Show the hint only on the very first TIFF snap & download
       if (format === 1 && !localStorage.getItem("fijiHintShown")) {
         setFijiInfoOpen(true);
         localStorage.setItem("fijiHintShown", "1");
       }
-      onSnapAndDownload(fileName, format);
+      setIsSnapping(true);
+      try {
+        await onSnapAndDownload(fileName, format);
+      } finally {
+        setIsSnapping(false);
+      }
     },
-    [onSnapAndDownload],
+    [isSnapping, onSnapAndDownload],
   );
 
   // Separate format options for snap and record
@@ -369,7 +397,7 @@ export default function StreamControls({
               const sanitized = e.target.value.replace(/[^a-zA-Z0-9_.-]/g, "");
               setSnapFileName(sanitized);
             }}
-            disabled={!isLiveViewActive}
+            disabled={isSnapping}
             inputProps={{
               pattern: "[a-zA-Z0-9_.-]*",
               maxLength: 100,
@@ -407,7 +435,7 @@ export default function StreamControls({
               onChange={(e) =>
                 dispatch(liveViewSlice.setSnapFormat(e.target.value))
               }
-              disabled={!isLiveViewActive}
+              disabled={isSnapping}
             >
               {snapFormatOptions.map((opt) => (
                 <MenuItem key={opt.value} value={opt.value}>
@@ -421,12 +449,18 @@ export default function StreamControls({
             variant="contained"
             color="primary"
             size="small"
-            onClick={() => onSnap(snapFileName, snapFormat)}
-            startIcon={<CameraAlt />}
-            disabled={!isLiveViewActive}
+            onClick={() => handleSnap(snapFileName, snapFormat)}
+            startIcon={
+              isSnapping ? (
+                <CircularProgress size={16} color="inherit" />
+              ) : (
+                <CameraAlt />
+              )
+            }
+            disabled={isSnapping}
             sx={{ whiteSpace: "nowrap", height: 40, minHeight: 40, width: 130 }}
           >
-            Snap
+            {isSnapping ? "Snapping…" : "Snap"}
           </Button>
 
           <Button
@@ -434,13 +468,32 @@ export default function StreamControls({
             color="primary"
             size="small"
             onClick={() => handleSnapAndDownload(snapFileName, snapFormat)}
-            startIcon={<GetApp />}
-            disabled={!isLiveViewActive}
+            startIcon={
+              isSnapping ? (
+                <CircularProgress size={16} color="inherit" />
+              ) : (
+                <GetApp />
+              )
+            }
+            disabled={isSnapping}
             sx={{ whiteSpace: "nowrap", width: 160, height: 40, minHeight: 40 }}
           >
             Snap & Download
           </Button>
         </Box>
+
+        {/* Hint: snapping also works with the stream off (long exposures) */}
+        {!isLiveViewActive && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ gridColumn: "1 / -1", mt: -1 }}
+          >
+            {isSnapping
+              ? "Capturing… the camera is armed on demand (this can take a while for long exposures)."
+              : "Stream is off — Snap still arms the camera on demand and captures a single frame (ideal for long exposures)."}
+          </Typography>
+        )}
 
         {/* Go to Folder - Below Snap */}
         <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}>

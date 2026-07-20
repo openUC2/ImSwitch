@@ -246,23 +246,28 @@ const TimeDimension = () => {
         </AccordionSummary>
         <AccordionDetails>
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {/* Focus every N frames */}
+            {/* Autofocus every N rounds */}
             <Box>
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.5 }}>
                 <Typography variant="caption" sx={{ fontWeight: 500 }}>
-                  Focus every N frames
+                  Autofocus every N rounds
                 </Typography>
-                <Tooltip title="Run autofocus every N timepoints to correct for focus drift during long time-lapse acquisitions." arrow>
+                <Tooltip title="Run autofocus only every Nth timepoint/round to correct focus drift during long time-lapses (1 = every round). Skipped rounds reuse the last measured focus offset. Requires autofocus to be enabled in the Z/Focus dimension." arrow>
                   <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
                 </Tooltip>
               </Box>
               <TextField
                 type="number"
                 size="small"
-                defaultValue={1}
+                value={parameterValue.autoFocusPeriodRounds || 1}
+                onChange={(e) =>
+                  dispatch(
+                    experimentSlice.setAutoFocusPeriodRounds(Number(e.target.value)),
+                  )
+                }
                 inputProps={{ min: 1 }}
                 sx={{ width: 100 }}
-                helperText="Run autofocus at this interval"
+                helperText="Run autofocus at this round interval"
               />
             </Box>
 

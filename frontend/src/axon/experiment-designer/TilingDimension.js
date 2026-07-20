@@ -522,6 +522,54 @@ const TilingDimension = () => {
                 </Select>
               </FormControl>
             </Box>
+
+            {/* XY acceleration */}
+            <Box>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  XY Acceleration
+                </Typography>
+                <Tooltip title="Acceleration of the XY stage. Lower values ramp the stage up/down more gently, reducing vibration at the cost of slightly longer moves." arrow>
+                  <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
+              <FormControl size="small" fullWidth sx={{ mt: 0.5 }}>
+                <Select
+                  value={parameterValue.acceleration || 1000000}
+                  onChange={(e) => dispatch(experimentSlice.setAcceleration(Number(e.target.value)))}
+                >
+                  {[100000, 250000, 500000, 1000000, 2000000, 5000000].map((accel) => (
+                    <MenuItem key={accel} value={accel}>
+                      {accel} steps/s²
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
+
+            {/* Z acceleration */}
+            <Box>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Z Acceleration
+                </Typography>
+                <Tooltip title="Acceleration of the Z stage during focus moves. Lower values reduce mechanical vibration before exposure." arrow>
+                  <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
+              <FormControl size="small" fullWidth sx={{ mt: 0.5 }}>
+                <Select
+                  value={parameterValue.z_acceleration || 1000000}
+                  onChange={(e) => dispatch(experimentSlice.setZAcceleration(Number(e.target.value)))}
+                >
+                  {[100000, 250000, 500000, 1000000, 2000000, 5000000].map((accel) => (
+                    <MenuItem key={accel} value={accel}>
+                      {accel} steps/s²
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
           </Box>
         </AccordionDetails>
       </Accordion>

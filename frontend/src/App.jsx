@@ -12,6 +12,7 @@ import DetectorTriggerController from "./components/DetectorTriggerController.js
 import ExtendedLEDMatrixController from "./components/ExtendedLEDMatrixController.jsx";
 import FlowStopController from "./components/FlowStopController.js";
 import FocusLockController from "./components/FocusLockController.js";
+import I2CSensorController from "./components/I2CSensorController.jsx";
 import HoloController from "./components/HoloController.js";
 import OffAxisHoloController from "./components/OffAxisHoloController.js";
 import DPCController from "./components/DPCController.js";
@@ -26,6 +27,8 @@ import MotorSettingsController from "./components/MotorSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
 import LargeFovScanController from "./components/OpenLayers.js";
 import SocketView from "./components/SocketView.js";
+import MMCoreController from "./components/MMCoreController.jsx";
+
 import TimelapseController from "./components/TimelapseController.js";
 import STORMControllerArkitekt from "./components/STORMControllerArkitekt.js";
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
@@ -41,6 +44,7 @@ import VizarrViewer from "./components/VizarrViewer.jsx";
 import { JupyterProvider } from "./context/JupyterContext.js";
 import { PWAProvider } from "./context/PWAContext.js";
 import DemoController from "./components/DemoController.js";
+import StageMapController from "./components/StageMapController.jsx";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
 import GalvoScannerController from "./components/GalvoScannerController.jsx";
 import ShitScopeComponent from "./components/ShitScopeComponent.js";
@@ -570,6 +574,7 @@ function App() {
             <DialogTitle>Napari Command</DialogTitle>
             <DialogContent>
               <DialogContentText sx={{ mb: 2 }}>
+                Install the napari plugin using: "pip install openuc2-processor"
                 Clipboard is not available in this context. Copy the command below manually:
               </DialogContentText>
               <TextField
@@ -699,6 +704,7 @@ function App() {
               )}
               {selectedPlugin === "Stresstest" && <StresstestController />}
               {selectedPlugin === "FocusLock" && <FocusLockController />}
+              {selectedPlugin === "I2CSensor" && <I2CSensorController />}
               {selectedPlugin === "AcceptanceTest" && (
                 <AcceptanceTestComponent />
               )}
@@ -778,6 +784,8 @@ function App() {
               )}
               {selectedPlugin === "LightSheet" && <LightsheetController />}
               {selectedPlugin === "Timelapse" && <TimelapseController />}
+              {selectedPlugin === "MMCore" && <MMCoreController />}
+
               {selectedPlugin === "WiFi" && <WiFiController />}
               {plugins.map(
                 (p) =>
@@ -788,6 +796,7 @@ function App() {
                   ),
               )}
               {selectedPlugin === "DemoController" && <DemoController />}
+              {selectedPlugin === "StageMap" && <StageMapController />}
               {selectedPlugin === "CompositeAcquisition" && (
                 <CompositeAcquisitionComponent />
               )}

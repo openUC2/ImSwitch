@@ -157,6 +157,12 @@ class HikCamManager(DetectorManager):
             return self._camera.getFrameNumber()
         return -1
 
+    def getStreamDiagnostics(self):
+        """Camera-side streaming latency metrics (see hikcamera.getStreamDiagnostics)."""
+        if hasattr(self._camera, "getStreamDiagnostics"):
+            return self._camera.getStreamDiagnostics()
+        return {}
+
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
         If the parameter doesn't exist, i.e. the parameters field doesn't

@@ -254,6 +254,7 @@ class ObjectiveInfo:
     magnifications: List
     objectiveNames: List
     objectivePositions: List
+    zPositions: List = field(default_factory=lambda: [0, 0])
     homeDirection: int = -1
     homePolarity: int = 1
     homeSpeed: int = 20000
@@ -746,6 +747,18 @@ class PulseStreamerInfo:
     """ IP address of Pulse Streamer hardware. """
 
 
+@dataclass(frozen=False)
+class MMCoreSettingsInfo:
+    """ Persisted Micro-Manager (MMCore) camera settings.
+
+    ``savedProperties`` maps a detector name to a dict of
+    ``{propertyName: value}`` that the MMCoreController re-applies to the
+    device on startup, so camera settings changed through the frontend survive
+    a restart. Written by ``MMCoreController.saveMMCoreSettings`` and cleared by
+    ``resetMMCoreSettings``. """
+
+    savedProperties: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
 
 @dataclass_json(undefined=Undefined.INCLUDE)
 @dataclass
@@ -781,6 +794,10 @@ class SetupInfo:
     managers will require a corresponding RS232 connection to be referenced in
     their properties.
     """
+
+    mmcoreSettings: Optional[MMCoreSettingsInfo] = field(default_factory=lambda: None)
+    """ Persisted MMCore (Micro-Manager) camera settings, re-applied on startup
+    by the MMCoreController. ``null`` when no settings have been saved. """
 
     slm: Optional[SLMInfo] = field(default_factory=lambda: None)
     """ SLM settings. Required to be defined to use SLM functionality. """

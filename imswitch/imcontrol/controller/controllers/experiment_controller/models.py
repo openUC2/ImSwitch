@@ -34,6 +34,13 @@ except ImportError:  # pragma: no cover
 KeepIlluminationMode = Literal["auto", "on", "off"]
 AutoFocusMode = Literal["software", "hardware"]
 AutoFocusSoftwareMethod = Literal["scan", "hillClimbing"]
+# Autofocus scheduling scope within a (qualifying) timelapse round:
+# - "everyPosition"     : run autofocus at every XY tile (per-position focus).
+# - "firstPositionOnly" : run autofocus once, at the first tile of the round,
+#                         and apply the measured focus as a global Z offset to
+#                         all positions of that round (assumes drift is global,
+#                         e.g. thermal — cheaper and less photobleaching).
+AutoFocusScope = Literal["everyPosition", "firstPositionOnly"]
 TriggerMode = Literal["hardware", "software"]
 FocusFitMethod = Literal["spline", "rbf", "constant"]
 FocusAlgorithm = Literal["LAPE", "GLVA", "JPEG"]
@@ -202,6 +209,26 @@ class ParameterValue(BaseModel):
     autoFocusHillClimbingMaxIterations: int = 50
     autofocus_target_focus_setpoint: Optional[float] = None
     autofocus_max_attempts: int = 2
+    # --- Autofocus scheduling (see AutoFocusScope) ------------------------
+    autoFocusScope: AutoFocusScope = Field(
+        "everyPosition",
+        description="Where autofocus runs within a round: 'everyPosition' "
+                    "(per XY tile) or 'firstPositionOnly' (once per round at "
+                    "the first tile, applied as a global Z offset).",
+    )
+    autoFocusPeriodRounds: int = Field(
+        1,
+        ge=1,
+        description="Run autofocus only every Nth timelapse round/timepoint "
+                    "(1 = every round). Skipped rounds reuse the last offset.",
+    )
+    autoFocusApplyGlobalOffset: bool = Field(
+        True,
+        description="When True the autofocus result updates a shared Z offset "
+                    "that all capture Z-moves add on top of their base Z, so "
+                    "the measured focus is actually applied to acquisitions "
+                    "(instead of being overwritten by the next absolute move).",
+    )
     zStack: bool
     zStackMin: float
     zStackMax: float
@@ -210,6 +237,14 @@ class ParameterValue(BaseModel):
     gains: Union[List[float], float] = None
     speed: float = 20000.0
     z_speed: float = 5000.0
+    # Stage acceleration (steps/s²) for the scan. <= 0 → keep the controller
+    # defaults. XY is applied to move_stage_xy, Z to move_stage_z.
+    acceleration: float = Field(
+        1000000.0, description="XY stage acceleration for the scan (steps/s²)."
+    )
+    z_acceleration: float = Field(
+        1000000.0, description="Z stage acceleration for the scan (steps/s²)."
+    )
     # Tiling behaviour toggle (Wellplate "Tiling" tab): after the scan finishes,
     # move the stage back to the XYZ it was at before the scan started. Default
     # off (the stage stays at the last acquired tile).
@@ -242,6 +277,23 @@ class ParameterValue(BaseModel):
     keepIlluminationOn: KeepIlluminationMode = Field(
         "auto",
         description="Illumination mode: 'auto' (single channel stays on), 'on' (always on), 'off' (per-frame toggle)",
+    )
+    turnOffIlluminationBetweenTimepoints: bool = Field(
+        True,
+        description="Turn illumination off during the wait between timelapse "
+                    "rounds even when keepIlluminationOn keeps it on within a "
+                    "round. Prevents continuous sample exposure during tPeriod.",
+    )
+    busPowerDarkness: bool = Field(
+        False,
+        description="Cut the CAN-bus power (complete darkness) around every "
+                    "exposure. For low-light/luminescence imaging where even "
+                    "indicator LEDs must be off during the exposure.",
+    )
+    busPowerSettleTime: float = Field(
+        2.0,
+        description="Seconds to wait after cutting and after restoring CAN-bus "
+                    "power when busPowerDarkness is enabled.",
     )
     # Synthetic LED-matrix channels (ring/DPC), kept SEPARATE from the
     # conventional `illumination` list above.  This is the single source of

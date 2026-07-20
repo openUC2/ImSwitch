@@ -88,7 +88,7 @@ class ImConMainController(MainController):
                 self.__masterController, "sila2Manager"
             ):
                 self.__logger.warning(
-                    "SiLA2Manager unavailable; skipping SiLA2Controller."
+                    "SiLa2Manager unavailable; skipping SiLA2Controller."
                 )
                 continue
 
@@ -223,6 +223,22 @@ class ImConMainController(MainController):
         except Exception as e:
             self.__logger.warning(
                 f"Could not create ReadNoiseCalibrationController: {e}"
+            )
+
+        # Add StageMapController for MicroMagellan-style live stage mapping (no widget required)
+        try:
+            self.__logger.info("Creating StageMapController for stage mapping")
+            from .controllers.StageMapController import StageMapController
+            self.controllers["StageMap"] = self.__factory.createController(
+                StageMapController, None
+            )
+            # Register StageMapController
+            self.__masterController.registerController(
+                "StageMap", self.controllers["StageMap"]
+            )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not create StageMapController: {e}"
             )
 
         # Generate API

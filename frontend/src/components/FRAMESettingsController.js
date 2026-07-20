@@ -12,6 +12,7 @@ import ReadNoiseCalibrationTab from "./FRAMESettings/ReadNoiseCalibrationTab";
 import ExtendedObjectiveController from "./ObjectiveController";
 import StageOffsetCalibrationTab from "./FRAMESettings/StageOffsetCalibrationTab";
 import OpticalFlowTab from "./FRAMESettings/OpticalFlowTab";
+import CollisionDetectionTab from "./FRAMESettings/CollisionDetectionTab";
 import { selectHasController } from "../state/slices/BackendCapabilitiesSlice";
 
 /**
@@ -76,6 +77,7 @@ const FRAMESettings = () => {
         )}
         <Tab value="stageOffset" label="Stage Offset Calibration" />
         <Tab value="opticalFlow" label="Optical Flow Alignment" />
+        <Tab value="collision" label="Collision Detection" />
       </Tabs>
 
       <Box sx={{ mt: 2 }}>
@@ -92,6 +94,7 @@ const FRAMESettings = () => {
         )}
         {selectedTab === "stageOffset" && <StageOffsetCalibrationTab />}
         {selectedTab === "opticalFlow" && <OpticalFlowTab />}
+        {selectedTab === "collision" && <CollisionDetectionTab />}
       </Box>
     </Box>
   );

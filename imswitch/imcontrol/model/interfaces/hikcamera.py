@@ -106,6 +106,10 @@ class CameraHIK:
         self.NBuffer = 3
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
+        # Live-stream latency instrumentation (see getStreamDiagnostics()).
+        self._streamStats = self._newStreamStats()
+        self._nodeNumRet = None       # hex return of MV_CC_SetImageNodeNum
+        self._grabStrategyRet = None  # hex return of MV_CC_SetGrabStrategy
         self.camera = None
         self.DEBUG = False
         self.binning = binning
@@ -418,6 +422,7 @@ class CameraHIK:
         pass it to the user callback.'''
         @CALLBACK_SIG
         def _cb(pData, pInfo, _):
+            t_entry = time.time()  # wall clock at callback entry (for lag stats)
             info = pInfo.contents
             w, h   = info.nWidth, info.nHeight
             nSize  = info.nFrameLen
@@ -573,6 +578,17 @@ class CameraHIK:
             # pass to user callback
             user_cb(frame, fid, ts)
 
+            # Latency instrumentation: cheap dict updates only (runs on the SDK
+            # delivery thread). nHostTimeStamp is the host-driver receive time
+            # (ms); (t_entry - nHostTimeStamp) therefore measures how long the
+            # frame sat in the SDK/driver queue BEFORE Python saw it.
+            self._updateStreamStats(
+                t_entry,
+                getattr(info, "nHostTimeStamp", 0),
+                fid,
+                getattr(info, "nLostPacket", 0),
+            )
+
         return _cb
 
     def get_camera_parameters(self):
@@ -679,17 +695,29 @@ class CameraHIK:
             self._callback_registered = True
 
         # Cap the SDK's internal node queue so the free-running (continuous) live
-        # view can't build up a large FIFO backlog of stale frames. NOTE:
-        # MV_CC_SetGrabStrategy(LatestImagesOnly) is NOT usable here — in callback
-        # mode the SDK rejects it with MV_E_CALLORDER (0x80000003) and pushes every
-        # frame regardless. Deterministic, in-sync grabs for autofocus/calibration
-        # are instead done via software trigger (see snapSoftwareTrigger). Must
-        # precede StartGrabbing.
+        # view can't build up a large FIFO backlog of stale frames. Return codes
+        # are recorded (0x0 = MV_OK) and exposed via getStreamDiagnostics() so we
+        # can verify the caps are actually in effect on this SDK build.
+        # MV_CC_SetGrabStrategy(LatestImagesOnly) is rejected with MV_E_CALLORDER
+        # (0x80000003) while grabbing; here — BEFORE StartGrabbing — is the one
+        # legal moment it might be accepted, so try once and record the verdict.
+        # Deterministic in-sync grabs for autofocus/calibration use software
+        # trigger regardless (see snapSoftwareTrigger).
         try:
             if hasattr(self.camera, "MV_CC_SetImageNodeNum"):
-                self.camera.MV_CC_SetImageNodeNum(2)
+                ret = self.camera.MV_CC_SetImageNodeNum(2)
+                self._nodeNumRet = f"0x{ret:x}"
+                self.__logger.info(f"MV_CC_SetImageNodeNum(2) -> 0x{ret:x}")
+            if hasattr(self.camera, "MV_CC_SetGrabStrategy"):
+                ret = self.camera.MV_CC_SetGrabStrategy(MV_GrabStrategy_LatestImagesOnly)
+                self._grabStrategyRet = f"0x{ret:x}"
+                self.__logger.info(f"MV_CC_SetGrabStrategy(LatestImagesOnly) -> 0x{ret:x}"
+                                   + ("" if ret == 0 else " (rejected; FIFO capped by node num only)"))
         except Exception as e:
-            self.__logger.debug(f"Set node num failed: {e}")
+            self.__logger.debug(f"Set node num / grab strategy failed: {e}")
+
+        # Fresh latency stats for this streaming session.
+        self._streamStats = self._newStreamStats()
 
         try:
             ret = self.camera.MV_CC_StartGrabbing()
@@ -1070,6 +1098,84 @@ class CameraHIK:
     def getFrameNumber(self):
         return self.frameNumber
 
+    # ── live-stream latency instrumentation ──────────────────────────────────
+    def _newStreamStats(self):
+        """Fresh per-session counters; reset on every start_live()."""
+        return {
+            "frames": 0,
+            "fps_callback": 0.0,       # rate at which the SDK delivers to Python
+            "callback_ms_avg": 0.0,    # Python conversion+push cost per frame
+            "callback_ms_max": 0.0,
+            "sdk_lag_ms_now": None,    # t_callback - nHostTimeStamp of the frame
+            "sdk_lag_ms_avg": None,    # GROWING avg => backlog upstream of Python
+            "sdk_lag_ms_max": None,
+            "frame_gaps": 0,           # frames the SDK dropped (nFrameNum jumps)
+            "lost_packets": 0,         # GigE packet loss reported by the driver
+            "_last_frame_num": None,
+            "_last_entry_t": None,
+            "_started": time.time(),
+        }
+
+    def _updateStreamStats(self, t_entry, host_ts_ms, frame_num, lost_packets):
+        """Update EMA latency stats; runs on the SDK callback thread (keep cheap)."""
+        s = self._streamStats
+        a = 0.05  # EMA weight
+        s["frames"] += 1
+        cb_ms = (time.time() - t_entry) * 1000.0
+        s["callback_ms_avg"] = cb_ms if s["frames"] == 1 else (1 - a) * s["callback_ms_avg"] + a * cb_ms
+        if cb_ms > s["callback_ms_max"]:
+            s["callback_ms_max"] = cb_ms
+        if s["_last_entry_t"] is not None:
+            dt = t_entry - s["_last_entry_t"]
+            if dt > 0:
+                inst = 1.0 / dt
+                s["fps_callback"] = inst if s["fps_callback"] == 0.0 else (1 - a) * s["fps_callback"] + a * inst
+        s["_last_entry_t"] = t_entry
+        if host_ts_ms:
+            lag = t_entry * 1000.0 - float(host_ts_ms)
+            s["sdk_lag_ms_now"] = lag
+            s["sdk_lag_ms_avg"] = lag if s["sdk_lag_ms_avg"] is None else (1 - a) * s["sdk_lag_ms_avg"] + a * lag
+            s["sdk_lag_ms_max"] = lag if s["sdk_lag_ms_max"] is None else max(s["sdk_lag_ms_max"], lag)
+        if s["_last_frame_num"] is not None and frame_num > s["_last_frame_num"] + 1:
+            s["frame_gaps"] += frame_num - s["_last_frame_num"] - 1
+        s["_last_frame_num"] = frame_num
+        if lost_packets:
+            s["lost_packets"] += int(lost_packets)
+        # Periodic compact report so the buildup is visible in plain logs.
+        if s["frames"] % 200 == 0:
+            fmt = lambda v: "n/a" if v is None else f"{v:.0f}"
+            line = (
+                f"HIK stream: n={s['frames']} fps={s['fps_callback']:.1f} "
+                f"cb={s['callback_ms_avg']:.1f}/{s['callback_ms_max']:.0f}ms "
+                f"sdk_lag(now/avg/max)={fmt(s['sdk_lag_ms_now'])}/{fmt(s['sdk_lag_ms_avg'])}/{fmt(s['sdk_lag_ms_max'])}ms "
+                f"gaps={s['frame_gaps']} lost_pkts={s['lost_packets']}"
+            )
+            if s["sdk_lag_ms_avg"] is not None and s["sdk_lag_ms_avg"] > 300:
+                self.__logger.warning(line + "  <-- frame backlog building upstream of Python (SDK/driver queue)")
+            else:
+                self.__logger.info(line)
+
+    def getStreamDiagnostics(self) -> dict:
+        """Snapshot of the streaming pipeline health (poll while live view runs).
+
+        How to read it:
+        * ``sdk_lag_ms_*`` growing over time  -> backlog in the SDK/driver queue
+          (before Python). Flat & small -> camera side is real-time.
+        * ``latest_frame_age_ms`` small       -> Python has a fresh frame; if the
+          browser still lags, the buildup is in encode/socket/frontend.
+        * ``frame_gaps`` growing              -> SDK drops frames when its queue is
+          full (bounded latency); zero gaps despite slow consumer -> unbounded FIFO.
+        """
+        s = {k: v for k, v in self._streamStats.items() if not k.startswith("_")}
+        last_entry = self._streamStats.get("_last_entry_t")
+        s["latest_frame_age_ms"] = None if last_entry is None else (time.time() - last_entry) * 1000.0
+        s["uptime_s"] = time.time() - self._streamStats.get("_started", time.time())
+        s["is_streaming"] = self.is_streaming
+        s["buffered_frames"] = len(self.frame_buffer)
+        s["set_image_node_num_ret"] = self._nodeNumRet
+        s["set_grab_strategy_ret"] = self._grabStrategyRet
+        return s
+
     def getDiagnostics(self) -> dict:
         """Call this from the REST API or a notebook to see camera state."""
         stFormat = MVCC_ENUMVALUE()
@@ -1095,6 +1201,7 @@ class CameraHIK:
             "isRGB": self.isRGB,
             "is_streaming": self.is_streaming,
             "frame": frame_info,
+            "stream": self.getStreamDiagnostics(),
         }
 
     # ── helper ---------------------------------------------------------------

@@ -12,6 +12,7 @@ import * as notificationSlice from "../state/slices/NotificationSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
 import * as focusLockSlice from "../state/slices/FocusLockSlice.js";
+import * as i2cSlice from "../state/slices/I2CSensorSlice.js";
 import * as mazeGameSlice from "../state/slices/MazeGameSlice.js";
 import * as autofocusSlice from "../state/slices/AutofocusSlice.js";
 import * as opticalFlowSlice from "../state/slices/OpticalFlowSlice.js";
@@ -24,6 +25,7 @@ import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 import * as storageSlice from "../state/slices/StorageSlice.js";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
+import * as stageMapSlice from "../state/slices/StageMapSlice.js";
 import { fetchAvailableControllers } from "../state/slices/BackendCapabilitiesSlice";
 
 import { io } from "socket.io-client";
@@ -70,25 +72,63 @@ const WebSocketHandler = () => {
       // Skip monitoring if backend connection is not configured
       if (!ip || !port) {
         dispatch(uc2Slice.setBackendConnected(false));
+        dispatch(uc2Slice.setApiConnected(false));
         dispatch(uc2Slice.setUc2Connected(false));
         return false;
       }
 
-      // ── Schritt 1: Backend API erreichbar ──
+      // ── Step 1: Backend API reachable and responding correctly ──
       const apiBase = `${ip}:${port}/imswitch/api/UC2ConfigController`;
+      const versionBase = `${ip}:${port}/imswitch/api`;
       let backendAlive = false;
+
+      const readBooleanJsonResponse = async (response) => {
+        const contentType = response.headers.get("content-type") || "";
+        if (!contentType.toLowerCase().includes("application/json")) {
+          throw new Error(
+            `Unexpected response type: ${contentType || "unknown"}`,
+          );
+        }
+
+        const data = await response.json();
+        if (typeof data !== "boolean") {
+          throw new Error("Unexpected JSON payload for connection check");
+        }
+
+        return data;
+      };
+
+      const readVersionJsonResponse = async (response) => {
+        const contentType = response.headers.get("content-type") || "";
+        if (!contentType.toLowerCase().includes("application/json")) {
+          throw new Error(
+            `Unexpected response type: ${contentType || "unknown"}`,
+          );
+        }
+
+        const data = await response.json();
+        if (!data || typeof data.version !== "string" || !data.version) {
+          throw new Error("Unexpected version payload for connection check");
+        }
+
+        return data.version;
+      };
+
       try {
-        console.debug(`[Check 1] Backend liveness: ${apiBase}/is_connected`);
+        console.debug(`[Check 1] Backend version: ${versionBase}/version`);
         const livenessResponse = await fetchWithTimeout(
-          `${apiBase}/is_connected`,
+          `${versionBase}/version`,
           { method: "GET" },
           5000,
         );
-        backendAlive = livenessResponse.ok;
+        backendAlive = livenessResponse.ok
+          ? Boolean(await readVersionJsonResponse(livenessResponse))
+          : false;
         console.debug(`[Check 1] Backend alive: ${backendAlive}`);
       } catch (error) {
         backendAlive = false;
       }
+      dispatch(uc2Slice.setApiConnected(backendAlive));
       dispatch(uc2Slice.setBackendConnected(backendAlive));
 
       // ── Schritt 2: ESP32/UART hardware connectivity ──
@@ -104,8 +144,7 @@ const WebSocketHandler = () => {
             5000,
           );
           if (hwResponse.ok) {
-            const data = await hwResponse.json();
-            hardwareConnected = data === true;
+            hardwareConnected = await readBooleanJsonResponse(hwResponse);
           }
           console.debug(
             `[Check 2] Hardware (ESP32/UART) connected: ${hardwareConnected}`,
@@ -319,16 +358,31 @@ const WebSocketHandler = () => {
   useEffect(() => {
     const handleManualConnectionCheck = async (event) => {
       console.log("Manual connection check triggered (HTTP + WebSocket)");
-      const { ip, port, websocketPort } = event.detail || {};
+      const { requestId, ip, port, websocketPort } = event.detail || {};
 
-      // Test HTTP connection first
-      const httpResult = await checkUc2Connection(ip, port);
+      let httpResult = false;
+      let wsResult = null;
 
-      // Test WebSocket connection if websocketPort is provided
-      if (websocketPort) {
-        const wsResult = await testWebSocketConnection(ip, websocketPort);
-        console.log(
-          `Connection test results - HTTP: ${httpResult}, WebSocket: ${wsResult}`,
+      try {
+        // Test HTTP connection first
+        httpResult = await checkUc2Connection(ip, port);
+
+        // Test WebSocket connection if websocketPort is provided
+        if (websocketPort) {
+          wsResult = await testWebSocketConnection(ip, websocketPort);
+          console.log(
+            `Connection test results - HTTP: ${httpResult}, WebSocket: ${wsResult}`,
+          );
+        }
+      } finally {
+        window.dispatchEvent(
+          new CustomEvent("imswitch:checkConnectionResult", {
+            detail: {
+              requestId,
+              httpResult,
+              wsResult,
+            },
+          }),
         );
       }
     };
@@ -503,7 +557,8 @@ const WebSocketHandler = () => {
         // Per-frame Redux updates are throttled (see above); the live canvas is
         // fed every frame via CustomEvents instead, so it still runs at full FPS.
         const nowTs = Date.now();
-        const doReduxUpdate = nowTs - lastFrameReduxTs > FRAME_REDUX_THROTTLE_MS;
+        const doReduxUpdate =
+          nowTs - lastFrameReduxTs > FRAME_REDUX_THROTTLE_MS;
         if (doReduxUpdate) lastFrameReduxTs = nowTs;
 
         if (doReduxUpdate && metadata && metadata.frame_id !== undefined) {
@@ -988,7 +1043,12 @@ const WebSocketHandler = () => {
             // Auto-advance to completion step on terminal states.
             // "cancelled" is treated as terminal so the UI unblocks even
             // when the user aborted a stuck flash via cancelUSBFlash.
-            const terminalStates = ["success", "failed", "warning", "cancelled"];
+            const terminalStates = [
+              "success",
+              "failed",
+              "warning",
+              "cancelled",
+            ];
             if (terminalStates.includes(flashStatus.status)) {
               if (
                 flashStatus.status === "success" ||
@@ -1025,6 +1085,37 @@ const WebSocketHandler = () => {
           }
         } catch (error) {
           console.error("Error in sigBusStatusUpdate handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigCollisionStatusUpdate") {
+        // Collision detector (GPIO slave): trip/clear events, arm/reset state
+        console.log("sigCollisionStatusUpdate received:", dataJson);
+        try {
+          const collisionStatus = dataJson.args?.p0;
+          if (collisionStatus) {
+            dispatch(uc2Slice.setCollisionStatus(collisionStatus));
+            // Global toast on a fresh trip so the user is warned even when
+            // the Frame Settings > Collision Detection tab is not open. The
+            // tab itself shows the full crash dialog with the reset flow.
+            if (collisionStatus.trip && collisionStatus.latched) {
+              const sensorVal = collisionStatus.event?.filtered;
+              dispatch(
+                notificationSlice.setNotification({
+                  message:
+                    "Collision detected!" +
+                    (sensorVal !== undefined ? ` (sensor=${sensorVal})` : "") +
+                    (collisionStatus.motorsStopped
+                      ? " All motors stopped."
+                      : " Auto-stop was NOT armed.") +
+                    " Inspect the stage and reset the alarm in Frame Settings > Collision Detection.",
+                  type: "error",
+                  autoHideDuration: null,
+                }),
+              );
+            }
+          }
+        } catch (error) {
+          console.error("Error in sigCollisionStatusUpdate handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigStorageStatusUpdate") {
@@ -1065,6 +1156,29 @@ const WebSocketHandler = () => {
             "Error in sigDetectorParametersUpdated handler:",
             error,
           );
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigStageMapTileAdded") {
+        // New stitched-map tile from StageMapController: {id, x, y, widthUm,
+        // heightUm, channel, image (base64 jpeg preview)}
+        try {
+          const tile = dataJson.args?.p0;
+          if (tile && tile.image) {
+            dispatch(stageMapSlice.addTile(tile));
+          }
+        } catch (error) {
+          console.error("Error in sigStageMapTileAdded handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigStageMapStatus") {
+        // Stage map runtime status (isRunning, tileCount, channels, FOV, ...)
+        try {
+          const mapStatus = dataJson.args?.p0;
+          if (mapStatus) {
+            dispatch(stageMapSlice.setStatus(mapStatus));
+          }
+        } catch (error) {
+          console.error("Error in sigStageMapStatus handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateOMEZarrStore") {
@@ -1216,6 +1330,38 @@ const WebSocketHandler = () => {
         } catch (error) {
           console.error("Error parsing focus lock state signal:", error);
         }
+      } else if (dataJson.name === "sigI2CSensorUpdate") {
+        let sensorData = dataJson.args?.p0 || dataJson.args || {};
+        // Handle I2C sensor updates - updated for new library format
+        try {
+          if (typeof sensorData === "object") {
+            dispatch(i2cSlice.updateSensorData(sensorData));
+          }
+        } catch (error) {
+          console.error("Error parsing I2C sensor update signal:", error);
+        }
+      
+        /*
+          // ── Live push: subscribe to the backend signal over Socket.IO ─────────
+          useEffect(() => {
+            if (!socket) return;
+            const handler = (raw) => {
+              try {
+                const msg = msgpackDecode(raw);
+                if (!msg || msg.name !== SIGNAL_NAME) return;
+                // args = { <paramName>: record }; take the single record dict.
+                const args = msg.args || {};
+                const record = Array.isArray(args) ? args[0] : Object.values(args)[0];
+                appendSample(record);
+              } catch (e) {
+                // ignore non-msgpack / unrelated frames
+              }
+            };
+            socket.on("signal_msgpack", handler);
+            return () => socket.off("signal_msgpack", handler);
+          }, [socket, appendSample]);
+        */
+
       } else if (dataJson.name === "sigCalibrationProgress") {
         //console.log("sigCalibrationProgress", dataJson);
         // Handle calibration progress updates - updated for new library format
@@ -1387,8 +1533,8 @@ const WebSocketHandler = () => {
 
     socket.onclose = () => {
       console.log("WebSocket closed");
-      //update redux state
-      dispatch(webSocketSlice.resetState());
+      // Keep last manual test result visible; only mark live connection as down.
+      dispatch(webSocketSlice.setConnected(false));
     };
 
     // Listen for disconnect events
@@ -1413,7 +1559,12 @@ const WebSocketHandler = () => {
       socket.disconnect();
       socket.close();
     };
-  }, [dispatch, connectionSettingsState, syncLivestreamStatus, syncIlluminationState]);
+  }, [
+    dispatch,
+    connectionSettingsState,
+    syncLivestreamStatus,
+    syncIlluminationState,
+  ]);
 
   // Global UC2 connection monitoring (periodic checks with pause functionality)
   useEffect(() => {

@@ -171,19 +171,9 @@ export const restoreObjectiveIllumination = async ({
       }
     }
 
-    if (enabled !== null && enabled !== undefined) {
-      try {
-        const response = await fetch(
-          `${hostIP}:${hostPort}/imswitch/api/LaserController/setLaserActive?laserName=${encodedLaserName}&active=${enabled}`,
-        );
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        dispatch(laserSlice.setLaserEnabled({ laserName, enabled: !!enabled }));
-      } catch (error) {
-        errors.push(`laser ${laserName} active: ${error.message || error}`);
-      }
-    }
+    // Do not restore the laser enabled/disabled state when switching objectives.
+    // The user controls whether lights are on or off; only the power level is
+    // objective-specific and should be restored from the preset.
   }
 
   return { restored: true, errors };

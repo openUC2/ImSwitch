@@ -332,12 +332,88 @@ class GalvoScannerController(ImConWidgetController):
         try:
             scanner = self._master.galvoScannersManager[scannerName]
             scanner.stop_scan(timeout=timeout)
-            
+
             self.__logger.info(f"Stopped scan on {scannerName}")
             result = {"status": "stopped", "scannerName": scannerName}
             return result
         except Exception as e:
             self.__logger.error(f"Error stopping scan on {scannerName}: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def getGalvoParkConfig(self, scannerName: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get the parking configuration (park_x, park_y, park_on_stop).
+
+        Example:
+            GET /api/GalvoScannerController/getGalvoParkConfig
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        try:
+            scanner = self._master.galvoScannersManager[scannerName]
+            cfg = scanner.get_park_config()
+            cfg["scannerName"] = scannerName
+            return cfg
+        except Exception as e:
+            self.__logger.error(f"Error getting park config for {scannerName}: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def setGalvoParkConfig(self, scannerName: Optional[str] = None,
+                           park_x: Optional[int] = None,
+                           park_y: Optional[int] = None,
+                           park_on_stop: Optional[bool] = None) -> Dict[str, Any]:
+        """
+        Update the parking configuration.
+
+        Args:
+            park_x: Park X position in DAC counts (0-4095)
+            park_y: Park Y position in DAC counts (0-4095)
+            park_on_stop: Whether to move to the park position when a scan stops
+
+        Example:
+            POST /api/GalvoScannerController/setGalvoParkConfig?park_x=2048&park_y=2048&park_on_stop=true
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        try:
+            scanner = self._master.galvoScannersManager[scannerName]
+            cfg = scanner.set_park_config(park_x=park_x, park_y=park_y,
+                                          park_on_stop=park_on_stop)
+            cfg["scannerName"] = scannerName
+            return cfg
+        except Exception as e:
+            self.__logger.error(f"Error setting park config for {scannerName}: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def parkGalvo(self, scannerName: Optional[str] = None,
+                  timeout: int = 1) -> Dict[str, Any]:
+        """
+        Immediately move the beam to the configured park position.
+
+        Example:
+            POST /api/GalvoScannerController/parkGalvo
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        try:
+            scanner = self._master.galvoScannersManager[scannerName]
+            result = scanner.park(timeout=timeout)
+            self.__logger.info(f"Parked {scannerName}")
+            return result
+        except Exception as e:
+            self.__logger.error(f"Error parking {scannerName}: {e}")
             return {"error": str(e)}
 
     @APIExport()

@@ -176,9 +176,28 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
             result = self._galvo.stop_galvo_scan(timeout=timeout)
             self._is_scanning = False
             self.__logger.info("Stopped galvo scan")
+            # Move the beam to the configured park position (e.g. center) so it
+            # doesn't sit at wherever the scan happened to stop.
+            if self._park_on_stop:
+                self.park(timeout=timeout)
             return result or {"status": "stopped"}
         except Exception as e:
             self.__logger.error(f"Failed to stop galvo scan: {e}")
+            return {"error": str(e)}
+
+    def park(self, timeout: int = 1) -> Dict[str, Any]:
+        """Move the beam to the configured park position (DAC counts)."""
+        if self._galvo is None:
+            return {"error": "Galvo not initialized"}
+        try:
+            result = self._galvo.set_position(self._park_x, self._park_y,
+                                              timeout=timeout)
+            self.__logger.info(
+                f"Parked galvo at ({self._park_x}, {self._park_y})")
+            return result or {"status": "parked",
+                              "x": self._park_x, "y": self._park_y}
+        except Exception as e:
+            self.__logger.error(f"Failed to park galvo: {e}")
             return {"error": str(e)}
 
     def get_status(self, timeout: int = 1) -> Dict[str, Any]:
@@ -200,13 +219,18 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
         
         try:
             result = self._galvo.get_galvo_status(timeout=timeout)
-            
+
+            # post_json may return a single dict, a list of response dicts, or an
+            # error string (on timeout / qid mismatch). Normalize to a dict so a
+            # non-dict never crashes with "'str' object has no attribute 'get'".
+            resp = self._extract_status_dict(result)
+
             # Update internal state from hardware response
-            if result:
-                self._is_scanning = result.get('running', False)
-                self._current_frame = result.get('current_frame', 0)
-                self._current_line = result.get('current_line', 0)
-            
+            if resp:
+                self._is_scanning = bool(resp.get('running', self._is_scanning))
+                self._current_frame = resp.get('current_frame', self._current_frame)
+                self._current_line = resp.get('current_line', self._current_line)
+
             return {
                 "running": self._is_scanning,
                 "current_frame": self._current_frame,
@@ -221,6 +245,30 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
                 "running": self._is_scanning,
                 "config": self.get_config_dict()
             }
+
+    @staticmethod
+    def _extract_status_dict(result: Any) -> Optional[Dict[str, Any]]:
+        """
+        Normalize a UC2-REST post_json return value into a status dict.
+
+        post_json returns different shapes depending on the transport/timing:
+        - dict: use directly
+        - list of dicts: pick the entry carrying the galvo status/qid
+        - str (e.g. "communication interrupted by timeout ..."): no status
+        """
+        if isinstance(result, dict):
+            return result
+        if isinstance(result, list):
+            for item in result:
+                if isinstance(item, dict) and (
+                    'running' in item or 'scanActive' in item
+                ):
+                    return item
+            # Fall back to the first dict in the list (may just carry qid)
+            for item in result:
+                if isinstance(item, dict):
+                    return item
+        return None
 
     def set_dac(self, channel: int = 1, frequency: int = 1, offset: int = 0,
                 amplitude: float = 1.0, clk_div: int = 0, phase: int = 0,

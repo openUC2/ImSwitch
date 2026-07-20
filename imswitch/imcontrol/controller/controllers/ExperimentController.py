@@ -2199,7 +2199,7 @@ class ExperimentController(ImConWidgetController):
         # Use the experiment-configured scan speed (set from the frontend in
         # startWellplateExperiment); falls back to the defaults in __init__ when
         # no experiment has overridden it.
-        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
+        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=(self.ACCELERATION, self.ACCELERATION))
         #newPosition = self.mStage.getPosition()
         #self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
         return (posX, posY) # TODO: Need to adjust in case of relative move

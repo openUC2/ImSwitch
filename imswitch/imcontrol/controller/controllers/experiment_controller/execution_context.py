@@ -120,11 +120,15 @@ class ExecutionContext:
             "autofocus_hc_max_iterations": p.autoFocusHillClimbingMaxIterations,
             "autofocus_target_focus_setpoint": p.autofocus_target_focus_setpoint,
             "autofocus_max_attempts": p.autofocus_max_attempts,
+            "autofocus_scope": p.autoFocusScope,
+            "autofocus_period_rounds": p.autoFocusPeriodRounds,
+            "autofocus_apply_global_offset": p.autoFocusApplyGlobalOffset,
             "t_period": self.t_period,
             "isRGB": self.is_rgb,
             "t_pre_s": p.performance_t_pre_s,
             "t_post_s": p.performance_t_post_s,
             "keep_illumination_on": self.keep_illumination_on,
+            "turn_off_between_timepoints": p.turnOffIlluminationBetweenTimepoints,
         }
 
     def performance_experiment_params(self) -> Dict[str, Any]:

@@ -61,12 +61,19 @@ const initialExperimentState = {
     autoFocusMode: "software", // "software" (Z-sweep/hill-climbing) or "hardware" (one-shot using FocusLock)
     autofocus_max_attempts: 3, // Max attempts for hardware autofocus
     autofocus_target_focus_setpoint: 0, // Target focus setpoint for hardware autofocus
+    // Autofocus scheduling
+    autoFocusScope: "everyPosition", // "everyPosition" (per XY tile) or "firstPositionOnly" (once per round → global Z offset)
+    autoFocusPeriodRounds: 1, // Run autofocus only every Nth timelapse round (1 = every round)
+    autoFocusApplyGlobalOffset: true, // Apply the AF result as a global Z offset to all capture moves
     zStack: false,
     zStackMin: 0.0,
     zStackMax: 0.0,
     zStackStepSize: 0.1,
     speed: 20000,
     z_speed: 5000,
+    // Stage acceleration (steps/s²) for the scan. Applied to XY and Z moves.
+    acceleration: 1000000,
+    z_acceleration: 1000000,
     // Tiling behaviour toggles (Tiling tab). Default off.
     returnToOrigin: false, // move stage back to pre-scan XYZ when the scan ends
     overrideZWithCurrentZ: false, // use current stage Z for every position (ignored if focus map active)
@@ -93,6 +100,9 @@ const initialExperimentState = {
     is_snakescan: false, // Enable snakescan pattern (alternating row directions)
     // Illumination mode
     keepIlluminationOn: "auto", // "auto" = on for single channel, off for multi | "on" = always keep on | "off" = per-frame toggle
+    // Turn illumination off during the wait between timelapse rounds even when
+    // keepIlluminationOn keeps it on within a round (avoids continuous exposure).
+    turnOffIlluminationBetweenTimepoints: true,
     // Cut CAN-bus power (complete darkness) around every exposure. For
     // low-light / luminescence imaging where indicator LEDs must be off.
     busPowerDarkness: false,
@@ -206,6 +216,15 @@ const experimentSlice = createSlice({
       console.log("setAutoFocusMode", action.payload);
       state.parameterValue.autoFocusMode = action.payload;
     },
+    setAutoFocusScope: (state, action) => {
+      state.parameterValue.autoFocusScope = action.payload;
+    },
+    setAutoFocusPeriodRounds: (state, action) => {
+      state.parameterValue.autoFocusPeriodRounds = Math.max(1, Math.round(action.payload || 1));
+    },
+    setAutoFocusApplyGlobalOffset: (state, action) => {
+      state.parameterValue.autoFocusApplyGlobalOffset = action.payload;
+    },
     setAutoFocusSoftwareMethod: (state, action) => {
       state.parameterValue.autoFocusSoftwareMethod = action.payload;
     },
@@ -252,6 +271,12 @@ const experimentSlice = createSlice({
     setZSpeed: (state, action) => {
       console.log("setZSpeed");
       state.parameterValue.z_speed = action.payload;
+    },
+    setAcceleration: (state, action) => {
+      state.parameterValue.acceleration = Math.max(0, action.payload);
+    },
+    setZAcceleration: (state, action) => {
+      state.parameterValue.z_acceleration = Math.max(0, action.payload);
     },
     setGains: (state, action) => {
       console.log("setGains");
@@ -348,6 +373,9 @@ const experimentSlice = createSlice({
     setKeepIlluminationOn: (state, action) => {
       console.log("setKeepIlluminationOn", action.payload);
       state.parameterValue.keepIlluminationOn = action.payload;
+    },
+    setTurnOffIlluminationBetweenTimepoints: (state, action) => {
+      state.parameterValue.turnOffIlluminationBetweenTimepoints = action.payload;
     },
     setBusPowerDarkness: (state, action) => {
       state.parameterValue.busPowerDarkness = action.payload;
@@ -558,6 +586,9 @@ export const {
   setAutoFocusTwoStage,
   setAutoFocusAlgorithm,
   setAutoFocusMode,
+  setAutoFocusScope,
+  setAutoFocusPeriodRounds,
+  setAutoFocusApplyGlobalOffset,
   setAutoFocusSoftwareMethod,
   setAutoFocusHillClimbingInitialStep,
   setAutoFocusHillClimbingMinStep,
@@ -571,6 +602,8 @@ export const {
   setZStackStepSize,
   setSpeed,
   setZSpeed,
+  setAcceleration,
+  setZAcceleration,
   setGains,
   setExposureTimes,
   setPerformanceMode,
@@ -592,6 +625,7 @@ export const {
   setReturnToOrigin,
   setOverrideZWithCurrentZ,
   setKeepIlluminationOn,
+  setTurnOffIlluminationBetweenTimepoints,
   setBusPowerDarkness,
   setIlluminationParams,
   setIlluminationParamsForChannel,

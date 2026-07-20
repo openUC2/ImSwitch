@@ -1322,6 +1322,58 @@ const ChannelsDimension = () => {
             </FormControl>
           </Box>
 
+          {/* Turn illumination off between timelapse rounds */}
+          <Box
+            sx={{
+              mb: 2,
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+            }}
+          >
+            <Box sx={{ pr: 1 }}>
+              <Box sx={{ display: "flex", alignItems: "center", mb: 0.25 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Illumination off between timepoints
+                </Typography>
+                <Tooltip
+                  title={
+                    "For timelapses: turn the illumination OFF during the wait between rounds, even when the mode above keeps it on within a round. " +
+                    "Prevents the sample from being continuously exposed (photobleaching / phototoxicity) during the time-lapse period. " +
+                    "It is automatically switched back on at the start of the next round."
+                  }
+                  arrow
+                >
+                  <InfoOutlinedIcon
+                    sx={{
+                      fontSize: 14,
+                      ml: 0.5,
+                      color: "text.disabled",
+                      cursor: "help",
+                    }}
+                  />
+                </Tooltip>
+              </Box>
+              <Typography variant="caption" color="textSecondary">
+                Avoids continuous exposure during the time-lapse period.
+              </Typography>
+            </Box>
+            <Switch
+              size="small"
+              checked={parameterValue.turnOffIlluminationBetweenTimepoints !== false}
+              onChange={(e) =>
+                dispatch(
+                  experimentSlice.setTurnOffIlluminationBetweenTimepoints(
+                    e.target.checked,
+                  ),
+                )
+              }
+              inputProps={{
+                "aria-label": "Turn illumination off between timepoints",
+              }}
+            />
+          </Box>
+
           {/* CAN-bus power darkness — cut bus power around every exposure */}
           <Box
             sx={{

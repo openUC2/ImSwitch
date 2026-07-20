@@ -150,6 +150,12 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_hc_max_iterations = kwargs.get('autofocus_hc_max_iterations', 50)
         autofocus_max_attempts = kwargs.get('autofocus_max_attempts', 2)
         autofocus_target_focus_setpoint = kwargs.get('autofocus_target_focus_setpoint', None)
+        # Autofocus scheduling: scope (per-position vs first-point-only),
+        # period (every Nth round), and whether the AF result updates the
+        # shared global Z offset that capture moves apply.
+        autofocus_scope = kwargs.get('autofocus_scope', 'everyPosition')
+        autofocus_period_rounds = max(1, int(kwargs.get('autofocus_period_rounds', 1) or 1))
+        autofocus_apply_global_offset = kwargs.get('autofocus_apply_global_offset', True)
         initial_z_position = kwargs.get('initial_z_position', None)
         t_period = kwargs.get('t_period', 1)
         # Timing parameters from GUI (used for settle/exposure waits)
@@ -159,6 +165,9 @@ class ExperimentNormalMode(ExperimentModeBase):
         n_times = kwargs.get('n_times', 1)  # Total number of time points
         # Illumination mode: keep illumination on for entire acquisition?
         keep_illumination_on = kwargs.get('keep_illumination_on', False)
+        # Turn illumination off during the wait between timelapse rounds even
+        # when keep_illumination_on keeps it on within a round.
+        turn_off_between_timepoints = kwargs.get('turn_off_between_timepoints', True)
 
         # Initialize workflow components
         workflow_steps = []
@@ -223,6 +232,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                 keep_illumination_on=keep_illumination_on,
                 illumination_kinds=illumination_kinds,
                 illumination_params=illumination_params,
+                autofocus_scope=autofocus_scope,
+                autofocus_period_rounds=autofocus_period_rounds,
+                autofocus_apply_global_offset=autofocus_apply_global_offset,
             )
 
         # Add finalization steps
@@ -232,6 +244,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             writer_offset=writer_offset,
             keep_illumination_on=keep_illumination_on,
             illumination_kinds=illumination_kinds,
+            turn_off_between_timepoints=turn_off_between_timepoints,
         )
 
         # Add step to set LED status to idle when done
@@ -588,7 +601,10 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   autofocus_hc_step_reduction: float = 0.5,
                                   autofocus_hc_max_iterations: int = 50,
                                   illumination_kinds: Optional[List[str]] = None,
-                                  illumination_params: Optional[Dict[str, Dict[str, Any]]] = None) -> int:
+                                  illumination_params: Optional[Dict[str, Dict[str, Any]]] = None,
+                                  autofocus_scope: str = "everyPosition",
+                                  autofocus_period_rounds: int = 1,
+                                  autofocus_apply_global_offset: bool = True) -> int:
         """
         Create workflow steps for a single tile.
 
@@ -704,8 +720,31 @@ class ExperimentNormalMode(ExperimentModeBase):
                 ))
                 step_id += 1
 
-            # Perform autofocus if enabled (runs after focus map Z move if both active)
-            if is_auto_focus:
+            # Perform autofocus if enabled (runs after focus map Z move if both
+            # active). Scheduling:
+            #   - period: only on rounds where t % period == 0 (skipped rounds
+            #             reuse the last measured global Z offset)
+            #   - scope:  'everyPosition' → every XY tile; 'firstPositionOnly' →
+            #             only the very first tile of the round, applied as a
+            #             global Z offset to all positions (thermal-drift model)
+            af_period = max(1, int(autofocus_period_rounds or 1))
+            af_round_active = is_auto_focus and (t % af_period == 0)
+            if autofocus_scope == "firstPositionOnly":
+                do_autofocus = af_round_active and position_center_index == 0 and m_index == 0
+            else:
+                do_autofocus = af_round_active
+            if do_autofocus:
+                # When apply_global_offset is set, a post-func captures the
+                # measured focus Z and stores (measured - base_z) as the shared
+                # runtime offset that every capture Z-move adds on top of its
+                # base Z (see controller.update_af_offset / move_stage_z). This
+                # is what makes the autofocus result actually reach the images
+                # instead of being overwritten by the next absolute Z-move.
+                af_post_funcs = None
+                af_post_params = None
+                if autofocus_apply_global_offset:
+                    af_post_funcs = [self.controller.update_af_offset]
+                    af_post_params = {"expected_z": base_z, "apply_global_offset": True}
                 workflow_steps.append(WorkflowStep(
                     name="Autofocus",
                     step_id=step_id,
@@ -724,6 +763,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                         "af_hc_step_reduction": autofocus_hc_step_reduction,
                         "af_hc_max_iterations": autofocus_hc_max_iterations,
                     },
+                    post_funcs=af_post_funcs,
+                    post_params=af_post_params,
                 ))
                 step_id += 1
 
@@ -735,15 +776,23 @@ class ExperimentNormalMode(ExperimentModeBase):
             # a prior tile's focus-map or autofocus moved it elsewhere.
             is_z_stack = len(effective_z_positions) > 1
             for index_z, i_z in enumerate(effective_z_positions):
-                # Move Z for every plane in a Z-stack, or once for single-Z
+                # Move Z for every plane in a Z-stack, or once for single-Z.
+                # The settle wait is attached as a POST-func so it runs AFTER
+                # the stage stops — damping vibration before exposure. This is
+                # unconditional (independent of illumination mode), which fixes
+                # the keepIlluminationOn case where the per-frame illumination
+                # settle (its own post-wait below) is skipped and there would
+                # otherwise be no post-move settle at all. apply_af_offset adds
+                # the runtime autofocus Z offset so the measured focus reaches
+                # the acquisition instead of being overwritten here.
                 if is_z_stack or index_z == 0:
                     workflow_steps.append(WorkflowStep(
                         name=f"Move to Z {'plane ' + str(index_z) if is_z_stack else 'base position'} ({i_z:.1f} µm)",
                         step_id=step_id,
                         main_func=self.controller.move_stage_z,
-                        main_params={"posZ": i_z, "relative": False},
-                        pre_funcs=[self.controller.wait_time],
-                        pre_params={"seconds": t_pre_s},
+                        main_params={"posZ": i_z, "relative": False, "apply_af_offset": True},
+                        post_funcs=[self.controller.wait_time],
+                        post_params={"seconds": t_pre_s},
                     ))
                     step_id += 1
 
@@ -780,7 +829,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                                 name=f"Channel Z offset ({illu_source}: {channel_offset_z:+.1f} µm)",
                                 step_id=step_id,
                                 main_func=self.controller.move_stage_z,
-                                main_params={"posZ": adjusted_z, "relative": False},
+                                main_params={"posZ": adjusted_z, "relative": False, "apply_af_offset": True},
+                                post_funcs=[self.controller.wait_time],
+                                post_params={"seconds": t_pre_s},
                             ))
                             step_id += 1
 
@@ -1035,7 +1086,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                               t: int, n_times: int,
                               writer_offset: int = 0,
                               keep_illumination_on: bool = False,
-                              illumination_kinds: Optional[List[str]] = None) -> int:
+                              illumination_kinds: Optional[List[str]] = None,
+                              turn_off_between_timepoints: bool = True) -> int:
         """
         Add finalization workflow steps.
 
@@ -1068,9 +1120,18 @@ class ExperimentNormalMode(ExperimentModeBase):
             step_id += 1
 
         # Turn off all illuminations.
-        # When keep_illumination_on is active, only turn off on the very last
-        # timepoint so the light stays on between timepoints for speed.
-        should_turn_off = (not keep_illumination_on) or is_last_timepoint
+        # When keep_illumination_on is active, the light normally stays on
+        # between timepoints for speed and is only turned off on the very last
+        # timepoint. For timelapse we also turn it off between rounds (during
+        # the tPeriod wait) when turn_off_between_timepoints is set, so the
+        # sample is not continuously exposed. This is safe because
+        # execute_experiment re-emits the "Turn on illumination (continuous)"
+        # step at the start of every timepoint, re-enabling it next round.
+        should_turn_off = (
+            (not keep_illumination_on)
+            or is_last_timepoint
+            or turn_off_between_timepoints
+        )
         if should_turn_off:
             # Name-based kind lookup (parallel-array indexing was historically
             # brittle here when passthrough mode collapsed illumination_sources).

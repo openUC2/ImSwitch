@@ -81,6 +81,37 @@ export const apiStopGalvoScan = async (hostIP, hostPort, scannerName = null) => 
 };
 
 /**
+ * Get parking configuration (park_x, park_y, park_on_stop)
+ */
+export const apiGetGalvoParkConfig = async (hostIP, hostPort, scannerName = null) => {
+  const params = scannerName ? `?scannerName=${scannerName}` : '';
+  const response = await fetch(`${getApiBase(hostIP, hostPort)}/getGalvoParkConfig${params}`);
+  return response.json();
+};
+
+/**
+ * Update parking configuration
+ * @param {{park_x?: number, park_y?: number, park_on_stop?: boolean}} park
+ */
+export const apiSetGalvoParkConfig = async (hostIP, hostPort, scannerName, park) => {
+  const params = new URLSearchParams({ scannerName });
+  if (park.park_x !== undefined) params.append('park_x', String(park.park_x));
+  if (park.park_y !== undefined) params.append('park_y', String(park.park_y));
+  if (park.park_on_stop !== undefined) params.append('park_on_stop', String(park.park_on_stop));
+  const response = await fetch(`${getApiBase(hostIP, hostPort)}/setGalvoParkConfig?${params}`);
+  return response.json();
+};
+
+/**
+ * Immediately move the beam to the configured park position
+ */
+export const apiParkGalvo = async (hostIP, hostPort, scannerName = null) => {
+  const params = scannerName ? `?scannerName=${scannerName}` : '';
+  const response = await fetch(`${getApiBase(hostIP, hostPort)}/parkGalvo${params}`);
+  return response.json();
+};
+
+/**
  * Get status of all scanners
  */
 export const apiGetAllGalvoScannersStatus = async (hostIP, hostPort) => {
@@ -237,6 +268,9 @@ export default {
   apiSetGalvoScanConfig,
   apiStartGalvoScan,
   apiStopGalvoScan,
+  apiGetGalvoParkConfig,
+  apiSetGalvoParkConfig,
+  apiParkGalvo,
   apiGetAllGalvoScannersStatus,
   apiStopAllGalvoScans,
   apiSetArbitraryPoints,

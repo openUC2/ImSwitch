@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import createAxiosInstance from '../../backendapi/createAxiosInstance';
+import createAxiosInstance from "../../backendapi/createAxiosInstance";
 import {
   Box,
   Typography,
@@ -47,6 +47,7 @@ import * as vizarrViewerSlice from "../../state/slices/VizarrViewerSlice";
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
 import * as positionSlice from "../../state/slices/PositionSlice";
+import { setNotification } from "../../state/slices/NotificationSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 
 // API
@@ -69,7 +70,7 @@ const Status = Object.freeze({
 
 /**
  * ExperimentDesigner - Main container for the dimension-based experiment UI
- * 
+ *
  * Structure:
  * - Header with experiment controls (Start/Pause/Stop)
  * - Dimension bar for navigation
@@ -82,16 +83,24 @@ const ExperimentDesigner = () => {
   const infoPopupRef = useRef(null);
 
   // Redux state
-  const connectionSettings = useSelector(connectionSettingsSlice.getConnectionSettingsState);
+  const connectionSettings = useSelector(
+    connectionSettingsSlice.getConnectionSettingsState,
+  );
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const experimentUI = useSelector(experimentUISlice.getExperimentUIState);
-  const experimentStatus = useSelector(experimentStatusSlice.getExperimentStatusState);
-  const experimentWorkflow = useSelector(experimentStateSlice.getExperimentState);
+  const experimentStatus = useSelector(
+    experimentStatusSlice.getExperimentStatusState,
+  );
+  const experimentWorkflow = useSelector(
+    experimentStateSlice.getExperimentState,
+  );
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const focusMapConfig = useSelector(focusMapSlice.getFocusMapConfig);
   const focusMapManualPoints = useSelector(focusMapSlice.getManualPoints);
-  const parameterRange = useSelector(parameterRangeSlice.getParameterRangeState);
+  const parameterRange = useSelector(
+    parameterRangeSlice.getParameterRangeState,
+  );
   const positionState = useSelector(positionSlice.getPositionState);
 
   // Progress tracking
@@ -145,9 +154,10 @@ const ExperimentDesigner = () => {
           if (!status?.running) {
             setAshlarRunning(false);
             if (status?.error)
-              infoPopupRef.current?.showMessage(`Stitching failed: ${status.error.slice(0, 120)}`);
-            else
-              infoPopupRef.current?.showMessage("Ashlar stitching complete");
+              infoPopupRef.current?.showMessage(
+                `Stitching failed: ${status.error.slice(0, 120)}`,
+              );
+            else infoPopupRef.current?.showMessage("Ashlar stitching complete");
           }
         })
         .catch(() => {});
@@ -182,12 +192,17 @@ const ExperimentDesigner = () => {
     if (experimentWorkflow.stepName) {
       setCachedStepName(experimentWorkflow.stepName);
     }
-  }, [experimentWorkflow.totalSteps, experimentWorkflow.stepId, experimentWorkflow.stepName]);
+  }, [
+    experimentWorkflow.totalSteps,
+    experimentWorkflow.stepId,
+    experimentWorkflow.stepName,
+  ]);
 
   // Calculate progress
-  const progress = cachedTotalSteps && cachedTotalSteps > 0
-    ? Math.floor((cachedStepId / cachedTotalSteps) * 100)
-    : 0;
+  const progress =
+    cachedTotalSteps && cachedTotalSteps > 0
+      ? Math.floor((cachedStepId / cachedTotalSteps) * 100)
+      : 0;
 
   // Dimension to component mapping
   const dimensionComponents = {
@@ -202,34 +217,47 @@ const ExperimentDesigner = () => {
   };
 
   // Get active dimension component
-  const ActiveDimensionComponent = dimensionComponents[experimentUI.expandedDimension];
-  const isActiveDimensionEnabled = experimentUI.dimensions[experimentUI.expandedDimension]?.enabled ?? true;
+  const ActiveDimensionComponent =
+    dimensionComponents[experimentUI.expandedDimension];
+  const isActiveDimensionEnabled =
+    experimentUI.dimensions[experimentUI.expandedDimension]?.enabled ?? true;
 
   // Control handlers
   const handleStart = () => {
     console.log("Experiment started");
-    dispatch(experimentSlice.setIsSnakescan(wellSelectorState.areaSelectSnakescan));
+    dispatch(
+      experimentSlice.setIsSnakescan(wellSelectorState.areaSelectSnakescan),
+    );
 
     if (wellSelectorState.mode === "area") {
-      dispatch(experimentSlice.setOverlapWidth(wellSelectorState.areaSelectOverlap));
-      dispatch(experimentSlice.setOverlapHeight(wellSelectorState.areaSelectOverlap));
+      dispatch(
+        experimentSlice.setOverlapWidth(wellSelectorState.areaSelectOverlap),
+      );
+      dispatch(
+        experimentSlice.setOverlapHeight(wellSelectorState.areaSelectOverlap),
+      );
     }
 
     const scanConfig = coordinateCalculator.calculateScanCoordinates(
       experimentState,
       objectiveState,
-      wellSelectorState
+      wellSelectorState,
     );
 
     // "Override per-group Z with current Z" (Tiling tab): rewrite every stored
     // Z with the microscope's current stage Z. Done here on the frontend (the
     // backend just consumes the coordinates). Skipped when a focus map is
     // active, since the focus map drives Z per-XY.
-    if (experimentState.parameterValue.overrideZWithCurrentZ && !focusMapConfig.enabled) {
+    if (
+      experimentState.parameterValue.overrideZWithCurrentZ &&
+      !focusMapConfig.enabled
+    ) {
       const currentZ = positionState?.z ?? 0;
       (scanConfig.scanAreas || []).forEach((area) => {
         if (area.centerPosition) area.centerPosition.z = currentZ;
-        (area.positions || []).forEach((pos) => { pos.z = currentZ; });
+        (area.positions || []).forEach((pos) => {
+          pos.z = currentZ;
+        });
       });
     }
 
@@ -239,12 +267,49 @@ const ExperimentDesigner = () => {
     // Zero out intensities for channels that are not enabled for experiment acquisition
     const pv = experimentState.parameterValue;
     const channelEnabled = pv.channelEnabledForExperiment || [];
+    const selectedChannelCount = Array.isArray(channelEnabled)
+      ? channelEnabled.filter(Boolean).length
+      : 0;
+    const totalPositions = Number(scanConfig?.metadata?.totalPositions ?? 0);
+
+    if (totalPositions <= 0 && selectedChannelCount <= 0) {
+      dispatch(
+        setNotification({
+          message:
+            "Nothing to do: no positions and no channels selected. Please select at least one position and enable at least one channel.",
+          type: "warning",
+        }),
+      );
+      return;
+    }
+    if (totalPositions <= 0) {
+      dispatch(
+        setNotification({
+          message:
+            "Nothing to do: no positions selected. Please select at least one position before starting.",
+          type: "warning",
+        }),
+      );
+      return;
+    }
+    if (selectedChannelCount <= 0) {
+      dispatch(
+        setNotification({
+          message:
+            "Nothing to do: no channels selected. Please enable at least one channel in EXP before starting.",
+          type: "warning",
+        }),
+      );
+      return;
+    }
+
     const rawIntensities = pv.illuIntensities || [];
     const exposureTimes = pv.exposureTimes || [];
     const gains = pv.gains || [];
     const illuminationParamsState = pv.illuminationParams || {};
     const filteredIntensities = rawIntensities.map((val, idx) =>
-      channelEnabled[idx] === true ? val : 0    );
+      channelEnabled[idx] === true ? val : 0,
+    );
 
     // Split the flat channel list into conventional sources + a dedicated
     // synthetic (ring/DPC) list. The Channels dimension renders one merged
@@ -252,8 +317,12 @@ const ExperimentDesigner = () => {
     // boundary so the REST payload keeps `illumination` conventional-only and
     // carries ring/DPC in `syntheticChannels` (single source of truth, no
     // RGB→intensity promotion on the backend).
-    const defaultSourceNames = Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : [];
-    const syntheticDefs = Array.isArray(parameterRange.syntheticChannels) ? parameterRange.syntheticChannels : [];
+    const defaultSourceNames = Array.isArray(parameterRange.illuSources)
+      ? parameterRange.illuSources
+      : [];
+    const syntheticDefs = Array.isArray(parameterRange.syntheticChannels)
+      ? parameterRange.syntheticChannels
+      : [];
     const nDefault = defaultSourceNames.length;
     const syntheticChannelsPayload = syntheticDefs.map((s, j) => {
       const idx = nDefault + j;
@@ -283,16 +352,21 @@ const ExperimentDesigner = () => {
         syntheticChannels: syntheticChannelsPayload,
         resortPointListToSnakeCoordinates: false,
         is_snakescan: wellSelectorState.areaSelectSnakescan,
-        overlapWidth: wellSelectorState.mode === "area"
-          ? wellSelectorState.areaSelectOverlap
-          : pv.overlapWidth,
-        overlapHeight: wellSelectorState.mode === "area"
-          ? wellSelectorState.areaSelectOverlap
-          : pv.overlapHeight,
+        overlapWidth:
+          wellSelectorState.mode === "area"
+            ? wellSelectorState.areaSelectOverlap
+            : pv.overlapWidth,
+        overlapHeight:
+          wellSelectorState.mode === "area"
+            ? wellSelectorState.areaSelectOverlap
+            : pv.overlapHeight,
       },
       scanAreas: scanConfig.scanAreas,
       scanMetadata: scanConfig.metadata,
-      pointList: coordinateCalculator.convertToBackendFormat(scanConfig, experimentState).pointList,
+      pointList: coordinateCalculator.convertToBackendFormat(
+        scanConfig,
+        experimentState,
+      ).pointList,
       focusMap: focusMapConfig.enabled
         ? {
             ...focusMapConfig,
@@ -346,14 +420,17 @@ const ExperimentDesigner = () => {
 
   const handleStopStitch = () => {
     const axiosInstance = createAxiosInstance();
-    axiosInstance.get("/ExperimentController/stopAshlarStitching")
+    axiosInstance
+      .get("/ExperimentController/stopAshlarStitching")
       .then((res) => {
         if (res.data?.stopped) {
           setAshlarRunning(false);
           setAshlarInterrupted(true);
           infoPopupRef.current?.showMessage("Ashlar stitching stopped");
         } else {
-          infoPopupRef.current?.showMessage(res.data?.message ?? "No stitching process running");
+          infoPopupRef.current?.showMessage(
+            res.data?.message ?? "No stitching process running",
+          );
         }
       })
       .catch(() => {
@@ -375,7 +452,7 @@ const ExperimentDesigner = () => {
         } else {
           setAshlarInterrupted(true);
           infoPopupRef.current?.showMessage(
-            `Could not restart stitching: ${data?.error ?? "unknown error"}`
+            `Could not restart stitching: ${data?.error ?? "unknown error"}`,
           );
         }
       })
@@ -400,18 +477,21 @@ const ExperimentDesigner = () => {
 
   const handleOpenVizarr = () => {
     const api = createAxiosInstance();
-    api.get(
-      `/ExperimentController/getLastScanAsOMEZARR`
-    )
+    api
+      .get(`/ExperimentController/getLastScanAsOMEZARR`)
       .then((res) => res.data)
       .then((data) => {
         const lastZarrPath = data || "";
         if (lastZarrPath) {
-          dispatch(vizarrViewerSlice.openViewer({
-            url: lastZarrPath,
-            fileName: lastZarrPath.split("/").pop() || "OME-Zarr",
-          }));
-          infoPopupRef.current?.showMessage("Opening OME-Zarr in integrated viewer");
+          dispatch(
+            vizarrViewerSlice.openViewer({
+              url: lastZarrPath,
+              fileName: lastZarrPath.split("/").pop() || "OME-Zarr",
+            }),
+          );
+          infoPopupRef.current?.showMessage(
+            "Opening OME-Zarr in integrated viewer",
+          );
         } else {
           infoPopupRef.current?.showMessage("No OME-Zarr data available");
         }
@@ -422,7 +502,9 @@ const ExperimentDesigner = () => {
   };
 
   // Button visibility helpers
-  const showStart = experimentStatus.status === Status.IDLE || experimentStatus.status === Status.STOPPING;
+  const showStart =
+    experimentStatus.status === Status.IDLE ||
+    experimentStatus.status === Status.STOPPING;
   const showPause = experimentStatus.status === Status.RUNNING;
   const showResume = experimentStatus.status === Status.PAUSED;
   const showStop = experimentStatus.status !== Status.IDLE;
@@ -523,9 +605,9 @@ const ExperimentDesigner = () => {
               experimentStatus.status === Status.RUNNING
                 ? theme.palette.success.main
                 : experimentStatus.status === Status.PAUSED
-                ? theme.palette.warning.main
-                : theme.palette.grey[500],
-              0.15
+                  ? theme.palette.warning.main
+                  : theme.palette.grey[500],
+              0.15,
             ),
             fontWeight: 500,
           }}
@@ -535,7 +617,15 @@ const ExperimentDesigner = () => {
 
         {/* Progress */}
         {cachedTotalSteps && cachedTotalSteps > 0 && (
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, flex: 1, maxWidth: 300 }}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              flex: 1,
+              maxWidth: 300,
+            }}
+          >
             <Typography
               variant="caption"
               sx={{
@@ -560,10 +650,10 @@ const ExperimentDesigner = () => {
 
         {/* Viewer buttons */}
         <Tooltip title="Open Vizarr viewer">
-          <Button 
-            size="small" 
-            variant="outlined" 
-            onClick={handleOpenVizarr} 
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={handleOpenVizarr}
             startIcon={<VisibilityIcon />}
           >
             Open Vizarr

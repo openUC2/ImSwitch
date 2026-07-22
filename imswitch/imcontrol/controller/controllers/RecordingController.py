@@ -214,6 +214,13 @@ class RecordingController(ImConWidgetController):
             for detectorName in detectorNames
         }
 
+        # Arm the detectors on demand so snapping works even when the live stream
+        # is stopped. This is essential for long-exposure experiments (e.g. 60 s),
+        # where we cannot afford a continuous live stream: we start acquisition,
+        # wait for one full fresh exposure, capture, then release the detector
+        # again. Detectors that are already running (e.g. an active stream) are
+        # left untouched.
+        armedDetectors = self._armDetectorsForSnap(detectorNames)
 
         # Use RecordingService for snap operations
         try:
@@ -229,6 +236,10 @@ class RecordingController(ImConWidgetController):
             self.__logger.error(f"Failed to snap: {e}")
             self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
             raise
+        finally:
+            # Release any detectors we armed just for this snap, restoring the
+            # previous (stream-off) state.
+            self._disarmDetectorsAfterSnap(armedDetectors)
 
         saved_full_path = None
 
@@ -270,6 +281,142 @@ class RecordingController(ImConWidgetController):
             "relativePath": relativeFolder,
             "relativeFilePath": relative_file_path,
         }
+
+    def _getDetectorExposureSeconds(self, detector) -> float:
+        """Best-effort read of the detector exposure time, returned in seconds.
+
+        Exposure parameters are stored in milliseconds in ImSwitch. Returns 0.0
+        when the exposure cannot be determined (naming differs between drivers).
+        """
+        try:
+            params = detector.parameters
+        except Exception:
+            return 0.0
+        for key in ("exposure", "exposureTime", "ExposureTime", "exposure_time"):
+            try:
+                param = params.get(key) if hasattr(params, "get") else params[key]
+            except Exception:
+                param = None
+            if param is None:
+                continue
+            value = getattr(param, "value", param)
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value / 1000.0
+        return 0.0
+
+    def _armDetectorsForSnap(self, detectorNames) -> list:
+        """Ensure the given detectors are acquiring so a fresh frame can be
+        captured even when the live stream is stopped.
+
+        Mirrors the ``_running`` convention used by the detector managers and the
+        live-view controller: only detectors that are known to be stopped are
+        started here, and only those are returned so the caller can stop them
+        again afterwards. Detectors that are already running (e.g. an active
+        stream) or whose state cannot be determined are left untouched, which
+        preserves the previous snap behaviour for them.
+        """
+        started = []
+        for detectorName in detectorNames:
+            try:
+                detector = self._master.detectorsManager[detectorName]
+            except Exception as e:
+                self.__logger.warning(
+                    f"Could not access detector '{detectorName}' for snap: {e}"
+                )
+                continue
+            # `_running` is False only when the detector is definitely stopped.
+            isRunning = getattr(detector, "_running", None)
+            if isRunning is False:
+                try:
+                    detector.startAcquisition()
+                    started.append(detectorName)
+                    self.__logger.debug(
+                        f"Armed detector '{detectorName}' on demand for snap "
+                        f"(live stream not running)."
+                    )
+                except Exception as e:
+                    self.__logger.error(
+                        f"Failed to arm detector '{detectorName}' for snap: {e}"
+                    )
+
+        # Wait for a genuinely fresh frame on each detector we just armed so that
+        # long exposures are fully integrated before the frame is grabbed.
+        for detectorName in started:
+            try:
+                self._waitForFreshFrame(self._master.detectorsManager[detectorName])
+            except Exception as e:
+                self.__logger.warning(
+                    f"Error while waiting for a fresh frame on '{detectorName}': {e}"
+                )
+        return started
+
+    def _waitForFreshFrame(self, detector, framesToWait: int = 1,
+                           extraTimeout: float = 3.0) -> None:
+        """Block until the detector has produced a fresh frame after arming.
+
+        Waits for the frame counter to advance so that a snap taken with the
+        live stream off captures a real exposure rather than a stale buffered
+        frame. The timeout scales with the configured exposure time so exposures
+        of many seconds (e.g. 60 s or more) are supported.
+        """
+        exposureSeconds = self._getDetectorExposureSeconds(detector)
+        # Allow a full exposure for every frame we wait for, plus a safety margin.
+        timeout = max(2.0, (exposureSeconds + 0.2) * (framesToWait + 1) + extraTimeout)
+        startTime = time.time()
+        baselineFrameNumber = None
+        while True:
+            try:
+                frame, frameNumber = detector.getLatestFrame(returnFrameNumber=True)
+            except TypeError:
+                # Detector doesn't expose frame numbers - fall back to a
+                # time-based wait of roughly one exposure so we still capture a
+                # reasonably fresh frame.
+                time.sleep(min(timeout, exposureSeconds + 0.3))
+                return
+            except Exception as e:
+                self.__logger.warning(f"Error reading frame while arming snap: {e}")
+                time.sleep(min(timeout, exposureSeconds + 0.3))
+                return
+
+            if frameNumber is None:
+                # Driver doesn't report frame numbers via this path; wait ~one
+                # exposure and use whatever is available.
+                time.sleep(min(timeout, exposureSeconds + 0.3))
+                return
+
+            if baselineFrameNumber is None or frameNumber < baselineFrameNumber:
+                # Establish the baseline (or reset it if the counter wrapped or
+                # restarted when acquisition began).
+                baselineFrameNumber = frameNumber
+
+            if frame is not None and frameNumber >= baselineFrameNumber + framesToWait:
+                return
+
+            if time.time() - startTime > timeout:
+                self.__logger.debug(
+                    f"Timed out after {timeout:.1f}s waiting for a fresh frame; "
+                    f"using the latest available frame."
+                )
+                return
+            time.sleep(0.02)
+
+    def _disarmDetectorsAfterSnap(self, detectorNames) -> None:
+        """Stop the detectors that were armed by :meth:`_armDetectorsForSnap`,
+        restoring the previous (stream-off) state."""
+        for detectorName in detectorNames:
+            try:
+                self._master.detectorsManager[detectorName].stopAcquisition()
+                self.__logger.debug(
+                    f"Released detector '{detectorName}' after on-demand snap."
+                )
+            except Exception as e:
+                self.__logger.warning(
+                    f"Failed to release detector '{detectorName}' after snap: {e}"
+                )
 
     def snapNumpy(self) -> Dict[str, np.ndarray]:
         """
@@ -514,7 +661,7 @@ class RecordingController(ImConWidgetController):
             self.setSharedAttr(_recModeAttr, self.recMode.name)
 
 
-    @APIExport(runOnUIThread=True)
+    @APIExport(runOnUIThread=False)
     def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: int = SaveFormat.TIFF) -> dict:
         """Take a snap and save it to a file at the given fileName.
 

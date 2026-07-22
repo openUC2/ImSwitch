@@ -1,5 +1,5 @@
 """
-SiLA2Manager for OpenUC2 ImSwitch.
+SiLa2Manager for OpenUC2 ImSwitch.
 
 Manages the lifecycle of the SiLA2 server (UniteLabs CDK Connector).
 Configuration is loaded from setupInfo, analogous to ArkitektManager.
@@ -50,12 +50,12 @@ except ImportError:
     HAS_SILA2 = False
 
 
-class SiLA2Manager:
+class SiLa2Manager:
     """Manager for the SiLA2 server integration in ImSwitch."""
 
     def __init__(self, setupInfo):
         """
-        Initialize the SiLA2Manager.
+        Initialize the SiLa2Manager.
 
         Args:
             setupInfo: SiLA2Info dataclass from the setup configuration.
@@ -209,11 +209,12 @@ class SiLA2Manager:
         )
         # TODO: Load from config.json instead of hardcoding
         connector_config.cloud_server_endpoint.hostname = (
-            "00000000-0000-0000-0000-000000000000.dev.unitelabs.io"
+            "2e07ca51-aeb7-41b1-8f4e-b0834359a7d6.dev.unitelabs.io" # TODO: Make this loadable through configuration 
+            #"00000000-0000-0000-0000-000000000000.dev.unitelabs.io"
         )
         connector_config.cloud_server_endpoint.port = 443
         connector_config.cloud_server_endpoint.tls = True
-        connector_config.sila_server.uuid = "" # TODO: Load from settings info  / UUID 4  https://docs.unitelabs.io/connector-development/guides/configuration
+        connector_config.sila_server.uuid = "202a656c-4593-414e-80c8-201945838086" # TODO: Load from settings info  / UUID 4  https://docs.unitelabs.io/connector-development/guides/configuration
 
         app = Connector(connector_config)
         self._connector = app

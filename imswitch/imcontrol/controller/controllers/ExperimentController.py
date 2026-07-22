@@ -93,7 +93,13 @@ class ExperimentController(ImConWidgetController):
         self.SPEED_Y = self.SPEED_Y_default = 20000
         self.SPEED_X = self.SPEED_X_default = 20000
         self.SPEED_Z = self.SPEED_Z_default = 10000
-        self.ACCELERATION = 1000000
+        self.ACCELERATION = self.ACCELERATION_default = 1000000
+        self.ACCELERATION_Z = self.ACCELERATION_Z_default = 1000000
+        # Global Z focus offset updated at runtime by autofocus during an
+        # experiment. Capture Z-moves add this on top of their base Z so the
+        # measured focus is actually applied (see move_stage_z / autofocus).
+        # Reset to 0.0 at the start of every experiment.
+        self._experiment_af_offset = 0.0
 
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
@@ -191,7 +197,7 @@ class ExperimentController(ImConWidgetController):
             # A ring of radius r needs r LEDs from the centre to the edge,
             # so max usable radius is (min(N) - 1) // 2.  For an 8×8 matrix
             # this gives 3 (rings at radii 0,1,2,3 → 4 distinct rings).
-            _max_ring_radius = max(0, (min(_nx, _ny) - 1) // 2)
+            _max_ring_radius = 4# TODO:Hardcoded max(0, (min(_nx, _ny) - 1) // 2)
             self.ExperimentParams.ledMatrixInfo = {
                 "nLedsX": _nx,
                 "nLedsY": _ny,
@@ -911,6 +917,17 @@ class ExperimentController(ImConWidgetController):
             f"activeChannels={p.n_active_channels}, keepOn={keepIlluminationOn}"
         )
 
+        # CAN-bus power darkness: when enabled, every exposure is wrapped by a
+        # bus-power OFF → settle → grab → bus-power ON → settle sequence so the
+        # frame is exposed in complete darkness (see acquire_frame).
+        self._busPowerDarkness = bool(getattr(p, "busPowerDarkness", False))
+        self._busPowerSettle = float(getattr(p, "busPowerSettleTime", 2.0) or 0.0)
+        if self._busPowerDarkness:
+            self._logger.info(
+                f"CAN-bus power darkness ENABLED (settle={self._busPowerSettle:.1f}s "
+                f"each side of every exposure)"
+            )
+
         # check if we want to use performance mode
         self.ExperimentParams.performanceMode = p.performanceMode
         performanceMode = p.performanceMode
@@ -927,6 +944,18 @@ class ExperimentController(ImConWidgetController):
             self.SPEED_Z = self.SPEED_Z_default
         else:
             self.SPEED_Z = p.z_speed
+
+        # Stage acceleration (XY/Z) from the frontend; falls back to the
+        # __init__ defaults when the request leaves them unset (<= 0). XY is
+        # consumed by move_stage_xy, Z by move_stage_z.
+        _accel = getattr(p, "acceleration", 0) or 0
+        self.ACCELERATION = _accel if _accel > 0 else self.ACCELERATION_default
+        _accel_z = getattr(p, "z_acceleration", 0) or 0
+        self.ACCELERATION_Z = _accel_z if _accel_z > 0 else self.ACCELERATION_Z_default
+
+        # Reset the runtime autofocus Z offset for this experiment so a value
+        # left over from a previous run never leaks into a new acquisition.
+        self._experiment_af_offset = 0.0
 
         # Autofocus and timepoint values are read from `p` (ParameterValue)
         # directly via ExecutionContext.to_kwargs(); no local aliases needed.
@@ -1027,6 +1056,22 @@ class ExperimentController(ImConWidgetController):
         os.makedirs(dirPath, exist_ok=True)
         self._last_experiment_dir = dirPath
         mFileName = f"{timeStamp}_{exp_name}"
+
+        # I2C environmental sensor logging (optional). Probe once; if a sensor
+        # controller is present, enable a per-experiment sidecar CSV alongside
+        # the OME data and embed readings in per-frame metadata. All I2C
+        # handling is a silent no-op when no controller is configured.
+        self._i2c_csv_path = None
+        self._i2c_last_snapshot = None
+        self._i2c_last_read_ts = None
+        self._i2c_read_seq = 0
+        self._i2c_logged_seq = -1
+        try:
+            if self._read_i2c_snapshot(min_interval_s=0.0) is not None:
+                self._i2c_csv_path = os.path.join(dirPath, "i2c_sensor_log.csv")
+                self._logger.info(f"I2C sensor logging enabled → {self._i2c_csv_path}")
+        except Exception:
+            pass
 
         workflowSteps = []
         file_writers = []  # Initialize outside the loop for context storage
@@ -1130,8 +1175,23 @@ class ExperimentController(ImConWidgetController):
             # Use the accumulated workflow steps and file writers
             workflowSteps = all_workflow_steps
             file_writers = all_file_writers
+            # Per-step timing log for the post-experiment violin plot. Reset for
+            # each experiment run; populated from the workflow "completed" events
+            # (the workflow context itself is cleared when it finishes).
+            self._step_timings = []
+
             # Create workflow progress handler
             def sendProgress(payload):
+                try:
+                    if isinstance(payload, dict) and payload.get("status") == "completed":
+                        self._step_timings.append({
+                            "name": payload.get("name", "step"),
+                            "pre_time": float(payload.get("pre_time", 0.0) or 0.0),
+                            "main_time": float(payload.get("main_time", 0.0) or 0.0),
+                            "post_time": float(payload.get("post_time", 0.0) or 0.0),
+                        })
+                except Exception:
+                    pass
                 self.sigExperimentWorkflowUpdate.emit(payload)
 
             # Create workflow and context
@@ -1166,10 +1226,14 @@ class ExperimentController(ImConWidgetController):
             # including abort/stop paths — by joining the thread in a daemon.
             _trigger_cleanup_thread = self.workflow_manager.current_thread
 
+            _timing_plot_dir = dirPath
+
             def _restore_freerun():
                 if _trigger_cleanup_thread is not None:
                     _trigger_cleanup_thread.join()
                 self._endTriggeredAcquisition()
+                # Export a per-step timing violin plot alongside the data.
+                self._export_step_timings_plot(_timing_plot_dir)
 
             threading.Thread(
                 target=_restore_freerun, daemon=True, name="TriggeredAcqCleanup"
@@ -1177,13 +1241,11 @@ class ExperimentController(ImConWidgetController):
 
             # Auto-trigger Ashlar stitching once the workflow thread finishes,
             # guaranteeing all individual TIFFs are on disk before stitching starts.
-            if p.ome_write_ashlar_stitch:
+            if p.ome_write_ashlar_stitch and p.ome_write_individual_tiffs:
                 _wf_thread = self.workflow_manager.current_thread
                 _pixel_size = getattr(p, 'ashlar_pixel_size', 1.0)
                 _max_shift = getattr(p, 'ashlar_maximum_shift', 50.0)
                 _align_ch = getattr(p, 'ashlar_align_channel', 0)
-                _flip_x = bool(getattr(p, 'ashlar_flip_x', False))
-                _flip_y = bool(getattr(p, 'ashlar_flip_y', False))
                 _exp_dir = dirPath
 
                 def _auto_stitch():
@@ -1195,8 +1257,6 @@ class ExperimentController(ImConWidgetController):
                         maximumShift=_max_shift,
                         alignChannel=_align_ch,
                         experimentDir=_exp_dir,
-                        flipX=_flip_x,
-                        flipY=_flip_y,
                     )
 
                 threading.Thread(
@@ -1279,6 +1339,93 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.warning(f"Could not restore continuous mode: {e}")
 
+    @staticmethod
+    def _categorize_step(name: str) -> str:
+        """Group a workflow step name into a coarse category for the timing
+        violin plot."""
+        n = (name or "").strip().lower()
+        if "autofocus" in n or "focus map" in n:
+            return "Autofocus"
+        if "acquire" in n or "snap" in n:
+            return "Acquire"
+        if n.startswith("move") or "z offset" in n or "→ z" in n or "z →" in n:
+            return "Move"
+        if "illumination" in n or "laser" in n or "led" in n:
+            return "Illumination"
+        if "save" in n or "finaliz" in n or "writer" in n:
+            return "Save"
+        if "wait" in n or "timepoint" in n:
+            return "Wait"
+        return "Other"
+
+    def _export_step_timings_plot(self, out_dir: str) -> None:
+        """Render a violin plot of per-step wall-clock durations (grouped by
+        category) and save it as ``step_timings_violin.png`` in ``out_dir``.
+
+        Best-effort: any failure (no data, matplotlib missing, unwritable dir)
+        is logged and swallowed so it never affects the experiment outcome.
+        """
+        timings = list(getattr(self, "_step_timings", []) or [])
+        if not timings or not out_dir:
+            return
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            # Bucket total step durations (pre+main+post) by category.
+            buckets: Dict[str, List[float]] = {}
+            for t in timings:
+                total = (t.get("pre_time", 0.0) + t.get("main_time", 0.0)
+                         + t.get("post_time", 0.0))
+                cat = self._categorize_step(t.get("name", ""))
+                buckets.setdefault(cat, []).append(total)
+
+            # Keep a stable, meaningful category order.
+            order = ["Move", "Autofocus", "Illumination", "Acquire", "Save",
+                     "Wait", "Other"]
+            labels = [c for c in order if c in buckets]
+            data = [buckets[c] for c in labels]
+            if not data:
+                return
+
+            fig, ax = plt.subplots(figsize=(max(6, 1.4 * len(labels)), 5))
+            positions = list(range(1, len(labels) + 1))
+            # Violins need >1 point; fall back to a scatter for single-sample
+            # categories so they still render.
+            multi_idx = [i for i, d in enumerate(data) if len(d) > 1]
+            if multi_idx:
+                ax.violinplot([data[i] for i in multi_idx],
+                              positions=[positions[i] for i in multi_idx],
+                              showmeans=True, showextrema=True)
+            for i, d in enumerate(data):
+                jitter = np.random.uniform(-0.08, 0.08, size=len(d))
+                ax.scatter(np.full(len(d), positions[i]) + jitter, d,
+                           s=12, alpha=0.5, color="tab:blue")
+
+            ax.set_xticks(positions)
+            ax.set_xticklabels(
+                [f"{c}\n(n={len(buckets[c])})" for c in labels])
+            ax.set_ylabel("Step duration (s)")
+            total_steps = len(timings)
+            total_time = sum(
+                t.get("pre_time", 0.0) + t.get("main_time", 0.0)
+                + t.get("post_time", 0.0) for t in timings)
+            ax.set_title(
+                f"Per-step timing — {total_steps} steps, "
+                f"{total_time:.1f}s total")
+            ax.grid(True, axis="y", alpha=0.3)
+            fig.tight_layout()
+
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, "step_timings_violin.png")
+            fig.savefig(out_path, dpi=150)
+            plt.close(fig)
+            self._logger.info(f"Saved step-timing violin plot → {out_path}")
+        except Exception as e:
+            self._logger.warning(f"Could not export step-timing plot: {e}",
+                                 exc_info=True)
+
     def grabCameraFrame(self, frameSync: int = 2, returnFrameNumber: bool = False):
         """Return a single camera frame guaranteed to be captured after this call.
 
@@ -1347,7 +1494,7 @@ class ExperimentController(ImConWidgetController):
             return mFrame, currentFrameNumber
         return mFrame
 
-    def acquire_frame(self, channel: str, frameSync: int = 2):
+    def acquire_frame(self, channel: str, frameSync: int = 0):
         """Acquire a single frame deterministically.
 
         Delegates entirely to grabCameraFrame().  When software-trigger mode
@@ -1361,7 +1508,46 @@ class ExperimentController(ImConWidgetController):
             frameSync: Passed through to grabCameraFrame's fallback path.
         """
         self._logger.debug(f"Acquiring frame on channel {channel}")
+
+        # CAN-bus power darkness: cut bus power (→ complete darkness), let it
+        # settle, expose, then restore power and settle again. Wraps each frame
+        # so long luminescence exposures see zero stray light. Motors keep their
+        # position across the power cycle, so no re-homing is needed.
+        if getattr(self, "_busPowerDarkness", False):
+            settle = getattr(self, "_busPowerSettle", 2.0)
+            self._setBusPower(False)
+            if settle > 0:
+                time.sleep(settle)
+            try:
+                frame = self.grabCameraFrame(frameSync=frameSync)
+            finally:
+                self._setBusPower(True)
+                if settle > 0:
+                    time.sleep(settle)
+            return frame
+
         return self.grabCameraFrame(frameSync=frameSync)
+
+    def _setBusPower(self, enable: bool) -> None:
+        """Enable/disable the high-current CAN-bus power that feeds the slaves.
+
+        Best-effort: routed through the UC2Config controller. Logged and
+        swallowed when UC2Config/ESP32 is unavailable (e.g. simulation) so the
+        acquisition is never aborted by a missing bus."""
+        try:
+            uc2 = self._master.getController('UC2Config')
+        except Exception:
+            uc2 = None
+        if uc2 is None or not hasattr(uc2, "setBusPower"):
+            self._logger.warning(
+                "Bus-power darkness requested but UC2Config.setBusPower is "
+                "unavailable — skipping.")
+            return
+        try:
+            uc2.setBusPower(enable=bool(enable))
+            self._logger.debug(f"CAN-bus power {'ON' if enable else 'OFF'}")
+        except Exception as e:
+            self._logger.warning(f"setBusPower({enable}) failed: {e}")
 
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
         # Set gain and exposure via the shared attribute signal.
@@ -1760,6 +1946,23 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.debug(f"Could not enrich OME metadata from MetadataHub: {e}")
 
+        # Environmental (I2C) sensor snapshot alongside the frame, when an I2C
+        # sensor controller is configured. Throttled hardware read + optional
+        # sidecar-CSV logging (one row per fresh read). No-op otherwise.
+        try:
+            i2c_reading = self._read_i2c_snapshot()
+            if i2c_reading and i2c_reading.get("ok"):
+                for _k in ("temperature_c", "humidity_pct", "lux", "ch0_full", "ch1_ir"):
+                    _v = i2c_reading.get(_k)
+                    if _v is not None:
+                        ome_metadata[f"i2c_{_k}"] = _v
+                _seq = getattr(self, "_i2c_read_seq", 0)
+                if _seq != getattr(self, "_i2c_logged_seq", -1):
+                    self._i2c_logged_seq = _seq
+                    self._log_i2c_row(i2c_reading, ome_metadata.get("time_index", 0))
+        except Exception:
+            pass
+
         # Resolve the writer for this tile *before* we hand work to
         # the background saver — pulling from ``context`` on the
         # worker thread would be a lifetime hazard.
@@ -1996,17 +2199,53 @@ class ExperimentController(ImConWidgetController):
         # Use the experiment-configured scan speed (set from the frontend in
         # startWellplateExperiment); falls back to the defaults in __init__ when
         # no experiment has overridden it.
-        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
+        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=(self.ACCELERATION, self.ACCELERATION))
         #newPosition = self.mStage.getPosition()
         #self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
         return (posX, posY) # TODO: Need to adjust in case of relative move
 
-    def move_stage_z(self, posZ: float, relative: bool = False, maxSpeedZ=5000):
+    def move_stage_z(self, posZ: float, relative: bool = False, maxSpeedZ=5000,
+                     apply_af_offset: bool = False):
+        # When apply_af_offset is set (used by the per-plane capture moves in
+        # the acquisition workflow), add the runtime autofocus Z offset on top
+        # of the absolute target so the measured focus is actually applied to
+        # acquisitions instead of being overwritten by this absolute move.
+        if apply_af_offset and not relative:
+            posZ = posZ + float(getattr(self, "_experiment_af_offset", 0.0))
         self._logger.info(f"Moving stage to Z={posZ}")
-        self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, maxSpeedZ)), axis="Z", is_absolute=not relative, is_blocking=True)
+        self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, maxSpeedZ)), axis="Z", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION_Z)
         #newPosition = self.mStage.getPosition()
         #self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
         return posZ # TODO: Need to adjust in case of relative move
+
+    def update_af_offset(self, context=None, metadata=None, expected_z: float = 0.0,
+                         apply_global_offset: bool = True, **kwargs):
+        """Post-func for the Autofocus workflow step: store the global Z offset.
+
+        Reads the measured focus Z from ``metadata["result"]`` (the return value
+        of the preceding ``autofocus`` main-func) and records
+        ``measured - expected_z`` as ``self._experiment_af_offset``. Every
+        capture Z-move in the acquisition workflow adds this offset (via
+        ``move_stage_z(apply_af_offset=True)``), so the measured focus is
+        actually applied to acquisitions instead of being discarded by the next
+        absolute Z-move. Leaves the previous offset untouched if autofocus
+        failed (result is None) or when apply_global_offset is False.
+        """
+        if not apply_global_offset:
+            return None
+        measured = (metadata or {}).get("result")
+        if measured is None:
+            self._logger.debug("Autofocus returned no Z; keeping previous global offset.")
+            return None
+        try:
+            self._experiment_af_offset = float(measured) - float(expected_z)
+            self._logger.info(
+                f"Autofocus global Z offset updated to {self._experiment_af_offset:+.2f} µm "
+                f"(measured={float(measured):.2f}, expected base={float(expected_z):.2f})"
+            )
+        except Exception as e:
+            self._logger.debug(f"Could not update autofocus global Z offset: {e}")
+        return self._experiment_af_offset
 
     def set_detector_parameter(self, parameter: str, value: Any):
         """Set a detector parameter."""
@@ -2190,8 +2429,6 @@ class ExperimentController(ImConWidgetController):
         maximumShift: float = 50.0,
         alignChannel: int = 0,
         experimentDir: str = "",
-        flipX: bool = False,
-        flipY: bool = False,
     ) -> dict:
         """
         Schedule ashlarUC2 stitching for the last (or specified) experiment
@@ -2201,10 +2438,6 @@ class ExperimentController(ImConWidgetController):
         overview-scan async pattern.  Poll ``getOverviewAsyncStatus`` for
         completion; the result dict will contain ``outputDir`` on success.
 
-        Call this endpoint again with the same ``experimentDir`` and different
-        ``flipX``/``flipY`` values to redo stitching when the tile orientation
-        was incorrect (e.g. camera axis inverted relative to stage axis).
-
         Parameters
         ----------
         pixelSize     : physical pixel size in µm/pixel
@@ -2212,8 +2445,6 @@ class ExperimentController(ImConWidgetController):
         alignChannel  : channel index used for alignment (ashlar -c)
         experimentDir : absolute path to a specific experiment directory;
                         uses the most recent experiment when empty
-        flipX         : flip each tile horizontally (left↔right) before stitching
-        flipY         : flip each tile vertically (top↔bottom) before stitching
         """
         # Resolve which experiment directory to stitch before spawning the thread
         target_dir = experimentDir.strip() if experimentDir else ""
@@ -2253,20 +2484,14 @@ class ExperimentController(ImConWidgetController):
 
         thread = threading.Thread(
             target=self._runAshlarStitchingWorker,
-            args=(target_dir, resolved_pixel_size, maximumShift, alignChannel, flipX, flipY),
+            args=(target_dir, resolved_pixel_size, maximumShift, alignChannel),
             daemon=True,
             name="runAshlarStitching",
         )
         with self._overview_async_lock:
             self._overview_async_thread = thread
         thread.start()
-        return {
-            "started": True,
-            "task": "ashlar_stitching",
-            "experimentDir": target_dir,
-            "flipX": flipX,
-            "flipY": flipY,
-        }
+        return {"started": True, "task": "ashlar_stitching", "experimentDir": target_dir}
 
 
     def _runAshlarStitchingWorker(
@@ -2275,8 +2500,6 @@ class ExperimentController(ImConWidgetController):
         pixelSize: float,
         maximumShift: float,
         alignChannel: int,
-        flipX: bool = False,
-        flipY: bool = False,
     ) -> None:
         """
         Worker thread body for ashlar stitching.
@@ -2309,13 +2532,7 @@ class ExperimentController(ImConWidgetController):
             "--maximum-shift", str(maximumShift),
             "--align-channel", str(alignChannel),
             "--pixel-size", str(pixelSize),
-            "--tile-size", "512",
-            "--no-pyramid",  # pyramid generation OOM-kills large scans (rc=-9); generate pyramid separately if needed
         ]
-        if flipX:
-            cmd.append("--flip-x")
-        if flipY:
-            cmd.append("--flip-y")
         self._logger.info(f"Ashlar command: {' '.join(cmd)}")
 
         import threading, time
@@ -2383,16 +2600,7 @@ class ExperimentController(ImConWidgetController):
                     self._finishOverviewAsync(error=tail)
             else:
                 tail = "\n".join(stderr_lines[-20:]) or f"Script exited with code {rc}"
-                if rc == -9:
-                    self._logger.error(
-                        f"Ashlar stitching killed by OS (rc=-9 / SIGKILL) — "
-                        f"almost certainly an out-of-memory (OOM) condition. "
-                        f"The stitched image is too large for available RAM. "
-                        f"Try scanning fewer tiles, reducing channel count, or "
-                        f"adding swap space. Last output:\n{tail}"
-                    )
-                else:
-                    self._logger.error(f"Ashlar stitching failed (rc={rc}): {tail}")
+                self._logger.error(f"Ashlar stitching failed (rc={rc}): {tail}")
                 self._finishOverviewAsync(error=tail)
 
         except Exception as exc:
@@ -2566,9 +2774,79 @@ class ExperimentController(ImConWidgetController):
                     except Exception as e:
                         self._logger.debug(f"Could not turn off laser {laser_name}: {e}")
 
+            # Also clear the LED matrix/ring so a leftover ring/DPC pattern from
+            # a previous acquisition does not survive into this scan. Normal
+            # mode previously only reset the lasers here (performance mode reset
+            # the matrix separately); this brings normal mode to parity.
+            # set_led_matrix_pattern self-guards when no matrix is configured.
+            if getattr(self, "_ledMatrix", None) is not None:
+                self.set_led_matrix_pattern(kind="off", settle_s=0)
+
             self._logger.debug("All illumination sources switched off before scan")
         except Exception as e:
             self._logger.warning(f"Error switching off illumination: {e}")
+
+    def _read_i2c_snapshot(self, min_interval_s: float = 1.0) -> Optional[Dict[str, Any]]:
+        """Read the latest I2C environmental sensor values, or None.
+
+        Returns the reading dict from
+        ``I2CSensorController.getLatestI2CSensorValues()`` (keys such as
+        ``temperature_c`` / ``humidity_pct`` / ``lux``), or ``None`` when no
+        I2C sensor controller is configured or the read fails.
+
+        Reads are throttled: within ``min_interval_s`` of the last read the
+        cached snapshot is returned instead of hitting the hardware again, so
+        embedding this per-frame never bottlenecks a fast raster scan. Never
+        raises.
+        """
+        import time as _time
+        now = _time.monotonic()
+        cached = getattr(self, "_i2c_last_snapshot", None)
+        last_ts = getattr(self, "_i2c_last_read_ts", None)
+        if cached is not None and last_ts is not None and (now - last_ts) < min_interval_s:
+            return cached
+        try:
+            i2c = self._master.getController('I2CSensor')
+        except Exception:
+            i2c = None
+        reading = None
+        if i2c is not None:
+            try:
+                reading = i2c.getLatestI2CSensorValues()
+            except Exception as e:
+                self._logger.debug(f"I2C sensor read failed: {e}")
+                reading = None
+        self._i2c_last_snapshot = reading
+        self._i2c_last_read_ts = now
+        self._i2c_read_seq = getattr(self, "_i2c_read_seq", 0) + 1
+        return reading
+
+    def _log_i2c_row(self, reading: Dict[str, Any], time_index: int = 0) -> None:
+        """Append one environmental-sensor row to the experiment sidecar CSV.
+
+        No-op when no CSV path has been set up for this experiment (i.e. no
+        I2C controller was detected at start) or the reading is empty.
+        """
+        csv_path = getattr(self, "_i2c_csv_path", None)
+        if not csv_path or not reading:
+            return
+        try:
+            import csv as _csv
+            write_header = not os.path.exists(csv_path)
+            with open(csv_path, "a", newline="") as fh:
+                writer = _csv.writer(fh)
+                if write_header:
+                    writer.writerow([
+                        "datetime", "timestamp", "time_index",
+                        "temperature_c", "humidity_pct", "lux", "ch0_full", "ch1_ir",
+                    ])
+                writer.writerow([
+                    reading.get("datetime"), reading.get("timestamp"), time_index,
+                    reading.get("temperature_c"), reading.get("humidity_pct"),
+                    reading.get("lux"), reading.get("ch0_full"), reading.get("ch1_ir"),
+                ])
+        except Exception as e:
+            self._logger.debug(f"Could not append I2C sensor CSV row: {e}")
 
     # -------------------------------------------------------------------------
     # internal helpers
@@ -3089,19 +3367,33 @@ class ExperimentController(ImConWidgetController):
         # groups by interpolation instead of measuring a new grid.
         # ----------------------------------------------------------
         if config.use_manual_map:
-            source_fm = self._find_reusable_manual_map()
-            # If manual XY points were supplied but no fitted manual map exists
-            # yet (Z still "auto"), measure them now by autofocus at the
-            # frontend-provided XY locations — instead of falling back to a tiled
-            # autofocus grid.
-            if source_fm is None and config.points:
+            # Explicit manual points supplied for THIS run are the source of
+            # truth.  Measure/fit them fresh under "manual" so that a map left
+            # over from a previous acquisition — an automatic "global"/per-area
+            # map, or an earlier "manual" fit made with a *different* set of
+            # points — can never override the points the user just placed.
+            # Without this, _find_reusable_manual_map() would happily return the
+            # stale map (its preference order is manual→global→any fitted) and
+            # the freshly supplied config.points would be silently ignored.
+            if config.points:
                 self._logger.info(
-                    f"Focus map: measuring {len(config.points)} manual point(s) "
-                    f"by autofocus before the tiled scan"
+                    f"Focus map: (re)measuring {len(config.points)} supplied manual "
+                    f"point(s) before the tiled scan (overriding any stale map)"
                 )
+                self.focus_map_manager.clear("manual")
                 self._measure_focus_map_from_points(config.points, config)
+                source_fm = self.focus_map_manager.get("manual")
+                # Drop stale per-area maps so the fresh manual surface is actually
+                # interpolated onto every area below, instead of being shadowed by
+                # the "already fitted" skip-guard in the loop.
+                for area in areas:
+                    self.focus_map_manager.clear(area["areaId"])
+            else:
+                # Classic reuse workflow: no points supplied this run, so reuse a
+                # previously fitted manual/global template as-is.
                 source_fm = self._find_reusable_manual_map()
-            if source_fm is not None:
+
+            if source_fm is not None and source_fm.is_fitted:
                 self._logger.info(
                     f"Focus map: reusing manual map [{source_fm.group_id}] "
                     f"for {len(areas)} group(s) via interpolation"
@@ -3469,11 +3761,11 @@ class ExperimentController(ImConWidgetController):
                 continue
             z_in = pt.get("z", None)
             try:
-                self.move_stage_xy(posX=gx, posY=gy, relative=False)
                 if z_in is not None:
                     best_z = float(z_in)  # user-provided Z; no autofocus needed
                 else:
-                    time.sleep(0.1)  # settle
+                    self.move_stage_xy(posX=gx, posY=gy, relative=False)
+                    time.sleep(0.4)  # settle
                     best_z = self.autofocus(
                         mode=config.af_mode, af_range=config.af_range,
                         af_resolution=config.af_resolution, af_cropsize=config.af_cropsize,

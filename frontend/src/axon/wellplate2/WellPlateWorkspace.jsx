@@ -35,6 +35,7 @@ import apiLiveViewControllerStartLiveView from "../../backendapi/apiLiveViewCont
 import apiLiveViewControllerStopLiveView from "../../backendapi/apiLiveViewControllerStopLiveView";
 
 const VIEWPORT_STORAGE_KEY = "wp2-activeViewport";
+const TOUR_SEEN_KEY = "wp2-tour-seen";
 
 // Viewport indices that drive camera auto-switching (see VIEWPORTS below).
 const VIEW_LIVE = 1;
@@ -187,7 +188,11 @@ const launchTour = (isDarkMode) => {
   const tour = introJs();
   if (isDarkMode) document.body.classList.add("imswitch-tour-dark");
   tour.setOptions({ ...TOUR_OPTIONS, steps });
-  const cleanup = () => document.body.classList.remove("imswitch-tour-dark");
+  const cleanup = () => {
+    document.body.classList.remove("imswitch-tour-dark");
+    // Mark as seen so the tour does not auto-start again.
+    localStorage.setItem(TOUR_SEEN_KEY, "1");
+  };
   tour.onComplete(cleanup);
   tour.onExit(cleanup);
   tour.start();
@@ -308,6 +313,15 @@ const WellPlateWorkspace = () => {
   }, [viewport, detectorsKey, overviewName, dispatch]);
 
   const handleTour = useCallback(() => launchTour(isDarkMode), [isDarkMode]);
+
+  // Auto-launch the tour the very first time this workspace is opened.
+  useEffect(() => {
+    if (localStorage.getItem(TOUR_SEEN_KEY)) return;
+    // Small delay so the DOM elements referenced by tour targets are mounted.
+    const timer = setTimeout(() => launchTour(isDarkMode), 600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Primary viewports first, then the utility panels. `divider` marks where the
   // utility group starts so we can render a subtle separator before it.

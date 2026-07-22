@@ -201,7 +201,8 @@
      "Hypha",
      "LEDMatrix",
      "Joystick",
-     "ROIScan"
+     "ROIScan",
+     "I2CSensor"
   ],
   "nonAvailableWidgets":[
      "STORMRecon",

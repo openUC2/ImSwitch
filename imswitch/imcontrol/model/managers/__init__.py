@@ -35,5 +35,6 @@ from .FlowStopManager import FlowStopManager
 from .LepmonManager import LepmonManager
 from .PixelCalibrationManager import PixelCalibrationManager
 from .ArkitektManager import ArkitektManager
-from .SiLA2Manager import SiLA2Manager
+from .SiLa2Manager import SiLa2Manager
 from .InstrumentMetadataManager import InstrumentMetadataManager
+from . import MMCoreManager  # shared pymmcore-plus singleton (optional dependency)

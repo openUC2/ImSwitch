@@ -30,6 +30,7 @@ import {
   // Coding-specific icons
   MenuBook as MenuBookIcon,
   Psychology as PsychologyIcon,
+  Map as MapIcon,
 } from "@mui/icons-material";
 
 /**
@@ -127,6 +128,28 @@ export const APP_REGISTRY = {
   },
 
   // === APPS - Optional microscopy applications ===
+  mmCore: {
+    id: "mmCore",
+    name: "MMCore",
+    description:
+      "Micro-Manager (pymmcore) parameter editor and long-exposure snap-to-disk. Use for Andor and other MM-supported cameras when you need single multi-minute exposures.",
+    category: APP_CATEGORIES.APPS,
+    icon: PhotoCameraIcon,
+    enabled: false,
+    essential: false,
+    keywords: [
+      "mmcore",
+      "micromanager",
+      "pymmcore",
+      "andor",
+      "long",
+      "exposure",
+      "snap",
+    ],
+    pluginId: "MMCore",
+    requiredControllers: ["MMCoreController"],
+  },
+
   wellSelector: {
     id: "wellSelector",
     name: "Well Plate",
@@ -185,6 +208,29 @@ export const APP_REGISTRY = {
       "processing",
     ],
     pluginId: "STORMArkitekt",
+  },
+
+  stageMap: {
+    id: "stageMap",
+    name: "Stage Map",
+    description:
+      "Google-Maps-style live sample map (like MicroMagellan): tiles are captured wherever the stage stops and stitched into a growing multi-channel overview. Export as stitched OME-TIFF.",
+    category: APP_CATEGORIES.APPS,
+    icon: MapIcon,
+    enabled: false,
+    essential: false,
+    keywords: [
+      "stage",
+      "map",
+      "stitching",
+      "mosaic",
+      "magellan",
+      "overview",
+      "navigation",
+      "tiles",
+    ],
+    pluginId: "StageMap",
+    requiredControllers: ["StageMapController"],
   },
 
   demoController: {
@@ -367,6 +413,20 @@ export const APP_REGISTRY = {
     essential: false,
     keywords: ["focus", "lock", "stabilization", "feedback", "longterm"],
     pluginId: "FocusLock",
+  },
+
+  i2cSensor: {
+    id: "i2cSensor",
+    name: "Environmental Sensors",
+    description:
+      "Continuously logs temperature, humidity and light from I2C sensors (SHT45, TSL2591) on the CAN GPIO slave. Live rolling plot + CSV logging.",
+    category: APP_CATEGORIES.APPS,
+    icon: ThermostatIcon,
+    enabled: false,
+    essential: false,
+    keywords: ["i2c", "sensor", "temperature", "humidity", "light", "lux",
+      "environment", "sht45", "tsl2591", "logging"],
+    pluginId: "I2CSensor",
   },
 
   acceptanceTest: {

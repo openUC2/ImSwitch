@@ -42,6 +42,8 @@ class UC2ConfigController(ImConWidgetController):
     sigUSBFlashStatusUpdate = Signal(object)  # Emits USB flash status updates
     sigCameraTrigger = Signal(object)  # Emits camera trigger events from hardware
     sigBusStatusUpdate = Signal(object)  # Emits CAN-bus power / emergency-stop status changes
+    sigCollisionStatusUpdate = Signal(object)  # Emits collision-detector events/state (GPIO slave)
+    sigPtzEvent = Signal(object)  # Emits PTZ keyboard key events + the action they triggered
 
 
     def __init__(self, *args, **kwargs):
@@ -88,6 +90,26 @@ class UC2ConfigController(ImConWidgetController):
 
         # register emergency-stop callback (CAN-bus power / E-stop button)
         self.registerEmergencyCallback()
+
+        # collision detector (GPIO slave): latched crash state + optional
+        # armed auto-stop of all motors. A crash also cuts bus power (see
+        # collision_callback), so recovery requires the user to reset the
+        # alarm (restores power) AND run a safe frame-homing before the stage
+        # position can be trusted again — tracked by _collisionRequiresHoming.
+        self._collisionArmed = False
+        self._collisionLatched = False
+        self._collisionRequiresHoming = False
+        self._lastCollisionEvent = None
+        self.registerCollisionCallback()
+
+        # PTZ keyboard bridge (CAN node 61): map discrete key events (presets,
+        # AUX, iris) to microscope functions. The action table (name->callable)
+        # is fixed; the mapping (eventKey->action+params) is user-configurable
+        # at runtime via the setPtz* API so bindings stay flexible.
+        self._ptzActions = self._buildPtzActions()
+        self._ptzMapping = self._defaultPtzMapping()
+        self._lastPtzEvent = None
+        self.registerPtzCallback()
 
         # register the callbacks for emitting serial-related signals
         if hasattr(self._master.UC2ConfigManager, "ESP32"):
@@ -345,6 +367,448 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Could not register emergency callback: {e}")
 
+    def registerCollisionCallback(self):
+        """
+        Register a callback for collision-detector events from the GPIO slave.
+
+        The CANopen master pushes an unsolicited frame on every collision
+        trip/clear edge:
+            {"gpio":{"event":1,"node":60,"trip":1,"estop":0,
+                     "filtered":2365,"raw":2937,...}}
+        On trip we latch the crash state (cleared only by resetCollisionAlarm)
+        and — if armed via armCollisionProtection — immediately stop ALL
+        motors. The event is always forwarded to the frontend via
+        sigCollisionStatusUpdate.
+        """
+        def collision_callback(event):
+            try:
+                tripped = bool(event.get("trip", 0))
+                self._lastCollisionEvent = event
+                stopped = False
+                if tripped:
+                    # Latch: stays set until the user confirms the situation
+                    # is cleared via resetCollisionAlarm(). A crash always
+                    # invalidates the stage position → require safe homing.
+                    self._collisionLatched = True
+                    self._collisionRequiresHoming = True
+                    if self._collisionArmed:
+                        # Cut bus power AND stop motors immediately.
+                        self.setBusPower(enable=False)
+                        stopped = self._stopAllMotors()
+                        self.__logger.warning(
+                            f"COLLISION detected (filtered={event.get('filtered')}) — "
+                            f"bus power cut, motors stopped: {stopped}")
+                    else:
+                        self.__logger.warning(
+                            f"COLLISION detected (filtered={event.get('filtered')}) — "
+                            "auto-stop not armed")
+                self.sigCollisionStatusUpdate.emit(self._collisionStateDict(
+                    event=event, motorsStopped=stopped))
+            except Exception as e:
+                self.__logger.error(f"Error in collision_callback: {e}")
+
+        try:
+            registered = self._master.UC2ConfigManager.registerCollisionCallback(collision_callback)
+            if registered:
+                self.__logger.debug("Collision callback registered successfully")
+            else:
+                self.__logger.debug("Collision callback not registered (gpio module unavailable)")
+        except Exception as e:
+            self.__logger.error(f"Could not register collision callback: {e}")
+
+    def _stopAllMotors(self):
+        """Immediately stop every positioner. Returns True if at least one
+        stop command went out."""
+        anyStopped = False
+        try:
+            for name in self._master.positionersManager.getAllDeviceNames():
+                try:
+                    p = self._master.positionersManager[name]
+                    if hasattr(p, "stopAll"):
+                        p.stopAll()
+                    elif hasattr(p, "forceStop"):
+                        for ax in getattr(p, "axes", []):
+                            p.forceStop(ax)
+                    else:
+                        continue
+                    anyStopped = True
+                except Exception as e:
+                    self.__logger.error(f"Could not stop positioner {name}: {e}")
+        except Exception as e:
+            self.__logger.error(f"_stopAllMotors failed: {e}")
+        return anyStopped
+
+    def _collisionStateDict(self, event=None, motorsStopped=False):
+        return {
+            "trip": bool((event or self._lastCollisionEvent or {}).get("trip", 0)),
+            "latched": self._collisionLatched,
+            "armed": self._collisionArmed,
+            "requiresHoming": self._collisionRequiresHoming,
+            "motorsStopped": motorsStopped,
+            "event": event or self._lastCollisionEvent,
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PTZ keyboard bridge (CAN node 61) → microscope-function mapping
+    #
+    # The keyboard bridge forwards discrete keys to the master, which pushes
+    #   {"ptz":{"event":1,"name":"preset_call","arg":1,...}}
+    # over serial. We turn each key into an "event key" string and look it up
+    # in a user-configurable mapping to run a named action (snap, objective,
+    # laser, led, …). This mirrors the snap callback (registerCaptureCallback)
+    # but is table-driven so bindings can be changed at runtime via the API.
+    # ══════════════════════════════════════════════════════════════════════
+    @staticmethod
+    def _ptzEventKey(name, arg):
+        """Canonical binding key for a PTZ event. Keys with a meaningful arg
+        (presets 1..255, AUX 1..6) are addressed as "name:arg"; arg-less keys
+        (iris_open, autoscan, …) as plain "name". Dispatch tries "name:arg"
+        first, then falls back to "name" so a binding can be arg-agnostic."""
+        try:
+            arg = int(arg)
+        except (TypeError, ValueError):
+            arg = 0
+        return f"{name}:{arg}" if arg else str(name)
+
+    def _buildPtzActions(self):
+        """Return the registry of named actions {name: (fn, help)}.
+
+        Each fn takes a params dict (from the binding) plus the raw event, and
+        performs one microscope operation. Add new actions here; the mapping
+        API only references them by name so the frontend can offer a dropdown.
+        """
+        return {
+            "none":      (self._ptzActionNone,      "Do nothing (unbind a key)."),
+            "snap":      (self._ptzActionSnap,      "Snap an image and save it (like the ESP32 snap callback)."),
+            "objective": (self._ptzActionObjective, "Switch objective. params: {'slot': 0|1}."),
+            "laser":     (self._ptzActionLaser,     "Set a laser/LED device. params: {'name': <deviceName>, 'value': 0..1023, 'active': bool}."),
+            "led":       (self._ptzActionLaser,     "Alias of 'laser' for LED-array devices in lasersManager."),
+        }
+
+    def _defaultPtzMapping(self):
+        """Sensible starting bindings. Objective + snap are unambiguous; the
+        laser/LED example is left with a placeholder device name the user
+        edits via setPtzAction (device names are setup-specific)."""
+        return {
+            "preset_set": {"action": "objective", "params": {"slot": 0}},
+            "preset_call": {"action": "objective", "params": {"slot": 1}},
+            "iris_open":     {"action": "snap",      "params": {}},
+            # Example LED binding — set the real device name for your setup:
+            #   setPtzAction("aux_on:4",  "led", {"name":"LED", "value":512, "active":True})
+            #   setPtzAction("aux_off:4", "led", {"name":"LED", "value":0,   "active":False})
+        }
+
+    # ── individual actions ────────────────────────────────────────────────
+    def _ptzActionNone(self, params, event):
+        return {"ok": True, "action": "none"}
+
+    def _ptzActionSnap(self, params, event):
+        """Snap + save from the first detector, and push it to the viewer.
+        Same operation as the ESP32-triggered snapImage callback."""
+        try:
+            detector_names = self._master.detectorsManager.getAllDeviceNames()
+            detector = self._master.detectorsManager[detector_names[0]]
+            mImage = detector.getLatestFrame()
+            drivePath = dirtools.UserFileDirs.getValidatedDataPath()
+            timeStamp = datetime.datetime.now().strftime("%Y_%m_%d")
+            dirPath = os.path.join(drivePath, 'recordings', timeStamp)
+            fileName = "PTZSnap_" + datetime.datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
+            os.makedirs(dirPath, exist_ok=True)
+            filePath = os.path.join(dirPath, fileName)
+            if mImage is not None:
+                tif.imwrite(filePath + ".tif", mImage[0] if mImage.ndim == 3 else mImage)
+                self._commChannel.sigUpdateImage.emit('Image', mImage, True, 1, False)
+            return {"ok": True, "action": "snap", "path": filePath + ".tif"}
+        except Exception as e:
+            self.__logger.error(f"PTZ snap action failed: {e}")
+            return {"ok": False, "action": "snap", "error": str(e)}
+
+    def _ptzActionObjective(self, params, event):
+        """Switch objective slot via the ObjectiveController (commChannel)."""
+        try:
+            slot = int(params.get("slot", 0))
+            self._commChannel.sigSetObjectiveByID.emit(str(slot))
+            return {"ok": True, "action": "objective", "slot": slot}
+        except Exception as e:
+            self.__logger.error(f"PTZ objective action failed: {e}")
+            return {"ok": False, "action": "objective", "error": str(e)}
+
+    def _ptzActionLaser(self, params, event):
+        """Enable/disable + set a laser or LED device in lasersManager.
+        params: {'name': deviceName, 'value': 0..1023, 'active': bool}."""
+        try:
+            name = params.get("name")
+            if not name:
+                return {"ok": False, "action": "laser", "error": "no device name in params"}
+            names = self._master.lasersManager.getAllDeviceNames()
+            if name not in names:
+                return {"ok": False, "action": "laser",
+                        "error": f"device '{name}' not found in {names}"}
+            device = self._master.lasersManager[name]
+            active = bool(params.get("active", True))
+            device.setEnabled(active)
+            if "value" in params and active:
+                device.setValue(int(params["value"]))
+            return {"ok": True, "action": "laser", "name": name, "active": active,
+                    "value": params.get("value")}
+        except Exception as e:
+            self.__logger.error(f"PTZ laser action failed: {e}")
+            return {"ok": False, "action": "laser", "error": str(e)}
+
+    # ── dispatch + registration ───────────────────────────────────────────
+    def _dispatchPtzEvent(self, event):
+        """Look the event up in the mapping and run the bound action. Emits
+        sigPtzEvent with {event, binding, result} either way so a UI can show
+        activity and unmapped keys (helpful when building a binding table)."""
+        name = event.get("name", "")
+        arg = event.get("arg", 0)
+        exactKey = self._ptzEventKey(name, arg)
+        binding = self._ptzMapping.get(exactKey) or self._ptzMapping.get(str(name))
+        result = None
+        if binding:
+            actionName = binding.get("action", "none")
+            entry = self._ptzActions.get(actionName)
+            if entry is None:
+                result = {"ok": False, "error": f"unknown action '{actionName}'"}
+            else:
+                fn = entry[0]
+                result = fn(binding.get("params", {}) or {}, event)
+            self.__logger.info(f"PTZ key {exactKey} -> {actionName}: {result}")
+        else:
+            self.__logger.debug(f"PTZ key {exactKey} unmapped")
+        self.sigPtzEvent.emit({
+            "event": event,
+            "eventKey": exactKey,
+            "binding": binding,
+            "result": result,
+            "timestamp": datetime.datetime.now().isoformat(),
+        })
+
+    def registerPtzCallback(self):
+        """Register the PTZ key dispatcher with the manager (ESP32.ptz)."""
+        def ptz_callback(event):
+            try:
+                self._lastPtzEvent = event
+                self._dispatchPtzEvent(event)
+            except Exception as e:
+                self.__logger.error(f"Error in ptz_callback: {e}")
+        try:
+            registered = self._master.UC2ConfigManager.registerPtzCallback(ptz_callback)
+            if registered:
+                self.__logger.debug("PTZ callback registered successfully")
+            else:
+                self.__logger.debug("PTZ callback not registered (ptz module unavailable)")
+        except Exception as e:
+            self.__logger.error(f"Could not register PTZ callback: {e}")
+
+    ''' PTZ keyboard bridge (CAN node 61) '''
+
+    @APIExport(runOnUIThread=False)
+    def getPtzMapping(self):
+        """Return the current PTZ eventKey -> {action, params} bindings."""
+        return dict(self._ptzMapping)
+
+    @APIExport(runOnUIThread=False)
+    def listPtzActions(self):
+        """Available action names and their help text (for a binding UI)."""
+        return {name: help for name, (fn, help) in self._ptzActions.items()}
+
+    @APIExport(runOnUIThread=False)
+    def setPtzAction(self, eventKey: str, action: str, params: dict = None):
+        """Bind one key. eventKey e.g. "preset_call:1", "aux_on:4", "iris_open".
+        action must be one of listPtzActions(). params is action-specific,
+        e.g. {"slot":1} for objective, {"name":"LED","value":512} for led."""
+        if action not in self._ptzActions:
+            return {"status": "error",
+                    "message": f"unknown action '{action}'; choose from {list(self._ptzActions)}"}
+        self._ptzMapping[str(eventKey)] = {"action": action, "params": dict(params or {})}
+        return {"status": "ok", "mapping": self._ptzMapping[str(eventKey)]}
+
+    @APIExport(runOnUIThread=False)
+    def setPtzMapping(self, mapping: dict):
+        """Replace the whole binding table. Values are {"action","params"};
+        unknown actions are rejected."""
+        clean = {}
+        for k, v in (mapping or {}).items():
+            action = (v or {}).get("action", "none")
+            if action not in self._ptzActions:
+                return {"status": "error", "message": f"unknown action '{action}' for key '{k}'"}
+            clean[str(k)] = {"action": action, "params": dict((v or {}).get("params", {}) or {})}
+        self._ptzMapping = clean
+        return {"status": "ok", "mapping": self._ptzMapping}
+
+    @APIExport(runOnUIThread=False)
+    def clearPtzAction(self, eventKey: str):
+        """Remove one binding."""
+        self._ptzMapping.pop(str(eventKey), None)
+        return {"status": "ok", "mapping": self._ptzMapping}
+
+    @APIExport(runOnUIThread=False)
+    def triggerPtzEvent(self, name: str, arg: int = 0):
+        """Simulate a keyboard key (runs the bound action) — test the mapping
+        without the hardware. e.g. triggerPtzEvent("preset_call", 1)."""
+        event = {"event": 1, "name": name, "arg": int(arg), "simulated": True}
+        self._lastPtzEvent = event
+        self._dispatchPtzEvent(event)
+        return {"status": "ok", "event": event}
+
+    @APIExport(runOnUIThread=False)
+    def getPtzStatus(self):
+        """PTZ bridge diagnostics (parser stats + last frame + motion) plus the
+        last key event and the current binding table."""
+        try:
+            status = self._master.UC2ConfigManager.getPtzStatus() or {}
+        except Exception as e:
+            self.__logger.error(f"getPtzStatus failed: {e}")
+            status = {"status": "error", "message": str(e)}
+        status["lastEvent"] = self._lastPtzEvent
+        status["mapping"] = self._ptzMapping
+        return status
+
+    @APIExport(runOnUIThread=False)
+    def setPtzDebug(self, level: int):
+        """Bridge serial debug verbosity: 0 quiet, 1 decoded frames, 2 + raw
+        RS-485 hex (wiring / baud bring-up)."""
+        try:
+            return self._master.UC2ConfigManager.setPtzDebug(int(level))
+        except Exception as e:
+            self.__logger.error(f"setPtzDebug failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    ''' Collision detector (GPIO slave) '''
+
+    @APIExport(runOnUIThread=False)
+    def getGpioStatus(self):
+        """
+        Poll the collision detector on the GPIO slave (SDO reads over CAN).
+
+        :return: {"mode" (0=auto/1=manual), "mean"/"baseline", "sigma",
+                  "deviation", "filtered", "raw", "reference", "threshold",
+                  "sensitivity", "trip", "estop"} plus the software crash
+                  state {"latched", "armed", "requiresHoming"}.
+        """
+        try:
+            status = self._master.UC2ConfigManager.getGpioStatus() or {}
+            status["latched"] = self._collisionLatched
+            status["armed"] = self._collisionArmed
+            status["requiresHoming"] = self._collisionRequiresHoming
+            return status
+        except Exception as e:
+            self.__logger.error(f"getGpioStatus failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getCollisionState(self):
+        """Software crash state without touching the CAN bus:
+        {"trip", "latched", "armed", "event", "timestamp"}."""
+        return self._collisionStateDict()
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionThreshold(self, threshold: int):
+        """Deviation band (ADC counts) around the reference; persisted on the
+        slave in NVS."""
+        try:
+            return self._master.UC2ConfigManager.setCollisionThreshold(int(threshold))
+        except Exception as e:
+            self.__logger.error(f"setCollisionThreshold failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionSensitivity(self, sensitivity: int):
+        """Consecutive out-of-band samples (50 Hz) required to trip/clear —
+        rejects single-sample spikes. Persisted on the slave in NVS."""
+        try:
+            return self._master.UC2ConfigManager.setCollisionSensitivity(int(sensitivity))
+        except Exception as e:
+            self.__logger.error(f"setCollisionSensitivity failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionReference(self, reference: int):
+        """Explicitly set the idle baseline (ADC counts) — typically the
+        polled "mean" value. Persisted on the slave in NVS."""
+        try:
+            return self._master.UC2ConfigManager.setCollisionReference(int(reference))
+        except Exception as e:
+            self.__logger.error(f"setCollisionReference failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def calibrateCollisionReference(self):
+        """Tell the slave to take its CURRENT rolling mean as the new
+        reference. MANUAL mode only. Call while idle and collision-free."""
+        try:
+            return self._master.UC2ConfigManager.calibrateCollisionReference()
+        except Exception as e:
+            self.__logger.error(f"calibrateCollisionReference failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionMode(self, mode: str = "auto"):
+        """
+        Select the collision-detection algorithm on the slave (persisted NVS):
+          "auto"   — adaptive baseline + robust-sigma z-score. Parameter-free:
+                     tracks a slowly drifting background and trips on a fast
+                     deflection. Recommended; no calibration needed.
+          "manual" — fixed reference +/- threshold. Deterministic; requires the
+                     reference to be calibrated to the idle level.
+        """
+        try:
+            return self._master.UC2ConfigManager.setCollisionMode(mode)
+        except Exception as e:
+            self.__logger.error(f"setCollisionMode failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def armCollisionProtection(self, arm: bool = True):
+        """
+        Arm/disarm automatic motor stop on collision. While armed, a pushed
+        collision event immediately stops ALL positioners; the crash state
+        latches until resetCollisionAlarm() is called.
+        """
+        self._collisionArmed = bool(arm)
+        self.__logger.info(f"Collision auto-stop {'ARMED' if self._collisionArmed else 'disarmed'}")
+        state = self._collisionStateDict()
+        self.sigCollisionStatusUpdate.emit(state)
+        return state
+
+    @APIExport(runOnUIThread=False)
+    def resetCollisionAlarm(self, restorePower: bool = True):
+        """
+        Clear the latched crash state after the user has verified the
+        situation is resolved. By default this also restores CAN-bus power
+        (which a collision cuts) so the stage can move again — but it does
+        NOT move any motor. The `requiresHoming` flag stays set: the position
+        reference is lost after a crash, so a safe frame-homing must be run
+        (and confirmed via confirmSafeHoming) before normal operation.
+        """
+        self._collisionLatched = False
+        if restorePower:
+            try:
+                self.setBusPower(enable=True)
+            except Exception as e:
+                self.__logger.error(f"Could not restore bus power on reset: {e}")
+        self.__logger.info(
+            "Collision alarm reset by user (bus power restored=%s); safe homing still required"
+            % bool(restorePower))
+        state = self._collisionStateDict()
+        self.sigCollisionStatusUpdate.emit(state)
+        return state
+
+    @APIExport(runOnUIThread=False)
+    def confirmSafeHoming(self):
+        """
+        Clear the `requiresHoming` flag after a safe frame-homing has been
+        completed following a crash. Call this once the stage has been
+        re-homed and its position is trustworthy again.
+        """
+        self._collisionRequiresHoming = False
+        self.__logger.info("Collision post-crash homing confirmed by user")
+        state = self._collisionStateDict()
+        self.sigCollisionStatusUpdate.emit(state)
+        return state
+
     ''' CAN-bus power & emergency-stop (safety) '''
 
     @APIExport(runOnUIThread=False)
@@ -415,7 +879,7 @@ class UC2ConfigController(ImConWidgetController):
 
     ''' PS-controller joystick direction '''
 
-    @APIExport(runOnUIThread=False, requestType="POST")
+    @APIExport(runOnUIThread=False, requestType="GET")
     def setJoystickDirection(self, axis: str = "X", inverted: bool = False):
         """
         Invert (or un-invert) the PS-controller joystick for one motor axis.

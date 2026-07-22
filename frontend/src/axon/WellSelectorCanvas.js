@@ -1485,6 +1485,34 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     }
 
     //handle mode
+    if (wellSelectorState.mode == Mode.SINGLE_SELECT) {
+      // A clean click adds a new point; a drag (repositioning an existing point)
+      // must not create a spurious second point. Distinguish the two by checking
+      // how far the pointer moved since mouseDown.
+      const dx = localPos.x - mouseDownPosition.x;
+      const dy = localPos.y - mouseDownPosition.y;
+      if (Math.hypot(dx, dy) < 5) {
+        // Skip if the click landed on an existing point (user was repositioning it).
+        const clickedOnExisting = experimentState.pointList.some((itPoint) =>
+          wsUtils.isPointInsideRect(
+            localPos,
+            calcPhyPoint2PxPoint(itPoint),
+            getRasterWidthAsPx(),
+            getRasterHeightAsPx()
+          )
+        );
+        if (!clickedOnExisting) {
+          dispatch(
+            experimentSlice.createPoint({
+              ...calcPxPoint2PhyPoint(localPos),
+              z: positionState?.z ?? 0,
+            })
+          );
+        }
+      }
+      return;
+    }
+
     if (wellSelectorState.mode == Mode.MOVE_CAMERA) {
       const xySpeed = wellSelectorState.moveCameraSpeedXY ?? 20000;
       //move camera

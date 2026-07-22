@@ -16,6 +16,7 @@ const initialState = {
 
   // Connection status (IMPORTANT: Two different types!)
   backendConnected: false, // Backend API reachable (enables UI functions)
+  apiConnected: false, // Expected API endpoint reachable and returning valid data
   uc2Connected: false, // UC2 hardware connected to backend
 
   // CAN-bus power & emergency-stop (safety) — busPower: 1=on, 0=off, null=unknown
@@ -23,6 +24,14 @@ const initialState = {
   busAvailable: true, // bus usable (powered and not in E-stop)
   emergencyActive: false, // hardware E-stop currently asserted
   emergencyInfo: null, // { reason, msg, timestamp } from the last emergency event
+
+  // Collision detector (GPIO slave) — pushed via sigCollisionStatusUpdate
+  collisionTrip: false, // sensor currently out-of-band (live)
+  collisionLatched: false, // crash latched until user reset
+  collisionArmed: false, // auto motor-stop armed
+  collisionRequiresHoming: false, // safe frame-homing needed after a crash
+  collisionEvent: null, // last raw event dict from the firmware
+  collisionTimestamp: null,
 
   // Config file editing
   selectedFileForEdit: "",
@@ -90,6 +99,9 @@ const uc2Slice = createSlice({
     setBackendConnected: (state, action) => {
       state.backendConnected = action.payload;
     },
+    setApiConnected: (state, action) => {
+      state.apiConnected = action.payload;
+    },
     setUc2Connected: (state, action) => {
       state.uc2Connected = action.payload;
     },
@@ -112,6 +124,19 @@ const uc2Slice = createSlice({
           timestamp: s.timestamp ?? new Date().toISOString(),
         };
       }
+    },
+
+    // Collision detector — merge a {trip, latched, armed, event, timestamp}
+    // snapshot (from sigCollisionStatusUpdate or a getCollisionState poll)
+    setCollisionStatus: (state, action) => {
+      const s = action.payload || {};
+      if (s.trip !== undefined) state.collisionTrip = !!s.trip;
+      if (s.latched !== undefined) state.collisionLatched = !!s.latched;
+      if (s.armed !== undefined) state.collisionArmed = !!s.armed;
+      if (s.requiresHoming !== undefined)
+        state.collisionRequiresHoming = !!s.requiresHoming;
+      if (s.event !== undefined) state.collisionEvent = s.event;
+      state.collisionTimestamp = s.timestamp ?? new Date().toISOString();
     },
 
     // Config file editing
@@ -209,9 +234,11 @@ export const {
   addSerialLogEntry,
   clearSerialLog,
   setBackendConnected,
+  setApiConnected,
   setUc2Connected,
   setBusPower,
   setBusStatus,
+  setCollisionStatus,
   setSelectedFileForEdit,
   setEditorJson,
   setEditorJsonText,

@@ -128,6 +128,7 @@
     "GalvoScanner",
     "Goniometer",
     "StageCenterCalibration",
-    "OpticalFlowController"
+    "OpticalFlowController",
+    "I2CSensor"
   ]
 }

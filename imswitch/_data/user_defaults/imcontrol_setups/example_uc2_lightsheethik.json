@@ -8,15 +8,15 @@
         "isEnable": 1,
         "homeXenabled": true, 
         "homeStepsX":10000, 
-        "homeOnStartX": true,
+        "homeOnStartX": 0,
         "homeEndposReleaseX":5000,
         "homeYenabled": true, 
         "homeStepsY":10000, 
-        "homeOnStartY": true,
+        "homeOnStartY": 0,
         "homeEndposReleaseY":5000,
         "homeAenabled": true, 
         "homeStepsA":10000, 
-        "homeOnStarta": true,
+        "homeOnStarta": 0,
         "homeEndposReleaseA":5000,
         "stepsizeX": -0.3125,
         "stepsizeY": -0.3125,
@@ -39,7 +39,7 @@
         "host_": "192.168.43.129",
         "serialport_": "COM3",
         "serialport": "COM3",
-        "baudrate":500000, 
+        "baudrate":115200, 
         "debug":1
        }
     }

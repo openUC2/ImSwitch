@@ -24,8 +24,6 @@ import histoScanReducer from "./slices/HistoScanSlice";
 import widgetReducer from "./slices/WidgetSlice";
 import lepmonReducer from "./slices/LepmonSlice";
 import uc2Reducer from "./slices/UC2Slice";
-import stageOffsetCalibrationReducer from "./slices/StageOffsetCalibrationSlice";
-import stageCenterCalibrationReducer from "./slices/StageCenterCalibrationSlice";
 import flowStopReducer from "./slices/FlowStopSlice";
 import lightsheetReducer from "./slices/LightsheetSlice";
 import zarrinitialZarrReducer from "./slices/OmeZarrTileStreamSlice";
@@ -38,6 +36,7 @@ import mazeGameReducer from "./slices/MazeGameSlice";
 import themeReducer from "./slices/ThemeSlice";
 import notificationReducer from "./slices/NotificationSlice";
 import autofocusReducer from "./slices/AutofocusSlice";
+import opticalFlowReducer from "./slices/OpticalFlowSlice";
 import socketDebugReducer from "./slices/SocketDebugSlice";
 import appManagerReducer from "./slices/appManagerSlice";
 import canOtaReducer from "./slices/canOtaSlice";
@@ -56,6 +55,12 @@ import overviewRegistrationReducer from "./slices/OverviewRegistrationSlice";
 import frame3DViewerReducer from "./slices/Frame3DViewerSlice";
 import storageReducer from "./slices/StorageSlice";
 import goniometerReducer from "./slices/GoniometerSlice";
+import detectorParametersReducer from "./slices/DetectorParametersSlice";
+import backendCapabilitiesReducer from "./slices/BackendCapabilitiesSlice";
+import stageMapReducer from "./slices/StageMapSlice";
+import onboardingReducer from "./slices/OnboardingSlice";
+import homingReducer from "./slices/HomingSlice";
+import i2cReducer from "./slices/I2CSensorSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -129,6 +134,7 @@ const rootReducer = combineReducers({
   wellSelectorState: wellSelectorReducer,
   objectiveState: objectiveReducer,
   position: positionReducer,
+  homing: homingReducer, // runtime-only frame-homing progress (not persisted)
   LEDMatrixState: LEDMatrixReducer,
   experimentWorkflowState: experimentStateReducer,
   liveViewState: liveViewReducer,
@@ -136,8 +142,6 @@ const rootReducer = combineReducers({
   widgetState: widgetReducer,
   lepmon: lepmonReducer,
   uc2State: uc2Reducer,
-  stageOffsetCalibration: stageOffsetCalibrationReducer,
-  stageCenterCalibration: stageCenterCalibrationReducer,
   flowStop: flowStopReducer,
   lightsheet: persistReducer(lightsheetPersistConfig, lightsheetReducer), // Nested persist for axis config
   omeZarrState: zarrinitialZarrReducer,
@@ -150,6 +154,7 @@ const rootReducer = combineReducers({
   themeState: themeReducer,
   notification: notificationReducer,
   autofocusState: autofocusReducer,
+  opticalFlowState: opticalFlowReducer,
   socketDebugState: socketDebugReducer,
   appManager: appManagerReducer,
   canOtaState: canOtaReducer,
@@ -171,6 +176,11 @@ const rootReducer = combineReducers({
   ),
   storageState: storageReducer,
   goniometerState: goniometerReducer,
+  detectorParametersState: detectorParametersReducer,
+  backendCapabilities: backendCapabilitiesReducer,
+  stageMapState: stageMapReducer, // runtime-only stage map tiles (not persisted)
+  onboardingState: onboardingReducer,
+  i2cState: i2cReducer,
 });
 
 //#####################################################################################
@@ -190,6 +200,7 @@ const persistConfig = {
     "mazeGameState",
     "appManager", // Persist user's app preferences
     "liveViewState", // Persist position controller visibility
+    "onboardingState", // Persist the "intro tour was done" flag (first-run UX)
     // liveStreamState uses nested persist config above
   ],
   //blacklist: ['webSocketState'],  // Do not persist these

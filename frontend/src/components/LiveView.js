@@ -5,13 +5,22 @@ import {
   Box,
   Tabs,
   Tab,
+  Button,
+  ButtonGroup,
   Typography,
   IconButton,
   Drawer,
+  Tooltip,
   useMediaQuery,
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import CenterFocusStrongIcon from "@mui/icons-material/CenterFocusStrong";
+import LightModeIcon from "@mui/icons-material/LightMode";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import SensorsIcon from "@mui/icons-material/Sensors";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import ControlCameraIcon from "@mui/icons-material/ControlCamera";
 import AxisControl from "./AxisControl.jsx";
 import JoystickControl from "./JoystickControl.jsx";
 import VirtualJoystickControl from "./VirtualJoystickControl.js";
@@ -22,10 +31,12 @@ import IlluminationController from "./IlluminationController";
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView";
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
+import apiLiveViewControllerGetActiveStreams from "../backendapi/apiLiveViewControllerGetActiveStreams";
 import ObjectiveSwitcher from "./ObjectiveSwitcher";
 import DetectorTriggerController from "./DetectorTriggerController";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
+import { selectHasController } from "../state/slices/BackendCapabilitiesSlice";
 import { setNotification } from "../state/slices/NotificationSlice";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
 import ExtendedLEDMatrixController from "./ExtendedLEDMatrixController.jsx";
@@ -62,6 +73,12 @@ export default function LiveView({ setFileManagerInitialPath }) {
   // Access global Redux state
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
+  const hasObjectiveController = useSelector(
+    selectHasController("ObjectiveController"),
+  );
+  const hasLEDMatrixController = useSelector(
+    selectHasController("LEDMatrixController"),
+  );
 
   // Track if auto-start has been attempted to prevent re-triggering on format changes
   const autoStartAttemptedRef = React.useRef(false);
@@ -108,12 +125,11 @@ export default function LiveView({ setFileManagerInitialPath }) {
     6: "JPG",
   };
 
-  // Handle detector tab switching - restart stream with new detector
+  // Handle detector tab switching - restart stream with new detector, passing per-detector params
   useEffect(() => {
     const prevTab = prevActiveTabRef.current;
     prevActiveTabRef.current = activeTab;
 
-    // If tab changed and stream is running, restart stream with new detector
     if (prevTab !== activeTab && isStreamRunning) {
       console.log(
         `[LiveView] Tab changed from ${prevTab} to ${activeTab}, restarting stream...`,
@@ -121,23 +137,41 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
       (async () => {
         try {
-          // Stop current stream
           await apiLiveViewControllerStopLiveView();
-          console.log("[LiveView] Stopped stream for previous detector");
-
-          // Small delay to ensure clean shutdown
           await new Promise((resolve) => setTimeout(resolve, 200));
 
-          // Start new stream with new detector
           const protocol = liveStreamState.imageFormat || "jpeg";
           const newDetectorName = detectors[activeTab] || null;
-          await apiLiveViewControllerStartLiveView(newDetectorName, protocol);
-          console.log(
-            `[LiveView] Started ${protocol} stream for new detector: ${newDetectorName}`,
+
+          // Look up saved per-detector params from Redux
+          const savedParams =
+            newDetectorName &&
+            liveStreamState.perDetectorSettings[newDetectorName];
+          const overrideParams =
+            savedParams && savedParams.protocol === protocol
+              ? savedParams
+              : null;
+
+          const result = await apiLiveViewControllerStartLiveView(
+            newDetectorName,
+            protocol,
+            overrideParams,
           );
+          console.log(
+            `[LiveView] Started ${protocol} stream for ${newDetectorName}`,
+          );
+
+          // Save effective params returned by backend into Redux
+          if (result?.params && newDetectorName) {
+            dispatch(
+              liveStreamSlice.updateDetectorSettings({
+                detectorName: newDetectorName,
+                settings: result.params,
+              }),
+            );
+          }
         } catch (error) {
           console.error("[LiveView] Error switching detector stream:", error);
-          // Ensure Redux state reflects actual state
           dispatch(liveViewSlice.setIsStreamRunning(false));
         }
       })();
@@ -147,6 +181,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
     isStreamRunning,
     detectors,
     liveStreamState.imageFormat,
+    liveStreamState.perDetectorSettings,
     dispatch,
   ]);
 
@@ -172,6 +207,36 @@ export default function LiveView({ setFileManagerInitialPath }) {
       }
     })();
   }, [hostIP, hostPort, dispatch]);
+
+  /* Sync activeTab with the backend's currently-streaming detector.
+     Without this, the UI defaults to tab 0 (e.g. "Observationcamera")
+     even when the backend is actually streaming a different detector
+     (e.g. "WidefieldCamera"). */
+  useEffect(() => {
+    if (!detectors || detectors.length === 0) return;
+    (async () => {
+      try {
+        const resp = await apiLiveViewControllerGetActiveStreams();
+        const streams = resp?.active_streams || [];
+        if (streams.length === 0) return;
+        const activeDetectorName = streams[0]?.detector;
+        if (!activeDetectorName) return;
+        const idx = detectors.indexOf(activeDetectorName);
+        if (idx >= 0 && idx !== activeTab) {
+          console.log(
+            `[LiveView] Backend streams '${activeDetectorName}' — syncing activeTab ${activeTab} → ${idx}`,
+          );
+          // Mark prevActiveTab so the stream-switch effect doesn't re-trigger.
+          prevActiveTabRef.current = idx;
+          dispatch(liveViewSlice.setActiveTab(idx));
+        }
+      } catch (error) {
+        console.warn("[LiveView] Could not sync active detector tab:", error);
+      }
+    })();
+    // Only re-run when the detector list itself changes (not on tab clicks).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detectors]);
 
   /* min/max - disabled auto-windowing to allow manual control via slider */
   // Commented out to prevent overriding manual slider settings
@@ -236,19 +301,33 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
     try {
       if (shouldStart) {
-        // Determine protocol from current stream settings
-        // Use imageFormat from Redux state - supports binary, jpeg, and webrtc
-        const protocol = liveStreamState.imageFormat || "jpeg"; // Default to JPEG
+        const protocol = liveStreamState.imageFormat || "jpeg";
 
         console.log(
           `Starting ${protocol} stream (imageFormat: ${liveStreamState.imageFormat})`,
         );
 
-        // Start stream with current protocol (binary, jpeg, or webrtc)
-        // Get detector name from active tab
         const detectorName = detectors[activeTab] || null;
-        await apiLiveViewControllerStartLiveView(detectorName, protocol);
+        const savedParams =
+          detectorName && liveStreamState.perDetectorSettings[detectorName];
+        const overrideParams =
+          savedParams && savedParams.protocol === protocol ? savedParams : null;
+
+        const result = await apiLiveViewControllerStartLiveView(
+          detectorName,
+          protocol,
+          overrideParams,
+        );
         console.log(`Started ${protocol} stream for detector: ${detectorName}`);
+
+        if (result?.params && detectorName) {
+          dispatch(
+            liveStreamSlice.updateDetectorSettings({
+              detectorName,
+              settings: result.params,
+            }),
+          );
+        }
       } else {
         // Stop stream
         await apiLiveViewControllerStopLiveView();
@@ -470,15 +549,56 @@ export default function LiveView({ setFileManagerInitialPath }) {
             px: 1,
           }}
         >
-          <Tabs
-            value={activeTab}
-            onChange={(_, v) => dispatch(liveViewSlice.setActiveTab(v))}
-            sx={{ mt: 1 }}
+          <Box
+            sx={{
+              mt: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              gap: 1,
+              flexWrap: "wrap",
+            }}
           >
-            {detectors.map((d) => (
-              <Tab key={d} label={d} />
-            ))}
-          </Tabs>
+            <Typography
+              variant="caption"
+              sx={{ color: "text.secondary", fontWeight: 600 }}
+            >
+              Detectors:
+            </Typography>
+            <ButtonGroup
+              variant="outlined"
+              color="primary"
+              size="small"
+              aria-label="Detector selection"
+              data-tour="detector-tabs"
+              sx={{
+                flexWrap: "wrap",
+                "& .MuiButtonGroup-grouped": {
+                  minWidth: 120,
+                },
+              }}
+            >
+              {detectors.map((detectorName, idx) => (
+                <Button
+                  key={detectorName}
+                  onClick={() => dispatch(liveViewSlice.setActiveTab(idx))}
+                  sx={
+                    activeTab === idx
+                      ? {
+                          backgroundColor: "primary.main",
+                          color: "primary.contrastText",
+                          "&:hover": {
+                            backgroundColor: "primary.dark",
+                          },
+                        }
+                      : undefined
+                  }
+                >
+                  {detectorName}
+                </Button>
+              ))}
+            </ButtonGroup>
+          </Box>
 
           {/* Toggle button to open/close right panel */}
           <IconButton
@@ -499,6 +619,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
         {/* Live View Container */}
         <Box
+          data-tour="live-view"
           sx={{
             flex: "0 0 auto",
             mb: 2,
@@ -524,7 +645,9 @@ export default function LiveView({ setFileManagerInitialPath }) {
             lastCapturePath={lastCapturePath}
           />
 
-          <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
+          <Box data-tour="camera-controls">
+            <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
+          </Box>
         </Box>
       </Box>
 
@@ -603,6 +726,8 @@ export default function LiveView({ setFileManagerInitialPath }) {
               setStageControlTab={setStageControlTab}
               hostIP={hostIP}
               hostPort={hostPort}
+              hasObjectiveController={hasObjectiveController}
+              hasLEDMatrixController={hasLEDMatrixController}
             />
           </Box>
         )
@@ -617,23 +742,28 @@ function RightPanelContent({
   setStageControlTab,
   hostIP,
   hostPort,
+  hasObjectiveController,
+  hasLEDMatrixController,
 }) {
   return (
     <>
-      <Box mb={3}>
-        <Typography variant="h6">Stage Control</Typography>
+      <Box mb={3} data-tour="stage-control">
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <ControlCameraIcon fontSize="small" color="action" />
+          <Typography variant="h6">Stage Control</Typography>
+        </Box>
 
         {/* Stage Control Tabs */}
         <Tabs
           value={stageControlTab}
           onChange={(_, v) => setStageControlTab(v)}
-          sx={{ mb: 2 }}
+          sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}
           variant="scrollable"
           scrollButtons="auto"
         >
-          <Tab label="Multiple Axis View" />
-          <Tab label="Joystick Control" />
-          <Tab label="Virtual Joystick (speed mode)" />
+          <Tab label="Axis View" />
+          <Tab label="Joystick" />
+          <Tab label="Virtual Joystick" />
         </Tabs>
 
         {/* Multiple Axis View */}
@@ -652,28 +782,52 @@ function RightPanelContent({
         )}
       </Box>
 
-      <Box mb={3}>
-        <Typography variant="h6">Autofocus</Typography>
+      <Box mb={3} data-tour="autofocus">
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <CenterFocusStrongIcon fontSize="small" color="action" />
+          <Typography variant="h6">Autofocus</Typography>
+        </Box>
         <AutofocusController hostIP={hostIP} hostPort={hostPort} />
       </Box>
 
-      <Box mb={3}>
-        <Typography variant="h6">Illumination</Typography>
+      <Box mb={3} data-tour="illumination">
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <LightModeIcon fontSize="small" color="action" />
+          <Typography variant="h6">Illumination</Typography>
+          <Tooltip
+            title="Laser power and enabled state are updated in real-time via WebSocket. Adjust laser intensity and observe the color change on the detector stream."
+            arrow
+          >
+            <IconButton size="small" sx={{ ml: -0.5 }}>
+              <InfoOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
         <IlluminationController hostIP={hostIP} hostPort={hostPort} />
       </Box>
 
-      <Box mb={3}>
-        <Typography variant="h6">Objective</Typography>
-        <ObjectiveSwitcher hostIP={hostIP} hostPort={hostPort} />
-      </Box>
+      {hasObjectiveController && (
+        <Box mb={3} data-tour="objective">
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <VisibilityIcon fontSize="small" color="action" />
+            <Typography variant="h6">Objective</Typography>
+          </Box>
+          <ObjectiveSwitcher hostIP={hostIP} hostPort={hostPort} />
+        </Box>
+      )}
+
+      {hasLEDMatrixController && (
+        <Box mb={3}>
+          <Typography variant="h6">Extended LED Matrix</Typography>
+          <ExtendedLEDMatrixController hostIP={hostIP} hostPort={hostPort} />
+        </Box>
+      )}
 
       <Box mb={3}>
-        <Typography variant="h6">Extended LED Matrix</Typography>
-        <ExtendedLEDMatrixController hostIP={hostIP} hostPort={hostPort} />
-      </Box>
-
-      <Box mb={3}>
-        <Typography variant="h6">Detector Trigger</Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <SensorsIcon fontSize="small" color="action" />
+          <Typography variant="h6">Detector Trigger</Typography>
+        </Box>
         <DetectorTriggerController hostIP={hostIP} hostPort={hostPort} />
       </Box>
     </>

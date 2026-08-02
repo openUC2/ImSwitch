@@ -9,7 +9,7 @@ async function apiTMCSettingsGetForAxis(baseURL, axis) {
   const axios = (await import('./createAxiosInstance')).default(baseURL);
   
   try {
-    const response = await axios.get('/uc2config/getTMCSettingsForAxis', {
+    const response = await axios.get('/UC2ConfigController/getTMCSettingsForAxis', {
       params: { axis }
     });
     

@@ -14,10 +14,6 @@
 #   SCAN_EXT_DATA_PATH - Enable external storage scanning: "true"/"1" or "false" (default)
 #   EXT_DATA_PATH      - Mount point directory for external drives (e.g., /media, /Volumes)
 #
-# Interactive Shell:
-#   For an interactive shell with ImSwitch environment activated, use:
-#   docker run --entrypoint=venv-shell.sh <image-name>
-#
 # Storage Management:
 #   The new storage management system automatically handles:
 #   - Detection of external drives when SCAN_EXT_DATA_PATH=true

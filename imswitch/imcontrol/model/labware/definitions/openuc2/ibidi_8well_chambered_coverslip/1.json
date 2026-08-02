@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 2,
+  "version": 1,
+  "namespace": "openuc2",
+  "metadata": {
+    "displayName": "Ibidi 8-Well Chambered Coverslip",
+    "displayCategory": "wellPlate",
+    "displayVolumeUnits": "µL",
+    "tags": ["coverslip-bottom", "imaging", "live-cell"]
+  },
+  "brand": {"brand": "Ibidi", "brandId": ["80826"], "links": ["https://ibidi.com/chambered-coverslips/130--8-well-chambered-coverslip.html"]},
+  "parameters": {
+    "format": "irregular",
+    "isTiprack": false,
+    "loadName": "ibidi_8well_chambered_coverslip",
+    "isMagneticModuleCompatible": false,
+    "quirks": [],
+    "isDeckSlotCompatible": true
+  },
+  "ordering": [
+    ["A1", "B1"],
+    ["A2", "B2"],
+    ["A3", "B3"],
+    ["A4", "B4"]
+  ],
+  "cornerOffsetFromSlot": {"x": 0.0, "y": 0.0, "z": 0.0},
+  "dimensions": {
+    "xDimension": 75.5,
+    "yDimension": 25.5,
+    "zDimension": 8.0
+  },
+  "wells": {
+    "A1": {"shape": "rectangular", "depth": 6.8, "totalLiquidVolume": 300.0, "x": 12.6, "y": 18.7, "z": 0.0, "xDimension": 9.4, "yDimension": 10.7},
+    "A2": {"shape": "rectangular", "depth": 6.8, "totalLiquidVolume": 300.0, "x": 30.6, "y": 18.7, "z": 0.0, "xDimension": 9.4, "yDimension": 10.7},
+    "A3": {"shape": "rectangular", "depth": 6.8, "totalLiquidVolume": 300.0, "x": 48.6, "y": 18.7, "z": 0.0, "xDimension": 9.4, "yDimension": 10.7},
+    "A4": {"shape": "rectangular", "depth": 6.8, "totalLiquidVolume": 300.0, "x": 66.6, "y": 18.7, "z": 0.0, "xDimension": 9.4, "yDimension": 10.7},
+    "B1": {"shape": "rectangular", "depth": 6.8, "totalLiquidVolume": 300.0, "x": 12.6, "y": 6.8, "z": 0.0, "xDimension": 9.4, "yDimension": 10.7},
+    "B2": {"shape": "rectangular", "depth": 6.8, "totalLiquidVolume": 300.0, "x": 30.6, "y": 6.8, "z": 0.0, "xDimension": 9.4, "yDimension": 10.7},
+    "B3": {"shape": "rectangular", "depth": 6.8, "totalLiquidVolume": 300.0, "x": 48.6, "y": 6.8, "z": 0.0, "xDimension": 9.4, "yDimension": 10.7},
+    "B4": {"shape": "rectangular", "depth": 6.8, "totalLiquidVolume": 300.0, "x": 66.6, "y": 6.8, "z": 0.0, "xDimension": 9.4, "yDimension": 10.7}
+  },
+  "groups": [
+    {
+      "wells": ["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4"],
+      "metadata": {"displayCategory": "wellPlate"}
+    }
+  ]
+}

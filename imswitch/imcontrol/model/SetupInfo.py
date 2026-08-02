@@ -45,6 +45,25 @@ class DetectorInfo(DeviceInfo):
     forFocusLock: bool = False
     """ Whether the detector is used for focus lock. """
 
+    defaultStreamSettings: Dict[str, Any] = field(default_factory=dict)
+    """ Optional per-detector defaults for the live stream applied at startup.
+
+    Recognised top-level keys (all optional):
+      - ``protocol``: ``"binary" | "jpeg" | "mjpeg" | "webrtc"``
+      - ``subsampling_factor``: int >= 1
+      - ``throttle_ms``: int
+      - ``jpeg_quality``: int (0..100, JPEG-specific)
+      - ``compression_algorithm``: ``"lz4" | "zstd" | ...`` (binary-specific)
+      - ``compression_level``: int (binary-specific)
+      - ``crop_size``: [width, height] or null
+
+    These are baked into the per-detector params on first stream start, so
+    the live view comes up with a sensible default per camera (e.g. heavy
+    subsampling on a large overview camera, lossless binary on a widefield
+    sensor). The frontend cannot mutate these — it can only override the
+    *current* session via ``setStreamParameters``/``setDetectorStreamParameters``.
+    """
+
 
 @dataclass(frozen=False)
 class LaserInfo(DeviceInfo):
@@ -235,10 +254,12 @@ class ObjectiveInfo:
     magnifications: List
     objectiveNames: List
     objectivePositions: List
+    zPositions: List = field(default_factory=lambda: [0, 0])
     homeDirection: int = -1
     homePolarity: int = 1
     homeSpeed: int = 20000
     homeAcceleration: int = 20000
+    moveSpeed: int = 20000  # Speed used when switching between objective slots
     calibrateOnStart: bool = True
     active: bool = True
 
@@ -694,10 +715,13 @@ class EtSTEDInfo:
 
 @dataclass(frozen=False)
 class MicroscopeStandInfo:
-    managerName: str
+    name: str = "openUC2 FRAME"
+    """ Human-readable model of the microscope stand (default: openUC2 FRAME). """
+
+    managerName: Optional[str] = None
     """ Name of the manager to use. """
 
-    rs232device: str
+    rs232device: Optional[str] = None
     """ Name of the rs232 device to use. """
 
 
@@ -722,6 +746,18 @@ class PulseStreamerInfo:
     ipAddress: Optional[str] = None
     """ IP address of Pulse Streamer hardware. """
 
+
+@dataclass(frozen=False)
+class MMCoreSettingsInfo:
+    """ Persisted Micro-Manager (MMCore) camera settings.
+
+    ``savedProperties`` maps a detector name to a dict of
+    ``{propertyName: value}`` that the MMCoreController re-applies to the
+    device on startup, so camera settings changed through the frontend survive
+    a restart. Written by ``MMCoreController.saveMMCoreSettings`` and cleared by
+    ``resetMMCoreSettings``. """
+
+    savedProperties: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass_json(undefined=Undefined.INCLUDE)
@@ -758,6 +794,10 @@ class SetupInfo:
     managers will require a corresponding RS232 connection to be referenced in
     their properties.
     """
+
+    mmcoreSettings: Optional[MMCoreSettingsInfo] = field(default_factory=lambda: None)
+    """ Persisted MMCore (Micro-Manager) camera settings, re-applied on startup
+    by the MMCoreController. ``null`` when no settings have been saved. """
 
     slm: Optional[SLMInfo] = field(default_factory=lambda: None)
     """ SLM settings. Required to be defined to use SLM functionality. """
@@ -858,6 +898,10 @@ class SetupInfo:
     """ Instrument metadata for OME-types integration. Contains microscope identification,
     optical configuration, and UC2-specific metadata. """
 
+    overviewRegistration: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
+    """ Overview-camera slide registration config (per camera/layout, including
+    stage XYZ positions and homographies). Persisted by ExperimentController. """
+
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """
 
@@ -885,6 +929,19 @@ class SetupInfo:
                 ManagerClass = entry_point.load()
                 ManagerDataClass = make_dataclass(entry_point.name.split("_info")[0], [(entry_point.name, ManagerClass)])
                 setattr(self, entry_point.name.split("_info")[0], field(default_factory=ManagerDataClass))
+
+    def getMicroscopeStandName(self):
+        """ Human-readable microscope stand model.
+
+        Falls back to "openUC2 FRAME" when no stand (or no name) is configured,
+        since most setups leave ``microscopeStand`` as null.
+        """
+        stand = getattr(self, "microscopeStand", None)
+        if stand is not None:
+            name = getattr(stand, "name", None)
+            if name:
+                return name
+        return "openUC2 FRAME"
 
     def getDevice(self, deviceName):
         """ Returns the DeviceInfo for a specific device.

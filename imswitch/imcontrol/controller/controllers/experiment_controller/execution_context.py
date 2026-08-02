@@ -59,6 +59,14 @@ class ExecutionContext:
     # Per-iteration time index (mutated inside the time-lapse loop).
     timepoint_index: int = 0
 
+    # Per-source "kind" tag (parallel to illumination_sources).  Drives
+    # workflow branching: "default" → normal laser path; "ring" → LED-matrix
+    # ring snap; "dpc" → 4-direction half-illumination expansion.  Empty list
+    # is treated as all-default for backward compatibility.
+    illumination_kinds: List[str] = field(default_factory=list)
+    # Kind-specific params keyed by channel name (e.g. radius, RGB).
+    illumination_params: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
     @property
     def initial_z_position(self) -> float:
         return self.initial_xyz.get("Z", 0.0)
@@ -88,6 +96,8 @@ class ExecutionContext:
             "snake_tiles": self.snake_tiles,
             "illumination_intensities": self.illumination_intensities,
             "illumination_sources": self.illumination_sources,
+            "illumination_kinds": self.illumination_kinds,
+            "illumination_params": self.illumination_params,
             "z_positions": self.z_positions,
             "initial_z_position": self.initial_z_position,
             "exposures": self.exposures,
@@ -110,11 +120,15 @@ class ExecutionContext:
             "autofocus_hc_max_iterations": p.autoFocusHillClimbingMaxIterations,
             "autofocus_target_focus_setpoint": p.autofocus_target_focus_setpoint,
             "autofocus_max_attempts": p.autofocus_max_attempts,
+            "autofocus_scope": p.autoFocusScope,
+            "autofocus_period_rounds": p.autoFocusPeriodRounds,
+            "autofocus_apply_global_offset": p.autoFocusApplyGlobalOffset,
             "t_period": self.t_period,
             "isRGB": self.is_rgb,
             "t_pre_s": p.performance_t_pre_s,
             "t_post_s": p.performance_t_post_s,
             "keep_illumination_on": self.keep_illumination_on,
+            "turn_off_between_timepoints": p.turnOffIlluminationBetweenTimepoints,
         }
 
     def performance_experiment_params(self) -> Dict[str, Any]:

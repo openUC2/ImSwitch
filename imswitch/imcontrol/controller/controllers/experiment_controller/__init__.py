@@ -33,6 +33,7 @@ from .models import (
     FocusFitMethod,
     FocusMapConfig,
     FocusMapFromPointsRequest,
+    IlluminationKind,
     KeepIlluminationMode,
     MDAChannelConfig,
     MDASequenceInfo,
@@ -46,6 +47,8 @@ from .models import (
     ScanPattern,
     ScanPosition,
     StartExperimentResponse,
+    SyntheticChannel,
+    SyntheticKind,
     TriggerMode,
 )
 from .execution_context import ExecutionContext

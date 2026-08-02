@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 
 import { Button, useTheme, useMediaQuery } from "@mui/material";
 
@@ -9,17 +9,20 @@ import apiPositionerControllerMovePositionerForever from "../backendapi/apiPosit
 const PositionControllerComponent = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
-  const [intervalId, setIntervalId] = useState(null);
 
   const moveDistance = 500; //TODO adjust
   const zoomDistance = 100; //TODO adjust
   const keyMoveDistance = 100; // Distance for keyboard single press
+  const zCoarseDistance = 500; // Coarse step for Z axis (PageUp/Down)
   const continuousMoveSpeed = 5000; // Speed for continuous movement
 
   // Track pressed keys, their timers, and whether continuous mode was triggered
   const keyTimersRef = useRef({});
   const keyPressedRef = useRef({});
   const continuousModeTriggeredRef = useRef({}); // Track if continuous mode was activated
+
+  // Button long-press state: { timer, continuousMode, axis, speed, singleDist }
+  const buttonPressRef = useRef({ timer: null, continuousMode: false });
 
   //##################################################################################
   const movePositioner = (axis, dist) => {
@@ -34,46 +37,6 @@ const PositionControllerComponent = () => {
       .catch((error) => {
         console.log(`Move ${axis} by ${dist} error:`, error);
       });
-  };
-
-  //##################################################################################
-  const startPeriodicRequest = (action) => {
-    // Start calling movePosition repeatedly
-    const id = setInterval(() => {
-      switch (action) {
-        case "minus":
-          movePositioner("Z", -zoomDistance);
-          break;
-        case "plus":
-          movePositioner("Z", zoomDistance);
-          break;
-        case "up":
-          movePositioner("Y", -moveDistance);
-          break;
-        case "down":
-          movePositioner("Y", moveDistance);
-          break;
-        case "left":
-          movePositioner("X", -moveDistance);
-          break;
-        case "right":
-          movePositioner("X", moveDistance);
-          break;
-        default:
-          console.log("ERROR unhandled action:", action);
-          break;
-      }
-    }, 100); // 100ms interval, adjust as needed
-    setIntervalId(id);
-  };
-
-  //##################################################################################
-  const stopPeriodicRequest = () => {
-    // Clear the interval to stop calling movePosition
-    if (intervalId) {
-      clearInterval(intervalId);
-      setIntervalId(null);
-    }
   };
 
   //##################################################################################
@@ -96,16 +59,53 @@ const PositionControllerComponent = () => {
   };
 
   //##################################################################################
+  // Generic button long-press handlers (short press = single step, long press = move forever)
+  const handleButtonDown = (axis, speed, singleDist) => {
+    const bp = buttonPressRef.current;
+    bp.continuousMode = false;
+    bp.axis = axis;
+    bp.speed = speed;
+    bp.singleDist = singleDist;
+    if (bp.timer) clearTimeout(bp.timer);
+
+    bp.timer = setTimeout(() => {
+      bp.continuousMode = true;
+      bp.timer = null;
+      movePositionerForever(axis, speed, false);
+    }, 1000);
+  };
+
+  const handleButtonUp = () => {
+    const bp = buttonPressRef.current;
+    if (bp.timer) {
+      clearTimeout(bp.timer);
+      bp.timer = null;
+    }
+
+    if (bp.continuousMode) {
+      movePositionerForever(bp.axis, bp.speed, true); // stop
+      bp.continuousMode = false;
+    } else {
+      movePositioner(bp.axis, bp.singleDist);
+    }
+  };
+
+  //##################################################################################
   // Keyboard event handlers
   const handleKeyDown = (event) => {
-    // Prevent default browser behavior for arrow keys
+    // Prevent default browser behavior for arrow keys and page keys
     if (
-      ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)
+      ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown"].includes(event.key)
     ) {
       event.preventDefault();
     }
 
-    // Ignore if key is already pressed (prevents key repeat)
+    // Ignore browser-generated key-repeat events (fires periodically while key is held)
+    if (event.repeat) {
+      return;
+    }
+
+    // Ignore if key is already pressed (belt-and-suspenders guard)
     if (keyPressedRef.current[event.key]) {
       return;
     }
@@ -146,11 +146,19 @@ const PositionControllerComponent = () => {
           break;
         case "ArrowUp":
           axis = "Y";
-          speed = continuousMoveSpeed; // Positive for up
+          speed = -continuousMoveSpeed; // Positive for up
           break;
         case "ArrowDown":
           axis = "Y";
-          speed = -continuousMoveSpeed; // Negative for down
+          speed = continuousMoveSpeed; // Negative for down
+          break;
+        case "PageUp":
+          axis = "Z";
+          speed = continuousMoveSpeed;
+          break;
+        case "PageDown":
+          axis = "Z";
+          speed = -continuousMoveSpeed;
           break;
         default:
           return;
@@ -190,6 +198,14 @@ const PositionControllerComponent = () => {
       case "ArrowDown":
         axis = "Y";
         dist = -keyMoveDistance;
+        break;
+      case "PageUp":
+        axis = "Z";
+        dist = zCoarseDistance;
+        break;
+      case "PageDown":
+        axis = "Z";
+        dist = -zCoarseDistance;
         break;
       default:
         // Clean up state even for unhandled keys
@@ -281,72 +297,72 @@ const PositionControllerComponent = () => {
     >
       <Button
         variant="contained"
-        onMouseDown={() => startPeriodicRequest("minus")}
-        onMouseUp={stopPeriodicRequest}
-        onMouseLeave={stopPeriodicRequest}
-        onTouchStart={() => startPeriodicRequest("minus")}
-        onTouchEnd={stopPeriodicRequest}
-        onTouchCancel={stopPeriodicRequest}
+        onMouseDown={() => handleButtonDown("Z", -continuousMoveSpeed, -zoomDistance)}
+        onMouseUp={handleButtonUp}
+        onMouseLeave={handleButtonUp}
+        onTouchStart={() => handleButtonDown("Z", -continuousMoveSpeed, -zoomDistance)}
+        onTouchEnd={handleButtonUp}
+        onTouchCancel={handleButtonUp}
         sx={buttonStyle}
       >
         Z-
       </Button>
       <Button
         variant="contained"
-        onMouseDown={() => startPeriodicRequest("up")}
-        onMouseUp={stopPeriodicRequest}
-        onMouseLeave={stopPeriodicRequest}
-        onTouchStart={() => startPeriodicRequest("up")}
-        onTouchEnd={stopPeriodicRequest}
-        onTouchCancel={stopPeriodicRequest}
+        onMouseDown={() => handleButtonDown("Y", -continuousMoveSpeed, -moveDistance)}
+        onMouseUp={handleButtonUp}
+        onMouseLeave={handleButtonUp}
+        onTouchStart={() => handleButtonDown("Y", -continuousMoveSpeed, -moveDistance)}
+        onTouchEnd={handleButtonUp}
+        onTouchCancel={handleButtonUp}
         sx={buttonStyle}
       >
         Y↑
       </Button>
       <Button
         variant="contained"
-        onMouseDown={() => startPeriodicRequest("plus")}
-        onMouseUp={stopPeriodicRequest}
-        onMouseLeave={stopPeriodicRequest}
-        onTouchStart={() => startPeriodicRequest("plus")}
-        onTouchEnd={stopPeriodicRequest}
-        onTouchCancel={stopPeriodicRequest}
+        onMouseDown={() => handleButtonDown("Z", continuousMoveSpeed, zoomDistance)}
+        onMouseUp={handleButtonUp}
+        onMouseLeave={handleButtonUp}
+        onTouchStart={() => handleButtonDown("Z", continuousMoveSpeed, zoomDistance)}
+        onTouchEnd={handleButtonUp}
+        onTouchCancel={handleButtonUp}
         sx={buttonStyle}
       >
         Z+
       </Button>
       <Button
         variant="contained"
-        onMouseDown={() => startPeriodicRequest("left")}
-        onMouseUp={stopPeriodicRequest}
-        onMouseLeave={stopPeriodicRequest}
-        onTouchStart={() => startPeriodicRequest("left")}
-        onTouchEnd={stopPeriodicRequest}
-        onTouchCancel={stopPeriodicRequest}
+        onMouseDown={() => handleButtonDown("X", -continuousMoveSpeed, -moveDistance)}
+        onMouseUp={handleButtonUp}
+        onMouseLeave={handleButtonUp}
+        onTouchStart={() => handleButtonDown("X", -continuousMoveSpeed, -moveDistance)}
+        onTouchEnd={handleButtonUp}
+        onTouchCancel={handleButtonUp}
         sx={buttonStyle}
       >
         X←
       </Button>
       <Button
         variant="contained"
-        onMouseDown={() => startPeriodicRequest("down")}
-        onMouseUp={stopPeriodicRequest}
-        onMouseLeave={stopPeriodicRequest}
-        onTouchStart={() => startPeriodicRequest("down")}
-        onTouchEnd={stopPeriodicRequest}
-        onTouchCancel={stopPeriodicRequest}
+        onMouseDown={() => handleButtonDown("Y", continuousMoveSpeed, moveDistance)}
+        onMouseUp={handleButtonUp}
+        onMouseLeave={handleButtonUp}
+        onTouchStart={() => handleButtonDown("Y", continuousMoveSpeed, moveDistance)}
+        onTouchEnd={handleButtonUp}
+        onTouchCancel={handleButtonUp}
         sx={buttonStyle}
       >
         Y↓
       </Button>
       <Button
         variant="contained"
-        onMouseDown={() => startPeriodicRequest("right")}
-        onMouseUp={stopPeriodicRequest}
-        onMouseLeave={stopPeriodicRequest}
-        onTouchStart={() => startPeriodicRequest("right")}
-        onTouchEnd={stopPeriodicRequest}
-        onTouchCancel={stopPeriodicRequest}
+        onMouseDown={() => handleButtonDown("X", continuousMoveSpeed, moveDistance)}
+        onMouseUp={handleButtonUp}
+        onMouseLeave={handleButtonUp}
+        onTouchStart={() => handleButtonDown("X", continuousMoveSpeed, moveDistance)}
+        onTouchEnd={handleButtonUp}
+        onTouchCancel={handleButtonUp}
         sx={buttonStyle}
       >
         X→

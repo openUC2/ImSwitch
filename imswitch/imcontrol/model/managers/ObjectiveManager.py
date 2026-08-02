@@ -39,6 +39,7 @@ class ObjectiveManager(SignalInterface):
                 homePolarity = 1
                 homeSpeed = 20000
                 homeAcceleration = 20000
+                moveSpeed = 20000
                 calibrateOnStart = True
                 active = False
             self.__ObjectiveInfo = DefaultObjectiveInfo()
@@ -57,6 +58,8 @@ class ObjectiveManager(SignalInterface):
         self._homePolarity = self.__ObjectiveInfo.homePolarity
         self._homeSpeed = self.__ObjectiveInfo.homeSpeed
         self._homeAcceleration = self.__ObjectiveInfo.homeAcceleration
+        # moveSpeed defaults to 20000 if not present in older config files
+        self._moveSpeed = getattr(self.__ObjectiveInfo, 'moveSpeed', 20000)
         self._calibrateOnStart = self.__ObjectiveInfo.calibrateOnStart
         self._isActive = self.__ObjectiveInfo.active
 
@@ -111,6 +114,11 @@ class ObjectiveManager(SignalInterface):
     def homeAcceleration(self):
         """Get home acceleration from config"""
         return self._homeAcceleration
+
+    @property
+    def moveSpeed(self):
+        """Get the speed used when switching between objective slots"""
+        return self._moveSpeed
 
     @property
     def calibrateOnStart(self):
@@ -232,9 +240,21 @@ class ObjectiveManager(SignalInterface):
             "homePolarity": self._homePolarity,
             "homeSpeed": self._homeSpeed,
             "homeAcceleration": self._homeAcceleration,
+            "moveSpeed": self._moveSpeed,
             "calibrateOnStart": self._calibrateOnStart,
             "isActive": self._isActive
         }
+
+    def setMoveSpeed(self, speed: int):
+        """
+        Update the objective switching speed and persist it to the config file.
+        
+        Args:
+            speed: Motor speed in steps/s used when moving between objective slots
+        """
+        self._moveSpeed = int(speed)
+        self.__logger.info(f"Updated moveSpeed to {self._moveSpeed}")
+        self._saveObjectiveConfigToFile()
 
     def _saveObjectiveConfigToFile(self):
         """
@@ -255,6 +275,7 @@ class ObjectiveManager(SignalInterface):
             self.__ObjectiveInfo.homePolarity = self._homePolarity
             self.__ObjectiveInfo.homeSpeed = self._homeSpeed
             self.__ObjectiveInfo.homeAcceleration = self._homeAcceleration
+            self.__ObjectiveInfo.moveSpeed = self._moveSpeed
             self.__ObjectiveInfo.calibrateOnStart = self._calibrateOnStart
             self.__ObjectiveInfo.active = self._isActive
 

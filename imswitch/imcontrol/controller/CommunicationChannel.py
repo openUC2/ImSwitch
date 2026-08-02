@@ -14,6 +14,7 @@ class CommunicationChannel(SignalInterface):
 
     sigUpdateStreamFrame = Signal()
 
+    sigDetectorParametersUpdated = Signal(dict)  # Emits: {'detectorName': str, 'parameters': dict}
 
     sigUpdateImage = Signal(
         str, np.ndarray, bool, list, bool
@@ -112,6 +113,10 @@ class CommunicationChannel(SignalInterface):
     sigUpdateRotatorPosition = Signal(str, str)  # (rotatorName)
 
     sigUpdateMotorPosition = Signal(list)  # # TODO: Just forcely update the positoin in the GUI
+
+    sigHomingState = Signal(dict)  # (homingStateDict) - per-axis frame-homing progress for the frontend
+
+    sigDiskFull = Signal(dict)  # (diskInfoDict) - storage is (nearly) full; tell the user to free space
 
     sigUpdateLaserPower = Signal(dict)  # (laserPowerDict) - updates laser power values from device callbacks
 

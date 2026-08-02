@@ -3,17 +3,15 @@
 // Example of handling invalid Zarr URL and disabling double-click zoom
 
 import React, { useEffect, useState } from "react";
-import { useDispatch, useSelector } from "react-redux";
+import { useSelector } from "react-redux";
 import DeckGL from "@deck.gl/react";
 import { OrthographicView, OrthographicController } from "@deck.gl/core";
 import { MultiscaleImageLayer } from "@hms-dbmi/viv";
 import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
-import { log } from "deck.gl";
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice.js";
 
 const   ZarrTileViewController = () => {
   // reference Redux state
-  const dispatch = useDispatch();
   const omeZarrState = useSelector(omeZarrSlice.getOmeZarrState);
   const [fullURL, setfullURL] = useState("");
 
@@ -89,8 +87,14 @@ const   ZarrTileViewController = () => {
         id="scan"
         loader={{ type: "zarr", url: fullURL }}
         onMetadata={(meta) => {
-          // English comment: shape is typically [t, c, z, y, x] but we only need y,x
-          const [y, x] = meta.data.shape.slice(-2);
+          // shape is typically [t, c, z, y, x]; RGB stores add a trailing
+          // samples axis -> [t, c, z, y, x, 3]. Pick y,x accordingly so the
+          // view isn't sized off the 3-sample axis.
+          const shape = meta.data.shape;
+          const [y, x] =
+            shape.length >= 3 && shape[shape.length - 1] === 3
+              ? shape.slice(-3, -1)
+              : shape.slice(-2);
           setDims({ w: x, h: y });
         }}
         pickable={false}

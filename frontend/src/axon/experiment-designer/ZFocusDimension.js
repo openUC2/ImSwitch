@@ -361,6 +361,51 @@ const ZFocusDimension = () => {
             </FormControl>
           </Box>
 
+          {/* Autofocus scope — where autofocus runs within a round */}
+          <Box sx={{ mb: 2 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+              <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                Autofocus Scope
+              </Typography>
+              <Tooltip title="Every Position: run autofocus at every XY tile (most accurate, slowest, more photobleaching). First Position Only: autofocus once per round at the first tile and apply the result as a global Z offset to all positions — best when drift is global (e.g. thermal).">
+                <IconButton size="small">
+                  <InfoIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+            <FormControl size="small" fullWidth>
+              <Select
+                value={parameterValue.autoFocusScope || "everyPosition"}
+                onChange={(e) => dispatch(experimentSlice.setAutoFocusScope(e.target.value))}
+              >
+                <MenuItem value="everyPosition">Every Position</MenuItem>
+                <MenuItem value="firstPositionOnly">First Position Only (global Z offset)</MenuItem>
+              </Select>
+            </FormControl>
+            <FormControlLabel
+              sx={{ mt: 1 }}
+              control={
+                <Switch
+                  size="small"
+                  checked={parameterValue.autoFocusApplyGlobalOffset !== false}
+                  onChange={(e) =>
+                    dispatch(experimentSlice.setAutoFocusApplyGlobalOffset(e.target.checked))
+                  }
+                />
+              }
+              label={
+                <Typography variant="caption">
+                  Apply focus result as global Z offset
+                </Typography>
+              }
+            />
+            <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>
+              When on, the measured focus updates the Z reference for the acquired
+              frames. Turn off to only move the stage during autofocus without
+              shifting the acquisition Z.
+            </Typography>
+          </Box>
+
           {/* Software autofocus method selector */}
           {parameterValue.autoFocusMode !== "hardware" && (
             <Box sx={{ mb: 2 }}>
@@ -460,7 +505,7 @@ const ZFocusDimension = () => {
                 onChange={(e) => dispatch(experimentSlice.setAutoFocusIlluminationChannel(e.target.value))}
               >
                 <MenuItem value="">Auto (use active channel)</MenuItem>
-                {parameterRange.illuSources?.map((source) => (
+                {(Array.isArray(parameterRange.illuSources) ? parameterRange.illuSources : []).map((source) => (
                   <MenuItem key={source} value={source}>
                     {source}
                   </MenuItem>

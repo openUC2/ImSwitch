@@ -2,13 +2,14 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 import time
+import base64
 import traceback
 import threading
 import queue
 
 try:
     from scipy import fft as scipy_fft
-    hasSciPyFFT = False
+    hasSciPyFFT = True
 except:
     hasSciPyFFT = False
 
@@ -18,6 +19,12 @@ try:
     hasCV2 = True
 except:
     hasCV2 = False
+
+try:
+    from skimage.restoration import denoise_tv_chambolle
+    hasSkimageTV = True
+except Exception:
+    hasSkimageTV = False
 
 from imswitch.imcommon.model import initLogger, APIExport
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
@@ -34,14 +41,33 @@ class InLineHoloParams:
     wavelength: float = 488e-9  # meters
     na: float = 0.3
     dz: float = 0.0  # propagation distance in meters
+    dz_max: float = 30000e-6  # max dz exposed to UI slider (meters); 30 mm default
+    dz_step: float = 1e-6  # dz slider step size (meters); 1 µm default
     roi_center: Optional[List[int]] = None  # [x, y] in pixels
     roi_size: Optional[int] = 256  # square ROI size
-    color_channel: str = "green"  # "red", "green", "blue"
+    # "red", "green", "blue" or "white" (mean of all channels)
+    color_channel: str = "red"
     flip_x: bool = False
     flip_y: bool = False
     rotation: int = 0  # 0, 90, 180, 270
     update_freq: float = 10.0  # Hz (processing framerate)
     binning: int = 1  # binning factor (1, 2, 4, etc.)
+    show_raw: bool = False  # if True, reconstruct at dz=0 (raw, in-focus hologram)
+    # When True, ignore ROI crop and reconstruct the full sensor image
+    # (with software binning applied). Useful for full-FOV preview at low res.
+    full_frame: bool = False
+
+    # Background normalization (live divide) -------------------------------
+    # When True, the live frame is divided by the stored background before
+    # forming the field. Removes the static illumination envelope + fixed
+    # speckle (multiplicative artifacts), the single biggest cheap win.
+    bg_enabled: bool = False
+
+    # High-quality refinement (button press) ------------------------------
+    refine_method: str = "phase_retrieval"  # "phase_retrieval" | "tv"
+    refine_iterations: int = 30
+    refine_support_threshold: float = 0.5   # absorption threshold for support
+    refine_tv_weight: float = 0.05          # TV-Chambolle weight (tv method)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -49,6 +75,8 @@ class InLineHoloParams:
             "wavelength": self.wavelength,
             "na": self.na,
             "dz": self.dz,
+            "dz_max": self.dz_max,
+            "dz_step": self.dz_step,
             "roi_center": self.roi_center,
             "roi_size": self.roi_size,
             "color_channel": self.color_channel,
@@ -57,6 +85,13 @@ class InLineHoloParams:
             "rotation": self.rotation,
             "update_freq": self.update_freq,
             "binning": self.binning,
+            "show_raw": self.show_raw,
+            "full_frame": self.full_frame,
+            "bg_enabled": self.bg_enabled,
+            "refine_method": self.refine_method,
+            "refine_iterations": self.refine_iterations,
+            "refine_support_threshold": self.refine_support_threshold,
+            "refine_tv_weight": self.refine_tv_weight,
         }
 
 
@@ -69,6 +104,15 @@ class InLineHoloState:
     last_process_time: float = 0.0
     frame_count: int = 0
     processed_count: int = 0
+    # Timestamp of the last frame successfully pushed onto the MJPEG queue.
+    # Frontend uses this to detect a stalled processed stream and offer a
+    # restart action.
+    last_mjpeg_emit_time: float = 0.0
+    mjpeg_client_count: int = 0
+    # True when a background image is stored and available for live division.
+    has_background: bool = False
+    # True while a high-quality refinement is running (drives the UI spinner).
+    is_refining: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -78,6 +122,10 @@ class InLineHoloState:
             "last_process_time": self.last_process_time,
             "frame_count": self.frame_count,
             "processed_count": self.processed_count,
+            "last_mjpeg_emit_time": self.last_mjpeg_emit_time,
+            "mjpeg_client_count": self.mjpeg_client_count,
+            "has_background": self.has_background,
+            "is_refining": self.is_refining,
         }
 
 
@@ -143,6 +191,17 @@ class InLineHoloController(LiveUpdatedController):
 
         self._state = InLineHoloState()
         self._processing_lock = threading.Lock()
+
+        # Background normalization: the averaged raw frame (full resolution,
+        # native channels). Reduced through the live pipeline at divide time.
+        self._background = None
+        self._background_meta = {}
+        # Cache of the background patch matched to the current params (a crop +
+        # stride); invalidated whenever an affecting parameter changes.
+        self._bg_patch_cache = None
+        self._bg_patch_key = None
+        # Serialize high-quality refinement runs (one at a time).
+        self._refine_lock = threading.Lock()
 
         # Rate limiting counter (like FFTController pattern)
         # updateRate = number of frames to skip between processing
@@ -338,13 +397,20 @@ class InLineHoloController(LiveUpdatedController):
         # subsakmple
         if len(image.shape) == 2:
             # Grayscale
-            return image[::2, ::2]
+            return image[::self._params.binning, ::self._params.binning]
         else:
             # Color
-            return image[::2, ::2, :]
+            return image[::self._params.binning, ::self._params.binning, :]
 
     def _extract_roi(self, image):
-        """Extract ROI from image based on current parameters"""
+        """Extract ROI from image based on current parameters.
+
+        When ``full_frame`` is enabled, the ROI is bypassed entirely so the
+        reconstruction sees the full (already-binned) sensor image.
+        """
+        if self._params.full_frame:
+            return image
+
         h, w = image.shape[:2]
 
         # Determine ROI center
@@ -365,13 +431,25 @@ class InLineHoloController(LiveUpdatedController):
         return image[y1:y2, x1:x2]
 
     def _extract_color_channel(self, image):
-        """Extract specified color channel from RGB image"""
+        """Extract specified color channel from RGB image.
+
+        Channels are R/G/B in that index order (i.e. ``image[:, :, 0]`` is
+        red). Downstream cameras are responsible for delivering true RGB —
+        notably picamera2_interface.py converts its native BGR-in-memory
+        "RGB888" output into true RGB at the source.
+
+        ``white`` returns the mean across all channels (a luminance proxy).
+        """
         if len(image.shape) == 2:
             return image  # Already grayscale
 
-        channel_map = {"red": 0, "green": 1, "blue": 2}
-        channel_idx = channel_map.get(self._params.color_channel, 1)
+        channel = self._params.color_channel
+        if channel == "white":
+            # Mean over channels; cast to float to avoid uint8 overflow
+            return image.astype(np.float32).mean(axis=2)
 
+        channel_map = {"red": 0, "green": 1, "blue": 2}
+        channel_idx = channel_map.get(channel, 1)
         return image[:, :, channel_idx]
 
     def _apply_transforms(self, image):
@@ -391,21 +469,74 @@ class InLineHoloController(LiveUpdatedController):
 
         return image
 
-    def _process_inline(self, image):
-        """Process inline hologram"""
-        # Apply binning first
-        binned = self._apply_binning(image)
+    def _prepared_gray(self, image):
+        """Shared preprocessing: ROI -> colour -> transforms -> binning, then
+        (optionally) divide by the stored background.
 
-        # Extract ROI and color channel
-        roi = self._extract_roi(binned)
+        Background normalization is multiplicative removal of the illumination
+        envelope and fixed-pattern speckle, so we *divide* (not subtract). The
+        result plays the role of a normalized intensity (``contrast``) ready for
+        ``sqrt`` -> field amplitude. Returns a float32 array.
+        """
+        roi = self._extract_roi(image)
         gray = self._extract_color_channel(roi)
         gray = self._apply_transforms(gray)
+        gray = self._apply_binning(gray)
+        gray = gray.astype(np.float32)
 
-        # Convert to complex field (E-field from intensity)
-        E0 = np.sqrt(gray.astype(float))
+        if self._params.bg_enabled and self._background is not None:
+            bg = self._background_patch()
+            if bg is not None and bg.shape == gray.shape:
+                gray = gray / np.maximum(bg, 1e-6)
+            elif bg is not None:
+                self._logger.warning(
+                    f"Background shape {bg.shape} != frame {gray.shape}; "
+                    "skipping background division"
+                )
+        return gray
 
-        # Propagate
-        Ef = self._fresnel_propagator(E0, self._params.dz)
+    def _background_patch(self):
+        """Return the stored background reduced through the *same* pipeline the
+        live frame goes through (ROI -> colour -> transforms -> binning) so it
+        matches ``gray`` pixel-for-pixel. Cached, invalidated on param change."""
+        if self._background is None:
+            return None
+
+        key = (
+            self._params.full_frame,
+            tuple(self._params.roi_center) if self._params.roi_center else None,
+            self._params.roi_size,
+            self._params.color_channel,
+            self._params.flip_x,
+            self._params.flip_y,
+            self._params.rotation,
+            self._params.binning,
+            self._background_meta.get("timestamp"),
+        )
+        if self._bg_patch_cache is not None and self._bg_patch_key == key:
+            return self._bg_patch_cache
+
+        roi = self._extract_roi(self._background)
+        bg = self._extract_color_channel(roi)
+        bg = self._apply_transforms(bg)
+        bg = self._apply_binning(bg)
+        bg = bg.astype(np.float32)
+
+        self._bg_patch_cache = bg
+        self._bg_patch_key = key
+        return bg
+
+    def _process_inline(self, image):
+        """Process inline hologram (live path)."""
+        gray = self._prepared_gray(image)
+
+        # Convert to complex field (E-field from intensity / normalized contrast)
+        E0 = np.sqrt(np.clip(gray, 0, None))
+
+        # Propagate. When show_raw is set we reconstruct at dz=0, which returns
+        # the raw, in-focus hologram intensity regardless of the slider value.
+        dz = 0.0 if self._params.show_raw else self._params.dz
+        Ef = self._fresnel_propagator(E0, dz)
 
         # Return intensity
         return self._abssqr(Ef)
@@ -445,14 +576,7 @@ class InLineHoloController(LiveUpdatedController):
 
         try:
             # Normalize to uint8
-            frame = np.array(image)
-            if frame.dtype != np.uint8:
-                vmin = float(np.min(frame))
-                vmax = float(np.max(frame))
-                if vmax > vmin:
-                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
-                else:
-                    frame = np.zeros_like(frame, dtype=np.uint8)
+            frame = self._normalize_uint8(image)
 
             # Encode as JPEG
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality]
@@ -471,6 +595,7 @@ class InLineHoloController(LiveUpdatedController):
                 # Put in queue, drop frame if full
                 try:
                     self._mjpeg_queue.put_nowait(mjpeg_frame)
+                    self._state.last_mjpeg_emit_time = time.time()
                 except queue.Full:
                     pass  # Drop frame if queue is full
         except Exception as e:
@@ -484,6 +609,190 @@ class InLineHoloController(LiveUpdatedController):
         if self._last_frame is not None:
             self._processing_worker.prepareForNewImage(self._last_frame)
             self.sigImageReceived.emit()
+
+    # =========================
+    # Display encoding helpers
+    # =========================
+    @staticmethod
+    def _normalize_uint8(arr):
+        """Min-max normalize a (float) array to a uint8 image for display."""
+        frame = np.asarray(arr)
+        if frame.dtype != np.uint8:
+            vmin = float(np.min(frame))
+            vmax = float(np.max(frame))
+            if vmax > vmin:
+                frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
+            else:
+                frame = np.zeros_like(frame, dtype=np.uint8)
+        return frame
+
+    def _to_data_url(self, arr, fmt="png", max_size=None):
+        """Encode an image as a base64 data URL (PNG = lossless, preferred for
+        the background preview and the HQ reconstruction). Optionally downsample
+        so large full-sensor previews stay light over the wire."""
+        if not hasCV2 or arr is None:
+            return None
+        frame = self._normalize_uint8(arr)
+        if max_size and max(frame.shape[:2]) > max_size:
+            scale = max_size / float(max(frame.shape[:2]))
+            new_w = max(1, int(frame.shape[1] * scale))
+            new_h = max(1, int(frame.shape[0] * scale))
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        ext = ".png" if fmt == "png" else ".jpg"
+        mime = "image/png" if fmt == "png" else "image/jpeg"
+        ok, buf = cv2.imencode(ext, frame)
+        if not ok:
+            return None
+        b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+
+    def _background_preview_array(self):
+        """The stored background reduced to the current display channel (2D)."""
+        if self._background is None:
+            return None
+        return self._extract_color_channel(self._background)
+
+    def _grab_frames(self, num_frames, delay=0.03):
+        """Grab a short burst of raw frames from the detector (for background
+        estimation). Returns a list of frames (possibly shorter on failure)."""
+        frames = []
+        try:
+            detector = self._master.detectorsManager[self.camera]
+        except Exception as e:
+            self._logger.error(f"Background: cannot access detector: {e}")
+            return frames
+        self._ensure_camera_running()
+        for _ in range(max(1, int(num_frames))):
+            try:
+                f = detector.getLatestFrame()
+            except Exception as e:
+                self._logger.debug(f"getLatestFrame failed: {e}")
+                f = None
+            if f is not None:
+                frames.append(np.asarray(f))
+            time.sleep(max(0.0, delay))
+        return frames
+
+    # =========================
+    # High-quality refinement (single-shot, semi-transparent)
+    # =========================
+    def _to_object(self, U, dz=None):
+        """Propagate detector field -> object plane (reconstruction direction)."""
+        if dz is None:
+            dz = self._params.dz
+        return self._fresnel_propagator(U, dz)
+
+    def _to_detector(self, o, dz=None):
+        """Propagate object field -> detector plane (forward direction)."""
+        if dz is None:
+            dz = self._params.dz
+        return self._fresnel_propagator(o, -dz)
+
+    def _estimate_support(self, A):
+        """Estimate object support from a plain back-propagation. The object is
+        where the absorption (1-|t|) exceeds a normalized threshold."""
+        o0 = np.abs(self._to_object(A.astype(np.complex64)))
+        absorption = 1.0 - o0
+        amin = float(np.min(absorption))
+        amax = float(np.max(absorption))
+        if amax <= amin:
+            return np.ones(A.shape, dtype=bool)
+        norm = (absorption - amin) / (amax - amin)
+        thr = float(np.clip(self._params.refine_support_threshold, 0.0, 1.0))
+        support = norm > thr
+        if hasCV2:
+            support = cv2.dilate(
+                support.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1
+            ).astype(bool)
+        return support
+
+    def _tv_prox(self, mag, weight):
+        """Edge-preserving TV denoise of a magnitude image."""
+        if hasSkimageTV:
+            return denoise_tv_chambolle(mag, weight=weight)
+        # Lightweight fallback: a few explicit TV gradient-descent steps.
+        out = mag.astype(np.float32).copy()
+        for _ in range(5):
+            gx = np.diff(out, axis=1, append=out[:, -1:])
+            gy = np.diff(out, axis=0, append=out[-1:, :])
+            div = (np.diff(gx, axis=1, prepend=gx[:, :1])
+                   + np.diff(gy, axis=0, prepend=gy[:1, :]))
+            out = out + 0.1 * float(weight) * div
+        return out
+
+    def _phase_retrieval(self, A, support, iters, method="phase_retrieval",
+                         tv_weight=0.05):
+        """Latychevskaia-Fink constrained Gerchberg-Saxton (single-shot).
+
+        Constraints for a semi-transparent object:
+          * |t| <= 1               (object cannot amplify light)
+          * t = 1 outside support  (free-space background)
+          * keep the measured amplitude at the detector each iteration
+        ``method="tv"`` additionally applies a TV prox to |o| each iteration
+        (the lightweight compressive/TV hybrid).
+        """
+        U = A.astype(np.complex64)
+        for _ in range(max(1, int(iters))):
+            o = self._to_object(U)
+            mag = np.abs(o)
+            big = mag > 1.0
+            if np.any(big):
+                o[big] = o[big] / mag[big]          # |t| <= 1
+            if method == "tv":
+                mag2 = np.abs(o)
+                den = self._tv_prox(mag2, tv_weight)
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    scale = np.where(mag2 > 1e-6, den / mag2, 1.0)
+                o = o * scale.astype(np.float32)
+            o[~support] = 1.0                        # free-space background = 1
+            d = self._to_detector(o)
+            U = A * np.exp(1j * np.angle(d))         # measured amp, computed phase
+        return self._to_object(U)
+
+    def _refine(self):
+        """Run the high-quality reconstruction on the latest frame, reading
+        settings from ``self._params``. Returns a result dict with base64
+        amplitude + phase data URLs."""
+        image = self._last_frame
+        if image is None:
+            self._ensure_camera_running()
+            image = self._capture_camera_frame()
+        if image is None:
+            return {"success": False, "error": "No frame available"}
+
+        method = self._params.refine_method
+        iterations = self._params.refine_iterations
+        tv_weight = self._params.refine_tv_weight
+
+        t0 = time.time()
+        gray = self._prepared_gray(image)
+        # The LF constraints (|t|<=1, free-space=1) assume a *normalized*
+        # hologram (contrast ~ 1 in free space). When the background divide is
+        # not active, normalize by the median so free space sits near 1.
+        if not (self._params.bg_enabled and self._background is not None):
+            med = float(np.median(gray))
+            if med > 1e-6:
+                gray = gray / med
+        A = np.sqrt(np.clip(gray, 0, None)).astype(np.complex64)
+
+        support = self._estimate_support(A)
+        recon = self._phase_retrieval(
+            A, support, iterations, method=method, tv_weight=tv_weight
+        )
+        elapsed = time.time() - t0
+
+        amplitude = np.abs(recon)
+        phase = np.angle(recon)
+        return {
+            "success": True,
+            "method": method,
+            "iterations": int(iterations),
+            "elapsed": round(elapsed, 3),
+            "width": int(amplitude.shape[1]),
+            "height": int(amplitude.shape[0]),
+            "amplitude": self._to_data_url(amplitude, fmt="png"),
+            "phase": self._to_data_url(phase, fmt="png"),
+        }
 
     # =========================
     # Processing Worker (like FFTController pattern)
@@ -781,6 +1090,7 @@ class InLineHoloController(LiveUpdatedController):
         # Start streaming
         with self._processing_lock:
             self._state.is_streaming = True
+            self._state.mjpeg_client_count += 1
 
         # Ensure processing is running
         if not self._state.is_processing:
@@ -791,7 +1101,12 @@ class InLineHoloController(LiveUpdatedController):
 
         # Create generator for streaming response
         def frame_generator():
-            """Generator that yields MJPEG frames."""
+            """Generator that yields MJPEG frames.
+
+            ``is_streaming`` is only reset to False when the *last* connected
+            client disconnects, so opening the holo page in two tabs (or a
+            quick refresh) doesn't tear down everyone else's stream.
+            """
             try:
                 while self._state.is_streaming:
                     try:
@@ -802,11 +1117,16 @@ class InLineHoloController(LiveUpdatedController):
                         continue
             except GeneratorExit:
                 self._logger.info("MJPEG stream connection closed by client")
-                with self._processing_lock:
-                    self._state.is_streaming = False
-                self._emit_state_changed()
             except Exception as e:
                 self._logger.error(f"Error in MJPEG frame generator: {e}")
+            finally:
+                with self._processing_lock:
+                    self._state.mjpeg_client_count = max(
+                        0, self._state.mjpeg_client_count - 1
+                    )
+                    if self._state.mjpeg_client_count == 0:
+                        self._state.is_streaming = False
+                self._emit_state_changed()
 
         # Return streaming response with proper headers
         headers = {
@@ -822,6 +1142,220 @@ class InLineHoloController(LiveUpdatedController):
             media_type="multipart/x-mixed-replace;boundary=frame",
             headers=headers
         )
+
+    @APIExport(runOnUIThread=True)
+    def get_camera_info_inlineholo(self) -> Dict[str, Any]:
+        """Return info about the detector backing the inline-holo controller.
+
+        The frontend needs the detector name to address it from the shared
+        SettingsController endpoints (exposure / gain / mode / white balance).
+
+        Returns:
+            ``{"camera": "<name>", "is_rgb": bool}``
+        """
+        is_rgb = False
+        try:
+            detector = self._master.detectorsManager[self.camera]
+            is_rgb = bool(getattr(detector, "_isRGB", False))
+        except Exception:
+            pass
+        return {"camera": self.camera, "is_rgb": is_rgb}
+
+    @APIExport(runOnUIThread=True)
+    def restart_stream_inlineholo(self) -> Dict[str, Any]:
+        """Recover from a stalled processed stream.
+
+        Drops any queued MJPEG frames, resets stream-health counters, and
+        bounces the processing pipeline (stop → start) so a wedged worker
+        gets re-armed. Pairs with a fresh ``<img>`` mount on the client side
+        that reopens ``mjpeg_stream_inlineholo``.
+        """
+        # Remember whether we were processing — if so, restart afterwards.
+        was_processing = self._state.is_processing
+
+        while not self._mjpeg_queue.empty():
+            try:
+                self._mjpeg_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        with self._processing_lock:
+            self._state.is_streaming = False
+            self._state.mjpeg_client_count = 0
+            self._state.last_mjpeg_emit_time = 0.0
+            self._state.is_processing = False
+            self._state.is_paused = False
+
+        # Reset frame counter so rate-limiting starts fresh.
+        self._frame_counter = 0
+
+        if was_processing:
+            # Re-arm processing immediately; the frontend will reopen the
+            # MJPEG socket which flips is_streaming back to True.
+            self.start_processing_inlineholo()
+
+        self._emit_state_changed()
+        self._logger.info("Inline holo stream restarted by user")
+        return self._state.to_dict()
+
+    # =========================
+    # API: Background normalization
+    # =========================
+    @APIExport(runOnUIThread=False)
+    def acquire_background_inlineholo(self, mode: str = "median",
+                                      num_frames: int = 20) -> Dict[str, Any]:
+        """Acquire a background image used to normalize (divide) the live frame.
+
+        Args:
+            mode: "median" — temporal median over a burst of ``num_frames``
+                  frames; moving objects wash out while the static illumination
+                  envelope + fixed speckle remain (capture with the sample in
+                  view). "snapshot" — mean of a few frames, for static samples
+                  (move the sample out of the FOV first).
+            num_frames: number of frames to grab for the burst.
+
+        Returns:
+            ``{success, has_background, mode, num_frames, width, height, image}``
+            where ``image`` is a base64 PNG data URL preview.
+        """
+        n = max(1, int(num_frames))
+        frames = self._grab_frames(n)
+        if not frames:
+            return {"success": False, "error": "No frames captured",
+                    "has_background": False}
+        try:
+            stack = np.stack(frames, axis=0).astype(np.float32)
+        except Exception as e:
+            return {"success": False, "error": f"Frame shapes differ: {e}",
+                    "has_background": False}
+
+        if mode == "snapshot":
+            bg = np.mean(stack, axis=0)
+        else:
+            mode = "median"
+            bg = np.median(stack, axis=0)
+
+        with self._processing_lock:
+            self._background = bg
+            self._background_meta = {
+                "mode": mode,
+                "num_frames": len(frames),
+                "width": int(bg.shape[1]),
+                "height": int(bg.shape[0]),
+                "timestamp": time.time(),
+            }
+            self._bg_patch_cache = None
+            self._bg_patch_key = None
+            self._state.has_background = True
+
+        self._emit_state_changed()
+        self._logger.info(f"Acquired background ({mode}, {len(frames)} frames)")
+        return {
+            "success": True,
+            "has_background": True,
+            "mode": mode,
+            "num_frames": len(frames),
+            "width": int(bg.shape[1]),
+            "height": int(bg.shape[0]),
+            "image": self._to_data_url(self._background_preview_array(),
+                                       fmt="png", max_size=512),
+        }
+
+    @APIExport(runOnUIThread=False)
+    def get_background_inlineholo(self) -> Dict[str, Any]:
+        """Return the stored background as a base64 PNG data URL (or null).
+
+        Lets the frontend restore the preview after a page reload.
+        """
+        has = self._background is not None
+        result = {
+            "has_background": has,
+            "bg_enabled": self._params.bg_enabled,
+            "image": self._to_data_url(self._background_preview_array(),
+                                       fmt="png", max_size=512) if has else None,
+        }
+        if has:
+            result.update(self._background_meta)
+        return result
+
+    @APIExport(runOnUIThread=True)
+    def clear_background_inlineholo(self) -> Dict[str, Any]:
+        """Drop the stored background and disable live division."""
+        with self._processing_lock:
+            self._background = None
+            self._background_meta = {}
+            self._bg_patch_cache = None
+            self._bg_patch_key = None
+            self._params.bg_enabled = False
+            self._state.has_background = False
+        self._emit_state_changed()
+        self._logger.info("Cleared background")
+        return {"success": True, "has_background": False, "bg_enabled": False}
+
+    @APIExport(runOnUIThread=True)
+    def set_bg_enabled_inlineholo(self, enabled: bool = True) -> Dict[str, Any]:
+        """Enable/disable dividing the live frame by the stored background."""
+        enabled = bool(enabled)
+        if enabled and self._background is None:
+            return {"success": False, "error": "No background acquired",
+                    "bg_enabled": False}
+        with self._processing_lock:
+            self._params.bg_enabled = enabled
+        self._emit_state_changed()
+        return {"success": True, "bg_enabled": enabled}
+
+    # =========================
+    # API: High-quality refinement
+    # =========================
+    @APIExport(runOnUIThread=False)
+    def reconstruct_highquality_inlineholo(
+        self,
+        method: str = "phase_retrieval",
+        iterations: int = 30,
+        support_threshold: Optional[float] = None,
+        tv_weight: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """High-quality single-shot reconstruction (button press).
+
+        Args:
+            method: "phase_retrieval" — Latychevskaia-Fink constrained
+                Gerchberg-Saxton (twin-image suppression). "tv" — same loop plus
+                a TV-Chambolle prox per iteration.
+            iterations: number of GS iterations (~30-50 typical).
+            support_threshold: optional override for the object-support threshold.
+            tv_weight: optional override for the TV weight (tv method only).
+
+        Uses the current ``dz`` and, if enabled, the background normalization.
+        Runs one-at-a-time; ``is_refining`` reflects progress. Returns
+        ``{success, method, iterations, elapsed, amplitude, phase}`` with the
+        images as base64 PNG data URLs.
+        """
+        if method not in ("phase_retrieval", "tv"):
+            method = "phase_retrieval"
+
+        # Persist the chosen settings so the UI + params stay in sync.
+        with self._processing_lock:
+            self._params.refine_method = method
+            self._params.refine_iterations = max(1, int(iterations))
+            if support_threshold is not None:
+                self._params.refine_support_threshold = float(support_threshold)
+            if tv_weight is not None:
+                self._params.refine_tv_weight = float(tv_weight)
+
+        if not self._refine_lock.acquire(blocking=False):
+            return {"success": False, "error": "A refinement is already running"}
+        try:
+            self._state.is_refining = True
+            self._emit_state_changed()
+            return self._refine()
+        except Exception as e:
+            self._logger.error(f"HQ reconstruction failed: {e}")
+            self._logger.debug(traceback.format_exc())
+            return {"success": False, "error": str(e)}
+        finally:
+            self._state.is_refining = False
+            self._emit_state_changed()
+            self._refine_lock.release()
 
     #@APIExport(runOnUIThread=True)
     def process_single_frame(self, image: np.ndarray = None) -> Dict[str, Any]:

@@ -34,20 +34,33 @@ class OMETiffWriter(WriterBase):
     - RGB and grayscale support
     """
     
-    def __init__(self, session_ctx: SessionContext, 
+    def __init__(self, session_ctx: SessionContext,
                  bigtiff: bool = True,
-                 append_mode: bool = True):
+                 append_mode: bool = True,
+                 compression: Optional[str] = "zlib",
+                 compression_level: int = 1):
         """
         Initialize OME-TIFF writer.
-        
+
         Args:
             session_ctx: Session metadata
             bigtiff: Use BigTIFF format for large files
             append_mode: Write all frames to single file (True) or multiple files (False)
+            compression: tifffile compression codec to apply on each frame.
+                Pass ``None`` for uncompressed (matches old behaviour).
+                Defaults to ``"zlib"`` (deflate) with level 1, which on
+                typical microscopy data shrinks files ~2-3x at ~1 GB/s on
+                a Pi 5 — often *faster* end-to-end than uncompressed
+                because storage I/O is the bottleneck. Pass ``"zstd"`` if
+                ``imagecodecs`` is installed for even better throughput.
+            compression_level: Codec-specific level (1 = fastest, lossless
+                for zlib/zstd). Ignored when ``compression`` is None.
         """
         super().__init__(session_ctx)
         self.bigtiff = bigtiff
         self.append_mode = append_mode
+        self.compression = compression
+        self.compression_level = int(compression_level)
         self.detectors: Dict[str, DetectorContext] = {}
         self.file_paths: Dict[str, str] = {}
         self.queues: Dict[str, deque] = {}
@@ -213,10 +226,26 @@ class OMETiffWriter(WriterBase):
         # Determine photometric mode
         photometric = "rgb" if det_ctx.dtype in ['rgb', 'RGB'] else None
         
+        # Build a single set of write kwargs once, including the compression
+        # codec. tifffile is conservative about unknown kwargs, so we drop
+        # ``compression*`` if it's None to preserve the previous
+        # uncompressed behaviour.
+        write_kwargs = {
+            "photometric": photometric,
+        }
+        if self.compression:
+            write_kwargs["compression"] = self.compression
+            # ``compressionargs`` is the modern (tifffile >= 2022) way to
+            # pass codec level. Older versions ignore it harmlessly via
+            # **kwargs; if a future version rejects it strictly we'll see
+            # it in the per-frame except below and fall back to default
+            # level.
+            write_kwargs["compressionargs"] = {"level": self.compression_level}
+
         try:
             with tifffile.TiffWriter(filepath, bigtiff=self.bigtiff, append=self.append_mode) as tif:
                 stop_event = self.stop_events[detector_name]
-                
+
                 while not stop_event.is_set() or len(self.queues[detector_name]) > 0:
                     # Get frame from queue
                     with self.locks[detector_name]:
@@ -224,21 +253,45 @@ class OMETiffWriter(WriterBase):
                             frame, metadata = self.queues[detector_name].popleft()
                         else:
                             frame = None
-                    
+
                     if frame is not None:
                         try:
-                            # Write frame with metadata
+                            # Write frame with metadata.
                             tif.write(
                                 data=frame,
                                 metadata=metadata,
-                                photometric=photometric
+                                **write_kwargs,
                             )
+                        except TypeError as e:
+                            # Older tifffile rejects ``compressionargs``.
+                            # Retry once without the level hint, then keep
+                            # using the simpler kwargs for this session.
+                            if "compressionargs" in write_kwargs:
+                                logger.warning(
+                                    f"tifffile rejected compressionargs ({e}); "
+                                    f"retrying without explicit level."
+                                )
+                                write_kwargs.pop("compressionargs", None)
+                                try:
+                                    tif.write(
+                                        data=frame,
+                                        metadata=metadata,
+                                        **write_kwargs,
+                                    )
+                                except Exception as e2:
+                                    logger.error(
+                                        f"Error writing frame for {detector_name}: {e2}"
+                                    )
+                            else:
+                                logger.error(
+                                    f"Error writing frame for {detector_name}: {e}"
+                                )
                         except Exception as e:
                             logger.error(f"Error writing frame for {detector_name}: {e}")
                     else:
                         # Sleep briefly to avoid busy loop
                         time.sleep(0.01)
-        
+
         except Exception as e:
             logger.error(f"Error in writer loop for {detector_name}: {e}")
     

@@ -21,6 +21,12 @@ try:
 except Exception as e:
     print(e)
 
+# Grab-strategy constant — the Linux/Mac binding's headers don't export it.
+# 1 = LatestImagesOnly: the SDK keeps only the newest frame and clears the rest,
+# so a slow consumer (e.g. a busy autofocus/calibration loop holding the GIL)
+# cannot accumulate a FIFO backlog of stale frames in the SDK queue.
+MV_GrabStrategy_LatestImagesOnly = 1
+
 # Pixel format constants — 8-bit
 PixelType_Gvsp_Mono8 = 17301505
 PixelType_Gvsp_Mono8_Signed = 17301506
@@ -80,7 +86,7 @@ CALLBACK_SIG = CFUNCTYPE(
 class CameraHIK:
     """Minimal wrapper that grabs frames via SDK callback (no polling)."""
 
-    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=2, flipImage=(False, False)):
+    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=1, flipImage=(False, False)):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -100,11 +106,12 @@ class CameraHIK:
         self.NBuffer = 3
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
+        # Live-stream latency instrumentation (see getStreamDiagnostics()).
+        self._streamStats = self._newStreamStats()
+        self._nodeNumRet = None       # hex return of MV_CC_SetImageNodeNum
+        self._grabStrategyRet = None  # hex return of MV_CC_SetGrabStrategy
         self.camera = None
         self.DEBUG = False
-        # Binning
-        if platform in ("darwin", "linux2", "linux"):
-            binning = 2
         self.binning = binning
 
         self.SensorHeight = 0
@@ -115,6 +122,10 @@ class CameraHIK:
         self.lastFrameId = -1
         self.frameNumber = -1
         self.g_bExit = False
+        # Linux SDK holds the handle lock during callbacks, so MV_CC_ConvertPixelType
+        # returns MV_E_HANDLE (0x80000000) when called from within the callback thread.
+        # After the first failure we skip the SDK path and go straight to OpenCV.
+        self._sdk_convert_works = (platform == "darwin")
 
         self._open_camera(self.cameraNo)
 
@@ -127,53 +138,68 @@ class CameraHIK:
             self.isRGB = bool(detected_rgb) if detected_rgb is not None else self._detect_rgb()
 
         self.__logger.info(f"Camera RGB mode: {self.isRGB}")
+        self._activePixelFormat = PixelType_Gvsp_Mono8  # safe default
 
-        # Set pixel format based on RGB mode
-        self._activePixelFormat = PixelType_Gvsp_Mono8  # default
         if self.isRGB:
-            # Try different RGB/YUV formats for color cameras
             formats_to_try = [
-                PixelType_Gvsp_RGB8_Packed,
-                PixelType_Gvsp_YUV422_YUYV_Packed,
-                PixelType_Gvsp_BayerRG8,
-                PixelType_Gvsp_BayerBG8,
-                PixelType_Gvsp_BayerGB8,
-                PixelType_Gvsp_BayerGR8
+                (PixelType_Gvsp_BayerRG8,       "BayerRG8"),
+                (PixelType_Gvsp_BayerBG8,       "BayerBG8"),
+                (PixelType_Gvsp_BayerGB8,       "BayerGB8"),
+                (PixelType_Gvsp_BayerGR8,       "BayerGR8"),
+                (PixelType_Gvsp_RGB8_Packed,    "RGB8_Packed"),
             ]
-
-            format_set = False
-            for pixel_format in formats_to_try:
+            for pixel_format, name in formats_to_try:
                 ret = self.camera.MV_CC_SetEnumValue("PixelFormat", pixel_format)
+                self.__logger.info(
+                    f"Trying RGB pixel format {name} (0x{pixel_format:x}): "
+                    f"{'OK' if ret == 0 else f'FAILED ret=0x{ret:x}'}"
+                )
                 if ret == 0:
-                    self.__logger.info(f"Successfully set pixel format to 0x{pixel_format:x} for RGB camera")
                     self._activePixelFormat = pixel_format
-                    format_set = True
+                    self.__logger.info(f"Active pixel format set to {name}")
                     break
-                else:
-                    self.__logger.info(f"Failed to set pixel format 0x{pixel_format:x}, ret=0x{ret:x}")
-
-            if not format_set:
-                self.__logger.warning("Could not set any RGB pixel format, camera may not work correctly")
+            else:
+                # Nothing worked — force Mono8 so we at least get frames,
+                # then demosaic manually in the callback
+                self.__logger.warning(
+                    "Could not set any RGB format. Forcing Mono8 and will "
+                    "demosaic in software. Check camera supports colour output."
+                )
+                self.camera.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_Mono8)
+                self._activePixelFormat = PixelType_Gvsp_Mono8
         else:
-            # For mono cameras, try highest bit-depth first, fall back to Mono8
-            mono_formats_to_try = [
+            # mono camera — try highest bit depth, fall back to Mono8
+            for pixel_format, name in [
                 (PixelType_Gvsp_Mono12, "Mono12"),
                 (PixelType_Gvsp_Mono10, "Mono10"),
-                (PixelType_Gvsp_Mono8, "Mono8"),
-            ]
-            format_set = False
-            for pixel_format, name in mono_formats_to_try:
+                (PixelType_Gvsp_Mono8,  "Mono8"),
+            ]:
                 ret = self.camera.MV_CC_SetEnumValue("PixelFormat", pixel_format)
+                self.__logger.info(
+                    f"Trying mono pixel format {name} (0x{pixel_format:x}): "
+                    f"{'OK' if ret == 0 else f'FAILED ret=0x{ret:x}'}"
+                )
                 if ret == 0:
-                    self.__logger.info(f"Set pixel format to {name} for monochrome camera")
                     self._activePixelFormat = pixel_format
-                    format_set = True
                     break
-                else:
-                    self.__logger.debug(f"Mono format {name} not supported, ret=0x{ret:x}")
-            if not format_set:
-                self.__logger.warning("Could not set any mono pixel format")
-                self._activePixelFormat = PixelType_Gvsp_Mono8
+
+        # verify what actually got set
+        stCheck = MVCC_ENUMVALUE()
+        ret = self.camera.MV_CC_GetEnumValue("PixelFormat", stCheck)
+        if ret == 0:
+            self.__logger.info(
+                f"Verified active pixel format: 0x{stCheck.nCurValue:x} "
+                f"(requested isRGB={self.isRGB})"
+            )
+
+        stActualFormat = MVCC_ENUMVALUE()
+        ret = self.camera.MV_CC_GetEnumValue("PixelFormat", stActualFormat)
+        if ret == 0:
+            self.__logger.info(
+                f"Active pixel format after negotiation: "
+                f"0x{stActualFormat.nCurValue:x} "
+                f"(isRGB={self.isRGB})"
+            )
 
         # Mark camera as connected after successful initialization
         self.is_connected = True
@@ -374,7 +400,15 @@ class CameraHIK:
     # C callback factory ---------------------------------------------------
     # ---------------------------------------------------------------------
     def _on_frame(self, frame: np.ndarray, fid: int, ts: int):
-        self.frame_buffer.append(frame)
+        # CRITICAL: `frame` is a zero-copy NumPy view over the SDK's capture
+        # buffer (see `_wrap_cb`), which the SDK overwrites in place for every
+        # subsequent frame. Storing the view directly makes every entry in the
+        # ring buffer alias the same continuously-overwritten memory, so
+        # getLast() / the debug stack return whatever the SDK wrote most
+        # recently — not the frame acquired at this fid. This is what made grabs
+        # appear "out of sync" with the stage unless the settle time was large.
+        # Store an owned, contiguous copy (NBuffer is small, so this is cheap).
+        self.frame_buffer.append(np.array(frame, copy=True))
         self.frameid_buffer.append(fid)
         self.frameNumber = fid
         self.timestamp   = ts
@@ -388,39 +422,101 @@ class CameraHIK:
         pass it to the user callback.'''
         @CALLBACK_SIG
         def _cb(pData, pInfo, _):
+            t_entry = time.time()  # wall clock at callback entry (for lag stats)
             info = pInfo.contents
             w, h   = info.nWidth, info.nHeight
             nSize  = info.nFrameLen
-            pix    = info.enPixelType
+            pix    = int(info.enPixelType)
             fid    = info.nFrameNum
             ts     = self._hw_timestamp(info)        # ← fixed
+            src_buf = (c_ubyte * nSize).from_address(addressof(pData.contents))
+
+            if not getattr(self, '_pix_logged', False):
+                self.__logger.info(f"First frame pixel type: {pix}  w={w} h={h}")
+                self._pix_logged = True
+
+            frame = None
 
             # build NumPy view over the SDK buffer (zero-copy)
             # For >8-bit unpacked mono formats, each pixel is 2 bytes (uint16)
             if pix in _MONO_HIGHBIT_FORMATS:
                 buf = np.frombuffer(
-                    (c_ubyte * nSize).from_address(addressof(pData.contents)),
+                    src_buf,
                     dtype=np.uint16
                 )
+                frame = buf.reshape(h, w)
             elif pix in _MONO_PACKED_FORMATS:
-                # Bit-packed formats need SDK conversion to Mono16 first
-                nDst = w * h * 2  # 2 bytes per pixel in Mono16
+                nDst = w * h * 2
                 dst  = (c_ubyte * nDst)()
+
                 conv = MV_CC_PIXEL_CONVERT_PARAM()
                 memset(byref(conv), 0, sizeof(conv))
                 conv.nWidth         = w
                 conv.nHeight        = h
                 conv.enSrcPixelType = pix
                 conv.enDstPixelType = PixelType_Gvsp_Mono16
-                conv.pSrcData       = pData
+                conv.pSrcData       = src_buf
                 conv.nSrcDataLen    = nSize
                 conv.pDstBuffer     = dst
                 conv.nDstBufferSize = nDst
+
                 ret = self.camera.MV_CC_ConvertPixelType(conv)
                 if ret != 0:
-                    self.__logger.error(f"Packed mono convert failed 0x{ret:x}")
-                    return
-                buf = np.frombuffer(dst, dtype=np.uint16, count=w * h)
+                    self.__logger.error(
+                        f"Packed mono convert failed 0x{ret:x} "
+                        f"pix=0x{pix:x} w={w} h={h} nSize={nSize}"
+                    )
+                    # Last-resort: treat raw bytes as uint8, reshape, caller gets garbage
+                    # but at least the callback doesn't silently drop every frame
+                    buf = np.frombuffer(src_buf, dtype=np.uint8)
+                    frame = buf[:w*h].reshape(h, w).astype(np.uint16)
+                else:
+                    buf = np.frombuffer(dst, dtype=np.uint16, count=w * h)
+                    frame = buf.reshape(h, w)
+
+            elif pix in (PixelType_Gvsp_BayerRG8,
+                        PixelType_Gvsp_BayerBG8,
+                        PixelType_Gvsp_BayerGB8,
+                        PixelType_Gvsp_BayerGR8):
+                import cv2
+                bayer_map = {
+                    PixelType_Gvsp_BayerRG8: cv2.COLOR_BayerRG2RGB,
+                    PixelType_Gvsp_BayerBG8: cv2.COLOR_BayerBG2RGB,
+                    PixelType_Gvsp_BayerGB8: cv2.COLOR_BayerGB2RGB,
+                    PixelType_Gvsp_BayerGR8: cv2.COLOR_BayerGR2RGB,
+                }
+                sdk_ok = False
+                if self._sdk_convert_works:
+                    nRGB = w * h * 3
+                    dst  = (c_ubyte * nRGB)()
+                    conv = MV_CC_PIXEL_CONVERT_PARAM()
+                    memset(byref(conv), 0, sizeof(conv))
+                    conv.nWidth         = w
+                    conv.nHeight        = h
+                    conv.enSrcPixelType = pix
+                    conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
+                    conv.pSrcData       = pData
+                    conv.nSrcDataLen    = nSize
+                    conv.pDstBuffer     = dst
+                    conv.nDstBufferSize = nRGB
+                    ret = self.camera.MV_CC_ConvertPixelType(conv)
+                    if ret == 0:
+                        sdk_ok = True
+                        buf   = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
+                        frame = buf.reshape(h, w, 3)
+                    else:
+                        self.__logger.warning(
+                            f"MV_CC_ConvertPixelType returned 0x{ret:x} — "
+                            "disabling SDK Bayer conversion, using OpenCV for all future frames"
+                        )
+                        self._sdk_convert_works = False
+                if not sdk_ok:
+                    raw = np.frombuffer(
+                        (c_ubyte * nSize).from_address(addressof(pData.contents)),
+                        dtype=np.uint8
+                    ).reshape(h, w)
+                    frame = cv2.cvtColor(raw, bayer_map[pix])
+
             else:
                 buf = np.frombuffer(
                     (c_ubyte * nSize).from_address(addressof(pData.contents)),
@@ -437,26 +533,10 @@ class CameraHIK:
                         PixelType_Gvsp_BayerBG8,
                         PixelType_Gvsp_BayerGB8,
                         PixelType_Gvsp_BayerGR8):
-                # convert to RGB for non-packed types
-                if pix != PixelType_Gvsp_RGB8_Packed:
-                    nRGB = w * h * 3
-                    dst  = (c_ubyte * nRGB)()
-                    conv = MV_CC_PIXEL_CONVERT_PARAM()
-                    memset(byref(conv), 0, sizeof(conv))
-                    conv.nWidth         = w
-                    conv.nHeight        = h
-                    conv.enSrcPixelType = pix
-                    conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
-                    conv.pSrcData       = pData
-                    conv.nSrcDataLen    = nSize
-                    conv.pDstBuffer     = dst
-                    conv.nDstBufferSize = nRGB
-                    ret = self.camera.MV_CC_ConvertPixelType(conv)
-                    if ret != 0:
-                        self.__logger.error(f"Pixel convert failed 0x{ret:x}")
-                        return
-                    buf   = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
-                frame = buf.reshape(h, w, 3)
+                if pix == PixelType_Gvsp_RGB8_Packed:
+                    frame = buf.reshape(h, w, 3)
+                # else: Bayer frame was already converted to RGB in the block above
+                # (via SDK or OpenCV fallback) — reuse that result directly
             elif pix in (PixelType_Gvsp_YUV422_YUYV_Packed,
                         PixelType_Gvsp_YUV422_Packed,
                         PixelType_Gvsp_YUV444_Packed,
@@ -470,7 +550,7 @@ class CameraHIK:
                 conv.nHeight        = h
                 conv.enSrcPixelType = pix
                 conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
-                conv.pSrcData       = pData
+                conv.pSrcData       = src_buf
                 conv.nSrcDataLen    = nSize
                 conv.pDstBuffer     = dst
                 conv.nDstBufferSize = nRGB
@@ -491,9 +571,23 @@ class CameraHIK:
             if self.flipImage[1]:  # flipX
                 frame = np.flip(frame, axis=1)
 
+            # on mac we want to print the current pixel
+            if platform == "darwin":
+                self.__logger.debug(f"Frame {fid} received with pixel format 0x{pix:x}, shape {frame.shape}")
 
             # pass to user callback
             user_cb(frame, fid, ts)
+
+            # Latency instrumentation: cheap dict updates only (runs on the SDK
+            # delivery thread). nHostTimeStamp is the host-driver receive time
+            # (ms); (t_entry - nHostTimeStamp) therefore measures how long the
+            # frame sat in the SDK/driver queue BEFORE Python saw it.
+            self._updateStreamStats(
+                t_entry,
+                getattr(info, "nHostTimeStamp", 0),
+                fid,
+                getattr(info, "nLostPacket", 0),
+            )
 
         return _cb
 
@@ -514,17 +608,6 @@ class CameraHIK:
             param_dict["model_name"] = stName.chCurValue.decode("utf-8")
             if param_dict["model_name"].find("UC")>0:
                 param_dict["isRGB"] = True
-        # if isRGB switch off AWB
-        if param_dict["isRGB"] and False: # TODO: Review
-            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_CONTINUOUS)
-            if ret != 0:
-                print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
-                self.init_ok = False
-            else:
-                # 2) Set color temperature mode to Wide
-                ret = self.camera.MV_CC_SetEnumValueByString("BalanceColorTempMode", "WideMode")
-                if ret != 0:
-                    print("set BalanceColorTempMode failed! ret [0x%x]" % ret)
         elif param_dict["isRGB"]:
             ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_OFF)
             if ret != 0:
@@ -557,6 +640,7 @@ class CameraHIK:
             param_dict["gain_min"] = mGainValues[1]
             param_dict["gain_max"] = mGainValues[2]
 
+        # TODO: add blacklevel
         return param_dict
 
     def get_gain(self):
@@ -586,39 +670,73 @@ class CameraHIK:
             return
         self.flushBuffer()
 
-        # in case the camera is None, we have to restart it anyway
-        if self.camera is None: # TODO: 2025-11-03 15:13:38 ERROR [LiveViewController] Error starting live view: 'NoneType' object has no attribute 'MV_CC_RegisterImageCallBackEx'
+        if self.camera is None:
             self.reconnectCamera()
-            ret = self.camera.MV_CC_StartGrabbing()
-            if ret != 0:
-                raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
-            self.is_streaming = True
-            return
 
-        # Re-register callback if needed (in case it was deregistered during stop)
+        # Set pixel format every time before grabbing, don't touch white balance
+        if self.isRGB:
+            for fmt, name in [
+                (PixelType_Gvsp_BayerRG8, "BayerRG8"),
+                (PixelType_Gvsp_BayerGB8, "BayerGB8"),
+                (PixelType_Gvsp_BayerBG8, "BayerBG8"),
+                (PixelType_Gvsp_BayerGR8, "BayerGR8"),
+            ]:
+                ret = self.camera.MV_CC_SetEnumValue("PixelFormat", fmt)
+                if ret == 0:
+                    self._activePixelFormat = fmt
+                    self.__logger.info(f"Fell back to {name} for demosaic in callback")
+                        # break
+
+        # Re-register callback if needed
         if hasattr(self, '_callback_registered') and not self._callback_registered:
             ret = self.camera.MV_CC_RegisterImageCallBackEx(self._sdk_cb, None)
             if ret != 0:
                 raise RuntimeError(f"Re-register callback failed 0x{ret:x}")
             self._callback_registered = True
-            self.__logger.debug("Callback re-registered successfully")
+
+        # Cap the SDK's internal node queue so the free-running (continuous) live
+        # view can't build up a large FIFO backlog of stale frames. Return codes
+        # are recorded (0x0 = MV_OK) and exposed via getStreamDiagnostics() so we
+        # can verify the caps are actually in effect on this SDK build.
+        # MV_CC_SetGrabStrategy(LatestImagesOnly) is rejected with MV_E_CALLORDER
+        # (0x80000003) while grabbing; here — BEFORE StartGrabbing — is the one
+        # legal moment it might be accepted, so try once and record the verdict.
+        # Deterministic in-sync grabs for autofocus/calibration use software
+        # trigger regardless (see snapSoftwareTrigger).
+        try:
+            if hasattr(self.camera, "MV_CC_SetImageNodeNum"):
+                ret = self.camera.MV_CC_SetImageNodeNum(2)
+                self._nodeNumRet = f"0x{ret:x}"
+                self.__logger.info(f"MV_CC_SetImageNodeNum(2) -> 0x{ret:x}")
+            if hasattr(self.camera, "MV_CC_SetGrabStrategy"):
+                ret = self.camera.MV_CC_SetGrabStrategy(MV_GrabStrategy_LatestImagesOnly)
+                self._grabStrategyRet = f"0x{ret:x}"
+                self.__logger.info(f"MV_CC_SetGrabStrategy(LatestImagesOnly) -> 0x{ret:x}"
+                                   + ("" if ret == 0 else " (rejected; FIFO capped by node num only)"))
+        except Exception as e:
+            self.__logger.debug(f"Set node num / grab strategy failed: {e}")
+
+        # Fresh latency stats for this streaming session.
+        self._streamStats = self._newStreamStats()
 
         try:
             ret = self.camera.MV_CC_StartGrabbing()
             if ret != 0:
-                #raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
                 self.reconnectCamera()
                 ret = self.camera.MV_CC_StartGrabbing()
                 if ret != 0:
-                    self.__logger.error(f"StartGrabbing exception: RuntimeError after reconnect 0x{ret:x}")
                     raise RuntimeError(f"StartGrabbing failed after reconnect 0x{ret:x}")
         except Exception:
             raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
+
         self.is_streaming = True
 
     def stop_live(self):
         if not self.is_streaming:
             return
+
+        diag = self.getDiagnostics()
+        self.__logger.info(f"Camera diagnostics before stopping live: {diag}")
 
         # Stop grabbing first
         self.camera.MV_CC_StopGrabbing()
@@ -699,9 +817,30 @@ class CameraHIK:
 
     def setBinning(self, binning=1):
         try:
-            self.camera.MV_CC_SetIntValue("BinningX", binning)
-            self.camera.MV_CC_SetIntValue("BinningY", binning)
+            ret = self.camera.MV_CC_SetIntValue("BinningX", binning)
+            if ret != 0:
+                self.__logger.warning(f"BinningX set failed ret=0x{ret:x}")
+            ret = self.camera.MV_CC_SetIntValue("BinningY", binning)
+            if ret != 0:
+                self.__logger.warning(f"BinningY set failed ret=0x{ret:x}")
+
+            # Changing binning shifts WidthMax/HeightMax to the binned resolution.
+            # The camera keeps the old (now out-of-range) Width/Height values and
+            # silently reverts binning unless they are explicitly updated.
+            mWidth = MVCC_INTVALUE()
+            mHeight = MVCC_INTVALUE()
+            self.camera.MV_CC_GetIntValue("WidthMax", mWidth)
+            self.camera.MV_CC_GetIntValue("HeightMax", mHeight)
+            self.camera.MV_CC_SetIntValue("Width", mWidth.nCurValue)
+            self.camera.MV_CC_SetIntValue("Height", mHeight.nCurValue)
+            self.SensorWidth = mWidth.nCurValue
+            self.SensorHeight = mHeight.nCurValue
+
             self.binning = binning
+            self.__logger.debug(
+                f"Binning set to {binning}x{binning}, "
+                f"sensor size {self.SensorWidth}x{self.SensorHeight}"
+            )
         except Exception as e:
             self.__logger.error(e)
 
@@ -752,8 +891,22 @@ class CameraHIK:
         return latest_frame
 
     def flushBuffer(self):
+        # Clear BOTH the SDK's internal frame queue AND our Python ring buffer.
+        # The SDK grabs OneByOne (FIFO): if our callback can't keep up — e.g. a
+        # busy autofocus/calibration loop holds the GIL during heavy compute —
+        # frames pile up in the SDK queue and getLast() then returns ever more
+        # STALE frames (the build-up that only a stream stop/start used to reset).
+        # MV_CC_ClearImageBuffer discards that backlog in place. We also drop the
+        # last-frame fallback so the next grab waits for a genuinely new frame.
+        try:
+            if self.camera is not None and hasattr(self.camera, "MV_CC_ClearImageBuffer"):
+                self.camera.MV_CC_ClearImageBuffer()
+        except Exception as e:
+            self.__logger.debug(f"MV_CC_ClearImageBuffer failed: {e}")
         self.frameid_buffer.clear()
         self.frame_buffer.clear()
+        self.lastFrameFromBuffer = None
+        self.lastFrameId = -1
 
     def getLastChunk(self):
         """Return *and clear* the entire ring‑buffer as a numpy stack."""
@@ -827,32 +980,46 @@ class CameraHIK:
         return property_value
 
     def getPropertyValue(self, property_name):
-        stValue = MVCC_ENUMVALUE()
         if property_name == "gain":
-            self.camera.MV_CC_GetEnumValue("Gain", stValue)
+            result = self.get_gain()
+            return result[0] if result and result[0] is not None else None
         elif property_name == "exposure":
-            self.camera.MV_CC_GetEnumValue("ExposureTime", stValue)
-        elif property_name == "frame_number":
-            self.camera.MV_CC_GetEnumValue("FrameNum", stValue)
+            result = self.get_exposuretime()
+            # SDK returns µs, UI/manager expects ms
+            return result[0] / 1000.0 if result and result[0] is not None else None
         elif property_name == "exposure_mode":
-            self.camera.MV_CC_GetEnumValue("ExposureAuto", stValue)
+            stValue = MVCC_ENUMVALUE()
+            ret = self.camera.MV_CC_GetEnumValue("ExposureAuto", stValue)
+            if ret == 0:
+                # 0 = Off (manual), 1 = Once (treated as a transient action in the UI), 2 = Continuous (auto)
+                mode_map = {0: 'manual', 1: 'manual', 2: 'auto'}
+                return mode_map.get(stValue.nCurValue, 'manual')
+            return 'manual'
         elif property_name == "blacklevel":
+            stValue = MVCC_ENUMVALUE()
             self.camera.MV_CC_GetEnumValue("BlackLevel", stValue)
-        elif property_name == "image_width":
-            self.camera.MV_CC_GetEnumValue("Width", stValue)
-        elif property_name == "image_height":
-            self.camera.MV_CC_GetEnumValue("Height", stValue)
+            return stValue.nCurValue
+        elif property_name in ("image_width", "Width"):
+            stWidth = MVCC_INTVALUE()
+            self.camera.MV_CC_GetIntValue("Width", stWidth)
+            return stWidth.nCurValue
+        elif property_name in ("image_height", "Height"):
+            stHeight = MVCC_INTVALUE()
+            self.camera.MV_CC_GetIntValue("Height", stHeight)
+            return stHeight.nCurValue
+        elif property_name == "frame_number":
+            stValue = MVCC_ENUMVALUE()
+            self.camera.MV_CC_GetEnumValue("FrameNum", stValue)
+            return stValue.nCurValue
         elif property_name == "roi_size":
-            property_value = self.roi_size
-        elif property_name == "frame_Rate":
-            property_value = self.frame_rate
+            return self.roi_size
+        elif property_name == "frame_rate":
+            return self.frame_rate
         elif property_name == "trigger_source":
-            property_value = self.trigger_source
+            return self.trigger_source
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
-            return False
-        property_value = stValue.nCurValue
-        return property_value
+            return None
 
     def setTriggerSource(self, trigger_source):
         """
@@ -903,11 +1070,139 @@ class CameraHIK:
             return False
         return True
 
+    def snapSoftwareTrigger(self, timeout: float = 2.0):
+        """Fire one software trigger and return the frame it produces.
+
+        Requires the camera to already be in software-trigger mode
+        (``setTriggerSource('software')``). Because the frame is exposed *in
+        response to* the trigger, the returned image is guaranteed to be acquired
+        AFTER this call — i.e. after the stage move/settle — which eliminates the
+        free-run buffer lag that otherwise desyncs grabs from the stage. We flush
+        first so no pre-trigger frame can be mistaken for the triggered one.
+        """
+        self.flushBuffer()
+        prev_id = self.frameNumber
+        if not self.send_trigger():
+            return self.getLast()
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if self.frame_buffer and self.frameid_buffer[-1] != prev_id:
+                return self.frame_buffer[-1]
+            time.sleep(0.003)
+        self.__logger.warning("snapSoftwareTrigger: timed out waiting for triggered frame")
+        return self.frame_buffer[-1] if self.frame_buffer else None
+
     def openPropertiesGUI(self):
         pass
 
     def getFrameNumber(self):
         return self.frameNumber
+
+    # ── live-stream latency instrumentation ──────────────────────────────────
+    def _newStreamStats(self):
+        """Fresh per-session counters; reset on every start_live()."""
+        return {
+            "frames": 0,
+            "fps_callback": 0.0,       # rate at which the SDK delivers to Python
+            "callback_ms_avg": 0.0,    # Python conversion+push cost per frame
+            "callback_ms_max": 0.0,
+            "sdk_lag_ms_now": None,    # t_callback - nHostTimeStamp of the frame
+            "sdk_lag_ms_avg": None,    # GROWING avg => backlog upstream of Python
+            "sdk_lag_ms_max": None,
+            "frame_gaps": 0,           # frames the SDK dropped (nFrameNum jumps)
+            "lost_packets": 0,         # GigE packet loss reported by the driver
+            "_last_frame_num": None,
+            "_last_entry_t": None,
+            "_started": time.time(),
+        }
+
+    def _updateStreamStats(self, t_entry, host_ts_ms, frame_num, lost_packets):
+        """Update EMA latency stats; runs on the SDK callback thread (keep cheap)."""
+        s = self._streamStats
+        a = 0.05  # EMA weight
+        s["frames"] += 1
+        cb_ms = (time.time() - t_entry) * 1000.0
+        s["callback_ms_avg"] = cb_ms if s["frames"] == 1 else (1 - a) * s["callback_ms_avg"] + a * cb_ms
+        if cb_ms > s["callback_ms_max"]:
+            s["callback_ms_max"] = cb_ms
+        if s["_last_entry_t"] is not None:
+            dt = t_entry - s["_last_entry_t"]
+            if dt > 0:
+                inst = 1.0 / dt
+                s["fps_callback"] = inst if s["fps_callback"] == 0.0 else (1 - a) * s["fps_callback"] + a * inst
+        s["_last_entry_t"] = t_entry
+        if host_ts_ms:
+            lag = t_entry * 1000.0 - float(host_ts_ms)
+            s["sdk_lag_ms_now"] = lag
+            s["sdk_lag_ms_avg"] = lag if s["sdk_lag_ms_avg"] is None else (1 - a) * s["sdk_lag_ms_avg"] + a * lag
+            s["sdk_lag_ms_max"] = lag if s["sdk_lag_ms_max"] is None else max(s["sdk_lag_ms_max"], lag)
+        if s["_last_frame_num"] is not None and frame_num > s["_last_frame_num"] + 1:
+            s["frame_gaps"] += frame_num - s["_last_frame_num"] - 1
+        s["_last_frame_num"] = frame_num
+        if lost_packets:
+            s["lost_packets"] += int(lost_packets)
+        # Periodic compact report so the buildup is visible in plain logs.
+        if s["frames"] % 200 == 0:
+            fmt = lambda v: "n/a" if v is None else f"{v:.0f}"
+            line = (
+                f"HIK stream: n={s['frames']} fps={s['fps_callback']:.1f} "
+                f"cb={s['callback_ms_avg']:.1f}/{s['callback_ms_max']:.0f}ms "
+                f"sdk_lag(now/avg/max)={fmt(s['sdk_lag_ms_now'])}/{fmt(s['sdk_lag_ms_avg'])}/{fmt(s['sdk_lag_ms_max'])}ms "
+                f"gaps={s['frame_gaps']} lost_pkts={s['lost_packets']}"
+            )
+            if s["sdk_lag_ms_avg"] is not None and s["sdk_lag_ms_avg"] > 300:
+                self.__logger.warning(line + "  <-- frame backlog building upstream of Python (SDK/driver queue)")
+            else:
+                self.__logger.info(line)
+
+    def getStreamDiagnostics(self) -> dict:
+        """Snapshot of the streaming pipeline health (poll while live view runs).
+
+        How to read it:
+        * ``sdk_lag_ms_*`` growing over time  -> backlog in the SDK/driver queue
+          (before Python). Flat & small -> camera side is real-time.
+        * ``latest_frame_age_ms`` small       -> Python has a fresh frame; if the
+          browser still lags, the buildup is in encode/socket/frontend.
+        * ``frame_gaps`` growing              -> SDK drops frames when its queue is
+          full (bounded latency); zero gaps despite slow consumer -> unbounded FIFO.
+        """
+        s = {k: v for k, v in self._streamStats.items() if not k.startswith("_")}
+        last_entry = self._streamStats.get("_last_entry_t")
+        s["latest_frame_age_ms"] = None if last_entry is None else (time.time() - last_entry) * 1000.0
+        s["uptime_s"] = time.time() - self._streamStats.get("_started", time.time())
+        s["is_streaming"] = self.is_streaming
+        s["buffered_frames"] = len(self.frame_buffer)
+        s["set_image_node_num_ret"] = self._nodeNumRet
+        s["set_grab_strategy_ret"] = self._grabStrategyRet
+        return s
+
+    def getDiagnostics(self) -> dict:
+        """Call this from the REST API or a notebook to see camera state."""
+        stFormat = MVCC_ENUMVALUE()
+        self.camera.MV_CC_GetEnumValue("PixelFormat", stFormat)
+        
+        frame = self.getLast()
+        frame_info = {}
+        if frame is not None:
+            frame_info = {
+                "shape": list(frame.shape),
+                "dtype": str(frame.dtype),
+                "min": int(frame.min()),
+                "max": int(frame.max()),
+                "mean_per_channel": (
+                    [float(frame[:,:,c].mean()) for c in range(frame.shape[2])]
+                    if frame.ndim == 3 else [float(frame.mean())]
+                ),
+            }
+        
+        return {
+            "active_pixel_format_hex": f"0x{self._activePixelFormat:x}",
+            "actual_pixel_format_hex": f"0x{stFormat.nCurValue:x}",
+            "isRGB": self.isRGB,
+            "is_streaming": self.is_streaming,
+            "frame": frame_info,
+            "stream": self.getStreamDiagnostics(),
+        }
 
     # ── helper ---------------------------------------------------------------
     def _hw_timestamp(self, info):

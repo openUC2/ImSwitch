@@ -34,10 +34,25 @@ except ImportError:  # pragma: no cover
 KeepIlluminationMode = Literal["auto", "on", "off"]
 AutoFocusMode = Literal["software", "hardware"]
 AutoFocusSoftwareMethod = Literal["scan", "hillClimbing"]
+# Autofocus scheduling scope within a (qualifying) timelapse round:
+# - "everyPosition"     : run autofocus at every XY tile (per-position focus).
+# - "firstPositionOnly" : run autofocus once, at the first tile of the round,
+#                         and apply the measured focus as a global Z offset to
+#                         all positions of that round (assumes drift is global,
+#                         e.g. thermal — cheaper and less photobleaching).
+AutoFocusScope = Literal["everyPosition", "firstPositionOnly"]
 TriggerMode = Literal["hardware", "software"]
 FocusFitMethod = Literal["spline", "rbf", "constant"]
 FocusAlgorithm = Literal["LAPE", "GLVA", "JPEG"]
 ScanPattern = Literal["raster", "snake"]
+# Channel "kind" tag carried alongside the channel name in illuSources.
+# - "default" : conventional laser/LED illumination (existing behaviour).
+# - "ring"    : LED-matrix synthetic channel — a single frame illuminated
+#               by a ring of LEDs at a given radius with RGB intensities.
+# - "dpc"     : LED-matrix synthetic channel — at each XY position the
+#               workflow captures four frames (top/bottom/left/right half
+#               illumination) saved as four DPC_<dir> channels.
+IlluminationKind = Literal["default", "ring", "dpc"]
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +93,11 @@ class Point(BaseModel):
     neighborPointList: List[NeighborPoint] = Field(default_factory=list)
     wellId: Optional[str] = None
     areaType: Optional[str] = None  # well, free_scan, etc.
+    # Opentrons-style labware identification (all optional for back-compat)
+    wellRow: Optional[str] = None
+    wellColumn: Optional[int] = None
+    labwareLoadName: Optional[str] = None
+    conditionLabel: Optional[str] = None  # free-text per-well condition tag
 
 
 class ScanPosition(BaseModel):
@@ -113,6 +133,11 @@ class ScanArea(BaseModel):
     areaName: str
     areaType: str = "free_scan"
     wellId: Optional[str] = None
+    # Opentrons-style labware identification (all optional for back-compat)
+    wellRow: Optional[str] = None
+    wellColumn: Optional[int] = None
+    labwareLoadName: Optional[str] = None
+    conditionLabel: Optional[str] = None
     centerPosition: CenterPosition
     bounds: ScanBounds
     scanPattern: ScanPattern = "raster"
@@ -130,14 +155,45 @@ class ScanMetadata(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Synthetic (LED-matrix) illumination channels
+# ---------------------------------------------------------------------------
+SyntheticKind = Literal["ring", "dpc"]
+
+
+class SyntheticChannel(BaseModel):
+    """A synthetic LED-matrix illumination channel (ring or DPC).
+
+    These are kept in a **separate list** from the conventional ``illumination``
+    sources, both in the hardware-capabilities response
+    (:class:`ExperimentWorkflowParams`) and in the experiment request
+    (:class:`ParameterValue`).  Their "intensity" is the per-colour byte triple
+    (R/G/B, 0..255) rather than a single scalar, so mixing them into
+    ``illuIntensities`` previously required an RGB→intensity promotion hack.
+    Carrying them separately removes that ambiguity entirely – the workflow
+    builder merges them into its internal arrays in one well-defined place.
+    """
+    name: str
+    kind: SyntheticKind
+    enabled: bool = False
+    intensityR: int = 0
+    intensityG: int = 0
+    intensityB: int = 0
+    radius: Optional[int] = None      # ring only (LED units)
+    exposure: Optional[float] = None  # optional per-channel camera exposure (ms)
+    gain: Optional[float] = None      # optional per-channel camera gain
+
+    @property
+    def rgb_max(self) -> int:
+        """Max of the R/G/B bytes – used as the >0 active-channel gate."""
+        return max(int(self.intensityR or 0), int(self.intensityG or 0), int(self.intensityB or 0))
+
+
+# ---------------------------------------------------------------------------
 # Parameter / experiment models
 # ---------------------------------------------------------------------------
 class ParameterValue(BaseModel):
     illumination: Union[List[str], str] = None
     illuIntensities: Union[List[Optional[int]], Optional[int]] = None
-    brightfield: bool = False
-    darkfield: bool = False
-    differentialPhaseContrast: bool = False
     timeLapsePeriod: float
     numberOfImages: int
     autoFocus: bool
@@ -153,6 +209,26 @@ class ParameterValue(BaseModel):
     autoFocusHillClimbingMaxIterations: int = 50
     autofocus_target_focus_setpoint: Optional[float] = None
     autofocus_max_attempts: int = 2
+    # --- Autofocus scheduling (see AutoFocusScope) ------------------------
+    autoFocusScope: AutoFocusScope = Field(
+        "everyPosition",
+        description="Where autofocus runs within a round: 'everyPosition' "
+                    "(per XY tile) or 'firstPositionOnly' (once per round at "
+                    "the first tile, applied as a global Z offset).",
+    )
+    autoFocusPeriodRounds: int = Field(
+        1,
+        ge=1,
+        description="Run autofocus only every Nth timelapse round/timepoint "
+                    "(1 = every round). Skipped rounds reuse the last offset.",
+    )
+    autoFocusApplyGlobalOffset: bool = Field(
+        True,
+        description="When True the autofocus result updates a shared Z offset "
+                    "that all capture Z-moves add on top of their base Z, so "
+                    "the measured focus is actually applied to acquisitions "
+                    "(instead of being overwritten by the next absolute move).",
+    )
     zStack: bool
     zStackMin: float
     zStackMax: float
@@ -160,6 +236,25 @@ class ParameterValue(BaseModel):
     exposureTimes: Union[List[float], float] = None
     gains: Union[List[float], float] = None
     speed: float = 20000.0
+    z_speed: float = 5000.0
+    # Stage acceleration (steps/s²) for the scan. <= 0 → keep the controller
+    # defaults. XY is applied to move_stage_xy, Z to move_stage_z.
+    acceleration: float = Field(
+        1000000.0, description="XY stage acceleration for the scan (steps/s²)."
+    )
+    z_acceleration: float = Field(
+        1000000.0, description="Z stage acceleration for the scan (steps/s²)."
+    )
+    # Tiling behaviour toggle (Wellplate "Tiling" tab): after the scan finishes,
+    # move the stage back to the XYZ it was at before the scan started. Default
+    # off (the stage stays at the last acquired tile).
+    # (The "override per-group Z with current Z" toggle is applied entirely on
+    # the frontend — it rewrites each position's Z before sending — so it is not
+    # part of this backend contract.)
+    returnToOrigin: bool = Field(
+        False,
+        description="Move the stage back to the pre-scan XYZ position when the scan ends.",
+    )
     performanceMode: bool = False
     performanceTriggerMode: TriggerMode = Field(
         "hardware",
@@ -171,6 +266,10 @@ class ParameterValue(BaseModel):
     ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
     ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
     ome_write_individual_tiffs: bool = Field(False, description="Whether to write individual TIFF files per frame")
+    ome_write_ashlar_stitch: bool = Field(False, description="Whether to run Ashlar stitching after acquisition")
+    ashlar_pixel_size: float = Field(1.0, description="Pixel size for Ashlar stitching (µm/px)")
+    ashlar_maximum_shift: float = Field(50.0, description="Maximum shift for Ashlar tile alignment (µm)")
+    ashlar_align_channel: int = Field(0, description="Channel index used for Ashlar tile alignment")
     ome_write_single_tiff: bool = Field(
         False,
         description="Whether to write a single OME-TIFF (auto-enabled for single-tile scans)",
@@ -178,6 +277,32 @@ class ParameterValue(BaseModel):
     keepIlluminationOn: KeepIlluminationMode = Field(
         "auto",
         description="Illumination mode: 'auto' (single channel stays on), 'on' (always on), 'off' (per-frame toggle)",
+    )
+    turnOffIlluminationBetweenTimepoints: bool = Field(
+        True,
+        description="Turn illumination off during the wait between timelapse "
+                    "rounds even when keepIlluminationOn keeps it on within a "
+                    "round. Prevents continuous sample exposure during tPeriod.",
+    )
+    busPowerDarkness: bool = Field(
+        False,
+        description="Cut the CAN-bus power (complete darkness) around every "
+                    "exposure. For low-light/luminescence imaging where even "
+                    "indicator LEDs must be off during the exposure.",
+    )
+    busPowerSettleTime: float = Field(
+        2.0,
+        description="Seconds to wait after cutting and after restoring CAN-bus "
+                    "power when busPowerDarkness is enabled.",
+    )
+    # Synthetic LED-matrix channels (ring/DPC), kept SEPARATE from the
+    # conventional `illumination` list above.  This is the single source of
+    # truth for ring/DPC acquisition – the backend merges enabled entries into
+    # its internal workflow arrays, so there is no RGB→intensity promotion and
+    # no risk of a synthetic channel being mistaken for a real laser.
+    syntheticChannels: List[SyntheticChannel] = Field(
+        default_factory=list,
+        description="Synthetic LED-matrix channels (ring/DPC) for this experiment.",
     )
 
     # ------------------------------------------------------------------
@@ -286,6 +411,15 @@ class FocusMapConfig(BaseModel):
         description="List of scan area dicts with areaId, areaName, bounds (minX/maxX/minY/maxY)",
     )
 
+    # Manually-placed focus points. When present (and use_manual_map), the backend
+    # drives to each XY and autofocuses to measure Z (instead of a grid), then
+    # fits the "manual" map. Each item is {x, y} (z is measured); a provided
+    # numeric z is used as-is and autofocus is skipped for that point.
+    points: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Manual focus points [{x, y, z?}]; Z is autofocus-measured when missing/null",
+    )
+
 
 class Experiment(BaseModel):
     name: str
@@ -351,6 +485,21 @@ class ExperimentWorkflowParams(BaseModel):
     illuSourceMinIntensities: List[float] = Field(default_factory=list, description="Minimum intensities for each source")
     illuSourceMaxIntensities: List[float] = Field(default_factory=list, description="Maximum intensities for each source")
     illuIntensities: List[float] = Field(default_factory=list, description="Intensities for each source")
+    # Per-source "kind" tag, parallel to illuSources.  Frontend uses this to
+    # render kind-specific controls (radius + RGB for "ring", RGB-only for
+    # "dpc", default exposure/gain/intensity for "default").  Empty list →
+    # all sources are treated as "default" for backward compatibility.
+    illuSourceKinds: List[str] = Field(
+        default_factory=list,
+        description="Per-source kind tag (parallel to illuSources): always 'default' now that synthetic channels live in `syntheticChannels`.",
+    )
+    # Synthetic LED-matrix channels available on this hardware (ring/DPC),
+    # advertised separately from the conventional illuSources so the frontend
+    # renders them from their own list rather than disentangling kinds.
+    syntheticChannels: List[SyntheticChannel] = Field(
+        default_factory=list,
+        description="Available synthetic LED-matrix channels (ring/DPC) with their default RGB/radius.",
+    )
 
     # Camera parameters
     exposureTimes: List[float] = Field(default_factory=list, description="Exposure times for each source")
@@ -380,6 +529,18 @@ class ExperimentWorkflowParams(BaseModel):
             "on the C++ hardware directly rather than on the Python side."
         ),
     )
+    pixel_size_um: float = Field(
+        1.0,
+        description="Calibrated pixel size (µm/px) of the primary acquisition detector.",
+    )
+    # Optional LED-matrix hardware metadata used by the Wellplate designer to
+    # clamp slider ranges (max ring radius depends on the physical matrix
+    # size).  Absent / None when no LED matrix is configured.  Shape:
+    #   {"nLedsX": int, "nLedsY": int, "maxRingRadius": int}
+    ledMatrixInfo: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="LED matrix dimensions + derived limits (e.g. maxRingRadius).",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +567,7 @@ __all__ = [
     "FocusFitMethod",
     "FocusAlgorithm",
     "ScanPattern",
+    "IlluminationKind",
     # Models
     "FocusMapFromPointsRequest",
     "NeighborPoint",
@@ -415,6 +577,8 @@ __all__ = [
     "CenterPosition",
     "ScanArea",
     "ScanMetadata",
+    "SyntheticKind",
+    "SyntheticChannel",
     "ParameterValue",
     "FocusMapConfig",
     "Experiment",

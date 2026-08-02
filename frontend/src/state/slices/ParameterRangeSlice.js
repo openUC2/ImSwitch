@@ -11,7 +11,14 @@ const initialParameterRangeState = {
     zStack: { min: -10, max: 20 },
     zStackStepSize: { min: 0.1, max: 10 },
     speed: [1,5,10,50,100,500,1000,10000,20000,100000],
-    illuSources: [], // Array of illumination sources
+    illuSources: [], // Array of conventional (default) illumination sources
+    illuSourceKinds: [], // Per-source kind tag parallel to illuSources (all "default" now)
+    syntheticChannels: [], // Synthetic LED-matrix channels (ring/DPC), advertised separately
+    // LED-matrix hardware metadata.  Populated only when an LED matrix is
+    // configured.  Used to clamp the ring-radius slider in the Wellplate
+    // designer to physically meaningful values.  Shape:
+    //   { nLedsX, nLedsY, maxRingRadius }
+    ledMatrixInfo: null,
     illuSourceMinIntensities: [], // Array of minimum intensities for each illumination source
     illuSourceMaxIntensities: [], // Array of maximum intensities for each illumination source
     illuIntensities: [], // Array of intensities for each illumination source
@@ -19,7 +26,7 @@ const initialParameterRangeState = {
     gains: [], // Array of gain values for each illumination source
     isDPCpossible: false, // Boolean indicating if DPC is possible
     isDarkfieldpossible: false, // Boolean indicating if dark field is possible
-    performanceMode: false 
+    performanceMode: false
 };
 
 // Create slice
@@ -36,10 +43,10 @@ const parameterRangeSlice = createSlice({
 
       // Setters for each parameter
       setIllumination: (state, action) => {
-        state.illumination = action.payload;
+        state.illumination = Array.isArray(action.payload) ? action.payload : [];
       },
       setIlluminationIntensities: (state, action) => {
-        state.illuIntensities = action.payload;
+        state.illuIntensities = Array.isArray(action.payload) ? action.payload : [];
       },
       setTimeLapsePeriodMin: (state, action) => {
         state.timeLapsePeriod.min = action.payload;
@@ -81,22 +88,41 @@ const parameterRangeSlice = createSlice({
         state.speed = action.payload;
       },
       setIlluSources: (state, action) => {
-        state.illuSources = action.payload;
+        // Defensive: backend may return null/undefined/object when no
+        // illumination hardware is configured; the UI assumes an array
+        // (illuSources.map(...) breaks otherwise).
+        state.illuSources = Array.isArray(action.payload) ? action.payload : [];
+      },
+      // Per-source kind tag parallel to illuSources.  Empty array → all
+      // sources treated as "default" (legacy backends that don't ship this
+      // field still work).
+      setIlluSourceKinds: (state, action) => {
+        state.illuSourceKinds = Array.isArray(action.payload) ? action.payload : [];
+      },
+      // Synthetic LED-matrix channels (ring/DPC), advertised separately from
+      // illuSources. Shape: [{ name, kind, enabled, intensityR/G/B, radius? }]
+      setSyntheticChannels: (state, action) => {
+        state.syntheticChannels = Array.isArray(action.payload) ? action.payload : [];
+      },
+      // LED matrix hardware metadata { nLedsX, nLedsY, maxRingRadius }, or null.
+      setLedMatrixInfo: (state, action) => {
+        const p = action.payload;
+        state.ledMatrixInfo = p && typeof p === "object" ? p : null;
       },
       setIlluSourceMinIntensities: (state, action) => {
-        state.illuSourceMinIntensities = action.payload;
-      },  
+        state.illuSourceMinIntensities = Array.isArray(action.payload) ? action.payload : [];
+      },
       setIlluSourceMaxIntensities: (state, action) => {
-        state.illuSourceMaxIntensities = action.payload;
+        state.illuSourceMaxIntensities = Array.isArray(action.payload) ? action.payload : [];
       },
       setilluIntensities: (state, action) => {
-        state.illuIntensities = action.payload;
+        state.illuIntensities = Array.isArray(action.payload) ? action.payload : [];
       },
       setExposureTimes: (state, action) => {
-        state.exposureTimes = action.payload;
+        state.exposureTimes = Array.isArray(action.payload) ? action.payload : [];
       },
       setGains: (state, action) => {
-        state.gains = action.payload;
+        state.gains = Array.isArray(action.payload) ? action.payload : [];
       },
       setIsDPCpossible: (state, action) => {
         state.isDPCpossible = action.payload;
@@ -129,6 +155,9 @@ export const {
     setZStackStepSizeMax,
     setSpeed, 
     setIlluSources,
+    setIlluSourceKinds,
+    setSyntheticChannels,
+    setLedMatrixInfo,
     setIlluSourceMinIntensities,
     setIlluSourceMaxIntensities,
     setilluIntensities,

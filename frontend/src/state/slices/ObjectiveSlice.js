@@ -17,6 +17,12 @@ const initialObjectiveState = {
   posZ1: 0,
   magnification1: 0,
   magnification2: 0,
+
+  availableObjectivesNames: ["Obj 1", "Obj 2"],
+  availableObjectiveMagnifications: [0, 0],
+  availableObjectiveNAs: [0, 0],
+  availableObjectivePixelSizes: [0, 0],
+  slotConfigured: [true, true],
   
   // Additional state for ObjectiveController
   currentA: "",
@@ -27,6 +33,7 @@ const initialObjectiveState = {
   manualX1: "",
   manualZ0: "",
   manualZ1: "",
+  moveSpeed: 20000,
 };
 
 // Create slice
@@ -112,6 +119,24 @@ const objectiveSlice = createSlice({
     setManualZ1: (state, action) => {
       state.manualZ1 = action.payload;
     },
+    setMoveSpeed: (state, action) => {
+      state.moveSpeed = action.payload;
+    },
+    setAvailableObjectivesNames: (state, action) => {
+      state.availableObjectivesNames = action.payload;
+    },
+    setAvailableObjectiveMagnifications: (state, action) => {
+      state.availableObjectiveMagnifications = action.payload;
+    },
+    setAvailableObjectiveNAs: (state, action) => {
+      state.availableObjectiveNAs = action.payload;
+    },
+    setAvailableObjectivePixelSizes: (state, action) => {
+      state.availableObjectivePixelSizes = action.payload;
+    },
+    setSlotConfigured: (state, action) => {
+      state.slotConfigured = action.payload;
+    },
 
     resetState: (state) => {
       console.log("resetState");
@@ -143,6 +168,12 @@ export const {
   setManualX1,
   setManualZ0,
   setManualZ1,
+  setMoveSpeed,
+  setAvailableObjectivesNames,
+  setAvailableObjectiveMagnifications,
+  setAvailableObjectiveNAs,
+  setAvailableObjectivePixelSizes,
+  setSlotConfigured,
   resetState,
 } = objectiveSlice.actions;
 

@@ -13,9 +13,12 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
+  DialogContentText,
+  DialogActions,
   Tooltip,
   Switch,
   FormControlLabel,
+  CircularProgress,
 } from "@mui/material";
 import {
   PlayArrow,
@@ -29,6 +32,7 @@ import {
   GetApp,
 } from "@mui/icons-material";
 import StreamControlOverlay from "../components/StreamControlOverlay";
+import StreamPresets from "./StreamPresets";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner";
 import { useSelector, useDispatch } from "react-redux";
@@ -58,6 +62,47 @@ export default function StreamControls({
   // Default is empty - detector name is now automatically included in timestamp-based filename
   const [snapFileName, setSnapFileName] = useState("");
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const [fijiInfoOpen, setFijiInfoOpen] = useState(false);
+  // Track an in-flight snap so we can disable the buttons and show progress.
+  // Snapping is allowed even when the live stream is off (e.g. long-exposure
+  // experiments), in which case the request can take a while to return.
+  const [isSnapping, setIsSnapping] = useState(false);
+
+  // Wrap snap to track the in-flight state so the button shows progress and is
+  // guarded against double-clicks. Works whether or not the live stream is
+  // running (the backend arms the camera on demand for long-exposure snaps).
+  const handleSnap = useCallback(
+    async (fileName, format) => {
+      if (isSnapping) return;
+      setIsSnapping(true);
+      try {
+        await onSnap(fileName, format);
+      } finally {
+        setIsSnapping(false);
+      }
+    },
+    [isSnapping, onSnap],
+  );
+
+  // Wrap snap & download to show a one-time Fiji hint for TIFF files, and to
+  // track the in-flight state (see handleSnap).
+  const handleSnapAndDownload = useCallback(
+    async (fileName, format) => {
+      if (isSnapping) return;
+      // Show the hint only on the very first TIFF snap & download
+      if (format === 1 && !localStorage.getItem("fijiHintShown")) {
+        setFijiInfoOpen(true);
+        localStorage.setItem("fijiHintShown", "1");
+      }
+      setIsSnapping(true);
+      try {
+        await onSnapAndDownload(fileName, format);
+      } finally {
+        setIsSnapping(false);
+      }
+    },
+    [isSnapping, onSnapAndDownload],
+  );
 
   // Separate format options for snap and record
   const snapFormatOptions = [
@@ -231,6 +276,7 @@ export default function StreamControls({
       {/* Stream Control Section */}
       <Box
         component="fieldset"
+        data-tour="stream-controls"
         sx={{
           border: 1,
           borderColor: "divider",
@@ -300,14 +346,20 @@ export default function StreamControls({
           onClick={() => setOverlayOpen(true)}
           sx={{ ml: "auto" }}
           startIcon={<Settings />}
+          data-tour="stream-settings-button"
         >
           Settings
         </Button>
       </Box>
 
+      {/* Stream presets / macros — recall named bundles of objective +
+          exposure + gain + livestream parameters. Frontend-only. */}
+      <StreamPresets />
+
       {/* Recording Controls Section */}
       <Box
         component="fieldset"
+        data-tour="capture-controls"
         sx={{
           border: 1,
           borderColor: "divider",
@@ -345,7 +397,7 @@ export default function StreamControls({
               const sanitized = e.target.value.replace(/[^a-zA-Z0-9_.-]/g, "");
               setSnapFileName(sanitized);
             }}
-            disabled={!isLiveViewActive}
+            disabled={isSnapping}
             inputProps={{
               pattern: "[a-zA-Z0-9_.-]*",
               maxLength: 100,
@@ -383,7 +435,7 @@ export default function StreamControls({
               onChange={(e) =>
                 dispatch(liveViewSlice.setSnapFormat(e.target.value))
               }
-              disabled={!isLiveViewActive}
+              disabled={isSnapping}
             >
               {snapFormatOptions.map((opt) => (
                 <MenuItem key={opt.value} value={opt.value}>
@@ -397,26 +449,51 @@ export default function StreamControls({
             variant="contained"
             color="primary"
             size="small"
-            onClick={() => onSnap(snapFileName, snapFormat)}
-            startIcon={<CameraAlt />}
-            disabled={!isLiveViewActive}
+            onClick={() => handleSnap(snapFileName, snapFormat)}
+            startIcon={
+              isSnapping ? (
+                <CircularProgress size={16} color="inherit" />
+              ) : (
+                <CameraAlt />
+              )
+            }
+            disabled={isSnapping}
             sx={{ whiteSpace: "nowrap", height: 40, minHeight: 40, width: 130 }}
           >
-            Snap
+            {isSnapping ? "Snapping…" : "Snap"}
           </Button>
 
           <Button
             variant="contained"
             color="primary"
             size="small"
-            onClick={() => onSnapAndDownload(snapFileName, snapFormat)}
-            startIcon={<GetApp />}
-            disabled={!isLiveViewActive}
+            onClick={() => handleSnapAndDownload(snapFileName, snapFormat)}
+            startIcon={
+              isSnapping ? (
+                <CircularProgress size={16} color="inherit" />
+              ) : (
+                <GetApp />
+              )
+            }
+            disabled={isSnapping}
             sx={{ whiteSpace: "nowrap", width: 160, height: 40, minHeight: 40 }}
           >
             Snap & Download
           </Button>
         </Box>
+
+        {/* Hint: snapping also works with the stream off (long exposures) */}
+        {!isLiveViewActive && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ gridColumn: "1 / -1", mt: -1 }}
+          >
+            {isSnapping
+              ? "Capturing… the camera is armed on demand (this can take a while for long exposures)."
+              : "Stream is off — Snap still arms the camera on demand and captures a single frame (ideal for long exposures)."}
+          </Typography>
+        )}
 
         {/* Go to Folder - Below Snap */}
         <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}>
@@ -470,7 +547,7 @@ export default function StreamControls({
           {!isRecording ? (
             <Button
               variant="contained"
-              color="secondary"
+              color="primary"
               size="small"
               onClick={() => onStartRecord(snapFileName, recordFormat)}
               startIcon={<FiberManualRecord />}
@@ -533,13 +610,43 @@ export default function StreamControls({
       </Box>
 
       {/* Stream Control Overlay as Dialog */}
+      {/* One-time Fiji info dialog shown on first TIFF snap & download */}
+      <Dialog open={fijiInfoOpen} onClose={() => setFijiInfoOpen(false)}>
+        <DialogTitle>Open TIFF files with Fiji / ImageJ</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            The downloaded TIFF image is 16-bit. Most operating system viewers
+            will display it as a black or washed-out image because they cannot
+            scale 16-bit data correctly.
+            <br />
+            <br />
+            Please open the file with{" "}
+            <strong>
+              <a
+                href="https://fiji.sc"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Fiji / ImageJ
+              </a>
+            </strong>{" "}
+            — it handles 16-bit images properly and applies the correct
+            brightness/contrast scaling automatically.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setFijiInfoOpen(false)} variant="contained">
+            Got it
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog
         open={overlayOpen}
         onClose={() => setOverlayOpen(false)}
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>Stream Settings</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <StreamControlOverlay
             stats={hudData.stats}

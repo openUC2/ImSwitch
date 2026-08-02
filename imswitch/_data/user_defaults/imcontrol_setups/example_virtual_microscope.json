@@ -364,6 +364,7 @@
         "Stresstest",
         "ESP32InfoScreen",
         "StageCenterCalibration",
+        "OpticalFlow",
         "Demo",
         "FocusLock",
         "MazeGame",

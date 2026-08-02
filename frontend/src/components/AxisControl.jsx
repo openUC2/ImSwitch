@@ -13,6 +13,7 @@ import {
   Paper,
   Tooltip,
   IconButton,
+  Alert,
 } from "@mui/material";
 import {
   Add,
@@ -26,6 +27,12 @@ import {
 } from "@mui/icons-material";
 import * as positionSlice from "../state/slices/PositionSlice.js";
 import { useSelector, useDispatch } from "react-redux";
+
+// Unsafe motor-speed band (steps/s): in this range the stepper tends to lose
+// steps on the FRAME stage. Speeds at/below SPEED_WARN_MIN or at/above
+// SPEED_WARN_MAX run cleanly. The value stays editable - we only warn.
+const SPEED_WARN_MIN = 20000;
+const SPEED_WARN_MAX = 75000;
 
 /**
  * ImprovedAxisControl - Consolidated position display with multi-purpose editing
@@ -61,7 +68,7 @@ const ImprovedAxisControl = ({ hostIP, hostPort }) => {
     (async () => {
       try {
         const r = await fetch(
-          `${hostIP}:${hostPort}/imswitch/api/PositionerController/getPositionerNames`
+          `${hostIP}:${hostPort}/imswitch/api/PositionerController/getPositionerNames`,
         );
         const d = await r.json();
         setPositionerName(d[0]);
@@ -98,27 +105,31 @@ const ImprovedAxisControl = ({ hostIP, hostPort }) => {
   const moveAxis = (axis, distance) =>
     call(
       `${base}/movePositioner?positionerName=${positionerName}` +
-        `&axis=${axis}&dist=${distance}&isAbsolute=false&isBlocking=false&speed=${globalSpeed}`
+        `&axis=${axis}&dist=${distance}&isAbsolute=false&isBlocking=false&speed=${globalSpeed}`,
     );
 
   const moveAxisAbs = (axis, target) =>
     call(
       `${base}/movePositioner?positionerName=${positionerName}` +
-        `&axis=${axis}&dist=${target}&isAbsolute=true&isBlocking=false&speed=${globalSpeed}`
+        `&axis=${axis}&dist=${target}&isAbsolute=true&isBlocking=false&speed=${globalSpeed}`,
     );
 
   const homeAxis = (axis) =>
     call(
       `${base}/homeAxis?positionerName=${positionerName}` +
-        `&axis=${axis}&isBlocking=false`
+        `&axis=${axis}&isBlocking=false`,
     );
 
   const stopAxis = (axis) =>
     call(`${base}/stopAxis?positionerName=${positionerName}&axis=${axis}`);
 
-  const homeAll = () => {
-    Object.keys(positions).forEach((axis) => homeAxis(axis));
-  };
+  // HOME ALL runs the collision-safe global homing procedure (Z first, lift Z
+  // clear of the bottom, then X/Y, then restore Z) instead of homing each axis
+  // in arbitrary order. Progress is visible in FRAME Settings > Frame Homing.
+  const homeAll = () =>
+    call(
+      `${base}/startFrameHoming?positionerName=${positionerName}&isBlocking=false`,
+    );
 
   const stopAll = () => {
     Object.keys(positions).forEach((axis) => stopAxis(axis));
@@ -421,23 +432,33 @@ const ImprovedAxisControl = ({ hostIP, hostPort }) => {
             gap: 2,
           }}
         >
-          <TextField
-            label="Global Speed"
-            type="number"
-            size="small"
-            value={globalSpeed}
-            onChange={(e) => setGlobalSpeed(Number(e.target.value))}
-            sx={{ width: 150 }}
-            InputProps={{
-              startAdornment: <Speed fontSize="small" sx={{ mr: 0.5 }} />,
-              style: { fontSize: "0.8rem" },
-            }}
-          />
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+            <TextField
+              label="Global Speed"
+              type="number"
+              size="small"
+              value={globalSpeed}
+              onChange={(e) => setGlobalSpeed(Number(e.target.value))}
+              sx={{ width: 150 }}
+              InputProps={{
+                startAdornment: <Speed fontSize="small" sx={{ mr: 0.5 }} />,
+                style: { fontSize: "0.8rem" },
+              }}
+            />
+            {globalSpeed > SPEED_WARN_MIN && globalSpeed < SPEED_WARN_MAX && (
+              <Alert severity="warning" sx={{ py: 0, fontSize: "0.7rem", maxWidth: 320 }}>
+                Speeds between {SPEED_WARN_MIN.toLocaleString()} and{" "}
+                {SPEED_WARN_MAX.toLocaleString()} may cause the motor to lose
+                steps. Prefer ≤{SPEED_WARN_MIN.toLocaleString()} or ≥
+                {SPEED_WARN_MAX.toLocaleString()}.
+              </Alert>
+            )}
+          </Box>
 
           <Stack direction="row" spacing={1}>
             <Button
               variant="contained"
-              color="secondary"
+              color="primary"
               onClick={homeAll}
               startIcon={<Home />}
               size="small"

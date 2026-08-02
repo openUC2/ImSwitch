@@ -1,9 +1,14 @@
 import axios from "axios";
+import store from "../../state/store";
 
-const hostIP = window.location.hostname;
-const hostPort = window.location.port || 4000;
-const protocol = window.location.protocol;
+export function getFileManagerBaseUrl() {
+  const s = store.getState().connectionSettingsState;
+  return `${s.ip}:${s.apiPort}/imswitch/api/FileManager`;
+}
 
-export const api = axios.create({
-  baseURL: `${protocol}//${hostIP}:${hostPort}/imswitch/api/FileManager`,
+export const api = axios.create();
+
+api.interceptors.request.use((config) => {
+  config.baseURL = getFileManagerBaseUrl();
+  return config;
 });

@@ -40,11 +40,17 @@ jobs:
             gha-runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.gha-runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
+          # We check out the PR's HEAD commit instead of its merge commit so that
+          # Docker container SHA tags will match git commit SHAs even before merge-ctr-imgs:
+          ref: ${{ github.event.pull_request.head.sha }}
           # Don't download unnecessary data:
           fetch-depth: 0
           filter: 'blob:none'
+          # We fetch tags so that the staged pallet bundle has a record of ancestral tags, for
+          # pseudoversion string generation:
+          fetch-tags: true
 
       - name: Wait for frontend to build
         id: wait-build-frontend
@@ -54,7 +60,7 @@ jobs:
           sha: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Download built frontend
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: frontend
           path: ./frontend/build
@@ -65,36 +71,70 @@ jobs:
       # impossible to push to GHCR. See https://github.com/macbre/push-to-ghcr/issues/12
       - name: Lowercase image registry and owner
         id: image_registry_case
-        uses: ASzc/change-string-case-action@v6
+        uses: ASzc/change-string-case-action@v8
         with:
           string: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}
 
       # Build and publish Docker container image
       - name: Get Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ steps.image_registry_case.outputs.lowercase }}
           tags: |
-            type=sha # this sha doesn't appear to correspond to the git sha
+            type=sha
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
         with:
           install: true
           driver: docker-container  # Ensures proper driver setup
 
       - name: Log in to GitHub container registry
         if: env.PUSH_IMAGE == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Determine version string
+        id: version-string
+        run: |
+          # Get the SHA of the actual commit (not the fake merge commit) on PR-triggered runs
+          # (refer to https://stackoverflow.com/a/68068674/23202949):
+          if [ -n "${{ github.event.pull_request.head.sha }}" ]; then
+            ACTUAL_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            # Note: we want to have a SHA to check out even in merge queues, so we always fall back
+            # to a SHA even if it's a fictional SHA detached from any branches:
+            ACTUAL_SHA="${{ github.sha }}"
+          fi
+
+          TAG="$(git describe --tags --exact-match --match "v*" "$ACTUAL_SHA" 2>/dev/null || printf "")"
+          VERSION="$(git describe --tags --match "v*" --abbrev=7 "$ACTUAL_SHA")"
+          TIMESTAMP="$(TZ=UTC git show -s --format=%ad --date=format:'t%Y%m%d%H%M%S' "$ACTUAL_SHA")"
+
+          if [[ "$VERSION" != "$TAG" ]]; then
+            VERSION="$VERSION-$TIMESTAMP"
+            if [[ -n "${{ github.event.pull_request.head.sha }}" ]]; then
+              # We're in a pull request
+              VERSION="$VERSION-pr${{ github.event.pull_request.number }}"
+            fi
+          fi
+
+          echo "version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Record version
+        run: |
+          VERSION="${{ steps.version-string.outputs.version }}"
+          echo "version = \"$VERSION\"" > ./imswitch/version.py
+          cat ./imswitch/version.py
+
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -119,7 +159,7 @@ jobs:
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-${{ env.PLATFORM_PAIR }}
           path: /tmp/digests/*
@@ -135,7 +175,7 @@ jobs:
       - build-ctr-img
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
           pattern: digests-*
@@ -145,14 +185,14 @@ jobs:
       # impossible to push to GHCR. See https://github.com/macbre/push-to-ghcr/issues/12
       - name: Lowercase image registry and owner
         id: image_registry_case
-        uses: ASzc/change-string-case-action@v6
+        uses: ASzc/change-string-case-action@v8
         with:
           string: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}
 
       # Build and publish Docker container image
       - name: Get Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         env:
           DOCKER_METADATA_PR_HEAD_SHA: true
           IS_MAIN_BRANCH: ${{ github.ref == format('refs/heads/{0}', env.MAIN_BRANCH) }}
@@ -161,7 +201,7 @@ jobs:
         with:
           images: ${{ steps.image_registry_case.outputs.lowercase }}
           tags: |
-            type=match,pattern=${{ env.TAG_PREFIX }}(.*),group=1 # this implicitly updates latest
+            type=match,pattern=${{ env.TAG_PREFIX }}(.*),group=1
             type=raw,value=stable,enable=${{ env.IS_STABLE_BRANCH }},priority=702
             type=raw,value=beta,enable=${{ env.IS_BETA_BRANCH }},priority=701
             type=edge,branch=${{ env.MAIN_BRANCH }}
@@ -169,11 +209,11 @@ jobs:
             type=sha,priority=100
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
         if: env.PUSH_IMAGE == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}

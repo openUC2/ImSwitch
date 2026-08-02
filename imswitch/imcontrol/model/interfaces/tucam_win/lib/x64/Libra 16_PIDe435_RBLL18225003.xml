@@ -1,0 +1,34 @@
+<?TUXML version="1.0" encoding="UTF-8"?>
+<Cam_Libra16 Using="DftParameter">
+    <ParameterSets Name="DftParameter">
+        <Resolution>1</Resolution>
+        <PixelClock>0</PixelClock>
+        <BitOfDepth>0</BitOfDepth>
+        <GlobalGain>2</GlobalGain>
+        <ATExposure>0</ATExposure>
+        <FMExposure>0</FMExposure>
+        <LNExposure>830</LNExposure>
+        <BlackLevel>8</BlackLevel>
+        <FlatFieldCorrection>0</FlatFieldCorrection>
+        <Temperature>500</Temperature>
+        <TriggerOutput>0</TriggerOutput>
+        <DefectCorrectionValue>1</DefectCorrectionValue>
+        <MultipleCameras>1</MultipleCameras>
+        <Gamma>100</Gamma>
+        <Contrast>128</Contrast>
+        <LeftLevels>0</LeftLevels>
+        <RightLevels>16383</RightLevels>
+        <HistogramStatistic>0</HistogramStatistic>
+        <AutoLevels>0</AutoLevels>
+        <Horizontal>0</Horizontal>
+        <Vertical>0</Vertical>
+        <VerticalCorrection>1</VerticalCorrection>
+        <RotateR90>0</RotateR90>
+        <RotateL90>0</RotateL90>
+        <USBLed>1</USBLed>
+        <SumBin>0</SumBin>
+        <PGAHigh>100</PGAHigh>
+        <PGALow>100</PGALow>
+        <IgnorePercentage>10</IgnorePercentage>
+    </ParameterSets>
+</Cam_Libra16>

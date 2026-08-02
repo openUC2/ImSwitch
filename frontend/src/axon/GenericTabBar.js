@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 
-import { Button, Paper, Tabs, Tab } from "@mui/material";
+import { Box, Tabs, Tab } from "@mui/material";
 
 // Global counter to generate unique IDs for each component instance
 let counter = 0;
@@ -39,28 +39,26 @@ function GenericTabBar({ children, tabNames, id }) {
     }
   }, [activeTab, localStorageKey]);
 
-
   return (
-    <div>
-      <div style={{ display: "flex", padding: "8px" }}>
-        {/*renderTabs()*/}
-        <Paper>
-          <Tabs
-            value={activeTab}
-            onChange={(event, newValue) => setActiveTab(newValue)}
-            //aria-label="settings tabs"
-          >
-            {tabNames.map((tabName) => (
-              <Tab  key={tabName} label={tabName} />
-            ))}
-          </Tabs>
-        </Paper>
-      </div>
-      <div style={{ marginTop: "0px" }}>
+    <Box>
+      <Box sx={{ display: "flex", px: 1, pt: 1 }}>
+        <Tabs
+          value={activeTab}
+          onChange={(event, newValue) => setActiveTab(newValue)}
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{ borderBottom: 1, borderColor: "divider", width: "100%" }}
+        >
+          {tabNames.map((tabName) => (
+            <Tab key={tabName} label={tabName} />
+          ))}
+        </Tabs>
+      </Box>
+      <Box sx={{ mt: 0 }}>
         {/* Render the content of the active tab */}
         {children[activeTab]}
-      </div>
-    </div>
+      </Box>
+    </Box>
   );
 }
 

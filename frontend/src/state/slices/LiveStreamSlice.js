@@ -30,7 +30,9 @@ const initialLiveStreamState = {
     },
     jpeg: {
       enabled: true,
-      quality: 85
+      quality: 85,
+      subsampling: { factor: 1 },
+      throttle_ms: 100,
     },
     webrtc: {
       enabled: false,
@@ -39,6 +41,8 @@ const initialLiveStreamState = {
       subsampling_factor: 1
     }
   },
+  // Per-detector settings: { detectorName: { protocol, subsampling_factor, ... } }
+  perDetectorSettings: {},
   // Crop settings (applied before subsampling, shared across all formats)
   cropSize: 0, // 0 = no crop (full FOV), >0 = quadratic crop around center
   // Histogram data
@@ -155,6 +159,18 @@ const liveStreamSlice = createSlice({
       state.cropSize = action.payload;
     },
 
+    setPerDetectorSettings: (state, action) => {
+      state.perDetectorSettings = action.payload;
+    },
+
+    updateDetectorSettings: (state, action) => {
+      const { detectorName, settings } = action.payload;
+      state.perDetectorSettings[detectorName] = {
+        ...(state.perDetectorSettings[detectorName] || {}),
+        ...settings,
+      };
+    },
+
     resetState: (state) => {
       console.log("resetState");
       return { ...initialLiveStreamState }; // Reset to initial state
@@ -182,6 +198,8 @@ export const {
   setHistogramData,
   setShowHistogram,
   setCropSize,
+  setPerDetectorSettings,
+  updateDetectorSettings,
   resetState,
 } = liveStreamSlice.actions;
 

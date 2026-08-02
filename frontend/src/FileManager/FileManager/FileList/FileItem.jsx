@@ -10,6 +10,7 @@ import { useSelection } from "../../contexts/SelectionContext";
 import { useClipBoard } from "../../contexts/ClipboardContext";
 import { useLayout } from "../../contexts/LayoutContext";
 import Checkbox from "../../components/Checkbox/Checkbox";
+import { getFileManagerBaseUrl } from "../../api/api";
 
 const dragIconSize = 50;
 
@@ -31,6 +32,10 @@ const FileItem = ({
   const [checkboxClassName, setCheckboxClassName] = useState("hidden");
   const [dropZoneClass, setDropZoneClass] = useState("");
   const [tooltipPosition, setTooltipPosition] = useState(null);
+  const [thumbError, setThumbError] = useState(false);
+
+  // Reset the thumbnail fallback when this slot is reused for a different file.
+  useEffect(() => setThumbError(false), [file.path]);
 
   const { activeLayout } = useLayout();
   const iconSize = activeLayout === "grid" ? 48 : 20;
@@ -50,6 +55,8 @@ const FileItem = ({
     if (file.isDirectory) {
       setCurrentPath(file.path);
       setSelectedFiles([]);
+    } else if (file.isImage) {
+      triggerAction.show("imagePreview");
     } else {
       onFileOpen(file);
       enableFilePreview && triggerAction.show("previewFile");
@@ -218,7 +225,16 @@ const FileItem = ({
             onClick={(e) => e.stopPropagation()}
           />
         )}
-        {file.isDirectory ? (
+        {file.thumbnailPath && !thumbError ? (
+          <img
+            className="file-thumb"
+            style={{ width: iconSize, height: iconSize }}
+            src={`${getFileManagerBaseUrl()}${file.thumbnailPath}?size=128`}
+            alt={file.name}
+            loading="lazy"
+            onError={() => setThumbError(true)}
+          />
+        ) : file.isDirectory ? (
           <FaRegFolderOpen size={iconSize} />
         ) : (
           <>

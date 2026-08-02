@@ -1,0 +1,204 @@
+@import "../../../styles/variables";
+
+.image-preview-action {
+  padding: 1em;
+
+  .preview-layout {
+    display: flex;
+    gap: 16px;
+    max-height: 70dvh;
+  }
+
+  .preview-left {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .preview-right {
+    width: 280px;
+    min-width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    max-height: 70dvh;
+
+    &::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: $primary-color;
+      border-radius: 4px;
+    }
+  }
+
+  .preview-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 200px;
+    max-height: 55dvh;
+    background-color: #0a0a0a;
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+
+    .preview-image {
+      max-width: 100%;
+      max-height: 55dvh;
+      object-fit: contain;
+      opacity: 1;
+      transition: opacity 0.3s ease-in-out;
+    }
+
+    .img-loading {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .preview-fallback {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      color: #666;
+      padding: 40px;
+    }
+  }
+
+  .preview-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+
+    .action-btn {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+      font-size: 0.85em;
+    }
+  }
+
+  .preview-meta-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .preview-filename {
+      font-weight: 600;
+      font-size: 0.95em;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .preview-badge {
+      background-color: $primary-color;
+      color: #fff;
+      padding: 1px 8px;
+      border-radius: 10px;
+      font-size: 0.75em;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+  }
+
+  .preview-filesize {
+    font-size: 0.8em;
+    color: #888;
+  }
+
+  .preview-meta-loading {
+    font-size: 0.82em;
+    color: #888;
+  }
+
+  .metadata-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82em;
+
+    tr {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    td {
+      padding: 5px 4px;
+      vertical-align: top;
+    }
+
+    .metadata-label {
+      color: #888;
+      white-space: nowrap;
+      width: 1%;
+      padding-right: 10px;
+      font-weight: 500;
+    }
+
+    .metadata-value {
+      color: #ddd;
+      word-break: break-word;
+    }
+
+    &.compact {
+      font-size: 0.95em;
+
+      td {
+        padding: 3px 4px;
+      }
+    }
+  }
+
+  .description-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .collapsible-section {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    overflow: hidden;
+
+    .collapsible-header {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      width: 100%;
+      padding: 4px 6px;
+      background: rgba(255, 255, 255, 0.04);
+      border: none;
+      color: #ccc;
+      font-size: 0.82em;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: left;
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.08);
+      }
+    }
+
+    .collapsible-body {
+      padding: 4px 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .collapsible-section {
+      border-color: rgba(255, 255, 255, 0.05);
+
+      .collapsible-header {
+        font-weight: 500;
+        color: #aaa;
+        padding: 3px 5px;
+      }
+    }
+  }
+}

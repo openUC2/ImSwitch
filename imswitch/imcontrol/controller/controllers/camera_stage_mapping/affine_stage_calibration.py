@@ -16,43 +16,116 @@ import numpy as np
 import logging
 from typing import Optional, Dict
 
-try:
-    from skimage.registration import phase_cross_correlation
-    PHASE_CORRELATION_AVAILABLE = True
-except ImportError:
-    PHASE_CORRELATION_AVAILABLE = False
-    logging.warning("phase_cross_correlation not available")
+
+class TrackingError(RuntimeError):
+    """Raised when the cross-correlation peak is too weak to trust the shift."""
 
 
-def measure_pixel_shift(image1: np.ndarray, image2: np.ndarray) -> tuple:
+# --------------------------------------------------------------------------- #
+# High-pass FFT image tracking                                                #
+#                                                                             #
+# Adapted (and trimmed) from openflexure / camera-stage-mapping               #
+# (fft_image_tracking.py, R. Bowman, GNU GPL v3). The key advantage over a    #
+# plain phase correlation is the high-pass filter: it suppresses the slowly   #
+# varying illumination gradient / vignetting that otherwise dominates the     #
+# correlation and biases the measured shift. It also yields an honest         #
+# normalised peak height (0..1) we can use as a per-step quality / failure    #
+# detector — independent of any external dependency (no skimage required).    #
+# --------------------------------------------------------------------------- #
+
+def _prep(image: np.ndarray) -> np.ndarray:
+    """Grayscale + float + mean-subtract (so zero-padding adds the mean, not an edge)."""
+    image = np.asarray(image)
+    if image.ndim == 3:
+        image = image.mean(axis=2)
+    return image.astype(float) - float(np.mean(image))
+
+
+def _high_pass_mask(full_shape, sigma: float) -> np.ndarray:
+    """``1 - Gaussian`` low-pass on the real-FFT frequency grid.
+
+    ``sigma`` is the Gaussian standard deviation in *pixels* of the suppressed
+    structure: larger ``sigma`` removes more of the low (coarse) frequencies.
     """
-    Measure pixel displacement between two images using phase correlation.
-    
-    Args:
-        image1: Reference image
-        image2: Shifted image
-    
-    Returns:
-        (shift_x, shift_y): Pixel displacement in X and Y
-        correlation: Correlation quality (0-1)
+    fy = np.fft.fftfreq(full_shape[0])[:, np.newaxis]   # rows (full axis)
+    fx = np.fft.rfftfreq(full_shape[1])[np.newaxis, :]  # cols (halved by rfft)
+    r2 = fy ** 2 + fx ** 2
+    return 1.0 - np.exp(-2.0 * (np.pi * sigma) ** 2 * r2)
+
+
+def _background_subtracted_com(corr: np.ndarray, fractional_threshold: float = 0.1,
+                               quadrant_swap: bool = False) -> np.ndarray:
+    """Sub-pixel peak as the centre-of-mass of the top fraction of the correlation."""
+    corr = corr.astype(float)
+    hi, lo = float(np.max(corr)), float(np.min(corr))
+    background = hi - fractional_threshold * (hi - lo)
+    bs = corr - background
+    bs[bs < 0] = 0.0
+    rows = np.arange(corr.shape[0], dtype=float)
+    cols = np.arange(corr.shape[1], dtype=float)
+    if quadrant_swap:  # put DC at the centre so the shift is signed (smallest move)
+        rows[corr.shape[0] // 2:] -= corr.shape[0]
+        cols[corr.shape[1] // 2:] -= corr.shape[1]
+    total = float(np.sum(bs))
+    if total <= 0:
+        return np.array([0.0, 0.0])
+    r = float(np.sum(bs * rows[:, np.newaxis])) / total
+    c = float(np.sum(bs * cols[np.newaxis, :])) / total
+    return np.array([r, c])  # [row_shift, col_shift]
+
+
+def high_pass_fft_template(image: np.ndarray, sigma: float = 10.0, pad: bool = True):
+    """Build a reusable high-pass FFT template from the reference image.
+
+    Returns ``(template, fft_shape, self_peak)`` where ``self_peak`` is the
+    correlation height of the template against itself (the best achievable),
+    used to normalise the quality of later measurements.
     """
-    if not PHASE_CORRELATION_AVAILABLE:
-        raise ImportError("phase_cross_correlation is required for calibration")
+    img = _prep(image)
+    fft_shape = tuple(int(2 * s) for s in img.shape) if pad else tuple(img.shape)
+    fft = np.fft.rfft2(img, s=fft_shape)
+    template = np.conj(fft) * _high_pass_mask(fft_shape, sigma)
+    self_peak = float(np.max(np.fft.irfft2(template * fft, s=fft_shape)))
+    return template, fft_shape, self_peak
 
-    # Compute shift using phase correlation (sub-pixel accuracy)
-    shift, error, phase_diff = phase_cross_correlation(
-        image1, image2,
-        upsample_factor=3  # 0.01 pixel accuracy
-    )
 
-    # shift is [dy, dx], convert to [dx, dy]
-    shift_x = shift[1]
-    shift_y = shift[0]
+def displacement_from_template(template, fft_shape, self_peak, image,
+                               fractional_threshold: float = 0.1,
+                               error_threshold: float = 0.0):
+    """Measure the (dx, dy) shift of ``image`` relative to the template's reference.
 
-    # Estimate correlation quality from error
-    correlation = 1.0 - min(error, 1.0)
+    ``(dx, dy)`` are in image pixels (x = columns, y = rows), matching the sign
+    convention of the previous phase-correlation implementation. The second
+    return value is the normalised peak height in [0, 1] (1 == perfect match).
+    Raises :class:`TrackingError` if ``error_threshold > 0`` and the peak drops
+    below it.
+    """
+    img = _prep(image)
+    corr = np.fft.irfft2(template * np.fft.rfft2(img, s=fft_shape), s=fft_shape)
+    peak = float(np.max(corr))
+    quality = (peak / self_peak) if self_peak > 0 else 0.0
+    if error_threshold > 0 and quality < error_threshold:
+        raise TrackingError(f"correlation peak {quality:.3f} < threshold {error_threshold:.3f}")
+    com = _background_subtracted_com(corr, fractional_threshold, quadrant_swap=True)
+    # com is [row_shift, col_shift] = the displacement of the image content.
+    # Negate to match the legacy phase-correlation sign (the shift that registers
+    # `image` back onto the reference) so the downstream affine fit and the
+    # calibration-owned flip detection are unchanged. Return (dx, dy) = (col, row).
+    return (float(-com[1]), float(-com[0])), float(np.clip(quality, 0.0, 1.0))
 
-    return (shift_x, shift_y), correlation
+
+def measure_pixel_shift(image1: np.ndarray, image2: np.ndarray,
+                        sigma: float = 10.0, pad: bool = True) -> tuple:
+    """Measure pixel displacement of ``image2`` relative to ``image1``.
+
+    Drop-in replacement for the previous phase-correlation helper (same return
+    shape ``((shift_x, shift_y), correlation)``) but illumination-robust and
+    dependency-free. For a fixed reference measured against many frames, prefer
+    :func:`high_pass_fft_template` + :func:`displacement_from_template` to build
+    the template only once.
+    """
+    template, fft_shape, self_peak = high_pass_fft_template(image1, sigma=sigma, pad=pad)
+    return displacement_from_template(template, fft_shape, self_peak, image2)
 
 
 def compute_affine_matrix(pixel_shifts: np.ndarray, stage_shifts: np.ndarray) -> tuple:
@@ -202,3 +275,82 @@ def validate_calibration(affine_matrix: np.ndarray, metrics: Dict,
 
     logger.info("Calibration validation passed")
     return True, "Calibration passed all validation checks"
+
+
+# --------------------------------------------------------------------------- #
+# Backlash measurement                                                        #
+#                                                                             #
+# Adapted from openflexure / camera-stage-mapping (GNU GPL v3). Backlash is   #
+# the mechanical "dead zone": after a direction reversal the stage does not   #
+# move for the first part of the commanded travel while the slack is taken    #
+# up. We recover it from a 1-D scan that reverses direction: the value that   #
+# best linearises the (commanded stage) -> (observed image) relationship is   #
+# the backlash.                                                               #
+# --------------------------------------------------------------------------- #
+
+def apply_backlash(x, backlash: float = 0.0, start_unwound: bool = True) -> np.ndarray:
+    """Forward model of backlash: the realised position ``y`` lags commanded ``x``.
+
+    ``y`` follows ``x`` but only after ``x`` reverses by at least ``backlash``;
+    until then it stays put (the dead zone). With ``start_unwound`` we assume the
+    mechanism is slack at the first sample, so the first move must take up the
+    full ``backlash`` before anything happens.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.zeros_like(x)
+    if x.size == 0:
+        return y
+    if start_unwound and x.size > 1:
+        y[0] = x[0] + np.sign(x[1] - x[0]) * backlash
+    else:
+        y[0] = x[0]
+    for i in range(1, x.size):
+        d = x[i] - y[i - 1]
+        if abs(d) >= backlash:
+            y[i] = x[i] - np.sign(d) * backlash
+        else:
+            y[i] = y[i - 1]
+    return y
+
+
+def fit_backlash_1d(stage_pos, image_pos, max_backlash: Optional[float] = None) -> Dict:
+    """Estimate backlash (in the units of ``stage_pos``) from a reversing 1-D scan.
+
+    ``stage_pos`` is the commanded position along one axis (e.g. µm) and
+    ``image_pos`` the measured image displacement projected on that axis (px).
+    A brute-force search picks the backlash that minimises the residual of a
+    linear stage->image fit after applying the backlash model.
+
+    Returns ``{"backlash", "scale", "offset", "residual_std", "residual_std_zero"}``
+    where ``scale`` is image-px per stage-unit and ``residual_std_zero`` is the
+    fit residual with no backlash (for an improvement check).
+    """
+    stage_pos = np.asarray(stage_pos, dtype=float)
+    image_pos = np.asarray(image_pos, dtype=float)
+
+    def fit_motion(backlash):
+        xb = apply_backlash(stage_pos, backlash)
+        xb = xb - np.mean(xb)
+        m, c = np.polyfit(xb, image_pos, 1)
+        resid = image_pos - (xb * m + c)
+        ddof = 3 if image_pos.size > 3 else 0
+        return float(m), float(c), float(np.std(resid, ddof=ddof))
+
+    span = float(np.max(stage_pos) - np.min(stage_pos)) if stage_pos.size else 0.0
+    if max_backlash is None:
+        max_backlash = span / 2.0
+    # Candidate backlash values: 0, then geometrically spaced up to max_backlash.
+    candidates = [0.0]
+    step = max(1e-6, span / 200.0)
+    while step < max_backlash:
+        candidates.append(step)
+        step *= 1.33
+
+    m0, c0, res0 = fit_motion(0.0)
+    best = {"backlash": 0.0, "scale": m0, "offset": c0,
+            "residual_std": res0, "residual_std_zero": res0}
+    for cand in candidates:
+        m, c, res = fit_motion(cand)
+        if res < best["residual_std"]:
+            best.update(backlash=float(cand), scale=m, offset=c, residual_std=res)
+    return best

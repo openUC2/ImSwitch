@@ -262,7 +262,7 @@ class Picamera2Manager(DetectorManager):
 
     def getParameter(self, name):
         """Get a parameter value"""
-        if name not in self._parameters:
+        if name not in self.parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
 
         value = self._camera.getPropertyValue(name)

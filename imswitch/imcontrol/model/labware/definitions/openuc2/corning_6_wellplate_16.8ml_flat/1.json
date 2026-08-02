@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 2,
+  "version": 1,
+  "namespace": "openuc2",
+  "metadata": {
+    "displayName": "Corning 6 Well Plate 16.8 mL Flat",
+    "displayCategory": "wellPlate",
+    "displayVolumeUnits": "µL",
+    "tags": [
+      "SBS",
+      "wellPlate",
+      "_generated"
+    ]
+  },
+  "brand": {
+    "brand": "Corning",
+    "brandId": [],
+    "links": []
+  },
+  "parameters": {
+    "format": "6Standard",
+    "isTiprack": false,
+    "loadName": "corning_6_wellplate_16.8ml_flat",
+    "isMagneticModuleCompatible": false,
+    "quirks": [],
+    "isDeckSlotCompatible": true
+  },
+  "ordering": [
+    [
+      "A1",
+      "B1"
+    ],
+    [
+      "A2",
+      "B2"
+    ],
+    [
+      "A3",
+      "B3"
+    ]
+  ],
+  "cornerOffsetFromSlot": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "dimensions": {
+    "xDimension": 127.76,
+    "yDimension": 85.48,
+    "zDimension": 14.35
+  },
+  "wells": {
+    "A1": {
+      "shape": "circular",
+      "depth": 17.4,
+      "totalLiquidVolume": 16800.0,
+      "x": 24.55,
+      "y": 62.32,
+      "z": 0.0,
+      "diameter": 34.8
+    },
+    "B1": {
+      "shape": "circular",
+      "depth": 17.4,
+      "totalLiquidVolume": 16800.0,
+      "x": 24.55,
+      "y": 23.2,
+      "z": 0.0,
+      "diameter": 34.8
+    },
+    "A2": {
+      "shape": "circular",
+      "depth": 17.4,
+      "totalLiquidVolume": 16800.0,
+      "x": 63.67,
+      "y": 62.32,
+      "z": 0.0,
+      "diameter": 34.8
+    },
+    "B2": {
+      "shape": "circular",
+      "depth": 17.4,
+      "totalLiquidVolume": 16800.0,
+      "x": 63.67,
+      "y": 23.2,
+      "z": 0.0,
+      "diameter": 34.8
+    },
+    "A3": {
+      "shape": "circular",
+      "depth": 17.4,
+      "totalLiquidVolume": 16800.0,
+      "x": 102.79,
+      "y": 62.32,
+      "z": 0.0,
+      "diameter": 34.8
+    },
+    "B3": {
+      "shape": "circular",
+      "depth": 17.4,
+      "totalLiquidVolume": 16800.0,
+      "x": 102.79,
+      "y": 23.2,
+      "z": 0.0,
+      "diameter": 34.8
+    }
+  },
+  "groups": [
+    {
+      "wells": [
+        "A1",
+        "B1",
+        "A2",
+        "B2",
+        "A3",
+        "B3"
+      ],
+      "metadata": {
+        "displayCategory": "wellPlate"
+      }
+    }
+  ]
+}

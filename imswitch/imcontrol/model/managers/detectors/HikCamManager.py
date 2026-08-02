@@ -18,7 +18,6 @@ class HikCamManager(DetectorManager):
         self.__logger = initLogger(self, instanceName=name)
         self.detectorInfo = detectorInfo
 
-        binning = 1
         cameraId = detectorInfo.managerProperties['cameraListIndex']
         # NOTE: pixel size and flip are owned by PixelCalibrationController and
         # injected via setPixelSizeUm() / setFlipImage() during startup. We only
@@ -44,6 +43,11 @@ class HikCamManager(DetectorManager):
         # per-detector affine calibration has been loaded from the setup config.
         flipImage = (False, False)
 
+        # load binning from config
+        try:
+            binning = detectorInfo.managerProperties['binning']
+        except:
+            binning = 1
         self._camera = self._getHikObj(cameraId, isRGB, binning, flipImage)
 
         for propertyName, propertyValue in detectorInfo.managerProperties['hikcam'].items():
@@ -132,6 +136,33 @@ class HikCamManager(DetectorManager):
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         return self._camera.getLast(returnFrameNumber=returnFrameNumber)
 
+    def flushBuffer(self):
+        """Drop buffered frames so the next grab is guaranteed post-move/-settle."""
+        if hasattr(self._camera, "flushBuffer"):
+            self._camera.flushBuffer()
+
+
+    def snapSync(self, timeout: float = 2.0):
+        """Fire a software trigger and return the resulting (post-move) frame.
+
+        Requires software-trigger mode (``setTriggerSource('software')``). Returns
+        None if the camera does not support triggered snaps.
+        """
+        if hasattr(self._camera, "snapSoftwareTrigger"):
+            return self._camera.snapSoftwareTrigger(timeout=timeout)
+        return None
+
+    def getFrameNumber(self):
+        if hasattr(self._camera, "getFrameNumber"):
+            return self._camera.getFrameNumber()
+        return -1
+
+    def getStreamDiagnostics(self):
+        """Camera-side streaming latency metrics (see hikcamera.getStreamDiagnostics)."""
+        if hasattr(self._camera, "getStreamDiagnostics"):
+            return self._camera.getStreamDiagnostics()
+        return {}
+
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
         If the parameter doesn't exist, i.e. the parameters field doesn't
@@ -152,7 +183,7 @@ class HikCamManager(DetectorManager):
         contain a key with the specified parameter name, an error will be
         raised."""
 
-        if name not in self._parameters:
+        if name not in self.parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
 
         value = self._camera.getPropertyValue(name)
@@ -162,8 +193,9 @@ class HikCamManager(DetectorManager):
     def setTriggerSource(self, source):
         # update camera safely and mirror value in GUI parameter list
         self.__logger.debug(f'Setting trigger source to {source}')
-        self._performSafeCameraAction(lambda: self._camera.setTriggerSource(source))
+        self._camera.setTriggerSource(source)
         self.parameters['trigger_source'].value = source
+        return True
 
     def getChunk(self):
         try:
@@ -183,6 +215,11 @@ class HikCamManager(DetectorManager):
             self._camera.start_live()
             self._running = True
             self.__logger.debug('startlive')
+            try:
+                debug = self._camera.getDiagnostics()
+                self.__logger.info(f"Camera diagnostics after starting live: {debug}")
+            except Exception as e:
+                self.__logger.warning(f"Could not get camera diagnostics: {e}")
 
     def stopAcquisition(self):
         if self._running:
@@ -211,7 +248,7 @@ class HikCamManager(DetectorManager):
     def setFlipImage(self, flipY: bool, flipX: bool):
         """
         Set flip settings for the camera during runtime.
-        
+
         Args:
             flipY: Whether to flip vertically
             flipX: Whether to flip horizontally

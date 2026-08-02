@@ -31,7 +31,11 @@ class OpenCVCamManager(DetectorManager):
             # returning back to default pixelsize
             pixelSize = 1
 
-        self._camera = self._getOpenCVObj(detectorInfo.managerProperties['cameraListIndex'], isRGB)
+        # Flip is set by PixelCalibrationController via setFlipImage() once the
+        # per-detector affine calibration has been loaded from the setup config.
+        flipImage = (False, False)
+
+        self._camera = self._getOpenCVObj(detectorInfo.managerProperties['cameraListIndex'], isRGB, flipImage)
 
         model = self._camera.model
         self._running = False
@@ -115,6 +119,17 @@ class OpenCVCamManager(DetectorManager):
         value = self._camera.getPropertyValue(name)
         return value
 
+    def setFlipImage(self, flipY: bool, flipX: bool):
+        """
+        Set flip settings for the camera during runtime.
+
+        Args:
+            flipY: Whether to flip vertically
+            flipX: Whether to flip horizontally
+        """
+        self._camera.setFlipImage(flipY, flipX)
+        self.__logger.info(f"Updated flip settings: flipY={flipY}, flipX={flipX}")
+
     def setBinning(self, binning):
         super().setBinning(binning)
 
@@ -176,11 +191,11 @@ class OpenCVCamManager(DetectorManager):
     def openPropertiesDialog(self):
         self._camera.openPropertiesGUI()
 
-    def _getOpenCVObj(self, cameraindex=0, isRGB=0):
+    def _getOpenCVObj(self, cameraindex=0, isRGB=0, flipImage=(False, False)):
         try:
             from imswitch.imcontrol.model.interfaces.opencvcam import CameraOpenCV
             self.__logger.debug('Trying to initialize OpenCV IMX219 camera')
-            camera = CameraOpenCV(cameraindex, isRGB=isRGB)
+            camera = CameraOpenCV(cameraindex, isRGB=isRGB, flipImage=flipImage)
         except Exception as e:
             self.__logger.error(e)
             self.__logger.warning('Failed to initialize OpenCV IMX219 camera, loading TIS mocker')

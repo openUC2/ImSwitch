@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { ReactSortable } from "react-sortablejs";
 import { useDispatch, useSelector } from "react-redux";
-import ExperimentComponent from "./ExperimentComponent";
-import GenericTabBar from "./GenericTabBar";
-
 //import { FixedSizeList as List } from "react-window";
 
 import * as experimentSlice from "../state/slices/ExperimentSlice";
@@ -94,8 +91,11 @@ const PointListEditorComponent = () => {
     dispatch(experimentSlice.setPointList([]));
   };
   //##################################################################################
-  const handleGotoButtonClick = (x, y, z) => {
-    console.log("handleGotoButtonClick", x, y, z);
+  // Move the stage to a point. "includeZ" controls whether the Z axis is moved
+  // as well: the plain "Goto" stays in-plane (XY only) so the focus isn't
+  // disturbed, while "Goto (incl. Z)" also drives Z to the stored value.
+  const handleGotoButtonClick = (x, y, z, includeZ = false) => {
+    console.log("handleGotoButtonClick", x, y, z, "includeZ", includeZ);
     // Do something with x and y
     apiPositionerControllerMovePositioner({
       axis: "X",
@@ -137,8 +137,8 @@ const PointListEditorComponent = () => {
         );
       });
 
-    // Also move Z if a valid z value is provided
-    if (z != null && z !== 0) {
+    // Only move Z when the user explicitly asked for it (Goto incl. Z).
+    if (includeZ && z != null) {
       apiPositionerControllerMovePositioner({
         axis: "Z",
         dist: z,
@@ -184,10 +184,6 @@ const PointListEditorComponent = () => {
     >
       {/* Header */}
       <h4 style={{ margin: "0", padding: "0" }}>Point List Editor</h4>
-
-      {/* Add             <ExperimentComponent /> */}
-      <ExperimentComponent />
-      <h1> </h1>
 
       {/* Remove item button */}
       <div
@@ -462,14 +458,29 @@ const PointListEditorComponent = () => {
                   Set Z
                 </Button>
               )}
-              {/* Goto button */}
+              {/* Goto buttons: XY-only and XYZ */}
               {viewMode != ViewMode.READONLY && (
                 <Button
-                  sx={{ padding: "0px" }}
+                  sx={{ padding: "0px", minWidth: "48px" }}
                   disabled={false}
-                  onClick={() => handleGotoButtonClick(item.x, item.y, item.z)}
+                  onClick={() =>
+                    handleGotoButtonClick(item.x, item.y, item.z, false)
+                  }
+                  title="Move to this point's XY position (Z unchanged)"
                 >
                   Goto
+                </Button>
+              )}
+              {viewMode != ViewMode.READONLY && (
+                <Button
+                  sx={{ padding: "0px", minWidth: "64px" }}
+                  disabled={false}
+                  onClick={() =>
+                    handleGotoButtonClick(item.x, item.y, item.z, true)
+                  }
+                  title="Move to this point's XYZ position (includes Z)"
+                >
+                  Goto +Z
                 </Button>
               )}
               {/* Remove item button*/}

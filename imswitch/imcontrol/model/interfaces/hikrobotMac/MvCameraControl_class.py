@@ -173,6 +173,20 @@ class MvCamera():
         # C原型:int MV_CC_SetImageNodeNum(void* handle, unsigned int nNum)
         return MvCamCtrldll.MV_CC_SetImageNodeNum(self.handle, nNum)
 
+    # 设置抓取策略 (0=OneByOne, 1=LatestImagesOnly, 2=LatestImages, 3=UpcomingImage)
+    def MV_CC_SetGrabStrategy(self, enGrabStrategy):
+        MvCamCtrldll.MV_CC_SetGrabStrategy.argtype = (c_void_p, c_uint)
+        MvCamCtrldll.MV_CC_SetGrabStrategy.restype = c_uint
+        # C原型:int MV_CC_SetGrabStrategy(void* handle, MV_GRAB_STRATEGY enGrabStrategy)
+        return MvCamCtrldll.MV_CC_SetGrabStrategy(self.handle, enGrabStrategy)
+
+    # 清除SDK内部图像缓存（丢弃尚未取走的旧帧）
+    def MV_CC_ClearImageBuffer(self):
+        MvCamCtrldll.MV_CC_ClearImageBuffer.argtype = (c_void_p)
+        MvCamCtrldll.MV_CC_ClearImageBuffer.restype = c_uint
+        # C原型:int MV_CC_ClearImageBuffer(void* handle)
+        return MvCamCtrldll.MV_CC_ClearImageBuffer(self.handle)
+
     # 获取Integer型属性值
     def MV_CC_GetIntValue(self, strKey, stIntValue):
         MvCamCtrldll.MV_CC_GetIntValue.argtype = (c_void_p, c_void_p, c_void_p)

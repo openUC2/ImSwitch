@@ -41,6 +41,9 @@ class UC2ConfigController(ImConWidgetController):
     sigOTAStatusUpdate = Signal(object)  # Emits OTA status updates
     sigUSBFlashStatusUpdate = Signal(object)  # Emits USB flash status updates
     sigCameraTrigger = Signal(object)  # Emits camera trigger events from hardware
+    sigBusStatusUpdate = Signal(object)  # Emits CAN-bus power / emergency-stop status changes
+    sigCollisionStatusUpdate = Signal(object)  # Emits collision-detector events/state (GPIO slave)
+    sigPtzEvent = Signal(object)  # Emits PTZ keyboard key events + the action they triggered
 
 
     def __init__(self, *args, **kwargs):
@@ -56,6 +59,10 @@ class UC2ConfigController(ImConWidgetController):
 
         # Prevent concurrent flashing attempts
         self._usb_flash_lock = threading.Lock()
+        # Reference to a running esptool subprocess so cancel can reach it.
+        self._usb_flash_proc = None
+        # Cooperative cancel flag honoured by _run_esptool's read loop.
+        self._usb_flash_cancel_event = threading.Event()
 
 
         # WiFi credentials for OTA (can be overridden via API)
@@ -81,6 +88,29 @@ class UC2ConfigController(ImConWidgetController):
         # register camera trigger callback for performance mode
         self.registerCameraTriggerCallback()
 
+        # register emergency-stop callback (CAN-bus power / E-stop button)
+        self.registerEmergencyCallback()
+
+        # collision detector (GPIO slave): latched crash state + optional
+        # armed auto-stop of all motors. A crash also cuts bus power (see
+        # collision_callback), so recovery requires the user to reset the
+        # alarm (restores power) AND run a safe frame-homing before the stage
+        # position can be trusted again — tracked by _collisionRequiresHoming.
+        self._collisionArmed = False
+        self._collisionLatched = False
+        self._collisionRequiresHoming = False
+        self._lastCollisionEvent = None
+        self.registerCollisionCallback()
+
+        # PTZ keyboard bridge (CAN node 61): map discrete key events (presets,
+        # AUX, iris) to microscope functions. The action table (name->callable)
+        # is fixed; the mapping (eventKey->action+params) is user-configurable
+        # at runtime via the setPtz* API so bindings stay flexible.
+        self._ptzActions = self._buildPtzActions()
+        self._ptzMapping = self._defaultPtzMapping()
+        self._lastPtzEvent = None
+        self.registerPtzCallback()
+
         # register the callbacks for emitting serial-related signals
         if hasattr(self._master.UC2ConfigManager, "ESP32"):
             try:
@@ -101,19 +131,19 @@ class UC2ConfigController(ImConWidgetController):
         :return: Dictionary mapping CAN IDs to firmware filenames
         """
         return {
-            1: "esp32_UC2_3_CAN_HAT_Master_v2.bin",  # Master firmware (USB connected, use esptool)
-            10: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor A
-            11: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor X
-            12: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor Y
-            13: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor Z
-            14: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Additional motor
-            15: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Additional motor
-            20: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # Laser 0
-            21: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # Laser 1
-            22: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # Laser 2
-            30: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # LED 0
-            31: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # LED 1
-            40: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",  # Galvo mirror
+            1: "esp32_UC2_canopen_master_release.bin",  # Master firmware (HAT v2, USB connected, use esptool)
+            10: "esp32_UC2_canopen_slave_motor_release_motA.bin",  # Motor A
+            11: "esp32_UC2_canopen_slave_motor_release_motX.bin",  # Motor X
+            12: "esp32_UC2_canopen_slave_motor_release_motY.bin",  # Motor Y
+            13: "esp32_UC2_canopen_slave_motor_release_motZ.bin",  # Motor Z
+            14: "esp32_UC2_canopen_slave_motor_release.bin",  # Additional motor
+            15: "esp32_UC2_canopen_slave_motor_release.bin",  # Additional motor
+            20: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 0
+            21: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 1
+            22: "esp32_UC2_canopen_slave_laser_release.bin",  # Laser 2
+            30: "esp32_UC2_canopen_slave_led_release.bin",  # LED 0
+            31: "esp32_UC2_canopen_slave_led_release.bin",  # LED 1
+            40: "esp32_UC2_canopen_slave_galvo_release.bin",  # Galvo mirror
         }
 
     def processSerialWriteMessage(self, message):
@@ -303,24 +333,720 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Could not register camera trigger callback: {e}")
 
+    def registerEmergencyCallback(self):
+        """
+        Register a callback for emergency-stop (E-stop) events.
+
+        The CANopen master firmware pushes an unsolicited block when the
+        hardware E-stop is pressed/released:
+            {"emergency":{"active":1,"reason":"estop","msg":"..."}}
+        We forward it to the frontend via sigBusStatusUpdate so the UI can
+        warn the user and reflect that the CAN-bus is no longer available.
+        """
+        def emergency_callback(em):
+            try:
+                emergency_active = bool(em.get("active", 0))
+                status = {
+                    "emergencyActive": emergency_active,
+                    # The high-current bus is unavailable while the E-stop is asserted.
+                    "available": not emergency_active,
+                    "reason": em.get("reason"),
+                    "msg": em.get("msg"),
+                    "timestamp": datetime.datetime.now().isoformat(),
+                }
+                self.sigBusStatusUpdate.emit(status)
+            except Exception as e:
+                self.__logger.error(f"Error in emergency_callback: {e}")
+
+        try:
+            registered = self._master.UC2ConfigManager.registerEmergencyCallback(emergency_callback)
+            if registered:
+                self.__logger.debug("Emergency-stop callback registered successfully")
+            else:
+                self.__logger.debug("Emergency-stop callback not registered (state module unavailable)")
+        except Exception as e:
+            self.__logger.error(f"Could not register emergency callback: {e}")
+
+    def registerCollisionCallback(self):
+        """
+        Register a callback for collision-detector events from the GPIO slave.
+
+        The CANopen master pushes an unsolicited frame on every collision
+        trip/clear edge:
+            {"gpio":{"event":1,"node":60,"trip":1,"estop":0,
+                     "filtered":2365,"raw":2937,...}}
+        On trip we latch the crash state (cleared only by resetCollisionAlarm)
+        and — if armed via armCollisionProtection — immediately stop ALL
+        motors. The event is always forwarded to the frontend via
+        sigCollisionStatusUpdate.
+        """
+        def collision_callback(event):
+            try:
+                tripped = bool(event.get("trip", 0))
+                self._lastCollisionEvent = event
+                stopped = False
+                if tripped:
+                    # Latch: stays set until the user confirms the situation
+                    # is cleared via resetCollisionAlarm(). A crash always
+                    # invalidates the stage position → require safe homing.
+                    self._collisionLatched = True
+                    self._collisionRequiresHoming = True
+                    if self._collisionArmed:
+                        # Cut bus power AND stop motors immediately.
+                        self.setBusPower(enable=False)
+                        stopped = self._stopAllMotors()
+                        self.__logger.warning(
+                            f"COLLISION detected (filtered={event.get('filtered')}) — "
+                            f"bus power cut, motors stopped: {stopped}")
+                    else:
+                        self.__logger.warning(
+                            f"COLLISION detected (filtered={event.get('filtered')}) — "
+                            "auto-stop not armed")
+                self.sigCollisionStatusUpdate.emit(self._collisionStateDict(
+                    event=event, motorsStopped=stopped))
+            except Exception as e:
+                self.__logger.error(f"Error in collision_callback: {e}")
+
+        try:
+            registered = self._master.UC2ConfigManager.registerCollisionCallback(collision_callback)
+            if registered:
+                self.__logger.debug("Collision callback registered successfully")
+            else:
+                self.__logger.debug("Collision callback not registered (gpio module unavailable)")
+        except Exception as e:
+            self.__logger.error(f"Could not register collision callback: {e}")
+
+    def _stopAllMotors(self):
+        """Immediately stop every positioner. Returns True if at least one
+        stop command went out."""
+        anyStopped = False
+        try:
+            for name in self._master.positionersManager.getAllDeviceNames():
+                try:
+                    p = self._master.positionersManager[name]
+                    if hasattr(p, "stopAll"):
+                        p.stopAll()
+                    elif hasattr(p, "forceStop"):
+                        for ax in getattr(p, "axes", []):
+                            p.forceStop(ax)
+                    else:
+                        continue
+                    anyStopped = True
+                except Exception as e:
+                    self.__logger.error(f"Could not stop positioner {name}: {e}")
+        except Exception as e:
+            self.__logger.error(f"_stopAllMotors failed: {e}")
+        return anyStopped
+
+    def _collisionStateDict(self, event=None, motorsStopped=False):
+        return {
+            "trip": bool((event or self._lastCollisionEvent or {}).get("trip", 0)),
+            "latched": self._collisionLatched,
+            "armed": self._collisionArmed,
+            "requiresHoming": self._collisionRequiresHoming,
+            "motorsStopped": motorsStopped,
+            "event": event or self._lastCollisionEvent,
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PTZ keyboard bridge (CAN node 61) → microscope-function mapping
+    #
+    # The keyboard bridge forwards discrete keys to the master, which pushes
+    #   {"ptz":{"event":1,"name":"preset_call","arg":1,...}}
+    # over serial. We turn each key into an "event key" string and look it up
+    # in a user-configurable mapping to run a named action (snap, objective,
+    # laser, led, …). This mirrors the snap callback (registerCaptureCallback)
+    # but is table-driven so bindings can be changed at runtime via the API.
+    # ══════════════════════════════════════════════════════════════════════
+    @staticmethod
+    def _ptzEventKey(name, arg):
+        """Canonical binding key for a PTZ event. Keys with a meaningful arg
+        (presets 1..255, AUX 1..6) are addressed as "name:arg"; arg-less keys
+        (iris_open, autoscan, …) as plain "name". Dispatch tries "name:arg"
+        first, then falls back to "name" so a binding can be arg-agnostic."""
+        try:
+            arg = int(arg)
+        except (TypeError, ValueError):
+            arg = 0
+        return f"{name}:{arg}" if arg else str(name)
+
+    def _buildPtzActions(self):
+        """Return the registry of named actions {name: (fn, help)}.
+
+        Each fn takes a params dict (from the binding) plus the raw event, and
+        performs one microscope operation. Add new actions here; the mapping
+        API only references them by name so the frontend can offer a dropdown.
+        """
+        return {
+            "none":      (self._ptzActionNone,      "Do nothing (unbind a key)."),
+            "snap":      (self._ptzActionSnap,      "Snap an image and save it (like the ESP32 snap callback)."),
+            "objective": (self._ptzActionObjective, "Switch objective. params: {'slot': 0|1}."),
+            "laser":     (self._ptzActionLaser,     "Set a laser/LED device. params: {'name': <deviceName>, 'value': 0..1023, 'active': bool}."),
+            "led":       (self._ptzActionLaser,     "Alias of 'laser' for LED-array devices in lasersManager."),
+        }
+
+    def _defaultPtzMapping(self):
+        """Sensible starting bindings. Objective + snap are unambiguous; the
+        laser/LED example is left with a placeholder device name the user
+        edits via setPtzAction (device names are setup-specific)."""
+        return {
+            "preset_set": {"action": "objective", "params": {"slot": 0}},
+            "preset_call": {"action": "objective", "params": {"slot": 1}},
+            "iris_open":     {"action": "snap",      "params": {}},
+            # Example LED binding — set the real device name for your setup:
+            #   setPtzAction("aux_on:4",  "led", {"name":"LED", "value":512, "active":True})
+            #   setPtzAction("aux_off:4", "led", {"name":"LED", "value":0,   "active":False})
+        }
+
+    # ── individual actions ────────────────────────────────────────────────
+    def _ptzActionNone(self, params, event):
+        return {"ok": True, "action": "none"}
+
+    def _ptzActionSnap(self, params, event):
+        """Snap + save from the first detector, and push it to the viewer.
+        Same operation as the ESP32-triggered snapImage callback."""
+        try:
+            detector_names = self._master.detectorsManager.getAllDeviceNames()
+            detector = self._master.detectorsManager[detector_names[0]]
+            mImage = detector.getLatestFrame()
+            drivePath = dirtools.UserFileDirs.getValidatedDataPath()
+            timeStamp = datetime.datetime.now().strftime("%Y_%m_%d")
+            dirPath = os.path.join(drivePath, 'recordings', timeStamp)
+            fileName = "PTZSnap_" + datetime.datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
+            os.makedirs(dirPath, exist_ok=True)
+            filePath = os.path.join(dirPath, fileName)
+            if mImage is not None:
+                tif.imwrite(filePath + ".tif", mImage[0] if mImage.ndim == 3 else mImage)
+                self._commChannel.sigUpdateImage.emit('Image', mImage, True, 1, False)
+            return {"ok": True, "action": "snap", "path": filePath + ".tif"}
+        except Exception as e:
+            self.__logger.error(f"PTZ snap action failed: {e}")
+            return {"ok": False, "action": "snap", "error": str(e)}
+
+    def _ptzActionObjective(self, params, event):
+        """Switch objective slot via the ObjectiveController (commChannel)."""
+        try:
+            slot = int(params.get("slot", 0))
+            self._commChannel.sigSetObjectiveByID.emit(str(slot))
+            return {"ok": True, "action": "objective", "slot": slot}
+        except Exception as e:
+            self.__logger.error(f"PTZ objective action failed: {e}")
+            return {"ok": False, "action": "objective", "error": str(e)}
+
+    def _ptzActionLaser(self, params, event):
+        """Enable/disable + set a laser or LED device in lasersManager.
+        params: {'name': deviceName, 'value': 0..1023, 'active': bool}."""
+        try:
+            name = params.get("name")
+            if not name:
+                return {"ok": False, "action": "laser", "error": "no device name in params"}
+            names = self._master.lasersManager.getAllDeviceNames()
+            if name not in names:
+                return {"ok": False, "action": "laser",
+                        "error": f"device '{name}' not found in {names}"}
+            device = self._master.lasersManager[name]
+            active = bool(params.get("active", True))
+            device.setEnabled(active)
+            if "value" in params and active:
+                device.setValue(int(params["value"]))
+            return {"ok": True, "action": "laser", "name": name, "active": active,
+                    "value": params.get("value")}
+        except Exception as e:
+            self.__logger.error(f"PTZ laser action failed: {e}")
+            return {"ok": False, "action": "laser", "error": str(e)}
+
+    # ── dispatch + registration ───────────────────────────────────────────
+    def _dispatchPtzEvent(self, event):
+        """Look the event up in the mapping and run the bound action. Emits
+        sigPtzEvent with {event, binding, result} either way so a UI can show
+        activity and unmapped keys (helpful when building a binding table)."""
+        name = event.get("name", "")
+        arg = event.get("arg", 0)
+        exactKey = self._ptzEventKey(name, arg)
+        binding = self._ptzMapping.get(exactKey) or self._ptzMapping.get(str(name))
+        result = None
+        if binding:
+            actionName = binding.get("action", "none")
+            entry = self._ptzActions.get(actionName)
+            if entry is None:
+                result = {"ok": False, "error": f"unknown action '{actionName}'"}
+            else:
+                fn = entry[0]
+                result = fn(binding.get("params", {}) or {}, event)
+            self.__logger.info(f"PTZ key {exactKey} -> {actionName}: {result}")
+        else:
+            self.__logger.debug(f"PTZ key {exactKey} unmapped")
+        self.sigPtzEvent.emit({
+            "event": event,
+            "eventKey": exactKey,
+            "binding": binding,
+            "result": result,
+            "timestamp": datetime.datetime.now().isoformat(),
+        })
+
+    def registerPtzCallback(self):
+        """Register the PTZ key dispatcher with the manager (ESP32.ptz)."""
+        def ptz_callback(event):
+            try:
+                self._lastPtzEvent = event
+                self._dispatchPtzEvent(event)
+            except Exception as e:
+                self.__logger.error(f"Error in ptz_callback: {e}")
+        try:
+            registered = self._master.UC2ConfigManager.registerPtzCallback(ptz_callback)
+            if registered:
+                self.__logger.debug("PTZ callback registered successfully")
+            else:
+                self.__logger.debug("PTZ callback not registered (ptz module unavailable)")
+        except Exception as e:
+            self.__logger.error(f"Could not register PTZ callback: {e}")
+
+    ''' PTZ keyboard bridge (CAN node 61) '''
 
     @APIExport(runOnUIThread=False)
-    def scan_canbus(self, timeout:int=5) -> dict:
+    def getPtzMapping(self):
+        """Return the current PTZ eventKey -> {action, params} bindings."""
+        return dict(self._ptzMapping)
+
+    @APIExport(runOnUIThread=False)
+    def listPtzActions(self):
+        """Available action names and their help text (for a binding UI)."""
+        return {name: help for name, (fn, help) in self._ptzActions.items()}
+
+    @APIExport(runOnUIThread=False)
+    def setPtzAction(self, eventKey: str, action: str, params: dict = None):
+        """Bind one key. eventKey e.g. "preset_call:1", "aux_on:4", "iris_open".
+        action must be one of listPtzActions(). params is action-specific,
+        e.g. {"slot":1} for objective, {"name":"LED","value":512} for led."""
+        if action not in self._ptzActions:
+            return {"status": "error",
+                    "message": f"unknown action '{action}'; choose from {list(self._ptzActions)}"}
+        self._ptzMapping[str(eventKey)] = {"action": action, "params": dict(params or {})}
+        return {"status": "ok", "mapping": self._ptzMapping[str(eventKey)]}
+
+    @APIExport(runOnUIThread=False)
+    def setPtzMapping(self, mapping: dict):
+        """Replace the whole binding table. Values are {"action","params"};
+        unknown actions are rejected."""
+        clean = {}
+        for k, v in (mapping or {}).items():
+            action = (v or {}).get("action", "none")
+            if action not in self._ptzActions:
+                return {"status": "error", "message": f"unknown action '{action}' for key '{k}'"}
+            clean[str(k)] = {"action": action, "params": dict((v or {}).get("params", {}) or {})}
+        self._ptzMapping = clean
+        return {"status": "ok", "mapping": self._ptzMapping}
+
+    @APIExport(runOnUIThread=False)
+    def clearPtzAction(self, eventKey: str):
+        """Remove one binding."""
+        self._ptzMapping.pop(str(eventKey), None)
+        return {"status": "ok", "mapping": self._ptzMapping}
+
+    @APIExport(runOnUIThread=False)
+    def triggerPtzEvent(self, name: str, arg: int = 0):
+        """Simulate a keyboard key (runs the bound action) — test the mapping
+        without the hardware. e.g. triggerPtzEvent("preset_call", 1)."""
+        event = {"event": 1, "name": name, "arg": int(arg), "simulated": True}
+        self._lastPtzEvent = event
+        self._dispatchPtzEvent(event)
+        return {"status": "ok", "event": event}
+
+    @APIExport(runOnUIThread=False)
+    def getPtzStatus(self):
+        """PTZ bridge diagnostics (parser stats + last frame + motion) plus the
+        last key event and the current binding table."""
+        try:
+            status = self._master.UC2ConfigManager.getPtzStatus() or {}
+        except Exception as e:
+            self.__logger.error(f"getPtzStatus failed: {e}")
+            status = {"status": "error", "message": str(e)}
+        status["lastEvent"] = self._lastPtzEvent
+        status["mapping"] = self._ptzMapping
+        return status
+
+    @APIExport(runOnUIThread=False)
+    def setPtzDebug(self, level: int):
+        """Bridge serial debug verbosity: 0 quiet, 1 decoded frames, 2 + raw
+        RS-485 hex (wiring / baud bring-up)."""
+        try:
+            return self._master.UC2ConfigManager.setPtzDebug(int(level))
+        except Exception as e:
+            self.__logger.error(f"setPtzDebug failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    ''' Collision detector (GPIO slave) '''
+
+    @APIExport(runOnUIThread=False)
+    def getGpioStatus(self):
+        """
+        Poll the collision detector on the GPIO slave (SDO reads over CAN).
+
+        :return: {"mode" (0=auto/1=manual), "mean"/"baseline", "sigma",
+                  "deviation", "filtered", "raw", "reference", "threshold",
+                  "sensitivity", "trip", "estop"} plus the software crash
+                  state {"latched", "armed", "requiresHoming"}.
+        """
+        try:
+            status = self._master.UC2ConfigManager.getGpioStatus() or {}
+            status["latched"] = self._collisionLatched
+            status["armed"] = self._collisionArmed
+            status["requiresHoming"] = self._collisionRequiresHoming
+            return status
+        except Exception as e:
+            self.__logger.error(f"getGpioStatus failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getCollisionState(self):
+        """Software crash state without touching the CAN bus:
+        {"trip", "latched", "armed", "event", "timestamp"}."""
+        return self._collisionStateDict()
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionThreshold(self, threshold: int):
+        """Deviation band (ADC counts) around the reference; persisted on the
+        slave in NVS."""
+        try:
+            return self._master.UC2ConfigManager.setCollisionThreshold(int(threshold))
+        except Exception as e:
+            self.__logger.error(f"setCollisionThreshold failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionSensitivity(self, sensitivity: int):
+        """Consecutive out-of-band samples (50 Hz) required to trip/clear —
+        rejects single-sample spikes. Persisted on the slave in NVS."""
+        try:
+            return self._master.UC2ConfigManager.setCollisionSensitivity(int(sensitivity))
+        except Exception as e:
+            self.__logger.error(f"setCollisionSensitivity failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionReference(self, reference: int):
+        """Explicitly set the idle baseline (ADC counts) — typically the
+        polled "mean" value. Persisted on the slave in NVS."""
+        try:
+            return self._master.UC2ConfigManager.setCollisionReference(int(reference))
+        except Exception as e:
+            self.__logger.error(f"setCollisionReference failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def calibrateCollisionReference(self):
+        """Tell the slave to take its CURRENT rolling mean as the new
+        reference. MANUAL mode only. Call while idle and collision-free."""
+        try:
+            return self._master.UC2ConfigManager.calibrateCollisionReference()
+        except Exception as e:
+            self.__logger.error(f"calibrateCollisionReference failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setCollisionMode(self, mode: str = "auto"):
+        """
+        Select the collision-detection algorithm on the slave (persisted NVS):
+          "auto"   — adaptive baseline + robust-sigma z-score. Parameter-free:
+                     tracks a slowly drifting background and trips on a fast
+                     deflection. Recommended; no calibration needed.
+          "manual" — fixed reference +/- threshold. Deterministic; requires the
+                     reference to be calibrated to the idle level.
+        """
+        try:
+            return self._master.UC2ConfigManager.setCollisionMode(mode)
+        except Exception as e:
+            self.__logger.error(f"setCollisionMode failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def armCollisionProtection(self, arm: bool = True):
+        """
+        Arm/disarm automatic motor stop on collision. While armed, a pushed
+        collision event immediately stops ALL positioners; the crash state
+        latches until resetCollisionAlarm() is called.
+        """
+        self._collisionArmed = bool(arm)
+        self.__logger.info(f"Collision auto-stop {'ARMED' if self._collisionArmed else 'disarmed'}")
+        state = self._collisionStateDict()
+        self.sigCollisionStatusUpdate.emit(state)
+        return state
+
+    @APIExport(runOnUIThread=False)
+    def resetCollisionAlarm(self, restorePower: bool = True):
+        """
+        Clear the latched crash state after the user has verified the
+        situation is resolved. By default this also restores CAN-bus power
+        (which a collision cuts) so the stage can move again — but it does
+        NOT move any motor. The `requiresHoming` flag stays set: the position
+        reference is lost after a crash, so a safe frame-homing must be run
+        (and confirmed via confirmSafeHoming) before normal operation.
+        """
+        self._collisionLatched = False
+        if restorePower:
+            try:
+                self.setBusPower(enable=True)
+            except Exception as e:
+                self.__logger.error(f"Could not restore bus power on reset: {e}")
+        self.__logger.info(
+            "Collision alarm reset by user (bus power restored=%s); safe homing still required"
+            % bool(restorePower))
+        state = self._collisionStateDict()
+        self.sigCollisionStatusUpdate.emit(state)
+        return state
+
+    @APIExport(runOnUIThread=False)
+    def confirmSafeHoming(self):
+        """
+        Clear the `requiresHoming` flag after a safe frame-homing has been
+        completed following a crash. Call this once the stage has been
+        re-homed and its position is trustworthy again.
+        """
+        self._collisionRequiresHoming = False
+        self.__logger.info("Collision post-crash homing confirmed by user")
+        state = self._collisionStateDict()
+        self.sigCollisionStatusUpdate.emit(state)
+        return state
+
+    ''' CAN-bus power & emergency-stop (safety) '''
+
+    @APIExport(runOnUIThread=False)
+    def setBusPower(self, enable: bool = True):
+        """
+        Enable/disable the high-current CAN-bus power that feeds the slaves.
+
+        :param enable: True to power the bus, False to cut power.
+        :return: Status dict with the requested power state.
+        """
+        try:
+            self._master.UC2ConfigManager.setBusPower(enable)
+            return {"status": "success", "power": int(bool(enable))}
+        except Exception as e:
+            self.__logger.error(f"setBusPower failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getBusStatus(self):
+        """
+        Query CAN-bus power and emergency-stop status.
+
+        :return: {
+            "power": 1|0|None,           # high-current bus power state
+            "emergencyActive": bool,     # E-stop currently asserted
+            "available": bool,           # bus usable (powered and not in E-stop)
+            "estop": {...}               # raw E-stop diagnostics (best-effort)
+        }
+        """
+        try:
+            power = self._master.UC2ConfigManager.getBusPower()
+            emergency_active = self._master.UC2ConfigManager.isEmergencyActive()
+            estop = self._master.UC2ConfigManager.getEstop()
+            return {
+                "power": power,
+                "emergencyActive": bool(emergency_active),
+                "available": (power == 1) and not emergency_active,
+                "estop": estop,
+            }
+        except Exception as e:
+            self.__logger.error(f"getBusStatus failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getFirmwareInfo(self):
+        """
+        Identity of the USB-connected ESP32 master firmware.
+
+        :return: {name, version, date, author, pindef, isMaster, connected,
+                  serialport}. The build date and pindef are the most useful
+                  fields for telling boards/firmwares apart.
+        """
+        try:
+            return self._master.UC2ConfigManager.getFirmwareInfo()
+        except Exception as e:
+            self.__logger.error(f"getFirmwareInfo failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getMicroscopeStandName(self):
+        """Human-readable microscope stand model (default 'openUC2 FRAME')."""
+        try:
+            if getattr(self, "_setupInfo", None) is not None:
+                return {"name": self._setupInfo.getMicroscopeStandName()}
+        except Exception as e:
+            self.__logger.error(f"getMicroscopeStandName failed: {e}")
+        return {"name": "openUC2 FRAME"}
+
+    ''' PS-controller joystick direction '''
+
+    @APIExport(runOnUIThread=False, requestType="GET")
+    def setJoystickDirection(self, axis: str = "X", inverted: bool = False):
+        """
+        Invert (or un-invert) the PS-controller joystick for one motor axis.
+        Updates the in-memory cache in the stage manager and persists the new
+        value to the JSON setup file so the setting survives a restart.
+
+        :param axis: Axis name ("A", "X", "Y", "Z").
+        :param inverted: True to reverse joystick movement for that axis.
+        """
+        try:
+            # Update device + stage-manager cache (single source of truth).
+            if self.stages is not None and hasattr(self.stages, "setJoystickDirectionSettings"):
+                result = self.stages.setJoystickDirectionSettings(axis=axis, inverted=inverted)
+                if not result.get("success"):
+                    return {"status": "error", "message": result.get("error", "unknown")}
+            else:
+                # Fallback: direct device call when stages are unavailable.
+                self._master.UC2ConfigManager.setJoystickDirection(axis=axis, inverted=inverted)
+            # Persist the updated settings to the JSON config.
+            self._saveJoystickSettings()
+            return {"status": "success", "axis": str(axis).upper(), "inverted": bool(inverted)}
+        except Exception as e:
+            self.__logger.error(f"setJoystickDirection failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getJoystickDirection(self):
+        """
+        Read the joystick inversion per axis.
+
+        Reads from the in-memory stage-manager cache (no device round-trip).
+        This endpoint is intended for frontend initialisation: call it once on
+        page load to reflect the persisted config state without querying the
+        device. Falls back to a live device query if the cache is unavailable.
+
+        :return: {"status": "ok", "axes": {"A": bool, "X": bool, "Y": bool, "Z": bool}}
+        """
+        try:
+            # Prefer the in-memory cache (populated from config on startup).
+            if self.stages is not None and hasattr(self.stages, "getJoystickDirectionSettings"):
+                axes = self.stages.getJoystickDirectionSettings()
+                return {"status": "ok", "axes": axes}
+            # Fallback: live device query.
+            idx_to_name = {0: "A", 1: "X", 2: "Y", 3: "Z"}
+            raw = self._master.UC2ConfigManager.getJoystickDirection(axis=None)
+            axes = {}
+            if isinstance(raw, list):
+                for entry in raw:
+                    name = idx_to_name.get(entry.get("axis"))
+                    if name:
+                        axes[name] = bool(entry.get("inverted", False))
+            return {"status": "ok", "axes": axes}
+        except Exception as e:
+            self.__logger.error(f"getJoystickDirection failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    def _saveJoystickSettings(self):
+        """Persist the current joystick inversion cache to the JSON setup file.
+
+        Follows the same pattern as ``saveMotorSettings`` — reads the current
+        in-memory cache from the stage manager and writes the per-axis
+        ``joystickInverted<AXIS>`` keys into ``managerProperties``.
+        """
+        try:
+            if self.stages is None or not hasattr(self.stages, "getJoystickDirectionSettings"):
+                self.__logger.warning("Cannot save joystick settings: stages not available")
+                return
+            if not hasattr(self, "_setupInfo") or self._setupInfo is None:
+                self.__logger.warning("Cannot save joystick settings: _setupInfo not available")
+                return
+
+            positionerName = self.stages._name
+            joystick = self.stages.getJoystickDirectionSettings()
+            props_update = {f'joystickInverted{ax}': bool(v) for ax, v in joystick.items()}
+
+            if hasattr(self._setupInfo, "positioners") and positionerName in self._setupInfo.positioners:
+                for key, value in props_update.items():
+                    self._setupInfo.positioners[positionerName].managerProperties[key] = value
+
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                mOptions, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(mOptions, self._setupInfo)
+                self.__logger.info(f"Joystick settings saved for positioner '{positionerName}'")
+            else:
+                self.__logger.warning(
+                    f"Positioner '{positionerName}' not found in setupInfo.positioners"
+                )
+        except Exception as e:
+            self.__logger.error(f"Could not save joystick settings: {e}")
+
+    ''' Fan & board temperature '''
+
+    @APIExport(runOnUIThread=False)
+    def getFanState(self):
+        """
+        Read the current fan state from the firmware.
+
+        :return: {mode, wiper, manual, rpm, stalled, kick, tempC, curve}
+        """
+        try:
+            return self._master.UC2ConfigManager.getFan()
+        except Exception as e:
+            self.__logger.error(f"getFanState failed: {e}")
+            return {}
+
+    @APIExport(runOnUIThread=False)
+    def setFanMode(self, mode: str = "auto", wiper: int = None):
+        """
+        Set the fan operating mode.
+
+        :param mode: 'auto' (curve-driven), 'manual' (fixed wiper) or 'off'.
+        :param wiper: 0-127 PWM wiper, required/used for 'manual' mode.
+        :return: Status dict.
+        """
+        try:
+            w = int(wiper) if wiper is not None else None
+        except (TypeError, ValueError):
+            w = None
+        try:
+            self._master.UC2ConfigManager.setFanMode(mode=mode, wiper=w)
+            return {"status": "success", "mode": mode, "wiper": w}
+        except Exception as e:
+            self.__logger.error(f"setFanMode failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getBoardTemperature(self):
+        """
+        Read board/air temperatures from the firmware.
+
+        :return: {pcb, air, esp, pcb_ok, air_ok}
+        """
+        try:
+            return self._master.UC2ConfigManager.getTemperature()
+        except Exception as e:
+            self.__logger.error(f"getBoardTemperature failed: {e}")
+            return {}
+
+    @APIExport(runOnUIThread=False)
+    def scan_canbus(self, timeout:int=5, probe_range:bool=False) -> dict:
         """
         Scan the CAN bus for connected devices.
 
+        Reachable nodes report their firmware ``build`` timestamp, ``fwVersion``
+        and ``mac`` (SDO-probed by the master); the master's own identity is in
+        the ``master`` key.
+
         :param timeout: Timeout for the scan in seconds (default: 5)
-        :return: List of detected CAN IDs
-        
+        :param probe_range: if True, also probe node-ids 1..127 to discover
+            freshly flashed / unrouted boards (reported with
+            deviceTypeStr "unrouted"). Use before reassigning a node by MAC.
+        :return: dict with scan results
+
         returns:
         {
+            "master": {"canId": 1, "build": "Jun 23 2026 06:18:16",
+                       "fwVersion": "UC2-ESP v2.0", "mac": "6C:C8:40:45:C1:B0"},
             "scan": [
                 {
                 "canId": 20,
                 "deviceType": 1,
                 "status": 0,
                 "deviceTypeStr": "laser",
-                "statusStr": "idle"
+                "statusStr": "idle",
+                "build": "Jun 23 2026 08:06:05",
+                "fwVersion": "UC2-ESP v2.0",
+                "mac": "D8:3B:DA:A4:4D:C8"
                 }
             ],
             "detected_ids": [20],
@@ -331,11 +1057,18 @@ class UC2ConfigController(ImConWidgetController):
         try:
             if not hasattr(self._master.UC2ConfigManager, "ESP32") or not hasattr(self._master.UC2ConfigManager.ESP32, "can"):
                 self.__logger.error("CAN bus module not available in UC2 client")
-                return []
-
-            self.__logger.debug("Starting CAN bus scan...")
-            return_message = self._master.UC2ConfigManager.ESP32.can.scan(timeout=timeout)
-            scan_results = return_message[-1]
+                return {}
+            self.__logger.debug(f"Starting CAN bus scan (probe_range={probe_range})...")
+            can = self._master.UC2ConfigManager.ESP32.can
+            try:
+                return_message = can.scan(timeout=timeout, probe_range=probe_range)
+            except TypeError as e:
+                # Older uc2rest without probe_range support
+                self.__logger.error(e)
+                return_message = can.scan(timeout=timeout)
+            scan_results = return_message[-1] if isinstance(return_message, (list, tuple)) else return_message
+            if not isinstance(scan_results, dict):
+                scan_results = {}
             detected_ids = [device["canId"] for device in scan_results.get("scan", [])]
             scan_results["detected_ids"] = detected_ids
             self.__logger.info(f"Detected CAN devices: {detected_ids}")
@@ -344,6 +1077,58 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Error scanning CAN bus: {e}")
             return {}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def reassignCANId(self, new_id:int, mac:str=None, target:int=None,
+                      expect_mac:str=None, timeout:int=5) -> dict:
+        """
+        Reassign a CAN node's id over the bus (no reflash / USB needed).
+
+        Identify the node EITHER by its MAC (``mac`` — recommended: the master
+        finds whichever id currently advertises that MAC, so you don't need to
+        know the current id) OR by its current id (``target``, optionally
+        guarded by ``expect_mac``). ``new_id`` is always the desired new id.
+
+        The device persists the new id to NVS and resets its CANopen comms, so
+        it reappears at ``new_id`` after ~0.3 s. Re-scan afterwards to confirm.
+
+        :param new_id: desired CAN id (1..127)
+        :param mac: target MAC "AA:BB:CC:DD:EE:FF" (preferred)
+        :param target: current CAN id of the node (alternative to ``mac``)
+        :param expect_mac: when using ``target``, verify the MAC before committing
+        :param timeout: command timeout in seconds
+        :return: firmware response, e.g. {"status":"ok","target":60,"newId":70,"mac":"..."}
+                 or {"status":"error","error":"MAC not found on bus","mac":"..."}
+        """
+        try:
+            if not hasattr(self._master.UC2ConfigManager, "ESP32") or not hasattr(self._master.UC2ConfigManager.ESP32, "can"):
+                return {"status": "error", "message": "CAN bus module not available"}
+            esp32 = self._master.UC2ConfigManager.ESP32
+
+            # Build the firmware command and post it directly, so this works
+            # regardless of the installed uc2rest version (only the firmware
+            # needs to understand "byMac").
+            payload = {"task": "/can_act", "setRemoteNodeId": int(new_id)}
+            if mac:
+                self.__logger.info(f"Reassigning node with MAC {mac} -> CAN id {new_id}")
+                payload["byMac"] = str(mac)
+            elif target is not None:
+                self.__logger.info(f"Reassigning node {target} -> CAN id {new_id}")
+                payload["target"] = int(target)
+                if expect_mac:
+                    payload["expectMac"] = str(expect_mac)
+            else:
+                return {"status": "error", "message": "provide either 'mac' or 'target'"}
+
+            resp = esp32.post_json("/can_act", payload, getReturn=True,
+                                   timeout=timeout, nResponses=1)
+            result = resp[-1] if isinstance(resp, (list, tuple)) and resp else resp
+            self.__logger.info(f"reassignCANId result: {result}")
+            return result if isinstance(result, dict) else {"status": "success", "response": result}
+
+        except Exception as e:
+            self.__logger.error(f"reassignCANId failed: {e}")
+            return {"status": "error", "message": str(e)}
 
     @APIExport(runOnUIThread=False)
     def get_canbus_devices(self, timeout:int=2):
@@ -591,8 +1376,12 @@ class UC2ConfigController(ImConWidgetController):
         # Add your logic to unset auto-enable for the motors here.
         self.stages.enalbeMotors(enable=True, enableauto=False)
 
-    def reconnectThread(self, baudrate=None):
-        self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
+    def reconnectThread(self, baudrate=None, port=None):
+        try:
+            self._master.UC2ConfigManager.initSerial(port=port, baudrate=baudrate)
+        except TypeError:
+            # Older managers may not accept the port kwarg
+            self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
         self.__logger.debug("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
         self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
 
@@ -629,19 +1418,88 @@ class UC2ConfigController(ImConWidgetController):
         return {"message": f"Data path set to {path}"}
 
     @APIExport(runOnUIThread=True)
-    def reconnect(self):
-        self._logger.debug('Reconnecting to ESP32 device.')
-        baudrate = None
-        mThread = threading.Thread(target=self.reconnectThread, args=(baudrate,))
+    def reconnect(self, port: str = None, baudrate: int = None):
+        """Reconnect to the ESP32 over serial.
+
+        Optionally override the port and/or baudrate. When both are omitted
+        the values from the setup JSON / current runtime are used.
+        """
+        self._logger.debug(
+            f'Reconnecting to ESP32 device (port={port}, baudrate={baudrate}).'
+        )
+        try:
+            baudrate_int = int(baudrate) if baudrate is not None else None
+        except (TypeError, ValueError):
+            baudrate_int = None
+        port_str = port if port else None
+        mThread = threading.Thread(
+            target=self.reconnectThread,
+            kwargs={"baudrate": baudrate_int, "port": port_str},
+        )
         mThread.start()
+        return {
+            "status": "started",
+            "port": port_str,
+            "baudrate": baudrate_int,
+        }
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setSerialConfig(self, port: str = None, baudrate: int = None, persist: bool = True):
+        """Apply (and optionally persist) the serial port / baudrate used to
+        talk to the ESP32.
+
+        - Calls UC2ConfigManager.setSerialConfig to reconnect.
+        - When ``persist`` is True, writes the values into the setup JSON via
+          configfiletools.saveSetupInfo so the change survives a restart.
+        """
+        try:
+            baudrate_int = int(baudrate) if baudrate is not None else None
+        except (TypeError, ValueError):
+            return {"status": "error", "message": f"Invalid baudrate: {baudrate!r}"}
+        port_str = port if port else None
+
+        try:
+            result = self._master.UC2ConfigManager.setSerialConfig(
+                port=port_str, baudrate=baudrate_int, persist=bool(persist)
+            )
+        except AttributeError:
+            return {
+                "status": "error",
+                "message": "UC2ConfigManager does not support setSerialConfig (old build).",
+            }
+        except Exception as e:
+            self.__logger.error(f"setSerialConfig failed: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
+
+        self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
+        return {
+            "status": "success" if result.get("connected") else "warning",
+            "connected": bool(result.get("connected")),
+            "port": result.get("port"),
+            "baudrate": result.get("baudrate"),
+            "persisted": bool(persist),
+        }
 
     @APIExport(runOnUIThread=True)
     def writeSerial(self, payload):
         return self._master.UC2ConfigManager.ESP32.serial.writeSerial(payload)
 
     @APIExport(runOnUIThread=True)
-    def uc2_board_is_connected(self):
-        return self._master.UC2ConfigManager.isConnected()
+    def uc2_board_is_connected(self, strict: bool = False):
+        """Check whether the ESP32 board is reachable.
+
+        - ``strict=False`` (default): cheap flag-only check used by the
+          polling loop in the frontend.
+        - ``strict=True``: actively pings the firmware (writes /state_get)
+          and reports True only if the device responds within ~0.5s.
+        """
+        if not strict:
+            return self._master.UC2ConfigManager.isConnected()
+        try:
+            return bool(self._master.UC2ConfigManager.ping(timeout=0.5))
+        except Exception as e:
+            self.__logger.debug(f"strict uc2_board_is_connected ping failed: {e}")
+            return False
 
     @APIExport(runOnUIThread=True)
     def btpairing(self):
@@ -704,6 +1562,13 @@ class UC2ConfigController(ImConWidgetController):
         - id_20_esp32_seeed_xiao_esp32s3_can_slave_laser_debug.bin
         - id_21_esp32_seeed_xiao_esp32s3_can_slave_led_debug.bin
         
+        # update: the new naming convention for canopen is
+        - UC2_canopen_slave_motor_release.bin
+        - UC2_canopen_slave_laser_release.bin
+        - UC2_canopen_slave_led_release.bin
+        - UC2_canopen_master_release.bin
+        - UC2_canopen_slave_galvo_release.bin
+        
         :param server_url: URL of the firmware server (default: http://host.docker.internal/firmware)
         :return: Status message with list of available firmware files
         """
@@ -759,77 +1624,50 @@ class UC2ConfigController(ImConWidgetController):
         }
 
     @APIExport(runOnUIThread=False)
-    def listAvailableFirmware(self):
+    def listAvailableFirmware(self, can_ids: list = None):
         """
-        List all available firmware files from the configured server.
-        
-        Fetches the directory listing from <server_url>/latest/ and parses
-        available firmware files.
-        
-        :return: Dictionary with firmware files organized by device type
+        List firmware files from the configured server, mapped to CAN IDs.
+
+        Delegates to listAllFirmwareFiles() for the actual server fetch and then
+        maps the flat file list to the CAN-ID-keyed format expected by the CAN OTA
+        wizard.  Optionally filter to a subset of CAN IDs via *can_ids*.
+
+        :param can_ids: Optional list of integer CAN IDs to include. When None,
+                        all known CAN IDs are returned.
+        :return: {status, firmware_server, firmware_count,
+                  firmware: {can_id: {filename, url, can_id, size, mod_time}}}
         """
-        if not self._firmware_server_url:
-            return {
-                "status": "error",
-                "message": "Firmware server not set. Use setOTAFirmwareServer first."
-            }
+        # Reuse the working flat-list fetcher to avoid code duplication
+        flat = self.listAllFirmwareFiles()
+        if flat.get("status") != "success":
+            return flat  # Propagate error as-is
 
-        try:
-            # Fetch firmware list from server
-            list_url = f"{self._firmware_server_url}/"
-            self.__logger.debug(f"Fetching firmware list from {list_url}")
+        files_by_name = {f["filename"]: f for f in flat.get("files", [])}
 
-            response = requests.get(list_url, timeout=10, headers={"Accept": "application/json"})
-            response.raise_for_status()
+        # Build CAN-ID → expected firmware-filename mapping
+        can_id_to_firmware = self._get_can_id_firmware_mapping()
 
+        firmware_by_id = {}
+        for can_id, expected_filename in can_id_to_firmware.items():
+            # Optionally restrict to the requested CAN IDs
+            if can_ids is not None and can_id not in can_ids:
+                continue
+            if expected_filename in files_by_name:
+                f = files_by_name[expected_filename]
+                firmware_by_id[can_id] = {
+                    "filename": expected_filename,
+                    "url": f["url"],
+                    "can_id": can_id,
+                    "size": f.get("size", 0),
+                    "mod_time": f.get("mod_time", ""),
+                }
 
-            # Parse JSON response (same format as setOTAFirmwareServer)
-            firmware_data = response.json()
-
-            if not isinstance(firmware_data, list):
-                raise ValueError("Invalid response format from firmware server")
-
-            # Extract firmware file names from JSON response
-            firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
-            
-            self.__logger.debug(f"Available firmware files: {firmware_files}")
-
-            # Use centralized firmware mapping
-            can_id_to_firmware = self._get_can_id_firmware_mapping()
-            self.__logger.debug(f"CAN ID to firmware mapping: {can_id_to_firmware}")
-            # Organize by device ID using lookup table
-            firmware_by_id = {}
-            for can_id, expected_firmware in can_id_to_firmware.items():
-                # Check if expected firmware exists in available files
-                # print(expected_firmware)
-                if expected_firmware in firmware_files:
-                    firmware_url = f"{self._firmware_server_url}/{expected_firmware}"
-                    # print(firmware_url)
-                    # Find matching item in firmware_data to get size and mod_time
-                    firmware_info = next((item for item in firmware_data if item['name'] == expected_firmware), None)
-
-                    firmware_by_id[can_id] = {
-                        "filename": expected_firmware,
-                        "url": firmware_url,
-                        "can_id": can_id,
-                        "size": firmware_info.get('size', 0) if firmware_info else 0,
-                        "mod_time": firmware_info.get('mod_time', '') if firmware_info else ''
-                    }
-
-            return {
-                "status": "success",
-                "firmware_server": self._firmware_server_url,
-                "firmware_count": len(firmware_by_id),
-                "firmware": firmware_by_id
-            }
-
-        except requests.exceptions.RequestException as e:
-            self.__logger.error(f"Error fetching firmware list: {e}")
-            return {
-                "status": "error",
-                "message": f"Failed to fetch firmware list from server: {str(e)}",
-                "server_url": self._firmware_server_url
-            }
+        return {
+            "status": "success",
+            "firmware_server": self._firmware_server_url,
+            "firmware_count": len(firmware_by_id),
+            "firmware": firmware_by_id,
+        }
 
     @APIExport(runOnUIThread=False)
     def listAllFirmwareFiles(self):
@@ -1157,14 +1995,50 @@ class UC2ConfigController(ImConWidgetController):
                     "method": "can_streaming"
                 })
             
-            # Start streaming upload (blocking)
-            success = self._master.UC2ConfigManager.ESP32.canota.start_can_streaming_ota_blocking(
-                can_id=can_id,
-                firmware_path=str(firmware_path),
-                progress_callback=progress_callback,
-                status_callback=status_callback, 
-                baud=baud
-            )
+            # Start streaming upload (blocking) — retry up to 3 times on failure.
+            # The master occasionally returns size_write_failed on the first attempt
+            # after rebooting from a previous OTA, but succeeds on the next try.
+            MAX_RETRIES = 3
+            success = False
+            last_error = "CAN streaming upload failed"
+            for attempt in range(1, MAX_RETRIES + 1):
+                canota = self._master.UC2ConfigManager.ESP32.canota
+                # Make sure a previous cancel flag is cleared before this attempt
+                canota._cancel_event.clear()
+                success = canota.start_can_streaming_ota_blocking(
+                    can_id=can_id,
+                    firmware_path=str(firmware_path),
+                    progress_callback=progress_callback,
+                    status_callback=status_callback,
+                    baud=baud
+                )
+                if success:
+                    break
+                # Check if user cancelled — do not retry in that case
+                if canota._cancel_event.is_set():
+                    last_error = "Upload cancelled by user"
+                    break
+                if attempt < MAX_RETRIES:
+                    retry_msg = (
+                        f"Attempt {attempt}/{MAX_RETRIES} failed — "
+                        f"waiting 5 s before retry..."
+                    )
+                    self.__logger.warning(f"CAN OTA: {retry_msg}")
+                    status_callback(retry_msg, False)
+                    import time as _time
+                    _time.sleep(5)
+                    # Re-emit uploading state so the UI shows the retry
+                    self._ota_status[can_id]["status"] = "uploading"
+                    self._ota_status[can_id]["message"] = f"Retrying... (attempt {attempt + 1}/{MAX_RETRIES})"
+                    self.sigOTAStatusUpdate.emit({
+                        "canId": can_id,
+                        "status": "uploading",
+                        "progress": 5,
+                        "message": f"Retrying... (attempt {attempt + 1}/{MAX_RETRIES})",
+                        "method": "can_streaming"
+                    })
+                else:
+                    last_error = f"CAN streaming upload failed after {MAX_RETRIES} attempts"
             
             if success:
                 self._ota_status[can_id]["status"] = "success"
@@ -1183,7 +2057,7 @@ class UC2ConfigController(ImConWidgetController):
                     "message": "CAN streaming OTA completed successfully"
                 }
             else:
-                raise Exception("CAN streaming upload failed")
+                raise Exception(last_error)
                 
         except Exception as e:
             self.__logger.error(f"CAN streaming OTA failed for device {can_id}: {e}")
@@ -1206,6 +2080,25 @@ class UC2ConfigController(ImConWidgetController):
                 "message": f"CAN streaming OTA failed: {str(e)}"
             }
     
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def cancelCANStreamingOTA(self):
+        """
+        Request cancellation of any running CAN streaming OTA upload.
+
+        Sets the cancel flag on the canota object so the upload worker aborts
+        at the next chunk boundary and restores the serial connection.
+
+        :return: Status message
+        """
+        try:
+            canota = self._master.UC2ConfigManager.ESP32.canota
+            canota.cancel_streaming_ota()
+            self.__logger.info("CAN streaming OTA cancellation requested")
+            return {"status": "success", "message": "Cancellation requested"}
+        except Exception as e:
+            self.__logger.warning(f"Could not signal canota cancel: {e}")
+            return {"status": "error", "message": str(e)}
+
     @APIExport(runOnUIThread=False, requestType="POST")
     def startMultipleCANStreamingOTA(self, can_ids: list[int], delay_between: int = 5):
         """
@@ -1525,12 +2418,19 @@ class UC2ConfigController(ImConWidgetController):
         Run esptool via subprocess, streaming stdout/stderr lines through
         sigUSBFlashStatusUpdate so the frontend can display real-time progress
         (e.g. "Writing at 0x000f3000... (62%)").
+
+        Honours self._usb_flash_cancel_event – if it gets set while esptool
+        is running (e.g. via cancelUSBFlash), the subprocess is terminated and
+        the function returns (False, "cancelled by user").
+
         Returns (success, collected_output_string).
         """
         collected_lines = []
+        cancelled = False
 
         def _stream_subprocess(cmd_args):
             """Run esptool as subprocess and stream output line by line."""
+            nonlocal cancelled
             cmd = [sys.executable, "-m", "esptool"] + cmd_args
             proc = subprocess.Popen(
                 cmd,
@@ -1539,37 +2439,65 @@ class UC2ConfigController(ImConWidgetController):
                 text=True,
                 bufsize=1,
             )
-            for line in proc.stdout:
-                line = line.rstrip("\n\r")
-                if not line:
-                    continue
-                collected_lines.append(line)
-                self.__logger.debug(f"esptool: {line}")
+            # Publish so cancelUSBFlash can reach it.
+            self._usb_flash_proc = proc
 
-                # Parse "Writing at 0x000XXXXX... (NN%)" for progress
-                progress_match = None
-                if "Writing at" in line and "%" in line:
+            try:
+                for line in proc.stdout:
+                    if self._usb_flash_cancel_event.is_set():
+                        cancelled = True
+                        self.__logger.warning("Flash cancel requested — terminating esptool")
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+                        break
+                    line = line.rstrip("\n\r")
+                    if not line:
+                        continue
+                    collected_lines.append(line)
+                    self.__logger.debug(f"esptool: {line}")
+
+                    # Parse "Writing at 0x000XXXXX... (NN%)" for progress
+                    progress_match = None
+                    if "Writing at" in line and "%" in line:
+                        try:
+                            pct_str = line.split("(")[1].split("%")[0].strip()
+                            pct = int(pct_str)
+                            # Map esptool 0-100% into our 30-85% range
+                            mapped = 30 + int(pct * 0.55)
+                            progress_match = mapped
+                        except (IndexError, ValueError):
+                            pass
+
+                    self._emit_usb_flash_status(
+                        "flashing",
+                        progress_match if progress_match is not None else -1,
+                        line,
+                    )
+
+                if cancelled:
+                    # Give it a moment to react to terminate, then kill.
                     try:
-                        pct_str = line.split("(")[1].split("%")[0].strip()
-                        pct = int(pct_str)
-                        # Map esptool 0-100% into our 30-85% range
-                        mapped = 30 + int(pct * 0.55)
-                        progress_match = mapped
-                    except (IndexError, ValueError):
-                        pass
-
-                self._emit_usb_flash_status(
-                    "flashing",
-                    progress_match if progress_match is not None else -1,
-                    line,
-                )
-            proc.stdout.close()
-            proc.wait()
-            return proc.returncode
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        proc.wait()
+                else:
+                    proc.stdout.close()
+                    proc.wait()
+                return proc.returncode
+            finally:
+                self._usb_flash_proc = None
 
         # Prefer subprocess so we can stream output
         try:
             rc = _stream_subprocess(args)
+            if cancelled:
+                return False, "cancelled by user"
             ok = rc == 0
             return ok, "\n".join(collected_lines)
         except FileNotFoundError:
@@ -1652,7 +2580,28 @@ class UC2ConfigController(ImConWidgetController):
           erase_flash: if True, erase the entire flash before writing firmware.
           skip_disconnect: if True, skip disconnecting ImSwitch serial before flashing (useful for XIAO).
         """
-        with self._usb_flash_lock:
+        # If another flash is already running, cancel it before starting a
+        # new one. Otherwise we'd just block forever holding the lock.
+        if not self._usb_flash_lock.acquire(blocking=False):
+            self.__logger.warning(
+                "flashMasterFirmwareUSB called while a previous flash is still active "
+                "— cancelling the previous run and continuing."
+            )
+            self._cancel_running_flash(reason="superseded by new flash request")
+            # Wait up to 5s for the previous run to release the lock.
+            if not self._usb_flash_lock.acquire(timeout=5.0):
+                self._emit_usb_flash_status(
+                    "failed", 0,
+                    "A previous flash is still running and did not release in time."
+                )
+                return {
+                    "status": "error",
+                    "message": "Previous flash is still running — try again in a few seconds.",
+                }
+
+        try:
+            # Fresh cancel event for this run.
+            self._usb_flash_cancel_event.clear()
             try:
                 return self._do_flash(
                     port=port, match=match, baud=baud,
@@ -1665,6 +2614,49 @@ class UC2ConfigController(ImConWidgetController):
                 self.__logger.error(f"Unexpected flash error: {exc}", exc_info=True)
                 self._emit_usb_flash_status("failed", 0, f"Unexpected error: {exc}")
                 return {"status": "error", "message": str(exc)}
+        finally:
+            self._usb_flash_lock.release()
+
+    def _cancel_running_flash(self, reason: str = "cancelled by user"):
+        """Signal cancel + terminate the esptool subprocess if any.
+
+        Used both by the public cancelUSBFlash API and by re-entrant
+        flashMasterFirmwareUSB calls that want to supersede a stuck run.
+        Returns True if a process was running and got terminated.
+        """
+        self._usb_flash_cancel_event.set()
+        proc = self._usb_flash_proc
+        killed = False
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    killed = True
+                    self.__logger.info(f"esptool subprocess terminated ({reason})")
+            except Exception as e:
+                self.__logger.warning(f"Failed to terminate esptool: {e}")
+        # Surface a terminal status so the UI unblocks even if the read loop
+        # was already past its final line.
+        self._emit_usb_flash_status("cancelled", -1, reason)
+        return killed
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def cancelUSBFlash(self):
+        """Cancel a USB-flash run currently in progress.
+
+        Safe to call when nothing is running — returns ``{"status": "idle"}``.
+        """
+        if self._usb_flash_proc is None and not self._usb_flash_lock.locked():
+            return {"status": "idle", "message": "No flash in progress."}
+        killed = self._cancel_running_flash(reason="cancelled by user")
+        return {
+            "status": "cancelled",
+            "killed": killed,
+            "message": (
+                "Flash cancel requested — subprocess terminated." if killed
+                else "Flash cancel requested."
+            ),
+        }
 
     def _validate_firmware_binary(self, fw_path: Path, is_merged: bool, chip: str) -> dict:
         """
@@ -1736,28 +2728,31 @@ class UC2ConfigController(ImConWidgetController):
         result["flash_size"] = size
 
         if is_merged:
-            # For merged binaries the magic MUST be at 0x0
-            if magic_offset != 0:
+            # The bootloader magic must sit at the chip's boot address. For
+            # ESP32-S3 / S2 / C3 that is 0x0; for the classic ESP32 the
+            # bootloader lives at 0x1000, so a merged image legitimately starts
+            # with 0x1000 bytes of 0xFF padding (magic at 0x1000). Both layouts
+            # are flashed at 0x0 — esptool/the ROM handle the leading padding.
+            #
+            # NOTE: flash mode/freq (e.g. DIO/40m) are intentionally NOT flagged
+            # here. They are whatever the firmware's sdkconfig compiled and match
+            # the bundled bootloader, which is exactly what PlatformIO flashes.
+            expected_offsets = {
+                "esp32":   (0x0, 0x1000),
+                "esp32s2": (0x0,),
+                "esp32s3": (0x0,),
+                "esp32c3": (0x0,),
+            }.get(chip, (0x0, 0x1000))
+
+            if magic_offset not in expected_offsets:
+                pretty = " or ".join(f"0x{o:x}" for o in expected_offsets)
                 result["errors"].append(
-                    f"Merged binary has bootloader at 0x{magic_offset:x} instead of 0x0. "
-                    f"The binary was built with wrong BOOT_ADDR (likely 0x{magic_offset:x} "
-                    f"instead of 0x0000 for {chip}). "
-                    f"Flashing this at 0x0 will ALWAYS produce 'invalid header: 0xffffffff'. "
-                    f"→ Rebuild using the corrected CI YAML with BOOT_ADDR=0x0000."
+                    f"Merged binary has bootloader at 0x{magic_offset:x} instead of {pretty} "
+                    f"(expected for {chip}). The binary was built with a wrong boot address. "
+                    f"Flashing this at 0x0 will produce 'invalid header: 0xffffffff'. "
+                    f"→ Rebuild with the correct BOOT_ADDR for {chip}."
                 )
                 result["valid"] = False
-
-            # Warn about suboptimal flash mode for S3
-            if chip == "esp32s3" and fm == "DIO":
-                result["warnings"].append(
-                    f"Flash mode in binary is DIO but QIO is recommended for ESP32-S3. "
-                    f"Rebuild with --flash_mode qio in merge_bin."
-                )
-            if chip == "esp32s3" and freq == "40m":
-                result["warnings"].append(
-                    f"Flash frequency in binary is 40m but 80m is recommended for ESP32-S3. "
-                    f"Rebuild with --flash_freq 80m in merge_bin."
-                )
 
         self.__logger.info(
             f"Firmware validation: magic@0x{magic_offset:x}, "
@@ -1918,6 +2913,13 @@ class UC2ConfigController(ImConWidgetController):
             ]
             ok, msg = self._run_esptool(erase_args)
             if not ok:
+                if self._usb_flash_cancel_event.is_set():
+                    # cancelled status already emitted by _cancel_running_flash
+                    return {
+                        "status": "cancelled",
+                        "message": "Erase cancelled by user",
+                        "port": flash_port,
+                    }
                 self._emit_usb_flash_status("failed", 29, "Flash erase failed", msg)
                 return {
                     "status": "error",
@@ -1951,14 +2953,27 @@ class UC2ConfigController(ImConWidgetController):
                 "--baud", str(baud),
                 "--chip", resolved_chip,
                 "write-flash",
-                "--flash-mode", flash_params["flash-mode"],
-                "--flash-freq", flash_params["flash-freq"],
-                "--flash-size", flash_params["flash-size"],
+                # Preserve the flash mode/freq/size baked into the compiled app
+                # image header (mirrors `pio run --target upload`). Overriding
+                # them here would patch the app header to e.g. qio/80m while the
+                # on-device bootloader stays dio/40m -> header mismatch on boot.
+                "--flash-mode", "keep",
+                "--flash-freq", "keep",
+                "--flash-size", "keep",
                 flash_params["offset"],
                 str(fw_path),
             ]
         ok, msg = self._run_esptool(write_args)
         if not ok:
+            if self._usb_flash_cancel_event.is_set():
+                # cancelled status already emitted by _cancel_running_flash
+                return {
+                    "status": "cancelled",
+                    "message": "Flash cancelled by user",
+                    "port": flash_port,
+                    "firmware": str(fw_path),
+                    "chip": resolved_chip,
+                }
             self._emit_usb_flash_status("failed", 50, "Firmware write failed", msg)
             return {
                 "status": "error",
@@ -2030,8 +3045,8 @@ class UC2ConfigController(ImConWidgetController):
 
         if not port:
             return {"status": "error", "message": "No serial port specified"}
-
-        cmd = _json.dumps({"task": "/can_act", "address": int(address)})
+        # new command {"task":"/can_act","nodeId":10,"canMotorAxis":1, "address":10}
+        cmd = _json.dumps({"task": "/can_act", "address": int(address), "nodeId": int(address), "canMotorAxis": int(1)})
         self.__logger.info(f"Sending CAN address {address} to {port} @ {baud} baud")
         self._emit_usb_flash_status("flashing", 92, f"Assigning CAN address {address}...")
 
@@ -2040,7 +3055,7 @@ class UC2ConfigController(ImConWidgetController):
                 # Wait for the device to finish booting.  Freshly-flashed ESP32s
                 # may print boot messages / SHA-256 lines for several seconds.
                 self.__logger.info(f"Waiting for device boot on {port}...")
-                boot_wait_s = 5  # generous wait for boot-loop detection
+                boot_wait_s = 2  # generous wait for boot-loop detection
                 boot_output = ""
                 deadline = time.time() + boot_wait_s
                 stable_count = 0
@@ -2140,6 +3155,32 @@ class UC2ConfigController(ImConWidgetController):
             self._emit_usb_flash_status("failed", 92, f"CAN address assignment failed: {e}")
             return {"status": "error", "message": str(e)}
 
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setSerialConfig(self, port: str = "", baudrate: int = 115200, persist: bool = True):
+        """Apply (and optionally persist) the serial port / baudrate used to talk to the ESP32.
+
+        Parameters:
+          port: serial port device path (e.g. "/dev/ttyACM0"). Empty/"auto" keeps current.
+          baudrate: serial baudrate (default 115200). Pass 0/None to keep current.
+          persist: when True, write the change back to the setup JSON.
+        """
+        # Normalize optional inputs coming from query params
+        port_arg = port.strip() if isinstance(port, str) else port
+        if not port_arg or str(port_arg).lower() == "auto":
+            port_arg = None
+        baud_arg = int(baudrate) if baudrate not in (None, 0, "", "null") else None
+
+        try:
+            result = self._master.UC2ConfigManager.setSerialConfig(
+                port=port_arg,
+                baudrate=baud_arg,
+                persist=bool(persist),
+            )
+            return {"status": "success", **result, "persisted": bool(persist)}
+        except Exception as e:
+            self.__logger.error(f"Failed to set serial config: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
+        
     # Digital Input/Output API Methods
     @APIExport(runOnUIThread=False)
     def probeDeviceState(
@@ -2193,6 +3234,127 @@ class UC2ConfigController(ImConWidgetController):
             }
         except Exception as e:
             self.__logger.error(f"Failed to probe device state: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def testDeviceAction(
+        self,
+        port: str = "",
+        device_type: str = "motor",
+        baud: int = 115200,
+        timeout: float = 2.0,
+        # Motor params
+        stepperid: int = 1,
+        speed: int = 2000,
+        position: int = 1000,
+        isabs: int = 0,
+        # LED array params
+        r: int = 25,
+        g: int = 25,
+        b: int = 25,
+        led_action: str = "fill",
+        # Laser params
+        laserid: int = 1,
+        laserval: int = 118,
+    ):
+        """
+        Send a device-specific validation/test command directly over serial.
+
+        Used after USB flashing + CAN address assignment to verify that the slave
+        firmware is actually functioning (motor moves, LEDs light up, laser turns on).
+
+        Parameters:
+          port: serial port device path (e.g. "/dev/ttyACM0").
+          device_type: one of "motor", "ledarray", "laser".
+          baud: serial baudrate (default 115200, can be overridden).
+          timeout: serial read timeout in seconds.
+          stepperid, speed, position, isabs: motor parameters (device_type="motor").
+          r, g, b, led_action: LED array parameters (device_type="ledarray").
+          laserid, laserval: laser parameters (device_type="laser").
+        """
+        import json as _json
+        import serial as _serial
+
+        if not port:
+            return {"status": "error", "message": "No serial port specified"}
+
+        dt = (device_type or "").lower().strip()
+        if dt == "motor":
+            cmd_obj = {
+                "task": "/motor_act",
+                "motor": {
+                    "steppers": [{
+                        "stepperid": int(stepperid),
+                        "speed": int(speed),
+                        "position": int(position),
+                        "isabs": int(isabs),
+                    }]
+                },
+                "qid": 5,
+            }
+        elif dt in ("ledarray", "led", "ledarr"):
+            cmd_obj = {
+                "task": "/ledarr_act",
+                "qid": 17,
+                "led": {
+                    "action": led_action or "fill",
+                    "r": int(r),
+                    "g": int(g),
+                    "b": int(b),
+                },
+            }
+        elif dt == "laser":
+            cmd_obj = {
+                "task": "/laser_act",
+                "LASERid": int(laserid),
+                "LASERval": int(laserval),
+                "qid": 1,
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Unknown device_type '{device_type}'. Use 'motor', 'ledarray', or 'laser'.",
+            }
+
+        cmd = _json.dumps(cmd_obj)
+        self.__logger.info(f"Test device action ({dt}) on {port} @ {baud} baud: {cmd}")
+
+        try:
+            with _serial.Serial(port, int(baud), timeout=float(timeout)) as ser:
+                ser.reset_input_buffer()
+                ser.write((cmd + "\n").encode("utf-8"))
+                ser.flush()
+                time.sleep(0.3)
+                response = ""
+                deadline = time.time() + float(timeout)
+                while time.time() < deadline:
+                    if ser.in_waiting:
+                        response += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                        time.sleep(0.05)
+                    else:
+                        if response:
+                            break
+                        time.sleep(0.1)
+
+            response_stripped = response.strip()
+            self.__logger.info(f"Test device response ({dt}): {response_stripped[:300]}")
+
+            # Heuristic success check: look for a JSON-ish status:ok or absence of error markers
+            ok = True
+            lower_resp = response_stripped.lower()
+            if "0xffffffff" in lower_resp or "invalid header" in lower_resp:
+                ok = False
+            if '"status":"error"' in lower_resp.replace(" ", ""):
+                ok = False
+
+            return {
+                "status": "success" if ok else "warning",
+                "device_type": dt,
+                "command": cmd_obj,
+                "response": response_stripped[:1000],
+            }
+        except Exception as e:
+            self.__logger.error(f"Failed to send test action ({dt}): {e}")
             return {"status": "error", "message": str(e)}
 
     # Digital Input/Output API Methods
@@ -2666,6 +3828,15 @@ class UC2ConfigController(ImConWidgetController):
                             motorSettings[f'toff{ax}'] = tmc.get('toff', 3)
                     except Exception as e:
                         self.__logger.warning(f"Could not fetch TMC settings for axis {ax}: {e}")
+
+            # Always save joystick direction settings from the in-memory cache.
+            if hasattr(self.stages, "getJoystickDirectionSettings"):
+                try:
+                    joystick = self.stages.getJoystickDirectionSettings()
+                    for ax, inv in joystick.items():
+                        motorSettings[f'joystickInverted{ax}'] = bool(inv)
+                except Exception as e:
+                    self.__logger.warning(f"Could not fetch joystick settings: {e}")
             
             # Update setupInfo and save to config file
             if hasattr(self, '_setupInfo') and self._setupInfo is not None:
@@ -2677,7 +3848,7 @@ class UC2ConfigController(ImConWidgetController):
                             self._setupInfo.positioners[positionerName].managerProperties[key] = value
 
                     # Save the updated setupInfo to disk
-                    from imswitch.imcommon.model import configfiletools
+                    import imswitch.imcontrol.model.configfiletools as configfiletools
                     mOptions, _ = configfiletools.loadOptions()
                     configfiletools.saveSetupInfo(mOptions, self._setupInfo)
                     self.__logger.info(f"Saved motor settings for {positionerName}")

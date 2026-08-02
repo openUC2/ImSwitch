@@ -1,0 +1,421 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1900 1600" font-family="Inter, Helvetica, Arial, sans-serif">
+  <defs>
+    <style>
+      .title       { font-size: 28px; font-weight: 800; }
+      .subtitle    { font-size: 13px; }
+      .center-title { font-size: 22px; font-weight: 800; }
+      .center-sub   { font-size: 12px; }
+      .group-title  { font-size: 14px; font-weight: 700; }
+      .group-sub    { font-size: 10.5px; font-weight: 600; letter-spacing: 0.3px; }
+      .pill-text    { font-size: 10.5px; font-weight: 500; }
+      .legend-title { font-size: 13px; font-weight: 700; }
+      .legend-text  { font-size: 11px; }
+      .spec-title   { font-size: 14px; font-weight: 700; }
+      .spec-sub     { font-size: 11px; }
+      .trunk        { fill: none; stroke-width: 3.2; opacity: 0.55; }
+      .connector    { fill: none; stroke-width: 1; opacity: 0.4; }
+    </style>
+  </defs>
+
+  <!-- ===================== TITLE ===================== -->
+  <text x="950" y="44" text-anchor="middle" class="title" fill="#0f172a">ImSwitch → Newswitch feature mindmap</text>
+  <text x="950" y="68" text-anchor="middle" class="subtitle" fill="#475569">Every microscope-relevant controller, manager and UI surface, grouped by concern. Each leaf is colored by where it lands in the Arkitekt/Optikit world.</text>
+
+  <!-- ===================== TRUNKS (drawn behind everything) ===================== -->
+  <!-- Trunks fan out from center node (950, 800) to each group bubble center -->
+  <!-- G1 Hardware control          324°  (1168, 641)  blue   -->
+  <path d="M 950 800 L 1168 641" class="trunk" stroke="#185FA5"/>
+  <!-- G2 Imaging modes               0°  (1220, 800)  teal   -->
+  <path d="M 950 800 L 1220 800" class="trunk" stroke="#0F6E56"/>
+  <!-- G3 Scanning                   36°  (1168, 959)  gold   -->
+  <path d="M 950 800 L 1168 959" class="trunk" stroke="#B45309"/>
+  <!-- G4 Acquisition & recording    72°  (1033,1057)  pink   -->
+  <path d="M 950 800 L 1033 1057" class="trunk" stroke="#993556"/>
+  <!-- G5 Storage & data            108°  (867, 1057)  brown  -->
+  <path d="M 950 800 L 867 1057" class="trunk" stroke="#854F0B"/>
+  <!-- G6 Live view & streaming     144°  (732, 959)   orange -->
+  <path d="M 950 800 L 732 959" class="trunk" stroke="#C2410C"/>
+  <!-- G7 Firmware UC2 / OTA        180°  (680, 800)   d-grn  -->
+  <path d="M 950 800 L 680 800" class="trunk" stroke="#166534"/>
+  <!-- G8 Integration & ops         216°  (732, 641)   purple -->
+  <path d="M 950 800 L 732 641" class="trunk" stroke="#6D28D9"/>
+  <!-- G9 Workflow & experiment     252°  (867, 543)   indigo -->
+  <path d="M 950 800 L 867 543" class="trunk" stroke="#4338CA"/>
+  <!-- G10 Calibration & focus      288°  (1033, 543)  sky    -->
+  <path d="M 950 800 L 1033 543" class="trunk" stroke="#0284C7"/>
+
+  <!-- ===================== CENTER NODE ===================== -->
+  <g>
+    <rect x="790" y="747" width="320" height="106" rx="16" fill="#FBEAF0" stroke="#993556" stroke-width="2.8"/>
+    <text x="950" y="778" text-anchor="middle" class="center-title" fill="#4B1528">Microscope features</text>
+    <text x="950" y="800" text-anchor="middle" class="center-sub" fill="#993556">port from ImSwitch → newswitch</text>
+    <text x="950" y="817" text-anchor="middle" class="center-sub" fill="#993556">FastAPI + rekuest-next · React/Vite</text>
+    <text x="950" y="838" text-anchor="middle" font-size="10.5" font-weight="600" fill="#993556">70 controllers · 30 managers · 260 endpoints · ~75 components</text>
+  </g>
+
+  <!-- ===================== G1: HARDWARE CONTROL  (right-side, top)  ===================== -->
+  <g>
+    <!-- bubble at (1168, 641) -->
+    <rect x="1088" y="616" width="160" height="50" rx="12" fill="#FFFFFF" stroke="#185FA5" stroke-width="2.5"/>
+    <text x="1168" y="636" text-anchor="middle" class="group-title" fill="#0C447C">Hardware control</text>
+    <text x="1168" y="654" text-anchor="middle" class="group-sub" fill="#185FA5">9 controllers · 45 backends</text>
+
+    <!-- connector lines from pill inner edges to bubble right edge (1248, 641) -->
+    <line x1="1265" y1="581" x2="1248" y2="641" class="connector" stroke="#185FA5"/>
+    <line x1="1265" y1="605" x2="1248" y2="641" class="connector" stroke="#185FA5"/>
+    <line x1="1265" y1="629" x2="1248" y2="641" class="connector" stroke="#185FA5"/>
+    <line x1="1265" y1="653" x2="1248" y2="641" class="connector" stroke="#185FA5"/>
+    <line x1="1265" y1="677" x2="1248" y2="641" class="connector" stroke="#185FA5"/>
+    <line x1="1265" y1="701" x2="1248" y2="641" class="connector" stroke="#185FA5"/>
+
+    <!-- 6 pills, all → newswitch (orange) -->
+    <rect x="1265" y="571" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1350" y="585" text-anchor="middle" class="pill-text" fill="#712B13">Stage · 11 backends</text>
+    <rect x="1265" y="595" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1350" y="609" text-anchor="middle" class="pill-text" fill="#712B13">Lasers · 13 backends</text>
+    <rect x="1265" y="619" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1350" y="633" text-anchor="middle" class="pill-text" fill="#712B13">LEDs + LED matrix (ESP32)</text>
+    <rect x="1265" y="643" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1350" y="657" text-anchor="middle" class="pill-text" fill="#712B13">Cameras · 18 backends</text>
+    <rect x="1265" y="667" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1350" y="681" text-anchor="middle" class="pill-text" fill="#712B13">Objective + filter + rotator</text>
+    <rect x="1265" y="691" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1350" y="705" text-anchor="middle" class="pill-text" fill="#712B13">Galvo · SLM · DAQ · Temp</text>
+  </g>
+
+  <!-- ===================== G2: IMAGING MODES  (right-side, middle)  ===================== -->
+  <g>
+    <!-- bubble at (1220, 800) -->
+    <rect x="1140" y="775" width="160" height="50" rx="12" fill="#FFFFFF" stroke="#0F6E56" stroke-width="2.5"/>
+    <text x="1220" y="795" text-anchor="middle" class="group-title" fill="#085041">Imaging modes</text>
+    <text x="1220" y="813" text-anchor="middle" class="group-sub" fill="#0F6E56">11 controllers</text>
+
+    <!-- pills at x=1320 -->
+    <line x1="1320" y1="740" x2="1300" y2="800" class="connector" stroke="#0F6E56"/>
+    <line x1="1320" y1="764" x2="1300" y2="800" class="connector" stroke="#0F6E56"/>
+    <line x1="1320" y1="788" x2="1300" y2="800" class="connector" stroke="#0F6E56"/>
+    <line x1="1320" y1="812" x2="1300" y2="800" class="connector" stroke="#0F6E56"/>
+    <line x1="1320" y1="836" x2="1300" y2="800" class="connector" stroke="#0F6E56"/>
+    <line x1="1320" y1="860" x2="1300" y2="800" class="connector" stroke="#0F6E56"/>
+
+    <rect x="1320" y="730" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1405" y="744" text-anchor="middle" class="pill-text" fill="#712B13">Lightsheet</text>
+    <rect x="1320" y="754" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1405" y="768" text-anchor="middle" class="pill-text" fill="#712B13">Holography (off-axis + in-line)</text>
+    <rect x="1320" y="778" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1405" y="792" text-anchor="middle" class="pill-text" fill="#712B13">SIM · DPC acquisition</text>
+    <rect x="1320" y="802" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1405" y="816" text-anchor="middle" class="pill-text" fill="#712B13">STORM (acquire)</text>
+    <rect x="1320" y="826" width="170" height="20" rx="10" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+    <text x="1405" y="840" text-anchor="middle" class="pill-text" fill="#085041">Reconstructions → Arkitekt</text>
+    <rect x="1320" y="850" width="170" height="20" rx="10" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1"/>
+    <text x="1405" y="864" text-anchor="middle" class="pill-text" fill="#7F1D1D">HoliSheet · FLIM · ISM · FFT</text>
+  </g>
+
+  <!-- ===================== G3: SCANNING  (right-side, bottom)  ===================== -->
+  <g>
+    <!-- bubble at (1168, 959) -->
+    <rect x="1088" y="934" width="160" height="50" rx="12" fill="#FFFFFF" stroke="#B45309" stroke-width="2.5"/>
+    <text x="1168" y="954" text-anchor="middle" class="group-title" fill="#633806">Scanning</text>
+    <text x="1168" y="972" text-anchor="middle" class="group-sub" fill="#B45309">5 controllers</text>
+
+    <line x1="1265" y1="899" x2="1248" y2="959" class="connector" stroke="#B45309"/>
+    <line x1="1265" y1="923" x2="1248" y2="959" class="connector" stroke="#B45309"/>
+    <line x1="1265" y1="947" x2="1248" y2="959" class="connector" stroke="#B45309"/>
+    <line x1="1265" y1="971" x2="1248" y2="959" class="connector" stroke="#B45309"/>
+    <line x1="1265" y1="995" x2="1248" y2="959" class="connector" stroke="#B45309"/>
+    <line x1="1265" y1="1019" x2="1248" y2="959" class="connector" stroke="#B45309"/>
+
+    <rect x="1265" y="889" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1350" y="903" text-anchor="middle" class="pill-text" fill="#712B13">ROI · Tile / mosaic scan</text>
+    <rect x="1265" y="913" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1350" y="927" text-anchor="middle" class="pill-text" fill="#712B13">Wellplate experiment</text>
+    <rect x="1265" y="937" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1350" y="951" text-anchor="middle" class="pill-text" fill="#712B13">StageScan / HistoScan</text>
+    <rect x="1265" y="961" width="170" height="20" rx="10" fill="#EEEDFE" stroke="#3C3489" stroke-width="1"/>
+    <text x="1350" y="975" text-anchor="middle" class="pill-text" fill="#26215C">Labware library → Optikit</text>
+    <rect x="1265" y="985" width="170" height="20" rx="10" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+    <text x="1350" y="999" text-anchor="middle" class="pill-text" fill="#085041">Stitching (Ashlar) → Arkitekt</text>
+    <rect x="1265" y="1009" width="170" height="20" rx="10" fill="#F1F5F9" stroke="#475569" stroke-width="1"/>
+    <text x="1350" y="1023" text-anchor="middle" class="pill-text" fill="#1E293B">Rotation · Squid (decide)</text>
+  </g>
+
+  <!-- ===================== G4: ACQUISITION & RECORDING  (bottom-right)  ===================== -->
+  <g>
+    <!-- bubble at (1033, 1057) -->
+    <rect x="953" y="1032" width="160" height="50" rx="12" fill="#FFFFFF" stroke="#993556" stroke-width="2.5"/>
+    <text x="1033" y="1052" text-anchor="middle" class="group-title" fill="#4B1528">Acquisition</text>
+    <text x="1033" y="1070" text-anchor="middle" class="group-sub" fill="#993556">6 controllers</text>
+
+    <!-- pills extend down; x = 958 (centered on bubble_x=1033) -->
+    <line x1="1033" y1="1092" x2="1033" y2="1082" class="connector" stroke="#993556"/>
+    <line x1="1033" y1="1116" x2="1033" y2="1082" class="connector" stroke="#993556"/>
+    <line x1="1033" y1="1140" x2="1033" y2="1082" class="connector" stroke="#993556"/>
+    <line x1="1033" y1="1164" x2="1033" y2="1082" class="connector" stroke="#993556"/>
+    <line x1="1033" y1="1188" x2="1033" y2="1082" class="connector" stroke="#993556"/>
+    <line x1="1033" y1="1212" x2="1033" y2="1082" class="connector" stroke="#993556"/>
+
+    <rect x="953" y="1092" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1033" y="1106" text-anchor="middle" class="pill-text" fill="#712B13">Snap (PNG16 · numpy)</text>
+    <rect x="953" y="1116" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1033" y="1130" text-anchor="middle" class="pill-text" fill="#712B13">Recording service</text>
+    <rect x="953" y="1140" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1033" y="1154" text-anchor="middle" class="pill-text" fill="#712B13">Hardware-trigger burst</text>
+    <rect x="953" y="1164" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1033" y="1178" text-anchor="middle" class="pill-text" fill="#712B13">Timelapse</text>
+    <rect x="953" y="1188" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1033" y="1202" text-anchor="middle" class="pill-text" fill="#712B13">Composite (multi-channel)</text>
+    <rect x="953" y="1212" width="160" height="20" rx="10" fill="#F1F5F9" stroke="#475569" stroke-width="1"/>
+    <text x="1033" y="1226" text-anchor="middle" class="pill-text" fill="#1E293B">Experiment 160 KB → SPLIT</text>
+  </g>
+
+  <!-- ===================== G5: STORAGE & DATA  (bottom-left)  ===================== -->
+  <g>
+    <!-- bubble at (867, 1057) -->
+    <rect x="787" y="1032" width="160" height="50" rx="12" fill="#FFFFFF" stroke="#854F0B" stroke-width="2.5"/>
+    <text x="867" y="1052" text-anchor="middle" class="group-title" fill="#633806">Storage &amp; data</text>
+    <text x="867" y="1070" text-anchor="middle" class="group-sub" fill="#854F0B">1 ctrl · 4 writers</text>
+
+    <line x1="867" y1="1092" x2="867" y2="1082" class="connector" stroke="#854F0B"/>
+    <line x1="867" y1="1116" x2="867" y2="1082" class="connector" stroke="#854F0B"/>
+    <line x1="867" y1="1140" x2="867" y2="1082" class="connector" stroke="#854F0B"/>
+    <line x1="867" y1="1164" x2="867" y2="1082" class="connector" stroke="#854F0B"/>
+    <line x1="867" y1="1188" x2="867" y2="1082" class="connector" stroke="#854F0B"/>
+    <line x1="867" y1="1212" x2="867" y2="1082" class="connector" stroke="#854F0B"/>
+
+    <rect x="787" y="1092" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="867" y="1106" text-anchor="middle" class="pill-text" fill="#712B13">Storage controller (drives)</text>
+    <rect x="787" y="1116" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="867" y="1130" text-anchor="middle" class="pill-text" fill="#712B13">OME-Zarr writer (preferred)</text>
+    <rect x="787" y="1140" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="867" y="1154" text-anchor="middle" class="pill-text" fill="#712B13">OME-TIFF · TIFF · MP4</text>
+    <rect x="787" y="1164" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="867" y="1178" text-anchor="middle" class="pill-text" fill="#712B13">Stitched TIFF writer</text>
+    <rect x="787" y="1188" width="160" height="20" rx="10" fill="#F1F5F9" stroke="#475569" stroke-width="1"/>
+    <text x="867" y="1202" text-anchor="middle" class="pill-text" fill="#1E293B">OMERO upload (decide)</text>
+    <rect x="787" y="1212" width="160" height="20" rx="10" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+    <text x="867" y="1226" text-anchor="middle" class="pill-text" fill="#085041">Metadata · prov. → Arkitekt</text>
+  </g>
+
+  <!-- ===================== G6: LIVE VIEW & STREAMING  (left-side, bottom)  ===================== -->
+  <g>
+    <!-- bubble at (732, 959) -->
+    <rect x="652" y="934" width="160" height="50" rx="12" fill="#FFFFFF" stroke="#C2410C" stroke-width="2.5"/>
+    <text x="732" y="954" text-anchor="middle" class="group-title" fill="#7C2D12">Live view &amp; stream</text>
+    <text x="732" y="972" text-anchor="middle" class="group-sub" fill="#C2410C">7 ctrl · 3 transports</text>
+
+    <!-- pills to the LEFT; pill x = 477 (right edge 627), bubble left edge = 652 -->
+    <line x1="627" y1="899" x2="652" y2="959" class="connector" stroke="#C2410C"/>
+    <line x1="627" y1="923" x2="652" y2="959" class="connector" stroke="#C2410C"/>
+    <line x1="627" y1="947" x2="652" y2="959" class="connector" stroke="#C2410C"/>
+    <line x1="627" y1="971" x2="652" y2="959" class="connector" stroke="#C2410C"/>
+    <line x1="627" y1="995" x2="652" y2="959" class="connector" stroke="#C2410C"/>
+    <line x1="627" y1="1019" x2="652" y2="959" class="connector" stroke="#C2410C"/>
+
+    <rect x="457" y="889" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="542" y="903" text-anchor="middle" class="pill-text" fill="#712B13">StreamWorker (codec adapters)</text>
+    <rect x="457" y="913" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="542" y="927" text-anchor="middle" class="pill-text" fill="#712B13">Binary frames (Zstd / LZ4)</text>
+    <rect x="457" y="937" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="542" y="951" text-anchor="middle" class="pill-text" fill="#712B13">JPEG (PyTurboJPEG)</text>
+    <rect x="457" y="961" width="170" height="20" rx="10" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1"/>
+    <text x="542" y="975" text-anchor="middle" class="pill-text" fill="#7F1D1D">MJPEG (drop)</text>
+    <rect x="457" y="985" width="170" height="20" rx="10" fill="#F1F5F9" stroke="#475569" stroke-width="1"/>
+    <text x="542" y="999" text-anchor="middle" class="pill-text" fill="#1E293B">WebRTC (transport only)</text>
+    <rect x="457" y="1009" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="542" y="1023" text-anchor="middle" class="pill-text" fill="#712B13">WebGL · OpenLayers · Vizarr</text>
+  </g>
+
+  <!-- ===================== G7: FIRMWARE UC2 / OTA  (left-side, middle)  ===================== -->
+  <g>
+    <!-- bubble at (680, 800) -->
+    <rect x="600" y="775" width="160" height="50" rx="12" fill="#FFFFFF" stroke="#166534" stroke-width="2.5"/>
+    <text x="680" y="795" text-anchor="middle" class="group-title" fill="#14532D">Firmware UC2 / OTA</text>
+    <text x="680" y="813" text-anchor="middle" class="group-sub" fill="#166534">1 ctrl · 51 endpoints</text>
+
+    <!-- pills at x=410 (right edge 580); bubble left edge 600 -->
+    <line x1="580" y1="740" x2="600" y2="800" class="connector" stroke="#166534"/>
+    <line x1="580" y1="764" x2="600" y2="800" class="connector" stroke="#166534"/>
+    <line x1="580" y1="788" x2="600" y2="800" class="connector" stroke="#166534"/>
+    <line x1="580" y1="812" x2="600" y2="800" class="connector" stroke="#166534"/>
+    <line x1="580" y1="836" x2="600" y2="800" class="connector" stroke="#166534"/>
+    <line x1="580" y1="860" x2="600" y2="800" class="connector" stroke="#166534"/>
+
+    <rect x="410" y="730" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="495" y="744" text-anchor="middle" class="pill-text" fill="#712B13">UC2Config (51 endpoints)</text>
+    <rect x="410" y="754" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="495" y="768" text-anchor="middle" class="pill-text" fill="#712B13">CAN bus scan + probe</text>
+    <rect x="410" y="778" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="495" y="792" text-anchor="middle" class="pill-text" fill="#712B13">OTA (single · multi · stream)</text>
+    <rect x="410" y="802" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="495" y="816" text-anchor="middle" class="pill-text" fill="#712B13">USB esptool flash</text>
+    <rect x="410" y="826" width="170" height="20" rx="10" fill="#EEEDFE" stroke="#3C3489" stroke-width="1"/>
+    <text x="495" y="840" text-anchor="middle" class="pill-text" fill="#26215C">Firmware artifacts → Optikit</text>
+    <rect x="410" y="850" width="170" height="20" rx="10" fill="#EEEDFE" stroke="#3C3489" stroke-width="1"/>
+    <text x="495" y="864" text-anchor="middle" class="pill-text" fill="#26215C">CAN OD/EDS + WiFi → Optikit</text>
+  </g>
+
+  <!-- ===================== G8: INTEGRATION & OPS  (left-side, top)  ===================== -->
+  <g>
+    <!-- bubble at (732, 641) -->
+    <rect x="652" y="616" width="160" height="50" rx="12" fill="#FFFFFF" stroke="#6D28D9" stroke-width="2.5"/>
+    <text x="732" y="636" text-anchor="middle" class="group-title" fill="#4C1D95">Integration &amp; ops</text>
+    <text x="732" y="654" text-anchor="middle" class="group-sub" fill="#6D28D9">4 protocols + lifecycle</text>
+
+    <line x1="627" y1="581" x2="652" y2="641" class="connector" stroke="#6D28D9"/>
+    <line x1="627" y1="605" x2="652" y2="641" class="connector" stroke="#6D28D9"/>
+    <line x1="627" y1="629" x2="652" y2="641" class="connector" stroke="#6D28D9"/>
+    <line x1="627" y1="653" x2="652" y2="641" class="connector" stroke="#6D28D9"/>
+    <line x1="627" y1="677" x2="652" y2="641" class="connector" stroke="#6D28D9"/>
+    <line x1="627" y1="701" x2="652" y2="641" class="connector" stroke="#6D28D9"/>
+
+    <rect x="457" y="571" width="170" height="20" rx="10" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+    <text x="542" y="585" text-anchor="middle" class="pill-text" fill="#085041">Arkitekt connector (core)</text>
+    <rect x="457" y="595" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="542" y="609" text-anchor="middle" class="pill-text" fill="#712B13">REST → rekuest-next</text>
+    <rect x="457" y="619" width="170" height="20" rx="10" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+    <text x="542" y="633" text-anchor="middle" class="pill-text" fill="#085041">Acceptance · stress → Arkitekt</text>
+    <rect x="457" y="643" width="170" height="20" rx="10" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1"/>
+    <text x="542" y="657" text-anchor="middle" class="pill-text" fill="#7F1D1D">Hypha · ImJoy · Blockly (drop)</text>
+    <rect x="457" y="667" width="170" height="20" rx="10" fill="#F1F5F9" stroke="#475569" stroke-width="1"/>
+    <text x="542" y="681" text-anchor="middle" class="pill-text" fill="#1E293B">SiLA 2 (decide)</text>
+    <rect x="457" y="691" width="170" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="542" y="705" text-anchor="middle" class="pill-text" fill="#712B13">Logging · notifications</text>
+  </g>
+
+  <!-- ===================== G9: WORKFLOW & EXPERIMENT  (top-left)  ===================== -->
+  <g>
+    <!-- bubble at (867, 543) -->
+    <rect x="787" y="518" width="160" height="50" rx="12" fill="#FFFFFF" stroke="#4338CA" stroke-width="2.5"/>
+    <text x="867" y="538" text-anchor="middle" class="group-title" fill="#312E81">Workflow</text>
+    <text x="867" y="556" text-anchor="middle" class="group-sub" fill="#4338CA">2 ctrl + 1 monolith</text>
+
+    <!-- pills extend UP from bubble; x=782, columns -->
+    <line x1="867" y1="514" x2="867" y2="518" class="connector" stroke="#4338CA"/>
+    <line x1="867" y1="490" x2="867" y2="518" class="connector" stroke="#4338CA"/>
+    <line x1="867" y1="466" x2="867" y2="518" class="connector" stroke="#4338CA"/>
+    <line x1="867" y1="442" x2="867" y2="518" class="connector" stroke="#4338CA"/>
+    <line x1="867" y1="418" x2="867" y2="518" class="connector" stroke="#4338CA"/>
+    <line x1="867" y1="394" x2="867" y2="518" class="connector" stroke="#4338CA"/>
+
+    <rect x="787" y="494" width="160" height="20" rx="10" fill="#F1F5F9" stroke="#475569" stroke-width="1"/>
+    <text x="867" y="508" text-anchor="middle" class="pill-text" fill="#1E293B">ExperimentController → SPLIT</text>
+    <rect x="787" y="470" width="160" height="20" rx="10" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+    <text x="867" y="484" text-anchor="middle" class="pill-text" fill="#085041">WorkflowController → Arkitekt</text>
+    <rect x="787" y="446" width="160" height="20" rx="10" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+    <text x="867" y="460" text-anchor="middle" class="pill-text" fill="#085041">Pause / resume → rekuest</text>
+    <rect x="787" y="422" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="867" y="436" text-anchor="middle" class="pill-text" fill="#712B13">Focus map (routine)</text>
+    <rect x="787" y="398" width="160" height="20" rx="10" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+    <text x="867" y="412" text-anchor="middle" class="pill-text" fill="#085041">AppMgr · Watcher → Arkitekt</text>
+    <rect x="787" y="374" width="160" height="20" rx="10" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1"/>
+    <text x="867" y="388" text-anchor="middle" class="pill-text" fill="#7F1D1D">Demo · setup picker (drop)</text>
+  </g>
+
+  <!-- ===================== G10: CALIBRATION & FOCUS  (top-right)  ===================== -->
+  <g>
+    <!-- bubble at (1033, 543) -->
+    <rect x="953" y="518" width="160" height="50" rx="12" fill="#FFFFFF" stroke="#0284C7" stroke-width="2.5"/>
+    <text x="1033" y="538" text-anchor="middle" class="group-title" fill="#075985">Calibration &amp; focus</text>
+    <text x="1033" y="556" text-anchor="middle" class="group-sub" fill="#0284C7">6 controllers</text>
+
+    <line x1="1033" y1="514" x2="1033" y2="518" class="connector" stroke="#0284C7"/>
+    <line x1="1033" y1="490" x2="1033" y2="518" class="connector" stroke="#0284C7"/>
+    <line x1="1033" y1="466" x2="1033" y2="518" class="connector" stroke="#0284C7"/>
+    <line x1="1033" y1="442" x2="1033" y2="518" class="connector" stroke="#0284C7"/>
+    <line x1="1033" y1="418" x2="1033" y2="518" class="connector" stroke="#0284C7"/>
+    <line x1="1033" y1="394" x2="1033" y2="518" class="connector" stroke="#0284C7"/>
+
+    <rect x="953" y="494" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1033" y="508" text-anchor="middle" class="pill-text" fill="#712B13">Autofocus (software)</text>
+    <rect x="953" y="470" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1033" y="484" text-anchor="middle" class="pill-text" fill="#712B13">Focus lock (HW laser + PI)</text>
+    <rect x="953" y="446" width="160" height="20" rx="10" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+    <text x="1033" y="460" text-anchor="middle" class="pill-text" fill="#712B13">FOV lock (drift correction)</text>
+    <rect x="953" y="422" width="160" height="20" rx="10" fill="#EEEDFE" stroke="#3C3489" stroke-width="1"/>
+    <text x="1033" y="436" text-anchor="middle" class="pill-text" fill="#26215C">Pixel cal + AprilTag → Optikit</text>
+    <rect x="953" y="398" width="160" height="20" rx="10" fill="#EEEDFE" stroke="#3C3489" stroke-width="1"/>
+    <text x="1033" y="412" text-anchor="middle" class="pill-text" fill="#26215C">Stage + obj. cal → Optikit</text>
+    <rect x="953" y="374" width="160" height="20" rx="10" fill="#EEEDFE" stroke="#3C3489" stroke-width="1"/>
+    <text x="1033" y="388" text-anchor="middle" class="pill-text" fill="#26215C">Galvo affine cal → Optikit</text>
+  </g>
+
+  <!-- ===================== LEGEND (top-right) ===================== -->
+  <g>
+    <rect x="1530" y="95" width="350" height="200" rx="12" fill="#FFFFFF" stroke="#475569" stroke-width="1.2"/>
+    <text x="1545" y="118" class="legend-title" fill="#0f172a">Destination legend (pill colour)</text>
+
+    <rect x="1545" y="130" width="22" height="14" rx="7" fill="#FAECE7" stroke="#993C1D"/>
+    <text x="1575" y="142" class="legend-text" fill="#0f172a"><tspan font-weight="700">→ newswitch</tspan> · ports as a routine, kept as core</text>
+
+    <rect x="1545" y="152" width="22" height="14" rx="7" fill="#EEEDFE" stroke="#3C3489"/>
+    <text x="1575" y="164" class="legend-text" fill="#0f172a"><tspan font-weight="700">→ Optikit</tspan> · build / optics / firmware property</text>
+
+    <rect x="1545" y="174" width="22" height="14" rx="7" fill="#E1F5EE" stroke="#0F6E56"/>
+    <text x="1575" y="186" class="legend-text" fill="#0f172a"><tspan font-weight="700">→ Arkitekt</tspan> · orchestration · heavy compute · state</text>
+
+    <rect x="1545" y="196" width="22" height="14" rx="7" fill="#FEE2E2" stroke="#B91C1C"/>
+    <text x="1575" y="208" class="legend-text" fill="#0f172a"><tspan font-weight="700">→ drop</tspan> · redundant, Qt-only, dead code</text>
+
+    <rect x="1545" y="218" width="22" height="14" rx="7" fill="#F1F5F9" stroke="#475569"/>
+    <text x="1575" y="230" class="legend-text" fill="#0f172a"><tspan font-weight="700">→ decide / split</tspan> · needs an architectural call</text>
+
+    <line x1="1545" y1="246" x2="1865" y2="246" stroke="#cbd5e1"/>
+    <text x="1545" y="262" class="legend-text" fill="#475569">Trunk colours just distinguish the 10 main concerns;</text>
+    <text x="1545" y="277" class="legend-text" fill="#475569">they do not carry destination meaning.</text>
+  </g>
+
+  <!-- ===================== SPECIALTY / NOT-CORE BOX (bottom-right) ===================== -->
+  <g>
+    <rect x="1380" y="1300" width="500" height="270" rx="14" fill="#FFFFFF" stroke="#475569" stroke-width="1.4" stroke-dasharray="6 4"/>
+    <text x="1400" y="1326" class="spec-title" fill="#0f172a">Specialty &amp; legacy (not on the mindmap)</text>
+    <text x="1400" y="1346" class="spec-sub" fill="#475569">Out-of-scope for the core microscope port — handled separately</text>
+
+    <text x="1400" y="1378" class="spec-sub" font-weight="700" fill="#0f172a">Separate plugin deployments</text>
+    <rect x="1400" y="1388" width="170" height="20" rx="10" fill="#F1F5F9" stroke="#475569" stroke-width="1"/>
+    <text x="1485" y="1402" text-anchor="middle" class="pill-text" fill="#1E293B">Lepmon (moth trap · GPIO)</text>
+    <rect x="1580" y="1388" width="170" height="20" rx="10" fill="#F1F5F9" stroke="#475569" stroke-width="1"/>
+    <text x="1665" y="1402" text-anchor="middle" class="pill-text" fill="#1E293B">Goniometer (contact angle)</text>
+    <rect x="1400" y="1412" width="170" height="20" rx="10" fill="#F1F5F9" stroke="#475569" stroke-width="1"/>
+    <text x="1485" y="1426" text-anchor="middle" class="pill-text" fill="#1E293B">FlowStop (microfluidics)</text>
+    <rect x="1580" y="1412" width="170" height="20" rx="10" fill="#F1F5F9" stroke="#475569" stroke-width="1"/>
+    <text x="1665" y="1426" text-anchor="middle" class="pill-text" fill="#1E293B">Michelson · OpticalFlow</text>
+
+    <text x="1400" y="1454" class="spec-sub" font-weight="700" fill="#0f172a">Drop entirely</text>
+    <rect x="1400" y="1464" width="170" height="20" rx="10" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1"/>
+    <text x="1485" y="1478" text-anchor="middle" class="pill-text" fill="#7F1D1D">MazeGame · ShitScope</text>
+    <rect x="1580" y="1464" width="170" height="20" rx="10" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1"/>
+    <text x="1665" y="1478" text-anchor="middle" class="pill-text" fill="#7F1D1D">*_old · *_backup · BAK files</text>
+    <rect x="1400" y="1488" width="170" height="20" rx="10" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1"/>
+    <text x="1485" y="1502" text-anchor="middle" class="pill-text" fill="#7F1D1D">Console · FFT · ULenses (Qt)</text>
+    <rect x="1580" y="1488" width="170" height="20" rx="10" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1"/>
+    <text x="1665" y="1502" text-anchor="middle" class="pill-text" fill="#7F1D1D">Align* · BeadRec (Qt-era)</text>
+    <rect x="1400" y="1512" width="170" height="20" rx="10" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1"/>
+    <text x="1485" y="1526" text-anchor="middle" class="pill-text" fill="#7F1D1D">ESP32 info screen · Tiling</text>
+    <rect x="1580" y="1512" width="170" height="20" rx="10" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1"/>
+    <text x="1665" y="1526" text-anchor="middle" class="pill-text" fill="#7F1D1D">FLIM · ImTools · ImJoy</text>
+
+    <text x="1400" y="1554" class="spec-sub" font-style="italic" fill="#475569">All listed in NEWSWITCH_FEATURE_INVENTORY.md §19 and §25.</text>
+  </g>
+
+  <!-- ===================== HEADLINE COUNTS BOX (bottom-left) ===================== -->
+  <g>
+    <rect x="40" y="1300" width="380" height="270" rx="14" fill="#FFFFFF" stroke="#475569" stroke-width="1.4" stroke-dasharray="6 4"/>
+    <text x="60" y="1326" class="spec-title" fill="#0f172a">Today's surface in numbers</text>
+    <text x="60" y="1346" class="spec-sub" fill="#475569">Counts that drive the port effort</text>
+
+    <text x="60" y="1378" class="spec-sub" fill="#0f172a"><tspan font-weight="700">70</tspan> controllers in imcontrol/controller/controllers</text>
+    <text x="60" y="1398" class="spec-sub" fill="#0f172a"><tspan font-weight="700">30+</tspan> managers (one per hardware category)</text>
+    <text x="60" y="1418" class="spec-sub" fill="#0f172a"><tspan font-weight="700">45</tspan> vendor backends (cameras · lasers · stages…)</text>
+    <text x="60" y="1438" class="spec-sub" fill="#0f172a"><tspan font-weight="700">260</tspan> hand-written axios endpoint wrappers</text>
+    <text x="60" y="1458" class="spec-sub" fill="#0f172a"><tspan font-weight="700">~50</tspan> Redux slices in frontend/src/state/slices</text>
+    <text x="60" y="1478" class="spec-sub" fill="#0f172a"><tspan font-weight="700">~75</tspan> React components + axon widgets</text>
+    <text x="60" y="1498" class="spec-sub" fill="#0f172a"><tspan font-weight="700">3</tspan> coexisting stream transports (binary · JPEG · MJPEG)</text>
+    <text x="60" y="1518" class="spec-sub" fill="#0f172a"><tspan font-weight="700">4</tspan> alternative orchestrators (Arkitekt · Hypha · SiLA · WebRTC)</text>
+    <text x="60" y="1538" class="spec-sub" fill="#0f172a"><tspan font-weight="700">2</tspan> workflow composers (Workflow + Blockly + Experiment DSL)</text>
+
+    <text x="60" y="1562" class="spec-sub" font-style="italic" fill="#475569">Every drop above is a deletion the newswitch port avoids.</text>
+  </g>
+
+</svg>

@@ -34,16 +34,19 @@ class SingleTiffWriter:
         >>> writer.close()
     """
 
-    def __init__(self, file_path: str, bigtiff: bool = True):
+    def __init__(self, file_path: str, bigtiff: bool = True, isRGB: bool = False):
         """
         Initialize the single TIFF writer.
-        
+
         Args:
             file_path: Path where the TIFF file will be written
             bigtiff: Whether to use BigTIFF format (recommended for large files)
+            isRGB: Whether incoming tiles are RGB (H, W, 3) and should be written
+                   in colour (photometric="rgb") rather than as a 3-plane stack.
         """
         self.file_path = file_path
         self.bigtiff = bigtiff
+        self.isRGB = isRGB
         self.image_count = 0
         self._tiff_writer: Optional[tifffile.TiffWriter] = None
 
@@ -97,8 +100,15 @@ class SingleTiffWriter:
                 }
             }
 
-            # Write image with metadata
-            self._tiff_writer.write(data=image, metadata=metadata)
+            # Write image with metadata. RGB tiles (H, W, 3) must be tagged
+            # photometric="rgb" or tifffile would store them as a 3-plane
+            # grayscale stack; the 'axes' hint is dropped so tifffile infers
+            # the trailing samples axis. Grayscale tiles are unchanged.
+            if image.ndim == 3 and self.isRGB:
+                rgb_metadata = {k: v for k, v in metadata.items() if k != 'axes'}
+                self._tiff_writer.write(data=image, metadata=rgb_metadata, photometric='rgb')
+            else:
+                self._tiff_writer.write(data=image, metadata=metadata)
             self.image_count += 1
 
         except Exception as e:

@@ -6,6 +6,7 @@ import {
   MdOutlineDelete,
   MdOutlineFileDownload,
   MdOutlineFileUpload,
+  MdOutlineInfo,
 } from "react-icons/md";
 import { BiRename } from "react-icons/bi";
 import { FaListUl, FaRegPaste } from "react-icons/fa6";
@@ -23,6 +24,8 @@ const Toolbar = ({
   onLayoutChange,
   onRefresh,
   triggerAction,
+  showMetadataPane,
+  onToggleMetadataPane,
 }) => {
   const [showToggleViewMenu, setShowToggleViewMenu] = useState(false);
   const { currentFolder } = useFileNavigation();
@@ -53,6 +56,12 @@ const Toolbar = ({
   ];
 
   const toolbarRightItems = [
+    {
+      icon: <MdOutlineInfo size={18} />,
+      title: showMetadataPane ? "Hide details" : "Show details",
+      onClick: onToggleMetadataPane,
+      active: showMetadataPane,
+    },
     {
       icon: activeLayout === "grid" ? <BsGridFill size={16} /> : <FaListUl size={16} />,
       title: "Change View",
@@ -156,7 +165,11 @@ const Toolbar = ({
         <div>
           {toolbarRightItems.map((item, index) => (
             <div key={index} className="toolbar-left-items">
-              <button className="item-action icon-only" title={item.title} onClick={item.onClick}>
+              <button
+                className={`item-action icon-only ${item.active ? "active" : ""}`}
+                title={item.title}
+                onClick={item.onClick}
+              >
                 {item.icon}
               </button>
               {index !== toolbarRightItems.length - 1 && <div className="item-separator"></div>}

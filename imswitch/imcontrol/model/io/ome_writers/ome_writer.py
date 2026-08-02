@@ -51,8 +51,10 @@ class OMEWriterConfig:
     Controls which output formats are enabled and their parameters.
     
     Attributes:
-        write_tiff: DEPRECATED - Use write_individual_tiffs instead.
-                   Legacy mode that writes TIFFs without OME metadata.
+        write_tiff: Write a single multi-dimensional OME-TIFF hyperstack
+                   (TCZYX / TCZYXS for RGB) with full OME-XML metadata at
+                   finalize(). Fiji-readable ("Bio-Formats") with correct
+                   dimensions, physical pixel sizes and channel names.
         write_zarr: Write OME-Zarr format with pyramids
         write_stitched_tiff: Write stitched OME-TIFF mosaic
         write_tiff_single: Append tiles to a single TIFF file
@@ -76,7 +78,7 @@ class OMEWriterConfig:
         z_start: Starting Z position in microns
         time_interval: Time interval in seconds
     """
-    write_tiff: bool = False  # DEPRECATED - use write_individual_tiffs
+    write_tiff: bool = False  # Single multi-dimensional OME-TIFF hyperstack
     write_zarr: bool = True
     write_stitched_tiff: bool = False
     write_tiff_single: bool = False
@@ -159,7 +161,17 @@ class OMEFileStorePaths:
         self.tiff_dir = os.path.join(base_dir, "tiles")
         self.zarr_dir = os.path.join(base_dir + ".ome.zarr")
 
+        # NOTE: directories are created lazily (only when a TIFF is actually
+        # written – see ``ensure_tiff_dir`` / ``get_timepoint_dir``).  Creating
+        # ``tiff_dir`` eagerly here produced an empty ``<area>/tiles`` folder for
+        # every scan-area writer even when individual-TIFF output is disabled
+        # (the default), littering each multi-area / multi-position acquisition
+        # with dozens of empty directories.
+
+    def ensure_tiff_dir(self) -> str:
+        """Create and return the TIFF output directory on first use."""
         os.makedirs(self.tiff_dir, exist_ok=True)
+        return self.tiff_dir
 
     def get_timepoint_dir(self, timepoint_index: int) -> str:
         """
@@ -249,6 +261,8 @@ class OMEWriter:
         isRGB: bool = False,
         omero_connection_params: Optional[OMEROConnectionParams] = None,
         shared_omero_key: Optional[str] = None,
+        well_metadata: Optional[Dict[str, Any]] = None,
+        image_name: Optional[str] = None,
     ):
         """
         Initialize the OME writer.
@@ -264,6 +278,12 @@ class OMEWriter:
             omero_connection_params: OMERO connection parameters (required if write_omero=True)
             shared_omero_key: Key for shared OMERO uploader (for timelapse experiments).
                              If provided, reuses an existing uploader or creates one to share.
+            well_metadata: Optional dict describing the labware well backing this image.
+                Recognised keys: ``wellRow`` (str, e.g. "A"), ``wellColumn`` (int, 1-based),
+                ``labwareLoadName`` (str), ``conditionLabel`` (str). When provided, the OME-NGFF
+                ``well`` group attrs and a custom ``imswitch_well`` block are emitted.
+            image_name: Optional clean image name (e.g. the position/area name) used
+                for OME/OMERO image metadata. Falls back to the output file basename.
         """
         self.file_paths = file_paths
         self.tile_h, self.tile_w = tile_shape
@@ -274,6 +294,10 @@ class OMEWriter:
         self.isRGB = isRGB
         self.omero_connection_params = omero_connection_params
         self.shared_omero_key = shared_omero_key
+        self.well_metadata = well_metadata or None
+        # Optional clean image name for OME/OMERO metadata. Falls back to the
+        # file basename (legacy behaviour) when not provided.
+        self._image_name = image_name or None
 
         # Zarr components
         self.store = None
@@ -283,6 +307,13 @@ class OMEWriter:
         # TIFF writers
         self.tiff_stitcher: Optional[OmeTiffStitcher] = None
         self.single_tiff_writer: Optional[SingleTiffWriter] = None
+
+        # In-memory mosaic for the unified multi-dimensional OME-TIFF hyperstack
+        # (write_tiff). Filled tile-by-tile in write_frame() and flushed to a
+        # single Fiji-readable OME-TIFF at finalize(). Allocated lazily so we
+        # never reserve RAM when the option is disabled.
+        self.tiff_mosaic: Optional[np.ndarray] = None
+        self._tiff_frames_written = 0
 
         # OMERO uploader
         self.omero_uploader: Optional[OMEROUploader] = None
@@ -294,6 +325,9 @@ class OMEWriter:
         # Initialize storage backends
         if config.write_zarr:
             self._setup_zarr_store()
+
+        if config.write_tiff:
+            self._setup_tiff_mosaic()
 
         if config.write_stitched_tiff:
             self._setup_tiff_stitcher()
@@ -310,22 +344,74 @@ class OMEWriter:
         self.store = str(self.file_paths.zarr_dir)
         self.root = zarr.open_group(store=self.store, mode="w")
         
+        # Colour (RGB) detectors deliver (H, W, 3) tiles. Add a trailing
+        # "samples" axis so the canvas can physically store them, and keep the
+        # native 8-bit range (Picamera2/Hik RGB are uint8) so viewers render
+        # true colour instead of a near-black 16-bit image. Mono detectors keep
+        # the original 5-D uint16 layout unchanged.
+        base_shape = (
+            int(self.config.n_time_points),
+            int(self.config.n_channels),
+            int(self.config.n_z_planes),
+            int(self.ny * self.tile_h),
+            int(self.nx * self.tile_w),
+        )
+        base_chunks = (1, 1, 1, int(self.tile_h), int(self.tile_w))
+        if self.isRGB:
+            canvas_shape = base_shape + (3,)
+            canvas_chunks = base_chunks + (3,)
+            canvas_dtype = "uint8"
+        else:
+            canvas_shape = base_shape
+            canvas_chunks = base_chunks
+            canvas_dtype = "uint16"
+
         self.canvas = self.root.create_array(
             name="0",
-            shape=(
-                int(self.config.n_time_points),
-                int(self.config.n_channels),
-                int(self.config.n_z_planes),
-                int(self.ny * self.tile_h),
-                int(self.nx * self.tile_w)
-            ),  # t c z y x
-            chunks=(1, 1, 1, int(self.tile_h), int(self.tile_w)),
-            dtype="uint16",
+            shape=canvas_shape,   # t c z y x (s)
+            chunks=canvas_chunks,
+            dtype=canvas_dtype,
             compressor=self.config.zarr_compressor
         )
 
         # Set OME-Zarr metadata
         self._set_ome_ngff_metadata()
+
+    def _setup_tiff_mosaic(self):
+        """Allocate the in-memory mosaic backing the multi-dimensional OME-TIFF.
+
+        The mosaic mirrors the OME-Zarr canvas layout (TCZYX, plus a trailing
+        samples axis for RGB) so a full scan lands in a single Fiji-readable
+        hyperstack. Uint16 for mono detectors, uint8 for RGB (matching the
+        native camera range so colour renders correctly).
+        """
+        base_shape = (
+            int(self.config.n_time_points),
+            int(self.config.n_channels),
+            int(self.config.n_z_planes),
+            int(self.ny * self.tile_h),
+            int(self.nx * self.tile_w),
+        )
+        try:
+            if self.isRGB:
+                self.tiff_mosaic = np.zeros(base_shape + (3,), dtype=np.uint8)
+            else:
+                self.tiff_mosaic = np.zeros(base_shape, dtype=np.uint16)
+            if self.logger:
+                self.logger.debug(
+                    f"OME-TIFF mosaic allocated: shape={self.tiff_mosaic.shape}, "
+                    f"dtype={self.tiff_mosaic.dtype}"
+                )
+        except MemoryError:
+            # Refuse gracefully rather than crashing the acquisition thread.
+            self.tiff_mosaic = None
+            self.config.write_tiff = False
+            if self.logger:
+                self.logger.error(
+                    "Not enough memory to build the multi-dimensional OME-TIFF "
+                    f"mosaic (shape {base_shape}); disabling OME-TIFF output. "
+                    "Use OME-Zarr or Stitched OME-TIFF for very large scans."
+                )
 
     def _set_ome_ngff_metadata(self):
         """
@@ -340,28 +426,41 @@ class OMEWriter:
         pixel_size_z = self.config.pixel_size_z
         time_interval = self.config.time_interval
 
+        # 8-bit display range for RGB (uint8) canvases, 16-bit for mono.
+        display_max = 255 if self.isRGB else 65535
+
+        # Axes / scales. RGB canvases carry a trailing "samples" axis; mono
+        # canvases keep the classic 5-D TCZYX layout.
+        axes = [
+            {"name": "t", "type": "time", "unit": "second"},
+            {"name": "c", "type": "channel"},
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"},
+        ]
+        scale = [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]
+        translation = [0, 0, self.config.z_start, self.y_start, self.x_start]
+        if self.isRGB:
+            axes.append({"name": "s", "type": "channel"})
+            scale = scale + [1]
+            translation = translation + [0]
+
         # Set multiscales metadata with physical coordinate transformations
         self.root.attrs["multiscales"] = [{
             "version": "0.4",
-            "name": "experiment",
+            "name": self._image_name or "experiment",
             "datasets": [
                 {
                     "path": "0",
                     "coordinateTransformations": [
-                        {"type": "scale", "scale": [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]},
-                        {"type": "translation", "translation": [0, 0, self.config.z_start, self.y_start, self.x_start]}
+                        {"type": "scale", "scale": list(scale)},
+                        {"type": "translation", "translation": list(translation)}
                     ]
                 }
             ],
-            "axes": [
-                {"name": "t", "type": "time", "unit": "second"},
-                {"name": "c", "type": "channel"},
-                {"name": "z", "type": "space", "unit": "micrometer"},
-                {"name": "y", "type": "space", "unit": "micrometer"},
-                {"name": "x", "type": "space", "unit": "micrometer"},
-            ],
+            "axes": axes,
             "coordinateTransformations": [
-                {"type": "scale", "scale": [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]}
+                {"type": "scale", "scale": list(scale)}
             ]
         }]
 
@@ -379,15 +478,15 @@ class OMEWriter:
                 "inverted": False,
                 "window": {
                     "start": 0,
-                    "end": 65535,  # 16-bit max
+                    "end": display_max,
                     "min": 0,
-                    "max": 65535
+                    "max": display_max
                 }
             })
 
         self.root.attrs["omero"] = {
             "id": 1,
-            "name": os.path.basename(self.file_paths.zarr_dir),
+            "name": self._image_name or os.path.basename(self.file_paths.zarr_dir),
             "version": "0.4",
             "channels": channels,
             "rdefs": {
@@ -397,18 +496,40 @@ class OMEWriter:
             }
         }
 
+        # OME-NGFF "well" group attrs + ImSwitch labware metadata.
+        # Emitted only when the caller passed structured well metadata, so the
+        # plain (non-plate) acquisition path stays byte-identical.
+        if self.well_metadata:
+            wm = self.well_metadata
+            self.root.attrs["well"] = {
+                "version": "0.4",
+                "images": [{"path": "0", "acquisition": 0}],
+            }
+            self.root.attrs["imswitch_well"] = {
+                "wellRow": wm.get("wellRow"),
+                "wellColumn": wm.get("wellColumn"),
+                "labwareLoadName": wm.get("labwareLoadName"),
+                "conditionLabel": wm.get("conditionLabel"),
+            }
+
     def _setup_tiff_stitcher(self):
         """Set up the TIFF stitcher for creating stitched OME-TIFF files."""
+        # base_dir is created lazily (see OMEFileStorePaths); ensure it exists
+        # before the stitcher opens its output file inside it.
+        os.makedirs(self.file_paths.base_dir, exist_ok=True)
         stitched_tiff_path = os.path.join(self.file_paths.base_dir, "stitched.ome.tif")
-        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True, isRGB=self.isRGB)
+        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True, isRGB=self.isRGB, nx=self.nx, ny=self.ny, tile_w=self.tile_w, tile_h=self.tile_h)
         self.tiff_stitcher.start()
         if self.logger:
             self.logger.debug(f"TIFF stitcher initialized: {stitched_tiff_path}")
 
     def _setup_single_tiff_writer(self):
         """Set up the single TIFF writer for appending tiles with metadata."""
+        # base_dir is created lazily (see OMEFileStorePaths); ensure it exists
+        # before the single-TIFF writer opens its output file inside it.
+        os.makedirs(self.file_paths.base_dir, exist_ok=True)
         single_tiff_path = os.path.join(self.file_paths.base_dir, "single_tiles.ome.tif")
-        self.single_tiff_writer = SingleTiffWriter(single_tiff_path, bigtiff=True)
+        self.single_tiff_writer = SingleTiffWriter(single_tiff_path, bigtiff=True, isRGB=self.isRGB)
         if self.logger:
             self.logger.debug(f"Single TIFF writer initialized: {single_tiff_path}")
 
@@ -444,7 +565,7 @@ class OMEWriter:
         try:
             self.omero_uploader = OMEROUploader(
                 connection_params=self.omero_connection_params,
-                image_name=os.path.basename(self.file_paths.base_dir),
+                image_name=self._image_name or os.path.basename(self.file_paths.base_dir),
                 dtype=np.uint16,
                 size_x=self.nx * self.tile_w,
                 size_y=self.ny * self.tile_h,
@@ -493,10 +614,10 @@ class OMEWriter:
         """
         result = {}
 
-        # Legacy write_tiff is deprecated - use write_individual_tiffs instead
-        # which includes proper OME-XML metadata
-        # if self.config.write_tiff:
-        #     self._write_tiff_tile(frame, metadata)
+        # Accumulate into the in-memory multi-dimensional OME-TIFF mosaic.
+        # The full hyperstack is flushed to disk once in finalize().
+        if self.config.write_tiff and self.tiff_mosaic is not None:
+            self._write_tiff_mosaic_tile(frame, metadata)
 
         # Write to Zarr canvas if requested
         if self.config.write_zarr and self.canvas is not None:
@@ -524,21 +645,43 @@ class OMEWriter:
 
         return result
 
-    def _write_tiff_tile(self, frame, metadata: Dict[str, Any]):
-        """Write individual TIFF tile."""
-        t_idx = metadata.get("time_index", 0)
-        z_idx = metadata.get("z_index", 0)
-        c_idx = metadata.get("channel_index", 0)
+    def _write_tiff_mosaic_tile(self, frame, metadata: Dict[str, Any]):
+        """Place a single tile into the in-memory multi-dimensional OME-TIFF mosaic.
 
-        tiff_name = (
-            f"F{metadata.get('runningNumber', 0):06d}_"
-            f"t{t_idx:03d}_c{c_idx:03d}_z{z_idx:03d}_"
-            f"x{metadata['x']:.1f}_y{metadata['y']:.1f}_"
-            f"{metadata.get('illuminationChannel', 'unknown')}_"
-            f"{metadata.get('illuminationValue', 0)}.ome.tif"
-        )
-        tiff_path = os.path.join(self.file_paths.tiff_dir, tiff_name)
-        tif.imwrite(tiff_path, frame, compression=self.config.compression)
+        Uses the same grid/index maths as the Zarr canvas so the two outputs
+        stay pixel-aligned. Handles RGB/mono coercion identically to
+        ``_write_zarr_tile``.
+        """
+        # Calculate grid position
+        ix = int(round((metadata["x"] - self.x_start) / max(self.x_step, 1)))
+        iy = int(round((metadata["y"] - self.y_start) / max(self.y_step, 1)))
+
+        # Dimension indices, clamped to the allocated extents
+        t_idx = min(metadata.get("time_index", 0), self.config.n_time_points - 1)
+        c_idx = min(metadata.get("channel_index", 0), self.config.n_channels - 1)
+        z_idx = min(metadata.get("z_index", 0), self.config.n_z_planes - 1)
+
+        # Guard against out-of-range tiles (defensive; grid should already fit)
+        if not (0 <= ix < self.nx and 0 <= iy < self.ny):
+            if self.logger:
+                self.logger.warning(
+                    f"OME-TIFF tile ({ix},{iy}) outside grid ({self.nx}x{self.ny}); skipped"
+                )
+            return
+
+        y0, y1 = iy * self.tile_h, (iy + 1) * self.tile_h
+        x0, x1 = ix * self.tile_w, (ix + 1) * self.tile_w
+
+        if self.isRGB:
+            if frame.ndim == 2:
+                frame = np.stack([frame] * 3, axis=-1)
+            self.tiff_mosaic[t_idx, c_idx, z_idx, y0:y1, x0:x1, :] = frame
+        else:
+            if frame.ndim == 3:
+                frame = np.dot(frame[..., :3], [0.299, 0.587, 0.114]).astype(self.tiff_mosaic.dtype)
+            self.tiff_mosaic[t_idx, c_idx, z_idx, y0:y1, x0:x1] = frame
+
+        self._tiff_frames_written += 1
 
     def _write_zarr_tile(self, frame, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Write tile to Zarr canvas and return chunk information."""
@@ -560,8 +703,17 @@ class OMEWriter:
         y0, y1 = iy * self.tile_h, (iy + 1) * self.tile_h
         x0, x1 = ix * self.tile_w, (ix + 1) * self.tile_w
 
-        # Write to canvas with proper indexing
-        self.canvas[t_idx, c_idx, z_idx, y0:y1, x0:x1] = frame
+        # Write to canvas with proper indexing. RGB canvases carry a trailing
+        # samples axis; a stray 2-D frame is broadcast across the 3 samples,
+        # and a stray 3-D frame on a mono canvas is collapsed to luminance.
+        if self.isRGB:
+            if frame.ndim == 2:
+                frame = np.stack([frame] * 3, axis=-1)
+            self.canvas[t_idx, c_idx, z_idx, y0:y1, x0:x1, :] = frame
+        else:
+            if frame.ndim == 3:
+                frame = np.dot(frame[..., :3], [0.299, 0.587, 0.114]).astype(self.canvas.dtype)
+            self.canvas[t_idx, c_idx, z_idx, y0:y1, x0:x1] = frame
 
         # Return chunk information for frontend updates
         rel_chunk = f"0/{iy}.{ix}"  # NGFF v0.4 layout
@@ -624,10 +776,15 @@ class OMEWriter:
         filename = f"t{current_time}_x{x_microns}_y{y_microns}_z{z_microns}_c{c_idx}_{channel}_i{iterator:04d}_p{laser_power}.tif"
         filepath = os.path.join(timepoint_dir, filename)
 
+        # RGB tiles (H, W, 3) must be tagged photometric="rgb" or tifffile would
+        # store them as a 3-plane grayscale stack, which is why colour tiles were
+        # being saved as grayscale. Grayscale tiles keep photometric=None (auto).
+        photometric = "rgb" if (self.isRGB and frame.ndim == 3) else None
+
         # Build OME-XML metadata for this individual TIFF
         try:
             from .ome_tiff_metadata import build_ome_metadata_from_dict, OME_TYPES_AVAILABLE
-            
+
             if OME_TYPES_AVAILABLE:
                 # Prepare metadata dict with image dimensions and pixel info
                 ome_metadata = metadata.copy()
@@ -636,19 +793,19 @@ class OMEWriter:
                 ome_metadata["dtype"] = str(frame.dtype)
                 ome_metadata["pixel_size"] = self.config.pixel_size
                 ome_metadata["channel_name"] = channel
-                
+
                 # Build OME-XML string
                 ome_xml = build_ome_metadata_from_dict(ome_metadata)
                 if ome_xml:
-                    tif.imwrite(filepath, frame, compression=self.config.compression, description=ome_xml)
+                    tif.imwrite(filepath, frame, compression=self.config.compression, description=ome_xml, photometric=photometric)
                 else:
-                    tif.imwrite(filepath, frame, compression=self.config.compression)
+                    tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
             else:
-                tif.imwrite(filepath, frame, compression=self.config.compression)
+                tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
         except Exception as e:
             if self.logger:
                 self.logger.warning(f"Failed to write OME metadata to individual TIFF: {e}")
-            tif.imwrite(filepath, frame, compression=self.config.compression)
+            tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
 
     def _write_omero_tile(self, frame, metadata: Dict[str, Any]):
         """
@@ -667,6 +824,21 @@ class OMEWriter:
         t_idx = metadata.get("time_index", 0)
         c_idx = metadata.get("channel_index", 0)
         z_idx = metadata.get("z_index", 0)
+
+        # The OMERO uploader is built for the mono plane model (uint16, no
+        # samples axis) and is not RGB-aware. For colour experiments, downgrade
+        # the OMERO tile to grayscale so the upload stays functional instead of
+        # crashing/corrupting mid-run. The OME-Zarr and TIFF outputs still keep
+        # full colour. (Mono frames are 2-D and skip this branch unchanged.)
+        if self.isRGB and getattr(frame, "ndim", 0) == 3:
+            if not getattr(self, "_warned_omero_rgb", False):
+                if self.logger:
+                    self.logger.warning(
+                        "OMERO upload is not RGB-capable; uploading grayscale "
+                        "tiles to OMERO (OME-Zarr/TIFF outputs keep colour)."
+                    )
+                self._warned_omero_rgb = True
+            frame = np.dot(frame[..., :3], [0.299, 0.587, 0.114]).astype(np.uint16)
 
         # Create tile metadata
         tile_meta = TileMetadata(
@@ -707,6 +879,13 @@ class OMEWriter:
                 if self.logger:
                     self.logger.warning(f"Pyramid generation failed: {err}")
 
+        if self.config.write_tiff and self.tiff_mosaic is not None:
+            try:
+                self._finalize_ome_tiff()
+            except Exception as err:
+                if self.logger:
+                    self.logger.error(f"Failed to write multi-dimensional OME-TIFF: {err}")
+
         if self.config.write_stitched_tiff and self.tiff_stitcher is not None:
             self.tiff_stitcher.close()
             if self.logger:
@@ -730,6 +909,73 @@ class OMEWriter:
         if self.logger:
             self.logger.info(f"OME writer finalized for {self.file_paths.base_dir}")
 
+    def _finalize_ome_tiff(self):
+        """Flush the accumulated mosaic to a single multi-dimensional OME-TIFF.
+
+        Produces a Fiji/Bio-Formats-readable hyperstack with the proper OME
+        metadata model: TCZYX axes (plus a trailing samples axis for RGB),
+        physical pixel sizes, Z-step, time increment and channel names. Written
+        via tifffile's native OME support (``ome=True``).
+        """
+        if self.tiff_mosaic is None:
+            return
+
+        if self._tiff_frames_written == 0:
+            if self.logger:
+                self.logger.warning(
+                    "OME-TIFF requested but no frames were written; skipping empty file"
+                )
+            return
+
+        # Write the single hyperstack next to the OME-Zarr store so the two
+        # outputs live side by side under the same experiment folder.
+        os.makedirs(self.file_paths.base_dir, exist_ok=True)
+        out_path = os.path.join(
+            self.file_paths.base_dir,
+            os.path.basename(self.file_paths.base_dir) + ".ome.tif",
+        )
+
+        # RGB hyperstacks carry a trailing samples axis and must be tagged
+        # photometric="rgb"; mono stacks stay minisblack.
+        axes = "TCZYXS" if self.isRGB else "TCZYX"
+        photometric = "rgb" if self.isRGB else "minisblack"
+
+        # OME metadata model. tifffile maps these keys onto the OME-XML schema.
+        channel_names = list(self.config.channel_names or [])
+        ome_metadata = {
+            "axes": axes,
+            "PhysicalSizeX": float(self.config.pixel_size),
+            "PhysicalSizeXUnit": "µm",
+            "PhysicalSizeY": float(self.config.pixel_size),
+            "PhysicalSizeYUnit": "µm",
+            "PhysicalSizeZ": float(self.config.pixel_size_z),
+            "PhysicalSizeZUnit": "µm",
+            "TimeIncrement": float(self.config.time_interval),
+            "TimeIncrementUnit": "s",
+        }
+        if self._image_name:
+            ome_metadata["Name"] = self._image_name
+        if channel_names:
+            ome_metadata["Channel"] = {"Name": channel_names}
+
+        tif.imwrite(
+            out_path,
+            self.tiff_mosaic,
+            photometric=photometric,
+            metadata=ome_metadata,
+            compression=self.config.compression,
+            ome=True,
+            bigtiff=True,
+        )
+
+        # Release the buffer promptly — a full mosaic can be large.
+        self.tiff_mosaic = None
+
+        if self.logger:
+            self.logger.info(
+                f"Multi-dimensional OME-TIFF written ({self._tiff_frames_written} frames): {out_path}"
+            )
+
     def _build_vanilla_zarr_pyramids(self):
         """Build pyramid levels for OME-Zarr format."""
         if self.canvas is None:
@@ -750,7 +996,8 @@ class OMEWriter:
         """Synchronous pyramid generation with memory-efficient processing."""
         full_shape = self.canvas.shape
         n_t, n_c, n_z = full_shape[0], full_shape[1], full_shape[2]
-        spatial_shape = full_shape[-2:]
+        # RGB canvases are 6-D (…, Y, X, 3); mono are 5-D (…, Y, X).
+        spatial_shape = full_shape[3:5] if self.isRGB else full_shape[-2:]
 
         max_levels = 4
 
@@ -774,11 +1021,19 @@ class OMEWriter:
                         self.logger.warning(f"Could not delete existing pyramid level {level}: {e}")
                     continue
 
+            if self.isRGB:
+                level_shape = (n_t, n_c, n_z, int(new_y), int(new_x), 3)
+                level_chunks = (1, 1, 1, int(min(self.tile_h, new_y)), int(min(self.tile_w, new_x)), 3)
+                level_dtype = "uint8"
+            else:
+                level_shape = (n_t, n_c, n_z, int(new_y), int(new_x))
+                level_chunks = (1, 1, 1, int(min(self.tile_h, new_y)), int(min(self.tile_w, new_x)))
+                level_dtype = "uint16"
             level_canvas = self.root.create_array(
                 name=level_name,
-                shape=(n_t, n_c, n_z, int(new_y), int(new_x)),
-                chunks=(1, 1, 1, int(min(self.tile_h, new_y)), int(min(self.tile_w, new_x))),
-                dtype="uint16",
+                shape=level_shape,
+                chunks=level_chunks,
+                dtype=level_dtype,
                 compressor=self.config.zarr_compressor
             )
 
@@ -797,9 +1052,14 @@ class OMEWriter:
             for c_idx in range(n_c):
                 for z_idx in range(n_z):
                     try:
-                        source_data = np.array(source_canvas[t_idx, c_idx, z_idx, :, :])
-                        downsampled = source_data[::downsample_factor, ::downsample_factor]
-                        target_canvas[t_idx, c_idx, z_idx, :, :] = downsampled
+                        if self.isRGB:
+                            source_data = np.array(source_canvas[t_idx, c_idx, z_idx, :, :, :])
+                            downsampled = source_data[::downsample_factor, ::downsample_factor, :]
+                            target_canvas[t_idx, c_idx, z_idx, :, :, :] = downsampled
+                        else:
+                            source_data = np.array(source_canvas[t_idx, c_idx, z_idx, :, :])
+                            downsampled = source_data[::downsample_factor, ::downsample_factor]
+                            target_canvas[t_idx, c_idx, z_idx, :, :] = downsampled
                     except Exception as e:
                         if self.logger:
                             self.logger.warning(f"Failed to downsample t={t_idx}, c={c_idx}, z={z_idx}: {e}")
@@ -811,37 +1071,49 @@ class OMEWriter:
         pixel_size_z = self.config.pixel_size_z
         time_interval = self.config.time_interval
 
+        rgb = self.isRGB
+        display_max = 255 if rgb else 65535
+
         datasets = []
         for level_name in sorted([k for k in self.root.keys() if k.isdigit()], key=int):
             level_int = int(level_name)
             scale_factor = 2 ** level_int
+            ds_scale = [
+                time_interval, 1, pixel_size_z,
+                pixel_size_y * scale_factor,
+                pixel_size_x * scale_factor,
+            ]
+            ds_translation = [0, 0, self.config.z_start, self.y_start, self.x_start]
+            if rgb:
+                ds_scale = ds_scale + [1]
+                ds_translation = ds_translation + [0]
             datasets.append({
                 "path": level_name,
                 "coordinateTransformations": [
-                    {"type": "scale", "scale": [
-                        time_interval, 1, pixel_size_z,
-                        pixel_size_y * scale_factor,
-                        pixel_size_x * scale_factor
-                    ]},
-                    {"type": "translation", "translation": [
-                        0, 0, self.config.z_start, self.y_start, self.x_start
-                    ]}
+                    {"type": "scale", "scale": ds_scale},
+                    {"type": "translation", "translation": ds_translation}
                 ]
             })
 
+        axes = [
+            {"name": "t", "type": "time", "unit": "second"},
+            {"name": "c", "type": "channel"},
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"},
+        ]
+        top_scale = [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]
+        if rgb:
+            axes.append({"name": "s", "type": "channel"})
+            top_scale = top_scale + [1]
+
         self.root.attrs["multiscales"] = [{
             "version": "0.4",
-            "name": "experiment",
+            "name": self._image_name or "experiment",
             "datasets": datasets,
-            "axes": [
-                {"name": "t", "type": "time", "unit": "second"},
-                {"name": "c", "type": "channel"},
-                {"name": "z", "type": "space", "unit": "micrometer"},
-                {"name": "y", "type": "space", "unit": "micrometer"},
-                {"name": "x", "type": "space", "unit": "micrometer"},
-            ],
+            "axes": axes,
             "coordinateTransformations": [
-                {"type": "scale", "scale": [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]}
+                {"type": "scale", "scale": top_scale}
             ]
         }]
 
@@ -858,7 +1130,7 @@ class OMEWriter:
                     "coefficient": 1.0,
                     "family": "linear",
                     "inverted": False,
-                    "window": {"start": 0, "end": 65535, "min": 0, "max": 65535}
+                    "window": {"start": 0, "end": display_max, "min": 0, "max": display_max}
                 })
 
             self.root.attrs["omero"] = {

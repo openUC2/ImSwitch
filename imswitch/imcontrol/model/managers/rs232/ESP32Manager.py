@@ -42,10 +42,15 @@ class ESP32Manager:
         except:
             baudrate = 115200
 
+        # Optional: pin a specific board by USB serial number / port (deviceID)
+        # and/or only ever connect to the CANopen master (requireMaster), so a
+        # motor/slave board is never picked during auto-discovery.
+        device_id = rs232Info.managerProperties.get('deviceID', None)
+        require_master = rs232Info.managerProperties.get('requireMaster', False)
 
         # initialize the ESP32 device adapter
-        self.__logger.info(f"Initializing ESP32 device adapter with host: {self._host}, port: {self._port}, identity: {self._identity}, serialport: {self._serialport}, baudrate: {baudrate}")
-        self._esp32 = uc2.UC2Client(host=self._host, port=80, identity=self._identity, serialport=self._serialport, baudrate=baudrate, DEBUG=self._debugging, logger=self.__logger, skipFirmwareCheck=override_firmwarecheck)
+        self.__logger.info(f"Initializing ESP32 device adapter with host: {self._host}, port: {self._port}, identity: {self._identity}, serialport: {self._serialport}, baudrate: {baudrate}, deviceID: {device_id}, requireMaster: {require_master}")
+        self._esp32 = uc2.UC2Client(host=self._host, port=80, identity=self._identity, serialport=self._serialport, baudrate=baudrate, DEBUG=self._debugging, logger=self.__logger, skipFirmwareCheck=override_firmwarecheck, device_id=device_id, requireMaster=require_master)
 
 
     def finalize(self):

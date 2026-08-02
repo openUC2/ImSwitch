@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import createAxiosInstance from '../../backendapi/createAxiosInstance';
+import createAxiosInstance from "../../backendapi/createAxiosInstance";
 import {
   Box,
   Typography,
@@ -17,6 +17,7 @@ import PauseIcon from "@mui/icons-material/Pause";
 import StopIcon from "@mui/icons-material/Stop";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import VisibilityIcon from "@mui/icons-material/Visibility";
+import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 
 // Dimension components
 import DimensionBar from "./DimensionBar";
@@ -44,6 +45,9 @@ import * as objectiveSlice from "../../state/slices/ObjectiveSlice";
 import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsSlice";
 import * as vizarrViewerSlice from "../../state/slices/VizarrViewerSlice";
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
+import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
+import * as positionSlice from "../../state/slices/PositionSlice";
+import { setNotification } from "../../state/slices/NotificationSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 
 // API
@@ -52,6 +56,8 @@ import apiExperimentControllerStopExperiment from "../../backendapi/apiExperimen
 import apiExperimentControllerPauseWorkflow from "../../backendapi/apiExperimentControllerPauseWorkflow";
 import apiExperimentControllerResumeExperiment from "../../backendapi/apiExperimentControllerResumeExperiment";
 import apiExperimentControllerInterruptFocusMap from "../../backendapi/apiExperimentControllerInterruptFocusMap";
+import apiExperimentControllerRunAshlarStitching from "../../backendapi/apiExperimentControllerRunAshlarStitching";
+import apiExperimentControllerGetOverviewAsyncStatus from "../../backendapi/apiExperimentControllerGetOverviewAsyncStatus";
 import fetchGetExperimentStatus from "../../middleware/fetchExperimentControllerGetExperimentStatus";
 
 // Status enum
@@ -64,7 +70,7 @@ const Status = Object.freeze({
 
 /**
  * ExperimentDesigner - Main container for the dimension-based experiment UI
- * 
+ *
  * Structure:
  * - Header with experiment controls (Start/Pause/Stop)
  * - Dimension bar for navigation
@@ -77,19 +83,32 @@ const ExperimentDesigner = () => {
   const infoPopupRef = useRef(null);
 
   // Redux state
-  const connectionSettings = useSelector(connectionSettingsSlice.getConnectionSettingsState);
+  const connectionSettings = useSelector(
+    connectionSettingsSlice.getConnectionSettingsState,
+  );
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const experimentUI = useSelector(experimentUISlice.getExperimentUIState);
-  const experimentStatus = useSelector(experimentStatusSlice.getExperimentStatusState);
-  const experimentWorkflow = useSelector(experimentStateSlice.getExperimentState);
+  const experimentStatus = useSelector(
+    experimentStatusSlice.getExperimentStatusState,
+  );
+  const experimentWorkflow = useSelector(
+    experimentStateSlice.getExperimentState,
+  );
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const focusMapConfig = useSelector(focusMapSlice.getFocusMapConfig);
+  const focusMapManualPoints = useSelector(focusMapSlice.getManualPoints);
+  const parameterRange = useSelector(
+    parameterRangeSlice.getParameterRangeState,
+  );
+  const positionState = useSelector(positionSlice.getPositionState);
 
   // Progress tracking
   const [cachedStepId, setCachedStepId] = useState(0);
   const [cachedTotalSteps, setCachedTotalSteps] = useState(undefined);
   const [cachedStepName, setCachedStepName] = useState("");
+  const [ashlarRunning, setAshlarRunning] = useState(false);
+  const [ashlarInterrupted, setAshlarInterrupted] = useState(false);
 
   // Periodic status fetch
   useEffect(() => {
@@ -99,6 +118,52 @@ const ExperimentDesigner = () => {
     }, 3000);
     return () => clearInterval(intervalId);
   }, [dispatch]);
+
+  // Trigger Ashlar stitching automatically when the experiment finishes.
+  // Use a boolean ref so we catch any IDLE transition that follows a RUNNING
+  // phase — including RUNNING→STOPPING→IDLE flows.
+  const wasRunningRef = useRef(false);
+  useEffect(() => {
+    const curr = experimentStatus.status;
+    if (curr === Status.RUNNING) {
+      wasRunningRef.current = true;
+    } else if (wasRunningRef.current && curr === Status.IDLE) {
+      wasRunningRef.current = false;
+      if (experimentState.parameterValue.ome_write_ashlar_stitch) {
+        // Backend auto-starts stitching once all tiles are written.
+        // Start polling so we can show progress as soon as it begins.
+        setAshlarRunning(true);
+      }
+    }
+  }, [
+    experimentStatus.status,
+    experimentState.parameterValue.ome_write_ashlar_stitch,
+    experimentState.parameterValue.ashlar_pixel_size,
+    experimentState.parameterValue.ashlar_maximum_shift,
+    experimentState.parameterValue.ashlar_align_channel,
+  ]);
+
+  // Poll stitching progress until the background job finishes
+  useEffect(() => {
+    if (!ashlarRunning) return;
+    const intervalId = setInterval(() => {
+      apiExperimentControllerGetOverviewAsyncStatus()
+        .then((status) => {
+          if (status?.message)
+            infoPopupRef.current?.showMessage(`Stitching: ${status.message}`);
+          if (!status?.running) {
+            setAshlarRunning(false);
+            if (status?.error)
+              infoPopupRef.current?.showMessage(
+                `Stitching failed: ${status.error.slice(0, 120)}`,
+              );
+            else infoPopupRef.current?.showMessage("Ashlar stitching complete");
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(intervalId);
+  }, [ashlarRunning]);
 
   // Warn the user before leaving/refreshing the page while an experiment is running
   useEffect(() => {
@@ -127,12 +192,17 @@ const ExperimentDesigner = () => {
     if (experimentWorkflow.stepName) {
       setCachedStepName(experimentWorkflow.stepName);
     }
-  }, [experimentWorkflow.totalSteps, experimentWorkflow.stepId, experimentWorkflow.stepName]);
+  }, [
+    experimentWorkflow.totalSteps,
+    experimentWorkflow.stepId,
+    experimentWorkflow.stepName,
+  ]);
 
   // Calculate progress
-  const progress = cachedTotalSteps && cachedTotalSteps > 0
-    ? Math.floor((cachedStepId / cachedTotalSteps) * 100)
-    : 0;
+  const progress =
+    cachedTotalSteps && cachedTotalSteps > 0
+      ? Math.floor((cachedStepId / cachedTotalSteps) * 100)
+      : 0;
 
   // Dimension to component mapping
   const dimensionComponents = {
@@ -147,52 +217,173 @@ const ExperimentDesigner = () => {
   };
 
   // Get active dimension component
-  const ActiveDimensionComponent = dimensionComponents[experimentUI.expandedDimension];
-  const isActiveDimensionEnabled = experimentUI.dimensions[experimentUI.expandedDimension]?.enabled ?? true;
+  const ActiveDimensionComponent =
+    dimensionComponents[experimentUI.expandedDimension];
+  const isActiveDimensionEnabled =
+    experimentUI.dimensions[experimentUI.expandedDimension]?.enabled ?? true;
 
   // Control handlers
   const handleStart = () => {
     console.log("Experiment started");
-    dispatch(experimentSlice.setIsSnakescan(wellSelectorState.areaSelectSnakescan));
+    dispatch(
+      experimentSlice.setIsSnakescan(wellSelectorState.areaSelectSnakescan),
+    );
 
     if (wellSelectorState.mode === "area") {
-      dispatch(experimentSlice.setOverlapWidth(wellSelectorState.areaSelectOverlap));
-      dispatch(experimentSlice.setOverlapHeight(wellSelectorState.areaSelectOverlap));
+      dispatch(
+        experimentSlice.setOverlapWidth(wellSelectorState.areaSelectOverlap),
+      );
+      dispatch(
+        experimentSlice.setOverlapHeight(wellSelectorState.areaSelectOverlap),
+      );
     }
 
     const scanConfig = coordinateCalculator.calculateScanCoordinates(
       experimentState,
       objectiveState,
-      wellSelectorState
+      wellSelectorState,
     );
+
+    // "Override per-group Z with current Z" (Tiling tab): rewrite every stored
+    // Z with the microscope's current stage Z. Done here on the frontend (the
+    // backend just consumes the coordinates). Skipped when a focus map is
+    // active, since the focus map drives Z per-XY.
+    if (
+      experimentState.parameterValue.overrideZWithCurrentZ &&
+      !focusMapConfig.enabled
+    ) {
+      const currentZ = positionState?.z ?? 0;
+      (scanConfig.scanAreas || []).forEach((area) => {
+        if (area.centerPosition) area.centerPosition.z = currentZ;
+        (area.positions || []).forEach((pos) => {
+          pos.z = currentZ;
+        });
+      });
+    }
 
     console.log("Scan configuration:", scanConfig);
     console.log(`Total positions: ${scanConfig.metadata.totalPositions}`);
 
     // Zero out intensities for channels that are not enabled for experiment acquisition
-    const channelEnabled = experimentState.parameterValue.channelEnabledForExperiment || [];
-    const rawIntensities = experimentState.parameterValue.illuIntensities || [];
+    const pv = experimentState.parameterValue;
+    const channelEnabled = pv.channelEnabledForExperiment || [];
+    const selectedChannelCount = Array.isArray(channelEnabled)
+      ? channelEnabled.filter(Boolean).length
+      : 0;
+    const totalPositions = Number(scanConfig?.metadata?.totalPositions ?? 0);
+
+    if (totalPositions <= 0 && selectedChannelCount <= 0) {
+      dispatch(
+        setNotification({
+          message:
+            "Nothing to do: no positions and no channels selected. Please select at least one position and enable at least one channel.",
+          type: "warning",
+        }),
+      );
+      return;
+    }
+    if (totalPositions <= 0) {
+      dispatch(
+        setNotification({
+          message:
+            "Nothing to do: no positions selected. Please select at least one position before starting.",
+          type: "warning",
+        }),
+      );
+      return;
+    }
+    if (selectedChannelCount <= 0) {
+      dispatch(
+        setNotification({
+          message:
+            "Nothing to do: no channels selected. Please enable at least one channel in EXP before starting.",
+          type: "warning",
+        }),
+      );
+      return;
+    }
+
+    const rawIntensities = pv.illuIntensities || [];
+    const exposureTimes = pv.exposureTimes || [];
+    const gains = pv.gains || [];
+    const illuminationParamsState = pv.illuminationParams || {};
     const filteredIntensities = rawIntensities.map((val, idx) =>
-      channelEnabled[idx] === true ? val : 0    );
+      channelEnabled[idx] === true ? val : 0,
+    );
+
+    // Split the flat channel list into conventional sources + a dedicated
+    // synthetic (ring/DPC) list. The Channels dimension renders one merged
+    // list [default..., synthetic...]; here we cut it back at the default-source
+    // boundary so the REST payload keeps `illumination` conventional-only and
+    // carries ring/DPC in `syntheticChannels` (single source of truth, no
+    // RGB→intensity promotion on the backend).
+    const defaultSourceNames = Array.isArray(parameterRange.illuSources)
+      ? parameterRange.illuSources
+      : [];
+    const syntheticDefs = Array.isArray(parameterRange.syntheticChannels)
+      ? parameterRange.syntheticChannels
+      : [];
+    const nDefault = defaultSourceNames.length;
+    const syntheticChannelsPayload = syntheticDefs.map((s, j) => {
+      const idx = nDefault + j;
+      const params = illuminationParamsState[s.name] || {};
+      return {
+        name: s.name,
+        kind: s.kind,
+        enabled: channelEnabled[idx] === true,
+        intensityR: params.intensityR ?? s.intensityR ?? 0,
+        intensityG: params.intensityG ?? s.intensityG ?? 0,
+        intensityB: params.intensityB ?? s.intensityB ?? 0,
+        radius: params.radius ?? s.radius ?? null,
+        exposure: exposureTimes[idx] ?? null,
+        gain: gains[idx] ?? null,
+      };
+    });
 
     const experimentRequest = {
       name: experimentState.name,
       parameterValue: {
-        ...experimentState.parameterValue,
-        illuIntensities: filteredIntensities,
+        ...pv,
+        // Conventional channels only; synthetic channels travel separately.
+        illumination: defaultSourceNames,
+        illuIntensities: filteredIntensities.slice(0, nDefault),
+        exposureTimes: exposureTimes.slice(0, nDefault),
+        gains: gains.slice(0, nDefault),
+        syntheticChannels: syntheticChannelsPayload,
         resortPointListToSnakeCoordinates: false,
         is_snakescan: wellSelectorState.areaSelectSnakescan,
-        overlapWidth: wellSelectorState.mode === "area" 
-          ? wellSelectorState.areaSelectOverlap 
-          : experimentState.parameterValue.overlapWidth,
-        overlapHeight: wellSelectorState.mode === "area" 
-          ? wellSelectorState.areaSelectOverlap 
-          : experimentState.parameterValue.overlapHeight,
+        overlapWidth:
+          wellSelectorState.mode === "area"
+            ? wellSelectorState.areaSelectOverlap
+            : pv.overlapWidth,
+        overlapHeight:
+          wellSelectorState.mode === "area"
+            ? wellSelectorState.areaSelectOverlap
+            : pv.overlapHeight,
       },
       scanAreas: scanConfig.scanAreas,
       scanMetadata: scanConfig.metadata,
-      pointList: coordinateCalculator.convertToBackendFormat(scanConfig, experimentState).pointList,
-      focusMap: focusMapConfig.enabled ? focusMapConfig : undefined,
+      pointList: coordinateCalculator.convertToBackendFormat(
+        scanConfig,
+        experimentState,
+      ).pointList,
+      focusMap: focusMapConfig.enabled
+        ? {
+            ...focusMapConfig,
+            // In manual-map mode, carry the manually placed points so the backend
+            // can autofocus-measure their Z (for any left as "auto") and fit BEFORE
+            // the tiled scan, instead of falling back to a tiled autofocus grid.
+            ...(focusMapConfig.use_manual_map && focusMapManualPoints?.length
+              ? {
+                  points: focusMapManualPoints.map((p) => ({
+                    x: p.x,
+                    y: p.y,
+                    ...(p.z == null ? {} : { z: p.z }),
+                  })),
+                }
+              : {}),
+          }
+        : undefined,
     };
 
     apiExperimentControllerStartWellplateExperiment(experimentRequest)
@@ -227,6 +418,50 @@ const ExperimentDesigner = () => {
       });
   };
 
+  const handleStopStitch = () => {
+    const axiosInstance = createAxiosInstance();
+    axiosInstance
+      .get("/ExperimentController/stopAshlarStitching")
+      .then((res) => {
+        if (res.data?.stopped) {
+          setAshlarRunning(false);
+          setAshlarInterrupted(true);
+          infoPopupRef.current?.showMessage("Ashlar stitching stopped");
+        } else {
+          infoPopupRef.current?.showMessage(
+            res.data?.message ?? "No stitching process running",
+          );
+        }
+      })
+      .catch(() => {
+        infoPopupRef.current?.showMessage("Failed to stop Ashlar stitching");
+      });
+  };
+
+  const handleRestartStitch = () => {
+    setAshlarInterrupted(false);
+    apiExperimentControllerRunAshlarStitching({
+      pixelSize: experimentState.parameterValue.ashlar_pixel_size,
+      maximumShift: experimentState.parameterValue.ashlar_maximum_shift,
+      alignChannel: experimentState.parameterValue.ashlar_align_channel,
+    })
+      .then((data) => {
+        if (data?.started) {
+          setAshlarRunning(true);
+          infoPopupRef.current?.showMessage("Ashlar stitching restarted");
+        } else {
+          setAshlarInterrupted(true);
+          infoPopupRef.current?.showMessage(
+            `Could not restart stitching: ${data?.error ?? "unknown error"}`,
+          );
+        }
+      })
+      .catch(() => {
+        setAshlarInterrupted(true);
+        infoPopupRef.current?.showMessage("Failed to restart Ashlar stitching");
+      });
+  };
+
   const handleStop = () => {
     dispatch(experimentStatusSlice.setStatus(Status.IDLE));
     // Interrupt focus map immediately (in case we are in focus map phase)
@@ -242,18 +477,21 @@ const ExperimentDesigner = () => {
 
   const handleOpenVizarr = () => {
     const api = createAxiosInstance();
-    api.get(
-      `/ExperimentController/getLastScanAsOMEZARR`
-    )
+    api
+      .get(`/ExperimentController/getLastScanAsOMEZARR`)
       .then((res) => res.data)
       .then((data) => {
         const lastZarrPath = data || "";
         if (lastZarrPath) {
-          dispatch(vizarrViewerSlice.openViewer({
-            url: lastZarrPath,
-            fileName: lastZarrPath.split("/").pop() || "OME-Zarr",
-          }));
-          infoPopupRef.current?.showMessage("Opening OME-Zarr in integrated viewer");
+          dispatch(
+            vizarrViewerSlice.openViewer({
+              url: lastZarrPath,
+              fileName: lastZarrPath.split("/").pop() || "OME-Zarr",
+            }),
+          );
+          infoPopupRef.current?.showMessage(
+            "Opening OME-Zarr in integrated viewer",
+          );
         } else {
           infoPopupRef.current?.showMessage("No OME-Zarr data available");
         }
@@ -264,7 +502,9 @@ const ExperimentDesigner = () => {
   };
 
   // Button visibility helpers
-  const showStart = experimentStatus.status === Status.IDLE || experimentStatus.status === Status.STOPPING;
+  const showStart =
+    experimentStatus.status === Status.IDLE ||
+    experimentStatus.status === Status.STOPPING;
   const showPause = experimentStatus.status === Status.RUNNING;
   const showResume = experimentStatus.status === Status.PAUSED;
   const showStop = experimentStatus.status !== Status.IDLE;
@@ -326,6 +566,34 @@ const ExperimentDesigner = () => {
           </Tooltip>
         </ButtonGroup>
 
+        {/* Stitching control button — Stop while running, Restart after interrupted */}
+        {ashlarRunning && (
+          <Tooltip title="Kill the running Ashlar stitching process">
+            <Button
+              size="small"
+              variant="outlined"
+              color="warning"
+              startIcon={<AutoFixHighIcon />}
+              onClick={handleStopStitch}
+            >
+              Stop Stitching
+            </Button>
+          </Tooltip>
+        )}
+        {ashlarInterrupted && !ashlarRunning && (
+          <Tooltip title="Restart Ashlar stitching from the beginning">
+            <Button
+              size="small"
+              variant="outlined"
+              color="secondary"
+              startIcon={<AutoFixHighIcon />}
+              onClick={handleRestartStitch}
+            >
+              Restart Stitching
+            </Button>
+          </Tooltip>
+        )}
+
         {/* Status */}
         <Typography
           variant="body2"
@@ -337,9 +605,9 @@ const ExperimentDesigner = () => {
               experimentStatus.status === Status.RUNNING
                 ? theme.palette.success.main
                 : experimentStatus.status === Status.PAUSED
-                ? theme.palette.warning.main
-                : theme.palette.grey[500],
-              0.15
+                  ? theme.palette.warning.main
+                  : theme.palette.grey[500],
+              0.15,
             ),
             fontWeight: 500,
           }}
@@ -349,7 +617,15 @@ const ExperimentDesigner = () => {
 
         {/* Progress */}
         {cachedTotalSteps && cachedTotalSteps > 0 && (
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, flex: 1, maxWidth: 300 }}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              flex: 1,
+              maxWidth: 300,
+            }}
+          >
             <Typography
               variant="caption"
               sx={{
@@ -374,10 +650,10 @@ const ExperimentDesigner = () => {
 
         {/* Viewer buttons */}
         <Tooltip title="Open Vizarr viewer">
-          <Button 
-            size="small" 
-            variant="outlined" 
-            onClick={handleOpenVizarr} 
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={handleOpenVizarr}
             startIcon={<VisibilityIcon />}
           >
             Open Vizarr

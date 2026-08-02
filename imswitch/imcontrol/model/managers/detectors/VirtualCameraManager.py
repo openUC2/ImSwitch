@@ -33,7 +33,7 @@ class VirtualCameraManager(DetectorManager):
                 self._camera.SensorHeight)
         pixelSize = self._camera.PixelSize
         model = self._camera.model
-        self._running = True
+        self._running = False
         self.ExposureTime  = 0
         self.Gain = 0
         self.tLast = time.time()
@@ -66,8 +66,9 @@ class VirtualCameraManager(DetectorManager):
                             editable=True),
             'Camera pixel size': DetectorNumberParameter(group='Miscellaneous', value=pixelSize,
                                                 valueUnits='µm', editable=True),
-            'flipX': DetectorBooleanParameter(group='Misc', value=flipX, editable=True),
-            'flipY': DetectorBooleanParameter(group='Misc', value=flipY, editable=True)
+            # Flip is owned by PixelCalibration (set via setFlipImage), not the user.
+            'flipX': DetectorBooleanParameter(group='Misc', value=flipX, editable=False),
+            'flipY': DetectorBooleanParameter(group='Misc', value=flipY, editable=False)
             }
 
         # reading parameters from disk and write them to camrea

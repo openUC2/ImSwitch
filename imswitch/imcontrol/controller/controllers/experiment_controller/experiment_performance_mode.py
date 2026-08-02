@@ -15,6 +15,7 @@ import numpy as np
 
 from .experiment_mode_base import ExperimentModeBase
 from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths
+from imswitch.imcontrol.model.io.ome_writers import write_plate_metadata_sidecar
 from imswitch.imcommon.model import dirtools
 
 
@@ -136,6 +137,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                     snake_tiles, illumination_intensities, experiment_params
                 )
 
+            protocol_saved = False  # Ensure protocol is written only once per experiment
             for snake_tile in snake_tiles:
                 # Calculate timeout based on scan parameters
                 scan_timeout = self._calculate_scan_timeout(snake_tile, illumination_intensities, experiment_params)
@@ -158,8 +160,11 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 zarr_url = self._execute_fast_stage_scan(scan_params, t_period, n_times, experiment_params)
                 self._logger.info(f"Performance mode scan completed. Data saved to: {zarr_url}")
                 
-                # Save experiment protocol to JSON
-                self._save_performance_protocol(scan_params, experiment_params, zarr_url)
+                # Save experiment protocol to JSON exactly once per experiment
+                # (guard prevents re-saving on subsequent tiles/wells).
+                if not protocol_saved:
+                    self._save_performance_protocol(scan_params, experiment_params, zarr_url)
+                    protocol_saved = True
 
             # Finalize OME writers if they were created
             if file_writers:
@@ -961,9 +966,50 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             grid_shape=grid_shape,
             grid_geometry=grid_geometry,
             config=writer_config,
-            logger=self._logger
+            logger=self._logger,
+            isRGB=getattr(self.controller, 'isRGB', False),
         )
         file_writers.append(ome_writer)
+
+        # Best-effort OME-NGFF plate metadata sidecar (performance mode uses
+        # one writer for all wells, so we emit only the sidecar – not per-well
+        # zarr attrs).
+        try:
+            wells_used: List[tuple] = []
+            condition_labels: Dict[str, str] = {}
+            labware_load_name: Optional[str] = None
+            for tiles in snake_tiles:
+                if not tiles:
+                    continue
+                first = tiles[0]
+                w_row = first.get("wellRow")
+                w_col = first.get("wellColumn")
+                w_load = first.get("labwareLoadName")
+                w_cond = first.get("conditionLabel")
+                if w_load and labware_load_name is None:
+                    labware_load_name = w_load
+                if w_row and w_col is not None:
+                    wells_used.append((str(w_row), str(int(w_col))))
+                    if w_cond:
+                        condition_labels[f"{w_row}{int(w_col)}"] = w_cond
+            if labware_load_name and getattr(self.controller, "labware_manager", None) is not None:
+                lab = self.controller.labware_manager.get(labware_load_name)
+                if lab is not None:
+                    write_plate_metadata_sidecar(
+                        output_dir=dirPath,
+                        plate_name=labware_load_name,
+                        rows=list(lab.rows),
+                        columns=[str(c) for c in lab.columns],
+                        wells_used=wells_used,
+                        extra={
+                            "imswitch_labware": {
+                                "loadName": labware_load_name,
+                                "conditionLabels": condition_labels or None,
+                            }
+                        },
+                    )
+        except Exception as exc:  # noqa: BLE001 - sidecar is best-effort
+            self._logger.warning(f"Failed to write plate metadata sidecar (performance mode): {exc}")
 
         return file_writers
 

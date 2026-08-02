@@ -65,6 +65,11 @@ const initialState = {
   // [{ x, y, z }]
   manualPoints: [],
 
+  // When true, clicking the wellplate/sample map adds a manual focus point at
+  // the clicked XY (using the current stage Z) instead of moving the stage.
+  // Toggled from the Manual Focus Points menu (FocusMapDimension).
+  manualPlacementActive: false,
+
   // UI state
   ui: {
     isComputing: false,
@@ -173,6 +178,10 @@ const focusMapSlice = createSlice({
       state.manualPoints = [];
     },
 
+    setManualPlacementActive: (state, action) => {
+      state.manualPlacementActive = !!action.payload;
+    },
+
     updateManualPointZ: (state, action) => {
       // payload: { index, z }
       if (state.manualPoints && state.manualPoints[action.payload.index]) {
@@ -266,6 +275,7 @@ export const {
   addManualPoint,
   removeManualPoint,
   clearManualPoints,
+  setManualPlacementActive,
   updateManualPointZ,
   setFocusMapResults,
   updateFocusMapGroupResult,
@@ -289,6 +299,8 @@ export const getFocusMapGroupResult = (groupId) => (state) =>
   state.focusMap.results[groupId] || null;
 export const isFocusMapEnabled = (state) => state.focusMap.config.enabled;
 export const getManualPoints = (state) => state.focusMap.manualPoints || [];
+export const getManualPlacementActive = (state) =>
+  state.focusMap.manualPlacementActive ?? false;
 export const getShowOverlayOnWellplate = (state) => state.focusMap.ui?.showOverlayOnWellplate ?? true;
 export const getShowManualPoints = (state) => state.focusMap.ui?.showManualPoints ?? false;
 export const getShowMeasuredPoints = (state) => state.focusMap.ui?.showMeasuredPoints ?? false;

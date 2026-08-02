@@ -19,6 +19,7 @@ import {
   DragIndicator,
 } from "@mui/icons-material";
 import LiveViewControlWrapper from "./LiveViewControlWrapper";
+import DetectorToggle from "./DetectorToggle";
 
 const DEFAULT_SIZE  = { width: 340, height: 270 };
 const MIN_SIZE      = { width: 160, height: 130 };
@@ -150,6 +151,17 @@ const PictureInPicture = ({ visible, onClose }) => {
             <Close fontSize="small" />
           </IconButton>
         </Tooltip>
+      </Box>
+
+      {/* ── Camera selector ─────────────────────────────────────────── */}
+      {/* Tabs to choose which detector to display (widefield / overview / …).
+          Auto-hidden by DetectorToggle when only one camera exists. stopPropagation
+          keeps clicks from starting a window drag. */}
+      <Box
+        onMouseDown={(e) => e.stopPropagation()}
+        sx={{ px: 0.5, pt: 0.5, flexShrink: 0, "& > div": { mb: 0 } }}
+      >
+        <DetectorToggle />
       </Box>
 
       {/* ── Live view content ────────────────────────────────────────── */}

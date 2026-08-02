@@ -23,8 +23,6 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import Plot from "react-plotly.js";
 import { useDispatch, useSelector } from "react-redux";
 import * as autofocusSlice from "../state/slices/AutofocusSlice.js";
-import * as parameterRangeSlice from "../state/slices/ParameterRangeSlice.js";
-import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice.js";
 import apiAutofocusControllerStartLiveMonitoring from "../backendapi/apiAutofocusControllerStartLiveMonitoring.js";
 import apiAutofocusControllerStopLiveMonitoring from "../backendapi/apiAutofocusControllerStopLiveMonitoring.js";
 import apiAutofocusControllerSetLiveMonitoringParameters from "../backendapi/apiAutofocusControllerSetLiveMonitoringParameters.js";
@@ -46,8 +44,6 @@ const AutofocusController = ({ hostIP, hostPort }) => {
   const {
     rangeZ,
     resolutionZ,
-    defocusZ,
-    illuminationChannel,
     tSettle,
     isDebug,
     nGauss,
@@ -55,6 +51,7 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     focusAlgorithm,
     staticOffset,
     twoStage,
+    twoStageDivisor,
     autofocusMode,
     hillClimbingInitialStep,
     hillClimbingMinStep,
@@ -70,68 +67,12 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     liveMonitoringCropsize,
   } = autofocusState;
 
-  // Access parameter range state for available illumination sources
-  const parameterRangeState = useSelector(
-    parameterRangeSlice.getParameterRangeState,
-  );
-  const connectionSettingsState = useSelector(
-    connectionSettingsSlice.getConnectionSettingsState,
-  );
-
-  // Get available illumination sources and find currently active ones
-  // Ensure it's always an array
-  const availableIlluminations = Array.isArray(parameterRangeState.illuSources)
-    ? parameterRangeState.illuSources
-    : [];
-
-  // Function to get currently active illumination (first one that's on)
-  const getCurrentlyActiveIllumination = async () => {
-    if (availableIlluminations.length === 0) return null;
-
-    const ip = connectionSettingsState.ip || hostIP;
-    const port = connectionSettingsState.apiPort || hostPort;
-
-    if (!ip || !port) return availableIlluminations[0]; // Fallback to first available
-
-    try {
-      for (const illumination of availableIlluminations) {
-        const encodedName = encodeURIComponent(illumination);
-        const response = await fetch(
-          `${ip}:${port}/imswitch/api/LaserController/getLaserValue?laserName=${encodedName}`,
-        );
-        if (response.ok) {
-          const value = await response.json();
-          if (value > 0) {
-            return illumination; // Return the first active illumination
-          }
-        }
-      }
-      return availableIlluminations[0]; // Fallback to first if none active
-    } catch (error) {
-      console.error("Error checking active illuminations:", error);
-      return availableIlluminations[0]; // Fallback to first available
-    }
-  };
-
-  // Set default illumination channel when component mounts or illumination sources change
-  useEffect(() => {
-    if (availableIlluminations.length > 0 && !illuminationChannel) {
-      // If selected illumination is not available, find currently active one
-      if (!availableIlluminations.includes(illuminationChannel)) {
-        getCurrentlyActiveIllumination().then((activeIllumination) => {
-          if (activeIllumination) {
-            dispatch(autofocusSlice.setIlluminationChannel(activeIllumination));
-          }
-        });
-      }
-    }
-  }, [availableIlluminations, illuminationChannel, dispatch]);
-
   // Fetch backend autofocus status on mount and periodically
   const fetchAutofocusStatus = useCallback(async () => {
     try {
       const response = await fetch(
         `${hostIP}:${hostPort}/imswitch/api/AutofocusController/getAutofocusStatus`,
+        //setTimeout({ method: "GET" }, 5000)
       );
       if (response.ok) {
         const status = await response.json();
@@ -155,7 +96,7 @@ const AutofocusController = ({ hostIP, hostPort }) => {
   // Fetch status on mount
   useEffect(() => {
     fetchAutofocusStatus();
-  }, []);
+  }, [fetchAutofocusStatus]);
 
   // Periodic status sync while running
   useEffect(() => {
@@ -178,6 +119,8 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     }
   }, [liveFocusValue]);
 
+  const isPositiveFiniteNumber = (value) => Number.isFinite(value) && value > 0;
+
   const handleStart = async () => {
     // Prevent double-clicks
     if (isRunning || isStarting) {
@@ -185,20 +128,27 @@ const AutofocusController = ({ hostIP, hostPort }) => {
       return;
     }
 
+    if (
+      autofocusMode !== "hillClimbing" &&
+      (!isPositiveFiniteNumber(rangeZ) || !isPositiveFiniteNumber(resolutionZ))
+    ) {
+      setPositionError(
+        "Range Z and Resolution Z must be valid numbers greater than 0.",
+      );
+      return;
+    }
+
     setIsStarting(true);
     setPositionError(null);
 
     try {
-      // Use selected illumination channel or fallback to currently active one
-      const selectedChannel = illuminationChannel || availableIlluminations[0];
-
       let url;
       if (autofocusMode === "hillClimbing") {
         // Hill-climbing autofocus
         url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/autoFocusHillClimbing?initial_step=${hillClimbingInitialStep}&min_step=${hillClimbingMinStep}&step_reduction=${hillClimbingStepReduction}&max_iterations=${hillClimbingMaxIterations}&tSettle=${tSettle}&nCropsize=${nCropsize}&focusAlgorithm=${focusAlgorithm}&nGauss=${nGauss}&static_offset=${staticOffset}`;
       } else {
         // Standard Z-sweep autofocus
-        url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/autoFocus?rangez=${rangeZ}&resolutionz=${resolutionZ}&defocusz=${defocusZ}&illuminationChannel=${encodeURIComponent(selectedChannel || "")}&tSettle=${tSettle}&isDebug=${isDebug}&nGauss=${nGauss}&nCropsize=${nCropsize}&focusAlgorithm=${focusAlgorithm}&static_offset=${staticOffset}&twoStage=${twoStage}`;
+        url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/autoFocus?rangez=${rangeZ}&resolutionz=${resolutionZ}&tSettle=${tSettle}&isDebug=${isDebug}&nGauss=${nGauss}&nCropsize=${nCropsize}&focusAlgorithm=${focusAlgorithm}&static_offset=${staticOffset}&twoStage=${twoStage}&twoStageDivisor=${twoStageDivisor || 10}`;
       }
       const response = await fetch(url, { method: "GET" });
       const result = await response.json();
@@ -326,32 +276,44 @@ const AutofocusController = ({ hostIP, hostPort }) => {
         {/* Z-Sweep specific parameters */}
         {autofocusMode !== "hillClimbing" && (
           <>
-            <Grid item xs={3}>
+            <Grid item xs={4}>
               <TextField
                 label="Range Z"
+                type="number"
                 value={rangeZ}
-                onChange={(e) =>
-                  dispatch(autofocusSlice.setRangeZ(e.target.value))
+                onChange={(e) => {
+                  const parsed = parseFloat(e.target.value);
+                  if (isPositiveFiniteNumber(parsed)) {
+                    dispatch(autofocusSlice.setRangeZ(parsed));
+                  }
+                }}
+                inputProps={{ step: 0.1, min: 0.1 }}
+                error={!isPositiveFiniteNumber(rangeZ)}
+                helperText={
+                  isPositiveFiniteNumber(rangeZ)
+                    ? ""
+                    : "Please enter a number greater than 0"
                 }
                 fullWidth
               />
             </Grid>
-            <Grid item xs={3}>
+            <Grid item xs={4}>
               <TextField
                 label="Resolution Z"
+                type="number"
                 value={resolutionZ}
-                onChange={(e) =>
-                  dispatch(autofocusSlice.setResolutionZ(e.target.value))
-                }
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={3}>
-              <TextField
-                label="Defocus Z"
-                value={defocusZ}
-                onChange={(e) =>
-                  dispatch(autofocusSlice.setDefocusZ(e.target.value))
+                onChange={(e) => {
+                  const parsed = parseFloat(e.target.value);
+                  if (isPositiveFiniteNumber(parsed)) {
+                    dispatch(autofocusSlice.setResolutionZ(parsed));
+                  }
+                }}
+                inputProps={{ step: 0.1, min: 0.1 }}
+                error={!isPositiveFiniteNumber(resolutionZ)}
+                helperText={
+                  isPositiveFiniteNumber(resolutionZ)
+                    ? ""
+                    : "Please enter a number greater than 0"
                 }
                 fullWidth
               />
@@ -428,25 +390,6 @@ const AutofocusController = ({ hostIP, hostPort }) => {
             </Grid>
           </>
         )}
-
-        <Grid item xs={3}>
-          <FormControl fullWidth>
-            <InputLabel>Illumination Channel</InputLabel>
-            <Select
-              value={illuminationChannel || ""}
-              onChange={(e) =>
-                dispatch(autofocusSlice.setIlluminationChannel(e.target.value))
-              }
-              label="Illumination Channel"
-            >
-              {availableIlluminations.map((illumination) => (
-                <MenuItem key={illumination} value={illumination}>
-                  {illumination}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        </Grid>
 
         {/* Advanced Parameters Section */}
         <Grid item xs={12}>
@@ -706,6 +649,25 @@ const AutofocusController = ({ hostIP, hostPort }) => {
                         />
                       }
                       label="Two-Stage Focus"
+                    />
+                  </Grid>
+                )}
+                {autofocusMode !== "hillClimbing" && twoStage && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <TextField
+                      label="Fine Scan Divisor"
+                      type="number"
+                      value={twoStageDivisor}
+                      onChange={(e) =>
+                        dispatch(
+                          autofocusSlice.setTwoStageDivisor(
+                            parseInt(e.target.value) || 10,
+                          ),
+                        )
+                      }
+                      inputProps={{ step: 1, min: 2, max: 50 }}
+                      fullWidth
+                      helperText={`Fine scan: range÷${twoStageDivisor}, step÷${twoStageDivisor}`}
                     />
                   </Grid>
                 )}

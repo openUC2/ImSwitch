@@ -8,20 +8,53 @@ Created on 2023-12-12
 import ctypes
 from ctypes import *
 from enum import Enum
+import os
 
 #加载SDK动态库
 # 32bit
 #TUSDKdll = OleDLL("./lib/x86/TUCam.dll")
 # 64bit
-# Use relative path from the module's own directory and add DLL dir to PATH
-import os
 dll_dir = os.path.join(os.path.dirname(__file__), 'lib', 'x64')
-if dll_dir not in os.environ['PATH']:
-    os.environ['PATH'] = dll_dir + os.pathsep + os.environ['PATH']
-
-# Load the DLL - this will work from any working directory
 dll_path = os.path.join(dll_dir, 'TUCam.dll')
-TUSDKdll = OleDLL(dll_path)
+
+_dll_search_dirs = [dll_dir]
+_program_files_x86 = os.environ.get('ProgramFiles(x86)')
+_program_files = os.environ.get('ProgramFiles')
+
+for _base_dir in (_program_files_x86, _program_files):
+    if not _base_dir:
+        continue
+    _dll_search_dirs.extend([
+        os.path.join(_base_dir, 'TUCam_SDK', 'runtime', 'x64'),
+        os.path.join(_base_dir, 'TUCam_SDK', 'runtime', 'x64_all'),
+    ])
+
+_tucam_sdk_dir = os.environ.get('TUCAM_SDK_DIR')
+if _tucam_sdk_dir:
+    _dll_search_dirs.extend([
+        os.path.join(_tucam_sdk_dir, 'runtime', 'x64'),
+        os.path.join(_tucam_sdk_dir, 'runtime', 'x64_all'),
+    ])
+
+_registered_dll_dirs = []
+_path_entries = os.environ.get('PATH', '').split(os.pathsep)
+for _search_dir in dict.fromkeys(_dll_search_dirs):
+    if not os.path.isdir(_search_dir):
+        continue
+    if hasattr(os, 'add_dll_directory'):
+        _registered_dll_dirs.append(os.add_dll_directory(_search_dir))
+    if _search_dir not in _path_entries:
+        _path_entries.insert(0, _search_dir)
+
+os.environ['PATH'] = os.pathsep.join(_path_entries)
+
+try:
+    TUSDKdll = OleDLL(dll_path)
+except FileNotFoundError as exc:
+    raise FileNotFoundError(
+        f"Could not load TUCam.dll from '{dll_path}'. The file exists, but Windows could not resolve one of its dependent DLLs. "
+        f"Ensure the camera vendor runtime or Visual C++ redistributables required by TUCam.dll are installed. Original error: {exc}"
+    ) from exc
 
 #  class typedef enum TUCAM status:
 class TUCAMRET(Enum):

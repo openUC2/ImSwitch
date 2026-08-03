@@ -5,6 +5,8 @@
 import React, { useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
+  Alert,
+  AlertTitle,
   Box,
   Card,
   CardContent,
@@ -33,6 +35,7 @@ import {
   Star as StarIcon,
   Code as CodeIcon,
   Computer as ComputerIcon,
+  Extension as ExtensionIcon,
   GridView as GridViewIcon,
   Refresh as RefreshIcon,
   PlayArrow as PlayArrowIcon,
@@ -41,7 +44,9 @@ import { useTheme } from "@mui/material/styles";
 
 // Redux imports
 import {
+  selectDynamicApps,
   selectEnabledApps,
+  selectPluginErrors,
   selectSearchQuery,
   selectSelectedCategory,
   toggleApp,
@@ -58,8 +63,8 @@ import {
   APP_REGISTRY,
   APP_CATEGORIES,
   getAppsByCategory,
-  searchApps,
   filterAppsByAvailableControllers,
+  resolveMuiIcon,
 } from "../../constants/appRegistry";
 
 // Category metadata for UI
@@ -100,6 +105,59 @@ const CATEGORY_INFO = {
     color: "#ff5722",
     description: "System configuration and utilities",
   },
+  [APP_CATEGORIES.PLUGINS]: {
+    label: "Plugins",
+    icon: ExtensionIcon,
+    color: "#9c27b0",
+    description: "Externally installed plugins discovered at startup",
+  },
+};
+
+/**
+ * Plugins the backend knows about but could not make available: load errors
+ * and plugins gated off by availableWidgets.
+ *
+ * This panel is the whole point of reporting disabled/errored plugins from the
+ * backend at all. A plugin that silently fails to appear leaves the operator
+ * with nothing to search for; showing the name and the reason turns a support
+ * ticket into a one-line fix.
+ */
+const PluginProblemsPanel = ({ problems }) => {
+  if (!problems.length) return null;
+
+  return (
+    <Container maxWidth="xl" sx={{ pt: 2 }}>
+      <Paper elevation={1} sx={{ p: 2 }}>
+        <Box sx={{ display: "flex", alignItems: "center", mb: 1.5 }}>
+          <ExtensionIcon sx={{ mr: 1 }} />
+          <Typography variant="h6">Plugins not available</Typography>
+          <Chip size="small" label={problems.length} sx={{ ml: 1 }} />
+        </Box>
+        {problems.map((problem, index) => (
+          <Alert
+            key={`${problem.name}-${index}`}
+            severity={problem.kind === "error" ? "warning" : "info"}
+            sx={{ mb: 1 }}
+          >
+            <AlertTitle sx={{ mb: 0.25 }}>
+              {problem.name}
+              <Chip
+                size="small"
+                label={problem.kind === "no-ui" ? "no widget" : problem.kind}
+                sx={{ ml: 1 }}
+              />
+            </AlertTitle>
+            <Typography
+              variant="body2"
+              sx={{ wordBreak: "break-word", fontFamily: "monospace" }}
+            >
+              {problem.reason}
+            </Typography>
+          </Alert>
+        ))}
+      </Paper>
+    </Container>
+  );
 };
 
 /**
@@ -280,13 +338,29 @@ const AppManager = ({ onNavigateToApp }) => {
   const searchQuery = useSelector(selectSearchQuery);
   const selectedCategory = useSelector(selectSelectedCategory);
   const availableControllers = useSelector(selectAvailableControllers);
-  const availableApps = useMemo(
+  const dynamicApps = useSelector(selectDynamicApps);
+  const pluginProblems = useSelector(selectPluginErrors);
+
+  // Runtime plugins carry an icon *name*; resolve it to a component so they
+  // render through the same AppCard as built-ins.
+  const dynamicAppObjects = useMemo(
     () =>
-      filterAppsByAvailableControllers(
+      dynamicApps.map((app) => ({ ...app, icon: resolveMuiIcon(app.iconName) })),
+    [dynamicApps],
+  );
+
+  const availableApps = useMemo(
+    () => [
+      ...filterAppsByAvailableControllers(
         Object.values(APP_REGISTRY),
         availableControllers,
       ),
-    [availableControllers],
+      // Plugins are not gated on availableControllers: the backend already
+      // decided they could load, and their hardware contract is enforced there
+      // via required_hardware rather than by the frontend.
+      ...dynamicAppObjects,
+    ],
+    [availableControllers, dynamicAppObjects],
   );
 
   const availableAppIds = useMemo(
@@ -303,11 +377,19 @@ const AppManager = ({ onNavigateToApp }) => {
   const filteredApps = useMemo(() => {
     let apps = availableApps;
 
-    // Apply search filter
+    // Apply search filter.
+    // Filters the union in `availableApps` rather than calling searchApps(),
+    // which only knows the compile-time registry and would silently drop every
+    // plugin the moment the user typed anything.
     if (searchQuery.trim()) {
-      apps = filterAppsByAvailableControllers(
-        searchApps(searchQuery),
-        availableControllers,
+      const term = searchQuery.trim().toLowerCase();
+      apps = apps.filter(
+        (app) =>
+          app.name.toLowerCase().includes(term) ||
+          (app.description || "").toLowerCase().includes(term) ||
+          (app.keywords || []).some((keyword) =>
+            keyword.toLowerCase().includes(term),
+          ),
       );
     }
 
@@ -317,7 +399,7 @@ const AppManager = ({ onNavigateToApp }) => {
     }
 
     return apps;
-  }, [searchQuery, selectedCategory, availableApps, availableControllers]);
+  }, [searchQuery, selectedCategory, availableApps]);
 
   // Event handlers
   const handleToggleApp = (appId) => {
@@ -362,10 +444,15 @@ const AppManager = ({ onNavigateToApp }) => {
   const categoryStats = useMemo(() => {
     const stats = {};
     Object.values(APP_CATEGORIES).forEach((category) => {
-      const appsInCategory = filterAppsByAvailableControllers(
-        getAppsByCategory(category),
-        availableControllers,
-      );
+      const appsInCategory = [
+        ...filterAppsByAvailableControllers(
+          getAppsByCategory(category),
+          availableControllers,
+        ),
+        // Include plugins, or the category tab count reads 0 next to a tab
+        // that visibly contains plugins.
+        ...dynamicAppObjects.filter((app) => app.category === category),
+      ];
       const enabledInCategory = appsInCategory.filter((app) =>
         enabledApps.includes(app.id),
       );
@@ -375,7 +462,7 @@ const AppManager = ({ onNavigateToApp }) => {
       };
     });
     return stats;
-  }, [enabledApps, availableControllers]);
+  }, [enabledApps, availableControllers, dynamicAppObjects]);
 
   return (
     <Box sx={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -427,6 +514,11 @@ const AppManager = ({ onNavigateToApp }) => {
           </Typography>
         </Container>
       </Paper>
+
+      {/* Plugins the backend could not make available. Rendered above the grid
+          so it cannot be missed — a plugin that is simply absent from the list
+          gives the operator nothing to act on. */}
+      <PluginProblemsPanel problems={pluginProblems} />
 
       {/* Search and Controls */}
       <Paper elevation={0} sx={{ borderBottom: 1, borderColor: "divider" }}>

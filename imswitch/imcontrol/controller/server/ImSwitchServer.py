@@ -55,6 +55,73 @@ images_dir =  os.path.join(_baseDataFilesDir, 'images')
 app = FastAPI(root_path="/imswitch", docs_url=None, redoc_url=None)
 api_router = APIRouter(prefix="/api")
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  v2 plugin system — manifest endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+# The PluginManager is constructed inside ImSwitchServer.run(), but the route
+# handlers below are module-level closures and cannot reach `self`. They read
+# this module-level holder at *call* time instead; ImSwitchServer.run() fills it
+# in via set_plugin_manager() once discovery has finished.
+#
+# The ordering constraint that forces this design: routes must be registered on
+# `api_router` before app.include_router(api_router) runs, and that happens
+# before the PluginManager exists. So the route is registered early and the
+# state it reads arrives later.
+_PLUGIN_MANAGER = None
+
+
+def set_plugin_manager(manager) -> None:
+    """Publish the live PluginManager to the manifest route handlers."""
+    global _PLUGIN_MANAGER
+    _PLUGIN_MANAGER = manager
+
+
+def get_plugin_manager():
+    """Return the live PluginManager, or None if discovery has not run."""
+    return _PLUGIN_MANAGER
+
+
+def register_plugin_routes(router: APIRouter) -> None:
+    """Register the v2 plugin manifest endpoints on ``router``.
+
+    Called from :meth:`ImSwitchServer.createAPI` so the routes land on
+    ``api_router`` *before* ``app.include_router(api_router)``. Exposed as a
+    standalone function so tests can mount it on a throwaway router.
+    """
+
+    @router.get("/plugins")
+    def list_plugins():
+        """List every discovered v2 plugin plus any load errors.
+
+        Consumed by the React frontend (``usePluginWidgets`` in App.jsx). Never
+        fails: if discovery has not run or blew up, the frontend must degrade to
+        "no plugins" rather than break, so this returns empty lists with 200.
+        """
+        manager = get_plugin_manager()
+        if manager is None:
+            return {"plugins": [], "errors": []}
+        try:
+            return {"plugins": manager.manifest_list(), "errors": manager.errors()}
+        except Exception as e:
+            return {"plugins": [],
+                    "errors": [{"source": "plugin_manager",
+                                "error": f"{type(e).__name__}: {e}"}]}
+
+    @router.get("/plugins/{name}")
+    def get_plugin(name: str):
+        """Return the manifest entry for a single plugin. 404 if unknown.
+
+        The frontend does not need this, but it makes debugging one specific
+        plugin much easier than diffing the full list.
+        """
+        manager = get_plugin_manager()
+        entries = manager.manifest_list() if manager is not None else []
+        for entry in entries:
+            if entry.get("name") == name:
+                return entry
+        raise HTTPException(status_code=404, detail=f"No plugin named {name!r}")
+
 # Mount Socket.IO app at root path for WebSocket connections
 # This allows Socket.IO to handle all socket.io/* paths
 socket_app = get_socket_app()
@@ -68,8 +135,6 @@ except:print("Could not mount /imcontrol ui static files since directory is miss
 app.mount("/images", StaticFiles(directory=images_dir), name="images") # serve images for GUI
 # provide data path via static files
 app.mount("/data", StaticFiles(directory=dirtools.UserFileDirs.getValidatedDataPath()), name="data")  # serve user data files
-# manifests for the react app
-_ui_manifests = []
 
 
 if IS_SSL:
@@ -605,13 +670,15 @@ class ServerThread(threading.Thread):
             print("Server is stopping...")
 class ImSwitchServer(Worker):
 
-    def __init__(self, api, uiapi, setupInfo):
+    def __init__(self, api, setupInfo, master=None):
         super().__init__()
 
         self._api = api
-        self._uiapi = uiapi
+        self._setupInfo = setupInfo
+        self._master = master
         self._paused = False
         self._canceled = False
+        self._plugin_manager = None
 
         self.__logger =  initLogger(self)
 
@@ -625,6 +692,31 @@ class ImSwitchServer(Worker):
         # Note(ethanjli): all FastAPI path operations must be added before we call `include_router`!
         app.include_router(api_router)
 
+        # ── v2 plugin system ────────────────────────────────────────────
+        try:
+            from imswitch.plugin_manager import PluginManager
+            self._plugin_manager = PluginManager(
+                master     = self._master,
+                setup_info = self._setupInfo,
+                socket_app = socket_app,
+            )
+            self._plugin_manager.discover()
+            self._plugin_manager.attach_to_app(app)
+            # Publish to the /api/plugins route handlers, which were registered
+            # in createAPI() above and read this at call time.
+            set_plugin_manager(self._plugin_manager)
+            # attach_to_app() added routes to `app` after FastAPI may already
+            # have cached an OpenAPI document. Drop the cache so /openapi.json
+            # and the Swagger UI include the plugin routes.
+            app.openapi_schema = None
+            self.__logger.info(
+                "v2 plugins: loaded %d, errors %d",
+                len(self._plugin_manager._plugins),
+                len(self._plugin_manager.errors()),
+            )
+        except Exception:
+            self.__logger.exception("PluginManager failed to initialise")
+
         # To operate remotely we need to provide https
         # openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365
         # uvicorn your_fastapi_app:app --host 0.0.0.0 --port 8001 --ssl-keyfile=./key.pem --ssl-certfile=./cert.pem
@@ -637,6 +729,11 @@ class ImSwitchServer(Worker):
     def stop(self):
         self.__logger.debug("Stopping ImSwitchServer")
         try:
+            if self._plugin_manager is not None:
+                try:
+                    self._plugin_manager.shutdown()
+                except Exception:
+                    self.__logger.exception("plugin manager shutdown failed")
             self.server_thread.stop()
             #self.server_thread.join()
         except Exception as e:
@@ -679,17 +776,6 @@ class ImSwitchServer(Worker):
 
         return {"url": jupyter_url}
 
-    @api_router.get("/plugins")
-    def get_plugins():
-        """
-        Returns a list of available plugins
-        """
-        plugins = []
-        for f in _ui_manifests:
-            plugin = f
-            plugins.append(plugin)
-        return {"plugins": plugins}
-
     @api_router.get("/hostname")
     def get_hostname():
         """
@@ -700,6 +786,10 @@ class ImSwitchServer(Worker):
 
 
     def createAPI(self):
+        # Must happen here, not at import time: every path operation has to be
+        # on api_router before run() calls app.include_router(api_router).
+        register_plugin_routes(api_router)
+
         api_dict = self._api._asdict()
         functions = api_dict.keys()
 
@@ -729,22 +819,6 @@ class ImSwitchServer(Worker):
                         return func(*args, **kwargs)
             return wrapper
 
-        def includeUIAPI(str, func):
-            # based on UIExport decorator, only get is supported
-
-
-            if hasattr(func, '_UIExport') and func._UIExport:
-                @app.get(str)
-                @wraps(func)
-                async def wrapper(*args, **kwargs):
-                    return func(*args, **kwargs)
-            else:
-                @app.get(str)
-                @wraps(func)
-                async def wrapper(*args, **kwargs):
-                    return func(*args, **kwargs)
-            return wrapper
-
         # add APIExport decorated functions to the fastAPI
         for f in functions:
             func = api_dict[f]
@@ -753,37 +827,6 @@ class ImSwitchServer(Worker):
             else:
                 module = func.__module__.split('.')[-1]
             self.func = includeAPI("/"+module+"/"+f, func)
-
-        # add UIExport decorated functions to the fastAPI under /externUI
-        if self._uiapi is None: return # we are on QT mode
-        uiapi_dict = self._uiapi._asdict()
-        functions = uiapi_dict.keys()
-        for f in functions:
-            func = uiapi_dict[f]
-            if hasattr(func, 'module'):
-                module = func.module
-            else:
-                module = func.__module__.split('.')[-1]
-            meta = getattr(func, "_ui_meta", None)
-            mount = f"/plugin/{meta['name']}"
-            # self.func = includeUIAPI(mount, func)
-            _ui_manifests.append({
-                "name": meta["name"],
-                "icon": meta["icon"],
-                "path": meta["path"],
-                "exposed": "Widget",
-                "scope": "lightsheet_plugin",
-                "url": os.path.join(mount,"index.html"),
-                "remote": os.path.join(mount,"remoteEntry.js")
-            })
-            # only if the mount exists:
-            self.__logger.debug(f"Mounting {mount} to {os.path.join(meta['path'])}")
-            if os.path.exists(os.path.join(meta["path"])):
-                app.mount(
-                    mount,
-                    StaticFiles(directory=os.path.join(meta["path"])),
-                    name=meta["name"],
-                )
 
     @api_router.get("/UC2ConfigController/is_connected")
     def is_connected():

@@ -32,6 +32,9 @@ import {
   Psychology as PsychologyIcon,
   Map as MapIcon,
 } from "@mui/icons-material";
+// Namespace import so a plugin manifest can name any MUI icon at runtime.
+// @mui/icons-material is a federation singleton, so this costs nothing extra.
+import * as MuiIcons from "@mui/icons-material";
 
 /**
  * Categories for organizing applications
@@ -42,6 +45,9 @@ export const APP_CATEGORIES = {
   CALIBRATION: "calibration",
   CODING: "coding",
   SYSTEM: "system",
+  // Fallback bucket for runtime-discovered plugins whose manifest declares a
+  // menu_group that is not one of the built-in categories.
+  PLUGINS: "plugins",
 };
 
 /**
@@ -782,6 +788,89 @@ export const searchApps = (query) => {
         keyword.toLowerCase().includes(searchTerm),
       ),
   );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Runtime-discovered plugins
+//
+//  Plugins are not known at compile time, so they cannot live in APP_REGISTRY.
+//  Instead their manifests (from GET /imswitch/api/plugins) are mapped into the
+//  same shape and merged in at selector level, which lets them participate in
+//  the App Manager enable/disable flow and category grouping exactly like a
+//  built-in app.
+//
+//  APP_REGISTRY itself is never mutated — see appManagerSlice.dynamicApps.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// (No BUILT_IN_CATEGORIES lookup: plugins are always filed under PLUGINS —
+// see makeRegistryEntryFromManifest.)
+
+/**
+ * Resolve a Material-UI icon name from a plugin manifest to a component.
+ *
+ * Manifests carry an icon *name* (e.g. "ScienceIcon") because they are TOML on
+ * the backend. Names are matched with and without the "Icon" suffix so both
+ * `menu_icon = "Science"` and `menu_icon = "ScienceIcon"` work. Anything that
+ * does not resolve falls back to the generic extension icon rather than
+ * crashing the drawer — a plugin with a typo'd icon must still be clickable.
+ *
+ * @param {string} iconName
+ * @param {Record<string, React.ComponentType>} [iconSet] injectable for tests
+ */
+export const resolveMuiIcon = (iconName, iconSet = MuiIcons) => {
+  if (!iconName) return ExtensionIcon;
+  const stripped = iconName.replace(/Icon$/, "");
+  return iconSet[iconName] || iconSet[stripped] || ExtensionIcon;
+};
+
+/**
+ * Map a plugin manifest entry from /imswitch/api/plugins into the APP_REGISTRY
+ * shape. Serializable on purpose — this object goes into Redux, so it carries
+ * `iconName` (a string) rather than the icon component. Call `resolveMuiIcon`
+ * at render time.
+ *
+ * @param {object} manifest one element of the `plugins` array
+ */
+export const makeRegistryEntryFromManifest = (manifest) => {
+  const menu = manifest.menu || {};
+  const group = menu.group;
+
+  return {
+    // Namespaced so a plugin can never collide with a built-in app id.
+    id: `plugin:${manifest.name}`,
+    name: menu.label || manifest.display_name || manifest.name,
+    description:
+      manifest.description ||
+      `Plugin ${manifest.name} v${manifest.version || "?"}`,
+    // ALWAYS "plugins", regardless of the manifest's menu_group.
+    //
+    // An earlier version filed a plugin under its menu_group when that named a
+    // built-in category, so a manifest saying `menu_group = "apps"` put the
+    // plugin among the ~35 built-in applications with nothing marking it as a
+    // plugin. Someone who has just installed a plugin looks under "Plugins",
+    // does not find it, and concludes the whole system is broken. One
+    // predictable home beats flexible placement.
+    //
+    // menu_group survives as `menuGroup` below: display metadata, not routing.
+    category: APP_CATEGORIES.PLUGINS,
+    iconName: menu.icon || "ExtensionIcon",
+    enabled: true,
+    // Never essential: a plugin must always be disableable, or a broken one
+    // becomes impossible to hide.
+    essential: false,
+    keywords: ["plugin", manifest.name, group].filter(Boolean),
+    // The manifest's menu_group, kept for display and sidebar sub-grouping.
+    menuGroup: group || "Plugins",
+    // Must equal the key used by the plugins.map render block in App.jsx.
+    pluginId: manifest.name,
+
+    // Plugin-only fields.
+    isDynamic: true,
+    order: typeof menu.order === "number" ? menu.order : 100,
+    status: manifest.status || "loaded",
+    reason: manifest.reason || "",
+    version: manifest.version || "",
+  };
 };
 
 export default APP_REGISTRY;

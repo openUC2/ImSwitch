@@ -13,6 +13,9 @@
 #   DATA_PATH          - Default data storage path
 #   SCAN_EXT_DATA_PATH - Enable external storage scanning: "true"/"1" or "false" (default)
 #   EXT_DATA_PATH      - Mount point directory for external drives (e.g., /media, /Volumes)
+#   PLUGIN_PATH        - Drop-in plugin directory (default: /opt/imswitch/plugins).
+#                        Exported to the app as IMSWITCH_PLUGIN_DIR. Mount it
+#                        read-only; see docs/plugins/DEPLOYMENT.md.
 #
 # Storage Management:
 #   The new storage management system automatically handles:
@@ -76,6 +79,7 @@ log() { echo "[$(date +'%F %T')] $*"; }
 CONFIG_PATH="${CONFIG_PATH:-}"
 SSL=${SSL:-false}
 SCAN_EXT_DATA_PATH=${SCAN_EXT_DATA_PATH:-false}
+PLUGIN_PATH="${PLUGIN_PATH:-/opt/imswitch/plugins}"
 
 # ============================================================================
 # Server Mode - Start ImSwitch
@@ -118,6 +122,31 @@ ls "${CONFIG_PATH}/imcontrol_setups" 2>/dev/null || log 'Config directory not fo
 if [[ -f "${CONFIG_PATH}/config/imcontrol_options.json" ]]; then
     log 'Current imcontrol_options.json:'
     cat "${CONFIG_PATH}/config/imcontrol_options.json"
+fi
+
+# ============================================================================
+# Plugin Path Setup
+# ============================================================================
+# The v2 PluginManager scans $IMSWITCH_PLUGIN_DIR for drop-in plugins: one
+# subdirectory per plugin, each containing a Python package with a register()
+# function. Nothing is pip-installed.
+#
+# Deliberately non-fatal. A missing or empty plugin directory is the normal
+# case for most instruments, and a plugin problem must never stop a microscope
+# from booting. The listing below is what tells an operator whether a bind
+# mount actually landed — when it is wrong, this is the log line to read.
+export IMSWITCH_PLUGIN_DIR="$PLUGIN_PATH"
+log "Using PLUGIN_PATH: $PLUGIN_PATH"
+
+if [[ ! -d "$PLUGIN_PATH" ]]; then
+    log "Note: plugin directory '$PLUGIN_PATH' does not exist — continuing with no plugins."
+else
+    log 'Available plugins:'
+    if [[ -n "$(ls -A "$PLUGIN_PATH" 2>/dev/null)" ]]; then
+        ls -la "$PLUGIN_PATH"
+    else
+        log '  (none — directory is empty)'
+    fi
 fi
 
 # ============================================================================

@@ -1,10 +1,6 @@
 from dataclasses import dataclass
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
-try:
-    from importlib.metadata import entry_points
-except ImportError:
-    entry_points = None
 import importlib
 import importlib.util
 
@@ -41,16 +37,6 @@ class ImConMainViewNoQt(object):
         event.accept()
 
     def _addWidgetNoQt(self, dockInfoDict):
-        # Preload all available plugins for widgets
-        try:
-            eps = entry_points(group='imswitch.implugins')
-        except Exception:
-            eps = []
-        availablePlugins = {
-            entry_point.name: entry_point
-            for entry_point in eps
-        }
-
         for widgetKey, dockInfo in dockInfoDict.items():
             if widgetKey == "ImSwitchServer":
                 continue
@@ -78,20 +64,9 @@ class ImConMainViewNoQt(object):
                     self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)
                     continue
 
-            # Case 2: Check if there is a plugin for the widget
-            plugin_name = f'{widgetKey}_widget'
-            if plugin_name in availablePlugins:
-                try:
-                    packageWidget = availablePlugins[plugin_name].load()
-                    # load the class from the module
-                    mWidgetClass = getattr(packageWidget, f'{widgetKey}ReactWidget')
-                    self.widgets[widgetKey] = (widgetKey, packageWidget, mWidgetClass)
-                    continue
-                except Exception as e:
-                    self.__logger.error(f"Could not load plugin widget {widgetKey}: {e}")
-                    self.widgets[widgetKey] = (widgetKey, None, None)
-                    continue
-            # Case 3: There is no react widget, so we create a default one
+            # Case 2: There is no react widget, so we create a default one.
+            # (v2 plugins do not come through here at all — they ship their own
+            # federated React bundle, mounted by the PluginManager.)
             try:
                 self.widgets[widgetKey] = (widgetKey, None, None)
             except Exception as e:

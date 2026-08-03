@@ -124,11 +124,6 @@ include = ["imswitch*"]
 [tool.setuptools_scm]
 fallback_version = "0.0.0.dev0"
 
-[project.entry-points."imswitch.implugins.detectors"]
-
-[project.entry-points."imswitch.implugins.lasers"]
-
-[project.entry-points."imswitch.implugins.positioner"]
 
 [project.entry-points."jupyter_client.kernel_provisioners"]
 imswitch-provisioner = "imswitch.imcontrol.model.jupyter_connection:ExistingProvisioner"

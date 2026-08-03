@@ -129,6 +129,15 @@ RUN \
 
 # Place executables in the environment at the front of the path
 ENV PATH="/opt/imswitch/.venv/bin:$PATH"
+
+# Drop-in plugin directory. Created in the image so the mount point always
+# exists, even when nothing is mounted over it — otherwise a typo'd bind mount
+# and "no plugins installed" look identical in the logs.
+# Mount it read-only: anything that can write here executes arbitrary Python in
+# the microscope process. See docs/plugins/DEPLOYMENT.md.
+ENV IMSWITCH_PLUGIN_DIR="/opt/imswitch/plugins"
+RUN mkdir -p /opt/imswitch/plugins
+
 # Expose HTTP port and Jupyter server port
 EXPOSE 8001 8888 8889
 

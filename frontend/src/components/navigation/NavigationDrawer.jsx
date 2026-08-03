@@ -4,21 +4,26 @@ import {
   Code as CodeIcon,
   Computer as ComputerIcon,
   Dashboard as DashboardIcon,
+  Extension as ExtensionIcon,
   Folder as FolderIcon,
   Star as StarIcon,
   GridView as GridViewIcon,
   ViewInAr as ViewInArIcon,
 } from "@mui/icons-material";
 import { Divider, Drawer, List, useTheme } from "@mui/material";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useSelector } from "react-redux";
 import { getSidebarColors } from "../../constants/sidebarColors.js";
-import { selectEnabledApps } from "../../state/slices/appManagerSlice.js";
+import {
+  selectDynamicApps,
+  selectEnabledApps,
+} from "../../state/slices/appManagerSlice.js";
 import { selectAvailableControllers } from "../../state/slices/BackendCapabilitiesSlice";
 import {
   APP_REGISTRY,
   APP_CATEGORIES,
   isAppAvailableForControllers,
+  resolveMuiIcon,
 } from "../../constants/appRegistry.js";
 import DrawerEntry from "./DrawerEntry.jsx";
 import DrawerHeader from "./DrawerHeader.jsx";
@@ -38,9 +43,6 @@ const NavigationDrawer = ({
   // Navigation state
   selectedPlugin,
   handlePluginChange,
-
-  // Dynamic plugins
-  plugins = [],
 }) => {
   // Get current theme for color adaptation
   const theme = useTheme();
@@ -49,18 +51,38 @@ const NavigationDrawer = ({
   // Redux state
   const enabledApps = useSelector(selectEnabledApps);
   const availableControllers = useSelector(selectAvailableControllers);
+  const dynamicApps = useSelector(selectDynamicApps);
+
+  // Runtime-discovered plugins, resolved into renderable entries. Icons are
+  // stored in Redux as names (state must stay serializable), so the component
+  // is looked up here. Memoised because resolveMuiIcon runs per entry.
+  const dynamicEntries = useMemo(
+    () =>
+      dynamicApps.map((app) => ({ ...app, icon: resolveMuiIcon(app.iconName) })),
+    [dynamicApps],
+  );
 
   // Helper function to check if an app is enabled
   const isAppEnabled = (appId) => enabledApps.includes(appId);
 
-  // Helper function to get enabled apps by category
+  // Helper function to get enabled apps by category.
+  // Built-ins and plugins go through the same path, so a plugin gets category
+  // grouping and the App Manager toggle for free. Plugins sort by their
+  // manifest's menu.order, then by name; built-ins keep registry order.
   const getEnabledAppsByCategory = (category) => {
-    return Object.values(APP_REGISTRY).filter(
+    const builtIns = Object.values(APP_REGISTRY).filter(
       (app) =>
         app.category === category &&
         isAppEnabled(app.id) &&
         isAppAvailableForControllers(app, availableControllers),
     );
+
+    const plugins = dynamicEntries
+      .filter((app) => app.category === category && isAppEnabled(app.id))
+      .sort((a, b) => (a.order ?? 100) - (b.order ?? 100) ||
+        a.name.localeCompare(b.name));
+
+    return [...builtIns, ...plugins];
   };
 
   // Handle App Manager opening (currently handled by plugin change)
@@ -84,6 +106,9 @@ const NavigationDrawer = ({
       coding: false,
       system: false,
       systemSettings: false,
+      // Runtime plugins start expanded: an operator who bind-mounted a plugin
+      // is looking for it, and a collapsed group reads as "it didn't load".
+      plugins: true,
     };
   });
 
@@ -320,6 +345,31 @@ const NavigationDrawer = ({
               {renderAppsForCategory(
                 APP_CATEGORIES.SYSTEM,
                 SIDEBAR_COLORS.system,
+              )}
+            </DrawerEntry>
+          </>
+        )}
+
+        {/* Plugins Group — runtime-discovered plugins whose manifest declares
+            a menu_group that is not one of the built-in categories. Plugins
+            that DO name a built-in group are rendered inside that group above,
+            so this section only appears when there is something for it. */}
+        {getEnabledAppsByCategory(APP_CATEGORIES.PLUGINS).length > 0 && (
+          <>
+            <Divider sx={{ my: 1 }} />
+            <DrawerEntry
+              icon={<ExtensionIcon />}
+              label="Plugins"
+              onClick={() => toggleGroup("plugins")}
+              tooltip="Externally installed plugins"
+              color={SIDEBAR_COLORS.apps}
+              collapsed={!sidebarVisible}
+              collapsible={true}
+              expanded={groupsOpen.plugins}
+            >
+              {renderAppsForCategory(
+                APP_CATEGORIES.PLUGINS,
+                SIDEBAR_COLORS.apps,
               )}
             </DrawerEntry>
           </>

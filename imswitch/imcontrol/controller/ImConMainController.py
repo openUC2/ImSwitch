@@ -1,15 +1,10 @@
 import dataclasses
-try:
-    from importlib.metadata import entry_points
-except ImportError:
-    entry_points = None
 import h5py
 from imswitch.imcommon.controller import MainController, PickDatasetsController
 from imswitch.imcommon.model import (
     ostools,
     initLogger,
     generateAPI,
-    generateUI,
     generateShortcuts,
     SharedAttributes,
 )
@@ -120,22 +115,7 @@ class ImConMainController(MainController):
                     self.__logger.error(
                         f"Could not create controller for {controller_name}: {e}"
                     )
-            else:
-                try:
-                    mPlugin = self.loadPlugin(widgetKey)
-                    if mPlugin is None:
-                        raise ValueError(f"No controller found for widget {widgetKey}")
-                    self.controllers[widgetKey] = self.__factory.createController(
-                        mPlugin, widget
-                    )
-                    # Register controller in MasterController
-                    self.__masterController.registerController(
-                        widgetKey, self.controllers[widgetKey]
-                    )
-                except Exception as e:
-                    self.__logger.debug(e)
 
-           
         # Add PixelCalibrationController for pixel calibration management 
         try:
             self.__logger.info("Creating controller for PixelCalibration ")
@@ -251,16 +231,6 @@ class ImConMainController(MainController):
             f" is not included in your currently active"
             f" hardware setup file.",
         )
-        self.__apiui = None
-        uiObjs = mainView.widgets
-        self.__apiui = generateUI(
-            uiObjs,
-            missingAttributeErrorMsg=lambda attr: f"The imcontrol API does either not have any"
-            f" method {attr}, or the widget that defines it"
-            f" is not included in your currently active"
-            f" hardware setup file.",
-        )
-
         # Connect LiveViewController stream signal to noqt signal handler in headless mode
         if "LiveView" in self.controllers:
             try:
@@ -277,23 +247,11 @@ class ImConMainController(MainController):
 
 
         self.__logger.debug("Start ImSwitch Server")
-        self._serverWorker = ImSwitchServer(self.__api, self.__apiui, setupInfo)
+        self._serverWorker = ImSwitchServer(
+            self.__api, setupInfo, master=self.__masterController,
+        )
         self._thread = threading.Thread(target=self._serverWorker.run)
         self._thread.start()
-
-    def loadPlugin(self, widgetKey):
-        # try to get it from the plugins
-        foundPluginController = False
-        try:
-            eps = entry_points(group="imswitch.implugins")
-        except Exception:
-            eps = []
-        for entry_point in eps:
-            if entry_point.name == f"{widgetKey}_controller":
-                packageController = entry_point.load()
-                return packageController
-        self.__logger.error(f"No controller found for widget {widgetKey}")
-        return None
 
     @property
     def api(self):

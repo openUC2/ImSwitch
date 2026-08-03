@@ -41,7 +41,10 @@ class ImConMainViewNoQt(object):
         event.accept()
 
     def _addWidgetNoQt(self, dockInfoDict):
-        # Preload all available plugins for widgets
+        # Preload all available plugins for widgets.
+        # v1 mechanism, DEPRECATED — kept only for already-shipped external packages.
+        # New plugins ship their own React bundle via the v2 PluginManager.
+        # See docs/plugins/DECISIONS.md (ADR-001).
         try:
             eps = entry_points(group='imswitch.implugins')
         except Exception:

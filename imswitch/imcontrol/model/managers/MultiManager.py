@@ -29,7 +29,10 @@ class MultiManager(ABC):
                         managedDeviceInfo, managedDeviceName, **lowLevelManagers)
 
                 except Exception as e:
-                    # try to import from the implugins
+                    # Fall back to the v1 `imswitch.implugins.<subpkg>` entry points.
+                    # DEPRECATED — kept only for already-shipped external packages; v2 plugins
+                    # cannot contribute Manager classes at all.
+                    # See docs/plugins/DECISIONS.md (ADR-001, ADR-002).
                     self.__logger.error(e)
                     try:
                         eps = entry_points(group=f'imswitch.implugins.{subManagersPackage}')

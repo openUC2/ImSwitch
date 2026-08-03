@@ -194,7 +194,11 @@ class MasterController:
         # MasterController Class
 
         ###################################################################################################
-        # PLUGIN SYSTEM FOR MANAGERS
+        # PLUGIN SYSTEM FOR MANAGERS (v1 — DEPRECATED)
+        #
+        # `imswitch.implugins` entry points are the v1 plugin mechanism. They are kept only for
+        # already-shipped external packages and take no new features; new plugins use the v2
+        # PluginManager + imswitch.plugin_sdk. See docs/plugins/DECISIONS.md (ADR-001).
         ###################################################################################################
         eps = list(entry_points(group="imswitch.implugins")) if entry_points else []
         for entry_point in eps:
@@ -213,7 +217,6 @@ class MasterController:
                     except Exception:
                         InfoClass = None
                     ManagerClass = entry_point.load()  # Load the manager class
-                    # self.__setupInfo.add_attribute(attr_name=entry_point.name.split("_manager")[0], attr_value={})
                     moduleInfo = None  # TODO: This is not complete yet - the setupinfo would need to be added to the class in the very begnning prior to detecing external plugins/hooks
                     manager = ManagerClass(moduleInfo)  # Initialize the manager
                     setattr(

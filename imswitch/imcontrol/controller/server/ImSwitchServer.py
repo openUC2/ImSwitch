@@ -55,6 +55,73 @@ images_dir =  os.path.join(_baseDataFilesDir, 'images')
 app = FastAPI(root_path="/imswitch", docs_url=None, redoc_url=None)
 api_router = APIRouter(prefix="/api")
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  v2 plugin system — manifest endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+# The PluginManager is constructed inside ImSwitchServer.run(), but the route
+# handlers below are module-level closures and cannot reach `self`. They read
+# this module-level holder at *call* time instead; ImSwitchServer.run() fills it
+# in via set_plugin_manager() once discovery has finished.
+#
+# The ordering constraint that forces this design: routes must be registered on
+# `api_router` before app.include_router(api_router) runs, and that happens
+# before the PluginManager exists. So the route is registered early and the
+# state it reads arrives later.
+_PLUGIN_MANAGER = None
+
+
+def set_plugin_manager(manager) -> None:
+    """Publish the live PluginManager to the manifest route handlers."""
+    global _PLUGIN_MANAGER
+    _PLUGIN_MANAGER = manager
+
+
+def get_plugin_manager():
+    """Return the live PluginManager, or None if discovery has not run."""
+    return _PLUGIN_MANAGER
+
+
+def register_plugin_routes(router: APIRouter) -> None:
+    """Register the v2 plugin manifest endpoints on ``router``.
+
+    Called from :meth:`ImSwitchServer.createAPI` so the routes land on
+    ``api_router`` *before* ``app.include_router(api_router)``. Exposed as a
+    standalone function so tests can mount it on a throwaway router.
+    """
+
+    @router.get("/plugins")
+    def list_plugins():
+        """List every discovered v2 plugin plus any load errors.
+
+        Consumed by the React frontend (``usePluginWidgets`` in App.jsx). Never
+        fails: if discovery has not run or blew up, the frontend must degrade to
+        "no plugins" rather than break, so this returns empty lists with 200.
+        """
+        manager = get_plugin_manager()
+        if manager is None:
+            return {"plugins": [], "errors": []}
+        try:
+            return {"plugins": manager.manifest_list(), "errors": manager.errors()}
+        except Exception as e:
+            return {"plugins": [],
+                    "errors": [{"source": "plugin_manager",
+                                "error": f"{type(e).__name__}: {e}"}]}
+
+    @router.get("/plugins/{name}")
+    def get_plugin(name: str):
+        """Return the manifest entry for a single plugin. 404 if unknown.
+
+        The frontend does not need this, but it makes debugging one specific
+        plugin much easier than diffing the full list.
+        """
+        manager = get_plugin_manager()
+        entries = manager.manifest_list() if manager is not None else []
+        for entry in entries:
+            if entry.get("name") == name:
+                return entry
+        raise HTTPException(status_code=404, detail=f"No plugin named {name!r}")
+
 # Mount Socket.IO app at root path for WebSocket connections
 # This allows Socket.IO to handle all socket.io/* paths
 socket_app = get_socket_app()
@@ -635,6 +702,13 @@ class ImSwitchServer(Worker):
             )
             self._plugin_manager.discover()
             self._plugin_manager.attach_to_app(app)
+            # Publish to the /api/plugins route handlers, which were registered
+            # in createAPI() above and read this at call time.
+            set_plugin_manager(self._plugin_manager)
+            # attach_to_app() added routes to `app` after FastAPI may already
+            # have cached an OpenAPI document. Drop the cache so /openapi.json
+            # and the Swagger UI include the plugin routes.
+            app.openapi_schema = None
             self.__logger.info(
                 "v2 plugins: loaded %d, errors %d",
                 len(self._plugin_manager._plugins),
@@ -712,6 +786,10 @@ class ImSwitchServer(Worker):
 
 
     def createAPI(self):
+        # Must happen here, not at import time: every path operation has to be
+        # on api_router before run() calls app.include_router(api_router).
+        register_plugin_routes(api_router)
+
         api_dict = self._api._asdict()
         functions = api_dict.keys()
 

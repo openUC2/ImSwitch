@@ -1,8 +1,4 @@
 import dataclasses
-try:
-    from importlib.metadata import entry_points
-except ImportError:
-    entry_points = None
 import h5py
 from imswitch.imcommon.controller import MainController, PickDatasetsController
 from imswitch.imcommon.model import (
@@ -119,22 +115,7 @@ class ImConMainController(MainController):
                     self.__logger.error(
                         f"Could not create controller for {controller_name}: {e}"
                     )
-            else:
-                try:
-                    mPlugin = self.loadPlugin(widgetKey)
-                    if mPlugin is None:
-                        raise ValueError(f"No controller found for widget {widgetKey}")
-                    self.controllers[widgetKey] = self.__factory.createController(
-                        mPlugin, widget
-                    )
-                    # Register controller in MasterController
-                    self.__masterController.registerController(
-                        widgetKey, self.controllers[widgetKey]
-                    )
-                except Exception as e:
-                    self.__logger.debug(e)
 
-           
         # Add PixelCalibrationController for pixel calibration management 
         try:
             self.__logger.info("Creating controller for PixelCalibration ")
@@ -271,20 +252,6 @@ class ImConMainController(MainController):
         )
         self._thread = threading.Thread(target=self._serverWorker.run)
         self._thread.start()
-
-    def loadPlugin(self, widgetKey):
-        # try to get it from the plugins
-        foundPluginController = False
-        try:
-            eps = entry_points(group="imswitch.implugins")
-        except Exception:
-            eps = []
-        for entry_point in eps:
-            if entry_point.name == f"{widgetKey}_controller":
-                packageController = entry_point.load()
-                return packageController
-        self.__logger.error(f"No controller found for widget {widgetKey}")
-        return None
 
     @property
     def api(self):

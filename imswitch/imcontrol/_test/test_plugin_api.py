@@ -141,8 +141,7 @@ def test_plugins_route_lists_loaded_plugin(server, client, loaded_manager):
     assert entry["name"] == PLUGIN_NAME
     assert entry["display_name"] == "Demo Plugin"
     assert entry["version"] == "0.1.0"
-    # WP2 replaces this with "loaded" / "disabled" / "error".
-    assert entry["status"] == "ok"
+    assert entry["status"] == "loaded"
     assert entry["scope"] == "demo_plugin"
     assert entry["exposed"] == "./Widget"
     assert entry["remote_entry"] == f"/plugin/{PLUGIN_NAME}/ui/remoteEntry.js"

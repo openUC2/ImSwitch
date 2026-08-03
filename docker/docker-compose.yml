@@ -9,10 +9,15 @@ services:
       - /etc/machine-id:/etc/machine-id:ro
       - /home/pi/ImSwitchConfig:/home/pi/ImSwitchConfig
       - /home/pi/Datasets:/home/pi/Datasets
-      #- /Users/bene/ImSwitchConfig:/home/pi/ImSwitchConfig      
+      #- /Users/bene/ImSwitchConfig:/home/pi/ImSwitchConfig
       #- /Users/bene/ImSwitchConfig/Datasets:/home/pi/Datasets
       #- /Volumes:/media
       - /media:/media
+      # Drop-in plugins: one subdirectory per plugin, each containing a Python
+      # package with register(). Read-only on purpose — anything that can write
+      # here runs arbitrary Python in the microscope process and arbitrary
+      # JavaScript in the operator's browser. See docs/plugins/DEPLOYMENT.md.
+      - /home/pi/ImSwitchPlugins:/opt/imswitch/plugins:ro
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
       - /run/udev:/run/udev:ro
       - /dev/dma_heap:/dev/dma_heap
@@ -28,6 +33,8 @@ services:
       - SCAN_EXT_DATA_PATH=1
       - EXT_DATA_PATH=/media
       - SSL=0
+      # Exported to the app as IMSWITCH_PLUGIN_DIR by the entrypoint.
+      - PLUGIN_PATH=/opt/imswitch/plugins
     restart: always
 
   volume-setup:
@@ -38,4 +45,42 @@ services:
     volumes:
       #- /Users/bene/ImSwitchConfig/Datasets:/home/pi/Datasets
       - /home/pi/ImSwitchConfig/Datasets:/home/pi/Datasets
-    command: 'sh -c "chown -R 1000:1000 /home/pi/Datasets; sleep 60"'
+      # Docker auto-creates a missing bind-mount source as root-owned. The
+      # plugin directory is mounted read-only, so ownership does not affect the
+      # server — but creating it here means the operator sees an empty
+      # directory to drop plugins into rather than having to guess the path.
+      - /home/pi/ImSwitchPlugins:/home/pi/ImSwitchPlugins
+    command: 'sh -c "chown -R 1000:1000 /home/pi/Datasets /home/pi/ImSwitchPlugins; sleep 60"'
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  ALTERNATIVE PLUGIN DELIVERY: a container image used as a volume source.
+#
+#  The bind mount above is right for development and for a single
+#  self-hosted instrument: you rsync a directory and restart.
+#
+#  This second pattern is right for a fleet, where you want the plugin version
+#  pinned in the same file as everything else and rolled out by digest rather
+#  than by whoever last ran rsync. The plugin image is FROM scratch — it holds
+#  the plugin tree and nothing else — and simply copies itself into a named
+#  volume before the server starts.
+#
+#  Do not use both for the same plugin: a bind mount over /opt/imswitch/plugins
+#  hides the named volume.
+#
+#  services:
+#    plugin-goniometer:
+#      image: ghcr.io/openuc2/imswitch-plugin-goniometer:0.2.0
+#      volumes:
+#        - plugins:/out
+#      command: sh -c "cp -a /plugin /out/goniometer"
+#
+#    imswitch-docker-noqt:
+#      depends_on:
+#        plugin-goniometer:
+#          condition: service_completed_successfully
+#      volumes:
+#        - plugins:/opt/imswitch/plugins:ro   # replaces the bind mount above
+#
+#  volumes:
+#    plugins:
+# ─────────────────────────────────────────────────────────────────────────────

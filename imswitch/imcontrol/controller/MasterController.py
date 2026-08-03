@@ -1,10 +1,5 @@
 from imswitch.imcommon.model import VFileItem, initLogger
 
-try:
-    from importlib.metadata import entry_points
-except ImportError:
-    entry_points = None
-
 # TODO: Import managers dynamically - similar to the controllers - to save time
 from imswitch.imcontrol.model import (
     DetectorsManager,
@@ -188,48 +183,11 @@ class MasterController:
                 )
             else:
                 self.sila2Manager = SiLa2Manager(self.__setupInfo.sila2)
-        # load all implugin-related managers and add them to the class
-        # try to get it from the plugins
-        # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the
-        # MasterController Class
+        # Plugins do not contribute managers. A plugin claims *existing*
+        # hardware by role through imswitch.plugin_sdk; contributing a new
+        # device type stays host surface because it also needs the setup-file
+        # schema. See docs/plugins/DECISIONS.md (ADR-002).
 
-        ###################################################################################################
-        # PLUGIN SYSTEM FOR MANAGERS (v1 — DEPRECATED)
-        #
-        # `imswitch.implugins` entry points are the v1 plugin mechanism. They are kept only for
-        # already-shipped external packages and take no new features; new plugins use the v2
-        # PluginManager + imswitch.plugin_sdk. See docs/plugins/DECISIONS.md (ADR-001).
-        ###################################################################################################
-        eps = list(entry_points(group="imswitch.implugins")) if entry_points else []
-        for entry_point in eps:
-            InfoClass = None
-            print(f"entry_point: {entry_point.name}")
-            try:
-                if entry_point.name.find("manager") >= 0:
-                    # check if there is an info class, too
-                    try:
-                        InfoClassName = entry_point.name.split("_manager")[0] + "_info"
-                        info_entry = next(
-                            (ep for ep in eps if ep.name == InfoClassName), None
-                        )
-                        if info_entry is not None:
-                            InfoClass = info_entry.load()
-                    except Exception:
-                        InfoClass = None
-                    ManagerClass = entry_point.load()  # Load the manager class
-                    moduleInfo = None  # TODO: This is not complete yet - the setupinfo would need to be added to the class in the very begnning prior to detecing external plugins/hooks
-                    manager = ManagerClass(moduleInfo)  # Initialize the manager
-                    setattr(
-                        self, entry_point.name, manager
-                    )  # Add the manager to the class
-            except Exception as e:
-                self.__logger.error(e)
-
-
-
-        ###################################################################################################
-        # PLUGIN SYSTEM FOR MANAGERS
-        ###################################################################################################
         # Register detectors with MetadataHub
         if self.metadataHub is not None:
             self._register_detectors_with_hub()

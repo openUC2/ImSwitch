@@ -195,6 +195,27 @@ ImSwitch provides comprehensive Docker support for containerized deployments, en
 ### End-to-End Operating System
 - **[rpi-imswitch-os](https://github.com/openUC2/rpi-imswitch-os)**: A complete Raspberry Pi-based operating system image with ImSwitch and all UC2 components pre-installed and configured. This is the officially-supported way to deploy and use ImSwitch.
 
+## Extending ImSwitch
+
+Building on ImSwitch from outside this repository — a control panel, an analysis
+view, an instrument integration? Start at
+**[docs/INTEGRATION.md](docs/INTEGRATION.md)**, which picks the right extension
+point for what you are building:
+
+- **REST / Socket.IO client** — the default. Everything ImSwitch exposes with
+  `@APIExport` is already an HTTP endpoint; browse it live at
+  `/imswitch/api/docs` on any running instance.
+- **[Plugin](docs/plugins/README.md)** — for in-process frame access, tight
+  hardware loops, or a widget that lives inside the ImSwitch window. Start from
+  the [plugin template](https://github.com/openUC2/imswitch-plugin-template);
+  a plugin bind-mounts into the stock container with no rebuild and no
+  `pip install`.
+- **Upstream contribution** — for a new camera, stage or laser driver.
+
+Forking the core is not a supported extension path; see
+[docs/INTEGRATION.md](docs/INTEGRATION.md#do-not-fork-the-core) for what to do
+instead.
+
 ## Documentation
 
 Documentation for the upstream project is at

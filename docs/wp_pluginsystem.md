@@ -71,8 +71,17 @@ tree is on a branch off `feature/pluginsystemV2`.
 
 **Delivered.** `docs/plugins/DECISIONS.md`. Beyond the ADR, the two dead v1 code paths the
 audit found were deleted (`ImConMainController.loadPlugin` + its unreachable caller,
-`SetupInfo.add_attribute`); the three still-reachable v1 consumers carry a deprecation comment
-pointing at ADR-001.
+`SetupInfo.add_attribute`).
+
+**ADR-001 subsequently strengthened: v1 is now removed outright, not deprecated.** The
+inventory is what changed the decision — of the five `imswitch.implugins` consumers, two were
+already dead, and of the three live ones none could carry a fully-configured plugin
+(`MasterController` constructed every v1 manager with `moduleInfo = None`, under a TODO
+admitting the setup info was never wired up). Keeping a mechanism that cannot work costs
+documentation and test surface while protecting nothing. All five consumers and the empty
+`imswitch.implugins.*` entry-point groups in `pyproject.toml`/`setup.py` are gone. This is a
+**breaking change for any external package that declared those entry points** and belongs in
+the release notes; the migration path is in ADR-001.
 
 **Why.** Two plugin systems currently coexist: the v1 entry-point hooks (`imswitch.implugins`,
 consumed by `ImConMainController.loadPlugin` and `MultiManager`) and the v2 `PluginManager`.
@@ -188,7 +197,22 @@ on a clean install and does not 404.
 
 ---
 
-## WP2 — Drop-in loading from a bind mount, gated by `availableWidgets`
+## WP2 — Drop-in loading from a bind mount, gated by `availableWidgets` ✅ done
+
+**Delivered.** `_is_enabled()` gating before hardware resolution and controller construction;
+`DisabledPlugin` records surfaced in `manifest_list()` with `status: "disabled"` and a `reason`;
+`ui_dir` fallback to `<plugin_root>/<dist_dir>` via `__imswitch_plugin_root__`; `dropin_root()`
+resolved per call; per-plugin startup log line. 16 tests in
+`imswitch/imcontrol/_test/test_plugin_manager.py`.
+
+**Also fixed (not in the original defect list).** Browser-facing plugin URLs were missing the
+host's `root_path`. Starlette matches an `APIRouter` route with *or* without the `/imswitch`
+prefix, but matches a `StaticFiles` **Mount only with it** — so `remote_entry` as published
+would have 404'd every plugin bundle in production while the mount looked correct. The manager
+now captures `app.root_path` in `attach_to_app()` and prefixes `remote_entry` / `api_base`
+(`socket_ns` stays unprefixed — it is a Socket.IO namespace, not a URL). Guarded by
+`test_advertised_urls_actually_resolve_on_the_host_app`, which fetches the published URL rather
+than asserting a string shape.
 
 **Why.** Two requirements meet here. First, a plugin must load from a read-only bind mount
 with no `pip install` — that is what makes the Docker story work and what guarantees no
@@ -267,7 +291,19 @@ drop-in plugin directory:
 
 ---
 
-## WP3 — Frontend shared runtime
+## WP3 — Frontend shared runtime ✅ done
+
+**Delivered.** `frontend/shared-deps.js` (`SHARED_DEPS` + `makeShared({ eager })`);
+`craco.config.js` now uses `makeShared({ eager: true })` and exposes `./store`, `./contexts`,
+`./sharedDeps` under `filename: "remoteEntry.js"`; `src/context/index.js` barrel;
+`store.injectReducer(key, reducer, { persist })`.
+
+**Deviation from the prompt, point 4.** The prompt's `store.replaceReducer(buildRootReducer({...}))`
+would have broken persistence app-wide. A fresh `persistReducer` instance starts with a null
+persistoid and only gets one from the `PERSIST` action, which `persistStore` already dispatched
+at startup — so re-wrapping stops persisting *every* whitelisted slice the first time any plugin
+injects a reducer. Instead the combined reducer is a mutable binding behind a stable proxy, so
+the persist layer and the cross-tab sync wrapper keep their identity for the life of the page.
 
 **Why.** This is the work package that answers "can the plugin use the same Redux store".
 The answer is yes, and the React tree is already correct: `index.js` wraps `<App/>` in
@@ -362,7 +398,31 @@ exactly as before. Nothing user-visible changes in this WP — it is enabling wo
 
 ---
 
-## WP4 — Dynamic app registry, navigation, and a loader that fails loudly
+## WP4 — Dynamic app registry, navigation, and a loader that fails loudly ✅ done
+
+**Delivered.** `loadRemote` now settles on every path (missing scope, missing expose, script
+404, thrown init) plus a 10s timeout, each message naming the plugin and its URL;
+`PluginErrorBoundary` around each widget; `makeRegistryEntryFromManifest` + `resolveMuiIcon` +
+`APP_CATEGORIES.PLUGINS`; `appManager.dynamicApps` / `seenDynamicApps` / `pluginErrors` with
+union selectors; `NavigationDrawer` renders plugins (sorted by `menu.order`) instead of ignoring
+them; a "Plugins not available" panel in the App Manager.
+
+**Extra hole closed.** A plugin that loads a backend but ships no built frontend bundle
+(`remote_entry: null`) was going to be filtered out of both the sidebar and the registry — i.e.
+disappear silently, the exact failure mode point 6 exists to prevent. It is now reported as
+"no widget" with its working `api_base`.
+
+**Verified live**, not with a stub — real backend + real browser, two drop-in plugins:
+- Sidebar shows `APPS › Demo Widget` (manifest group `apps` → built-in category) and
+  `PLUGINS › Goniometer` (group `Measurement` → fallback bucket). Both clickable.
+- Demo widget rendered `host React identity shared: YES`, `useTheme().palette.mode = dark`
+  (host theme, not MUI's default) and `useSelector(connectionSettingsState).ip` — with no
+  props. That is WP3's central claim, confirmed empirically.
+- Goniometer (no built bundle) produced the error card naming the plugin and the 404 URL
+  instead of an endless spinner, and the rest of the app kept working; switching away and back
+  recovered.
+- With `goniometer` removed from `availableWidgets` it vanished from the sidebar and appeared
+  in the App Manager panel as *disabled*, quoting the reason.
 
 **Why.** With WP1 the manifest is served and with WP3 the runtime is shared, but a plugin
 still cannot be *reached*: `NavigationDrawer` takes a `plugins` prop and ignores it, and the
@@ -445,7 +505,31 @@ produces a visible error rather than an infinite spinner.
 
 ---
 
-## WP5 — Template repository
+## WP5 — Template repository ✅ done
+
+**Delivered** at `../imswitch-plugin-template` (sibling of this repo, like the goniometer).
+Backend (`register()` + `PluginController` with the thread-and-event pattern), `ui-src/` with a
+widget that reads theme/store/dispatch from context and injects its own Redux slice, `Makefile`
+(`build`/`check`/`dist`), `FROM scratch` Dockerfile, `.github/workflows/ci.yml`,
+`docs/WRITING_A_PLUGIN.md`.
+
+**Deviation from the prompt's layout.** The package is `imswitch_plugin_example/`, not
+`plugin/`. A drop-in plugin is imported by directory name off `sys.path`, so a package literally
+named `plugin` would be a landmine — it would shadow anything else called `plugin` in the
+process. The template's rename checklist covers it and `make check` verifies the five names agree.
+
+**Two design calls worth knowing.**
+- Remotes declare shared modules with webpack's `import: false`. Without it webpack *also* emits
+  a local fallback copy of React "just in case the host doesn't provide it" — which is the
+  duplicate-React bug merely deferred to runtime, and would have made the CI "no second React"
+  check impossible to pass. With it, a missing host module fails loudly at load instead.
+- `shared-deps.js` is now canonical in `frontend/shared-deps.js` and copied **byte-identically**
+  into each plugin, so `make check` can diff them. It gained a `fallback` option so one file
+  serves both sides.
+
+**Verified.** 14 contract checks pass on a clean build; deliberately breaking three of them
+(a runtime dependency, React moved to `dependencies`, a scope typo) produces exactly 4 failures,
+and reverting restores green. Built bundle is 20 KiB with no React runtime in it.
 
 **Why.** Everything up to here is host-side. This is the deliverable an external developer
 actually touches. The goniometer plugin is close to the right shape but was written against
@@ -558,7 +642,23 @@ tree loads in a running ImSwitch container.
 
 ---
 
-## WP6 — Docker image and compose integration
+## WP6 — Docker image and compose integration ✅ done (one part not applicable)
+
+**Delivered.** `Dockerfile` creates `/opt/imswitch/plugins` and sets `IMSWITCH_PLUGIN_DIR`;
+`docker/entrypoint.sh` gains `PLUGIN_PATH`, exports `IMSWITCH_PLUGIN_DIR`, and logs the
+directory plus a listing of its children (non-fatal when missing — a plugin problem must never
+stop a microscope booting); `docker/docker-compose.yml` gets the read-only bind mount,
+`PLUGIN_PATH`, the `volume-setup` chown, and the commented-out image-as-volume-source pattern;
+`docs/plugins/DEPLOYMENT.md` covers layout, enabling, verification and a symptom-keyed
+troubleshooting table.
+
+**Not done: the os-rpi compose file.** That lives in a different repository which is not checked
+out here, so I could not edit it without guessing at its current contents — and the prompt
+requires everything else in it to stay byte-identical, which is exactly the kind of promise you
+cannot keep while editing blind. `docs/plugins/DEPLOYMENT.md` §2 states precisely what to add
+(the `:ro` mount, `PLUGIN_PATH`, the `volume-setup` chown entry) and what not to touch
+(`device_cgroup_rules`, `group_add`, `extra_hosts`, restart policy, pinned digest, and no
+`ports:` section). Applying it is a two-minute change once that repo is available.
 
 **Why.** The deployment target is `os-rpi`'s `deployment.compose.yml`, which currently
 bind-mounts config, datasets and `/media` but has no plugin directory. Two delivery modes
@@ -629,7 +729,16 @@ adding its name to `availableWidgets` makes the widget appear in the browser aft
 
 ---
 
-## WP7 — End-to-end acceptance test
+## WP7 — End-to-end acceptance test ✅ done
+
+**Delivered.** `imswitch/imcontrol/_test/test_plugin_e2e.py` (7 tests) and
+`.github/workflows/plugin-e2e.yml`. Hermetic: no Docker, no hardware, no network, and no wait
+on the frontend build artifact, so it fails within a minute if WP1–WP4 regress. The workflow
+also asserts the host/remote halves of the shared-deps contract in Node — the host must share
+React as an eager singleton, a remote must be non-eager with no fallback copy.
+
+All six ordered assertions from the prompt are covered, plus "an absent plugin directory is
+normal, not an error". Total plugin test count: **32** across the three files.
 
 **Why.** This system has many moving parts across two languages and a container boundary.
 Without one automated test that exercises the whole chain, it will silently regress the first
@@ -674,7 +783,33 @@ real hardware, no network.
 
 ---
 
-## WP8 — Partner-facing documentation
+## WP8 — Partner-facing documentation ✅ done
+
+**Delivered.** `docs/plugins/README.md` (plugin-vs-REST decision table, quickstart, the three
+contracts with stability markers, a text lifecycle diagram, a per-surface guarantee table
+including an explicit "what we do not guarantee", and a symptom-keyed troubleshooting table);
+`docs/INTEGRATION.md` (new — routes a partner to REST client / plugin / upstream contribution,
+and replaces fork-the-core with a table of supported alternatives); plus an "Extending ImSwitch"
+section in the root `README.md`, without which neither doc is discoverable.
+
+**Two things the docs state plainly rather than glossing.** A plugin runs unsandboxed in the
+microscope process — a blocking plugin holds a FastAPI worker, and a duplicated NumPy gives
+wrong numbers rather than a crash. And `sdk_min` / `imswitch_min` / `permissions` are parsed but
+**not enforced**, so no one should rely on the host rejecting a mismatched plugin.
+
+All internal links and heading anchors across the four plugin docs were verified to resolve.
+
+**Follow-up: developer setup added to DEPLOYMENT.md.** §8 covers running ImSwitch natively
+(no Docker) on Windows/macOS/Linux — why `IMSWITCH_PLUGIN_DIR` must be set (the default
+`/opt/imswitch/plugins` is a container path), how to set it per-OS, the symlink/junction loop
+that lets ImSwitch import straight out of a git checkout, and the Windows-only `_data/static/imswitch`
+symlink problem. §9 documents what each Makefile target actually does, with verified bash and
+PowerShell equivalents for machines without `make`.
+
+While writing §8 the drop-in layout rules were checked empirically, which surfaced a papercut:
+the scanner accepted `<root>/<package>/__init__.py` but the loader then rejected it with a bare
+"no python package in ...". That error now names both working layouts and the fix, guarded by
+`test_package_directly_under_the_root_gets_an_actionable_error`.
 
 **Why.** This closes the loop on the original question we were asked ("what SDK/API should we
 use, and how do we extend the software?"). It also decides the support model: what an external
@@ -718,6 +853,62 @@ these docs.
 
 ---
 
+## Post-WP8 corrections
+
+Three changes after the first end-to-end use by someone other than the author, where a
+correctly-loaded plugin did not appear in the UI.
+
+**1. Selector identity bug (the actual cause).** `selectDynamicApps` and `selectPluginErrors`
+returned `state.appManager.dynamicApps || []` — a **fresh array on every call** whenever the
+field was absent. `useSelector` compares by reference, so every consumer re-rendered on every
+dispatched action and the `useMemo` chain in AppManager was invalidated continuously. The field
+is absent exactly when redux-persist rehydrates an `appManager` saved by a build without plugin
+support — i.e. on every upgrade, which is the normal path rather than an edge case. Both
+selectors now return a single frozen module-level constant.
+
+**2. Plugins were filed into built-in categories.** `makeRegistryEntryFromManifest` used the
+manifest's `menu_group` as the category when it named a built-in one. The template ships
+`menu_group = "apps"`, so the example plugin landed among the 19 built-in Applications with
+nothing marking it as a plugin — and anyone hunting under "Plugins" found an empty tab reading
+"No apps found". Plugins now always get `category: "plugins"`; `menu_group` survives as
+`menuGroup` display metadata. Recorded in the stable-surface table.
+
+**3. pip-install support removed (ADR-004).** Entry-point discovery is gone: no
+`ENTRY_POINT_GROUP`, no `importlib.metadata` import, no entry-point table in the template's
+`pyproject.toml`, and `_plugin_root_for` no longer falls back to a module's `__file__`. Directory
+scanning is the only mechanism. Guarded by `test_pip_installed_plugins_are_not_discovered`,
+which fails if anything consults `entry_points()`.
+
+**Also:** `main(plugin_dir=...)` / `--plugin-dir` now set the plugin directory explicitly,
+taking precedence over `$IMSWITCH_PLUGIN_DIR` and then `DEFAULT_DROPIN`. ImSwitch logs the
+resolved path at startup (`[main] Plugin folder: ...`). This exists because the default is a
+container path, so every native developer previously had to configure a shell variable.
+
+Verified live against the user's own `~/Documents/ImSwitchPlugins/imswitch-plugin-template`:
+sidebar shows `PLUGINS › Example`, the App Manager shows a `PLUGINS 1/1` tab and 35 cards with
+no empty state, and the widget renders reporting `theme: dark` and its injected Redux slice.
+
+---
+
+## Status summary
+
+| WP | State |
+|---|---|
+| WP0 audit + ADRs | done — v1 removed entirely (stronger than planned) |
+| WP1 `/api/plugins` route | done, 9 tests |
+| WP2 drop-in + gating | done, 16 tests; also fixed a `root_path` URL bug not in the defect list |
+| WP3 frontend shared runtime | done; deviated from prompt point 4 to avoid breaking redux-persist |
+| WP4 registry + navigation | done; verified live in a browser |
+| WP5 template repo | done at `../imswitch-plugin-template`, 14 contract checks, negative-tested |
+| WP6 docker + compose | done for this repo; the os-rpi compose file is documented, not edited (different repo) |
+| WP7 e2e test | done, 7 tests + `plugin-e2e.yml` |
+| WP8 documentation | done — `docs/plugins/README.md`, `docs/INTEGRATION.md`, root README section |
+
+32 plugin tests total. Full `imswitch/imcontrol/_test` run: same 26 pre-existing failures as the
+`bb4e04f1` baseline, no new ones.
+
+---
+
 ## Sequencing and effort
 
 ```
@@ -739,6 +930,21 @@ WP1 → WP2 → WP6 → WP7.
 **Minimum demo.** WP1 + WP3 + WP4 alone is enough to render the existing goniometer plugin
 in the sidebar with the host's theme and store, from a bind mount. That is the milestone
 worth showing to a partner before the template repo exists.
+
+**Status: done, and verified live.** The goniometer's `ui/webpack.config.js` was rebuilt on the
+shared-deps contract (vendored `shared-deps.js`, `eager: false`, `fallback: false`, `host_app`
+remote), its shared packages moved from `dependencies` to `peerDependencies`, and its widget
+now takes `apiBase` from the manifest instead of assembling a URL that would have missed the
+`/imswitch` prefix. The resulting bundle is 24 KiB with no React in it.
+
+Running against a real backend, the widget renders inside the host shell with **no console
+errors** and its calls resolve at `/imswitch/plugin/goniometer/api/get_focus_metric` → 200.
+
+The bundle is built into `src/imswitch_plugin_goniometer/ui/dist/` on this machine but is
+**gitignored**, as build artifacts should be — so a fresh clone still needs
+`cd ui && npm install && npm run build`, then copy `ui/dist` into the package (the template
+automates exactly this as `make build`). Worth adding the same Makefile to the goniometer repo
+so the step is not folklore.
 
 ---
 

@@ -123,7 +123,9 @@ const frame3DViewerPersistConfig = {
 
 //#####################################################################################
 // Combine reducers
-const rootReducer = combineReducers({
+// Kept as a named const so buildRootReducer() below can rebuild the root
+// reducer with plugin-injected slices merged in.
+const staticReducers = {
   connectionSettingsState: connectionSettingsReducer,
   webSocketState: webSocketReducer,
   experimentState: experimentReducer,
@@ -181,7 +183,30 @@ const rootReducer = combineReducers({
   stageMapState: stageMapReducer, // runtime-only stage map tiles (not persisted)
   onboardingState: onboardingReducer,
   i2cState: i2cReducer,
-});
+};
+
+//#####################################################################################
+// Dynamic reducer injection (plugins)
+//
+// A federated plugin can own a Redux slice via store.injectReducer(). The
+// combined reducer therefore has to be swappable, but everything wrapped
+// *around* it — the persist layer and the cross-tab sync wrapper — must stay
+// the same instance for the life of the page.
+//
+// That constraint is why this is a mutable binding behind a stable proxy rather
+// than the obvious `store.replaceReducer(persistReducer(config, combineReducers(...)))`.
+// A fresh persistReducer instance starts with a null persistoid and only gets
+// one when persistStore dispatches PERSIST — which already happened at startup.
+// Re-wrapping would therefore silently stop persisting *every* whitelisted
+// slice, app-wide, the first time any plugin injected a reducer.
+const injectedReducers = {};
+
+const buildRootReducer = (reducerMap) => combineReducers(reducerMap);
+
+let activeCombinedReducer = buildRootReducer(staticReducers);
+
+// Stable identity, mutable target.
+const rootReducer = (state, action) => activeCombinedReducer(state, action);
 
 //#####################################################################################
 // Persist configuration with whitelist and blacklist
@@ -271,6 +296,43 @@ const store = configureStore({
 //#####################################################################################
 // Persistor setup for Redux-Persist
 export const persistor = persistStore(store);
+
+//#####################################################################################
+// Plugin-facing reducer injection.
+//
+// Reached from a federated plugin as:
+//     import store from "host_app/store";
+//     store.injectReducer("myPluginState", myPluginReducer);
+//
+// Returns false if the key is already taken — first registration wins, matching
+// the backend's duplicate-plugin-name rule (ADR-003). Callers should treat a
+// false return as "someone already owns this key", not as an error to retry.
+store.injectReducer = (key, reducer, { persist = false } = {}) => {
+  if (staticReducers[key] || injectedReducers[key]) return false;
+
+  injectedReducers[key] = reducer;
+  activeCombinedReducer = buildRootReducer({
+    ...staticReducers,
+    ...injectedReducers,
+  });
+  // Same function identity as before (see rootReducer above); this call exists
+  // to make Redux dispatch REPLACE so the new slice gets its initial state.
+  store.replaceReducer(rootReducerWithSync);
+
+  if (persist) {
+    // TODO: persisting an injected slice needs the key added to persistConfig
+    // .whitelist *before* persistStore runs, which is impossible for a reducer
+    // that arrives at runtime. Doing it properly means a nested persistReducer
+    // owned by the plugin, with its own storage key. Deliberately not
+    // half-implemented — see docs/plugins/DECISIONS.md.
+    console.warn(
+      `[store] injectReducer("${key}", …, { persist: true }): persisting ` +
+        `plugin slices is not implemented yet. The slice works, but its state ` +
+        `will not survive a page reload.`,
+    );
+  }
+  return true;
+};
 
 // Export the store
 export default store;

@@ -755,6 +755,24 @@ class SettingsController(ImConWidgetController):
         return mParameterDict
 
     @APIExport()
+    def getDetectorParameter(self, detectorName: str=None, parameterName: str=None) -> Any:
+        """ Returns the value of the specified detector-specific parameter. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        if parameterName is None:
+            return None
+        try:
+            return self._master.detectorsManager.execOn(
+                detectorName, lambda c: c.getParameter(parameterName)
+            )
+        except Exception:
+            self._logger.warning(
+                f"Failed to get parameter '{parameterName}' for detector '{detectorName}'",
+                exc_info=True,
+            )
+            return None
+        
+    @APIExport()
     def getDetectorNames(self) -> List[str]:
         """ Returns the device names of all detectors. These device names can
         be passed to other detector-related functions. """

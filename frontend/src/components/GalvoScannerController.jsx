@@ -65,6 +65,8 @@ import {
   apiParkGalvo,
 } from '../backendapi/apiGalvoScannerController';
 import GalvoArbitraryPointsTab from './GalvoArbitraryPointsTab';
+import FlimLabsPanel from './FlimLabsPanel';
+import useDeveloperMode from '../utils/useDeveloperMode';
 
 /**
  * Rich, human-readable explanations for each scan parameter, shown as hover
@@ -89,14 +91,20 @@ const PARAM_TOOLTIPS = {
   line_settle_samples:
     'Extra settle samples held after the fly-back before the next line starts. Increase if the start of each line is distorted.',
   trig_delay_us:
-    'Delay between updating the galvo position and emitting the pixel trigger. NOTE: not yet consumed by the current scanner core.',
+    'Gap between the frame marker and the line marker at the start of frame (µs). Both markers fire during pre-blanking, before the first pixel.',
   trig_width_us:
-    'Width of the camera/pixel trigger pulse. NOTE: not yet consumed by the current scanner core.',
+    'Trigger pulse width in µs for the frame/line markers and the pixel clock (pixel width is capped at half the dwell time; 0 = fastest possible pulse).',
   enable_trigger: 'Emit the pixel/line trigger output during the scan. 0 = off, 1 = on.',
   apply_x_lut:
     'Apply a per-column X lookup table to linearize the mirror. 0 = off, 1 = on (requires an uploaded LUT).',
   park_x: 'X position (DAC counts, 0–4095) the beam moves to when a scan stops.',
   park_y: 'Y position (DAC counts, 0–4095) the beam moves to when a scan stops.',
+  overscan_samples:
+    'Extends the X ramp at the same per-pixel slope on both sides of the imaging window, so the mirror is already at constant velocity when triggers/laser start. Compensates the galvo lagging behind the DAC. Costs 2×overscan samples per line.',
+  laser_blanking:
+    'Gate the laser (galvo laser pin) HIGH only during the imaging window — off during pre-blanking, overscan, fly-back and settle. Prevents fly-back photons from smearing the image (e.g. into a FLIM acquisition).',
+  hw_pixel_clock:
+    'Generate the pixel clock with the ESP32-S3 RMT peripheral: exactly nx hardware-timed, equidistant pulses per line, decoupled from the DAC/SPI software loop. Falls back to software pulses on unsupported chips.',
 };
 
 /**
@@ -127,6 +135,9 @@ const GalvoScannerController = () => {
   const connectionSettings = useSelector(getConnectionSettingsState);
   const hostIP = connectionSettings.ip;
   const hostPort = connectionSettings.apiPort;
+  // FLIM bridge forced visible for now; revert to useDeveloperMode() gating later.
+  // (Destructuring `{ isDeveloperMode } = true` would yield undefined and hide it.)
+  const isDeveloperMode = true; // useDeveloperMode().isDeveloperMode;
 
   // Redux state
   const galvoState = useSelector(getGalvoScannerState);
@@ -819,7 +830,7 @@ const GalvoScannerController = () => {
                   onChange={handleConfigChange('trig_delay_us')}
                   inputProps={{ min: 0 }}
                   InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.trig_delay_us} /> }}
-                  helperText="Trigger delay (core: TODO)"
+                  helperText="Frame→line marker gap"
                 />
               </Grid>
               <Grid item xs={6}>
@@ -832,7 +843,7 @@ const GalvoScannerController = () => {
                   onChange={handleConfigChange('trig_width_us')}
                   inputProps={{ min: 0 }}
                   InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.trig_width_us} /> }}
-                  helperText="Trigger width (core: TODO)"
+                  helperText="Marker/pixel pulse width"
                 />
               </Grid>
               <Grid item xs={6}>
@@ -872,6 +883,45 @@ const GalvoScannerController = () => {
                   inputProps={{ min: 0, max: 1 }}
                   InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.apply_x_lut} /> }}
                   helperText="0=off, 1=on"
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="Overscan Samples"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={config.overscan_samples ?? 0}
+                  onChange={handleConfigChange('overscan_samples')}
+                  inputProps={{ min: 0 }}
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.overscan_samples} /> }}
+                  helperText="Constant-velocity margin"
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="Laser Blanking"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={config.laser_blanking ?? 0}
+                  onChange={handleConfigChange('laser_blanking')}
+                  inputProps={{ min: 0, max: 1 }}
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.laser_blanking} /> }}
+                  helperText="0=off, 1=gate laser"
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="HW Pixel Clock"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={config.hw_pixel_clock ?? 0}
+                  onChange={handleConfigChange('hw_pixel_clock')}
+                  inputProps={{ min: 0, max: 1 }}
+                  InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS.hw_pixel_clock} /> }}
+                  helperText="0=software, 1=RMT"
                 />
               </Grid>
             </Grid>
@@ -1107,6 +1157,9 @@ const GalvoScannerController = () => {
       {activeTab === 1 && (
         <GalvoArbitraryPointsTab />
       )}
+
+      {/* ========== FLIM LABS bridge (developer mode only) ========== */}
+      { activeTab === 0 && <FlimLabsPanel />}
     </Box>
   );
 };

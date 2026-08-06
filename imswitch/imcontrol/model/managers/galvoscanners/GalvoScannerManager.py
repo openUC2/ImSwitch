@@ -32,6 +32,15 @@ class GalvoScanConfig:
     line_settle_samples: int = 0
     enable_trigger: int = 1
     apply_x_lut: int = 0
+    # Linear ramp extension (same per-pixel slope) on both sides of the imaging
+    # window - compensates galvo lag so the mirror moves at constant velocity
+    # when triggers/laser start
+    overscan_samples: int = 0
+    # Gate the galvo laser pin HIGH only during the imaging window
+    laser_blanking: int = 0
+    # Hardware-equidistant pixel clock via the ESP32-S3 RMT peripheral
+    # (falls back to software pulses on unsupported SoCs)
+    hw_pixel_clock: int = 0
 
 
 @dataclass

@@ -50,6 +50,7 @@ import vizarrViewerReducer from "./slices/VizarrViewerSlice";
 import compositeAcquisitionReducer from "./slices/CompositeAcquisitionSlice";
 import experimentUIReducer from "./slices/ExperimentUISlice";
 import galvoScannerReducer from "./slices/GalvoScannerSlice";
+import flimLabsReducer from "./slices/FlimLabsSlice";
 import focusMapReducer from "./slices/FocusMapSlice";
 import overviewRegistrationReducer from "./slices/OverviewRegistrationSlice";
 import frame3DViewerReducer from "./slices/Frame3DViewerSlice";
@@ -168,6 +169,7 @@ const rootReducer = combineReducers({
   compositeAcquisitionState: compositeAcquisitionReducer,
   experimentUI: experimentUIReducer,
   galvoScannerState: galvoScannerReducer,
+  flimLabsState: flimLabsReducer,
   focusMap: persistReducer(focusMapPersistConfig, focusMapReducer), // Nested persist for UI accordion states
   overviewRegistrationState: overviewRegistrationReducer,
   frame3DViewer: persistReducer(

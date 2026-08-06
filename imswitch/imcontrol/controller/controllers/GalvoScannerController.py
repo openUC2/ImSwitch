@@ -153,7 +153,10 @@ class GalvoScannerController(ImConWidgetController):
                            trig_width_us: Optional[int] = None,
                            line_settle_samples: Optional[int] = None,
                            enable_trigger: Optional[int] = None,
-                           apply_x_lut: Optional[int] = None) -> Dict[str, Any]:
+                           apply_x_lut: Optional[int] = None,
+                           overscan_samples: Optional[int] = None,
+                           laser_blanking: Optional[int] = None,
+                           hw_pixel_clock: Optional[int] = None) -> Dict[str, Any]:
         """
         Update the configuration for a galvo scanner without starting a scan.
         
@@ -213,7 +216,10 @@ class GalvoScannerController(ImConWidgetController):
                 trig_width_us=trig_width_us,
                 line_settle_samples=line_settle_samples,
                 enable_trigger=enable_trigger,
-                apply_x_lut=apply_x_lut
+                apply_x_lut=apply_x_lut,
+                overscan_samples=overscan_samples,
+                laser_blanking=laser_blanking,
+                hw_pixel_clock=hw_pixel_clock
             )
             
             self.__logger.info(f"Updated config for {scannerName}")
@@ -241,6 +247,9 @@ class GalvoScannerController(ImConWidgetController):
                        line_settle_samples: Optional[int] = None,
                        enable_trigger: Optional[int] = None,
                        apply_x_lut: Optional[int] = None,
+                       overscan_samples: Optional[int] = None,
+                       laser_blanking: Optional[int] = None,
+                       hw_pixel_clock: Optional[int] = None,
                        timeout: int = 1) -> Dict[str, Any]:
         """
         Start a galvo scan with the specified parameters.
@@ -296,6 +305,9 @@ class GalvoScannerController(ImConWidgetController):
                 line_settle_samples=line_settle_samples,
                 enable_trigger=enable_trigger,
                 apply_x_lut=apply_x_lut,
+                overscan_samples=overscan_samples,
+                laser_blanking=laser_blanking,
+                hw_pixel_clock=hw_pixel_clock,
                 timeout=timeout
             )
             

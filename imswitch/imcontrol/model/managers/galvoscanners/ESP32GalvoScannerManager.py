@@ -81,6 +81,8 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
                    trig_delay_us: int = None, trig_width_us: int = None,
                    line_settle_samples: int = None, enable_trigger: int = None,
                    apply_x_lut: int = None,
+                   overscan_samples: int = None, laser_blanking: int = None,
+                   hw_pixel_clock: int = None,
                    timeout: int = 1) -> Dict[str, Any]:
         """
         Start galvo scanning with the specified parameters.
@@ -105,6 +107,10 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
             line_settle_samples: Line settling samples
             enable_trigger: Enable trigger output 0/1
             apply_x_lut: Apply X lookup table 0/1
+            overscan_samples: Constant-velocity ramp extension on both sides
+                of the imaging window (galvo lag compensation)
+            laser_blanking: Gate the laser pin HIGH only during imaging 0/1
+            hw_pixel_clock: Hardware RMT pixel clock (ESP32-S3) 0/1
             timeout: Request timeout in seconds
             
         Returns:
@@ -128,7 +134,10 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
             trig_width_us=trig_width_us,
             line_settle_samples=line_settle_samples,
             enable_trigger=enable_trigger,
-            apply_x_lut=apply_x_lut
+            apply_x_lut=apply_x_lut,
+            overscan_samples=overscan_samples,
+            laser_blanking=laser_blanking,
+            hw_pixel_clock=hw_pixel_clock
         )
         
         try:
@@ -149,6 +158,9 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
                 line_settle_samples=self._config.line_settle_samples,
                 enable_trigger=self._config.enable_trigger,
                 apply_x_lut=self._config.apply_x_lut,
+                overscan_samples=self._config.overscan_samples,
+                laser_blanking=self._config.laser_blanking,
+                hw_pixel_clock=self._config.hw_pixel_clock,
                 timeout=timeout
             )
             self._is_scanning = True

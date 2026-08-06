@@ -38,7 +38,10 @@ const initialState = {
     trig_width_us: 0,
     line_settle_samples: 0,
     enable_trigger: 1,
-    apply_x_lut: 0
+    apply_x_lut: 0,
+    overscan_samples: 0,
+    laser_blanking: 0,
+    hw_pixel_clock: 0
   },
   
   // Current scanner status

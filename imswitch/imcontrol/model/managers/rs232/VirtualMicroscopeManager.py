@@ -476,10 +476,15 @@ class VirtualGalvoScanner:
         self._x_position = 2048  # Center position
         self._y_position = 2048  # Center position
         
-    def set_galvo_scan(self, nx=None, ny=None, x_min=None, x_max=None, 
+    def set_galvo_scan(self, nx=None, ny=None, x_min=None, x_max=None,
                        y_min=None, y_max=None, sample_period_us=None,
-                       frame_count=None, bidirectional=None):
-        """Set scan configuration and start scanning."""
+                       frame_count=None, bidirectional=None, **kwargs):
+        """Set scan configuration and start scanning.
+
+        Extra keyword args (pre_samples, fly_samples, trig_*, overscan_samples,
+        laser_blanking, hw_pixel_clock, timeout, ...) are accepted for interface
+        parity with the real UC2-REST galvo but ignored by the simulation.
+        """
         with self.lock:
             # Update configuration
             if nx is not None:

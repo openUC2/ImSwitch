@@ -1144,7 +1144,7 @@ class Toupcam:
                 cls.__lib.Toupcam_HotPlug(cls.__HOTPLUG_CALLBACK(0), None)
             else:
                 cls.__hotplug_cb = cls.__HOTPLUG_CALLBACK(cls.__hotplugCallbackFun)
-                cls.__lib.Toupcam_HotPlug(__hotplug_cb, None)
+                cls.__lib.Toupcam_HotPlug(cls.__hotplug_cb, None)
 
     @classmethod
     def EnumV2(cls):
@@ -2284,7 +2284,7 @@ class Toupcam:
         self.__lib.Toupcam_AwbOnce(self.__h, None, None)
 
     def AwbOnePush(self):
-        AwbOnce(self)
+        self.AwbOnce(self)
 
     def AwbInit(self):
         """Auto White Balance "Once", Temp/Tint Mode"""
@@ -2294,19 +2294,19 @@ class Toupcam:
         self.__lib.Toupcam_AbbOnce(self.__h, None, None)
 
     def AbbOnePush(self):
-        AbbOnce(self)
+        self.AbbOnce(self)
 
     def FfcOnce(self):
         self.__lib.Toupcam_FfcOnce(self.__h)
 
     def FfcOnePush(self):
-        FfcOnce(self)
+        self.FfcOnce(self)
 
     def DfcOnce(self):
         self.__lib.Toupcam_DfcOnce(self.__h)
 
     def DfcOnePush(self):
-        DfcOnce(self)
+        self.DfcOnce(self)
 
     def FpncOnce(self):
         self.__lib.Toupcam_FpncOnce(self.__h)
@@ -2434,7 +2434,7 @@ class Toupcam:
     @staticmethod
     def __progressCallbackFun(percent, ctx):
         if __class__.__progress_fun:
-            __class__.__progress_fun(percent, __progress_ctx)
+            __class__.__progress_fun(percent, ctx.__progress_ctx)
 
     @classmethod
     def Update(cls, camId, filePath, pFun, pCtx):
@@ -2451,9 +2451,9 @@ class Toupcam:
         cls.__progress_ctx = pCtx
         cls.__progress_cb = cls.__PROGRESS_CALLBACK(cls.__progressCallbackFun)
         if sys.platform == 'win32':
-            return cls.__lib.Toupcam_Update(camId, filePath, __progress_cb, None)
+            return cls.__lib.Toupcam_Update(camId, filePath, cls.__progress_cb, None)
         else:
-            return cls.__lib.Toupcam_Update(camId.encode('ascii'), filePath.encode('ascii'), __progress_cb, None)
+            return cls.__lib.Toupcam_Update(camId.encode('ascii'), filePath.encode('ascii'), cls.__progress_cb, None)
 
     @classmethod
     def Gain2TempTint(cls, gain):

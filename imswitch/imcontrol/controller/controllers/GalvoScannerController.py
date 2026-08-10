@@ -47,6 +47,23 @@ class GalvoScannerController(ImConWidgetController):
                           f"{self._master.galvoScannersManager.getAllDeviceNames()}")
 
         self._bindGalvoToFlimDetectors()
+        self._autoStartScanners()
+
+    def _autoStartScanners(self):
+        """Start scanning at boot for scanners with autoStartScan enabled
+        (default). The FLIM rig wants the raster + trigger pattern running from
+        the start; disable with "autoStartScan": false in managerProperties.
+        """
+        for name in self._master.galvoScannersManager.getAllDeviceNames():
+            scanner = self._master.galvoScannersManager[name]
+            if not getattr(scanner, '_autoStartScan', False):
+                continue
+            try:
+                scanner.start_scan()
+                self.__logger.info(
+                    f"Auto-started galvo scan on '{name}' with default config")
+            except Exception as e:
+                self.__logger.warning(f"Auto-start of '{name}' failed: {e}")
 
     def _bindGalvoToFlimDetectors(self):
         """Late-bind galvo scanners into FLIM detectors.

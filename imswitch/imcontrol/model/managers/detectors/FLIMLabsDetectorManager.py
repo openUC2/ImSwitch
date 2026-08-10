@@ -120,11 +120,32 @@ class FLIMLabsDetectorManager(DetectorManager):
             'exposure': DetectorNumberParameter(
                 group='FLIM', value=float(props.get('frameTimeoutMs', 5000)),
                 valueUnits='ms', editable=True),
+            # Scan-region crop: pixels discarded from each line/frame edge.
+            # scan (= galvo nx/ny) = image + offsets. Use offset_left to drop
+            # the first column(s) where flyback/settle photons accumulate,
+            # exactly like the SCAN AREA panel of the FLIM LABS UI.
+            'offset_top': DetectorNumberParameter(
+                group='Scan Area', value=int(props.get('offsetTop', 0)),
+                valueUnits='px', editable=True),
+            'offset_right': DetectorNumberParameter(
+                group='Scan Area', value=int(props.get('offsetRight', 0)),
+                valueUnits='px', editable=True),
+            'offset_bottom': DetectorNumberParameter(
+                group='Scan Area', value=int(props.get('offsetBottom', 0)),
+                valueUnits='px', editable=True),
+            'offset_left': DetectorNumberParameter(
+                group='Scan Area', value=int(props.get('offsetLeft', 0)),
+                valueUnits='px', editable=True),
         }
 
         super().__init__(detectorInfo, name, fullShape=(width, height),
                          supportedBinnings=[1], model='FLIMLabs',
                          parameters=parameters, actions={}, croppable=False)
+
+        # The SCAN is what the galvo traces (= trigger pattern); the IMAGE is
+        # the scan minus the crop offsets. imageWidth/imageHeight in the setup
+        # file describe the scan; galvo sync overwrites it at runtime.
+        self._scanShape = (width, height)
 
         from imswitch.imcontrol.model.interfaces.flimlabsclient import FLIMLabsClient
         self._client = FLIMLabsClient(
@@ -159,9 +180,9 @@ class FLIMLabsDetectorManager(DetectorManager):
         return self._galvoScannerName
 
     def _syncGeometryFromGalvo(self) -> None:
-        """Adopt the galvo scan's nx/ny as the detector frame size.
+        """Adopt the galvo scan's nx/ny as the SCAN size.
 
-        The card has no geometry of its own - the frame is exactly what the
+        The card has no geometry of its own - the scan is exactly what the
         scanner's triggers delimit. If the user changes nx/ny in the galvo tab
         and the detector kept its setup-file size, every frame would be
         mis-shaped, so re-read it before each acquisition.
@@ -174,12 +195,26 @@ class FLIMLabsDetectorManager(DetectorManager):
         except Exception as e:
             self.__logger.debug(f'Could not read galvo geometry: {e}')
             return
-        if nx <= 0 or ny <= 0 or (nx, ny) == tuple(self._shape):
-            return
-        self._shape = (nx, ny)
-        self._DetectorManager__fullShape = (nx, ny)
-        self._client.set_image_size(nx, ny)
-        self.__logger.info(f'FLIM frame geometry synced from galvo: {nx}x{ny}')
+        if nx > 0 and ny > 0 and (nx, ny) != self._scanShape:
+            self._scanShape = (nx, ny)
+            self.__logger.info(f'FLIM scan geometry synced from galvo: {nx}x{ny}')
+
+    def _offsets(self):
+        """Crop offsets (top, right, bottom, left), clamped non-negative."""
+        get = lambda k: max(0, int(self.parameters[k].value))
+        return (get('offset_top'), get('offset_right'),
+                get('offset_bottom'), get('offset_left'))
+
+    def _applyGeometry(self):
+        """image = scan - offsets; resize the frame assembler accordingly."""
+        scan_w, scan_h = self._scanShape
+        top, right, bottom, left = self._offsets()
+        img_w = max(1, scan_w - left - right)
+        img_h = max(1, scan_h - top - bottom)
+        self._shape = (img_w, img_h)
+        self._DetectorManager__fullShape = (img_w, img_h)
+        self._client.set_image_size(img_w, img_h)
+        return img_w, img_h, (top, right, bottom, left)
 
     def _startGalvo(self) -> None:
         if not (self._autoStartGalvo and self._galvoScanner is not None):
@@ -215,7 +250,7 @@ class FLIMLabsDetectorManager(DetectorManager):
         if self._running:
             self.stopAcquisition()
         self._syncGeometryFromGalvo()
-        width, height = self._shape
+        width, height, offsets = self._applyGeometry()
         try:
             enabled = [i + 1 for i, on in enumerate(self._channels) if on] or [1]
             self._firmware = self._client.resolve_firmware(
@@ -233,6 +268,7 @@ class FLIMLabsDetectorManager(DetectorManager):
                 frequency_mhz=self.parameters['frequency_mhz'].value,
                 reconstruction=self.parameters['reconstruction'].value,
                 image_width=width, image_height=height,
+                offsets=offsets,  # scan = image + offsets = galvo nx/ny
                 channels=self._channels,
                 dwell_time_us=self.parameters['dwell_time'].value,
                 max_frames=maxFrames,
@@ -265,9 +301,21 @@ class FLIMLabsDetectorManager(DetectorManager):
             self.__logger.warning(f'Failed to stop FLIM acquisition: {e}')
         self._running = False
 
+    @staticmethod
+    def _toU16(frame):
+        """Photon-count frames are uint32 internally; the ImSwitch pipeline
+        (JPEGStreamWorker live view, TIFF writers) expects uint8/uint16 -
+        cv2.imencode rejects uint32 outright."""
+        if frame is None or frame.dtype == np.uint16:
+            return frame
+        return np.clip(frame, 0, 65535).astype(np.uint16)
+
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
-        """Return the most recent COMPLETE frame (no blocking)."""
-        return self._client.get_latest_frame(return_frame_number=returnFrameNumber)
+        """Return the most recent COMPLETE frame (no blocking), as uint16."""
+        if returnFrameNumber:
+            frame, n = self._client.get_latest_frame(return_frame_number=True)
+            return self._toU16(frame), n
+        return self._toU16(self._client.get_latest_frame())
 
     def getFrameNumber(self) -> int:
         return self._client.get_frame_number()
@@ -298,8 +346,8 @@ class FLIMLabsDetectorManager(DetectorManager):
             self.__logger.warning(
                 f'snapSync timed out after {timeout:.1f}s - is the galvo scanning '
                 'and are the trigger lines connected?')
-            return self._client.get_latest_frame()
-        return frame
+            return self._toU16(self._client.get_latest_frame())
+        return self._toU16(frame)
 
     def flushBuffer(self) -> None:
         """Drop the partially-integrated frame so the next grab is post-move."""
@@ -315,8 +363,10 @@ class FLIMLabsDetectorManager(DetectorManager):
     # -- Parameters / info ------------------------------------------------
     def setParameter(self, name, value):
         super().setParameter(name, value)
-        # Geometry-affecting changes require a restart of the acquisition
-        if name in ('reconstruction', 'frequency_mhz', 'dwell_time') and self._running:
+        # Geometry/firmware-affecting changes require an acquisition restart
+        if name in ('reconstruction', 'frequency_mhz', 'dwell_time',
+                    'offset_top', 'offset_right', 'offset_bottom',
+                    'offset_left') and self._running:
             self.stopAcquisition()
             self.startAcquisition()
         return self.parameters

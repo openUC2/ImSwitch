@@ -83,28 +83,50 @@ class FLIMLabsController(ImConWidgetController):
                     'error': 'No FLIMLabsDetectorManager configured in the setup file'}
         client = det.client
         width, height = det.shape
+        scanW, scanH = getattr(det, '_scanShape', (width, height))
+        debug = client.get_debug_stats()
+        running = det.isRunning
+        # A published frame carrying far fewer lines than the image height is
+        # the signature of a SECOND /data consumer splitting the stream (e.g.
+        # the FLIM LABS web UI open in another browser tab) - surface it.
+        hint = None
+        linesLast = debug.get('linesInLastFrame', 0)
+        if running and debug.get('publishes', 0) > 0 and linesLast < 0.8 * height:
+            hint = (f'Only {linesLast}/{height} lines in the last frame - is another '
+                    f'/data client (e.g. the FLIM LABS web UI) connected to the '
+                    f'same server? Close it; the stream supports one consumer.')
         return {
             'available': True,
             'detectorName': det.name,
             'serverUrl': client.base_url,
             'serverHealthy': client.health(),
-            'cardSerial': client.check_card(),
-            'running': det.isRunning,
+            # Probing the card opens the USB device and fails while the card is
+            # acquiring - show the cached serial during a run instead.
+            'cardSerial': client.last_card_serial if running else client.check_card(),
+            'running': running,
             'step': det.step,
             'firmware': getattr(det, '_firmware', None),
             'cps': client.cps,
             'frameNumber': client.get_frame_number(),
             'imageWidth': width,
             'imageHeight': height,
+            'scanWidth': scanW,
+            'scanHeight': scanH,
             'lastDataFile': client.last_data_file,
             'calibrationResults': client.get_calibration_results(),
             'calibrationReference': det.calibrationReference,
             'galvoScanner': det.galvoScannerName,
+            'debug': debug,
+            'hint': hint,
             'parameters': {
                 'dwell_time': det.parameters['dwell_time'].value,
                 'frames_to_integrate': det.parameters['frames_to_integrate'].value,
                 'frequency_mhz': det.parameters['frequency_mhz'].value,
                 'reconstruction': det.parameters['reconstruction'].value,
+                'offset_top': det.parameters['offset_top'].value,
+                'offset_right': det.parameters['offset_right'].value,
+                'offset_bottom': det.parameters['offset_bottom'].value,
+                'offset_left': det.parameters['offset_left'].value,
             },
         }
 
@@ -120,9 +142,14 @@ class FLIMLabsController(ImConWidgetController):
             return {'error': 'No FLIM detector configured'}
         if det.isRunning:
             return {'error': 'Stop the running acquisition before detecting the frequency'}
-        freq = det.client.detect_laser_frequency()
-        if freq is None:
-            return {'error': 'Frequency detection returned no reading (sync connected?)'}
+        try:
+            freq = det.client.detect_laser_frequency()
+        except Exception as e:
+            # The flim-server maps all errors to 400; the body carries the
+            # reason. 'ProcessAlreadyRunning' = the card is busy - either an
+            # acquisition just stopped (retry in a moment) or ANOTHER client
+            # (e.g. the FLIM LABS web UI) is using the same server.
+            return {'error': f'Frequency detection failed: {e}'}
         # Snap to the firmware grid so the resolved firmware matches
         nominal = min([20, 40, 80, 100], key=lambda f: abs(f - freq))
         det.setParameter('frequency_mhz', nominal)
@@ -188,8 +215,7 @@ class FLIMLabsController(ImConWidgetController):
         det = self._detector
         if det is None:
             return {'error': 'No FLIM detector configured'}
-        det.client.flush()
-        det.client.clear_analysis()
+        det.client.reset_buffers()
         return {'status': 'reset'}
 
     @APIExport()

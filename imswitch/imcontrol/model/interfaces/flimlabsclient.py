@@ -133,11 +133,14 @@ class _Reader:
         self.off += n
 
 
-def parse_flim_chunk(buf: bytes) -> List[Dict[str, Any]]:
+def parse_flim_chunk(buf: bytes,
+                     stats: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
     """Parse one binary WebSocket chunk into a list of message dicts.
 
     Truncated or unknown trailing data stops parsing gracefully; whatever was
-    decoded before that point is returned.
+    decoded before that point is returned. When ``stats`` is given, dropped
+    remainders are counted there ('unknownTagDrops' / 'truncatedChunks') -
+    non-zero values mean protocol drift and thus silently lost lines.
     """
     r = _Reader(buf)
     out: List[Dict[str, Any]] = []
@@ -267,10 +270,14 @@ def parse_flim_chunk(buf: bytes) -> List[Dict[str, Any]]:
                 out.append({'type': t, 'frequency': r.f64(), 'laserPeriod': r.f64()})
             else:
                 # Unknown tag: length unknown, the rest of the chunk is unusable
+                if stats is not None:
+                    stats['unknownTagDrops'] = stats.get('unknownTagDrops', 0) + 1
+                    stats['lastUnknownTag'] = t
                 break
     except (struct.error, IndexError, ValueError):
         # Truncated message at chunk end - keep what we parsed
-        pass
+        if stats is not None:
+            stats['truncatedChunks'] = stats.get('truncatedChunks', 0) + 1
     return out
 
 
@@ -327,9 +334,22 @@ class FLIMLabsClient:
         # Working buffer for the frame currently being received
         self._acc = np.zeros((self._height, self._width), dtype=np.uint32)
         self._acc_frame_idx: Optional[int] = None
+        self._acc_lines = 0
         # Last complete frame + monotonic counter (the "frame number")
         self._latest = np.zeros((self._height, self._width), dtype=np.uint32)
         self._frame_number = 0
+        # Cumulative sum over ALL frames (scouting display, like the FLIM LABS
+        # UI): photon counts integrate across frames, and any line missed in
+        # one frame is filled by the next - robust against a competing /data
+        # consumer or transient losses.
+        self._cum = np.zeros((self._height, self._width), dtype=np.uint32)
+        # Diagnostics for debugging line loss / protocol issues
+        self._stats: Dict[str, int] = {
+            'wsChunks': 0, 'unknownTagDrops': 0, 'lineMsgs': 0,
+            'lateLines': 0, 'frameResets': 0, 'publishes': 0,
+            'linesInLastFrame': 0,
+        }
+        self._tag_counts: Dict[int, int] = {}
 
         self._ws: Optional["websocket.WebSocketApp"] = None
         self._ws_thread: Optional[threading.Thread] = None
@@ -363,16 +383,34 @@ class FLIMLabsClient:
         return self.base_url.replace('http', 'ws', 1) + '/data'
 
     # -- REST ------------------------------------------------------------
+    @staticmethod
+    def _check(r: requests.Response) -> Any:
+        """Raise with the SERVER's error text on failure.
+
+        The flim-server maps every FlimError rejection to HTTP 400 with a JSON
+        body like {"error": "ProcessAlreadyRunning"}; surfacing that body is
+        the difference between a debuggable message and a bare "400 Bad
+        Request".
+        """
+        if r.ok:
+            return r.json()
+        detail = None
+        try:
+            body = r.json()
+            detail = body.get('error') or body.get('message') or body.get('data')
+        except Exception:
+            detail = (r.text or '')[:200]
+        raise requests.HTTPError(
+            f'{r.status_code} from flim-server: {detail or r.reason}', response=r)
+
     def _get(self, path: str) -> Any:
-        r = requests.get(f'{self.base_url}{path}', timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._check(requests.get(f'{self.base_url}{path}',
+                                        timeout=self.timeout))
 
     def _post(self, path: str, payload: Optional[dict] = None) -> Any:
-        r = requests.post(f'{self.base_url}{path}', json=payload or {},
-                          timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._check(requests.post(f'{self.base_url}{path}',
+                                         json=payload or {},
+                                         timeout=self.timeout))
 
     def health(self) -> bool:
         try:
@@ -382,13 +420,26 @@ class FLIMLabsClient:
             return False
 
     def check_card(self) -> Optional[str]:
-        """Return the card serial number, or None when no card is reachable."""
+        """Return the card serial number, or None when no card is reachable.
+
+        The probe opens the USB device server-side, which FAILS while an
+        acquisition is running (the card is busy) - use ``last_card_serial``
+        for display purposes during a run instead of re-probing.
+        """
         try:
             res = self._get('/api/card/check')
-            return res.get('data')
+            serial = res.get('data')
+            if serial:
+                self._card_serial = serial
+            return serial
         except Exception as e:
             self.__logger.debug(f'card check failed: {e}')
             return None
+
+    @property
+    def last_card_serial(self) -> Optional[str]:
+        """Serial from the most recent successful check (not re-probed)."""
+        return getattr(self, '_card_serial', None)
 
     def resolve_firmware(self, sync: str = 'in', frequency_mhz: float = 40,
                          channels: Optional[List[int]] = None,
@@ -405,13 +456,16 @@ class FLIMLabsClient:
         })
         return res.get('data')
 
-    def detect_laser_frequency(self) -> Optional[float]:
-        try:
-            res = self._post('/api/laser/detect-frequency', {})
-            return float(res.get('data'))
-        except Exception as e:
-            self.__logger.warning(f'laser frequency detection failed: {e}')
-            return None
+    def detect_laser_frequency(self) -> float:
+        """One-shot frequency-meter run. Raises with the server's error text on
+        failure - the usual one is 'ProcessAlreadyRunning' (the card is busy:
+        stop the acquisition, or another client such as the FLIM LABS web UI is
+        using it). Takes ~1-2 s while the server collects 3 readings; use a
+        generous timeout."""
+        r = requests.post(f'{self.base_url}/api/laser/detect-frequency',
+                          json={}, timeout=max(self.timeout, 90.0))
+        res = self._check(r)
+        return float(res.get('data'))
 
     # -- Payload ---------------------------------------------------------
     def build_imaging_payload(self, firmware: str, step: str = 'scouting',
@@ -505,7 +559,9 @@ class FLIMLabsClient:
             self._width, self._height = int(width), int(height)
             self._acc = np.zeros((self._height, self._width), dtype=np.uint32)
             self._latest = np.zeros((self._height, self._width), dtype=np.uint32)
+            self._cum = np.zeros((self._height, self._width), dtype=np.uint32)
             self._acc_frame_idx = None
+            self._acc_lines = 0
 
     def set_message_callback(self, cb: Optional[Callable[[Dict[str, Any]], None]]) -> None:
         """Register an observer for every decoded message (calibration/phasor)."""
@@ -568,36 +624,77 @@ class FLIMLabsClient:
         """Promote the working buffer to 'latest frame'. Caller holds the lock."""
         self._latest = self._acc.copy()
         self._frame_number += 1
+        self._stats['publishes'] += 1
+        self._stats['linesInLastFrame'] = self._acc_lines
         self._acc.fill(0)
+        self._acc_lines = 0
         self._frame_event.notify_all()
+
+    # If the frame index moves backwards by more than this, the card process
+    # was restarted (its frame counter reset to 0) - e.g. stale queue backlog
+    # from a previous run drained into a fresh acquisition. Smaller backsteps
+    # are late lines of an already-published frame.
+    _FRAME_RESET_THRESHOLD = 4
 
     def _handle_message(self, msg: Dict[str, Any]) -> None:
         t = msg['type']
+        self._tag_counts[t] = self._tag_counts.get(t, 0) + 1
         if t == FlimMsg.LINE:
             line = msg['line']
             frame = msg['frame']
+            px = msg['pixels']
             with self._lock:
-                if self._acc_frame_idx is None:
+                self._stats['lineMsgs'] += 1
+                if not (0 <= line < self._height):
+                    return
+                n = min(len(px), self._width)
+                px32 = px[:n].astype(np.uint32, copy=False)
+                # Cumulative display buffer takes every line, regardless of
+                # frame bookkeeping (mirrors the FLIM LABS UI behaviour).
+                self._cum[line, :n] += px32
+                if self._acc_frame_idx is None or frame == self._acc_frame_idx:
                     self._acc_frame_idx = frame
-                elif frame != self._acc_frame_idx:
-                    # The card moved on to a new frame -> the previous one is done
+                    self._acc[line, :n] += px32
+                    self._acc_lines += 1
+                elif frame > self._acc_frame_idx:
+                    # Card moved on -> previous frame is complete
                     self._publish_frame()
                     self._acc_frame_idx = frame
-                if 0 <= line < self._height:
-                    px = msg['pixels']
-                    n = min(len(px), self._width)
-                    # Sum over enabled channels into one intensity image
-                    self._acc[line, :n] += px[:n].astype(np.uint32, copy=False)
+                    self._acc[line, :n] += px32
+                    self._acc_lines += 1
+                elif self._acc_frame_idx - frame > self._FRAME_RESET_THRESHOLD:
+                    # Frame counter jumped far backwards: a new acquisition
+                    # started (stale backlog boundary). Drop the partial frame
+                    # and re-anchor - do NOT treat the whole new run as "late".
+                    self._stats['frameResets'] += 1
+                    self._acc.fill(0)
+                    self._acc_lines = 0
+                    self._acc_frame_idx = frame
+                    self._acc[line, :n] += px32
+                    self._acc_lines += 1
+                else:
+                    # Late line of an already-published frame (out-of-order
+                    # delivery): patch it into the published image so it is
+                    # not lost, but don't restart frame bookkeeping.
+                    self._stats['lateLines'] += 1
+                    self._latest[line, :n] += px32
         elif t == FlimMsg.COMPLETED_FRAME_LINES:
+            # Authoritative complete frame from the card - replaces whatever
+            # per-line accumulation we had for this frame.
             lines = msg['lines']
             with self._lock:
+                self._acc.fill(0)
+                self._acc_lines = 0
                 for i, px in enumerate(lines):
                     if i >= self._height:
                         break
                     n = min(len(px), self._width)
-                    self._acc[i, :n] += px[:n].astype(np.uint32, copy=False)
+                    px32 = px[:n].astype(np.uint32, copy=False)
+                    self._acc[i, :n] += px32
+                    self._acc_lines += 1
                 self._acc_frame_idx = msg['frame']
                 self._publish_frame()
+                self._acc_frame_idx = None
         elif t == FlimMsg.CPS:
             self._cps = msg['cps']
         elif t == FlimMsg.CALIBRATION:
@@ -632,7 +729,8 @@ class FLIMLabsClient:
     def _on_ws_message(self, _ws, data) -> None:
         if isinstance(data, str):
             return  # control/JSON frames are not used by the data socket
-        for msg in parse_flim_chunk(data):
+        self._stats['wsChunks'] += 1
+        for msg in parse_flim_chunk(data, stats=self._stats):
             self._handle_message(msg)
 
     def _open_ws(self) -> None:
@@ -671,9 +769,14 @@ class FLIMLabsClient:
         self.set_image_size(image_width, image_height)
         with self._lock:
             self._acc.fill(0)
+            self._cum.fill(0)
             self._acc_frame_idx = None
+            self._acc_lines = 0
             self._frame_number = 0
             self._last_data_file = None
+            for k in self._stats:
+                self._stats[k] = 0
+            self._tag_counts.clear()
         self._open_ws()
         try:
             self._post('/start', payload)
@@ -714,13 +817,37 @@ class FLIMLabsClient:
             return self._frame_number
 
     def get_display_frame(self) -> np.ndarray:
-        """Frame for live display: the partially-filled current frame while it
-        is being received, otherwise the last complete one. FLIM frames take
-        seconds, so showing the progressive fill matters for usability."""
+        """Frame for live display: the CUMULATIVE photon-count image, exactly
+        like the FLIM LABS UI. It fills progressively during the (multi-second)
+        frame, keeps integrating across frames, and self-heals lines missed in
+        one frame with the next - which also makes it robust if a second /data
+        consumer is splitting the stream."""
         with self._lock:
-            if self._acc_frame_idx is not None and self._acc.any():
-                return self._acc.copy()
-            return self._latest.copy()
+            return self._cum.copy()
+
+    def get_debug_stats(self) -> Dict[str, Any]:
+        """Counters for diagnosing line loss / protocol drift.
+
+        ``linesInLastFrame`` far below the image height while running is the
+        signature of a second /data consumer splitting the stream (e.g. the
+        FLIM LABS web UI open in another tab)."""
+        with self._lock:
+            stats = dict(self._stats)
+        stats['tagCounts'] = {str(k): v for k, v in sorted(self._tag_counts.items())}
+        stats['imageHeight'] = self._height
+        return stats
+
+    def reset_buffers(self) -> None:
+        """Full display/analysis reset (cumulative image, latest frame,
+        counters). Does not touch a running acquisition."""
+        with self._lock:
+            self._cum.fill(0)
+            self._latest.fill(0)
+            self._acc.fill(0)
+            self._acc_lines = 0
+            self._acc_frame_idx = None
+            self._frame_number = 0
+        self.clear_analysis()
 
     def wait_for_next_frame(self, timeout: float = 10.0,
                             min_new_frames: int = 1) -> Optional[np.ndarray]:
@@ -747,6 +874,7 @@ class FLIMLabsClient:
         """Discard the partially-integrated frame (post-move flush)."""
         with self._lock:
             self._acc.fill(0)
+            self._acc_lines = 0
             self._acc_frame_idx = None
 
 

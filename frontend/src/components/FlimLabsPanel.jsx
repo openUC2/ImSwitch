@@ -91,8 +91,12 @@ const applyHotColormap = (t) => {
 };
 
 const MODE_TABS = ['scouting', 'calibration', 'phasors'];
-const STATUS_POLL_MS = 1000;
-const IMAGE_POLL_MS = 1000;
+// A FLIM frame takes seconds — fast polling only adds server load and log
+// noise. Status: slow heartbeat when idle, quicker while running. Images are
+// only fetched while an acquisition runs (plus once on stop for the final).
+const STATUS_POLL_IDLE_MS = 5000;
+const STATUS_POLL_RUNNING_MS = 2000;
+const IMAGE_POLL_MS = 2000;
 
 const FlimLabsPanel = () => {
   const dispatch = useDispatch();
@@ -222,22 +226,25 @@ const FlimLabsPanel = () => {
     }
   }, [hostIP, hostPort, drawPhasor]);
 
-  useEffect(() => {
-    pollStatus();
-    const id = setInterval(pollStatus, STATUS_POLL_MS);
-    return () => clearInterval(id);
-  }, [pollStatus]);
+  const running = !!status?.running;
 
   useEffect(() => {
-    if (mode === 'phasors') {
-      const id = setInterval(pollPhasor, IMAGE_POLL_MS);
-      pollPhasor();
-      return () => clearInterval(id);
-    }
-    const id = setInterval(pollImage, IMAGE_POLL_MS);
-    pollImage();
+    pollStatus();
+    const id = setInterval(
+      pollStatus, running ? STATUS_POLL_RUNNING_MS : STATUS_POLL_IDLE_MS
+    );
     return () => clearInterval(id);
-  }, [mode, pollImage, pollPhasor]);
+  }, [pollStatus, running]);
+
+  // Image/phasor data: poll only while an acquisition is running; fetch once
+  // on mount and once when the run ends so the final result stays visible.
+  useEffect(() => {
+    const fetchOnce = mode === 'phasors' ? pollPhasor : pollImage;
+    fetchOnce();
+    if (!running) return undefined;
+    const id = setInterval(fetchOnce, IMAGE_POLL_MS);
+    return () => clearInterval(id);
+  }, [mode, running, pollImage, pollPhasor]);
 
   // ------------------------------------------------------------------
   // Config persistence (ImSwitch setup JSON)
@@ -377,7 +384,6 @@ const FlimLabsPanel = () => {
   // ------------------------------------------------------------------
   const available = status?.available !== false;
   const params = status?.parameters || {};
-  const running = !!status?.running;
   const calibrationResults = status?.calibrationResults || [];
   const calibrationReference = status?.calibrationReference || null;
 
@@ -442,6 +448,11 @@ const FlimLabsPanel = () => {
       {configStatus && (
         <Alert severity="info" onClose={() => setConfigStatus('')} sx={{ mt: 1 }}>
           {configStatus}
+        </Alert>
+      )}
+      {status?.hint && (
+        <Alert severity="warning" sx={{ mt: 1 }}>
+          {status.hint}
         </Alert>
       )}
 
@@ -534,10 +545,37 @@ const FlimLabsPanel = () => {
             </Tooltip>
           </Box>
 
+          {/* Scan-region crop: image = scan (galvo nx/ny) minus offsets */}
+          <Typography variant="subtitle2" sx={{ mt: 1 }}>Scan Area (crop)</Typography>
+          <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
+            {[['offset_top', 'Top'], ['offset_right', 'Right'],
+              ['offset_bottom', 'Bottom'], ['offset_left', 'Left']].map(([key, label]) => (
+              <TextField
+                key={key}
+                label={label}
+                size="small"
+                type="number"
+                inputProps={{ min: 0 }}
+                value={params[key] ?? 0}
+                disabled={running}
+                onChange={(e) => setDetectorParam(key, Number(e.target.value))}
+                sx={{ width: 90 }}
+              />
+            ))}
+          </Box>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-            Image {status?.imageWidth}×{status?.imageHeight} px — set by the galvo scan
-            pattern. Galvo: {status?.galvoScanner || 'not bound'}.
+            Scan {status?.scanWidth}×{status?.scanHeight} px (galvo nx/ny) → image{' '}
+            {status?.imageWidth}×{status?.imageHeight} px after crop. Use Left to drop the
+            first column(s) where flyback/settle photons pile up. Galvo:{' '}
+            {status?.galvoScanner || 'not bound'}.
           </Typography>
+          {status?.debug && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+              Debug: {status.debug.linesInLastFrame ?? 0}/{status?.imageHeight} lines/frame,{' '}
+              {status.debug.lateLines ?? 0} late, {status.debug.frameResets ?? 0} resets,{' '}
+              {status.debug.unknownTagDrops ?? 0} unknown-tag drops
+            </Typography>
+          )}
 
           {/* Calibration-specific parameters */}
           {mode !== 'scouting' && (

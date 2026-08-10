@@ -46,6 +46,38 @@ class GalvoScannerController(ImConWidgetController):
         self.__logger.info(f"GalvoScannerController initialized with devices: "
                           f"{self._master.galvoScannersManager.getAllDeviceNames()}")
 
+        self._bindGalvoToFlimDetectors()
+
+    def _bindGalvoToFlimDetectors(self):
+        """Late-bind galvo scanners into FLIM detectors.
+
+        Detectors are constructed before galvoScannersManager exists, so a
+        FLIMLabsDetectorManager cannot resolve its ``galvoScanner`` property at
+        construction time. Do it here, once both managers are up, so the FLIM
+        detector can start/stop the scan around its own acquisitions.
+        """
+        try:
+            detectors = self._master.detectorsManager
+            scanners = self._master.galvoScannersManager
+        except Exception:
+            return
+        for detName in detectors.getAllDeviceNames():
+            det = detectors[detName]
+            if not hasattr(det, 'setGalvoScanner'):
+                continue
+            scannerName = getattr(det, 'galvoScannerName', None)
+            names = scanners.getAllDeviceNames()
+            if scannerName is None and names:
+                scannerName = names[0]
+            if scannerName and scannerName in names:
+                det.setGalvoScanner(scanners[scannerName])
+                self.__logger.info(
+                    f"Bound galvo scanner '{scannerName}' to detector '{detName}'")
+            else:
+                self.__logger.warning(
+                    f"Detector '{detName}' requests galvo scanner '{scannerName}' "
+                    "which is not configured")
+
 
     # ========================
     # API Export Methods
@@ -403,6 +435,44 @@ class GalvoScannerController(ImConWidgetController):
             return cfg
         except Exception as e:
             self.__logger.error(f"Error setting park config for {scannerName}: {e}")
+            return {"error": str(e)}
+
+    @APIExport()
+    def getFlimLabsConfig(self) -> Dict[str, Any]:
+        """
+        Return the persisted FLIM LABS bridge settings from the setup file.
+
+        Returns an empty dict when nothing has been saved yet.
+
+        Example:
+            GET /api/GalvoScannerController/getFlimLabsConfig
+        """
+        cfg = getattr(self._setupInfo, 'flimLabs', None)
+        return cfg if isinstance(cfg, dict) else {}
+
+    @APIExport(requestType="POST")
+    def setFlimLabsConfig(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Persist FLIM LABS bridge settings into the setup configuration file.
+
+        The dict is stored as-is under the top-level ``flimLabs`` key and
+        survives a restart. The frontend loads it on mount via
+        getFlimLabsConfig.
+
+        Example:
+            POST /api/GalvoScannerController/setFlimLabsConfig
+            body: {"host": "192.168.2.100", "frequencyMhz": 40, ...}
+            (FastAPI maps the single dict parameter to the raw JSON body)
+        """
+        try:
+            self._setupInfo.flimLabs = dict(config or {})
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            mOptions, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(mOptions, self._setupInfo)
+            self.__logger.info("FLIM LABS bridge settings saved to setup file")
+            return {"status": "saved", "config": self._setupInfo.flimLabs}
+        except Exception as e:
+            self.__logger.error(f"Failed to save FLIM LABS settings: {e}")
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=True)

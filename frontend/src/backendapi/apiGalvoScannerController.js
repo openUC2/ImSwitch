@@ -103,6 +103,27 @@ export const apiSetGalvoParkConfig = async (hostIP, hostPort, scannerName, park)
 };
 
 /**
+ * Get persisted FLIM LABS bridge settings from the ImSwitch setup file
+ */
+export const apiGetFlimLabsConfig = async (hostIP, hostPort) => {
+  const response = await fetch(`${getApiBase(hostIP, hostPort)}/getFlimLabsConfig`);
+  return response.json();
+};
+
+/**
+ * Persist FLIM LABS bridge settings into the ImSwitch setup file.
+ * FastAPI maps the endpoint's single dict parameter to the raw JSON body.
+ */
+export const apiSetFlimLabsConfig = async (hostIP, hostPort, config) => {
+  const response = await fetch(`${getApiBase(hostIP, hostPort)}/setFlimLabsConfig`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  return response.json();
+};
+
+/**
  * Immediately move the beam to the configured park position
  */
 export const apiParkGalvo = async (hostIP, hostPort, scannerName = null) => {
@@ -271,6 +292,8 @@ export default {
   apiGetGalvoParkConfig,
   apiSetGalvoParkConfig,
   apiParkGalvo,
+  apiGetFlimLabsConfig,
+  apiSetFlimLabsConfig,
   apiGetAllGalvoScannersStatus,
   apiStopAllGalvoScans,
   apiSetArbitraryPoints,

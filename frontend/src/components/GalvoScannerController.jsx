@@ -27,6 +27,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import SendIcon from '@mui/icons-material/Send';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import ScatterPlotIcon from '@mui/icons-material/ScatterPlot';
+import BiotechIcon from '@mui/icons-material/Biotech';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import { useSelector, useDispatch } from 'react-redux';
@@ -66,7 +67,6 @@ import {
 } from '../backendapi/apiGalvoScannerController';
 import GalvoArbitraryPointsTab from './GalvoArbitraryPointsTab';
 import FlimLabsPanel from './FlimLabsPanel';
-import useDeveloperMode from '../utils/useDeveloperMode';
 
 /**
  * Rich, human-readable explanations for each scan parameter, shown as hover
@@ -135,9 +135,7 @@ const GalvoScannerController = () => {
   const connectionSettings = useSelector(getConnectionSettingsState);
   const hostIP = connectionSettings.ip;
   const hostPort = connectionSettings.apiPort;
-  // FLIM bridge forced visible for now; revert to useDeveloperMode() gating later.
-  // (Destructuring `{ isDeveloperMode } = true` would yield undefined and hide it.)
-  const isDeveloperMode = true; // useDeveloperMode().isDeveloperMode;
+  // FLIM bridge is a first-class tab now (no developer-mode gating).
 
   // Redux state
   const galvoState = useSelector(getGalvoScannerState);
@@ -592,6 +590,7 @@ const GalvoScannerController = () => {
       >
         <Tab icon={<GridOnIcon />} label="Raster Scan" />
         <Tab icon={<ScatterPlotIcon />} label="Arbitrary Points" />
+        <Tab icon={<BiotechIcon />} label="FLIM" />
       </Tabs>
 
       {/* Status and Alerts — shared */}
@@ -1158,8 +1157,8 @@ const GalvoScannerController = () => {
         <GalvoArbitraryPointsTab />
       )}
 
-      {/* ========== FLIM LABS bridge (developer mode only) ========== */}
-      { activeTab === 0 && <FlimLabsPanel />}
+      {/* ========== TAB 2: FLIM LABS bridge ========== */}
+      {activeTab === 2 && <FlimLabsPanel />}
     </Box>
   );
 };

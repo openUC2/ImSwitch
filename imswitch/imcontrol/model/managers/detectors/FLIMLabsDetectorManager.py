@@ -66,6 +66,50 @@ from .DetectorManager import (
 )
 
 
+class _FLIMCameraShim:
+    """The `_camera` surface generic controllers reach for on a detector.
+
+    ObjectiveController, ExperimentController, WorkflowController and friends
+    read `detector._camera.SensorWidth/SensorHeight/isRGB/exposure_time`
+    directly instead of going through the DetectorManager API. Without this
+    attribute those controllers raise on construction, which takes the FLIM
+    detector out of the live view entirely.
+
+    Everything is derived from the manager, so a galvo-driven geometry change
+    is reflected without re-creating the shim.
+    """
+
+    def __init__(self, manager: 'FLIMLabsDetectorManager'):
+        self._manager = manager
+        self.model = 'FLIMLabs'
+        self.isRGB = False
+
+    @property
+    def SensorWidth(self) -> int:
+        return int(self._manager.shape[0])
+
+    @property
+    def SensorHeight(self) -> int:
+        return int(self._manager.shape[1])
+
+    @property
+    def exposure_time(self) -> float:
+        """Frame integration time in microseconds (callers divide by 1e6)."""
+        return float(self._manager.parameters['exposure'].value) * 1e3
+
+    def setParameter(self, name, value):
+        return self._manager.setParameter(name, value)
+
+    def getStreamDiagnostics(self) -> dict:
+        return {
+            'model': self.model,
+            'width': self.SensorWidth,
+            'height': self.SensorHeight,
+            'running': self._manager.isRunning,
+            'frameNumber': self._manager.client.get_frame_number(),
+        }
+
+
 class FLIMLabsDetectorManager(DetectorManager):
     """DetectorManager for a FLIM LABS card served by flim-imager 2.x."""
 
@@ -130,6 +174,9 @@ class FLIMLabsDetectorManager(DetectorManager):
         self._client = FLIMLabsClient(
             host=self._host, port=self._port,
             image_width=width, image_height=height, name=name)
+
+        # Generic controllers reach into detector._camera; see _FLIMCameraShim.
+        self._camera = _FLIMCameraShim(self)
 
         # Probe with a short timeout: an unreachable server must not stall the
         # whole ImSwitch startup behind the normal request timeout.

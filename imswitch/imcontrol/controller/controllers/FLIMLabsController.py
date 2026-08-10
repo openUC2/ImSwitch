@@ -88,7 +88,9 @@ class FLIMLabsController(ImConWidgetController):
             'detectorName': det.name,
             'serverUrl': client.base_url,
             'serverHealthy': client.health(),
-            'cardSerial': client.check_card(),
+            # While running, the card is held by the acquisition -- probing it
+            # would contend with that, so answer from the cached serial.
+            'cardSerial': client.check_card(use_cache=det.isRunning),
             'running': det.isRunning,
             'step': det.step,
             'firmware': getattr(det, '_firmware', None),

@@ -318,6 +318,8 @@ class FLIMLabsClient:
         self.host = host
         self.port = int(port)
         self.timeout = timeout
+        # Serial from the last successful probe; see check_card(use_cache=...)
+        self._card_serial: Optional[str] = None
 
         self._width = int(image_width)
         self._height = int(image_height)
@@ -368,7 +370,8 @@ class FLIMLabsClient:
         r.raise_for_status()
         return r.json()
 
-    def _post(self, path: str, payload: Optional[dict] = None) -> Any:
+    def _post(self, path: str, payload: Optional[dict] = None, timeout: float=None) -> Any:
+        timeout = timeout or self.timeout
         r = requests.post(f'{self.base_url}{path}', json=payload or {},
                           timeout=self.timeout)
         r.raise_for_status()
@@ -381,11 +384,22 @@ class FLIMLabsClient:
         except Exception:
             return False
 
-    def check_card(self) -> Optional[str]:
-        """Return the card serial number, or None when no card is reachable."""
+    def check_card(self, use_cache: bool = False) -> Optional[str]:
+        """Return the card serial number, or None when no card is reachable.
+
+        ``use_cache`` answers from the last successful probe instead of asking
+        the server. Pass it while an acquisition is running: the check opens the
+        board and claims its USB interface, which contends with the acquisition
+        that already holds it.
+        """
+        if use_cache and self._card_serial is not None:
+            return self._card_serial
         try:
             res = self._get('/api/card/check')
-            return res.get('data')
+            serial = res.get('data')
+            if serial is not None:
+                self._card_serial = serial
+            return serial
         except Exception as e:
             self.__logger.debug(f'card check failed: {e}')
             return None
@@ -407,7 +421,7 @@ class FLIMLabsClient:
 
     def detect_laser_frequency(self) -> Optional[float]:
         try:
-            res = self._post('/api/laser/detect-frequency', {})
+            res = self._post('/api/laser/detect-frequency', {}, timeout=10)
             return float(res.get('data'))
         except Exception as e:
             self.__logger.warning(f'laser frequency detection failed: {e}')

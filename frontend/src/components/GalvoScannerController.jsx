@@ -67,6 +67,7 @@ import {
 } from '../backendapi/apiGalvoScannerController';
 import GalvoArbitraryPointsTab from './GalvoArbitraryPointsTab';
 import FlimLabsPanel from './FlimLabsPanel';
+import { apiFlimGetStatus } from '../backendapi/apiFlimLabs';
 
 /**
  * Rich, human-readable explanations for each scan parameter, shown as hover
@@ -135,7 +136,22 @@ const GalvoScannerController = () => {
   const connectionSettings = useSelector(getConnectionSettingsState);
   const hostIP = connectionSettings.ip;
   const hostPort = connectionSettings.apiPort;
-  // FLIM bridge is a first-class tab now (no developer-mode gating).
+
+  // The FLIM tab only exists when the backend has a FLIMLabsController with a
+  // configured FLIMLabsDetectorManager (probed once on mount).
+  const [flimAvailable, setFlimAvailable] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const st = await apiFlimGetStatus(hostIP, hostPort);
+        if (!cancelled) setFlimAvailable(st?.available !== false);
+      } catch (e) {
+        if (!cancelled) setFlimAvailable(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [hostIP, hostPort]);
 
   // Redux state
   const galvoState = useSelector(getGalvoScannerState);
@@ -143,6 +159,12 @@ const GalvoScannerController = () => {
   const status = useSelector(getGalvoStatus);
   const scanInfo = useSelector(getScanInfo);
   const activeTab = useSelector(getActiveTab);
+
+  // If the stored tab points at the (absent) FLIM tab, fall back to Raster
+  useEffect(() => {
+    if (!flimAvailable && activeTab === 2) dispatch(setActiveTab(0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flimAvailable, activeTab]);
   
   // Destructure with defaults for safety
   const scannerNames = galvoState?.scannerNames || [];
@@ -590,7 +612,7 @@ const GalvoScannerController = () => {
       >
         <Tab icon={<GridOnIcon />} label="Raster Scan" />
         <Tab icon={<ScatterPlotIcon />} label="Arbitrary Points" />
-        <Tab icon={<BiotechIcon />} label="FLIM" />
+        {flimAvailable && <Tab icon={<BiotechIcon />} label="FLIM" />}
       </Tabs>
 
       {/* Status and Alerts — shared */}
@@ -1157,8 +1179,8 @@ const GalvoScannerController = () => {
         <GalvoArbitraryPointsTab />
       )}
 
-      {/* ========== TAB 2: FLIM LABS bridge ========== */}
-      {activeTab === 2 && <FlimLabsPanel />}
+      {/* ========== TAB 2: FLIM LABS bridge (only when backend-enabled) ========== */}
+      {flimAvailable && activeTab === 2 && <FlimLabsPanel />}
     </Box>
   );
 };

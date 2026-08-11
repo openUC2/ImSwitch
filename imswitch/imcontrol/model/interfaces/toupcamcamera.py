@@ -191,6 +191,14 @@ class CameraToupcam:
         self._raw_buf = bytes(maxBytes)
         self._frame_info = toupcam.ToupcamFrameInfoV3()
 
+        if toupcam.MISSING_EXPORTS:
+            # native lib older than the wrapper — harmless as long as none of the
+            # calls below is one of these (see _LibProxy in toupcam.py)
+            self.__logger.debug(
+                f"Toupcam SDK {toupcam.Toupcam.Version()} does not export: "
+                f"{', '.join(sorted(toupcam.MISSING_EXPORTS))}"
+            )
+
         self.__logger.info(
             f"Opened {self.deviceName}: {width}x{height}, "
             f"{'RGB24' if self.isRGB else f'RAW{self._bits}'}, "

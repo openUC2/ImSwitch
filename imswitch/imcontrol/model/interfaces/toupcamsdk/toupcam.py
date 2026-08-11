@@ -892,6 +892,41 @@ else:
         def __init__(self, hr):
             self.hr = hr
 
+# --- ImSwitch patch begin: tolerate native libraries that export only a subset of
+# the API this wrapper declares. Vendor SDK releases differ per platform and version
+# (e.g. the ImagePtr calls this file declares are absent from toupcam.dll
+# 59.30594.20260120), and a single missing export must not abort __initlib and take
+# the whole camera down. Unknown entry points turn into placeholders that swallow the
+# prototype assignments and raise E_NOTIMPL if they are ever actually called; names
+# collected in MISSING_EXPORTS. ---
+MISSING_EXPORTS = set()
+
+class _MissingExport:
+    """Stand-in for an entry point the loaded native library does not export."""
+
+    def __init__(self, name):
+        object.__setattr__(self, 'name', name)
+
+    def __setattr__(self, key, value):
+        pass  # swallow the restype/argtypes/errcheck assignments done at init time
+
+    def __call__(self, *args, **kwargs):
+        raise HRESULTException(0x80004001)  # E_NOTIMPL
+
+class _LibProxy:
+    """ctypes library wrapper handing out _MissingExport for unresolvable symbols."""
+
+    def __init__(self, lib):
+        self._lib = lib
+
+    def __getattr__(self, name):
+        try:
+            return getattr(self._lib, name)
+        except AttributeError:
+            MISSING_EXPORTS.add(name)
+            return _MissingExport(name)
+# --- ImSwitch patch end ---
+
 class Toupcam:
     class __Resolution(ctypes.Structure):
         _fields_ = [('width', ctypes.c_uint),
@@ -2510,6 +2545,11 @@ class Toupcam:
                     cls.__lib = ctypes.cdll.LoadLibrary('libtoupcam.so')
                 else:
                     cls.__lib = ctypes.cdll.LoadLibrary('libtoupcam.dylib')
+
+            # --- ImSwitch patch begin: see _LibProxy above — keeps the prototype
+            # declarations below working against SDK builds that lack some of them ---
+            cls.__lib = _LibProxy(cls.__lib)
+            # --- ImSwitch patch end ---
 
             cls.__FrameInfoV4._fields_ = [
                         ('v3', cls.__FrameInfoV3),

@@ -1,6 +1,13 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
-import { Button, useTheme, useMediaQuery } from "@mui/material";
+import {
+  Box,
+  Button,
+  ButtonGroup,
+  Typography,
+  useTheme,
+  useMediaQuery,
+} from "@mui/material";
 
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
 import apiPositionerControllerMovePositionerForever from "../backendapi/apiPositionerControllerMovePositionerForever.js";
@@ -10,8 +17,8 @@ const PositionControllerComponent = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
 
-  const moveDistance = 500; //TODO adjust
-  const zoomDistance = 100; //TODO adjust
+  const [xyStepSize, setXYStepSize] = useState(500);
+  const [zStepSize, setZStepSize] = useState(100);
   const keyMoveDistance = 100; // Distance for keyboard single press
   const zCoarseDistance = 500; // Coarse step for Z axis (PageUp/Down)
   const continuousMoveSpeed = 5000; // Speed for continuous movement
@@ -21,8 +28,15 @@ const PositionControllerComponent = () => {
   const keyPressedRef = useRef({});
   const continuousModeTriggeredRef = useRef({}); // Track if continuous mode was activated
 
-  // Button long-press state: { timer, continuousMode, axis, speed, singleDist }
-  const buttonPressRef = useRef({ timer: null, continuousMode: false });
+  // Button long-press state: { timer, continuousMode, active, axis, speed, singleDist }
+  const buttonPressRef = useRef({
+    timer: null,
+    continuousMode: false,
+    active: false,
+    axis: null,
+    speed: 0,
+    singleDist: 0,
+  });
 
   //##################################################################################
   const movePositioner = (axis, dist) => {
@@ -50,7 +64,7 @@ const PositionControllerComponent = () => {
       .then((positionerResponse) => {
         console.log(
           `Move forever ${axis} speed ${speed} stop=${is_stop}:`,
-          positionerResponse
+          positionerResponse,
         );
       })
       .catch((error) => {
@@ -62,6 +76,7 @@ const PositionControllerComponent = () => {
   // Generic button long-press handlers (short press = single step, long press = move forever)
   const handleButtonDown = (axis, speed, singleDist) => {
     const bp = buttonPressRef.current;
+    bp.active = true;
     bp.continuousMode = false;
     bp.axis = axis;
     bp.speed = speed;
@@ -77,6 +92,10 @@ const PositionControllerComponent = () => {
 
   const handleButtonUp = () => {
     const bp = buttonPressRef.current;
+    if (!bp.active) {
+      return;
+    }
+
     if (bp.timer) {
       clearTimeout(bp.timer);
       bp.timer = null;
@@ -88,6 +107,11 @@ const PositionControllerComponent = () => {
     } else {
       movePositioner(bp.axis, bp.singleDist);
     }
+
+    bp.active = false;
+    bp.axis = null;
+    bp.speed = 0;
+    bp.singleDist = 0;
   };
 
   //##################################################################################
@@ -95,7 +119,14 @@ const PositionControllerComponent = () => {
   const handleKeyDown = (event) => {
     // Prevent default browser behavior for arrow keys and page keys
     if (
-      ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown"].includes(event.key)
+      [
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "PageUp",
+        "PageDown",
+      ].includes(event.key)
     ) {
       event.preventDefault();
     }
@@ -262,7 +293,7 @@ const PositionControllerComponent = () => {
 
       // Clear all timers on unmount
       Object.values(keyTimersRef.current).forEach((timer) =>
-        clearTimeout(timer)
+        clearTimeout(timer),
       );
       keyTimersRef.current = {};
       keyPressedRef.current = {};
@@ -284,90 +315,175 @@ const PositionControllerComponent = () => {
   };
 
   return (
-    <div
-      className="arrow-container"
-      style={{
-        padding: isMobile ? "16px" : "10px",
-        display: "grid",
-        gridTemplateColumns: `repeat(3, ${buttonSize}px)`,
-        gridTemplateRows: `repeat(2, ${buttonSize}px)`,
-        gap: isMobile ? "8px" : "4px",
-        width: "fit-content",
-      }}
-    >
-      <Button
-        variant="contained"
-        onMouseDown={() => handleButtonDown("Z", -continuousMoveSpeed, -zoomDistance)}
-        onMouseUp={handleButtonUp}
-        onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("Z", -continuousMoveSpeed, -zoomDistance)}
-        onTouchEnd={handleButtonUp}
-        onTouchCancel={handleButtonUp}
-        sx={buttonStyle}
+    <Box>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 1,
+          mb: 1,
+          flexWrap: "wrap",
+        }}
       >
-        Z-
-      </Button>
-      <Button
-        variant="contained"
-        onMouseDown={() => handleButtonDown("Y", -continuousMoveSpeed, -moveDistance)}
-        onMouseUp={handleButtonUp}
-        onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("Y", -continuousMoveSpeed, -moveDistance)}
-        onTouchEnd={handleButtonUp}
-        onTouchCancel={handleButtonUp}
-        sx={buttonStyle}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+          <Typography variant="caption" sx={{ fontWeight: 700, opacity: 0.8 }}>
+            XY
+          </Typography>
+          <ButtonGroup size="small" sx={{ height: 24 }}>
+            {[10, 100, 1000].map((value) => (
+              <Button
+                key={value}
+                variant={xyStepSize === value ? "contained" : "outlined"}
+                onClick={() => setXYStepSize(value)}
+                sx={{
+                  minWidth: 0,
+                  px: 0.75,
+                  py: 0,
+                  fontSize: "0.65rem",
+                  lineHeight: 1,
+                }}
+              >
+                {value}
+              </Button>
+            ))}
+          </ButtonGroup>
+        </Box>
+
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+          <Typography variant="caption" sx={{ fontWeight: 700, opacity: 0.8 }}>
+            Z
+          </Typography>
+          <ButtonGroup size="small" sx={{ height: 24 }}>
+            {[50, 100, 500].map((value) => (
+              <Button
+                key={value}
+                variant={zStepSize === value ? "contained" : "outlined"}
+                onClick={() => setZStepSize(value)}
+                sx={{
+                  minWidth: 0,
+                  px: 0.75,
+                  py: 0,
+                  fontSize: "0.65rem",
+                  lineHeight: 1,
+                }}
+              >
+                {value}
+              </Button>
+            ))}
+          </ButtonGroup>
+        </Box>
+      </Box>
+
+      <div
+        className="arrow-container"
+        style={{
+          padding: isMobile ? "16px" : "10px",
+          display: "grid",
+          gridTemplateColumns: `repeat(3, ${buttonSize}px)`,
+          gridTemplateRows: `repeat(2, ${buttonSize}px)`,
+          gap: isMobile ? "8px" : "4px",
+          width: "fit-content",
+        }}
       >
-        Y↑
-      </Button>
-      <Button
-        variant="contained"
-        onMouseDown={() => handleButtonDown("Z", continuousMoveSpeed, zoomDistance)}
-        onMouseUp={handleButtonUp}
-        onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("Z", continuousMoveSpeed, zoomDistance)}
-        onTouchEnd={handleButtonUp}
-        onTouchCancel={handleButtonUp}
-        sx={buttonStyle}
-      >
-        Z+
-      </Button>
-      <Button
-        variant="contained"
-        onMouseDown={() => handleButtonDown("X", -continuousMoveSpeed, -moveDistance)}
-        onMouseUp={handleButtonUp}
-        onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("X", -continuousMoveSpeed, -moveDistance)}
-        onTouchEnd={handleButtonUp}
-        onTouchCancel={handleButtonUp}
-        sx={buttonStyle}
-      >
-        X←
-      </Button>
-      <Button
-        variant="contained"
-        onMouseDown={() => handleButtonDown("Y", continuousMoveSpeed, moveDistance)}
-        onMouseUp={handleButtonUp}
-        onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("Y", continuousMoveSpeed, moveDistance)}
-        onTouchEnd={handleButtonUp}
-        onTouchCancel={handleButtonUp}
-        sx={buttonStyle}
-      >
-        Y↓
-      </Button>
-      <Button
-        variant="contained"
-        onMouseDown={() => handleButtonDown("X", continuousMoveSpeed, moveDistance)}
-        onMouseUp={handleButtonUp}
-        onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("X", continuousMoveSpeed, moveDistance)}
-        onTouchEnd={handleButtonUp}
-        onTouchCancel={handleButtonUp}
-        sx={buttonStyle}
-      >
-        X→
-      </Button>
-    </div>
+        <Button
+          variant="contained"
+          onMouseDown={() =>
+            handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)
+          }
+          onMouseUp={handleButtonUp}
+          onMouseLeave={handleButtonUp}
+          onTouchStart={() =>
+            handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)
+          }
+          onTouchEnd={handleButtonUp}
+          onTouchCancel={handleButtonUp}
+          sx={buttonStyle}
+        >
+          Z-
+        </Button>
+        <Button
+          variant="contained"
+          onMouseDown={() =>
+            handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)
+          }
+          onMouseUp={handleButtonUp}
+          onMouseLeave={handleButtonUp}
+          onTouchStart={() =>
+            handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)
+          }
+          onTouchEnd={handleButtonUp}
+          onTouchCancel={handleButtonUp}
+          sx={buttonStyle}
+        >
+          Y↑
+        </Button>
+        <Button
+          variant="contained"
+          onMouseDown={() =>
+            handleButtonDown("Z", continuousMoveSpeed, zStepSize)
+          }
+          onMouseUp={handleButtonUp}
+          onMouseLeave={handleButtonUp}
+          onTouchStart={() =>
+            handleButtonDown("Z", continuousMoveSpeed, zStepSize)
+          }
+          onTouchEnd={handleButtonUp}
+          onTouchCancel={handleButtonUp}
+          sx={buttonStyle}
+        >
+          Z+
+        </Button>
+        <Button
+          variant="contained"
+          onMouseDown={() =>
+            handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)
+          }
+          onMouseUp={handleButtonUp}
+          onMouseLeave={handleButtonUp}
+          onTouchStart={() =>
+            handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)
+          }
+          onTouchEnd={handleButtonUp}
+          onTouchCancel={handleButtonUp}
+          sx={buttonStyle}
+        >
+          X←
+        </Button>
+        <Button
+          variant="contained"
+          onMouseDown={() =>
+            handleButtonDown("Y", continuousMoveSpeed, xyStepSize)
+          }
+          onMouseUp={handleButtonUp}
+          onMouseLeave={handleButtonUp}
+          onTouchStart={() =>
+            handleButtonDown("Y", continuousMoveSpeed, xyStepSize)
+          }
+          onTouchEnd={handleButtonUp}
+          onTouchCancel={handleButtonUp}
+          sx={buttonStyle}
+        >
+          Y↓
+        </Button>
+        <Button
+          variant="contained"
+          onMouseDown={() =>
+            handleButtonDown("X", continuousMoveSpeed, xyStepSize)
+          }
+          onMouseUp={handleButtonUp}
+          onMouseLeave={handleButtonUp}
+          onTouchStart={() =>
+            handleButtonDown("X", continuousMoveSpeed, xyStepSize)
+          }
+          onTouchEnd={handleButtonUp}
+          onTouchCancel={handleButtonUp}
+          sx={buttonStyle}
+        >
+          X→
+        </Button>
+      </div>
+    </Box>
   );
 };
 //##################################################################################

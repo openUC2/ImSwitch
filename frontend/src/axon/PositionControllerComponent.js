@@ -21,8 +21,15 @@ const PositionControllerComponent = () => {
   const keyPressedRef = useRef({});
   const continuousModeTriggeredRef = useRef({}); // Track if continuous mode was activated
 
-  // Button long-press state: { timer, continuousMode, axis, speed, singleDist }
-  const buttonPressRef = useRef({ timer: null, continuousMode: false });
+  // Button long-press state: { timer, continuousMode, active, axis, speed, singleDist }
+  const buttonPressRef = useRef({
+    timer: null,
+    continuousMode: false,
+    active: false,
+    axis: null,
+    speed: 0,
+    singleDist: 0,
+  });
 
   //##################################################################################
   const movePositioner = (axis, dist) => {
@@ -50,7 +57,7 @@ const PositionControllerComponent = () => {
       .then((positionerResponse) => {
         console.log(
           `Move forever ${axis} speed ${speed} stop=${is_stop}:`,
-          positionerResponse
+          positionerResponse,
         );
       })
       .catch((error) => {
@@ -62,6 +69,7 @@ const PositionControllerComponent = () => {
   // Generic button long-press handlers (short press = single step, long press = move forever)
   const handleButtonDown = (axis, speed, singleDist) => {
     const bp = buttonPressRef.current;
+    bp.active = true;
     bp.continuousMode = false;
     bp.axis = axis;
     bp.speed = speed;
@@ -77,6 +85,10 @@ const PositionControllerComponent = () => {
 
   const handleButtonUp = () => {
     const bp = buttonPressRef.current;
+    if (!bp.active) {
+      return;
+    }
+
     if (bp.timer) {
       clearTimeout(bp.timer);
       bp.timer = null;
@@ -88,6 +100,11 @@ const PositionControllerComponent = () => {
     } else {
       movePositioner(bp.axis, bp.singleDist);
     }
+
+    bp.active = false;
+    bp.axis = null;
+    bp.speed = 0;
+    bp.singleDist = 0;
   };
 
   //##################################################################################
@@ -95,7 +112,14 @@ const PositionControllerComponent = () => {
   const handleKeyDown = (event) => {
     // Prevent default browser behavior for arrow keys and page keys
     if (
-      ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown"].includes(event.key)
+      [
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "PageUp",
+        "PageDown",
+      ].includes(event.key)
     ) {
       event.preventDefault();
     }
@@ -262,7 +286,7 @@ const PositionControllerComponent = () => {
 
       // Clear all timers on unmount
       Object.values(keyTimersRef.current).forEach((timer) =>
-        clearTimeout(timer)
+        clearTimeout(timer),
       );
       keyTimersRef.current = {};
       keyPressedRef.current = {};
@@ -297,10 +321,14 @@ const PositionControllerComponent = () => {
     >
       <Button
         variant="contained"
-        onMouseDown={() => handleButtonDown("Z", -continuousMoveSpeed, -zoomDistance)}
+        onMouseDown={() =>
+          handleButtonDown("Z", -continuousMoveSpeed, -zoomDistance)
+        }
         onMouseUp={handleButtonUp}
         onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("Z", -continuousMoveSpeed, -zoomDistance)}
+        onTouchStart={() =>
+          handleButtonDown("Z", -continuousMoveSpeed, -zoomDistance)
+        }
         onTouchEnd={handleButtonUp}
         onTouchCancel={handleButtonUp}
         sx={buttonStyle}
@@ -309,10 +337,14 @@ const PositionControllerComponent = () => {
       </Button>
       <Button
         variant="contained"
-        onMouseDown={() => handleButtonDown("Y", -continuousMoveSpeed, -moveDistance)}
+        onMouseDown={() =>
+          handleButtonDown("Y", -continuousMoveSpeed, -moveDistance)
+        }
         onMouseUp={handleButtonUp}
         onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("Y", -continuousMoveSpeed, -moveDistance)}
+        onTouchStart={() =>
+          handleButtonDown("Y", -continuousMoveSpeed, -moveDistance)
+        }
         onTouchEnd={handleButtonUp}
         onTouchCancel={handleButtonUp}
         sx={buttonStyle}
@@ -321,10 +353,14 @@ const PositionControllerComponent = () => {
       </Button>
       <Button
         variant="contained"
-        onMouseDown={() => handleButtonDown("Z", continuousMoveSpeed, zoomDistance)}
+        onMouseDown={() =>
+          handleButtonDown("Z", continuousMoveSpeed, zoomDistance)
+        }
         onMouseUp={handleButtonUp}
         onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("Z", continuousMoveSpeed, zoomDistance)}
+        onTouchStart={() =>
+          handleButtonDown("Z", continuousMoveSpeed, zoomDistance)
+        }
         onTouchEnd={handleButtonUp}
         onTouchCancel={handleButtonUp}
         sx={buttonStyle}
@@ -333,10 +369,14 @@ const PositionControllerComponent = () => {
       </Button>
       <Button
         variant="contained"
-        onMouseDown={() => handleButtonDown("X", -continuousMoveSpeed, -moveDistance)}
+        onMouseDown={() =>
+          handleButtonDown("X", -continuousMoveSpeed, -moveDistance)
+        }
         onMouseUp={handleButtonUp}
         onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("X", -continuousMoveSpeed, -moveDistance)}
+        onTouchStart={() =>
+          handleButtonDown("X", -continuousMoveSpeed, -moveDistance)
+        }
         onTouchEnd={handleButtonUp}
         onTouchCancel={handleButtonUp}
         sx={buttonStyle}
@@ -345,10 +385,14 @@ const PositionControllerComponent = () => {
       </Button>
       <Button
         variant="contained"
-        onMouseDown={() => handleButtonDown("Y", continuousMoveSpeed, moveDistance)}
+        onMouseDown={() =>
+          handleButtonDown("Y", continuousMoveSpeed, moveDistance)
+        }
         onMouseUp={handleButtonUp}
         onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("Y", continuousMoveSpeed, moveDistance)}
+        onTouchStart={() =>
+          handleButtonDown("Y", continuousMoveSpeed, moveDistance)
+        }
         onTouchEnd={handleButtonUp}
         onTouchCancel={handleButtonUp}
         sx={buttonStyle}
@@ -357,10 +401,14 @@ const PositionControllerComponent = () => {
       </Button>
       <Button
         variant="contained"
-        onMouseDown={() => handleButtonDown("X", continuousMoveSpeed, moveDistance)}
+        onMouseDown={() =>
+          handleButtonDown("X", continuousMoveSpeed, moveDistance)
+        }
         onMouseUp={handleButtonUp}
         onMouseLeave={handleButtonUp}
-        onTouchStart={() => handleButtonDown("X", continuousMoveSpeed, moveDistance)}
+        onTouchStart={() =>
+          handleButtonDown("X", continuousMoveSpeed, moveDistance)
+        }
         onTouchEnd={handleButtonUp}
         onTouchCancel={handleButtonUp}
         sx={buttonStyle}

@@ -23,7 +23,9 @@ const PositionControllerComponent = () => {
 
   const [xyStepSize, setXYStepSize] = useState(() => {
     try {
-      const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
+      const saved = JSON.parse(
+        window.localStorage.getItem(STORAGE_KEY) || "{}",
+      );
       return validXYStepSizes.includes(saved.xy) ? saved.xy : 100;
     } catch {
       return 100;
@@ -32,7 +34,9 @@ const PositionControllerComponent = () => {
 
   const [zStepSize, setZStepSize] = useState(() => {
     try {
-      const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
+      const saved = JSON.parse(
+        window.localStorage.getItem(STORAGE_KEY) || "{}",
+      );
       return validZStepSizes.includes(saved.z) ? saved.z : 100;
     } catch {
       return 100;
@@ -322,14 +326,74 @@ const PositionControllerComponent = () => {
   };
 
   return (
-    <Box
-      sx={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: 1,
-      }}
-    >
+    <Box>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 1,
+          mb: 1,
+          flexWrap: "wrap",
+        }}
+      >
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+          <Typography variant="caption" sx={{ fontWeight: 700, opacity: 0.8 }}>
+            XY
+          </Typography>
+          <ButtonGroup
+            size="small"
+            sx={{ height: 24 }}
+            aria-label="XY step size"
+          >
+            {validXYStepSizes.map((value) => (
+              <Button
+                key={value}
+                variant={xyStepSize === value ? "contained" : "outlined"}
+                onClick={() => setXYStepSize(value)}
+                sx={{
+                  minWidth: 0,
+                  px: 0.75,
+                  py: 0,
+                  fontSize: "0.65rem",
+                  lineHeight: 1,
+                }}
+              >
+                {value}
+              </Button>
+            ))}
+          </ButtonGroup>
+        </Box>
+
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+          <Typography variant="caption" sx={{ fontWeight: 700, opacity: 0.8 }}>
+            Z
+          </Typography>
+          <ButtonGroup
+            size="small"
+            sx={{ height: 24 }}
+            aria-label="Z step size"
+          >
+            {validZStepSizes.map((value) => (
+              <Button
+                key={value}
+                variant={zStepSize === value ? "contained" : "outlined"}
+                onClick={() => setZStepSize(value)}
+                sx={{
+                  minWidth: 0,
+                  px: 0.75,
+                  py: 0,
+                  fontSize: "0.65rem",
+                  lineHeight: 1,
+                }}
+              >
+                {value}
+              </Button>
+            ))}
+          </ButtonGroup>
+        </Box>
+      </Box>
+
       <div
         className="arrow-container"
         style={{
@@ -343,10 +407,14 @@ const PositionControllerComponent = () => {
       >
         <Button
           variant="contained"
-          onMouseDown={() => handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)}
+          onMouseDown={() =>
+            handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)
+          }
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() => handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)}
+          onTouchStart={() =>
+            handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)
+          }
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -355,10 +423,14 @@ const PositionControllerComponent = () => {
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() => handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)}
+          onMouseDown={() =>
+            handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)
+          }
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() => handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)}
+          onTouchStart={() =>
+            handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)
+          }
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -367,10 +439,14 @@ const PositionControllerComponent = () => {
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() => handleButtonDown("Z", continuousMoveSpeed, zStepSize)}
+          onMouseDown={() =>
+            handleButtonDown("Z", continuousMoveSpeed, zStepSize)
+          }
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() => handleButtonDown("Z", continuousMoveSpeed, zStepSize)}
+          onTouchStart={() =>
+            handleButtonDown("Z", continuousMoveSpeed, zStepSize)
+          }
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -379,10 +455,14 @@ const PositionControllerComponent = () => {
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() => handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)}
+          onMouseDown={() =>
+            handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)
+          }
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() => handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)}
+          onTouchStart={() =>
+            handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)
+          }
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -391,10 +471,14 @@ const PositionControllerComponent = () => {
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() => handleButtonDown("Y", continuousMoveSpeed, xyStepSize)}
+          onMouseDown={() =>
+            handleButtonDown("Y", continuousMoveSpeed, xyStepSize)
+          }
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() => handleButtonDown("Y", continuousMoveSpeed, xyStepSize)}
+          onTouchStart={() =>
+            handleButtonDown("Y", continuousMoveSpeed, xyStepSize)
+          }
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -403,10 +487,14 @@ const PositionControllerComponent = () => {
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() => handleButtonDown("X", continuousMoveSpeed, xyStepSize)}
+          onMouseDown={() =>
+            handleButtonDown("X", continuousMoveSpeed, xyStepSize)
+          }
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() => handleButtonDown("X", continuousMoveSpeed, xyStepSize)}
+          onTouchStart={() =>
+            handleButtonDown("X", continuousMoveSpeed, xyStepSize)
+          }
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -414,53 +502,6 @@ const PositionControllerComponent = () => {
           X→
         </Button>
       </div>
-
-      <Box
-        sx={{
-          display: "flex",
-          gap: 1,
-          justifyContent: "center",
-          alignItems: "center",
-          flexWrap: "wrap",
-          mt: 0.5,
-        }}
-      >
-        <Box>
-          <Typography variant="caption" sx={{ display: "block", textAlign: "center" }}>
-            XY
-          </Typography>
-          <ButtonGroup size="small" aria-label="XY step size">
-            {validXYStepSizes.map((step) => (
-              <Button
-                key={step}
-                variant={xyStepSize === step ? "contained" : "outlined"}
-                onClick={() => setXYStepSize(step)}
-                sx={{ minWidth: 52 }}
-              >
-                {step}
-              </Button>
-            ))}
-          </ButtonGroup>
-        </Box>
-
-        <Box>
-          <Typography variant="caption" sx={{ display: "block", textAlign: "center" }}>
-            Z
-          </Typography>
-          <ButtonGroup size="small" aria-label="Z step size">
-            {validZStepSizes.map((step) => (
-              <Button
-                key={step}
-                variant={zStepSize === step ? "contained" : "outlined"}
-                onClick={() => setZStepSize(step)}
-                sx={{ minWidth: 52 }}
-              >
-                {step}
-              </Button>
-            ))}
-          </ButtonGroup>
-        </Box>
-      </Box>
     </Box>
   );
 };

@@ -12,36 +12,33 @@ import {
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
 import apiPositionerControllerMovePositionerForever from "../backendapi/apiPositionerControllerMovePositionerForever.js";
 
+const validXYStepSizes = [10, 100, 1000];
+const validZStepSizes = [50, 100, 500];
+const STORAGE_KEY = "imswitch-stage-control-step-sizes";
+
 //##################################################################################
 const PositionControllerComponent = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
 
-  const validXYStepSizes = [10, 100, 1000];
-  const validZStepSizes = [50, 100, 500];
-  const STORAGE_KEY = "imswitch-stage-control-step-sizes";
-  const readStoredStepSizes = () => {
-    if (typeof window === "undefined") {
-      return { xy: 100, z: 100 };
-    }
-
+  const [xyStepSize, setXYStepSize] = useState(() => {
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (!raw) {
-        return { xy: 100, z: 100 };
-      }
-
-      const parsed = JSON.parse(raw);
-      const xy = validXYStepSizes.includes(parsed?.xy) ? parsed.xy : 100;
-      const z = validZStepSizes.includes(parsed?.z) ? parsed.z : 100;
-      return { xy, z };
+      const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
+      return validXYStepSizes.includes(saved.xy) ? saved.xy : 100;
     } catch {
-      return { xy: 100, z: 100 };
+      return 100;
     }
-  };
+  });
 
-  const [xyStepSize, setXYStepSize] = useState(() => readStoredStepSizes().xy);
-  const [zStepSize, setZStepSize] = useState(() => readStoredStepSizes().z);
+  const [zStepSize, setZStepSize] = useState(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
+      return validZStepSizes.includes(saved.z) ? saved.z : 100;
+    } catch {
+      return 100;
+    }
+  });
+
   const keyMoveDistance = 100; // Distance for keyboard single press
   const zCoarseDistance = 500; // Coarse step for Z axis (PageUp/Down)
   const continuousMoveSpeed = 5000; // Speed for continuous movement
@@ -160,7 +157,6 @@ const PositionControllerComponent = () => {
   //##################################################################################
   // Keyboard event handlers
   const handleKeyDown = (event) => {
-    // Prevent default browser behavior for arrow keys and page keys
     if (
       [
         "ArrowLeft",
@@ -174,57 +170,44 @@ const PositionControllerComponent = () => {
       event.preventDefault();
     }
 
-    // Ignore browser-generated key-repeat events (fires periodically while key is held)
     if (event.repeat) {
       return;
     }
 
-    // Ignore if key is already pressed (belt-and-suspenders guard)
     if (keyPressedRef.current[event.key]) {
       return;
     }
 
-    console.log(`Key down: ${event.key}`);
-
-    // Initialize all state for this key press
     keyPressedRef.current[event.key] = true;
-    continuousModeTriggeredRef.current[event.key] = false; // Reset continuous mode flag
+    continuousModeTriggeredRef.current[event.key] = false;
 
-    // Clear any existing timer for this key (just in case)
     if (keyTimersRef.current[event.key]) {
       clearTimeout(keyTimersRef.current[event.key]);
     }
 
-    // Set a timer for 1 second - if still pressed, switch to continuous mode
     keyTimersRef.current[event.key] = setTimeout(() => {
-      console.log(`Key ${event.key} held for 1s - starting continuous mode`);
-
-      // Mark that continuous mode was triggered
       continuousModeTriggeredRef.current[event.key] = true;
-
-      // Remove the timer reference since it has fired
       delete keyTimersRef.current[event.key];
 
-      // Key held for more than 1 second, start continuous movement
       let axis = null;
       let speed = continuousMoveSpeed;
 
       switch (event.key) {
         case "ArrowLeft":
           axis = "X";
-          speed = -continuousMoveSpeed; // Negative for left
+          speed = -continuousMoveSpeed;
           break;
         case "ArrowRight":
           axis = "X";
-          speed = continuousMoveSpeed; // Positive for right
+          speed = continuousMoveSpeed;
           break;
         case "ArrowUp":
           axis = "Y";
-          speed = -continuousMoveSpeed; // Positive for up
+          speed = -continuousMoveSpeed;
           break;
         case "ArrowDown":
           axis = "Y";
-          speed = continuousMoveSpeed; // Negative for down
+          speed = continuousMoveSpeed;
           break;
         case "PageUp":
           axis = "Z";
@@ -239,9 +222,9 @@ const PositionControllerComponent = () => {
       }
 
       if (axis) {
-        movePositionerForever(axis, speed, false); // Start continuous movement
+        movePositionerForever(axis, speed, false);
       }
-    }, 1000); // 1 second delay
+    }, 1000);
   };
 
   //##################################################################################
@@ -250,9 +233,6 @@ const PositionControllerComponent = () => {
       return;
     }
 
-    console.log(`Key up: ${event.key}`);
-
-    // Determine axis first
     let axis = null;
     let dist = keyMoveDistance;
 
@@ -282,7 +262,6 @@ const PositionControllerComponent = () => {
         dist = -zCoarseDistance;
         break;
       default:
-        // Clean up state even for unhandled keys
         keyPressedRef.current[event.key] = false;
         delete continuousModeTriggeredRef.current[event.key];
         if (keyTimersRef.current[event.key]) {
@@ -292,49 +271,34 @@ const PositionControllerComponent = () => {
         return;
     }
 
-    // Check if continuous mode was triggered
     const wasContinuousMode = continuousModeTriggeredRef.current[event.key];
-    console.log(`Key ${event.key} - continuous mode was: ${wasContinuousMode}`);
 
-    // Clean up timer if it still exists
     if (keyTimersRef.current[event.key]) {
       clearTimeout(keyTimersRef.current[event.key]);
       delete keyTimersRef.current[event.key];
     }
 
     if (wasContinuousMode) {
-      // Continuous mode was active, just stop it
-      console.log(`Stopping continuous mode for ${event.key}`);
       if (axis) {
         movePositionerForever(axis, continuousMoveSpeed, true);
       }
-    } else {
-      // Do a single move (only if continuous mode was NOT triggered)
-      console.log(`Single move for ${event.key}`);
-      if (axis) {
-        movePositioner(axis, dist);
-      }
+    } else if (axis) {
+      movePositioner(axis, dist);
     }
 
-    // Clean up ALL tracking state for this key
     keyPressedRef.current[event.key] = false;
     delete continuousModeTriggeredRef.current[event.key];
-
-    console.log(`Key ${event.key} state cleaned up`);
   };
 
   //##################################################################################
-  // Add and remove keyboard event listeners
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
 
-    // Cleanup function to remove listeners and clear timers
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
 
-      // Clear all timers on unmount
       Object.values(keyTimersRef.current).forEach((timer) =>
         clearTimeout(timer),
       );
@@ -342,7 +306,7 @@ const PositionControllerComponent = () => {
       keyPressedRef.current = {};
       continuousModeTriggeredRef.current = {};
     };
-  }, []); // Empty dependency array means this effect runs once on mount
+  }, []);
 
   //##################################################################################
   const buttonSize = isMobile ? 60 : 48;
@@ -358,66 +322,14 @@ const PositionControllerComponent = () => {
   };
 
   return (
-    <Box>
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 1,
-          mb: 1,
-          flexWrap: "wrap",
-        }}
-      >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-          <Typography variant="caption" sx={{ fontWeight: 700, opacity: 0.8 }}>
-            XY
-          </Typography>
-          <ButtonGroup size="small" sx={{ height: 24 }}>
-            {validXYStepSizes.map((value) => (
-              <Button
-                key={value}
-                variant={xyStepSize === value ? "contained" : "outlined"}
-                onClick={() => setXYStepSize(value)}
-                sx={{
-                  minWidth: 0,
-                  px: 0.75,
-                  py: 0,
-                  fontSize: "0.65rem",
-                  lineHeight: 1,
-                }}
-              >
-                {value}
-              </Button>
-            ))}
-          </ButtonGroup>
-        </Box>
-
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-          <Typography variant="caption" sx={{ fontWeight: 700, opacity: 0.8 }}>
-            Z
-          </Typography>
-          <ButtonGroup size="small" sx={{ height: 24 }}>
-            {validZStepSizes.map((value) => (
-              <Button
-                key={value}
-                variant={zStepSize === value ? "contained" : "outlined"}
-                onClick={() => setZStepSize(value)}
-                sx={{
-                  minWidth: 0,
-                  px: 0.75,
-                  py: 0,
-                  fontSize: "0.65rem",
-                  lineHeight: 1,
-                }}
-              >
-                {value}
-              </Button>
-            ))}
-          </ButtonGroup>
-        </Box>
-      </Box>
-
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 1,
+      }}
+    >
       <div
         className="arrow-container"
         style={{
@@ -431,14 +343,10 @@ const PositionControllerComponent = () => {
       >
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)
-          }
+          onMouseDown={() => handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)}
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)
-          }
+          onTouchStart={() => handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)}
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -447,14 +355,10 @@ const PositionControllerComponent = () => {
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)
-          }
+          onMouseDown={() => handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)}
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)
-          }
+          onTouchStart={() => handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)}
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -463,14 +367,10 @@ const PositionControllerComponent = () => {
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("Z", continuousMoveSpeed, zStepSize)
-          }
+          onMouseDown={() => handleButtonDown("Z", continuousMoveSpeed, zStepSize)}
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("Z", continuousMoveSpeed, zStepSize)
-          }
+          onTouchStart={() => handleButtonDown("Z", continuousMoveSpeed, zStepSize)}
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -479,14 +379,10 @@ const PositionControllerComponent = () => {
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)
-          }
+          onMouseDown={() => handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)}
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)
-          }
+          onTouchStart={() => handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)}
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -495,14 +391,10 @@ const PositionControllerComponent = () => {
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("Y", continuousMoveSpeed, xyStepSize)
-          }
+          onMouseDown={() => handleButtonDown("Y", continuousMoveSpeed, xyStepSize)}
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("Y", continuousMoveSpeed, xyStepSize)
-          }
+          onTouchStart={() => handleButtonDown("Y", continuousMoveSpeed, xyStepSize)}
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -511,14 +403,10 @@ const PositionControllerComponent = () => {
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("X", continuousMoveSpeed, xyStepSize)
-          }
+          onMouseDown={() => handleButtonDown("X", continuousMoveSpeed, xyStepSize)}
           onMouseUp={handleButtonUp}
           onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("X", continuousMoveSpeed, xyStepSize)
-          }
+          onTouchStart={() => handleButtonDown("X", continuousMoveSpeed, xyStepSize)}
           onTouchEnd={handleButtonUp}
           onTouchCancel={handleButtonUp}
           sx={buttonStyle}
@@ -526,6 +414,53 @@ const PositionControllerComponent = () => {
           X→
         </Button>
       </div>
+
+      <Box
+        sx={{
+          display: "flex",
+          gap: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          flexWrap: "wrap",
+          mt: 0.5,
+        }}
+      >
+        <Box>
+          <Typography variant="caption" sx={{ display: "block", textAlign: "center" }}>
+            XY
+          </Typography>
+          <ButtonGroup size="small" aria-label="XY step size">
+            {validXYStepSizes.map((step) => (
+              <Button
+                key={step}
+                variant={xyStepSize === step ? "contained" : "outlined"}
+                onClick={() => setXYStepSize(step)}
+                sx={{ minWidth: 52 }}
+              >
+                {step}
+              </Button>
+            ))}
+          </ButtonGroup>
+        </Box>
+
+        <Box>
+          <Typography variant="caption" sx={{ display: "block", textAlign: "center" }}>
+            Z
+          </Typography>
+          <ButtonGroup size="small" aria-label="Z step size">
+            {validZStepSizes.map((step) => (
+              <Button
+                key={step}
+                variant={zStepSize === step ? "contained" : "outlined"}
+                onClick={() => setZStepSize(step)}
+                sx={{ minWidth: 52 }}
+              >
+                {step}
+              </Button>
+            ))}
+          </ButtonGroup>
+        </Box>
+      </Box>
     </Box>
   );
 };

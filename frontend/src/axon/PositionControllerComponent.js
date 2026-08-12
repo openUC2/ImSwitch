@@ -330,11 +330,10 @@ const PositionControllerComponent = () => {
       <Box
         sx={{
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
-          justifyContent: "space-between",
           gap: 1,
           mb: 1,
-          flexWrap: "wrap",
         }}
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>

@@ -28,6 +28,8 @@ import json
 import struct
 import threading
 import time
+from collections import deque
+from contextlib import contextmanager
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -345,6 +347,20 @@ class FLIMLabsClient:
         # one frame is filled by the next - robust against a competing /data
         # consumer or transient losses.
         self._cum = np.zeros((self._height, self._width), dtype=np.uint32)
+        # Rolling display accumulator: the live image is the sum of the last
+        # ``_display_frames`` published frames. 1 = show each frame on its own
+        # (the historical behaviour). Raising it trades latency for SNR, which
+        # is what makes a photon-starved scouting frame legible. Kept separate
+        # from _latest so wait_for_next_frame()/snapSync() still see single
+        # frames and don't double-count their own integration.
+        self._display_frames = 1
+        self._history: deque = deque(maxlen=1)
+        self._display_sum = np.zeros((self._height, self._width), dtype=np.uint32)
+        # Latest decay histogram per channel (256 bins over one laser period).
+        # The card sends these as CURVE messages; keeping them lets the UI plot
+        # the decay without a second consumer on /data.
+        self._curves: Dict[int, np.ndarray] = {}
+        self._roi_curves: Dict[int, np.ndarray] = {}
         # Diagnostics for debugging line loss / protocol issues
         self._stats: Dict[str, int] = {
             'wsChunks': 0, 'unknownTagDrops': 0, 'lineMsgs': 0,
@@ -411,10 +427,13 @@ class FLIMLabsClient:
 
     def _post(self, path: str, payload: Optional[dict] = None, timeout: float=None) -> Any:
         timeout = timeout or self.timeout
-        r = requests.post(f'{self.base_url}{path}', json=payload or {},
-                          timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        # Through _check, not raise_for_status: the server answers every
+        # failure with 400 and puts the reason in the body
+        # (REFERENCE_FILE_NOT_FOUND, REFERENCE_FILE_CHANNEL_MISMATCH,
+        # ProcessAlreadyRunning, ...). raise_for_status() discards exactly the
+        # part that says what went wrong.
+        return self._check(requests.post(f'{self.base_url}{path}',
+                                         json=payload or {}, timeout=timeout))
 
     def health(self) -> bool:
         try:
@@ -464,12 +483,54 @@ class FLIMLabsClient:
         return res.get('data')
 
     def detect_laser_frequency(self) -> Optional[float]:
+        with self._exclusive_card_access():
+            try:
+                # The server collects several settled readings and only gives
+                # up after 60 s of its own; a shorter client timeout turns a
+                # slow but successful detection into a spurious "Read timed
+                # out".
+                res = self._post('/api/laser/detect-frequency', {}, timeout=75)
+                return float(res.get('data'))
+            except Exception as e:
+                self.__logger.warning(f'laser frequency detection failed: {e}')
+                return None
+
+    @contextmanager
+    def _exclusive_card_access(self):
+        """Run a one-shot REST detection with no competing queue consumer.
+
+        /api/laser/detect-frequency and /api/channels/detect pop from the very
+        same queue the server's /data websocket task drains, so a socket left
+        open would race the handler for the readings it is waiting on. Drop the
+        socket for the duration and restore it afterwards; the server clears
+        the queue when an experiment starts, so nothing stale survives the gap.
+        """
+        had_socket = self.ws_connected()
+        if had_socket:
+            self.close_ws()
         try:
-            res = self._post('/api/laser/detect-frequency', {}, timeout=10)
-            return float(res.get('data'))
+            yield
+        finally:
+            if had_socket and not self.ws_connected():
+                try:
+                    self._open_ws(reuse=False)
+                except Exception as e:
+                    self.__logger.warning(f'Could not reopen /data socket: {e}')
+
+    def list_calibrations(self) -> List[Dict[str, Any]]:
+        """Calibration references that actually exist on the server.
+
+        The files live in the server's container, so this is the only
+        authoritative answer to "which calibrations can a phasors run use".
+        Returns [] when the route is unavailable (older server) or nothing has
+        been written yet.
+        """
+        try:
+            res = self._get('/api/imaging/calibrations')
+            return res.get('data') or []
         except Exception as e:
-            self.__logger.warning(f'laser frequency detection failed: {e}')
-            return None
+            self.__logger.debug(f'calibration listing unavailable: {e}')
+            return []
 
     # -- Payload ---------------------------------------------------------
     def build_imaging_payload(self, firmware: str, step: str = 'scouting',
@@ -566,6 +627,62 @@ class FLIMLabsClient:
             self._cum = np.zeros((self._height, self._width), dtype=np.uint32)
             self._acc_frame_idx = None
             self._acc_lines = 0
+            self._reset_display_locked()
+
+    def _reset_display_locked(self) -> None:
+        """Drop the rolling display history. Caller holds the lock."""
+        self._history = deque(maxlen=max(1, self._display_frames))
+        self._display_sum = np.zeros((self._height, self._width), dtype=np.uint32)
+
+    def set_display_frames(self, n: int) -> None:
+        """Set how many published frames the live image sums over (>= 1).
+
+        Takes effect immediately; the running history is dropped so the next
+        published frame starts a clean window rather than mixing two settings.
+        """
+        n = max(1, int(n))
+        with self._lock:
+            if n == self._display_frames:
+                return
+            self._display_frames = n
+            self._reset_display_locked()
+
+    @property
+    def display_frames(self) -> int:
+        return self._display_frames
+
+    def send_dimensions(self, scan_width: int, scan_height: int,
+                        image_width: int, image_height: int,
+                        offsets=(0, 0, 0, 0)) -> bool:
+        """Push a live geometry change to a running acquisition.
+
+        The server accepts text control frames on /data and applies them to the
+        running experiment's control queue (ControlMessage::UpdateDimensions),
+        so the scan can be re-shaped without stopping the card. Only the
+        scouting step consumes them upstream.
+
+        ``offsets`` is (top, right, bottom, left), matching the detector's
+        crop parameters. Returns True if the frame was handed to the socket.
+        """
+        ws = self._ws
+        if ws is None:
+            return False
+        top, right, bottom, left = offsets
+        msg = {
+            'type': 'update_dimensions',
+            'scan_width': int(scan_width), 'scan_height': int(scan_height),
+            'image_width': int(image_width), 'image_height': int(image_height),
+            'offset_top': int(top), 'offset_right': int(right),
+            'offset_bottom': int(bottom), 'offset_left': int(left),
+        }
+        try:
+            ws.send(json.dumps(msg))
+        except Exception as e:
+            self.__logger.warning(f'Could not send dimension update: {e}')
+            return False
+        # Local buffers must follow the server or every line lands out of range
+        self.set_image_size(image_width, image_height)
+        return True
 
     def set_message_callback(self, cb: Optional[Callable[[Dict[str, Any]], None]]) -> None:
         """Register an observer for every decoded message (calibration/phasor)."""
@@ -627,6 +744,13 @@ class FLIMLabsClient:
     def _publish_frame(self) -> None:
         """Promote the working buffer to 'latest frame'. Caller holds the lock."""
         self._latest = self._acc.copy()
+        # Roll the display window: evict the frame leaving it before appending,
+        # so _display_sum stays exactly the sum of _history.
+        if self._display_frames > 1:
+            if len(self._history) == self._display_frames:
+                self._display_sum -= self._history[0]
+            self._history.append(self._latest)
+            self._display_sum += self._latest
         self._frame_number += 1
         self._stats['publishes'] += 1
         self._stats['linesInLastFrame'] = self._acc_lines
@@ -699,6 +823,11 @@ class FLIMLabsClient:
                 self._acc_frame_idx = msg['frame']
                 self._publish_frame()
                 self._acc_frame_idx = None
+        elif t in (FlimMsg.CURVE, FlimMsg.ROI_CURVE):
+            # Cumulative decay for the frame; last one wins.
+            target = self._curves if t == FlimMsg.CURVE else self._roi_curves
+            with self._lock:
+                target[int(msg['channel'])] = np.asarray(msg['data'], dtype=np.uint32)
         elif t == FlimMsg.CPS:
             self._cps = msg['cps']
         elif t == FlimMsg.CALIBRATION:
@@ -737,10 +866,21 @@ class FLIMLabsClient:
         for msg in parse_flim_chunk(data, stats=self._stats):
             self._handle_message(msg)
 
-    def _open_ws(self) -> None:
+    def ws_connected(self) -> bool:
+        thread = self._ws_thread
+        return self._ws is not None and thread is not None and thread.is_alive()
+
+    def _open_ws(self, reuse: bool = True) -> None:
         if not IS_WEBSOCKET_AVAILABLE:
             raise RuntimeError('websocket-client is not installed '
                                '(pip install websocket-client)')
+        if reuse and self.ws_connected():
+            # Keep one long-lived consumer. /data is single-consumer upstream,
+            # and while nobody is attached the server's queue just accumulates -
+            # a leftover EndExperiment there is what used to make the next
+            # one-shot detection report "no frequency reading".
+            self._experiment_ended.clear()
+            return
         self.close_ws()
         self._experiment_ended.clear()
         ws = websocket.WebSocketApp(
@@ -789,14 +929,22 @@ class FLIMLabsClient:
             raise
         self._running = True
 
-    def stop(self) -> None:
+    def stop(self, close_socket: bool = False) -> None:
+        """Stop the acquisition, keeping the data socket open by default.
+
+        Holding /data open between runs keeps this process the single consumer
+        the server expects, and keeps draining its queue so nothing stale is
+        waiting for the next run. Pass close_socket=True to release it (e.g. to
+        hand the server over to the FLIM LABS web UI).
+        """
         try:
             self._post('/stop')
         except Exception as e:
             self.__logger.debug(f'FLIM stop failed: {e}')
         finally:
             self._running = False
-            self.close_ws()
+            if close_socket:
+                self.close_ws()
 
     @property
     def is_running(self) -> bool:
@@ -811,8 +959,17 @@ class FLIMLabsClient:
         return self._last_data_file
 
     def get_latest_frame(self, return_frame_number: bool = False):
+        """Most recent complete frame, or the sum of the last
+        ``display_frames`` of them when that is > 1 (see set_display_frames).
+
+        wait_for_next_frame() deliberately keeps returning single frames, so
+        snapSync()'s own integration is unaffected by this setting.
+        """
         with self._lock:
-            frame = self._latest.copy()
+            if self._display_frames > 1 and len(self._history):
+                frame = self._display_sum.copy()
+            else:
+                frame = self._latest.copy()
             n = self._frame_number
         return (frame, n) if return_frame_number else frame
 
@@ -828,6 +985,17 @@ class FLIMLabsClient:
         consumer is splitting the stream."""
         with self._lock:
             return self._cum.copy()
+
+    def get_decay_curves(self, roi: bool = False) -> Dict[str, Any]:
+        """Latest decay histogram per channel, with its time axis.
+
+        256 bins spanning one laser period, so the x axis is
+        ``bin * laserPeriodNs / 256`` nanoseconds.
+        """
+        with self._lock:
+            source = self._roi_curves if roi else self._curves
+            curves = {str(ch): data.tolist() for ch, data in sorted(source.items())}
+        return {'curves': curves, 'bins': 256}
 
     def get_debug_stats(self) -> Dict[str, Any]:
         """Counters for diagnosing line loss / protocol drift.
@@ -851,6 +1019,9 @@ class FLIMLabsClient:
             self._acc_lines = 0
             self._acc_frame_idx = None
             self._frame_number = 0
+            self._reset_display_locked()
+            self._curves.clear()
+            self._roi_curves.clear()
         self.clear_analysis()
 
     def wait_for_next_frame(self, timeout: float = 10.0,
@@ -880,6 +1051,9 @@ class FLIMLabsClient:
             self._acc.fill(0)
             self._acc_lines = 0
             self._acc_frame_idx = None
+            # The rolling display window holds pre-move frames; after a stage
+            # move they belong to a different field of view.
+            self._reset_display_locked()
 
 
 # Copyright (C) 2020-2025 ImSwitch developers

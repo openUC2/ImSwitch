@@ -53,6 +53,8 @@ Setup file example
 }
 """
 
+import json
+import os
 import time
 
 import numpy as np
@@ -122,6 +124,17 @@ class FLIMLabsDetectorManager(DetectorManager):
         width = int(props.get('imageWidth', 256))
         height = int(props.get('imageHeight', 256))
         self._pixelSizeUm = float(props.get('pixelSizeUm', 1.0))
+        # Scanner -> sample calibration. The galvo is commanded in DAC counts
+        # (0..DAC_FULL_SCALE-1); how much sample that spans depends on galvo
+        # gain, scan lens and objective, so it has to be measured once (grid
+        # slide / known bead spacing) and put in the setup file. Give either
+        # umPerDacUnit{X,Y} directly, or fovUmFullScale{X,Y} (the µm spanned by
+        # the FULL DAC range) and let it be derived. With neither, pixelSizeUm
+        # stays the static setup value and nothing below changes behaviour.
+        self._umPerDac = [
+            self._resolveUmPerDac(props, 'X'), self._resolveUmPerDac(props, 'Y')]
+        # Derived per-axis pixel size (x, y); falls back to the static value.
+        self._pixelSizeUmXY = (self._pixelSizeUm, self._pixelSizeUm)
 
         self._frequencyMhz = float(props.get('frequencyMhz', 40))
         self._laserSync = props.get('laserSync', 'in')
@@ -145,6 +158,7 @@ class FLIMLabsDetectorManager(DetectorManager):
         self._step = 'scouting'
         self._acquisitionTimestamp = None
         self._calibrationReference = None
+        self._calibrations = []
 
         parameters = {
             'dwell_time': DetectorNumberParameter(
@@ -152,6 +166,14 @@ class FLIMLabsDetectorManager(DetectorManager):
                 valueUnits='us', editable=True),
             'frames_to_integrate': DetectorNumberParameter(
                 group='FLIM', value=int(props.get('framesToIntegrate', 1)),
+                valueUnits='frames', editable=True),
+            # How many consecutive frames the LIVE image sums over. The card
+            # emits one frame per galvo sweep, so at low count rates a single
+            # frame is mostly zeros; raising this trades latency for SNR.
+            # Affects display only - snapSync() integrates via
+            # frames_to_integrate and is unaffected.
+            'display_frames': DetectorNumberParameter(
+                group='FLIM', value=int(props.get('displayFrames', 1)),
                 valueUnits='frames', editable=True),
             'frequency_mhz': DetectorNumberParameter(
                 group='FLIM', value=self._frequencyMhz, valueUnits='MHz',
@@ -198,6 +220,8 @@ class FLIMLabsDetectorManager(DetectorManager):
 
         # Generic controllers reach into detector._camera; see _FLIMCameraShim.
         self._camera = _FLIMCameraShim(self)
+        self._calibrations = self._loadCalibrations()
+        self._client.set_display_frames(self.parameters['display_frames'].value)
 
         # Probe with a short timeout: an unreachable server must not stall the
         # whole ImSwitch startup behind the normal request timeout.
@@ -212,6 +236,20 @@ class FLIMLabsDetectorManager(DetectorManager):
             self.__logger.warning(
                 f'No FLIM card reachable at {self._client.base_url} - the detector '
                 'will return blank frames until the server/card is available.')
+
+    # DAC range the galvo scanner is commanded over (x_min/x_max are 0..4095).
+    DAC_FULL_SCALE = 4096
+
+    @classmethod
+    def _resolveUmPerDac(cls, props, axis: str):
+        """µm of sample per DAC count for one axis, or None if uncalibrated."""
+        direct = props.get(f'umPerDacUnit{axis}', props.get('umPerDacUnit'))
+        if direct:
+            return float(direct)
+        fov = props.get(f'fovUmFullScale{axis}', props.get('fovUmFullScale'))
+        if fov:
+            return float(fov) / cls.DAC_FULL_SCALE
+        return None
 
     # -- Galvo coupling ---------------------------------------------------
     def setGalvoScanner(self, scanner) -> None:
@@ -245,6 +283,117 @@ class FLIMLabsDetectorManager(DetectorManager):
         if nx > 0 and ny > 0 and (nx, ny) != self._scanShape:
             self._scanShape = (nx, ny)
             self.__logger.info(f'FLIM scan geometry synced from galvo: {nx}x{ny}')
+        # Read separately: a scanner without a DAC range still has a valid
+        # nx/ny, and losing the shape sync over a missing range would be worse
+        # than simply not deriving a pixel size.
+        try:
+            spanX = abs(int(cfg.x_max) - int(cfg.x_min))
+            spanY = abs(int(cfg.y_max) - int(cfg.y_min))
+        except Exception as e:
+            self.__logger.debug(f'Could not read galvo scan range: {e}')
+            return
+        self._syncPixelSize(nx, ny, spanX, spanY)
+
+    def _syncPixelSize(self, nx: int, ny: int, spanX: int, spanY: int) -> None:
+        """Derive pixel size from the scanned DAC range and the sample count.
+
+        pixel = (scanned DAC span) * (µm per DAC count) / (samples across it).
+        Uncalibrated axes keep the static setup value.
+        """
+        umPerDacX, umPerDacY = self._umPerDac
+        if umPerDacX is None or umPerDacY is None or nx <= 0 or ny <= 0:
+            return
+        psX = umPerDacX * spanX / nx
+        psY = umPerDacY * spanY / ny
+        if psX <= 0 or psY <= 0:
+            return
+        if (psX, psY) != self._pixelSizeUmXY:
+            self._pixelSizeUmXY = (psX, psY)
+            # Keep the scalar in step for anything reading it directly
+            self._pixelSizeUm = psX
+            self.__logger.info(
+                f'FLIM pixel size from galvo: {psX:.4f} x {psY:.4f} um/px '
+                f'(FOV {umPerDacX * spanX:.1f} x {umPerDacY * spanY:.1f} um)')
+
+    def applyGeometryLive(self) -> dict:
+        """Re-read the galvo geometry and push it to a running acquisition.
+
+        The server applies ControlMessage::UpdateDimensions to the running
+        experiment, so a scan-parameter change in the galvo tab takes effect
+        without stopping and re-arming the card. Only the scouting step
+        consumes these upstream; other steps need the restart.
+        """
+        self._syncGeometryFromGalvo()
+        width, height, offsets = self._applyGeometry()
+        scan_w, scan_h = self._scanShape
+        pushed = False
+        if self._running:
+            if self._step == 'scouting':
+                pushed = self._client.send_dimensions(
+                    scan_w, scan_h, width, height, offsets)
+                if not pushed:
+                    self.__logger.debug(
+                        'Live dimension update not delivered; restarting')
+            if not pushed:
+                # Steps other than scouting ignore the control message, and a
+                # closed socket means it never arrived - re-arm instead.
+                self.stopAcquisition()
+                self.startAcquisitionStep(self._step)
+        return {'scanWidth': scan_w, 'scanHeight': scan_h,
+                'imageWidth': width, 'imageHeight': height,
+                'offsets': offsets, 'live': pushed,
+                'pixelSizeUm': list(self._pixelSizeUmXY)}
+
+    def setFieldOfViewUm(self, fovUmX=None, fovUmY=None,
+                         nx=None, ny=None) -> dict:
+        """Set the scanned field of view in micrometres, and optionally the
+        sampling (nx/ny).
+
+        The galvo is commanded in DAC counts, so the requested extent is
+        converted with the scanner calibration and centred on the scan's
+        current centre. Pixel size follows as FOV/samples; the new geometry is
+        pushed to a running acquisition rather than re-arming the card.
+        """
+        if self._galvoScanner is None:
+            return {'error': 'No galvo scanner bound to this detector'}
+        umPerDacX, umPerDacY = self._umPerDac
+        if (fovUmX and umPerDacX is None) or (fovUmY and umPerDacY is None):
+            return {'error': 'Scanner is not calibrated: set umPerDacUnitX/Y '
+                             'or fovUmFullScaleX/Y in the detector properties'}
+        try:
+            cfg = self._galvoScanner.config
+        except Exception as e:
+            return {'error': f'Could not read galvo config: {e}'}
+
+        def dacRange(lo, hi, fovUm, umPerDac):
+            """DAC window of the requested width, centred where the old one was
+            and clamped into the device range."""
+            span = max(1, int(round(fovUm / umPerDac)))
+            span = min(span, self.DAC_FULL_SCALE - 1)
+            centre = (int(lo) + int(hi)) // 2
+            newLo = centre - span // 2
+            newLo = max(0, min(newLo, self.DAC_FULL_SCALE - 1 - span))
+            return newLo, newLo + span
+
+        update = {}
+        if nx:
+            update['nx'] = int(nx)
+        if ny:
+            update['ny'] = int(ny)
+        if fovUmX:
+            update['x_min'], update['x_max'] = dacRange(
+                cfg.x_min, cfg.x_max, float(fovUmX), umPerDacX)
+        if fovUmY:
+            update['y_min'], update['y_max'] = dacRange(
+                cfg.y_min, cfg.y_max, float(fovUmY), umPerDacY)
+        if update:
+            try:
+                self._galvoScanner.update_config(**update)
+            except Exception as e:
+                return {'error': f'Could not update galvo config: {e}'}
+        result = self.applyGeometryLive()
+        result['galvo'] = update
+        return result
 
     def _offsets(self):
         """Crop offsets (top, right, bottom, left), clamped non-negative."""
@@ -330,6 +479,7 @@ class FLIMLabsDetectorManager(DetectorManager):
             if step == 'calibration':
                 # Where the server will write its reference JSON
                 self._calibrationReference = flim_calibration_reference_path(timestamp)
+                self._recordCalibration(timestamp, tauNs, harmonics)
             self.__logger.info(f'FLIM {step} acquisition started ({width}x{height})')
         except Exception as e:
             self.__logger.error(f'Failed to start FLIM {step} acquisition: {e}')
@@ -341,12 +491,18 @@ class FLIMLabsDetectorManager(DetectorManager):
     def stopAcquisition(self) -> None:
         if not self._running:
             return
+        wasCalibration = self._step == 'calibration'
+        calibrationTimestamp = self._acquisitionTimestamp
         self._stopGalvo()
         try:
             self._client.stop()
         except Exception as e:
             self.__logger.warning(f'Failed to stop FLIM acquisition: {e}')
         self._running = False
+        if wasCalibration and calibrationTimestamp is not None:
+            # Only now can the run be judged usable: the card has returned its
+            # phase/modulation table and the server has written the reference.
+            self._confirmCalibration(calibrationTimestamp)
 
     @staticmethod
     def _toU16(frame):
@@ -410,10 +566,18 @@ class FLIMLabsDetectorManager(DetectorManager):
     # -- Parameters / info ------------------------------------------------
     def setParameter(self, name, value):
         super().setParameter(name, value)
-        # Geometry/firmware-affecting changes require an acquisition restart
-        if name in ('reconstruction', 'frequency_mhz', 'dwell_time',
-                    'offset_top', 'offset_right', 'offset_bottom',
-                    'offset_left') and self._running:
+        if name == 'display_frames':
+            # Display-only: never touches the acquisition.
+            self._client.set_display_frames(self.parameters[name].value)
+            return self.parameters
+        if name in ('offset_top', 'offset_right', 'offset_bottom',
+                    'offset_left'):
+            # Crop offsets are part of the dimension update the server accepts
+            # live, so these no longer cost a restart while scouting.
+            self.applyGeometryLive()
+            return self.parameters
+        # Firmware-affecting changes still require re-arming the card
+        if name in ('reconstruction', 'frequency_mhz', 'dwell_time') and self._running:
             self.stopAcquisition()
             self.startAcquisition()
         return self.parameters
@@ -455,11 +619,146 @@ class FLIMLabsDetectorManager(DetectorManager):
         return self._step
 
     @property
+    def channels(self):
+        """Per-channel enable flags (8 entries), as sent to the server."""
+        return list(self._channels)
+
+    @property
     def calibrationReference(self):
         return self._calibrationReference
 
     def setCalibrationReference(self, path) -> None:
         self._calibrationReference = path
+
+    # -- Calibration registry ---------------------------------------------
+    # A phasors run needs the reference JSON produced by an earlier
+    # calibration, and that file lives on the FLIM SERVER (inside its
+    # container), so ImSwitch cannot enumerate it. Keep our own index of the
+    # calibrations we started, with the metadata the server validates against,
+    # so the UI can offer them as a dropdown and mismatches can be caught
+    # before the server answers 400.
+
+    @property
+    def calibrationsFile(self) -> str:
+        from imswitch.imcommon.model.dirtools import UserFileDirs
+        return os.path.join(UserFileDirs.Config, 'flim_calibrations.json')
+
+    def _loadCalibrations(self) -> list:
+        try:
+            with open(self.calibrationsFile, 'r') as f:
+                entries = json.load(f)
+            return entries if isinstance(entries, list) else []
+        except FileNotFoundError:
+            return []
+        except Exception as e:
+            self.__logger.warning(f'Could not read calibration index: {e}')
+            return []
+
+    def _saveCalibrations(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.calibrationsFile), exist_ok=True)
+            with open(self.calibrationsFile, 'w') as f:
+                json.dump(self._calibrations, f, indent=2)
+        except Exception as e:
+            self.__logger.warning(f'Could not write calibration index: {e}')
+
+    def _recordCalibration(self, timestamp: int, tauNs, harmonics: int) -> None:
+        """Register a calibration run that has just been started."""
+        self._calibrations = [c for c in self._calibrations
+                              if c.get('timestamp') != timestamp]
+        self._calibrations.append({
+            'timestamp': timestamp,
+            'referenceFile': flim_calibration_reference_path(timestamp),
+            'tauNs': tauNs,
+            'harmonics': int(harmonics),
+            # The server checks the reference against the ENABLED channel count
+            # and the harmonic count, so both have to travel with the entry.
+            'channels': list(self._channels),
+            'channelCount': sum(1 for c in self._channels if c),
+            'frequencyMhz': float(self.parameters['frequency_mhz'].value),
+            'label': f'tau={tauNs}ns h={harmonics} @{timestamp}',
+            'confirmed': False,
+        })
+        self._saveCalibrations()
+
+    def _confirmCalibration(self, timestamp: int) -> None:
+        """Mark a calibration usable once the card actually returned results."""
+        results = self._client.get_calibration_results()
+        for entry in self._calibrations:
+            if entry.get('timestamp') == timestamp:
+                entry['confirmed'] = bool(results)
+                entry['results'] = results
+                self._saveCalibrations()
+                return
+
+    def listCalibrations(self, confirmedOnly: bool = False) -> list:
+        """Calibrations available for a phasors run, newest first.
+
+        The server is the authority on which reference files exist -- our local
+        index records intent, and a calibration whose file never got written
+        (an unwritable data volume, a crashed run) would otherwise be offered
+        and then fail with REFERENCE_FILE_NOT_FOUND. Server entries are
+        enriched with the local metadata (tau, channels) where timestamps
+        match, and the local-only ones are marked so the UI can grey them out.
+        """
+        local = {c.get('timestamp'): c for c in self._calibrations}
+        merged = []
+        for remote in self._client.list_calibrations():
+            entry = dict(local.get(remote.get('timestamp'), {}))
+            entry.update({
+                'timestamp': remote.get('timestamp'),
+                'referenceFile': remote.get('file'),
+                'harmonics': remote.get('harmonics', entry.get('harmonics')),
+                'channelCount': remote.get('channels', entry.get('channelCount')),
+                'laserPeriodNs': remote.get('laser_period_ns'),
+                'onServer': True,
+                'confirmed': True,
+            })
+            entry.setdefault('label', f'@{remote.get("timestamp")}')
+            merged.append(entry)
+
+        seen = {e['timestamp'] for e in merged}
+        for entry in self._calibrations:
+            if entry.get('timestamp') in seen:
+                continue
+            entry = dict(entry)
+            entry['onServer'] = False
+            # Never usable: the reference file is not on the server.
+            entry['confirmed'] = False
+            merged.append(entry)
+
+        if confirmedOnly:
+            merged = [c for c in merged if c.get('confirmed')]
+        return sorted(merged, key=lambda c: c.get('timestamp') or 0, reverse=True)
+
+    def resolveCalibration(self, timestamp=None, referenceFile=None) -> dict:
+        """Pick the calibration to use for a phasors run.
+
+        Returns {'referenceFile', 'harmonics', ...} or {'error': ...}. An
+        explicit referenceFile wins; then a timestamp; otherwise the most
+        recent confirmed calibration.
+        """
+        if referenceFile:
+            return {'referenceFile': referenceFile}
+        available = self.listCalibrations()
+        if timestamp is not None:
+            for entry in available:
+                if entry.get('timestamp') == int(timestamp):
+                    if not entry.get('onServer'):
+                        return {'error': f'Calibration {timestamp} is not on the '
+                                         f'server - its reference file was never '
+                                         f'written. Re-run the calibration.'}
+                    return dict(entry)
+            return {'error': f'No calibration with timestamp {timestamp}'}
+        usable = [c for c in available if c.get('confirmed')]
+        if usable:
+            return dict(usable[0])
+        if available:
+            return {'error': 'Calibration runs were recorded but none of their '
+                             'reference files are on the server - check that the '
+                             "server's data directory is writable, then re-run a "
+                             'calibration.'}
+        return {'error': 'No calibration available - run a calibration first'}
 
     def getDisplayFrame(self):
         """Progressive frame for live display (partial frame while filling)."""
@@ -467,7 +766,19 @@ class FLIMLabsDetectorManager(DetectorManager):
 
     @property
     def pixelSizeUm(self):
-        return [1, self._pixelSizeUm, self._pixelSizeUm]
+        """[z, y, x] in µm. x/y come from the galvo scan range when the
+        scanner is calibrated (see umPerDacUnit / fovUmFullScale)."""
+        psX, psY = self._pixelSizeUmXY
+        return [1, psY, psX]
+
+    @property
+    def fovUm(self):
+        """Scanned field of view (x, y) in µm, or None if uncalibrated."""
+        psX, psY = self._pixelSizeUmXY
+        scan_w, scan_h = self._scanShape
+        if None in self._umPerDac:
+            return None
+        return (psX * scan_w, psY * scan_h)
 
     def crop(self, hpos, vpos, hsize, vsize):
         """Not croppable: the frame size is defined by the galvo scan pattern."""

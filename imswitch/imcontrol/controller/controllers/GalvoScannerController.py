@@ -96,6 +96,36 @@ class GalvoScannerController(ImConWidgetController):
                     "which is not configured")
 
 
+    def _propagateGeometryToFlim(self, scannerName):
+        """Push the current scan geometry into every FLIM detector bound to
+        this scanner.
+
+        The FLIM card has no geometry of its own - frame/line/pixel boundaries
+        come from this scanner's trigger pattern. If nx/ny or the scanned DAC
+        range changes while the card is armed for the old shape, lines fall
+        outside the frame buffer and are dropped silently, so the live image
+        just stops updating. Pushing it through keeps the two in step without
+        re-arming the card (scouting applies it live).
+        """
+        results = {}
+        try:
+            detectors = self._master.detectorsManager
+        except Exception:
+            return results
+        for detName in detectors.getAllDeviceNames():
+            det = detectors[detName]
+            if not hasattr(det, 'applyGeometryLive'):
+                continue
+            if getattr(det, 'galvoScannerName', None) not in (None, scannerName):
+                continue
+            try:
+                results[detName] = det.applyGeometryLive()
+            except Exception as e:
+                self.__logger.warning(
+                    f"Could not propagate geometry to '{detName}': {e}")
+                results[detName] = {'error': str(e)}
+        return results
+
     # ========================
     # API Export Methods
     # ========================
@@ -272,10 +302,15 @@ class GalvoScannerController(ImConWidgetController):
             )
             
             self.__logger.info(f"Updated config for {scannerName}")
+            # The FLIM card derives its frame purely from this scan pattern, so
+            # a geometry change has to reach it too - otherwise every line
+            # lands out of range and the image silently goes blank.
+            flim = self._propagateGeometryToFlim(scannerName)
             return {
                 "status": "config_updated",
                 "scannerName": scannerName,
-                "config": scanner.get_config_dict()
+                "config": scanner.get_config_dict(),
+                "flimDetectors": flim,
             }
         except Exception as e:
             self.__logger.error(f"Error setting config for {scannerName}: {e}")
@@ -361,7 +396,10 @@ class GalvoScannerController(ImConWidgetController):
             )
             
             self.__logger.info(f"Started scan on {scannerName}")
-            result = {"status": "started", "scannerName": scannerName}
+            # start_scan() also commits any nx/ny/range overrides passed here,
+            # so the FLIM detectors need the same update as setGalvoScanConfig.
+            result = {"status": "started", "scannerName": scannerName,
+                      "flimDetectors": self._propagateGeometryToFlim(scannerName)}
             return result
         except Exception as e:
             self.__logger.error(f"Error starting scan on {scannerName}: {e}")
@@ -510,7 +548,11 @@ class GalvoScannerController(ImConWidgetController):
             scanner = self._master.galvoScannersManager[scannerName]
             result = scanner.park(timeout=timeout)
             self.__logger.info(f"Parked {scannerName}")
-            return result
+            # The ESP32 answers with a LIST (e.g. [{'return': 1, 'qid': 51}]);
+            # returning it raw fails FastAPI's Dict[str, Any] response model
+            # with a 500 before the caller ever sees it.
+            return {"status": "parked", "scannerName": scannerName,
+                    "result": result}
         except Exception as e:
             self.__logger.error(f"Error parking {scannerName}: {e}")
             return {"error": str(e)}

@@ -118,9 +118,15 @@ class FLIMLabsController(ImConWidgetController):
             'galvoScanner': det.galvoScannerName,
             'debug': debug,
             'hint': hint,
+            # [z, y, x] um. x/y are derived from the galvo scan range when the
+            # scanner is calibrated (umPerDacUnit / fovUmFullScale in the setup
+            # file); otherwise they are the static setup value.
+            'pixelSizeUm': det.pixelSizeUm,
+            'fovUm': det.fovUm,
             'parameters': {
                 'dwell_time': det.parameters['dwell_time'].value,
                 'frames_to_integrate': det.parameters['frames_to_integrate'].value,
+                'display_frames': det.parameters['display_frames'].value,
                 'frequency_mhz': det.parameters['frequency_mhz'].value,
                 'reconstruction': det.parameters['reconstruction'].value,
                 'offset_top': det.parameters['offset_top'].value,
@@ -150,21 +156,94 @@ class FLIMLabsController(ImConWidgetController):
             # acquisition just stopped (retry in a moment) or ANOTHER client
             # (e.g. the FLIM LABS web UI) is using the same server.
             return {'error': f'Frequency detection failed: {e}'}
-        # Snap to the firmware grid so the resolved firmware matches
+        if not freq:
+            return {'error': 'Frequency detection failed: no signal detected'}
+        # Keep the MEASURED value (e.g. 39.99974 MHz), not the nominal grid
+        # point. Firmware selection snaps to the nearest grid frequency
+        # server-side anyway, while the laser period used for the lifetime
+        # maths comes from this number - rounding it to 40 MHz would both
+        # misreport the laser and bias the decay axis.
         nominal = min([20, 40, 80, 100], key=lambda f: abs(f - freq))
-        det.setParameter('frequency_mhz', nominal)
+        det.setParameter('frequency_mhz', freq)
         return {'frequency': freq, 'nominal': nominal}
+
+    @APIExport()
+    def getFlimDecayCurve(self, roi: bool = False) -> Dict[str, Any]:
+        """Decay histogram per channel, ready to plot.
+
+        256 bins spanning one laser period. ``timeNs`` is the matching x axis in
+        nanoseconds, derived from the current laser frequency, so a client can
+        plot counts against time without knowing the encoding.
+
+        Example:
+            GET /api/FLIMLabsController/getFlimDecayCurve
+        """
+        det = self._detector
+        if det is None:
+            return {'error': 'No FLIM detector configured'}
+        data = det.client.get_decay_curves(roi=bool(roi))
+        freqMhz = float(det.parameters['frequency_mhz'].value) or 40.0
+        laserPeriodNs = 1000.0 / freqMhz
+        bins = data.get('bins', 256)
+        data['laserPeriodNs'] = laserPeriodNs
+        data['frequencyMhz'] = freqMhz
+        data['timeNs'] = [i * laserPeriodNs / bins for i in range(bins)]
+        return data
+
+    # ------------------------------------------------------------------
+    # Geometry / field of view
+    # ------------------------------------------------------------------
+    @APIExport(runOnUIThread=True)
+    def setFlimFieldOfView(self, fovUmX: Optional[float] = None,
+                           fovUmY: Optional[float] = None,
+                           nx: Optional[int] = None,
+                           ny: Optional[int] = None) -> Dict[str, Any]:
+        """Set the scanned field of view in micrometres and/or the sampling.
+
+        The galvo is commanded in DAC counts, so this needs the scanner
+        calibration (``umPerDacUnitX/Y`` or ``fovUmFullScaleX/Y`` in the
+        detector's setup properties). Pixel size follows as FOV / samples, and
+        a running scouting acquisition picks the new geometry up without being
+        re-armed.
+
+        Example:
+            GET /api/FLIMLabsController/setFlimFieldOfView?fovUmX=200&fovUmY=200&nx=512&ny=512
+        """
+        det = self._detector
+        if det is None:
+            return {'error': 'No FLIM detector configured'}
+        return det.setFieldOfViewUm(fovUmX=fovUmX, fovUmY=fovUmY, nx=nx, ny=ny)
 
     # ------------------------------------------------------------------
     # Acquisition control
     # ------------------------------------------------------------------
+    @APIExport()
+    def listFlimCalibrations(self) -> Dict[str, Any]:
+        """Calibrations available for a phasors run, newest first.
+
+        The reference JSON lives on the FLIM server (inside its container), so
+        this index is kept by ImSwitch as calibrations are run. Feed it to a
+        dropdown and pass the chosen ``timestamp`` to startFlimAcquisition.
+
+        Example:
+            GET /api/FLIMLabsController/listFlimCalibrations
+        """
+        det = self._detector
+        if det is None:
+            return {'error': 'No FLIM detector configured'}
+        return {'calibrations': det.listCalibrations(),
+                'current': det.calibrationReference}
+
     @APIExport(runOnUIThread=False)
     def startFlimAcquisition(self, step: str = 'scouting',
                              maxFrames: int = 0,
                              tauNs: Optional[float] = None,
                              harmonics: int = 1,
                              exportData: bool = False,
-                             exportFilename: str = '') -> Dict[str, Any]:
+                             exportFilename: str = '',
+                             exportPath: str = '',
+                             calibrationTimestamp: Optional[int] = None,
+                             referenceFile: Optional[str] = None) -> Dict[str, Any]:
         """Start a FLIM run.
 
         Args:
@@ -175,6 +254,12 @@ class FLIMLabsController(ImConWidgetController):
             tauNs: known lifetime of the solid calibrator.
             harmonics: number of harmonics for calibration/phasors.
             exportData: write the acquisition on the FLIM server.
+            exportPath: server-side directory for the exports; empty lets the
+                server use its own data folder (~/.flim-labs/data).
+            calibrationTimestamp: which stored calibration to use for phasors
+                (see listFlimCalibrations). Defaults to the newest confirmed
+                one; its frequency and harmonics are reused.
+            referenceFile: explicit server-side path, overriding the above.
 
         Example:
             GET /api/FLIMLabsController/startFlimAcquisition?step=calibration&tauNs=4&maxFrames=10
@@ -182,12 +267,47 @@ class FLIMLabsController(ImConWidgetController):
         det = self._detector
         if det is None:
             return {'error': 'No FLIM detector configured'}
-        referenceFile = None
         if step == 'phasors':
-            referenceFile = det.calibrationReference
-            if not referenceFile:
-                return {'error': 'No calibration reference - run a calibration first'}
-        export = {'enabled': bool(exportData), 'filename': exportFilename or 'imswitch_flim'}
+            chosen = det.resolveCalibration(timestamp=calibrationTimestamp,
+                                            referenceFile=referenceFile)
+            if 'error' in chosen:
+                return chosen
+            referenceFile = chosen['referenceFile']
+            # The server validates the reference against the harmonic count and
+            # the number of ENABLED channels and answers 400 on a mismatch;
+            # checking here says which of the two is wrong.
+            if chosen.get('harmonics') is not None and int(chosen['harmonics']) != int(harmonics):
+                return {'error': f'Calibration was made with harmonics='
+                                 f'{chosen["harmonics"]}, this run asks for '
+                                 f'{harmonics}. Use the same harmonic count.',
+                        'calibration': chosen}
+            enabled = sum(1 for c in det.channels if c)
+            if chosen.get('channelCount') is not None and int(chosen['channelCount']) != enabled:
+                return {'error': f'Calibration covers {chosen["channelCount"]} '
+                                 f'channel(s) but {enabled} are enabled now. '
+                                 f'Enable the same channels or recalibrate.',
+                        'calibration': chosen}
+            # Reuse the frequency the calibration was taken at: the phase /
+            # modulation offsets in the reference are only valid for that laser
+            # period, so drifting to a freshly measured value would silently
+            # bias every lifetime.
+            calFreq = chosen.get('frequencyMhz')
+            if calFreq:
+                current = float(det.parameters['frequency_mhz'].value)
+                if abs(current - float(calFreq)) > 1e-6:
+                    det.setParameter('frequency_mhz', float(calFreq))
+                    self.__logger.info(
+                        f'Restored calibration frequency {calFreq} MHz '
+                        f'(was {current} MHz) for the phasors run')
+            self.__logger.info(f'Phasors run using calibration {referenceFile}')
+        else:
+            referenceFile = None
+        # Empty path = let the server pick its own data directory. It is the
+        # only side that knows where it can write, and an empty path used to
+        # mean "write to /", which fails as Permission denied.
+        export = {'enabled': bool(exportData),
+                  'filename': exportFilename or 'imswitch_flim',
+                  'path': exportPath or ''}
         return det.startAcquisitionStep(
             step=step, maxFrames=maxFrames, tauNs=tauNs, harmonics=harmonics,
             referenceFile=referenceFile, export=export)

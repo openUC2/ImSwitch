@@ -1830,6 +1830,17 @@ class ExperimentController(ImConWidgetController):
             # Read the resulting Z position
             result = self.mStage.getPosition().get("Z", None)
 
+            # Surface the scan's plausibility verdict (flat metric curve, peak
+            # clipped at the range edge, rejected fit) in the experiment log so
+            # bad focus-map points are traceable to their cause.
+            quality = getattr(autofocusController, '_lastFocusQuality', None)
+            if quality is not None and not quality.get("is_valid", True):
+                self._logger.warning(
+                    "Autofocus result at Z=%s is implausible: %s",
+                    f"{result:.2f}" if result is not None else "?",
+                    "; ".join(quality.get("warnings", [])) or "unknown reason",
+                )
+
             self._logger.debug("Autofocus completed successfully")
             return result
 

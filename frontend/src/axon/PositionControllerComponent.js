@@ -17,11 +17,54 @@ const PositionControllerComponent = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
 
-  const [xyStepSize, setXYStepSize] = useState(500);
-  const [zStepSize, setZStepSize] = useState(100);
+  const validXYStepSizes = [10, 100, 1000];
+  const validZStepSizes = [50, 100, 500];
+  const STORAGE_KEY = "imswitch-stage-control-step-sizes";
+  const readStoredStepSizes = () => {
+    if (typeof window === "undefined") {
+      return { xy: 100, z: 100 };
+    }
+
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        return { xy: 100, z: 100 };
+      }
+
+      const parsed = JSON.parse(raw);
+      const xy = validXYStepSizes.includes(parsed?.xy) ? parsed.xy : 100;
+      const z = validZStepSizes.includes(parsed?.z) ? parsed.z : 100;
+      return { xy, z };
+    } catch {
+      return { xy: 100, z: 100 };
+    }
+  };
+
+  const [xyStepSize, setXYStepSize] = useState(() => readStoredStepSizes().xy);
+  const [zStepSize, setZStepSize] = useState(() => readStoredStepSizes().z);
   const keyMoveDistance = 100; // Distance for keyboard single press
   const zCoarseDistance = 500; // Coarse step for Z axis (PageUp/Down)
   const continuousMoveSpeed = 5000; // Speed for continuous movement
+
+  useEffect(() => {
+    if (!validXYStepSizes.includes(xyStepSize)) {
+      setXYStepSize(100);
+    }
+    if (!validZStepSizes.includes(zStepSize)) {
+      setZStepSize(100);
+    }
+  }, [xyStepSize, zStepSize]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ xy: xyStepSize, z: zStepSize }),
+      );
+    } catch {
+      // Ignore storage write issues in private browsing or restricted envs.
+    }
+  }, [xyStepSize, zStepSize]);
 
   // Track pressed keys, their timers, and whether continuous mode was triggered
   const keyTimersRef = useRef({});
@@ -331,7 +374,7 @@ const PositionControllerComponent = () => {
             XY
           </Typography>
           <ButtonGroup size="small" sx={{ height: 24 }}>
-            {[10, 100, 1000].map((value) => (
+            {validXYStepSizes.map((value) => (
               <Button
                 key={value}
                 variant={xyStepSize === value ? "contained" : "outlined"}
@@ -355,7 +398,7 @@ const PositionControllerComponent = () => {
             Z
           </Typography>
           <ButtonGroup size="small" sx={{ height: 24 }}>
-            {[50, 100, 500].map((value) => (
+            {validZStepSizes.map((value) => (
               <Button
                 key={value}
                 variant={zStepSize === value ? "contained" : "outlined"}

@@ -25,6 +25,9 @@ const initialState = {
   tiles: [],
   // channel name -> {color, visible}
   channels: {},
+  // Draw the collected tiles on the wellplate/sample-layout canvas
+  // (WellSelectorCanvas) so a ROI can be picked on top of the overview scan.
+  showOnWellplate: false,
   isMapping: false,
   status: {
     tileCount: 0,
@@ -101,6 +104,10 @@ const stageMapSlice = createSlice({
       state.isMapping = Boolean(action.payload);
     },
 
+    setShowOnWellplate: (state, action) => {
+      state.showOnWellplate = Boolean(action.payload);
+    },
+
     setStatus: (state, action) => {
       state.status = { ...state.status, ...(action.payload || {}) };
       if (action.payload?.isRunning !== undefined) {
@@ -119,6 +126,7 @@ export const {
   setChannelVisible,
   setChannelColor,
   setIsMapping,
+  setShowOnWellplate,
   setStatus,
 } = stageMapSlice.actions;
 

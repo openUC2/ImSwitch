@@ -8,6 +8,7 @@ import * as positionSlice from "../state/slices/PositionSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as focusMapSlice from "../state/slices/FocusMapSlice.js";
 import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js";
+import * as stageMapSlice from "../state/slices/StageMapSlice.js";
 
 import * as wsUtils from "./WellSelectorUtils.js";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
@@ -98,9 +99,12 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   const focusMapState = useSelector(focusMapSlice.getFocusMapState);
   const focusMapManualPoints = useSelector(focusMapSlice.getManualPoints);
   const overviewRegState = useSelector(overviewRegSlice.getOverviewRegistrationState);
+  const stageMapState = useSelector(stageMapSlice.getStageMapState);
 
   // Preloaded overlay images cache (HTML Image objects)
   const overlayImagesRef = useRef({});
+  // Stage map tile previews cache, keyed by tile id
+  const stageMapTileImagesRef = useRef({});
 
   //##################################################################################
   useImperativeHandle(ref, () => ({
@@ -216,6 +220,11 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     overviewRegState.overlayEnabled,
     overviewRegState.overlayOpacity,
     overviewRegState.overlayData,
+    focusMapState,
+    focusMapManualPoints,
+    stageMapState.showOnWellplate,
+    stageMapState.tiles,
+    stageMapState.channels,
   ]);
 
   //##################################################################################
@@ -901,6 +910,9 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     //------------ draw overview camera overlay images
     drawOverviewOverlay(ctx);
 
+    //------------ draw collected stage-map scan tiles at their stage positions
+    drawStageMapTilesOverlay(ctx);
+
     //------------ draw focus map points overlay
     drawFocusMapOverlay(ctx);
 
@@ -985,6 +997,52 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   };
 
   //##################################################################################
+  // Draw the tiles collected by the StageMapController (e.g. a 4x overview
+  // tilescan) at their true stage positions, underneath the selection/focus
+  // layers, so a ROI for a higher-magnification scan can be picked on the
+  // actual sample image. Tiles are centre-based stage µm rectangles with
+  // downscaled JPEG previews (same data StageMapController.jsx renders).
+  const drawStageMapTilesOverlay = (ctx) => {
+    if (!stageMapState?.showOnWellplate) return;
+    const tiles = stageMapState.tiles || [];
+    if (tiles.length === 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+
+    tiles.forEach((tile) => {
+      if (tile.x == null || tile.y == null || !tile.image) return;
+      // Respect the channel visibility toggles from the StageMap app
+      const channel = stageMapState.channels?.[tile.channel || "default"];
+      if (channel && channel.visible === false) return;
+
+      let cachedImg = stageMapTileImagesRef.current[tile.id];
+      if (!cachedImg) {
+        const img = new Image();
+        img.src = `data:image/jpeg;base64,${tile.image}`;
+        img.onload = () => {
+          stageMapTileImagesRef.current[tile.id] = img;
+          requestAnimationFrame(() => renderCanvas());
+        };
+        return; // Skip this tile until its preview is decoded
+      }
+
+      const px = calcPhy2Px(tile.x - tile.widthUm / 2);
+      const py = calcPhy2Px(tile.y - tile.heightUm / 2);
+      const pw = calcPhy2Px(tile.widthUm);
+      const ph = calcPhy2Px(tile.heightUm);
+
+      try {
+        ctx.drawImage(cachedImg, px, py, pw, ph);
+      } catch (e) {
+        // Image may have been evicted/not decodable
+      }
+    });
+
+    ctx.restore();
+  };
+
+  //##################################################################################
   // Draw focus map grid points as black crosses and manual points as blue circles
   const drawFocusMapOverlay = (ctx) => {
     if (!focusMapState?.config?.enabled) return;
@@ -993,6 +1051,9 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
     const results = focusMapState.results || {};
     const crossSize = 3; // px half-size of each cross arm
+    // Point hovered in the FocusMapDimension lists – emphasised here so the
+    // user can see which cross/circle a list row corresponds to.
+    const highlighted = focusMapState?.ui?.highlightedPoint || null;
 
     ctx.save();
     ctx.lineWidth = 2;
@@ -1003,19 +1064,36 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     // crosses (they otherwise clutter the map with a grid) — only the manual
     // points below matter.
     if (!focusMapState?.config?.use_manual_map) {
-      Object.values(results).forEach((group) => {
+      Object.entries(results).forEach(([groupId, group]) => {
         const points = group?.points || [];
-        points.forEach((pt) => {
+        points.forEach((pt, idx) => {
           if (pt.x == null || pt.y == null) return;
           const px = calcPhy2Px(pt.x);
           const py = calcPhy2Px(pt.y);
 
-          ctx.strokeStyle = "#000000";
+          const isHighlighted =
+            highlighted &&
+            highlighted.source === "measured" &&
+            highlighted.groupId === groupId &&
+            highlighted.index === idx;
+
+          if (isHighlighted) {
+            // Orange ring + enlarged cross for the hovered list row
+            ctx.strokeStyle = "#FF9800";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(px, py, crossSize * 3, 0, 2 * Math.PI);
+            ctx.stroke();
+          }
+
+          ctx.strokeStyle = isHighlighted ? "#FF9800" : "#000000";
+          ctx.lineWidth = 2;
+          const s = isHighlighted ? crossSize * 2 : crossSize;
           ctx.beginPath();
-          ctx.moveTo(px - crossSize, py - crossSize);
-          ctx.lineTo(px + crossSize, py + crossSize);
-          ctx.moveTo(px + crossSize, py - crossSize);
-          ctx.lineTo(px - crossSize, py + crossSize);
+          ctx.moveTo(px - s, py - s);
+          ctx.lineTo(px + s, py + s);
+          ctx.moveTo(px + s, py - s);
+          ctx.lineTo(px - s, py + s);
           ctx.stroke();
         });
       });
@@ -1027,6 +1105,19 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
         if (pt.x == null || pt.y == null) return;
         const px = calcPhy2Px(pt.x);
         const py = calcPhy2Px(pt.y);
+
+        const isHighlighted =
+          highlighted &&
+          highlighted.source === "manual" &&
+          highlighted.index === idx;
+
+        if (isHighlighted) {
+          ctx.strokeStyle = "#FF9800";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(px, py, 9, 0, 2 * Math.PI);
+          ctx.stroke();
+        }
 
         // Blue filled circle
         ctx.fillStyle = "rgba(33, 150, 243, 0.8)";

@@ -80,6 +80,10 @@ const initialState = {
     showOverlayOnWellplate: true, // Toggle: draw focus map points on wellplate canvas
     showManualPoints: false, // Accordion expand state (persisted)
     showMeasuredPoints: false, // Accordion expand state (persisted)
+    // Point currently hovered/selected in the point lists, mirrored as a
+    // highlight marker on the wellplate canvas and the heatmap preview.
+    // { source: "measured" | "manual", groupId: string|null, index: number } | null
+    highlightedPoint: null,
   },
 };
 
@@ -191,6 +195,16 @@ const focusMapSlice = createSlice({
 
     // ── Results management ──────────────────────────────────
 
+    removeMeasuredPoint: (state, action) => {
+      // payload: { groupId, index } – drop one auto-measured calibration
+      // point (e.g. a grid point that landed outside the sample).
+      const { groupId, index } = action.payload;
+      const result = state.results[groupId];
+      if (result?.points && index >= 0 && index < result.points.length) {
+        result.points.splice(index, 1);
+      }
+    },
+
     setFocusMapResults: (state, action) => {
       // Replace all results { groupId: resultObj, ... }
       state.results = action.payload;
@@ -245,6 +259,11 @@ const focusMapSlice = createSlice({
       state.ui.showMeasuredPoints = action.payload;
     },
 
+    setFocusMapHighlightedPoint: (state, action) => {
+      // payload: { source, groupId, index } | null
+      state.ui.highlightedPoint = action.payload || null;
+    },
+
     // ── Reset ───────────────────────────────────────────────
 
     resetFocusMapState: () => {
@@ -277,6 +296,7 @@ export const {
   clearManualPoints,
   setManualPlacementActive,
   updateManualPointZ,
+  removeMeasuredPoint,
   setFocusMapResults,
   updateFocusMapGroupResult,
   clearFocusMapResults,
@@ -287,6 +307,7 @@ export const {
   setShowOverlayOnWellplate,
   setShowManualPoints,
   setShowMeasuredPoints,
+  setFocusMapHighlightedPoint,
   resetFocusMapState,
 } = focusMapSlice.actions;
 
@@ -304,6 +325,8 @@ export const getManualPlacementActive = (state) =>
 export const getShowOverlayOnWellplate = (state) => state.focusMap.ui?.showOverlayOnWellplate ?? true;
 export const getShowManualPoints = (state) => state.focusMap.ui?.showManualPoints ?? false;
 export const getShowMeasuredPoints = (state) => state.focusMap.ui?.showMeasuredPoints ?? false;
+export const getFocusMapHighlightedPoint = (state) =>
+  state.focusMap.ui?.highlightedPoint ?? null;
 
 // Export reducer
 export default focusMapSlice.reducer;

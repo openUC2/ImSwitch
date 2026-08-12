@@ -82,7 +82,7 @@ import apiAutofocusControllerDoAutofocusBackground, { waitForAutofocusComplete }
 
 
 // Visualization
-import FocusMapVisualization from "./FocusMapVisualization";
+import FocusMapVisualization, { colorForValue } from "./FocusMapVisualization";
 
 /**
  * Extract Z from positions API response which may be nested:
@@ -134,6 +134,7 @@ const FocusMapDimension = () => {
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const showOverlayOnWellplate = useSelector(focusMapSlice.getShowOverlayOnWellplate);
   const manualPlacementActive = useSelector(focusMapSlice.getManualPlacementActive);
+  const highlightedPoint = useSelector(focusMapSlice.getFocusMapHighlightedPoint);
 
   // Detect mutual exclusion: per-position AF enabled while Focus Map is also enabled
   const isAutoFocusPerPosition = parameterValue.autoFocus === true;
@@ -629,6 +630,49 @@ const FocusMapDimension = () => {
     },
     [config, results, dispatch]
   );
+
+  // Delete a measured (auto-generated) calibration point, e.g. one that
+  // landed outside the sample. The surface is refitted from the remaining
+  // points right away so the map never reflects the deleted point. If no
+  // points remain, the whole group map is cleared (backend + frontend).
+  const handleDeleteMeasuredPoint = useCallback(
+    async (groupId, pointIndex) => {
+      const result = results[groupId];
+      if (!result?.points) return;
+      const remaining = result.points.filter((_, i) => i !== pointIndex);
+
+      // Indices shift after removal – drop any stale highlight
+      dispatch(focusMapSlice.setFocusMapHighlightedPoint(null));
+
+      if (remaining.length === 0) {
+        try {
+          await apiExperimentControllerClearFocusMap(groupId);
+        } catch (err) {
+          console.error("Failed to clear focus map group:", err);
+        }
+        dispatch(focusMapSlice.clearFocusMapResults(groupId));
+        setPreviewData((prev) => (prev?.groupId === groupId ? null : prev));
+        return;
+      }
+
+      dispatch(focusMapSlice.removeMeasuredPoint({ groupId, index: pointIndex }));
+      await handleRefitGroup(groupId, remaining);
+    },
+    [results, handleRefitGroup, dispatch]
+  );
+
+  // Hover helpers linking list rows to the wellplate / heatmap markers
+  const highlightPoint = useCallback(
+    (source, groupId, index) => {
+      dispatch(
+        focusMapSlice.setFocusMapHighlightedPoint({ source, groupId, index })
+      );
+    },
+    [dispatch]
+  );
+  const clearHighlight = useCallback(() => {
+    dispatch(focusMapSlice.setFocusMapHighlightedPoint(null));
+  }, [dispatch]);
 
   // Status icon helper
   const StatusIcon = ({ status }) => {
@@ -1193,7 +1237,16 @@ const FocusMapDimension = () => {
                     </TableHead>
                     <TableBody>
                       {manualPoints.map((pt, idx) => (
-                        <TableRow key={idx}>
+                        <TableRow
+                          key={idx}
+                          hover
+                          selected={
+                            highlightedPoint?.source === "manual" &&
+                            highlightedPoint?.index === idx
+                          }
+                          onMouseEnter={() => highlightPoint("manual", null, idx)}
+                          onMouseLeave={clearHighlight}
+                        >
                           <TableCell>{idx + 1}</TableCell>
                           <TableCell>
                             <TextField
@@ -1781,9 +1834,39 @@ const FocusMapDimension = () => {
                               const goToKey = `${groupId}-${idx}`;
                               const isMoving = goToInProgress === goToKey;
 
+                              const isHighlighted =
+                                highlightedPoint?.source === "measured" &&
+                                highlightedPoint?.groupId === groupId &&
+                                highlightedPoint?.index === idx;
+                              // Same colour ramp as the heatmap preview so the
+                              // row chip visually matches the drawn point.
+                              const zColor = colorForValue(
+                                zMax > zMin ? (pt.z - zMin) / (zMax - zMin) : 0.5
+                              );
+
                               return (
-                                <TableRow key={idx} hover>
-                                  <TableCell>{idx + 1}</TableCell>
+                                <TableRow
+                                  key={idx}
+                                  hover
+                                  selected={isHighlighted}
+                                  onMouseEnter={() => highlightPoint("measured", groupId, idx)}
+                                  onMouseLeave={clearHighlight}
+                                >
+                                  <TableCell>
+                                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+                                      <Box
+                                        sx={{
+                                          width: 10,
+                                          height: 10,
+                                          borderRadius: "50%",
+                                          bgcolor: zColor,
+                                          border: `1px solid ${theme.palette.text.primary}`,
+                                          flexShrink: 0,
+                                        }}
+                                      />
+                                      {idx + 1}
+                                    </Box>
+                                  </TableCell>
                                   {/* Editable X */}
                                   <TableCell>
                                     {editingPointXY?.groupId === groupId &&
@@ -2019,6 +2102,20 @@ const FocusMapDimension = () => {
                                           </IconButton>
                                         </span>
                                       </Tooltip>
+                                      <Tooltip title="Delete this point and refit the surface from the remaining points">
+                                        <span>
+                                          <IconButton
+                                            size="small"
+                                            color="error"
+                                            onClick={() =>
+                                              handleDeleteMeasuredPoint(groupId, idx)
+                                            }
+                                            disabled={isMoving || ui.isComputing}
+                                          >
+                                            <DeleteIcon fontSize="small" />
+                                          </IconButton>
+                                        </span>
+                                      </Tooltip>
                                     </Box>
                                   </TableCell>
                                 </TableRow>
@@ -2078,6 +2175,12 @@ const FocusMapDimension = () => {
               </Typography>
               <FocusMapVisualization
                 data={previewData}
+                highlightIndex={
+                  highlightedPoint?.source === "measured" &&
+                  highlightedPoint?.groupId === previewData.groupId
+                    ? highlightedPoint.index
+                    : null
+                }
                 onClickPosition={async (worldX, worldY) => {
                   // Move stage to clicked position on the heatmap, including
                   // interpolated Z from the preview grid.

@@ -2,7 +2,7 @@ from datetime import datetime
 import time
 from fastapi import HTTPException
 import numpy as np
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 import os
 import sys
@@ -2210,7 +2210,16 @@ class ExperimentController(ImConWidgetController):
         # Use the experiment-configured scan speed (set from the frontend in
         # startWellplateExperiment); falls back to the defaults in __init__ when
         # no experiment has overridden it.
-        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=(self.ACCELERATION, self.ACCELERATION))
+        # A single coordinated XY command is preferred (no dog-leg between
+        # tiles), but stages that cannot do it — e.g. MMCore — would silently
+        # drop an axis="XY" move, so those fall back to sequential axes.
+        if "XY" in (getattr(self.mStage, "combinedAxes", None) or []):
+            self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=(self.ACCELERATION, self.ACCELERATION))
+        else:
+            for axis, value, speed in (("X", posX, self.SPEED_X), ("Y", posY, self.SPEED_Y)):
+                if value is None:
+                    continue
+                self.mStage.move(value=value, speed=speed, axis=axis, is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()
         #self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
         return (posX, posY) # TODO: Need to adjust in case of relative move
@@ -3611,11 +3620,23 @@ class ExperimentController(ImConWidgetController):
                 },
             }]
 
+        # When a curated grid (frontend preview) is supplied, it is the
+        # authoritative plan for this call: areas whose points were all
+        # removed by the user are skipped instead of re-measured.
+        has_curated_grid = bool(focusMapConfig.grid_points)
+
         for area in effective_scan_areas:
             area_id = area.get("areaId", "default")
             area_name = area.get("areaName", area_id)
 
             if group_id is not None and area_id != group_id:
+                continue
+
+            if has_curated_grid and not self._explicit_grid_points_for_group(
+                    focusMapConfig, area_id):
+                self._logger.info(
+                    f"Focus map [{area_id}]: all planned grid points removed by user – skipping"
+                )
                 continue
 
             bounds = area.get("bounds", {})
@@ -3628,6 +3649,25 @@ class ExperimentController(ImConWidgetController):
             results[area_id] = result
 
         return results
+
+    @staticmethod
+    def _explicit_grid_points_for_group(config: FocusMapConfig,
+                                        group_id: str) -> List[Tuple[float, float]]:
+        """Return the user-curated grid positions belonging to ``group_id``.
+
+        ``config.grid_points`` entries carry the frontend scan-area id as
+        ``group_id``; entries without one apply to every group. Returns an
+        empty list when nothing matches (caller falls back to generate_grid).
+        """
+        explicit = []
+        for p in (config.grid_points or []):
+            try:
+                if p.get("group_id") not in (None, group_id):
+                    continue
+                explicit.append((float(p["x"]), float(p["y"])))
+            except (TypeError, ValueError, KeyError):
+                continue
+        return explicit
 
     def _compute_focus_map_for_group(self, group_id: str, group_name: str,
                                      bounds: Dict[str, float],
@@ -3660,13 +3700,22 @@ class ExperimentController(ImConWidgetController):
         # to measure from scratch.
         fm.clear_points()
 
-        # Generate measurement grid
-        grid = FocusMap.generate_grid(
-            bounds=bounds,
-            rows=config.rows,
-            cols=config.cols,
-            add_margin=config.add_margin,
-        )
+        # User-curated grid positions from the frontend preview take precedence
+        # over the generated grid (entries tagged with another group_id belong
+        # to a different scan area and are ignored here).
+        grid = self._explicit_grid_points_for_group(config, group_id)
+        if grid:
+            self._logger.info(
+                f"Focus map [{group_id}]: using {len(grid)} user-curated grid point(s) "
+                f"instead of the generated {config.rows}x{config.cols} grid"
+            )
+        else:
+            grid = FocusMap.generate_grid(
+                bounds=bounds,
+                rows=config.rows,
+                cols=config.cols,
+                add_margin=config.add_margin,
+            )
         self._logger.info(f"Focus map [{group_id}]: measuring {len(grid)} points")
 
         # Measure each grid point

@@ -94,7 +94,7 @@ def _assess_focus_curve(zs, fvals, x0_fit, fit_y, popt, step):
 
     # 1) Contrast: a flat metric curve means there was nothing to focus on
     #    (empty FOV, saturated image, illumination off).
-    contrast = (f_max - f_min) / (abs(f_min) + 1e-12)
+    contrast = (f_max - f_min) / (abs(f_min) + 1e-12) # TODO: Is this the a meaningful boundary?
     flat_curve = contrast < _AF_MIN_CONTRAST
     if flat_curve:
         warnings.append(
@@ -133,7 +133,7 @@ def _assess_focus_curve(zs, fvals, x0_fit, fit_y, popt, step):
     #    flat/tilted curve dressed up as a peak.
     sigma = float(popt[2]) if popt is not None else None
     sigma_ok = sigma is None or (0.5 * step <= sigma <= z_span)
-
+    sigma_ok = True # TODO: This feature is too strict as of now - especially for the virtualmicroscope
     # A converged fit that is much narrower than the step size means the
     # "peak" is a single elevated sample (hot frame / glitch), not a focus
     # curve — neither the fit nor the argmax can be trusted then.

@@ -56,6 +56,7 @@ export const apiFlimStart = (hostIP, hostPort, {
   harmonics = 1,
   exportData = false,
   exportFilename = '',
+  calibrationTimestamp = null, // which stored calibration a phasors run uses
 } = {}) => {
   const params = new URLSearchParams({
     step,
@@ -65,6 +66,9 @@ export const apiFlimStart = (hostIP, hostPort, {
     exportFilename,
   });
   if (tauNs !== null && tauNs !== undefined) params.append('tauNs', String(tauNs));
+  if (calibrationTimestamp !== null && calibrationTimestamp !== undefined) {
+    params.append('calibrationTimestamp', String(calibrationTimestamp));
+  }
   return jsonFetch(`${getApiBase(hostIP, hostPort)}/startFlimAcquisition?${params}`);
 };
 
@@ -87,6 +91,40 @@ export const apiFlimSetParameter = (hostIP, hostPort, name, value) =>
     `&value=${encodeURIComponent(value)}`
   );
 
+/**
+ * Decay histogram per channel: {channels: {<ch>: [counts]}, bins, timeNs,
+ * laserPeriodNs, frequencyMhz} - ready to plot counts vs timeNs.
+ */
+export const apiFlimGetDecay = (hostIP, hostPort, roi = false) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/getFlimDecayCurve?roi=${roi}`);
+
+/**
+ * Set the scanned field of view in µm and/or the sampling (nx/ny). Needs the
+ * scanner calibration (umPerDacUnit / fovUmFullScale) in the setup file.
+ */
+export const apiFlimSetFov = (hostIP, hostPort, { fovUmX, fovUmY, nx, ny } = {}) => {
+  const params = new URLSearchParams();
+  if (fovUmX != null) params.append('fovUmX', String(fovUmX));
+  if (fovUmY != null) params.append('fovUmY', String(fovUmY));
+  if (nx != null) params.append('nx', String(nx));
+  if (ny != null) params.append('ny', String(ny));
+  return jsonFetch(`${getApiBase(hostIP, hostPort)}/setFlimFieldOfView?${params}`);
+};
+
+/** Calibrations usable for a phasors run, newest first (+ 'current'). */
+export const apiFlimListCalibrations = (hostIP, hostPort) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/listFlimCalibrations`);
+
+/**
+ * Save intensity TIFF + decay + metadata into ImSwitch's data folder
+ * (<DataPath>/FLIM/). Returns file paths and the TIFF as a base64 data URL
+ * for a direct browser download.
+ */
+export const apiFlimSaveData = (hostIP, hostPort, filename = '') =>
+  jsonFetch(
+    `${getApiBase(hostIP, hostPort)}/saveFlimData?filename=${encodeURIComponent(filename)}`
+  );
+
 const api = {
   apiFlimGetStatus,
   apiFlimGetImage,
@@ -96,6 +134,10 @@ const api = {
   apiFlimReset,
   apiFlimDetectLaserFrequency,
   apiFlimSetParameter,
+  apiFlimGetDecay,
+  apiFlimSetFov,
+  apiFlimListCalibrations,
+  apiFlimSaveData,
 };
 
 export default api;

@@ -75,6 +75,10 @@ import {
   apiFlimReset,
   apiFlimDetectLaserFrequency,
   apiFlimSetParameter,
+  apiFlimGetDecay,
+  apiFlimSetFov,
+  apiFlimListCalibrations,
+  apiFlimSaveData,
 } from '../backendapi/apiFlimLabs';
 import {
   apiGetFlimLabsConfig,
@@ -110,10 +114,19 @@ const FlimLabsPanel = () => {
   const [configStatus, setConfigStatus] = useState('');
   const [status, setStatus] = useState(null);
   const [imageUrl, setImageUrl] = useState(null);
+  // Stored calibrations (for the phasors reference dropdown)
+  const [calibrations, setCalibrations] = useState([]);
+  const [selectedCalibration, setSelectedCalibration] = useState('');
+  // FOV inputs (µm); empty = leave unchanged
+  const [fovInputX, setFovInputX] = useState('');
+  const [fovInputY, setFovInputY] = useState('');
+  const [decayLog, setDecayLog] = useState(true);
 
   const mode = MODE_TABS[modeTab];
   const phasorCanvasRef = useRef(null);
   const phasorDataRef = useRef(null);
+  const decayCanvasRef = useRef(null);
+  const decayDataRef = useRef(null);
 
   // ------------------------------------------------------------------
   // Phasor rendering (sparse density from the backend + universal semicircle)
@@ -185,6 +198,122 @@ const FlimLabsPanel = () => {
   }, [mode, drawPhasor]);
 
   // ------------------------------------------------------------------
+  // Decay (TCSPC) curve rendering
+  // ------------------------------------------------------------------
+  const CHANNEL_COLORS = ['#4fc3f7', '#ffb74d', '#81c784', '#e57373',
+                          '#ba68c8', '#fff176', '#4db6ac', '#f06292'];
+
+  const drawDecay = useCallback(() => {
+    const canvas = decayCanvasRef.current;
+    if (!canvas) return;
+    const W = 560;
+    const H = 190;
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    const data = decayDataRef.current;
+    const curves = data?.curves || {};
+    const channels = Object.keys(curves);
+    const padL = 34;
+    const padB = 16;
+    const plotW = W - padL - 6;
+    const plotH = H - padB - 8;
+
+    // Axes
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, 8);
+    ctx.lineTo(padL, 8 + plotH);
+    ctx.lineTo(padL + plotW, 8 + plotH);
+    ctx.stroke();
+
+    const laserPeriodNs = data?.laserPeriodNs || 25;
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.font = '10px sans-serif';
+    ctx.fillText('0', padL - 3, H - 4);
+    ctx.fillText(`${(laserPeriodNs / 2).toFixed(1)}`, padL + plotW / 2 - 8, H - 4);
+    ctx.fillText(`${laserPeriodNs.toFixed(1)} ns`, padL + plotW - 34, H - 4);
+
+    let maxCount = 0;
+    for (const ch of channels) {
+      for (const v of curves[ch]) if (v > maxCount) maxCount = v;
+    }
+    if (maxCount === 0) {
+      ctx.fillText('no photons in histogram yet', padL + 14, H / 2);
+      return;
+    }
+    const yOf = (v) => {
+      const t = decayLog
+        ? Math.log1p(v) / Math.log1p(maxCount)
+        : v / maxCount;
+      return 8 + plotH - t * plotH;
+    };
+    ctx.fillText(decayLog ? 'log' : 'lin', 4, 14);
+    ctx.fillText(`${maxCount}`, 2, yOf(maxCount) + 8);
+
+    channels.forEach((ch, ci) => {
+      const counts = curves[ch];
+      const n = counts.length || 1;
+      ctx.strokeStyle = CHANNEL_COLORS[ci % CHANNEL_COLORS.length];
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const x = padL + (i / (n - 1)) * plotW;
+        const y = yOf(counts[i]);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      // Legend
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.fillText(`CH${Number(ch) + 1}`, padL + plotW - 30, 18 + ci * 12);
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decayLog]);
+
+  const pollDecay = useCallback(async () => {
+    try {
+      const res = await apiFlimGetDecay(hostIP, hostPort);
+      if (res && !res.error) {
+        decayDataRef.current = res;
+        drawDecay();
+      }
+    } catch (e) {
+      /* transient */
+    }
+  }, [hostIP, hostPort, drawDecay]);
+
+  useEffect(() => {
+    drawDecay(); // redraw on log/lin toggle with cached data
+  }, [decayLog, drawDecay]);
+
+  // ------------------------------------------------------------------
+  // Stored calibrations (phasors reference dropdown)
+  // ------------------------------------------------------------------
+  const refreshCalibrations = useCallback(async () => {
+    try {
+      const res = await apiFlimListCalibrations(hostIP, hostPort);
+      if (res && !res.error) {
+        const list = res.calibrations || [];
+        setCalibrations(list);
+        // Preselect the newest usable one if nothing is chosen yet
+        setSelectedCalibration((prev) => {
+          if (prev !== '' && list.some((c) => c.timestamp === prev)) return prev;
+          const usable = list.find((c) => c.confirmed);
+          return usable ? usable.timestamp : '';
+        });
+      }
+    } catch (e) {
+      /* endpoint missing or server down - dropdown stays empty */
+    }
+  }, [hostIP, hostPort]);
+
+  // ------------------------------------------------------------------
   // Polling: status + image (+ phasor while in phasor mode)
   // ------------------------------------------------------------------
   const pollStatus = useCallback(async () => {
@@ -236,15 +365,23 @@ const FlimLabsPanel = () => {
     return () => clearInterval(id);
   }, [pollStatus, running]);
 
-  // Image/phasor data: poll only while an acquisition is running; fetch once
-  // on mount and once when the run ends so the final result stays visible.
+  // Image/phasor/decay data: poll only while an acquisition is running; fetch
+  // once on mount and once when the run ends so the final result stays visible.
   useEffect(() => {
-    const fetchOnce = mode === 'phasors' ? pollPhasor : pollImage;
+    const fetchOnce = mode === 'phasors'
+      ? pollPhasor
+      : () => { pollImage(); pollDecay(); };
     fetchOnce();
     if (!running) return undefined;
     const id = setInterval(fetchOnce, IMAGE_POLL_MS);
     return () => clearInterval(id);
-  }, [mode, running, pollImage, pollPhasor]);
+  }, [mode, running, pollImage, pollPhasor, pollDecay]);
+
+  // Calibration list: refresh when the phasors tab opens and whenever a run
+  // ends (a calibration might just have been added).
+  useEffect(() => {
+    if (mode === 'phasors' || !running) refreshCalibrations();
+  }, [mode, running, refreshCalibrations]);
 
   // ------------------------------------------------------------------
   // Config persistence (ImSwitch setup JSON)
@@ -302,8 +439,10 @@ const FlimLabsPanel = () => {
     dispatch(clearFlimError());
     try {
       const res = await apiFlimDetectLaserFrequency(hostIP, hostPort);
+      if (res?.error) throw new Error(res.error);
       setConfigStatus(
-        `Laser detected at ${Number(res.frequency).toFixed(3)} MHz → using ${res.nominal} MHz firmware`
+        `Laser measured at ${Number(res.frequency).toFixed(5)} MHz ` +
+        `(firmware grid: ${res.nominal} MHz) — measured value kept for the lifetime axis`
       );
       pollStatus();
     } catch (e) {
@@ -328,6 +467,8 @@ const FlimLabsPanel = () => {
         harmonics: mode === 'scouting' ? 1 : Number(flim.calibrationHarmonics) || 1,
         exportData: flim.exportEnabled && mode !== 'calibration',
         exportFilename: flim.exportFilename,
+        calibrationTimestamp:
+          mode === 'phasors' && selectedCalibration !== '' ? selectedCalibration : null,
       });
       pollStatus();
     } catch (e) {
@@ -359,6 +500,49 @@ const FlimLabsPanel = () => {
       pollStatus();
     } catch (e) {
       dispatch(setFlimError(`Reset failed: ${e.message}`));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleApplyFov = async () => {
+    setBusy(true);
+    dispatch(clearFlimError());
+    try {
+      const args = {};
+      if (fovInputX !== '') args.fovUmX = Number(fovInputX);
+      if (fovInputY !== '') args.fovUmY = Number(fovInputY);
+      const res = await apiFlimSetFov(hostIP, hostPort, args);
+      if (res?.error) dispatch(setFlimError(`FOV: ${res.error}`));
+      else setConfigStatus('Field of view updated (galvo scan range adjusted)');
+      pollStatus();
+    } catch (e) {
+      dispatch(setFlimError(`FOV update failed: ${e.message}`));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Save intensity TIFF + decay + metadata into ImSwitch's data folder; also
+  // offer the returned TIFF as a direct browser download.
+  const handleSaveData = async (downloadToo = false) => {
+    setBusy(true);
+    dispatch(clearFlimError());
+    try {
+      const res = await apiFlimSaveData(hostIP, hostPort, flim.exportFilename || 'flim');
+      if (res?.error) {
+        dispatch(setFlimError(`Save failed: ${res.error}`));
+      } else {
+        setConfigStatus(`Saved to ${res.directory} (${res.basename}_*)`);
+        if (downloadToo && res.tiff) {
+          const a = document.createElement('a');
+          a.download = `${res.basename}_intensity.tif`;
+          a.href = res.tiff;
+          a.click();
+        }
+      }
+    } catch (e) {
+      dispatch(setFlimError(`Save failed: ${e.message}`));
     } finally {
       setBusy(false);
     }
@@ -470,20 +654,26 @@ const FlimLabsPanel = () => {
             Acquisition (detector parameters)
           </Typography>
           <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-            <FormControl size="small" fullWidth>
-              <InputLabel>Laser Freq (MHz)</InputLabel>
-              <Select
-                value={params.frequency_mhz ?? 40}
+            <Tooltip title="Measured laser sync frequency. The firmware snaps to the nearest grid point (20/40/80/100 MHz) server-side; the exact value here defines the laser period for the lifetime axis, so keep the MEASURED number, not the nominal one.">
+              <TextField
                 label="Laser Freq (MHz)"
+                size="small"
+                fullWidth
+                type="number"
+                inputProps={{ step: 0.00001, min: 1 }}
+                value={params.frequency_mhz ?? 40}
                 disabled={running}
-                onChange={(e) => setDetectorParam('frequency_mhz', e.target.value)}
-              >
-                {[20, 40, 80, 100].map((f) => (
-                  <MenuItem key={f} value={f}>{f}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Tooltip title="Measure the laser sync frequency with the card's frequency meter">
+                onChange={(e) => setDetectorParam('frequency_mhz', Number(e.target.value))}
+                helperText={
+                  params.frequency_mhz
+                    ? `nominal grid: ${[20, 40, 80, 100].reduce((a, b) =>
+                        Math.abs(b - params.frequency_mhz) < Math.abs(a - params.frequency_mhz) ? b : a
+                      )} MHz`
+                    : undefined
+                }
+              />
+            </Tooltip>
+            <Tooltip title="Measure the laser sync frequency with the card's frequency meter (takes a few seconds; card must be idle)">
               <span>
                 <Button
                   size="small"
@@ -543,6 +733,17 @@ const FlimLabsPanel = () => {
                 onChange={(e) => setDetectorParam('frames_to_integrate', Number(e.target.value))}
               />
             </Tooltip>
+            <Tooltip title="How many consecutive frames the LIVE image sums over — raise for SNR at low count rates (display only; grabs are unaffected)">
+              <TextField
+                label="Live avg"
+                size="small"
+                type="number"
+                inputProps={{ min: 1 }}
+                value={params.display_frames ?? 1}
+                onChange={(e) => setDetectorParam('display_frames', Number(e.target.value))}
+                sx={{ width: 90 }}
+              />
+            </Tooltip>
           </Box>
 
           {/* Scan-region crop: image = scan (galvo nx/ny) minus offsets */}
@@ -575,6 +776,86 @@ const FlimLabsPanel = () => {
               {status.debug.lateLines ?? 0} late, {status.debug.frameResets ?? 0} resets,{' '}
               {status.debug.unknownTagDrops ?? 0} unknown-tag drops
             </Typography>
+          )}
+
+          {/* Field of view (µm) — needs the scanner calibration in the setup file */}
+          <Typography variant="subtitle2" sx={{ mt: 1 }}>Field of View</Typography>
+          {status?.fovUm ? (
+            <>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                Current: {status.fovUm[0]?.toFixed(1)} × {status.fovUm[1]?.toFixed(1)} µm —{' '}
+                {status.pixelSizeUm?.[2]?.toFixed(3)} µm/px (x),{' '}
+                {status.pixelSizeUm?.[1]?.toFixed(3)} µm/px (y)
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, mt: 0.5, alignItems: 'center' }}>
+                <TextField
+                  label="FOV X (µm)"
+                  size="small"
+                  type="number"
+                  value={fovInputX}
+                  placeholder={status.fovUm[0]?.toFixed(0)}
+                  onChange={(e) => setFovInputX(e.target.value)}
+                  sx={{ width: 110 }}
+                />
+                <TextField
+                  label="FOV Y (µm)"
+                  size="small"
+                  type="number"
+                  value={fovInputY}
+                  placeholder={status.fovUm[1]?.toFixed(0)}
+                  onChange={(e) => setFovInputY(e.target.value)}
+                  sx={{ width: 110 }}
+                />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={handleApplyFov}
+                  disabled={busy || (fovInputX === '' && fovInputY === '')}
+                >
+                  Apply
+                </Button>
+              </Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                Adjusts the galvo scan range around its center; a running scouting run
+                picks the new FOV up live.
+              </Typography>
+            </>
+          ) : (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+              Scanner not calibrated — add <code>umPerDacUnitX/Y</code> (or{' '}
+              <code>fovUmFullScaleX/Y</code>) to the FLIM detector&apos;s managerProperties
+              to set the FOV in µm and get a real pixel size.
+            </Typography>
+          )}
+
+          {/* Phasors: which stored calibration to use as reference */}
+          {mode === 'phasors' && (
+            <FormControl size="small" fullWidth sx={{ mt: 1 }}>
+              <InputLabel>Calibration reference</InputLabel>
+              <Select
+                value={selectedCalibration}
+                label="Calibration reference"
+                onChange={(e) => setSelectedCalibration(e.target.value)}
+              >
+                {calibrations.length === 0 && (
+                  <MenuItem value="" disabled>
+                    No calibrations stored — run one first
+                  </MenuItem>
+                )}
+                {calibrations.map((c) => (
+                  <MenuItem
+                    key={c.timestamp}
+                    value={c.timestamp}
+                    disabled={!c.confirmed}
+                  >
+                    {new Date((c.timestamp || 0) * 1000).toLocaleString()}
+                    {c.tauNs != null ? ` — τ=${c.tauNs} ns` : ''}
+                    {c.harmonics != null ? `, h=${c.harmonics}` : ''}
+                    {!c.onServer ? ' (missing on server)' : ''}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           )}
 
           {/* Calibration-specific parameters */}
@@ -633,7 +914,8 @@ const FlimLabsPanel = () => {
               color={mode === 'calibration' ? 'warning' : 'primary'}
               startIcon={<PlayArrowIcon />}
               onClick={handleStart}
-              disabled={busy || running || (mode === 'phasors' && !calibrationReference)}
+              disabled={busy || running ||
+                (mode === 'phasors' && selectedCalibration === '' && !calibrationReference)}
             >
               Start {mode}
             </Button>
@@ -652,6 +934,28 @@ const FlimLabsPanel = () => {
             <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownloadPng}>
               PNG
             </Button>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+            <Tooltip title="Write intensity TIFF + decay histogram + metadata into ImSwitch's data folder (<DataPath>/FLIM/)">
+              <Button
+                variant="outlined"
+                startIcon={<SaveIcon />}
+                onClick={() => handleSaveData(false)}
+                disabled={busy}
+              >
+                Save to data folder
+              </Button>
+            </Tooltip>
+            <Tooltip title="Save AND download the raw uint16 intensity TIFF in the browser">
+              <Button
+                variant="outlined"
+                startIcon={<DownloadIcon />}
+                onClick={() => handleSaveData(true)}
+                disabled={busy}
+              >
+                TIFF
+              </Button>
+            </Tooltip>
           </Box>
         </Grid>
 
@@ -704,6 +1008,33 @@ const FlimLabsPanel = () => {
           >
             <canvas ref={phasorCanvasRef} style={{ width: '100%', maxWidth: 560 }} />
           </Box>
+
+          {/* Decay (TCSPC) curve — scouting/calibration modes */}
+          {mode !== 'phasors' && (
+            <Box sx={{ mt: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
+                  Decay (TCSPC)
+                  {decayDataRef.current?.frequencyMhz
+                    ? ` — laser period ${decayDataRef.current.laserPeriodNs?.toFixed(2)} ns`
+                    : ''}
+                </Typography>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={decayLog}
+                      onChange={(e) => setDecayLog(e.target.checked)}
+                    />
+                  }
+                  label={<Typography variant="caption">log scale</Typography>}
+                />
+              </Box>
+              <Box sx={{ bgcolor: 'black', borderRadius: 1 }}>
+                <canvas ref={decayCanvasRef} style={{ width: '100%', maxWidth: 560 }} />
+              </Box>
+            </Box>
+          )}
 
           {/* Calibration results */}
           {mode === 'calibration' && (

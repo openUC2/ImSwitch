@@ -18,6 +18,7 @@ connection and one frame assembler.
 """
 
 import base64
+import json
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -403,6 +404,70 @@ class FLIMLabsController(ImConWidgetController):
         if det is None:
             return {'error': 'No FLIM detector configured'}
         return det.client.get_phasor_sparse(max_points=maxPoints)
+
+    @APIExport()
+    def saveFlimData(self, filename: str = '') -> Dict[str, Any]:
+        """Save the current FLIM data into ImSwitch's data folder.
+
+        Writes into ``<DataPath>/FLIM/``:
+          - ``<name>_intensity.tif``  - cumulative photon counts (uint16 TIFF)
+          - ``<name>_decay.json``     - per-channel decay histograms + time axis
+          - ``<name>_meta.json``      - geometry, laser frequency, calibration...
+
+        Also returns the TIFF as a base64 data URL so the browser can offer a
+        direct download of the raw data (not just the colormapped PNG).
+
+        Example:
+            GET /api/FLIMLabsController/saveFlimData?filename=sample1
+        """
+        det = self._detector
+        if det is None:
+            return {'error': 'No FLIM detector configured'}
+        frame = det.getDisplayFrame()
+        if frame is None or frame.size == 0 or not frame.any():
+            return {'error': 'No FLIM data acquired yet'}
+        if not HAS_CV2:
+            return {'error': 'OpenCV not available for TIFF encoding'}
+
+        import os
+        import time as _time
+        from imswitch.imcommon.model import dirtools
+        stamp = _time.strftime('%Y%m%d_%H%M%S')
+        name = (filename or 'flim').strip().replace(os.sep, '_') or 'flim'
+        base = f'{name}_{stamp}'
+        outDir = os.path.join(dirtools.UserFileDirs.Data, 'FLIM')
+        os.makedirs(outDir, exist_ok=True)
+
+        # Raw counts as 16-bit TIFF (photon counts per pixel rarely exceed
+        # 65535; uint32 TIFFs are poorly supported by downstream viewers)
+        tif16 = np.clip(frame, 0, 65535).astype(np.uint16)
+        tiffPath = os.path.join(outDir, f'{base}_intensity.tif')
+        cv2.imwrite(tiffPath, tif16)
+
+        decay = self.getFlimDecayCurve()
+        decayPath = os.path.join(outDir, f'{base}_decay.json')
+        with open(decayPath, 'w') as f:
+            json.dump(decay, f, indent=2)
+
+        status = self.getFlimStatus()
+        meta = {k: status.get(k) for k in (
+            'detectorName', 'serverUrl', 'cardSerial', 'step', 'firmware',
+            'frameNumber', 'imageWidth', 'imageHeight', 'scanWidth',
+            'scanHeight', 'calibrationReference', 'galvoScanner',
+            'pixelSizeUm', 'fovUm', 'parameters', 'cps')}
+        meta['savedAt'] = stamp
+        meta['maxCount'] = int(frame.max())
+        metaPath = os.path.join(outDir, f'{base}_meta.json')
+        with open(metaPath, 'w') as f:
+            json.dump(meta, f, indent=2)
+
+        ok, buf = cv2.imencode('.tif', tif16)
+        tiffB64 = ('data:image/tiff;base64,'
+                   + base64.b64encode(buf.tobytes()).decode('ascii')) if ok else None
+        self.__logger.info(f'FLIM data saved to {outDir} ({base}_*)')
+        return {'status': 'saved', 'directory': outDir,
+                'files': [tiffPath, decayPath, metaPath],
+                'tiff': tiffB64, 'basename': base}
 
     # ------------------------------------------------------------------
     # Helpers

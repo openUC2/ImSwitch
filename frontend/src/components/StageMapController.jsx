@@ -463,6 +463,87 @@ const StageMapController = () => {
     [screenToStage, notify],
   );
 
+  // ------------------------------------------------------------------
+  // Keyboard: arrow keys step the stage by exactly one FOV and snap a
+  // tile at the new position, so the map can be grown tile-by-tile.
+  // ------------------------------------------------------------------
+
+  // The key handler reads live values through a ref so the window listener
+  // is registered once and never sees stale FOV / mapping state.
+  const arrowMoveBusyRef = useRef(false);
+  const arrowStateRef = useRef({});
+  arrowStateRef.current = {
+    fovX: status.fovX,
+    fovY: status.fovY,
+    flipY,
+    isMapping,
+    autoSnap: params?.autoSnapEnabled,
+    settleS: params?.settleTimeS,
+  };
+
+  useEffect(() => {
+    const isTypingTarget = (el) =>
+      el &&
+      (el.tagName === "INPUT" ||
+        el.tagName === "TEXTAREA" ||
+        el.tagName === "SELECT" ||
+        el.isContentEditable);
+
+    const onKeyDown = (e) => {
+      const dirs = {
+        ArrowLeft: [-1, 0],
+        ArrowRight: [1, 0],
+        ArrowUp: [0, -1],
+        ArrowDown: [0, 1],
+      };
+      const dir = dirs[e.key];
+      if (!dir) return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (isTypingTarget(e.target)) return;
+      e.preventDefault(); // keep the page from scrolling
+      if (arrowMoveBusyRef.current) return; // swallow key-repeat while moving
+
+      const {
+        fovX,
+        fovY,
+        flipY: flip,
+        isMapping: mapping,
+        autoSnap,
+        settleS,
+      } = arrowStateRef.current;
+      if (!fovX || !fovY) {
+        notify("Field of view unknown — cannot step by one FOV", "warning");
+        return;
+      }
+      // Screen-up is -Y in the default orientation and +Y when Y is flipped,
+      // so the stage always steps the way the map visually moves.
+      const dx = dir[0] * fovX;
+      const dy = dir[1] * (flip ? -fovY : fovY);
+
+      arrowMoveBusyRef.current = true;
+      (async () => {
+        try {
+          await apiStageMapGotoPosition(dx, dy, false, true); // relative + blocking
+          // While mapping with auto-snap the backend captures on settle by
+          // itself; otherwise snap explicitly so the tile shows up right away.
+          if (!(mapping && autoSnap)) {
+            await new Promise((r) =>
+              setTimeout(r, Math.max(0, (settleS ?? 0.25) * 1000)),
+            );
+            await apiStageMapSnapTile();
+          }
+        } catch (err) {
+          notify("Arrow-key stage step failed", "error");
+        } finally {
+          arrowMoveBusyRef.current = false;
+        }
+      })();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [notify]);
+
   const fitToTiles = useCallback(() => {
     if (tiles.length === 0) return;
     const view = viewRef.current;
@@ -759,7 +840,8 @@ const StageMapController = () => {
             pointerEvents: "none",
           }}
         >
-          drag: pan · wheel: zoom · double-click: move stage here
+          drag: pan · wheel: zoom · double-click: move stage here · arrow keys:
+          step 1 FOV + snap
         </Typography>
       </Box>
 

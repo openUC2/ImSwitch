@@ -67,7 +67,7 @@ import apiStageCenterCalibrationGetLatestHeatmap from "../../backendapi/apiStage
 import apiStageCenterCalibrationGetIsRunning from "../../backendapi/apiStageCenterCalibrationGetIsRunning";
 import apiStageCenterCalibrationGetRecommendedScanParameters from "../../backendapi/apiStageCenterCalibrationGetRecommendedScanParameters";
 import apiExperimentControllerGetKnownCalibrationLayouts from "../../backendapi/apiExperimentControllerGetKnownCalibrationLayouts";
-import apiPositionerControllerMovePositioner from "../../backendapi/apiPositionerControllerMovePositioner";
+import apiPositionerControllerMovePositionerXYZ from "../../backendapi/apiPositionerControllerMovePositionerXYZ";
 import apiPositionerControllerSetStageOffsetAxis from "../../backendapi/apiPositionerControllerSetStageOffsetAxis";
 import apiPositionerControllerGetDevicePositionAxis from "../../backendapi/apiPositionerControllerGetDevicePositionAxis";
 import apiPositionerControllerHomeAxis from "../../backendapi/apiPositionerControllerHomeAxis";
@@ -780,15 +780,9 @@ const StageOffsetCalibrationTab = () => {
 
   const moveStage = async (x, y) => {
     try {
-      await apiPositionerControllerMovePositioner({
-        axis: "X",
-        dist: x,
-        isAbsolute: true,
-        isBlocking: false,
-      });
-      await apiPositionerControllerMovePositioner({
-        axis: "Y",
-        dist: y,
+      await apiPositionerControllerMovePositionerXYZ({
+        x,
+        y,
         isAbsolute: true,
         isBlocking: false,
       });

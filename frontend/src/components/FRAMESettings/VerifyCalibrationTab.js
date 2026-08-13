@@ -28,7 +28,7 @@ import {
 
 import LiveViewControlWrapper from '../../axon/LiveViewControlWrapper';
 import * as liveStreamSlice from '../../state/slices/LiveStreamSlice';
-import apiPositionerControllerMovePositioner from '../../backendapi/apiPositionerControllerMovePositioner';
+import apiPositionerControllerMovePositionerXYZ from '../../backendapi/apiPositionerControllerMovePositionerXYZ';
 import apiPixelCalibrationControllerGetAvailableDetectors from '../../backendapi/apiPixelCalibrationControllerGetAvailableDetectors';
 import apiPixelCalibrationControllerGetCalibrationData from '../../backendapi/apiPixelCalibrationControllerGetCalibrationData';
 import apiLiveViewControllerGetStreamParameters from '../../backendapi/apiLiveViewControllerGetStreamParameters';
@@ -136,14 +136,17 @@ const VerifyCalibrationTab = () => {
   }, [imageDims]);
 
   const nudge = async (dx, dy) => {
+    if (dx === 0 && dy === 0) return;
     try {
       setLoading(true); setError('');
-      if (dx !== 0) {
-        await apiPositionerControllerMovePositioner({ axis: 'X', dist: dx, isAbsolute: false, isBlocking: true });
-      }
-      if (dy !== 0) {
-        await apiPositionerControllerMovePositioner({ axis: 'Y', dist: dy, isAbsolute: false, isBlocking: true });
-      }
+      // One blocking move; an axis with zero delta is left out entirely so a
+      // pure-X or pure-Y nudge still touches only that axis.
+      await apiPositionerControllerMovePositionerXYZ({
+        ...(dx !== 0 ? { x: dx } : {}),
+        ...(dy !== 0 ? { y: dy } : {}),
+        isAbsolute: false,
+        isBlocking: true,
+      });
       setNetMove((p) => ({ dx: p.dx + dx, dy: p.dy + dy }));
       setStatus('Stage moved. Compare the feature to the predicted marker / ring.');
     } catch (err) {

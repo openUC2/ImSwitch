@@ -49,6 +49,7 @@ import apiMazeGameControllerSetHistory from "../backendapi/apiMazeGameController
 import apiMazeGameControllerSetDownscale from "../backendapi/apiMazeGameControllerSetDownscale.js";
 import apiMazeGameControllerSetPollInterval from "../backendapi/apiMazeGameControllerSetPollInterval.js";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
+import apiPositionerControllerMovePositionerXYZ from "../backendapi/apiPositionerControllerMovePositionerXYZ.js";
 
 const TabPanel = (props) => {
   const { children, value, index, ...other } = props;
@@ -189,16 +190,9 @@ const MazeGameController = ({ title = "Maze Game" }) => {
       const moveX = relativeX * fovX;
       const moveY = relativeY * fovY;
       
-      await apiPositionerControllerMovePositioner({
-        axis: "X",
-        dist: moveX,
-        isAbsolute: false,
-        isBlocking: false
-      });
-      
-      await apiPositionerControllerMovePositioner({
-        axis: "Y", 
-        dist: -moveY,
+      await apiPositionerControllerMovePositionerXYZ({
+        x: moveX,
+        y: -moveY,
         isAbsolute: false,
         isBlocking: false
       });

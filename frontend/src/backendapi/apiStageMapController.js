@@ -40,8 +40,8 @@ export const apiStageMapSetChannel = (channel) =>
 export const apiStageMapGetTiles = (fromId = 0, includePreviews = true) =>
   get("getStageMapTiles", { fromId, includePreviews });
 
-export const apiStageMapGotoPosition = (x, y, isAbsolute = true) =>
-  get("gotoStagePosition", { x, y, isAbsolute });
+export const apiStageMapGotoPosition = (x, y, isAbsolute = true, isBlocking = false) =>
+  get("gotoStagePosition", { x, y, isAbsolute, isBlocking });
 
 export const apiStageMapSaveOmeTiff = (filename = "") =>
   get("saveStitchedOmeTiff", { filename });

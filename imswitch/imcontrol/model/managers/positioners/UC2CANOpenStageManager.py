@@ -405,6 +405,11 @@ class UC2CANOpenStageManager(PositionerManager):
     # ------------------------------------------------------------------
     # Motion
     # ------------------------------------------------------------------
+    @property
+    def combinedAxes(self):
+        """Firmware moves X/Y (and X/Y/Z) as one coordinated motion."""
+        return ["XY", "XYZ"]
+
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None,
              speed=None, isEnable=None, timeout=gTIMEOUT, is_reduced=True):
         """ Move one or more axes. See :class:`ESP32StageManager.move` for the

@@ -25,7 +25,7 @@ import WebRTCViewer from "./WebRTCViewer";
 import MJPEGViewer from "./MJPEGViewer";
 import PositionControllerComponent from "./PositionControllerComponent";
 import HistogramOverlay from "../components/HistogramOverlay";
-import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner";
+import apiPositionerControllerMovePositionerXYZ from "../backendapi/apiPositionerControllerMovePositionerXYZ";
 import { useSelector, useDispatch } from "react-redux";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
@@ -187,16 +187,11 @@ const LiveViewControlWrapper = ({
       );
 
       // Move stage so the clicked feature ends up at the centre (relative move).
-      await apiPositionerControllerMovePositioner({
-        axis: "X",
-        dist: moveX,
-        isAbsolute: false,
-        isBlocking: false,
-      });
-
-      await apiPositionerControllerMovePositioner({
-        axis: "Y",
-        dist: moveY,
+      // One coordinated XY move: sending X and Y as separate requests makes the
+      // stage travel an L-shape and stutter mid-way on a diagonal click.
+      await apiPositionerControllerMovePositionerXYZ({
+        x: moveX,
+        y: moveY,
         isAbsolute: false,
         isBlocking: false,
       });

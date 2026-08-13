@@ -3,7 +3,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { Box, Typography } from "@mui/material";
 import * as liveViewSlice from "../state/slices/LiveStreamSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
-import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
+import apiPositionerControllerMovePositionerXYZ from "../backendapi/apiPositionerControllerMovePositionerXYZ.js";
 
 /**
  * LiveViewComponent - Unified image viewer with intensity scaling
@@ -359,18 +359,11 @@ const LiveViewComponent = ({
         `Moving to position X: ${x.toFixed(2)}, Y: ${y.toFixed(2)} µm`,
       );
 
-      // Move X axis
-      await apiPositionerControllerMovePositioner({
-        axis: "X",
-        dist: x,
-        isAbsolute: false,
-        isBlocking: false,
-      });
-
-      // Move Y axis
-      await apiPositionerControllerMovePositioner({
-        axis: "Y",
-        dist: y,
+      // One coordinated XY move — two single-axis requests race each other and
+      // make the stage stutter on its way to the clicked point.
+      await apiPositionerControllerMovePositionerXYZ({
+        x,
+        y,
         isAbsolute: false,
         isBlocking: false,
       });

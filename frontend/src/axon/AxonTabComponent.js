@@ -85,13 +85,23 @@ const AxonTabComponent = () => {
   }, [dispatch]);
 
   return (
-    <div style={{ width: "100%" }}>
+    // Full-height flex column so the new workspace can split the left/right
+    // scrolling instead of growing the single page scrollbar.
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
       {/* PiP toggle button – always visible in the top-right corner */}
       <div
         style={{
           display: "flex",
           justifyContent: "flex-end",
           padding: "2px 8px 0 0",
+          flexShrink: 0,
         }}
       >
         <PiPToggleButton

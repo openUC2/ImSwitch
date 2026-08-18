@@ -32,6 +32,8 @@ import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControl
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
 import apiLiveViewControllerGetActiveStreams from "../backendapi/apiLiveViewControllerGetActiveStreams";
+import apiLiveViewControllerGetLongExposureInfo from "../backendapi/apiLiveViewControllerGetLongExposureInfo";
+import { showSnapPreview } from "../utils/snapPreview";
 import ObjectiveSwitcher from "./ObjectiveSwitcher";
 import DetectorTriggerController from "./DetectorTriggerController";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
@@ -99,6 +101,10 @@ export default function LiveView({ setFileManagerInitialPath }) {
   const lastCapturePath =
     liveViewState.lastCapturePath || liveViewState.lastSnapPath; // compatibility with persisted old key
   const isStreamRunning = liveViewState.isStreamRunning;
+  // Long-exposure mode: streaming is disabled above the threshold, snap-only.
+  const isLongExposure = liveViewState.isLongExposure;
+  const longExposureThresholdMs = liveViewState.longExposureThresholdMs || 2000;
+  const exposureMs = liveViewState.exposureMs || 0;
 
   // Keep some local state for now (these may need their own slices later)
   const [isRecording, setIsRecording] = useState(false);
@@ -157,6 +163,24 @@ export default function LiveView({ setFileManagerInitialPath }) {
             protocol,
             overrideParams,
           );
+
+          // The new detector may be configured for long exposures, in which
+          // case the backend refuses to stream. Reflect that instead of
+          // leaving the UI claiming a stream is running.
+          if (result?.status === "long_exposure") {
+            console.log(
+              `[LiveView] ${newDetectorName} is in long-exposure mode, not streaming`,
+            );
+            dispatch(liveViewSlice.setIsStreamRunning(false));
+            dispatch(
+              liveViewSlice.setLongExposureInfo({
+                exposureMs: result.exposureMs,
+                thresholdMs: result.thresholdMs,
+                isLongExposure: true,
+              }),
+            );
+            return;
+          }
           console.log(
             `[LiveView] Started ${protocol} stream for ${newDetectorName}`,
           );
@@ -272,8 +296,15 @@ export default function LiveView({ setFileManagerInitialPath }) {
         const isActive = await apiViewControllerGetLiveViewActive();
         dispatch(liveViewSlice.setIsStreamRunning(isActive));
 
+        // Long exposures (>2 s by default) produce frames far slower than the
+        // stream worker's grab timeout, so an auto-started stream would just
+        // churn on stale frames. Ask the backend first and leave the stream off
+        // in that case — Snap still works and arms the camera on demand.
+        const exposureInfo = await apiLiveViewControllerGetLongExposureInfo();
+        dispatch(liveViewSlice.setLongExposureInfo(exposureInfo));
+
         // Auto-start stream if not already running (improves first-time UX)
-        if (!isActive) {
+        if (!isActive && !exposureInfo.isLongExposure) {
           console.log("[LiveView] Stream not active, auto-starting...");
           try {
             const protocol = liveStreamState.imageFormat || "jpeg";
@@ -283,6 +314,11 @@ export default function LiveView({ setFileManagerInitialPath }) {
           } catch (error) {
             console.error("[LiveView] Failed to auto-start stream:", error);
           }
+        } else if (!isActive && exposureInfo.isLongExposure) {
+          console.log(
+            `[LiveView] Skipping auto-start: exposure ${exposureInfo.exposureMs} ms ` +
+              `exceeds ${exposureInfo.thresholdMs} ms — use Snap instead.`,
+          );
         }
 
         // Mark auto-start as attempted (prevents re-triggering on format changes)
@@ -292,6 +328,53 @@ export default function LiveView({ setFileManagerInitialPath }) {
       }
     })();
   }, [hostIP, hostPort, activeTab, dispatch, liveStreamState.imageFormat]);
+
+  /* Track exposure changes so long-exposure mode follows the user's edits.
+     The backend already stops a running stream when the exposure crosses the
+     threshold (SettingsController.setDetectorExposureTime); this keeps the UI's
+     Start button and hints in sync with that. */
+  const detectorExposure = useSelector(
+    (state) => state.detectorParametersState?.parameters?.exposure,
+  );
+  // Previous exposure, so we can tell a real user-driven crossing of the
+  // threshold from the first value we ever see. Without this, mounting with an
+  // already-long exposure would look like a crossing and stop a stream the user
+  // had deliberately forced on.
+  const prevExposureRef = React.useRef(null);
+  useEffect(() => {
+    const nextExposureMs = Number(detectorExposure);
+    if (!Number.isFinite(nextExposureMs) || nextExposureMs <= 0) return;
+
+    const previousExposureMs = prevExposureRef.current;
+    prevExposureRef.current = nextExposureMs;
+    if (previousExposureMs === nextExposureMs) return;
+
+    const isLongNow = nextExposureMs > longExposureThresholdMs;
+    dispatch(
+      liveViewSlice.setLongExposureInfo({
+        exposureMs: nextExposureMs,
+        thresholdMs: longExposureThresholdMs,
+        isLongExposure: isLongNow,
+      }),
+    );
+
+    // Only on an actual crossing: the backend has just stopped the stream in
+    // SettingsController.setDetectorExposureTime, so mirror that here.
+    const crossedIntoLongExposure =
+      isLongNow &&
+      previousExposureMs !== null &&
+      previousExposureMs <= longExposureThresholdMs;
+    if (crossedIntoLongExposure && isStreamRunning) {
+      dispatch(liveViewSlice.setIsStreamRunning(false));
+      showNotification(
+        `Exposure ${nextExposureMs} ms exceeds ${longExposureThresholdMs} ms — live stream stopped. Use Snap to capture.`,
+        "info",
+      );
+    }
+    // isStreamRunning/showNotification are read from the current render on
+    // purpose; adding them as deps would re-fire this on every stream toggle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detectorExposure, longExposureThresholdMs, dispatch]);
 
   /* handlers */
   // Note: Range handling now done directly in Redux dispatch - old handlers removed
@@ -313,12 +396,26 @@ export default function LiveView({ setFileManagerInitialPath }) {
         const overrideParams =
           savedParams && savedParams.protocol === protocol ? savedParams : null;
 
+        // Clicking Start is an explicit request, so force past the
+        // long-exposure block the backend applies to auto-start. The stream
+        // will be slow, but the user asked for it.
         const result = await apiLiveViewControllerStartLiveView(
           detectorName,
           protocol,
           overrideParams,
+          isLongExposure,
         );
         console.log(`Started ${protocol} stream for detector: ${detectorName}`);
+
+        if (result?.status === "long_exposure") {
+          // Only reachable if the backend refused despite force (older backend)
+          showNotification(
+            result.message || "Live streaming is disabled at this exposure.",
+            "warning",
+          );
+          dispatch(liveViewSlice.setIsStreamRunning(false));
+          return;
+        }
 
         if (result?.params && detectorName) {
           dispatch(
@@ -360,9 +457,28 @@ export default function LiveView({ setFileManagerInitialPath }) {
   }
 
   async function runSnap(fileName, format) {
+    // With the stream stopped the viewport has no frames to draw, so ask the
+    // backend to send the captured frame back as a PNG preview. It is built
+    // from the same exposure that was just saved — no second acquisition, which
+    // matters when one frame takes tens of seconds.
+    const wantPreview = !isStreamRunning;
+
+    // Progress estimate for the bar over the viewport: roughly one exposure
+    // plus readout/encode overhead. Frontend-only; the bar switches to
+    // indeterminate if the snap outlives the estimate.
+    dispatch(
+      liveViewSlice.startSnap({ expectedMs: Math.max(exposureMs, 0) + 1500 }),
+    );
     try {
+      const params = new URLSearchParams({
+        fileName: fileName ?? "",
+        saveFormat: String(format),
+      });
+      if (wantPreview) {
+        params.set("returnPreview", "true");
+      }
       const response = await fetch(
-        `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?fileName=${encodeURIComponent(fileName)}&saveFormat=${encodeURIComponent(format)}`,
+        `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?${params.toString()}`,
       );
       if (!response.ok) {
         throw new Error(`Snap failed: ${response.status}`);
@@ -370,6 +486,9 @@ export default function LiveView({ setFileManagerInitialPath }) {
       const data = await response.json();
       const { filePath } = deriveCapturePaths(data);
       dispatch(liveViewSlice.setLastCapturePath(filePath)); // Store latest capture path
+      if (wantPreview && data.previewImage) {
+        showSnapPreview(data.previewImage);
+      }
       const label = formatLabels[format] || "Unknown";
       showNotification(`Image saved (${label})`, "success");
       return data;
@@ -377,6 +496,8 @@ export default function LiveView({ setFileManagerInitialPath }) {
       console.error("Snap failed:", error);
       showNotification("Snap failed", "error");
       return null;
+    } finally {
+      dispatch(liveViewSlice.finishSnap());
     }
   }
 
@@ -660,6 +781,9 @@ export default function LiveView({ setFileManagerInitialPath }) {
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mb: 2 }}>
           <StreamControls
             isStreamRunning={isStreamRunning}
+            isLongExposure={isLongExposure}
+            exposureMs={exposureMs}
+            longExposureThresholdMs={longExposureThresholdMs}
             onToggleStream={toggleStream}
             onSnap={snap}
             onSnapAndDownload={snapAndDownload}

@@ -942,10 +942,22 @@ class SettingsController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def setDetectorExposureTime(self, detectorName: str=None, exposureTime: float=None) -> None:
-        """ Sets the exposure time for the specified detector. """
+        """ Sets the exposure time for the specified detector (in milliseconds).
+
+        Raising the exposure past LiveViewController.LONG_EXPOSURE_THRESHOLD_MS
+        also stops any running live view: at multi-second exposures the stream
+        delivers frames slower than the worker's grab timeout, so it would only
+        spin on stale frames. Snap keeps working and arms the camera on demand.
+        """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'exposure', exposureTime)
+        try:
+            liveViewController = self._master.getController('LiveView')
+            if liveViewController is not None:
+                liveViewController.stopLiveViewForLongExposure(detectorName)
+        except Exception as e:
+            self._logger.debug(f"Could not apply long-exposure stream policy: {e}")
 
     @APIExport(runOnUIThread=True)
     def setDetectorBlackLevel(self, detectorName: str=None, blackLevel: float=0) -> None:

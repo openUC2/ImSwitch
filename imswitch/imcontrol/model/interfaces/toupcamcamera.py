@@ -17,6 +17,22 @@ except Exception as e:  # missing native library, broken install, ...
     TOUPCAM_IMPORT_ERROR = e
 
 
+# Exposure above which the live stream is no longer useful: the SDK delivers a
+# frame only once per integration, so the preview would freeze for seconds at a
+# time. The frontend stops (and does not auto-start) the stream above this and
+# switches to snap-on-demand instead. Kept here so backend and UI agree on one
+# number; see LiveViewController.LONG_EXPOSURE_THRESHOLD_MS.
+LONG_EXPOSURE_THRESHOLD_MS = 2000.0
+
+# The ImSwitch UI exposes gain as a small unitless 0..23 scale (inherited from
+# the GenICam cameras, where it is dB). Toupcam instead uses *analog gain in
+# percent*, 100 = 1x, with a per-model maximum read from get_ExpoAGainRange().
+# We map the UI scale linearly onto that native range, so UI 0 is always the
+# camera's minimum gain and UI 23 always its maximum.
+UI_GAIN_MIN = 0
+UI_GAIN_MAX = 23
+
+
 class CameraToupcam:
     """ToupTek (Toupcam) camera wrapper that grabs frames via the SDK's
     pull-mode callback (no polling), mirroring the CameraHIK interface so the
@@ -25,6 +41,13 @@ class CameraToupcam:
     Frames are pulled with PullImageV3 into a preallocated full-sensor buffer
     and stored in the ring buffer as owned copies (never views), so entries
     can not alias SDK memory that is overwritten by later frames.
+
+    Units at this boundary (the SDK uses different ones internally):
+
+    - exposure: **milliseconds** in/out (ImSwitch convention), converted to the
+      SDK's microseconds in :meth:`set_exposure_time`.
+    - gain: **UI scale 0..23** in/out, mapped linearly onto the camera's native
+      analog-gain percent range in :meth:`set_gain`.
     """
 
     def __init__(self, cameraNo=None, exposure_time=100, gain=0, frame_rate=-1,
@@ -67,6 +90,13 @@ class CameraToupcam:
         self.SensorWidth = 0
         self.max_adu = 255
 
+        # Native hardware ranges, filled in by _open_camera(). Cached because
+        # set_gain()/set_exposure_time() are on the hot path of every UI slider
+        # drag and the SDK getters round-trip over USB.
+        self._gainRangeNative = (100, 100, 100)   # (min, max, default) percent
+        self._expRangeUs = (1, 1_000_000, 10_000)  # (min, max, default) µs
+        self._maxBitDepth = 8
+
         self.hcam = None
         self._pull_lock = threading.Lock()
         self._reconnect_lock = threading.Lock()
@@ -87,6 +117,10 @@ class CameraToupcam:
             if binning and binning > 1:
                 self.setBinning(binning)
             self.set_frame_rate(frame_rate)
+            # set temperature/fan/TEC state if supported, otherwise ignore
+            self.set_temperature(-10)  # °C
+            self.set_fan_speed(True)
+
         except Exception as e:
             self.__logger.warning(f"Applying initial camera settings failed: {e}")
 
@@ -123,6 +157,27 @@ class CameraToupcam:
                         | toupcam.TOUPCAM_FLAG_RAW14 | toupcam.TOUPCAM_FLAG_RAW16)
         self._hasHighBitDepth = bool(flag & highbitFlags)
 
+        # Native ranges, read once. Gain is in percent (100 = 1x) and exposure
+        # in µs; both are mapped to the ImSwitch UI units by the setters below.
+        try:
+            self._gainRangeNative = self.hcam.get_ExpoAGainRange()
+        except toupcam.HRESULTException as ex:
+            self.__logger.warning(
+                f"get_ExpoAGainRange failed hr=0x{ex.hr & 0xffffffff:x}, "
+                f"assuming {self._gainRangeNative}"
+            )
+        try:
+            self._expRangeUs = self.hcam.get_ExpTimeRange()
+        except toupcam.HRESULTException as ex:
+            self.__logger.warning(
+                f"get_ExpTimeRange failed hr=0x{ex.hr & 0xffffffff:x}, "
+                f"assuming {self._expRangeUs}"
+            )
+        try:
+            self._maxBitDepth = int(self.hcam.MaxBitDepth())
+        except Exception:
+            self._maxBitDepth = 8
+
         # select the largest available resolution (full sensor)
         nRes = dev.model.preview
         best, bestArea = 0, 0
@@ -157,7 +212,12 @@ class CameraToupcam:
             self._npDtype = np.uint8
             self.max_adu = 255
         else:
-            # RAW mode: unprocessed sensor data, highest available bit depth
+            # RAW mode: unprocessed sensor data, highest available bit depth.
+            # TOUPCAM_OPTION_BITDEPTH only picks the *container*: 0 = 8 bit,
+            # 1 = "16 bit", which really means "the sensor's native depth in a
+            # 16-bit word". MaxBitDepth() reports that native depth (14 on the
+            # RAW14 models), so max_adu below is 16383 there, not 65535 — i.e.
+            # yes, the full 14 bits are used, no truncation to 8 or 12.
             self.hcam.put_Option(toupcam.TOUPCAM_OPTION_RAW, 1)
             useHighBit = False
             if self._hasHighBitDepth:
@@ -175,7 +235,7 @@ class CameraToupcam:
             self._bytesPerPixel = 2 if useHighBit else 1
             self._npDtype = np.uint16 if useHighBit else np.uint8
             try:
-                self.max_adu = (1 << self.hcam.MaxBitDepth()) - 1 if useHighBit else 255
+                self.max_adu = (1 << self._maxBitDepth) - 1 if useHighBit else 255
             except toupcam.HRESULTException:
                 self.max_adu = 65535 if useHighBit else 255
 
@@ -199,11 +259,25 @@ class CameraToupcam:
                 f"{', '.join(sorted(toupcam.MISSING_EXPORTS))}"
             )
 
+        try:
+            pixelFormat = self.hcam.get_Option(toupcam.TOUPCAM_OPTION_PIXEL_FORMAT)
+        except Exception:
+            pixelFormat = None
+
+        gmin, gmax, gdef = self._gainRangeNative
+        emin, emax, _ = self._expRangeUs
         self.__logger.info(
             f"Opened {self.deviceName}: {width}x{height}, "
             f"{'RGB24' if self.isRGB else f'RAW{self._bits}'}, "
             f"TEC={self._hasTEC}, fan={self._hasFan}, blacklevel={self._hasBlacklevel}, "
             f"swTrigger={self._hasSoftwareTrigger}, extTrigger={self._hasExternalTrigger}"
+        )
+        self.__logger.info(
+            f"{self.deviceName} ranges: sensor bit depth={self._maxBitDepth} "
+            f"(max ADU {self.max_adu}, pixelFormat={pixelFormat}), "
+            f"exposure {emin / 1000.0:.3f}..{emax / 1000.0:.1f} ms, "
+            f"gain {gmin}..{gmax}% (default {gdef}%) "
+            f"mapped from UI {UI_GAIN_MIN}..{UI_GAIN_MAX}"
         )
         self.is_connected = True
 
@@ -396,12 +470,20 @@ class CameraToupcam:
     # ---------------------------------------------------------------------
     # Frame access (ring buffer)
     # ---------------------------------------------------------------------
-    def getLast(self, returnFrameNumber: bool = False, timeout: float = 1.0,
+    def getLast(self, returnFrameNumber: bool = False, timeout: float = None,
                 auto_trigger: bool = False):
-        """Return the newest frame in the ring buffer (see CameraHIK.getLast)."""
+        """Return the newest frame in the ring buffer (see CameraHIK.getLast).
+
+        ``timeout`` defaults to one full integration plus a margin rather than a
+        flat 1 s, so a multi-second exposure is actually waited out instead of
+        reporting "no frame" while the sensor is still integrating.
+        """
         if auto_trigger and str(self.trigger_source).lower() in (
                 "internal trigger", "software", "software trigger"):
             self.send_trigger()
+
+        if timeout is None:
+            timeout = self._frameTimeout()
 
         t0 = time.time()
         while not self.frame_buffer:
@@ -497,10 +579,25 @@ class CameraToupcam:
     # Exposure / gain / blacklevel / frame rate / format
     # ---------------------------------------------------------------------
     def set_exposure_time(self, exposure_time):
-        """exposure_time in ms (UI convention)."""
-        self.exposure_time = exposure_time
+        """exposure_time in ms (ImSwitch UI convention).
+
+        The SDK takes microseconds (``Toupcam_put_ExpoTime``), so the value is
+        multiplied by 1000 here, then clamped to the model's ``get_ExpTimeRange``
+        — passing an out-of-range value makes the SDK reject the call outright
+        and silently leave the previous exposure in place.
+        """
+        emin, emax, _ = self._expRangeUs
+        requestedUs = int(round(float(exposure_time) * 1000))
+        appliedUs = int(max(emin, min(emax, requestedUs)))
+        if appliedUs != requestedUs:
+            self.__logger.warning(
+                f"Exposure {exposure_time} ms is outside the camera range "
+                f"{emin / 1000.0:.3f}..{emax / 1000.0:.1f} ms, clamped to "
+                f"{appliedUs / 1000.0:.3f} ms"
+            )
         try:
-            self.hcam.put_ExpoTime(int(exposure_time * 1000))  # SDK wants µs
+            self.hcam.put_ExpoTime(appliedUs)
+            self.exposure_time = appliedUs / 1000.0
         except toupcam.HRESULTException as ex:
             self.__logger.error(
                 f"Set exposure {exposure_time} ms failed hr=0x{ex.hr & 0xffffffff:x}"
@@ -511,10 +608,30 @@ class CameraToupcam:
         try:
             cur = self.hcam.get_ExpoTime()
             emin, emax, _ = self.hcam.get_ExpTimeRange()
+            self._expRangeUs = (emin, emax, self._expRangeUs[2])
             return (cur, emin, emax)
         except Exception as e:
             self.__logger.error(f"Get exposure time failed: {e}")
             return (None, None, None)
+
+    def getExposureSeconds(self) -> float:
+        """Current exposure in seconds, from the cached UI value."""
+        try:
+            return max(float(self.exposure_time), 0.0) / 1000.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    def isLongExposure(self, thresholdMs: float = LONG_EXPOSURE_THRESHOLD_MS) -> bool:
+        """True when a live stream would be pointless at the current exposure."""
+        return self.getExposureSeconds() * 1000.0 > thresholdMs
+
+    def _frameTimeout(self, base: float = 1.0) -> float:
+        """Grab timeout that always leaves room for one full integration.
+
+        A fixed 1 s (the old default) expires long before a multi-second
+        exposure completes, so every long-exposure grab returned None.
+        """
+        return max(base, 2.0 * self.getExposureSeconds() + base)
 
     def set_exposure_mode(self, exposure_mode="manual"):
         exposure_mode = str(exposure_mode).lower()
@@ -532,24 +649,62 @@ class CameraToupcam:
     def set_camera_mode(self, isAutomatic):
         self.set_exposure_mode(isAutomatic)
 
-    def set_gain(self, gain):
-        """Analog gain in Toupcam native percent (100 = 1x)."""
+    def _uiGainToNative(self, uiGain) -> int:
+        """Map the UI's 0..23 scale linearly onto the camera's percent range.
+
+        Toupcam analog gain is a percentage with 100 = 1x and a per-model
+        maximum (often 2000–5000%). Feeding the raw UI number to
+        ``put_ExpoAGain`` would land below ``gmin`` for every value the UI can
+        produce, so the camera stayed pinned at minimum gain no matter what the
+        user selected.
+        """
+        gmin, gmax, _ = self._gainRangeNative
         try:
-            gmin, gmax, _ = self.hcam.get_ExpoAGainRange()
-            value = int(max(gmin, min(gmax, gain if gain and gain > 0 else gmin)))
+            ui = float(uiGain)
+        except (TypeError, ValueError):
+            ui = UI_GAIN_MIN
+        ui = max(UI_GAIN_MIN, min(UI_GAIN_MAX, ui))
+        span = UI_GAIN_MAX - UI_GAIN_MIN
+        frac = (ui - UI_GAIN_MIN) / span if span else 0.0
+        return int(round(gmin + frac * (gmax - gmin)))
+
+    def _nativeGainToUi(self, nativeGain) -> float:
+        """Inverse of :meth:`_uiGainToNative`, so the UI round-trips."""
+        gmin, gmax, _ = self._gainRangeNative
+        if gmax <= gmin:
+            return float(UI_GAIN_MIN)
+        frac = (float(nativeGain) - gmin) / (gmax - gmin)
+        frac = max(0.0, min(1.0, frac))
+        return round(UI_GAIN_MIN + frac * (UI_GAIN_MAX - UI_GAIN_MIN), 2)
+
+    def set_gain(self, gain):
+        """Set analog gain from the UI's 0..23 scale (see _uiGainToNative)."""
+        try:
+            value = self._uiGainToNative(gain)
             self.hcam.put_ExpoAGain(value)
-            self.gain = value
+            self.gain = self._nativeGainToUi(value)
+            self.__logger.debug(f"Gain UI {gain} -> {value}% native")
         except Exception as e:
             self.__logger.error(f"Set gain {gain} failed: {e}")
 
     def get_gain(self):
-        """Return (current, min, max) in native percent."""
+        """Return (current, min, max) on the UI's 0..23 scale."""
         try:
+            self._gainRangeNative = self.hcam.get_ExpoAGainRange()
             cur = self.hcam.get_ExpoAGain()
-            gmin, gmax, _ = self.hcam.get_ExpoAGainRange()
-            return (cur, gmin, gmax)
+            return (self._nativeGainToUi(cur), float(UI_GAIN_MIN), float(UI_GAIN_MAX))
         except Exception as e:
             self.__logger.error(f"Get gain failed: {e}")
+            return (None, None, None)
+
+    def get_gain_native(self):
+        """Return (current, min, max) analog gain in Toupcam percent."""
+        try:
+            self._gainRangeNative = self.hcam.get_ExpoAGainRange()
+            gmin, gmax, _ = self._gainRangeNative
+            return (self.hcam.get_ExpoAGain(), gmin, gmax)
+        except Exception as e:
+            self.__logger.error(f"Get native gain failed: {e}")
             return (None, None, None)
 
     def set_blacklevel(self, blacklevel):
@@ -696,13 +851,18 @@ class CameraToupcam:
             self.__logger.error(f"Software trigger failed: {e}")
             return False
 
-    def snapSoftwareTrigger(self, timeout: float = 2.0):
+    def snapSoftwareTrigger(self, timeout: float = None):
         """Fire one software trigger and return the frame it produces.
 
         Requires software-trigger mode (``setTriggerSource('software')``); the
         returned image is guaranteed to be exposed AFTER this call — the basis
         for deterministic post-move grabs (see CameraHIK.snapSoftwareTrigger).
+
+        ``timeout`` defaults to one integration plus a margin so long exposures
+        are waited out; pass a value to override.
         """
+        if timeout is None:
+            timeout = self._frameTimeout(base=2.0)
         self.flushBuffer()
         prev_id = self.frameNumber
         if not self.send_trigger():
@@ -797,14 +957,27 @@ class CameraToupcam:
         try:
             params["sensor_width"] = self.SensorWidth
             params["sensor_height"] = self.SensorHeight
+            # container depth (8/16/24) vs. what the sensor actually delivers
             params["bit_depth"] = self._bits
+            params["sensor_bit_depth"] = self._maxBitDepth
+            params["max_adu"] = self.max_adu
             params["isRGB"] = self.isRGB
             cur, emin, emax = self.get_exposuretime()
             params["exposure_us"] = cur
             params["exposure_range_us"] = (emin, emax)
+            params["exposure_ms"] = None if cur is None else cur / 1000.0
+            params["exposure_range_ms"] = (
+                None if emin is None else emin / 1000.0,
+                None if emax is None else emax / 1000.0,
+            )
             gcur, gmin, gmax = self.get_gain()
-            params["gain_percent"] = gcur
-            params["gain_range_percent"] = (gmin, gmax)
+            params["gain"] = gcur
+            params["gain_range"] = (gmin, gmax)
+            ncur, nmin, nmax = self.get_gain_native()
+            params["gain_percent"] = ncur
+            params["gain_range_percent"] = (nmin, nmax)
+            params["long_exposure_threshold_ms"] = LONG_EXPOSURE_THRESHOLD_MS
+            params["is_long_exposure"] = self.isLongExposure()
             temp = self.get_temperature()
             if temp is not None:
                 params["temperature_c"] = temp
@@ -848,6 +1021,12 @@ class CameraToupcam:
             "trigger_source": self.trigger_source,
             "shape": tuple(self.shape),
             "bit_depth": getattr(self, "_bits", None),
+            "sensor_bit_depth": self._maxBitDepth,
+            "max_adu": self.max_adu,
+            "exposure_ms": self.exposure_time,
+            "is_long_exposure": self.isLongExposure(),
+            "gain": self.gain,
+            "gain_percent_native": self._uiGainToNative(self.gain),
             "stream": self.getStreamDiagnostics(),
         }
 

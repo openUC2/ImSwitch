@@ -41,6 +41,9 @@ import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 
 export default function StreamControls({
   isStreamRunning, // This prop is kept for backwards compatibility but we prefer Redux state
+  isLongExposure = false,
+  exposureMs = 0,
+  longExposureThresholdMs = 2000,
   onToggleStream,
   onSnap,
   onSnapAndDownload,
@@ -303,16 +306,29 @@ export default function StreamControls({
           </Typography>
         </Box>
 
-        <Button
-          variant="contained"
-          color="success"
-          size="small"
-          onClick={handleStartStream}
-          disabled={isLiveViewActive}
-          startIcon={<PlayArrow />}
+        <Tooltip
+          arrow
+          title={
+            isLongExposure
+              ? `Exposure is ${Math.round(exposureMs)} ms (> ${longExposureThresholdMs} ms). ` +
+                `A live stream would deliver a frame slower than it times out — use Snap instead. ` +
+                `Starting anyway is allowed but will be very slow.`
+              : ""
+          }
         >
-          Start
-        </Button>
+          <span>
+            <Button
+              variant="contained"
+              color={isLongExposure ? "warning" : "success"}
+              size="small"
+              onClick={handleStartStream}
+              disabled={isLiveViewActive}
+              startIcon={<PlayArrow />}
+            >
+              {isLongExposure ? "Start anyway" : "Start"}
+            </Button>
+          </span>
+        </Tooltip>
 
         <Button
           variant="contained"
@@ -486,12 +502,14 @@ export default function StreamControls({
         {!isLiveViewActive && (
           <Typography
             variant="caption"
-            color="text.secondary"
+            color={isLongExposure && !isSnapping ? "warning.main" : "text.secondary"}
             sx={{ gridColumn: "1 / -1", mt: -1 }}
           >
             {isSnapping
               ? "Capturing… the camera is armed on demand (this can take a while for long exposures)."
-              : "Stream is off — Snap still arms the camera on demand and captures a single frame (ideal for long exposures)."}
+              : isLongExposure
+                ? `Long-exposure mode: exposure is ${Math.round(exposureMs)} ms (> ${longExposureThresholdMs} ms), so live streaming is off. Snap arms the camera, waits one full exposure and shows the frame above.`
+                : "Stream is off — Snap still arms the camera on demand and captures a single frame (ideal for long exposures)."}
           </Typography>
         )}
 

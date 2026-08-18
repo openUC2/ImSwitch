@@ -8,6 +8,7 @@ The legacy RecordingManager has been removed - all recording functionality
 is now provided by the centralized io/writers ecosystem.
 """
 
+import base64
 import os
 import time
 import traceback
@@ -168,12 +169,73 @@ class RecordingController(ImConWidgetController):
         
         return stats
 
-    def snap(self, name=None, mSaveFormat=None) -> dict:
+    def _buildSnapPreview(self, detectorNames, maxSize: int = 1024) -> Optional[dict]:
+        """Encode the just-captured frame as a small 8-bit PNG data URL.
+
+        Reads the detector's *current* latest frame, so this must be called
+        while the detector is still armed and before a new exposure can start —
+        it then costs no extra exposure, which matters when a single frame takes
+        a minute. The frame is min/max windowed to 8 bit purely for display;
+        the file written to disk keeps the full bit depth.
+        """
+        for detectorName in detectorNames:
+            try:
+                frame = self._master.detectorsManager[detectorName].getLatestFrame()
+            except Exception as e:
+                self.__logger.debug(f"No preview frame from '{detectorName}': {e}")
+                continue
+            if frame is None:
+                continue
+            try:
+                image = np.asarray(frame)
+                if image.ndim == 3 and image.shape[2] >= 3:
+                    image = image[:, :, :3]
+                elif image.ndim != 2:
+                    continue
+
+                if image.dtype != np.uint8:
+                    lo = float(image.min())
+                    hi = float(image.max())
+                    scale = 255.0 / (hi - lo) if hi > lo else 0.0
+                    image = ((image.astype(np.float32) - lo) * scale)
+                    image = np.clip(image, 0, 255).astype(np.uint8)
+
+                # No explicit mode: Pillow infers "L" / "RGB" from the uint8
+                # array shape, and the mode argument is deprecated since 10.0.
+                pil = Image.fromarray(np.ascontiguousarray(image))
+                if maxSize > 0 and max(pil.size) > maxSize:
+                    ratio = maxSize / float(max(pil.size))
+                    pil = pil.resize(
+                        (max(1, int(pil.width * ratio)), max(1, int(pil.height * ratio))),
+                        Image.NEAREST,
+                    )
+                with python_io.BytesIO() as buf:
+                    pil.save(buf, format="PNG")
+                    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+                return {
+                    "previewDetector": detectorName,
+                    "previewImage": f"data:image/png;base64,{encoded}",
+                    "previewWidth": pil.width,
+                    "previewHeight": pil.height,
+                }
+            except Exception as e:
+                self.__logger.warning(
+                    f"Failed to build snap preview for '{detectorName}': {e}"
+                )
+        return None
+
+    def snap(self, name=None, mSaveFormat=None, returnPreview: bool = False,
+             previewMaxSize: int = 1024) -> dict:
         """
         Take a snap and save it to a file using RecordingService.
-        
+
         This method delegates to RecordingService from the io module for
         all snap operations.
+
+        When ``returnPreview`` is set, the captured frame is additionally
+        returned as a downscaled 8-bit PNG data URL so the UI can display it —
+        useful when the live stream is off (long exposures) and the viewport
+        would otherwise stay blank.
         """
         self.updateRecAttrs(isSnapping=True)
 
@@ -223,6 +285,7 @@ class RecordingController(ImConWidgetController):
         armedDetectors = self._armDetectorsForSnap(detectorNames)
 
         # Use RecordingService for snap operations
+        preview = None
         try:
             result = self.recording_service.snap(
                 detector_names=detectorNames,
@@ -232,6 +295,10 @@ class RecordingController(ImConWidgetController):
                 attrs=attrs,
                 async_write=False,  # Synchronous write to ensure file is saved immediately
             )
+            if returnPreview:
+                # Still armed here, so this returns the frame we just captured
+                # instead of triggering another (possibly minute-long) exposure.
+                preview = self._buildSnapPreview(detectorNames, previewMaxSize)
         except Exception as e:
             self.__logger.error(f"Failed to snap: {e}")
             self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
@@ -276,11 +343,14 @@ class RecordingController(ImConWidgetController):
         except Exception:
             relative_file_path = None
 
-        return {
+        response = {
             "fullPath": saved_full_path,
             "relativePath": relativeFolder,
             "relativeFilePath": relative_file_path,
         }
+        if preview:
+            response.update(preview)
+        return response
 
     def _getDetectorExposureSeconds(self, detector) -> float:
         """Best-effort read of the detector exposure time, returned in seconds.
@@ -662,13 +732,18 @@ class RecordingController(ImConWidgetController):
 
 
     @APIExport(runOnUIThread=False)
-    def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: int = SaveFormat.TIFF) -> dict:
+    def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: int = SaveFormat.TIFF,
+                        returnPreview: bool = False, previewMaxSize: int = 1024) -> dict:
         """Take a snap and save it to a file at the given fileName.
 
         Parameters:
         - fileName: Optional suffix or filename to append to the generated name. If None,
             the default naming used by `snap()` will be applied.
         - saveFormat: Desired `SaveFormat` enum value (default: `SaveFormat.TIFF`).
+        - returnPreview: Also return the captured frame as a downscaled 8-bit PNG
+            data URL (`previewImage`), so a UI with the live stream stopped (long
+            exposures) can display the result without a second exposure.
+        - previewMaxSize: Longest edge of that preview in pixels.
         """
         '''
         numpy_array = list(self.snapNumpy().values())[0]
@@ -678,7 +753,8 @@ class RecordingController(ImConWidgetController):
         print(deconvoled_image)
         '''
         # do nothing here
-        return self.snap(name=fileName, mSaveFormat=saveFormat)
+        return self.snap(name=fileName, mSaveFormat=saveFormat,
+                         returnPreview=returnPreview, previewMaxSize=previewMaxSize)
 
     @APIExport(runOnUIThread=False)
     def snapImage(self, output: bool = False, toList: bool = True) -> Union[None, list]:

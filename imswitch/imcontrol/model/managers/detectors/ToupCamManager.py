@@ -69,10 +69,12 @@ class ToupCamManager(DetectorManager):
         except Exception:
             initial_exposure = 100
         try:
-            hw_gain = self._camera.get_gain()  # returns (current, min, max) in native percent
-            initial_gain = hw_gain[0] if hw_gain and hw_gain[0] is not None else 100
+            # (current, min, max) on the UI's 0..23 scale; the driver maps that
+            # onto the camera's native analog-gain percent range.
+            hw_gain = self._camera.get_gain()
+            initial_gain = hw_gain[0] if hw_gain and hw_gain[0] is not None else 0
         except Exception:
-            initial_gain = 100
+            initial_gain = 0
 
         # Prepare parameters
         parameters = {
@@ -160,6 +162,39 @@ class ToupCamManager(DetectorManager):
         if hasattr(self._camera, "getStreamDiagnostics"):
             return self._camera.getStreamDiagnostics()
         return {}
+
+    def getParameterRanges(self) -> dict:
+        """Hardware limits for the editable parameters, in UI units.
+
+        Exposure is reported in ms and gain on the UI's 0..23 scale (the driver
+        maps that onto the camera's native analog-gain percent range), so the
+        values can be used directly to clamp the frontend's inputs.
+        """
+        ranges = {}
+        try:
+            _, expMinUs, expMaxUs = self._camera.get_exposuretime()
+            if expMinUs is not None and expMaxUs is not None:
+                ranges['exposure'] = {'min': expMinUs / 1000.0,
+                                      'max': expMaxUs / 1000.0,
+                                      'units': 'ms'}
+        except Exception as e:
+            self.__logger.debug(f"Could not read exposure range: {e}")
+        try:
+            _, gainMin, gainMax = self._camera.get_gain()
+            if gainMin is not None and gainMax is not None:
+                ranges['gain'] = {'min': gainMin, 'max': gainMax, 'units': 'arb.u.'}
+        except Exception as e:
+            self.__logger.debug(f"Could not read gain range: {e}")
+        return ranges
+
+    def isLongExposure(self) -> bool:
+        """True when the exposure is too long for a useful live stream."""
+        if hasattr(self._camera, "isLongExposure"):
+            try:
+                return bool(self._camera.isLongExposure())
+            except Exception:
+                return False
+        return False
 
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
@@ -328,6 +363,8 @@ class ToupCamManager(DetectorManager):
         status['cameraType'] = 'Toupcam'
         status['isMock'] = self._camera.model == "mock"
         status['isConnected'] = getattr(self._camera, 'is_connected', False)
+        status['parameterRanges'] = self.getParameterRanges()
+        status['isLongExposure'] = self.isLongExposure()
 
         # Add acquisition status
         status['isAcquiring'] = self._running

@@ -6,6 +6,7 @@ import {
   Chip,
   Typography,
   CircularProgress,
+  LinearProgress,
   Stack,
 } from "@mui/material";
 import { keyframes } from "@mui/system";
@@ -30,6 +31,7 @@ import { useSelector, useDispatch } from "react-redux";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
+import { SNAP_PREVIEW_EVENT } from "../utils/snapPreview.js";
 
 // Pulsing animation for LIVE indicator
 const pulse = keyframes`
@@ -107,6 +109,49 @@ const LiveViewControlWrapper = ({
   const showInteractiveControls =
     showPositionController || (isHovering && canHover);
   const zoomPercent = Math.round(transformState.scale * 100);
+
+  // ── Snap preview ────────────────────────────────────────────────────────
+  // With the stream stopped (the long-exposure workflow) no frames ever reach
+  // the viewers, so the viewport stays blank. LiveView pushes the captured
+  // frame here as a PNG data URL and we show it in place of the live image.
+  // Handled at wrapper level rather than inside one viewer so it works for
+  // every protocol (binary/WebGL, JPEG, MJPEG, WebRTC). A restarted stream
+  // clears it again.
+  const [snapPreview, setSnapPreview] = useState(null);
+  useEffect(() => {
+    const onSnapPreview = (e) => {
+      const dataUrl = e.detail && e.detail.dataUrl;
+      if (dataUrl) setSnapPreview(dataUrl);
+    };
+    window.addEventListener(SNAP_PREVIEW_EVENT, onSnapPreview);
+    return () => window.removeEventListener(SNAP_PREVIEW_EVENT, onSnapPreview);
+  }, []);
+  useEffect(() => {
+    if (liveViewState.isStreamRunning) setSnapPreview(null);
+  }, [liveViewState.isStreamRunning]);
+  const showSnapPreviewImage = Boolean(snapPreview) && !liveViewState.isStreamRunning;
+
+  // ── Snap progress ───────────────────────────────────────────────────────
+  // A long-exposure snap can take a minute with no visible feedback. Estimate
+  // the progress from the exposure time (a frontend-only estimate: LiveView
+  // stores the expected duration when the request goes out) and fall back to an
+  // indeterminate bar once the estimate is exceeded.
+  const { isSnapping, snapStartedAt, snapExpectedMs } = liveViewState;
+  const [snapElapsedMs, setSnapElapsedMs] = useState(0);
+  useEffect(() => {
+    if (!isSnapping || !snapStartedAt) {
+      setSnapElapsedMs(0);
+      return undefined;
+    }
+    const tick = () => setSnapElapsedMs(Date.now() - snapStartedAt);
+    tick();
+    const id = setInterval(tick, 100);
+    return () => clearInterval(id);
+  }, [isSnapping, snapStartedAt]);
+  const snapProgress =
+    snapExpectedMs > 0
+      ? Math.min(99, (snapElapsedMs / snapExpectedMs) * 100)
+      : null;
 
   useEffect(() => {
     return () => {
@@ -370,6 +415,21 @@ const LiveViewControlWrapper = ({
               },
             }}
           />
+        ) : liveViewState.isLongExposure ? (
+          <Tooltip
+            title={`Exposure is ${Math.round(liveViewState.exposureMs)} ms (> ${liveViewState.longExposureThresholdMs} ms). Live streaming is disabled at this exposure — use Snap to capture single frames.`}
+            arrow
+          >
+            <Chip
+              label={`LONG EXPOSURE • ${(liveViewState.exposureMs / 1000).toFixed(1)} s`}
+              size="small"
+              sx={{
+                backgroundColor: "warning.main",
+                color: "white",
+                fontWeight: "bold",
+              }}
+            />
+          </Tooltip>
         ) : (
           <Chip
             label="PAUSED"
@@ -455,7 +515,78 @@ const LiveViewControlWrapper = ({
           }}
         />
 
-        {liveViewState.isStreamRunning && enableZoomPan ? (
+        {/* Snap progress: a long exposure can run for a minute with no other
+            feedback, so show how far along the capture is right over the
+            viewport. Determinate against the exposure-based estimate, then
+            indeterminate if the capture outlives it. */}
+        {isSnapping && (
+          <Box
+            sx={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              zIndex: 5,
+              px: 1.5,
+              pt: 1,
+            }}
+          >
+            <LinearProgress
+              variant={snapProgress === null ? "indeterminate" : "determinate"}
+              value={snapProgress ?? 0}
+              sx={{ height: 6, borderRadius: 3 }}
+            />
+            <Typography
+              variant="caption"
+              sx={{
+                display: "block",
+                mt: 0.5,
+                color: "white",
+                textShadow: "0 1px 3px rgba(0,0,0,0.9)",
+                fontWeight: 600,
+              }}
+            >
+              {`Capturing… ${(snapElapsedMs / 1000).toFixed(1)} s`}
+              {snapExpectedMs > 0 && ` / ~${(snapExpectedMs / 1000).toFixed(1)} s`}
+            </Typography>
+          </Box>
+        )}
+
+        {showSnapPreviewImage ? (
+          <Box
+            sx={{
+              width: "100%",
+              height: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              position: "relative",
+            }}
+          >
+            <img
+              src={snapPreview}
+              alt="Last captured frame"
+              style={{
+                maxWidth: "100%",
+                maxHeight: "100%",
+                objectFit: "contain",
+                imageRendering: "pixelated",
+              }}
+            />
+            <Chip
+              label="SNAPSHOT"
+              size="small"
+              sx={{
+                position: "absolute",
+                bottom: 10,
+                left: 10,
+                backgroundColor: "rgba(0, 0, 0, 0.6)",
+                color: "white",
+                fontWeight: "bold",
+              }}
+            />
+          </Box>
+        ) : liveViewState.isStreamRunning && enableZoomPan ? (
           <TransformWrapper
             key={`zoom-shell-${liveStreamState.imageFormat}-${liveViewState.isStreamRunning}`}
             initialScale={1}

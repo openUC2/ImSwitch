@@ -33,6 +33,11 @@ import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControll
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
 import apiLiveViewControllerGetActiveStreams from "../backendapi/apiLiveViewControllerGetActiveStreams";
 import apiLiveViewControllerGetLongExposureInfo from "../backendapi/apiLiveViewControllerGetLongExposureInfo";
+import {
+  apiRecordingControllerStartSnap,
+  apiRecordingControllerGetSnapStatus,
+  apiRecordingControllerCancelSnap,
+} from "../backendapi/apiRecordingControllerSnapJob";
 import { showSnapPreview } from "../utils/snapPreview";
 import ObjectiveSwitcher from "./ObjectiveSwitcher";
 import DetectorTriggerController from "./DetectorTriggerController";
@@ -456,34 +461,38 @@ export default function LiveView({ setFileManagerInitialPath }) {
     return { folderPath, filePath, fileName };
   }
 
+  // Poll interval for a running snap job. The countdown/progress bar is driven
+  // locally, so this only has to be often enough to pick up completion
+  // promptly — not often enough to animate anything.
+  const SNAP_POLL_INTERVAL_MS = 400;
+
   async function runSnap(fileName, format) {
     // With the stream stopped the viewport has no frames to draw, so ask the
     // backend to send the captured frame back as a PNG preview. It is built
-    // from the same exposure that was just saved — no second acquisition, which
+    // from the same exposure that was saved — no second acquisition, which
     // matters when one frame takes tens of seconds.
     const wantPreview = !isStreamRunning;
 
-    // Progress estimate for the bar over the viewport: roughly one exposure
-    // plus readout/encode overhead. Frontend-only; the bar switches to
-    // indeterminate if the snap outlives the estimate.
+    // Local estimate so the countdown starts the instant the user clicks,
+    // before the backend has answered. Replaced by the backend's own estimate
+    // once startSnap returns (it knows the detector's real exposure).
     dispatch(
       liveViewSlice.startSnap({ expectedMs: Math.max(exposureMs, 0) + 1500 }),
     );
+
     try {
-      const params = new URLSearchParams({
+      // Returns as soon as the job is queued — the exposure runs on a backend
+      // worker thread, so a 60 s capture no longer holds the request open.
+      const job = await apiRecordingControllerStartSnap({
         fileName: fileName ?? "",
-        saveFormat: String(format),
+        saveFormat: format,
+        returnPreview: wantPreview,
       });
-      if (wantPreview) {
-        params.set("returnPreview", "true");
-      }
-      const response = await fetch(
-        `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?${params.toString()}`,
-      );
-      if (!response.ok) {
-        throw new Error(`Snap failed: ${response.status}`);
-      }
-      const data = await response.json();
+      dispatch(liveViewSlice.updateSnapJob(job));
+
+      const data = await pollSnapJob(job.jobId);
+      if (data === null) return null; // cancelled or failed; already reported
+
       const { filePath } = deriveCapturePaths(data);
       dispatch(liveViewSlice.setLastCapturePath(filePath)); // Store latest capture path
       if (wantPreview && data.previewImage) {
@@ -498,6 +507,51 @@ export default function LiveView({ setFileManagerInitialPath }) {
       return null;
     } finally {
       dispatch(liveViewSlice.finishSnap());
+    }
+  }
+
+  /* Poll a background snap job until it finishes. Resolves with the snap
+     result, or null if the job was cancelled or errored (both already
+     reported to the user). */
+  async function pollSnapJob(jobId) {
+    for (;;) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, SNAP_POLL_INTERVAL_MS),
+      );
+
+      let state;
+      try {
+        state = await apiRecordingControllerGetSnapStatus(jobId);
+      } catch (error) {
+        // A dropped poll is not a failed capture — the job keeps running on
+        // the backend, so retry rather than giving up on the exposure.
+        console.warn("Snap status poll failed, retrying:", error);
+        continue;
+      }
+      dispatch(liveViewSlice.updateSnapJob(state));
+
+      if (state.status === "done") return state.result || {};
+      if (state.status === "cancelled") {
+        showNotification("Capture cancelled", "info");
+        return null;
+      }
+      if (state.status === "error" || state.status === "unknown") {
+        showNotification(state.error || "Snap failed", "error");
+        return null;
+      }
+    }
+  }
+
+  /* Abort a running capture. The backend stops the detector, which ends the
+     integration instead of waiting the exposure out. */
+  async function cancelSnap() {
+    dispatch(liveViewSlice.setSnapCancelling(true));
+    try {
+      await apiRecordingControllerCancelSnap(liveViewState.snapJobId);
+    } catch (error) {
+      console.error("Failed to cancel snap:", error);
+      showNotification("Could not cancel the capture", "error");
+      dispatch(liveViewSlice.setSnapCancelling(false));
     }
   }
 
@@ -784,6 +838,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
             isLongExposure={isLongExposure}
             exposureMs={exposureMs}
             longExposureThresholdMs={longExposureThresholdMs}
+            onCancelSnap={cancelSnap}
             onToggleStream={toggleStream}
             onSnap={snap}
             onSnapAndDownload={snapAndDownload}

@@ -29,7 +29,6 @@ import {
   Videocam,
   VideoLibrary,
   Settings,
-  GetApp,
 } from "@mui/icons-material";
 import StreamControlOverlay from "../components/StreamControlOverlay";
 import StreamPresets from "./StreamPresets";
@@ -52,6 +51,7 @@ export default function StreamControls({
   onStopRecord,
   onStopRecordAndDownload,
   onRecordAndDownload,
+  onCancelSnap,
   onGoToFolder,
   lastCapturePath,
 }) {
@@ -71,10 +71,15 @@ export default function StreamControls({
   // Snapping is allowed even when the live stream is off (e.g. long-exposure
   // experiments), in which case the request can take a while to return.
   const [isSnapping, setIsSnapping] = useState(false);
-  // Timed "Record & Download": clip length in seconds, and the countdown shown
-  // on the button while the clip is being acquired.
-  const [clipSeconds, setClipSeconds] = useState(5);
+  // Timed record: clip length in seconds, and the countdown shown on the button
+  // while the clip is being acquired. 0 = record until the user stops.
+  const [clipSeconds, setClipSeconds] = useState(0);
   const [clipRemaining, setClipRemaining] = useState(0);
+  // "Download when finished" replaces the separate *& Download* buttons: the
+  // download is a property of the capture, not a different kind of capture, so
+  // it belongs on a toggle rather than doubling the button count.
+  const [downloadSnap, setDownloadSnap] = useState(false);
+  const [downloadRecording, setDownloadRecording] = useState(false);
 
   // Wrap snap to track the in-flight state so the button shows progress and is
   // guarded against double-clicks. Works whether or not the live stream is
@@ -134,6 +139,26 @@ export default function StreamControls({
 
   // Use Redux state as source of truth for stream status
   const isLiveViewActive = liveViewState.isStreamRunning;
+  // Set as soon as a cancel request goes out, so both Cancel buttons (here and
+  // on the image overlay) disable together.
+  const snapCancelling = liveViewState.snapCancelling;
+
+  // One Snap button: the format select and the download toggle decide what
+  // actually happens, so the user is not choosing between near-identical
+  // buttons on every capture.
+  const handleSnapClick = useCallback(() => {
+    if (downloadSnap) {
+      handleSnapAndDownload(snapFileName, snapFormat);
+    } else {
+      handleSnap(snapFileName, snapFormat);
+    }
+  }, [
+    downloadSnap,
+    handleSnap,
+    handleSnapAndDownload,
+    snapFileName,
+    snapFormat,
+  ]);
 
   // Record a fixed-length clip and download it in one click (the video
   // counterpart of Snap & Download). The countdown doubles as the busy state.
@@ -158,6 +183,53 @@ export default function StreamControls({
     snapFileName,
     recordFormat,
   ]);
+
+  // One Record button covering all four combinations that used to need three
+  // buttons plus a clip-length field: manual vs. auto-stop, download vs. not.
+  const handleRecordClick = useCallback(() => {
+    if (isRecording) {
+      if (downloadRecording) {
+        onStopRecordAndDownload();
+      } else {
+        onStopRecord();
+      }
+      return;
+    }
+    const seconds = Number(clipSeconds) || 0;
+    if (seconds > 0 && downloadRecording) {
+      // Timed clip that downloads itself; the backend-side stop is handled by
+      // the timed helper, which is the only path that also downloads.
+      handleRecordAndDownload();
+      return;
+    }
+    if (seconds > 0) {
+      // Timed clip without download: start now, stop ourselves after `seconds`.
+      onStartRecord(snapFileName, recordFormat);
+      setClipRemaining(seconds);
+      const ticker = setInterval(
+        () => setClipRemaining((s) => (s > 1 ? s - 1 : 0)),
+        1000,
+      );
+      setTimeout(() => {
+        clearInterval(ticker);
+        setClipRemaining(0);
+        onStopRecord();
+      }, seconds * 1000);
+      return;
+    }
+    onStartRecord(snapFileName, recordFormat);
+  }, [
+    isRecording,
+    downloadRecording,
+    clipSeconds,
+    handleRecordAndDownload,
+    onStartRecord,
+    onStopRecord,
+    onStopRecordAndDownload,
+    snapFileName,
+    recordFormat,
+  ]);
+
   // Ensure defaults are set on component mount
   useEffect(() => {
     if (!liveViewState.snapFormat) {
@@ -338,37 +410,38 @@ export default function StreamControls({
         <Tooltip
           arrow
           title={
-            isLongExposure
+            isLongExposure && !isLiveViewActive
               ? `Exposure is ${Math.round(exposureMs)} ms (> ${longExposureThresholdMs} ms). ` +
                 `A live stream would deliver a frame slower than it times out — use Snap instead. ` +
                 `Starting anyway is allowed but will be very slow.`
-              : ""
+              : isLiveViewActive
+                ? "Stop the live stream"
+                : "Start the live stream"
           }
         >
           <span>
             <Button
               variant="contained"
-              color={isLongExposure ? "warning" : "success"}
+              color={
+                isLiveViewActive
+                  ? "error"
+                  : isLongExposure
+                    ? "warning"
+                    : "success"
+              }
               size="small"
-              onClick={handleStartStream}
-              disabled={isLiveViewActive}
-              startIcon={<PlayArrow />}
+              onClick={isLiveViewActive ? handleStopStream : handleStartStream}
+              startIcon={isLiveViewActive ? <Stop /> : <PlayArrow />}
+              sx={{ width: 150, whiteSpace: "nowrap" }}
             >
-              {isLongExposure ? "Start anyway" : "Start"}
+              {isLiveViewActive
+                ? "Stop stream"
+                : isLongExposure
+                  ? "Start anyway"
+                  : "Start stream"}
             </Button>
           </span>
         </Tooltip>
-
-        <Button
-          variant="contained"
-          color="error"
-          size="small"
-          onClick={handleStopStream}
-          disabled={!isLiveViewActive}
-          startIcon={<Stop />}
-        >
-          Stop
-        </Button>
 
         <FormControlLabel
           control={
@@ -455,13 +528,16 @@ export default function StreamControls({
           </FormHelperText>
         </FormControl>
 
-        {/* Snap Section - Left Column */}
+        {/* Snap row — one button. The format select and the "download when
+            finished" toggle carry the variation that used to be spread across
+            separate Snap / Snap & Download buttons. */}
         <Box
           sx={{
+            gridColumn: "1 / -1",
             display: "flex",
             gap: 1,
             alignItems: "center",
-            flexWrap: "nowrap",
+            flexWrap: "wrap",
           }}
         >
           <Typography
@@ -470,7 +546,7 @@ export default function StreamControls({
           >
             Snap:
           </Typography>
-          <FormControl size="small" sx={{ width: 180, height: 40 }}>
+          <FormControl size="small" sx={{ width: 160 }}>
             <InputLabel id="snap-format-label">Format</InputLabel>
             <Select
               labelId="snap-format-label"
@@ -494,7 +570,7 @@ export default function StreamControls({
             variant="contained"
             color="primary"
             size="small"
-            onClick={() => handleSnap(snapFileName, snapFormat)}
+            onClick={handleSnapClick}
             startIcon={
               isSnapping ? (
                 <CircularProgress size={16} color="inherit" />
@@ -503,161 +579,42 @@ export default function StreamControls({
               )
             }
             disabled={isSnapping}
-            sx={{ whiteSpace: "nowrap", height: 40, minHeight: 40, width: 130 }}
+            sx={{ whiteSpace: "nowrap", height: 40, minHeight: 40, width: 150 }}
           >
-            {isSnapping ? "Snapping…" : "Snap"}
+            {isSnapping ? "Capturing…" : "Snap"}
           </Button>
 
-          <Button
-            variant="contained"
-            color="primary"
-            size="small"
-            onClick={() => handleSnapAndDownload(snapFileName, snapFormat)}
-            startIcon={
-              isSnapping ? (
-                <CircularProgress size={16} color="inherit" />
-              ) : (
-                <GetApp />
-              )
-            }
-            disabled={isSnapping}
-            sx={{ whiteSpace: "nowrap", width: 160, height: 40, minHeight: 40 }}
-          >
-            Snap & Download
-          </Button>
-        </Box>
-
-        {/* Hint: snapping also works with the stream off (long exposures) */}
-        {!isLiveViewActive && (
-          <Typography
-            variant="caption"
-            color={isLongExposure && !isSnapping ? "warning.main" : "text.secondary"}
-            sx={{ gridColumn: "1 / -1", mt: -1 }}
-          >
-            {isSnapping
-              ? "Capturing… the camera is armed on demand (this can take a while for long exposures)."
-              : isLongExposure
-                ? `Long-exposure mode: exposure is ${Math.round(exposureMs)} ms (> ${longExposureThresholdMs} ms), so live streaming is off. Snap arms the camera, waits one full exposure and shows the frame above.`
-                : "Stream is off — Snap still arms the camera on demand and captures a single frame (ideal for long exposures)."}
-          </Typography>
-        )}
-
-        {/* Go to Folder - Below Snap */}
-        <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}>
-          <Button
-            variant="outlined"
-            color="inherit"
-            size="small"
-            disabled={!lastCapturePath}
-            onClick={onGoToFolder}
-            sx={{ width: 130, height: 40, opacity: 0.85 }}
-          >
-            Go to Folder
-          </Button>
-        </Box>
-
-        {/* Record Section - Right Column */}
-        <Box
-          sx={{
-            display: "flex",
-            gap: 1,
-            alignItems: "center",
-            flexWrap: "nowrap",
-          }}
-        >
-          <Typography
-            variant="body2"
-            sx={{ fontWeight: "medium", minWidth: 60 }}
-          >
-            Record:
-          </Typography>
-          <FormControl size="small" sx={{ width: 180, height: 40 }}>
-            <InputLabel id="record-format-label">Format</InputLabel>
-            <Select
-              labelId="record-format-label"
-              id="record-format-select"
-              value={recordFormat}
-              label="Format"
-              onChange={(e) =>
-                dispatch(liveViewSlice.setRecordFormat(e.target.value))
-              }
-              disabled={!isLiveViewActive}
-            >
-              {recordFormatOptions.map((opt) => (
-                <MenuItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          {!isRecording ? (
+          {/* Cancel appears only while a capture is running, so it never adds
+              to the resting button count. Aborts the exposure on the camera
+              rather than waiting it out. */}
+          {isSnapping && onCancelSnap && (
             <Button
-              variant="contained"
-              color="primary"
-              size="small"
-              onClick={() => onStartRecord(snapFileName, recordFormat)}
-              startIcon={<FiberManualRecord />}
-              disabled={!isLiveViewActive}
-              sx={{
-                whiteSpace: "nowrap",
-                height: 40,
-                minHeight: 40,
-                width: 130,
-              }}
-            >
-              Record
-            </Button>
-          ) : (
-            <Button
-              variant="contained"
+              variant="outlined"
               color="error"
               size="small"
-              onClick={onStopRecord}
-              startIcon={<StopIcon />}
-              sx={{
-                animation: "blinker 1.5s linear infinite",
-                whiteSpace: "nowrap",
-                height: 40,
-                minHeight: 40,
-                width: 130,
-                "@keyframes blinker": {
-                  "50%": { opacity: 0.6 },
-                },
-              }}
+              onClick={onCancelSnap}
+              disabled={snapCancelling}
+              sx={{ whiteSpace: "nowrap", height: 40, minHeight: 40 }}
             >
-              Stop
+              {snapCancelling ? "Cancelling…" : "Cancel"}
             </Button>
           )}
 
-          <Tooltip
-            title={isRecording ? "" : "Please start a recording first"}
-            arrow
-          >
-            <span>
-              <Button
-                variant="contained"
-                color="warning"
+          <FormControlLabel
+            control={
+              <Switch
+                checked={downloadSnap}
+                onChange={(e) => setDownloadSnap(e.target.checked)}
                 size="small"
-                onClick={onStopRecordAndDownload}
-                startIcon={<GetApp />}
-                disabled={!isRecording}
-                sx={{
-                  whiteSpace: "nowrap",
-                  height: 40,
-                  minHeight: 40,
-                  width: 160,
-                }}
-              >
-                Stop & Download
-              </Button>
-            </span>
-          </Tooltip>
+              />
+            }
+            label="Download when finished"
+            sx={{ ml: 0.5 }}
+          />
         </Box>
 
-        {/* Timed acquire & download — the video counterpart of Snap & Download:
-            records a fixed-length clip, then downloads it without the manual
-            start/stop dance. */}
+        {/* Record row — Record/Stop is one toggle; "Auto-stop after" turns it
+            into a fixed-length clip instead of needing its own button. */}
         <Box
           sx={{
             gridColumn: "1 / -1",
@@ -667,56 +624,134 @@ export default function StreamControls({
             flexWrap: "wrap",
           }}
         >
-          <TextField
-            label="Clip length (s)"
-            type="number"
-            size="small"
-            value={clipSeconds}
-            onChange={(e) => setClipSeconds(e.target.value)}
-            inputProps={{ min: 1, max: 600, step: 1 }}
-            disabled={clipRemaining > 0 || isRecording}
-            sx={{ width: 130 }}
-          />
+          <Typography
+            variant="body2"
+            sx={{ fontWeight: "medium", minWidth: 60 }}
+          >
+            Record:
+          </Typography>
+          <FormControl size="small" sx={{ width: 160 }}>
+            <InputLabel id="record-format-label">Format</InputLabel>
+            <Select
+              labelId="record-format-label"
+              id="record-format-select"
+              value={recordFormat}
+              label="Format"
+              onChange={(e) =>
+                dispatch(liveViewSlice.setRecordFormat(e.target.value))
+              }
+              disabled={!isLiveViewActive || isRecording}
+            >
+              {recordFormatOptions.map((opt) => (
+                <MenuItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
           <Tooltip
-            title={
-              isRecording
-                ? "A recording is already running — use Stop & Download"
-                : `Record ${Math.max(1, Number(clipSeconds) || 5)} s and download the file`
-            }
             arrow
+            title={
+              !isLiveViewActive
+                ? "Recording needs a running live stream"
+                : isRecording
+                  ? "Stop the recording"
+                  : Number(clipSeconds) > 0
+                    ? `Record a ${Math.round(Number(clipSeconds))} s clip and stop automatically`
+                    : "Record until you press Stop"
+            }
           >
             <span>
               <Button
                 variant="contained"
-                color="secondary"
+                color={isRecording ? "error" : "primary"}
                 size="small"
-                onClick={handleRecordAndDownload}
+                onClick={handleRecordClick}
                 startIcon={
-                  clipRemaining > 0 ? (
-                    <CircularProgress size={16} color="inherit" />
-                  ) : (
-                    <GetApp />
-                  )
+                  isRecording ? <StopIcon /> : <FiberManualRecord />
                 }
-                disabled={!isLiveViewActive || isRecording || clipRemaining > 0}
+                disabled={!isLiveViewActive || clipRemaining > 0}
                 sx={{
                   whiteSpace: "nowrap",
                   height: 40,
                   minHeight: 40,
-                  width: 200,
+                  width: 150,
+                  ...(isRecording && {
+                    animation: "blinker 1.5s linear infinite",
+                    "@keyframes blinker": { "50%": { opacity: 0.6 } },
+                  }),
                 }}
               >
                 {clipRemaining > 0
-                  ? `Recording… ${clipRemaining}s`
-                  : "Record & Download"}
+                  ? `Recording ${clipRemaining}s`
+                  : isRecording
+                    ? "Stop"
+                    : "Record"}
               </Button>
             </span>
           </Tooltip>
-          {clipRemaining > 0 && (
-            <Typography variant="caption" color="text.secondary">
-              The clip downloads automatically when the countdown finishes.
-            </Typography>
-          )}
+
+          <TextField
+            label="Auto-stop (s)"
+            type="number"
+            size="small"
+            value={clipSeconds}
+            onChange={(e) => setClipSeconds(e.target.value)}
+            inputProps={{ min: 0, max: 600, step: 1 }}
+            disabled={isRecording || clipRemaining > 0}
+            helperText="0 = manual"
+            sx={{ width: 120 }}
+          />
+
+          <FormControlLabel
+            control={
+              <Switch
+                checked={downloadRecording}
+                onChange={(e) => setDownloadRecording(e.target.checked)}
+                size="small"
+              />
+            }
+            label="Download when finished"
+            sx={{ ml: 0.5 }}
+          />
+        </Box>
+
+        {/* Status line: one place for the long-exposure / stream-off hint and
+            the link to the saved files, instead of a standalone button. */}
+        <Box
+          sx={{
+            gridColumn: "1 / -1",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 2,
+            flexWrap: "wrap",
+          }}
+        >
+          <Typography
+            variant="caption"
+            color={
+              isLongExposure && !isSnapping ? "warning.main" : "text.secondary"
+            }
+            sx={{ flex: 1, minWidth: 220 }}
+          >
+            {isSnapping
+              ? "Capturing… the camera is armed on demand; progress and Cancel are shown on the image above."
+              : isLongExposure
+                ? `Long-exposure mode: exposure is ${Math.round(exposureMs)} ms (> ${longExposureThresholdMs} ms), so live streaming is off. Snap arms the camera, waits one full exposure and shows the frame above.`
+                : !isLiveViewActive
+                  ? "Stream is off — Snap still arms the camera on demand and captures a single frame."
+                  : ""}
+          </Typography>
+          <Button
+            variant="text"
+            size="small"
+            disabled={!lastCapturePath}
+            onClick={onGoToFolder}
+          >
+            Open capture folder
+          </Button>
         </Box>
       </Box>
 

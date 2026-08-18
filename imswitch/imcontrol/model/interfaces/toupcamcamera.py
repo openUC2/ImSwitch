@@ -489,6 +489,12 @@ class CameraToupcam:
         while not self.frame_buffer:
             if time.time() - t0 > timeout:
                 return (None, None) if returnFrameNumber else None
+            if not self.is_streaming:
+                # Acquisition was stopped while we were waiting (e.g. a snap was
+                # cancelled): no further frame can arrive, so return now instead
+                # of sitting out the rest of a multi-second exposure timeout.
+                # This is what makes an in-progress long exposure abortable.
+                return (None, None) if returnFrameNumber else None
             if self.lastFrameFromBuffer is not None:  # e.g. while in trigger mode
                 if returnFrameNumber:
                     return self.lastFrameFromBuffer, self.lastFrameId

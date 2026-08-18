@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import {
+  Button,
   IconButton,
   Tooltip,
   Box,
@@ -32,6 +33,7 @@ import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import { SNAP_PREVIEW_EVENT } from "../utils/snapPreview.js";
+import { apiRecordingControllerCancelSnap } from "../backendapi/apiRecordingControllerSnapJob";
 
 // Pulsing animation for LIVE indicator
 const pulse = keyframes`
@@ -131,12 +133,15 @@ const LiveViewControlWrapper = ({
   }, [liveViewState.isStreamRunning]);
   const showSnapPreviewImage = Boolean(snapPreview) && !liveViewState.isStreamRunning;
 
-  // ── Snap progress ───────────────────────────────────────────────────────
-  // A long-exposure snap can take a minute with no visible feedback. Estimate
-  // the progress from the exposure time (a frontend-only estimate: LiveView
-  // stores the expected duration when the request goes out) and fall back to an
-  // indeterminate bar once the estimate is exceeded.
-  const { isSnapping, snapStartedAt, snapExpectedMs } = liveViewState;
+  // ── Snap countdown ──────────────────────────────────────────────────────
+  // A long-exposure snap can run for a minute with no visible feedback. The
+  // countdown ticks entirely client-side off the start time and the expected
+  // duration (one exposure + overhead) — deliberately independent of the
+  // backend, so it stays smooth even if a status poll is slow or dropped and it
+  // starts the instant the user clicks. It is an estimate, so it stops at "any
+  // moment now…" instead of hitting zero and pretending the frame is late.
+  const { isSnapping, snapStartedAt, snapExpectedMs, snapJobId, snapCancelling } =
+    liveViewState;
   const [snapElapsedMs, setSnapElapsedMs] = useState(0);
   useEffect(() => {
     if (!isSnapping || !snapStartedAt) {
@@ -148,10 +153,32 @@ const LiveViewControlWrapper = ({
     const id = setInterval(tick, 100);
     return () => clearInterval(id);
   }, [isSnapping, snapStartedAt]);
+
+  const snapRemainingMs = Math.max(0, snapExpectedMs - snapElapsedMs);
+  const snapOverrun = snapExpectedMs > 0 && snapRemainingMs <= 0;
   const snapProgress =
     snapExpectedMs > 0
       ? Math.min(99, (snapElapsedMs / snapExpectedMs) * 100)
       : null;
+  const snapLabel = snapCancelling
+    ? "Cancelling…"
+    : snapExpectedMs <= 0
+      ? `Capturing… ${(snapElapsedMs / 1000).toFixed(1)} s`
+      : snapOverrun
+        ? `Capturing… any moment now (${(snapElapsedMs / 1000).toFixed(1)} s elapsed)`
+        : `Capturing… ${(snapRemainingMs / 1000).toFixed(1)} s remaining`;
+
+  // Cancel is offered here rather than only in the controls panel: when a
+  // 60 s exposure is running this bar is where the user is looking.
+  const handleCancelSnap = useCallback(async () => {
+    dispatch(liveViewSlice.setSnapCancelling(true));
+    try {
+      await apiRecordingControllerCancelSnap(snapJobId);
+    } catch (error) {
+      console.error("Failed to cancel snap:", error);
+      dispatch(liveViewSlice.setSnapCancelling(false));
+    }
+  }, [dispatch, snapJobId]);
 
   useEffect(() => {
     return () => {
@@ -532,23 +559,50 @@ const LiveViewControlWrapper = ({
             }}
           >
             <LinearProgress
-              variant={snapProgress === null ? "indeterminate" : "determinate"}
+              variant={
+                snapProgress === null || snapOverrun
+                  ? "indeterminate"
+                  : "determinate"
+              }
               value={snapProgress ?? 0}
               sx={{ height: 6, borderRadius: 3 }}
             />
-            <Typography
-              variant="caption"
+            <Box
               sx={{
-                display: "block",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 1,
                 mt: 0.5,
-                color: "white",
-                textShadow: "0 1px 3px rgba(0,0,0,0.9)",
-                fontWeight: 600,
               }}
             >
-              {`Capturing… ${(snapElapsedMs / 1000).toFixed(1)} s`}
-              {snapExpectedMs > 0 && ` / ~${(snapExpectedMs / 1000).toFixed(1)} s`}
-            </Typography>
+              <Typography
+                variant="caption"
+                sx={{
+                  color: "white",
+                  textShadow: "0 1px 3px rgba(0,0,0,0.9)",
+                  fontWeight: 600,
+                }}
+              >
+                {snapLabel}
+              </Typography>
+              <Button
+                size="small"
+                variant="outlined"
+                color="inherit"
+                onClick={handleCancelSnap}
+                disabled={snapCancelling}
+                sx={{
+                  color: "white",
+                  borderColor: "rgba(255,255,255,0.6)",
+                  backgroundColor: "rgba(0,0,0,0.45)",
+                  minWidth: 0,
+                  py: 0,
+                }}
+              >
+                Cancel
+              </Button>
+            </Box>
           </Box>
         )}
 

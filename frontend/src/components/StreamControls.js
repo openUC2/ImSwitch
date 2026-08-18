@@ -51,6 +51,7 @@ export default function StreamControls({
   onStartRecord,
   onStopRecord,
   onStopRecordAndDownload,
+  onRecordAndDownload,
   onGoToFolder,
   lastCapturePath,
 }) {
@@ -70,6 +71,10 @@ export default function StreamControls({
   // Snapping is allowed even when the live stream is off (e.g. long-exposure
   // experiments), in which case the request can take a while to return.
   const [isSnapping, setIsSnapping] = useState(false);
+  // Timed "Record & Download": clip length in seconds, and the countdown shown
+  // on the button while the clip is being acquired.
+  const [clipSeconds, setClipSeconds] = useState(5);
+  const [clipRemaining, setClipRemaining] = useState(0);
 
   // Wrap snap to track the in-flight state so the button shows progress and is
   // guarded against double-clicks. Works whether or not the live stream is
@@ -129,6 +134,30 @@ export default function StreamControls({
 
   // Use Redux state as source of truth for stream status
   const isLiveViewActive = liveViewState.isStreamRunning;
+
+  // Record a fixed-length clip and download it in one click (the video
+  // counterpart of Snap & Download). The countdown doubles as the busy state.
+  const handleRecordAndDownload = useCallback(async () => {
+    if (clipRemaining > 0 || !onRecordAndDownload) return;
+    const seconds = Math.max(1, Number(clipSeconds) || 5);
+    setClipRemaining(seconds);
+    const ticker = setInterval(
+      () => setClipRemaining((s) => (s > 1 ? s - 1 : 0)),
+      1000,
+    );
+    try {
+      await onRecordAndDownload(snapFileName, recordFormat, seconds);
+    } finally {
+      clearInterval(ticker);
+      setClipRemaining(0);
+    }
+  }, [
+    clipRemaining,
+    clipSeconds,
+    onRecordAndDownload,
+    snapFileName,
+    recordFormat,
+  ]);
   // Ensure defaults are set on component mount
   useEffect(() => {
     if (!liveViewState.snapFormat) {
@@ -624,6 +653,70 @@ export default function StreamControls({
               </Button>
             </span>
           </Tooltip>
+        </Box>
+
+        {/* Timed acquire & download — the video counterpart of Snap & Download:
+            records a fixed-length clip, then downloads it without the manual
+            start/stop dance. */}
+        <Box
+          sx={{
+            gridColumn: "1 / -1",
+            display: "flex",
+            gap: 1,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <TextField
+            label="Clip length (s)"
+            type="number"
+            size="small"
+            value={clipSeconds}
+            onChange={(e) => setClipSeconds(e.target.value)}
+            inputProps={{ min: 1, max: 600, step: 1 }}
+            disabled={clipRemaining > 0 || isRecording}
+            sx={{ width: 130 }}
+          />
+          <Tooltip
+            title={
+              isRecording
+                ? "A recording is already running — use Stop & Download"
+                : `Record ${Math.max(1, Number(clipSeconds) || 5)} s and download the file`
+            }
+            arrow
+          >
+            <span>
+              <Button
+                variant="contained"
+                color="secondary"
+                size="small"
+                onClick={handleRecordAndDownload}
+                startIcon={
+                  clipRemaining > 0 ? (
+                    <CircularProgress size={16} color="inherit" />
+                  ) : (
+                    <GetApp />
+                  )
+                }
+                disabled={!isLiveViewActive || isRecording || clipRemaining > 0}
+                sx={{
+                  whiteSpace: "nowrap",
+                  height: 40,
+                  minHeight: 40,
+                  width: 200,
+                }}
+              >
+                {clipRemaining > 0
+                  ? `Recording… ${clipRemaining}s`
+                  : "Record & Download"}
+              </Button>
+            </span>
+          </Tooltip>
+          {clipRemaining > 0 && (
+            <Typography variant="caption" color="text.secondary">
+              The clip downloads automatically when the countdown finishes.
+            </Typography>
+          )}
         </Box>
       </Box>
 

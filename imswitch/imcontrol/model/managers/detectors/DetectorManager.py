@@ -46,6 +46,12 @@ class DetectorNumberParameter(DetectorParameter):
     valueUnits: str
     """ Parameter value units, e.g. "nm" or "fps". """
 
+    valueMin: Optional[float] = None
+    """ Lowest value accepted by the hardware, or None if unknown. """
+
+    valueMax: Optional[float] = None
+    """ Highest value accepted by the hardware, or None if unknown. """
+
 @dataclass
 class DetectorBooleanParameter(DetectorParameter):
     """ A detector parameter with a boolean value. """
@@ -150,12 +156,16 @@ class DetectorManager(SignalInterface):
         If the parameter doesn't exist, i.e. the parameters field doesn't
         contain a key with the specified parameter name, an AttributeError will
         be raised. """
-        if name == 'previewMinValue':
-            self.setMinValueFramePreview(value)
-            return
-        elif name == 'previewMaxValue':
-            self.setMaxValueFramePreview(value)
-            return
+        if name in ('previewMinValue', 'previewMaxValue'):
+            if name == 'previewMinValue':
+                self.setMinValueFramePreview(value)
+            else:
+                self.setMaxValueFramePreview(value)
+            # Mirror it in the parameter list too, so readers (and the camera
+            # settings UI) see the value that is actually in effect.
+            if name in self.__parameters:
+                self.__parameters[name].value = value
+            return self.parameters
         # Keep backward compatibility for legacy exposure naming, but do not
         # remap exposure_mode (auto/manual) into numeric exposure.
         if name.find("posure") > 0 and name != 'exposure_mode':
@@ -163,6 +173,17 @@ class DetectorManager(SignalInterface):
         if name not in self.__parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
         self.__parameters[name].value = value
+        return self.parameters
+
+    def refreshParameters(self) -> Dict[str, DetectorParameter]:
+        """ Re-read the parameters that the hardware can report back and update
+        the cached values, then return the parameter dict.
+
+        The base implementation only returns the cached values; managers whose
+        camera can be queried (e.g. for a live sensor temperature) should
+        override this. Callers must tolerate stale values, since not every
+        parameter is readable from every device.
+        """
         return self.parameters
 
     def sendSoftwareTrigger(self) -> None:
@@ -387,6 +408,8 @@ class DetectorManager(SignalInterface):
             if isinstance(param_obj, DetectorNumberParameter):
                 param_info['type'] = 'number'
                 param_info['units'] = param_obj.valueUnits
+                param_info['min'] = param_obj.valueMin
+                param_info['max'] = param_obj.valueMax
             elif isinstance(param_obj, DetectorListParameter):
                 param_info['type'] = 'list'
                 param_info['options'] = param_obj.options

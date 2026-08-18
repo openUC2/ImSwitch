@@ -574,6 +574,15 @@ class CameraToupcam:
             self.__logger.warning(
                 f"Binning {binning} not accepted hr=0x{ex.hr & 0xffffffff:x}"
             )
+            return
+        # Binning changes the delivered frame size. While streaming the next
+        # pull updates self.shape anyway, but callers that set the binning on an
+        # idle camera need the new size right away.
+        try:
+            width, height = self.hcam.get_Size()
+            self.shape = (height, width)
+        except toupcam.HRESULTException as ex:
+            self.__logger.debug(f"get_Size after binning failed hr=0x{ex.hr & 0xffffffff:x}")
 
     # ---------------------------------------------------------------------
     # Exposure / gain / blacklevel / frame rate / format
@@ -938,6 +947,10 @@ class CameraToupcam:
             return self.get_temperature()
         elif property_name == "binning":
             return self.binning
+        elif property_name == "pixel_format":
+            if self.isRGB:
+                return "rgb24"
+            return "mono16" if self._bits > 8 else "mono8"
         else:
             self.__logger.warning(f"Property {property_name} does not exist")
             return None

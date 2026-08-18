@@ -56,6 +56,8 @@ back to `musl` (Alpine) automatically.
        "managerProperties": {
          "cameraListIndex": 0,
          "isRGB": false,
+         "binning": 1,
+         "supportedBinnings": [1, 2, 3, 4],
          "toupcam": {
            "exposure": 100,
            "gain": 100,
@@ -73,7 +75,11 @@ back to `musl` (Alpine) automatically.
 - **Bit depth**: mono cameras run in RAW mode at the highest supported bit
   depth (16-bit container) by default; `pixel_format` = `mono8`/`mono16`
   switches it. RGB models (`isRGB: true`) deliver RGB24.
-- **Gain** is in Toupcam native percent: 100 = 1x, 200 = 2x, etc.
+- **Gain** is in Toupcam native percent: 100 = 1x, 200 = 2x, etc. The manager
+  reports the hardware min/max, which the UI uses to bound the input.
+- **Binning** is averaged digital binning (`supportedBinnings`, default
+  `[1, 2, 3, 4]`). It changes the delivered frame size; the manager reads the
+  new size back from the SDK and the viewers are told to re-fit.
 - **Trigger**: `Continous` (free run), `Internal trigger` (software trigger,
   used by `snapSync`/deterministic grabs), `External trigger` (hardware input).
 - **TEC models** additionally expose `temperature` (read-only),

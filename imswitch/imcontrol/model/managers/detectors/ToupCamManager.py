@@ -1,6 +1,15 @@
-
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter, DetectorListParameter, DetectorBooleanParameter
+
+# Parameters the camera can be asked about at any time. Everything else is
+# write-only or ImSwitch-side bookkeeping, and querying it would only produce
+# "property does not exist" warnings from the camera wrapper.
+_HARDWARE_READABLE_PARAMS = (
+    'exposure', 'gain', 'blacklevel', 'exposure_mode', 'frame_rate',
+    'frame_number', 'image_width', 'image_height', 'trigger_source',
+    'temperature', 'pixel_format',
+)
+
 
 class ToupCamManager(DetectorManager):
     """ DetectorManager that deals with ToupTek (Toupcam) cameras and the
@@ -12,6 +21,8 @@ class ToupCamManager(DetectorManager):
       (list indexing starts at 0); set this to an invalid value, e.g. the
       string "mock" to load a mocker
     - ``toupcam`` -- dictionary of Toupcam camera properties
+    - ``supportedBinnings`` -- list of selectable binning factors (default
+      ``[1, 2, 3, 4]``); Toupcam applies these as averaged digital binning
     """
 
     def __init__(self, detectorInfo, name, **_lowLevelManagers):
@@ -62,26 +73,32 @@ class ToupCamManager(DetectorManager):
         self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
 
         # Read actual values from camera hardware instead of using hardcoded defaults
+        exposure_min = exposure_max = None
         try:
             hw_exposure = self._camera.get_exposuretime()  # returns (current, min, max) in µs
             # SDK returns µs, UI expects ms → divide by 1000
             initial_exposure = hw_exposure[0] / 1000 if hw_exposure and hw_exposure[0] is not None else 100
+            if hw_exposure and hw_exposure[1] is not None:
+                exposure_min = hw_exposure[1] / 1000
+            if hw_exposure and hw_exposure[2] is not None:
+                exposure_max = hw_exposure[2] / 1000
         except Exception:
             initial_exposure = 100
+        gain_min = gain_max = None
         try:
-            # (current, min, max) on the UI's 0..23 scale; the driver maps that
-            # onto the camera's native analog-gain percent range.
-            hw_gain = self._camera.get_gain()
+            hw_gain = self._camera.get_gain()  # returns (current, min, max) in native percent
             initial_gain = hw_gain[0] if hw_gain and hw_gain[0] is not None else 0
+            gain_min, gain_max = hw_gain[1], hw_gain[2]
         except Exception:
             initial_gain = 0
 
         # Prepare parameters
         parameters = {
             'exposure': DetectorNumberParameter(group='Misc', value=initial_exposure, valueUnits='ms',
-                                                editable=True),
+                                                editable=True, valueMin=exposure_min,
+                                                valueMax=exposure_max),
             'gain': DetectorNumberParameter(group='Misc', value=initial_gain, valueUnits='arb.u.',
-                                            editable=True),
+                                            editable=True, valueMin=gain_min, valueMax=gain_max),
             'blacklevel': DetectorNumberParameter(group='Misc', value=0, valueUnits='arb.u.',
                                             editable=True),
             'image_width': DetectorNumberParameter(group='Misc', value=fullShape[0], valueUnits='arb.u.',
@@ -110,6 +127,14 @@ class ToupCamManager(DetectorManager):
                                                 valueUnits='µm', editable=True)
             }
 
+        # Mono cameras can switch the RAW container bit depth at runtime; in RGB
+        # mode the SDK always delivers RGB24, so the option is meaningless there.
+        if not isRGB:
+            parameters['pixel_format'] = DetectorListParameter(
+                group='Image format',
+                value='mono16' if getattr(self._camera, '_bits', 8) > 8 else 'mono8',
+                options=['mono8', 'mono16'], editable=True)
+
         # TEC-cooled models get temperature control parameters
         if getattr(self._camera, '_hasTEC', False):
             parameters['target_temperature'] = DetectorNumberParameter(
@@ -127,8 +152,26 @@ class ToupCamManager(DetectorManager):
                                               func=self._camera.openPropertiesGUI)
         }
 
-        super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
+        try:
+            supportedBinnings = [int(b) for b in
+                                 detectorInfo.managerProperties['supportedBinnings']]
+            if not supportedBinnings:
+                raise ValueError('empty supportedBinnings')
+        except Exception:
+            supportedBinnings = [1, 2, 3, 4]
+        # The configured startup binning has to be selectable, otherwise the
+        # base class rejects it when it applies supportedBinnings[0].
+        if binning not in supportedBinnings:
+            supportedBinnings.insert(0, binning)
+
+        super().__init__(detectorInfo, name, fullShape=fullShape,
+                         supportedBinnings=supportedBinnings,
                          model=model, parameters=parameters, actions=actions, croppable=True)
+
+        # DetectorManager.__init__ applies supportedBinnings[0]; make sure the
+        # camera ends up on the binning that was requested in the setup file.
+        if binning != self.binning:
+            self.setBinning(binning)
 
     def _getPreviewMaxValue(self):
         """Return max preview value based on the camera's active bit depth."""
@@ -204,11 +247,59 @@ class ToupCamManager(DetectorManager):
 
         super().setParameter(name, value)
 
+        # Preview min/max only scale the displayed image, there is no camera
+        # property behind them (the base class already stored them).
+        if name in ('previewMinValue', 'previewMaxValue'):
+            return value
+
         if name not in self._DetectorManager__parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
 
         value = self._camera.setPropertyValue(name, value)
+
+        # Switching the RAW container also changes the full-scale value, so the
+        # preview range has to follow it.
+        if name == 'pixel_format' and 'previewMaxValue' in self.parameters:
+            self.parameters['previewMaxValue'].value = self._getPreviewMaxValue()
+
         return value
+
+    def refreshParameters(self):
+        """Re-read the camera-backed parameters (temperature, exposure, ...).
+
+        Values the camera cannot report are left at their cached value; a
+        failing read must never take down the whole refresh.
+        """
+        for name in _HARDWARE_READABLE_PARAMS:
+            if name not in self.parameters:
+                continue
+            try:
+                value = self._camera.getPropertyValue(name)
+            except Exception:
+                continue
+            if value is not None:
+                self.parameters[name].value = value
+        return self.parameters
+
+    def setBinning(self, binning):
+        """Apply digital binning on the camera and follow the new frame size."""
+        super().setBinning(binning)
+
+        if not hasattr(self._camera, 'setBinning'):
+            return
+
+        def binningAction():
+            self._camera.setBinning(binning)
+            # The frame size shrinks with the binning factor; read it back so
+            # ROI handling and the shape reported to the UI stay consistent.
+            shape = getattr(self._camera, 'shape', None)
+            if shape is not None and len(shape) >= 2:
+                self._shape = (shape[1], shape[0])  # camera reports (h, w)
+
+        try:
+            self._performSafeCameraAction(binningAction)
+        except Exception as e:
+            self.__logger.error(f'Failed to set binning {binning}: {e}')
 
     def getParameter(self, name):
         """Gets a parameter value and returns the value.

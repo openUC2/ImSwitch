@@ -514,9 +514,11 @@ class RecordingController(ImConWidgetController):
     def _start_frame_recording(self, save_format: SaveFormat):
         """Start recording for a specific number of frames."""
         if save_format == SaveFormat.MP4:
+            # fps=None: the writer measures the real stream rate. A hard-coded
+            # 30 fps produced videos that played back at the wrong speed.
             self.recording_service.start_video_recording(
                 filepath=f"{self.savename}.mp4",
-                fps=30.0
+                fps=None
             )
         else:
             # Use streaming for TIFF/other formats
@@ -533,9 +535,10 @@ class RecordingController(ImConWidgetController):
     def _start_continuous_recording(self, save_format: SaveFormat):
         """Start continuous recording until stopped."""
         if save_format == SaveFormat.MP4:
+            # fps=None: measured from the live stream (see _start_frame_recording).
             self.recording_service.start_video_recording(
                 filepath=f"{self.savename}.mp4",
-                fps=30.0
+                fps=None
             )
         elif save_format == SaveFormat.TIFF:
             self.start_streaming_recording(

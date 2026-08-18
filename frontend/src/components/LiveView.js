@@ -626,6 +626,32 @@ export default function LiveView({ setFileManagerInitialPath }) {
     }
   };
 
+  // One-shot "acquire a clip and hand me the file", the video counterpart of
+  // Snap & Download: record for `durationSec`, then stop and download. Resolves
+  // only once the file has been fetched so the button can show progress.
+  const recordAndDownload = async (description, format, durationSec) => {
+    const seconds = Math.max(1, Number(durationSec) || 5);
+    try {
+      let url = `${hostIP}:${hostPort}/imswitch/api/RecordingController/startRecording?mSaveFormat=${format}`;
+      if (description && description.trim()) {
+        url += `&fileName=${encodeURIComponent(description)}`;
+      }
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Start recording failed: ${response.status}`);
+      }
+      setIsRecording(true);
+      showNotification(`Recording ${seconds}s…`, "info");
+    } catch (error) {
+      console.error("Timed recording failed to start:", error);
+      showNotification("Recording start failed", "error");
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+    await stopRecAndDownload();
+  };
+
   return (
     <Box
       sx={{
@@ -765,6 +791,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
             onStartRecord={startRec}
             onStopRecord={stopRec}
             onStopRecordAndDownload={stopRecAndDownload}
+            onRecordAndDownload={recordAndDownload}
             onGoToFolder={handleGoToFolder}
             lastCapturePath={lastCapturePath}
           />

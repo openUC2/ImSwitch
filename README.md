@@ -63,7 +63,7 @@ sudo chown  -R pi:pi /home/pi/ImSwitchConfig
 # fix opencv installations 
 uv pip uninstall opencv-python-headless opencv-contrib-python-headless opencv-contrib-python opencv-python
 sudo apt-get install -y libgl1 libglib2.0-0
-uv pip install opencv-python-headless>=4.13.0.92 opencv-contrib-python-headless>=4.13.0.92 opencv-contrib-python>=4.13.0.92 --force-reinstall
+uv pip install opencv-contrib-python-headless>=4.13.0.92 --force-reinstall
 # Then reboot your computer, or at least fully log out of your user account and then log back in
 ```
 

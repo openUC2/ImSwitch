@@ -233,27 +233,18 @@ class ToupCamManager(DetectorManager):
         return value
 
     def refreshParameters(self):
-        """Re-read the camera-backed parameters (temperature, exposure, ...).
-
-        Values the camera cannot report are left at their cached value; a
-        failing read must never take down the whole refresh.
-        """
-        for name in _HARDWARE_READABLE_PARAMS:
-            if name not in self.parameters:
-                continue
-            try:
-                value = self._camera.getPropertyValue(name)
-            except Exception:
-                continue
-            if value is not None:
-                self.parameters[name].value = value
-        return self.parameters
+        """Re-read the camera-backed parameters (temperature, exposure, ...)."""
+        return self._refreshParametersFromCamera(_HARDWARE_READABLE_PARAMS)
 
     def setBinning(self, binning):
         """Apply digital binning on the camera and follow the new frame size."""
         super().setBinning(binning)
 
         if not hasattr(self._camera, 'setBinning'):
+            return
+        if getattr(self._camera, 'binning', None) == binning:
+            # Already applied (e.g. by the camera constructor) – don't restart
+            # the stream for a no-op.
             return
 
         def binningAction():
@@ -262,7 +253,9 @@ class ToupCamManager(DetectorManager):
             # ROI handling and the shape reported to the UI stay consistent.
             shape = getattr(self._camera, 'shape', None)
             if shape is not None and len(shape) >= 2:
-                self._shape = (shape[1], shape[0])  # camera reports (h, w)
+                binnedShape = (shape[1], shape[0])  # camera reports (h, w)
+                self._shape = binnedShape
+                self._setFullShape(binnedShape)
 
         try:
             self._performSafeCameraAction(binningAction)

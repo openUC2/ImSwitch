@@ -3,6 +3,14 @@ import numpy as np
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter, DetectorListParameter
 
+# Parameters CameraOpenCV.getPropertyValue() can answer. Everything else is
+# write-only or ImSwitch-side bookkeeping, and querying it would only produce
+# "property does not exist" warnings from the camera wrapper.
+_HARDWARE_READABLE_PARAMS = (
+    'exposure', 'gain', 'blacklevel', 'image_width', 'image_height',
+    'pixel_format',
+)
+
 
 class OpenCVCamManager(DetectorManager):
     """ DetectorManager that deals with TheImagingSource cameras and the
@@ -14,6 +22,9 @@ class OpenCVCamManager(DetectorManager):
       indexing starts at 0); set this string to an invalid value, e.g. the
       string "mock" to load a mocker
     - ``av`` -- dictionary of Allied Vision camera properties
+
+    Note that the OpenCV/V4L backend has no binning control, so this manager
+    only ever reports a binning of 1.
     """
 
     def __init__(self, detectorInfo, name, **_lowLevelManagers):
@@ -113,11 +124,25 @@ class OpenCVCamManager(DetectorManager):
         contain a key with the specified parameter name, an error will be
         raised."""
 
-        if name not in self._parameters:
+        if name not in self.parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
 
         value = self._camera.getPropertyValue(name)
         return value
+
+    def refreshParameters(self):
+        """Re-read the camera-backed parameters (exposure, gain, ...)."""
+        return self._refreshParametersFromCamera(_HARDWARE_READABLE_PARAMS)
+
+    def getCameraStatus(self):
+        """ Returns comprehensive OpenCV camera status information. """
+        status = super().getCameraStatus()
+
+        status['cameraType'] = 'OpenCV'
+        status['isMock'] = self._camera.model == "mock"
+        status['isConnected'] = getattr(self._camera, 'camera', None) is not None
+        status['isAcquiring'] = self._running
+        return status
 
     def setFlipImage(self, flipY: bool, flipX: bool):
         """

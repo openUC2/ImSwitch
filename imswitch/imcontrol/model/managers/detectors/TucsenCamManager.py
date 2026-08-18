@@ -2,6 +2,15 @@
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter, DetectorListParameter, DetectorBooleanParameter
 
+# Parameters CameraTucsen.getPropertyValue() can answer. Everything else is
+# write-only or ImSwitch-side bookkeeping, and querying it would only produce
+# "unknown property" warnings from the camera wrapper.
+_HARDWARE_READABLE_PARAMS = (
+    'exposure', 'gain', 'blacklevel', 'frame_rate', 'trigger_source',
+    'image_width', 'image_height',
+)
+
+
 class TucsenCamManager(DetectorManager):
     """ DetectorManager that deals with Tucsen cameras and the
     parameters for frame extraction from them.
@@ -12,13 +21,20 @@ class TucsenCamManager(DetectorManager):
       indexing starts at 0); set this string to an invalid value, e.g. the
       string "mock" to load a mocker
     - ``tucsencam`` -- dictionary of Tucsen camera properties
+    - ``binning`` -- binning factor to start up with (default 1)
+    - ``supportedBinnings`` -- selectable binning factors (default ``[1, 2]``);
+      the camera switches between its RESOLUTION and SENSITIVE (2x2-combined)
+      readout modes, so anything above 2 is not meaningful
     """
 
     def __init__(self, detectorInfo, name, **_lowLevelManagers):
         self.__logger = initLogger(self, instanceName=name)
         self.detectorInfo = detectorInfo
 
-        binning = 1
+        try:
+            binning = int(detectorInfo.managerProperties['binning'])
+        except Exception:
+            binning = 1
         cameraId = detectorInfo.managerProperties['cameraListIndex']
         # Pixel size and flip are owned by PixelCalibrationController; the
         # values are injected via setPixelSizeUm() / setFlipImage() at startup
@@ -60,12 +76,29 @@ class TucsenCamManager(DetectorManager):
         # TODO: Not implemented yet
         self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
 
+        # Read actual values and limits from the camera where it can report them
+        exposure_min = exposure_max = None
+        try:
+            hw_exposure = self._camera.get_exposuretime()  # (current, min, max) in ms
+            initial_exposure = hw_exposure[0] if hw_exposure and hw_exposure[0] is not None else 100
+            exposure_min, exposure_max = hw_exposure[1], hw_exposure[2]
+        except Exception:
+            initial_exposure = 100
+        gain_min = gain_max = None
+        try:
+            hw_gain = self._camera.get_gain()  # (current, min, max)
+            initial_gain = hw_gain[0] if hw_gain and hw_gain[0] is not None else 1
+            gain_min, gain_max = hw_gain[1], hw_gain[2]
+        except Exception:
+            initial_gain = 1
+
         # Prepare parameters
         parameters = {
-            'exposure': DetectorNumberParameter(group='Misc', value=100, valueUnits='ms',
-                                                editable=True),
-            'gain': DetectorNumberParameter(group='Misc', value=1, valueUnits='arb.u.',
-                                            editable=True),
+            'exposure': DetectorNumberParameter(group='Misc', value=initial_exposure, valueUnits='ms',
+                                                editable=True, valueMin=exposure_min,
+                                                valueMax=exposure_max),
+            'gain': DetectorNumberParameter(group='Misc', value=initial_gain, valueUnits='arb.u.',
+                                            editable=True, valueMin=gain_min, valueMax=gain_max),
             'blacklevel': DetectorNumberParameter(group='Misc', value=100, valueUnits='arb.u.',
                                             editable=True),
             'image_width': DetectorNumberParameter(group='Misc', value=fullShape[0], valueUnits='arb.u.',
@@ -100,11 +133,28 @@ class TucsenCamManager(DetectorManager):
                                               func=self._camera.openPropertiesGUI)
         }
 
+        try:
+            supportedBinnings = [int(b) for b in
+                                 detectorInfo.managerProperties['supportedBinnings']]
+            if not supportedBinnings:
+                raise ValueError('empty supportedBinnings')
+        except Exception:
+            supportedBinnings = [1, 2]
+        # The configured startup binning has to be selectable, otherwise the
+        # base class rejects it when it applies supportedBinnings[0].
+        if binning not in supportedBinnings:
+            supportedBinnings.insert(0, binning)
+
         # Start the frame grabbing thread
         # self.startAcquisition()
-        super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
+        super().__init__(detectorInfo, name, fullShape=fullShape,
+                         supportedBinnings=supportedBinnings,
                          model=model, parameters=parameters, actions=actions, croppable=True)
 
+        # DetectorManager.__init__ applies supportedBinnings[0]; make sure the
+        # camera ends up on the binning that was requested in the setup file.
+        if binning != self.binning:
+            self.setBinning(binning)
 
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         return self._camera.getLast(returnFrameNumber=returnFrameNumber)
@@ -116,6 +166,11 @@ class TucsenCamManager(DetectorManager):
         raised."""
 
         super().setParameter(name, value)
+
+        # Preview min/max only scale the displayed image, there is no camera
+        # property behind them (the base class already stored them).
+        if name in ('previewMinValue', 'previewMaxValue'):
+            return value
 
         if name not in self._DetectorManager__parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
@@ -129,11 +184,44 @@ class TucsenCamManager(DetectorManager):
         contain a key with the specified parameter name, an error will be
         raised."""
 
-        if name not in self._parameters:
+        if name not in self.parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
 
         value = self._camera.getPropertyValue(name)
         return value
+
+    def refreshParameters(self):
+        """Re-read the camera-backed parameters (exposure, gain, ...)."""
+        return self._refreshParametersFromCamera(_HARDWARE_READABLE_PARAMS)
+
+    def setBinning(self, binning):
+        """Switch the readout mode and follow the resulting frame size.
+
+        Tucsen exposes binning as RESOLUTION (1x) vs SENSITIVE (2x2 combined),
+        so the camera re-reports its sensor size after the change.
+        """
+        super().setBinning(binning)
+
+        if not hasattr(self._camera, 'setBinning'):
+            return
+        if getattr(self._camera, 'binning', None) == binning:
+            # Already applied (e.g. by the camera constructor) – don't restart
+            # the stream for a no-op.
+            return
+
+        def binningAction():
+            self._camera.setBinning(binning)
+            width = getattr(self._camera, 'SensorWidth', None)
+            height = getattr(self._camera, 'SensorHeight', None)
+            if width and height:
+                self._shape = (width, height)
+                self._frameStart = (0, 0)
+                self._setFullShape((width, height))
+
+        try:
+            self._performSafeCameraAction(binningAction)
+        except Exception as e:
+            self.__logger.error(f'Failed to set binning {binning}: {e}')
 
     def setTriggerSource(self, source):
         # update camera safely and mirror value in GUI parameter list
@@ -243,6 +331,31 @@ class TucsenCamManager(DetectorManager):
 
     def closeEvent(self):
         self._camera.close()
+
+    def getCameraStatus(self):
+        """ Returns comprehensive Tucsen camera status information. """
+        status = super().getCameraStatus()
+
+        status['cameraType'] = 'Tucsen'
+        status['isMock'] = self._camera.model == "mock"
+        status['isConnected'] = getattr(self._camera, 'is_connected', not status['isMock'])
+        status['isAcquiring'] = self._running
+        status['isAdjustingParameters'] = self._adjustingParameters
+
+        try:
+            camera_params = self._camera.get_camera_parameters()
+            if camera_params:
+                status['hardwareParameters'] = camera_params
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve hardware parameters: {e}")
+
+        try:
+            status['currentTriggerSource'] = self._camera.getTriggerSource()
+            status['availableTriggerTypes'] = self._camera.getTriggerTypes()
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve trigger information: {e}")
+
+        return status
 
 
 # Copyright (C) ImSwitch developers 2021

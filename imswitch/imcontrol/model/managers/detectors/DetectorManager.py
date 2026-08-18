@@ -186,6 +186,42 @@ class DetectorManager(SignalInterface):
         """
         return self.parameters
 
+    def _refreshParametersFromCamera(
+        self, parameterNames: Tuple[str, ...]
+    ) -> Dict[str, DetectorParameter]:
+        """ Shared ``refreshParameters()`` body for managers whose camera object
+        implements ``getPropertyValue()``.
+
+        Only the named parameters are queried: asking a camera wrapper for a
+        property it does not know just produces log noise. A parameter is left
+        at its cached value when the read raises, returns ``None``, or returns
+        the ``False`` that several wrappers use to signal "unknown property" —
+        so this must not be used for boolean parameters.
+        """
+        camera = getattr(self, '_camera', None)
+        if camera is None or not hasattr(camera, 'getPropertyValue'):
+            return self.parameters
+
+        for name in parameterNames:
+            if name not in self.__parameters:
+                continue
+            try:
+                value = camera.getPropertyValue(name)
+            except Exception:
+                continue
+            if value is None or value is False:
+                continue
+            self.__parameters[name].value = value
+        return self.parameters
+
+    def _setFullShape(self, fullShape: Tuple[int, int]) -> None:
+        """ Update the reported full-chip size.
+
+        Needed after a binning change, which shrinks the largest frame the
+        detector can deliver.
+        """
+        self.__fullShape = tuple(fullShape)
+
     def sendSoftwareTrigger(self) -> None:
         """Trigger a software trigger on the detector, if supported.
         This is a no-op for detectors that do not support software triggering.

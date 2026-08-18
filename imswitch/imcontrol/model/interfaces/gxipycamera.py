@@ -211,6 +211,33 @@ class CameraGXIPY:
         except Exception as e:
             self.__logger.error(f"Failed to set exposure time: {e}")
 
+    def get_exposuretime(self):
+        """Return (current, min, max) exposure in ms, mirroring CameraHIK."""
+        try:
+            current = self.camera.ExposureTime.get() / 1000.0
+        except Exception as e:
+            self.__logger.error(f"Get exposure time failed: {e}")
+            return (None, None, None)
+        try:
+            limits = self.camera.ExposureTime.get_range()
+            return (current, limits["min"] / 1000.0, limits["max"] / 1000.0)
+        except Exception:
+            # Not every model advertises a range – the value alone is enough.
+            return (current, None, None)
+
+    def get_gain(self):
+        """Return (current, min, max) gain, mirroring CameraHIK."""
+        try:
+            current = self.camera.Gain.get()
+        except Exception as e:
+            self.__logger.error(f"Get gain failed: {e}")
+            return (None, None, None)
+        try:
+            limits = self.camera.Gain.get_range()
+            return (current, limits["min"], limits["max"])
+        except Exception:
+            return (current, None, None)
+
     def set_exposure_mode(self, exposure_mode="manual"):
         """Set exposure mode to match HIK camera interface."""
         try:
@@ -303,10 +330,26 @@ class CameraGXIPY:
             return -1
 
     def setBinning(self, binning=1):
-        # Unfortunately this does not work
-        self.camera.BinningHorizontal.set(binning)
-        self.camera.BinningVertical.set(binning)
-        self.binning = binning
+        """Set hardware binning.
+
+        NOTE: the BinningHorizontal/BinningVertical nodes are not honoured by
+        every Daheng model — on some the call succeeds but the delivered frame
+        size does not change. GXPIPYManager therefore only offers binning
+        factors the setup explicitly opts into.
+        """
+        try:
+            self.camera.BinningHorizontal.set(binning)
+            self.camera.BinningVertical.set(binning)
+            self.binning = binning
+        except Exception as e:
+            self.__logger.error(f"Failed to set binning {binning}: {e}")
+            return
+        # Keep the reported sensor size in sync (same formula as _init_cam).
+        try:
+            self.SensorHeight = self.camera.HeightMax.get() // self.binning
+            self.SensorWidth = self.camera.WidthMax.get() // self.binning
+        except Exception as e:
+            self.__logger.debug(f"Could not refresh sensor size after binning: {e}")
 
     def getLast(self, is_resize=True, returnFrameNumber=False, timeout=1.0, auto_trigger=False):
         """
@@ -470,7 +513,9 @@ class CameraGXIPY:
             if property_name == "gain":
                 property_value = self.camera.Gain.get()
             elif property_name == "exposure":
-                property_value = self.camera.ExposureTime.get()
+                # The SDK reports µs; set_exposure_time() takes ms, so report ms
+                # here too (same convention as the HIK/Toupcam wrappers).
+                property_value = self.camera.ExposureTime.get() / 1000.0
             elif property_name == "exposure_mode":
                 # Get current exposure auto mode and convert to string
                 exposure_auto_value = self.camera.ExposureAuto.get()

@@ -144,35 +144,55 @@ class MockCameraTucsen:
         return frames, ids
 
     def setPropertyValue(self, property_name, property_value):
-        """Set a camera property value."""
-        if property_name == "exposure_time":
+        """Set a camera property value.
+
+        Key handling mirrors CameraTucsen.setPropertyValue, so the mock reacts
+        to the same names the manager uses (notably "exposure", not only
+        "exposure_time").
+        """
+        key = str(property_name).strip().lower().replace(" ", "_")
+        if key in ("exposure", "exposure_time"):
             self.exposure_time = property_value
-        elif property_name == "gain":
+        elif key == "gain":
             self.gain = property_value
-        elif property_name == "blacklevel":
+        elif key == "blacklevel":
             self.blacklevel = property_value
-        elif property_name == "binning":
+        elif key == "binning":
             self.binning = property_value
+        elif key == "frame_rate":
+            self.frame_rate = property_value
+        elif key in ("trigger_source", "trigger"):
+            self.trigger_source = property_value
         else:
             self.__logger.debug(f"Mock camera: set {property_name} = {property_value}")
+        return property_value
 
     def getPropertyValue(self, property_name):
-        """Get a camera property value."""
-        if property_name == "exposure_time":
+        """Get a camera property value.
+
+        Returns None for properties the mock does not model, matching the real
+        wrapper — callers use that to tell "unknown" from a real value.
+        """
+        key = str(property_name).strip().lower().replace(" ", "_")
+        if key in ("exposure", "exposure_time"):
             return self.exposure_time
-        elif property_name == "gain":
+        elif key == "gain":
             return self.gain
-        elif property_name == "blacklevel":
+        elif key == "blacklevel":
             return self.blacklevel
-        elif property_name == "binning":
+        elif key == "binning":
             return self.binning
-        elif property_name == "image_width":
+        elif key == "frame_rate":
+            return self.frame_rate
+        elif key in ("trigger_source", "trigger"):
+            return self.trigger_source
+        elif key in ("image_width", "width"):
             return self.SensorWidth
-        elif property_name == "image_height":
+        elif key in ("image_height", "height"):
             return self.SensorHeight
         else:
             self.__logger.debug(f"Mock camera: get {property_name}")
-            return 0
+            return None
 
     def getTriggerTypes(self):
         """Return available trigger types."""
@@ -244,7 +264,11 @@ class MockCameraTucsen:
         self.blacklevel = blacklevel
 
     def setBinning(self, binning=1):
-        """Set camera binning."""
+        """Set camera binning and shrink the reported sensor size accordingly,
+        the way the real camera switches to its combined-pixel readout."""
+        binning = max(1, int(binning))
+        self.SensorWidth = (self.SensorWidth * self.binning) // binning
+        self.SensorHeight = (self.SensorHeight * self.binning) // binning
         self.binning = binning
 
     # Context manager support

@@ -9,6 +9,10 @@ import createAxiosInstance from "./createAxiosInstance";
  * @param {string|null} detectorName - Name of detector to stream from (null = first available)
  * @param {string} protocol - Streaming protocol ('binary', 'jpeg', 'mjpeg', 'webrtc')
  * @param {object|null} params - Optional parameters to override defaults
+ * @param {boolean} force - Start even when the exposure exceeds the backend's
+ *   long-exposure threshold. Without it such a request returns
+ *   `{status: 'long_exposure', message}` instead of starting a stream that
+ *   would only deliver stale frames.
  * 
  * Example params:
  * For binary:
@@ -40,11 +44,11 @@ import createAxiosInstance from "./createAxiosInstance";
  * 
  * Returns: Dictionary with status and stream info
  */
-const apiLiveViewControllerStartLiveView = async (detectorName = null, protocol = 'binary', params = null) => {
+const apiLiveViewControllerStartLiveView = async (detectorName = null, protocol = 'binary', params = null, force = false) => {
   try {
     const axiosInstance = createAxiosInstance();
     const url = `/LiveViewController/startLiveView`;
-    
+
     const queryParams = {};
     if (detectorName !== null && detectorName !== undefined) {
       queryParams.detectorName = detectorName;
@@ -52,7 +56,10 @@ const apiLiveViewControllerStartLiveView = async (detectorName = null, protocol 
     if (protocol !== null && protocol !== undefined) {
       queryParams.protocol = protocol;
     }
-    
+    if (force) {
+      queryParams.force = true;
+    }
+
     const response = await axiosInstance.post(url, params, {
       params: queryParams,
       headers: {

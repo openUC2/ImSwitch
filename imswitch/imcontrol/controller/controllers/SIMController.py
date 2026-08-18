@@ -431,7 +431,7 @@ class SIMController(ImConWidgetController):
                         # we need to capture images and display patterns one-by-one
                         self.SIMStack = []
                         try:
-                            mExposureTime = self.detector.getParameter("exposure")/1e6 # s^-1
+                            mExposureTime = self.detector.getParameter("exposure")/1e3 # ms -> s
                         except:
                             mExposureTime = 0.1
                         for iPattern in range(9):
@@ -555,7 +555,7 @@ class SIMController(ImConWidgetController):
                 # we need to capture images and display patterns one-by-one
                 self.SIMStack = []
                 try:
-                    mExposureTime = self.detector.getParameter("exposure")/1e6 # s^-1
+                    mExposureTime = self.detector.getParameter("exposure")/1e3 # ms -> s
                 except:
                     mExposureTime = 0.1
                 for iPattern in range(9):

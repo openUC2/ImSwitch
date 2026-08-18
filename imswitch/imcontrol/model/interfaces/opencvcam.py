@@ -104,18 +104,18 @@ class CameraOpenCV:
             return
         self.analog_gain = analog_gain
         try:
-            self.camera.set(cv2.CAP_PROP_EXPOSURE, self.analog_gain)
+            self.camera.set(cv2.CAP_PROP_GAIN, self.analog_gain)
         except Exception as e:
             self.__logger.error(e)
-            self.__logger.debug("Error setting Exposure time in opencv camera")
+            self.__logger.debug("Error setting gain in opencv camera")
 
     def set_blacklevel(self,blacklevel):
         self.blacklevel = blacklevel
-        self.__logger.debug("Error setting blacklevel time in opencv camera")
+        self.__logger.debug("Black level is not supported by the opencv backend")
 
     def set_pixel_format(self,format):
-        self.pixelformat = format
-        self.__logger.debug("Error setting pixelformat time in opencv camera")
+        self.pixel_format = format
+        self.__logger.debug("Pixel format is not supported by the opencv backend")
 
     def setFlipImage(self, flipY: bool, flipX: bool):
         """Set flip settings applied to every captured frame."""
@@ -156,11 +156,12 @@ class CameraOpenCV:
         return property_value
 
     def getPropertyValue(self, property_name):
-        # Check if the property exists.
+        # Check if the property exists. The attribute names have to match the
+        # ones set in __init__/the setters, otherwise every read raises.
         if property_name == "gain":
-            property_value = self.gain
+            property_value = self.analog_gain
         elif property_name == "exposure":
-            property_value = self.exposure
+            property_value = self.exposure_time
         elif property_name == "blacklevel":
             property_value = self.blacklevel
         elif property_name == "image_width":
@@ -168,7 +169,7 @@ class CameraOpenCV:
         elif property_name == "image_height":
             property_value = self.SensorHeight
         elif property_name == "pixel_format":
-            property_value = self.PixelFormat
+            property_value = self.pixel_format
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
             return False

@@ -1,28 +1,28 @@
-
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter, DetectorListParameter, DetectorBooleanParameter
 
-# Parameters CameraHIK.getPropertyValue() can answer. Everything else is
+# Parameters the camera can be asked about at any time. Everything else is
 # write-only or ImSwitch-side bookkeeping, and querying it would only produce
 # "property does not exist" warnings from the camera wrapper.
 _HARDWARE_READABLE_PARAMS = (
     'exposure', 'gain', 'blacklevel', 'exposure_mode', 'frame_rate',
     'frame_number', 'image_width', 'image_height', 'trigger_source',
+    'temperature', 'pixel_format',
 )
 
 
-class HikCamManager(DetectorManager):
-    """ DetectorManager that deals with TheImagingSource cameras and the
+class ToupCamManager(DetectorManager):
+    """ DetectorManager that deals with ToupTek (Toupcam) cameras and the
     parameters for frame extraction from them.
 
     Manager properties:
 
-    - ``cameraListIndex`` -- the camera's index in the Hik Vision camera list (list
-      indexing starts at 0); set this string to an invalid value, e.g. the
+    - ``cameraListIndex`` -- the camera's index in the Toupcam device list
+      (list indexing starts at 0); set this to an invalid value, e.g. the
       string "mock" to load a mocker
-    - ``hik`` -- dictionary of Hik Vision camera properties
+    - ``toupcam`` -- dictionary of Toupcam camera properties
     - ``supportedBinnings`` -- list of selectable binning factors (default
-      ``[1, 2, 4]``, applied through the BinningX/BinningY nodes)
+      ``[1, 2, 3, 4]``); Toupcam applies these as averaged digital binning
     """
 
     def __init__(self, detectorInfo, name, **_lowLevelManagers):
@@ -40,7 +40,7 @@ class HikCamManager(DetectorManager):
         except:
             self._mockstackpath = None
 
-        try: # FIXME: get that form the real camera
+        try:
             isRGB = detectorInfo.managerProperties['isRGB']
         except:
             isRGB = False
@@ -54,24 +54,22 @@ class HikCamManager(DetectorManager):
         # per-detector affine calibration has been loaded from the setup config.
         flipImage = (False, False)
 
-        # load binning from config
         try:
             binning = detectorInfo.managerProperties['binning']
         except:
             binning = 1
-        self._camera = self._getHikObj(cameraId, isRGB, binning, flipImage)
+        self._camera = self._getToupcamObj(cameraId, isRGB, binning, flipImage)
 
-        for propertyName, propertyValue in detectorInfo.managerProperties['hikcam'].items():
+        for propertyName, propertyValue in detectorInfo.managerProperties['toupcam'].items():
             self._camera.setPropertyValue(propertyName, propertyValue)
 
-        fullShape = (self._camera.SensorWidth, #TODO: This can be zero if loaded from Windows, why?
+        fullShape = (self._camera.SensorWidth,
                      self._camera.SensorHeight)
 
         model = self._camera.model
         self._running = False
         self._adjustingParameters = False
 
-        # TODO: Not implemented yet
         self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
 
         # Read actual values from camera hardware instead of using hardcoded defaults
@@ -88,11 +86,11 @@ class HikCamManager(DetectorManager):
             initial_exposure = 100
         gain_min = gain_max = None
         try:
-            hw_gain = self._camera.get_gain()  # returns (current, min, max)
-            initial_gain = hw_gain[0] if hw_gain and hw_gain[0] is not None else 1
+            hw_gain = self._camera.get_gain()  # returns (current, min, max) in native percent
+            initial_gain = hw_gain[0] if hw_gain and hw_gain[0] is not None else 0
             gain_min, gain_max = hw_gain[1], hw_gain[2]
         except Exception:
-            initial_gain = 1
+            initial_gain = 0
 
         # Prepare parameters
         parameters = {
@@ -101,7 +99,7 @@ class HikCamManager(DetectorManager):
                                                 valueMax=exposure_max),
             'gain': DetectorNumberParameter(group='Misc', value=initial_gain, valueUnits='arb.u.',
                                             editable=True, valueMin=gain_min, valueMax=gain_max),
-            'blacklevel': DetectorNumberParameter(group='Misc', value=100, valueUnits='arb.u.',
+            'blacklevel': DetectorNumberParameter(group='Misc', value=0, valueUnits='arb.u.',
                                             editable=True),
             'image_width': DetectorNumberParameter(group='Misc', value=fullShape[0], valueUnits='arb.u.',
                         editable=False),
@@ -112,9 +110,9 @@ class HikCamManager(DetectorManager):
             'frame_number': DetectorNumberParameter(group='Misc', value=1, valueUnits='frames',
                                     editable=False),
             'exposure_mode': DetectorListParameter(group='Misc', value='manual',
-                            options=['manual', 'auto', 'single'], editable=True),
+                            options=['manual', 'auto'], editable=True),
             'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),
-            'mode': DetectorBooleanParameter(group='Misc', value=name, editable=False), # auto or manual exposure settings
+            'mode': DetectorBooleanParameter(group='Misc', value=name, editable=False),
             'previewMinValue': DetectorNumberParameter(group='Misc', value=0, valueUnits='arb.u.',
                                     editable=True),
             'previewMaxValue': DetectorNumberParameter(group='Misc', value=self._getPreviewMaxValue(), valueUnits='arb.u.',
@@ -129,6 +127,25 @@ class HikCamManager(DetectorManager):
                                                 valueUnits='µm', editable=True)
             }
 
+        # Mono cameras can switch the RAW container bit depth at runtime; in RGB
+        # mode the SDK always delivers RGB24, so the option is meaningless there.
+        if not isRGB:
+            parameters['pixel_format'] = DetectorListParameter(
+                group='Image format',
+                value='mono16' if getattr(self._camera, '_bits', 8) > 8 else 'mono8',
+                options=['mono8', 'mono16'], editable=True)
+
+        # TEC-cooled models get temperature control parameters
+        if getattr(self._camera, '_hasTEC', False):
+            parameters['target_temperature'] = DetectorNumberParameter(
+                group='Cooling', value=0, valueUnits='°C', editable=True)
+        if getattr(self._camera, '_hasGetTemperature', False):
+            parameters['temperature'] = DetectorNumberParameter(
+                group='Cooling', value=0, valueUnits='°C', editable=False)
+        if getattr(self._camera, '_hasFan', False):
+            parameters['fan_speed'] = DetectorNumberParameter(
+                group='Cooling', value=-1, valueUnits='arb.u.', editable=True)
+
         # Prepare actions
         actions = {
             'More properties': DetectorAction(group='Misc',
@@ -141,7 +158,7 @@ class HikCamManager(DetectorManager):
             if not supportedBinnings:
                 raise ValueError('empty supportedBinnings')
         except Exception:
-            supportedBinnings = [1, 2, 4]
+            supportedBinnings = [1, 2, 3, 4]
         # The configured startup binning has to be selectable, otherwise the
         # base class rejects it when it applies supportedBinnings[0].
         if binning not in supportedBinnings:
@@ -157,17 +174,8 @@ class HikCamManager(DetectorManager):
             self.setBinning(binning)
 
     def _getPreviewMaxValue(self):
-        """Return max preview value based on the camera's active pixel format bit depth."""
-        try:
-            fmt = getattr(self._camera, '_activePixelFormat', None)
-            if fmt is not None:
-                # Check against high-bit mono format set from hikcamera module
-                from imswitch.imcontrol.model.interfaces.hikcamera import _MONO_HIGHBIT_FORMATS
-                if fmt in _MONO_HIGHBIT_FORMATS:
-                    return 4095  # 12-bit
-        except Exception:
-            pass
-        return 255  # 8-bit default
+        """Return max preview value based on the camera's active bit depth."""
+        return getattr(self._camera, 'max_adu', 255)
 
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         return self._camera.getLast(returnFrameNumber=returnFrameNumber)
@@ -176,7 +184,6 @@ class HikCamManager(DetectorManager):
         """Drop buffered frames so the next grab is guaranteed post-move/-settle."""
         if hasattr(self._camera, "flushBuffer"):
             self._camera.flushBuffer()
-
 
     def snapSync(self, timeout: float = 2.0):
         """Fire a software trigger and return the resulting (post-move) frame.
@@ -194,10 +201,43 @@ class HikCamManager(DetectorManager):
         return -1
 
     def getStreamDiagnostics(self):
-        """Camera-side streaming latency metrics (see hikcamera.getStreamDiagnostics)."""
+        """Camera-side streaming metrics (see toupcamcamera.getStreamDiagnostics)."""
         if hasattr(self._camera, "getStreamDiagnostics"):
             return self._camera.getStreamDiagnostics()
         return {}
+
+    def getParameterRanges(self) -> dict:
+        """Hardware limits for the editable parameters, in UI units.
+
+        Exposure is reported in ms and gain on the UI's 0..23 scale (the driver
+        maps that onto the camera's native analog-gain percent range), so the
+        values can be used directly to clamp the frontend's inputs.
+        """
+        ranges = {}
+        try:
+            _, expMinUs, expMaxUs = self._camera.get_exposuretime()
+            if expMinUs is not None and expMaxUs is not None:
+                ranges['exposure'] = {'min': expMinUs / 1000.0,
+                                      'max': expMaxUs / 1000.0,
+                                      'units': 'ms'}
+        except Exception as e:
+            self.__logger.debug(f"Could not read exposure range: {e}")
+        try:
+            _, gainMin, gainMax = self._camera.get_gain()
+            if gainMin is not None and gainMax is not None:
+                ranges['gain'] = {'min': gainMin, 'max': gainMax, 'units': 'arb.u.'}
+        except Exception as e:
+            self.__logger.debug(f"Could not read gain range: {e}")
+        return ranges
+
+    def isLongExposure(self) -> bool:
+        """True when the exposure is too long for a useful live stream."""
+        if hasattr(self._camera, "isLongExposure"):
+            try:
+                return bool(self._camera.isLongExposure())
+            except Exception:
+                return False
+        return False
 
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
@@ -216,7 +256,43 @@ class HikCamManager(DetectorManager):
             raise AttributeError(f'Non-existent parameter "{name}" specified')
 
         value = self._camera.setPropertyValue(name, value)
+
+        # Switching the RAW container also changes the full-scale value, so the
+        # preview range has to follow it.
+        if name == 'pixel_format' and 'previewMaxValue' in self.parameters:
+            self.parameters['previewMaxValue'].value = self._getPreviewMaxValue()
+
         return value
+
+    def refreshParameters(self):
+        """Re-read the camera-backed parameters (temperature, exposure, ...)."""
+        return self._refreshParametersFromCamera(_HARDWARE_READABLE_PARAMS)
+
+    def setBinning(self, binning):
+        """Apply digital binning on the camera and follow the new frame size."""
+        super().setBinning(binning)
+
+        if not hasattr(self._camera, 'setBinning'):
+            return
+        if getattr(self._camera, 'binning', None) == binning:
+            # Already applied (e.g. by the camera constructor) – don't restart
+            # the stream for a no-op.
+            return
+
+        def binningAction():
+            self._camera.setBinning(binning)
+            # The frame size shrinks with the binning factor; read it back so
+            # ROI handling and the shape reported to the UI stay consistent.
+            shape = getattr(self._camera, 'shape', None)
+            if shape is not None and len(shape) >= 2:
+                binnedShape = (shape[1], shape[0])  # camera reports (h, w)
+                self._shape = binnedShape
+                self._setFullShape(binnedShape)
+
+        try:
+            self._performSafeCameraAction(binningAction)
+        except Exception as e:
+            self.__logger.error(f'Failed to set binning {binning}: {e}')
 
     def getParameter(self, name):
         """Gets a parameter value and returns the value.
@@ -229,37 +305,6 @@ class HikCamManager(DetectorManager):
 
         value = self._camera.getPropertyValue(name)
         return value
-
-    def refreshParameters(self):
-        """Re-read the camera-backed parameters (exposure, gain, ...)."""
-        return self._refreshParametersFromCamera(_HARDWARE_READABLE_PARAMS)
-
-    def setBinning(self, binning):
-        """Apply BinningX/BinningY on the camera and follow the new frame size."""
-        super().setBinning(binning)
-
-        if not hasattr(self._camera, 'setBinning'):
-            return
-        if getattr(self._camera, 'binning', None) == binning:
-            # Already applied (e.g. by the camera constructor) – don't restart
-            # the stream for a no-op.
-            return
-
-        def binningAction():
-            self._camera.setBinning(binning)
-            # CameraHIK.setBinning re-reads WidthMax/HeightMax, which shrink with
-            # the binning factor, so the new full frame size is authoritative.
-            width = getattr(self._camera, 'SensorWidth', None)
-            height = getattr(self._camera, 'SensorHeight', None)
-            if width and height:
-                self._shape = (width, height)
-                self._frameStart = (0, 0)
-                self._setFullShape((width, height))
-
-        try:
-            self._performSafeCameraAction(binningAction)
-        except Exception as e:
-            self.__logger.error(f'Failed to set binning {binning}: {e}')
 
     def setTriggerSource(self, source):
         # update camera safely and mirror value in GUI parameter list
@@ -339,19 +384,12 @@ class HikCamManager(DetectorManager):
                 f'{self._camera.model}: crop frame to {hsize}x{vsize} at {hpos},{vpos}.'
             )
             self._camera.setROI(hpos, vpos, hsize, vsize)
-            # TODO: THis has to be reviewed as it seems to not be correct !
             self._shape = (hsize, vsize)
             self._frameStart = (hpos, vpos)
-            pass
         try:
             self._performSafeCameraAction(cropAction)
         except Exception as e:
             self.__logger.error(e)
-            # TODO: unsure if frameStart is needed? Try without.
-            # This should be the only place where self.frameStart is changed
-            # Only place self.shapes is changed
-
-        pass
 
     def _performSafeCameraAction(self, function):
         """ This method is used to change those camera properties that need
@@ -383,17 +421,16 @@ class HikCamManager(DetectorManager):
         """Get the available trigger types for the camera."""
         return self._camera.getTriggerTypes()
 
-    def _getHikObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False)):
+    def _getToupcamObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False)):
         try:
-            from imswitch.imcontrol.model.interfaces.hikcamera import CameraHIK
-            self.__logger.debug(f'Trying to initialize Hik camera {cameraId}')
-            camera = CameraHIK(cameraNo=cameraId, isRGB=isRGB, binning=binning, flipImage=flipImage)
+            from imswitch.imcontrol.model.interfaces.toupcamcamera import CameraToupcam
+            self.__logger.debug(f'Trying to initialize Toupcam camera {cameraId}')
+            camera = CameraToupcam(cameraNo=cameraId, isRGB=isRGB, binning=binning, flipImage=flipImage)
         except Exception as e:
             self.__logger.error(e)
-            self.__logger.warning(f'Failed to initialize CameraHik {cameraId}, loading TIS mocker')
+            self.__logger.warning(f'Failed to initialize CameraToupcam {cameraId}, loading TIS mocker')
             from imswitch.imcontrol.model.interfaces.tiscamera_mock import MockCameraTIS
-            camera = MockCameraTIS(mocktype=self._mocktype, mockstackpath=self._mockstackpath,  isRGB=isRGB)
-
+            camera = MockCameraTIS(mocktype=self._mocktype, mockstackpath=self._mockstackpath, isRGB=isRGB)
 
         self.__logger.info(f'Initialized camera, model: {camera.model}')
         return camera
@@ -402,14 +439,16 @@ class HikCamManager(DetectorManager):
         self._camera.close()
 
     def getCameraStatus(self):
-        """ Returns comprehensive HIK camera status information. """
+        """ Returns comprehensive Toupcam camera status information. """
         # Get base status from parent class
         status = super().getCameraStatus()
 
-        # Add HIK-specific information
-        status['cameraType'] = 'HIK'
-        status['isMock'] = self._mocktype != "normal" if hasattr(self, '_mocktype') else False
-        status['isConnected'] = self._camera is not None and hasattr(self._camera, 'cam')
+        # Add Toupcam-specific information
+        status['cameraType'] = 'Toupcam'
+        status['isMock'] = self._camera.model == "mock"
+        status['isConnected'] = getattr(self._camera, 'is_connected', False)
+        status['parameterRanges'] = self.getParameterRanges()
+        status['isLongExposure'] = self.isLongExposure()
 
         # Add acquisition status
         status['isAcquiring'] = self._running

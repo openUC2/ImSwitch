@@ -7,3 +7,4 @@ global-exclude __pycache__
 global-exclude *.py[co]
 recursive-include imswitch/imcontrol/model/interfaces/hikrobotWin/dll *.dll
 recursive-include imswitch/imcontrol/model/interfaces/
+recursive-include imswitch/imcontrol/model/interfaces/toupcamsdk *.py *.rules *.so *.dylib *.dll

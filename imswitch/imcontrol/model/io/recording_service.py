@@ -356,108 +356,277 @@ class BackgroundStorageWorker:
 class MP4Writer:
     """
     MP4 video writer with start/stop recording.
-    
+
     Uses OpenCV VideoWriter for MP4 encoding.
+
+    Scientific detectors hand us 12/16-bit single-channel frames, which a
+    consumer video codec cannot represent, so every frame is windowed down to
+    8-bit here (see ``normalization``). The intensity window is computed once
+    from the first frame and then held for the whole recording — a per-frame
+    autoscale would make the video flicker as the sample brightness changes.
     """
-    
-    def __init__(self, filepath: str, fps: float = 30.0, 
+
+    # Frames buffered while measuring the true frame rate (see ``fps=None``).
+    # Bounded by a byte budget as well so a large sensor cannot blow up RAM.
+    _WARMUP_FRAMES = 10
+    _WARMUP_MAX_BYTES = 64 * 1024 * 1024
+
+    def __init__(self, filepath: str, fps: Optional[float] = None,
                  frame_size: Optional[Tuple[int, int]] = None,
-                 codec: str = 'mp4v'):
+                 codec: Optional[str] = None,
+                 quality: int = 95,
+                 normalization: str = 'auto',
+                 vmin: Optional[float] = None,
+                 vmax: Optional[float] = None):
         """
         Initialize MP4 writer.
-        
+
         Args:
             filepath: Output file path
-            fps: Frames per second
+            fps: Frames per second. ``None`` (default) measures the real rate
+                from the first few frames — the stream rarely runs at the
+                nominal 30 fps, and a wrong header plays the video back at the
+                wrong speed.
             frame_size: (width, height) - auto-detected from first frame if None
-            codec: FourCC codec code
+            codec: FourCC code. ``None`` tries H.264 ('avc1') first and falls
+                back to 'mp4v'. H.264 matters because browsers (and the
+                frontend's preview/download) cannot play MPEG-4 Part 2.
+            quality: Encoder quality 0-100 (maps to the codec's bitrate).
+            normalization: How non-8-bit frames are mapped to 8-bit.
+                'auto'   - robust 0.5/99.5 percentile window from the first
+                           frame, held for the recording (default);
+                'minmax' - min/max of the first frame;
+                'full'   - full dtype range (e.g. 0..65535), no autoscale.
+            vmin, vmax: Explicit intensity window; overrides ``normalization``.
         """
         self._filepath = filepath
-        self._fps = fps
+        self._nominal_fps = float(fps) if fps else None
+        self._fps = self._nominal_fps or 30.0
         self._frame_size = frame_size
         self._codec = codec
+        self._quality = int(quality)
+        self._normalization = normalization
+        self._window: Optional[Tuple[float, float]] = (
+            (float(vmin), float(vmax)) if vmin is not None and vmax is not None else None
+        )
         self._writer = None
         self._is_recording = False
         self._frame_count = 0
         self._start_time: Optional[float] = None
+        self._first_frame_time: Optional[float] = None
+        self._last_frame_time: Optional[float] = None
+        self._warmup: List[Tuple[float, np.ndarray]] = []
+        self._warmup_bytes = 0
         self._lock = threading.Lock()
         self._logger = logging.getLogger(self.__class__.__name__)
-    
+
     def start(self):
         """Start recording."""
         if self._is_recording:
             return
-        
-        # Writer is created on first frame to auto-detect size
+
+        # Writer is created on the first frame(s) to auto-detect size and rate
         self._is_recording = True
         self._frame_count = 0
+        self._warmup = []
+        self._warmup_bytes = 0
+        self._window = self._window if self._window else None
         self._start_time = time.time()
+        self._first_frame_time = None
+        self._last_frame_time = None
         self._logger.info(f"MP4 recording started: {self._filepath}")
-    
+
     def stop(self):
         """Stop recording and finalize file."""
         if not self._is_recording:
             return
-        
+
         with self._lock:
+            # Frames still held for the rate estimate must reach the file.
+            if self._writer is None and self._warmup:
+                self._open_writer()
+                self._flush_warmup()
             self._is_recording = False
             if self._writer is not None:
                 self._writer.release()
                 self._writer = None
-        
-        self._logger.info(f"MP4 recording stopped: {self._frame_count} frames written")
-    
+
+        measured = self.measured_fps
+        if measured and abs(measured - self._fps) / self._fps > 0.1:
+            self._logger.warning(
+                f"MP4 written at {self._fps:.2f} fps but frames arrived at "
+                f"{measured:.2f} fps — playback speed will be off by "
+                f"{self._fps / measured:.2f}x"
+            )
+        self._logger.info(
+            f"MP4 recording stopped: {self._frame_count} frames written "
+            f"({self._fps:.2f} fps header)"
+        )
+
+    # ------------------------------------------------------------------
+    # Frame conversion
+    # ------------------------------------------------------------------
+
+    def _compute_window(self, frame: np.ndarray) -> Tuple[float, float]:
+        """Pick the intensity window used to map this recording to 8-bit."""
+        if self._normalization == 'full':
+            if np.issubdtype(frame.dtype, np.integer):
+                info = np.iinfo(frame.dtype)
+                return float(info.min), float(info.max)
+            return 0.0, 1.0
+
+        # Subsample: a full percentile over a 20 MP frame is needlessly slow
+        # and the window only needs to be approximately right.
+        sample = frame[::4, ::4] if frame.ndim >= 2 else frame
+        if self._normalization == 'minmax':
+            lo, hi = float(np.min(sample)), float(np.max(sample))
+        else:  # 'auto'
+            lo, hi = (float(v) for v in np.percentile(sample, (0.5, 99.5)))
+        if hi <= lo:  # flat/blank first frame – fall back to the full frame
+            lo, hi = float(np.min(frame)), float(np.max(frame))
+        if hi <= lo:  # genuinely constant image
+            hi = lo + 1.0
+        return lo, hi
+
+    def _to_uint8(self, frame: np.ndarray) -> np.ndarray:
+        """Window a 12/16-bit (or float) frame down to 8-bit for the codec.
+
+        cv2.VideoWriter silently accepts a uint16 array and writes garbage
+        instead of raising, which is why unnormalized recordings came out
+        looking empty.
+        """
+        if frame.dtype == np.uint8:
+            return frame
+        if self._window is None:
+            self._window = self._compute_window(frame)
+        lo, hi = self._window
+        scaled = (frame.astype(np.float32) - lo) * (255.0 / (hi - lo))
+        return np.clip(scaled, 0, 255).astype(np.uint8)
+
+    def _prepare(self, frame: np.ndarray) -> np.ndarray:
+        """Convert a detector frame into the 8-bit BGR image the codec wants."""
+        frame = self._to_uint8(frame)
+        if frame.ndim == 2:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        elif frame.shape[2] == 4:
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        # H.264 needs even dimensions; crop the odd last row/column rather
+        # than rescaling, so pixels stay where they are.
+        h, w = frame.shape[:2]
+        if h % 2 or w % 2:
+            frame = frame[:h - (h % 2), :w - (w % 2)]
+        return np.ascontiguousarray(frame)
+
+    # ------------------------------------------------------------------
+    # Writer lifecycle
+    # ------------------------------------------------------------------
+
+    def _open_writer(self):
+        """Create the VideoWriter, sizing and timing it from the warm-up."""
+        first = self._prepare(self._warmup[0][1])
+        h, w = first.shape[:2]
+        if self._frame_size is None:
+            self._frame_size = (w, h)  # VideoWriter wants (width, height)
+
+        # Rate: measured across the warm-up unless the caller pinned one.
+        if self._nominal_fps is None and len(self._warmup) > 1:
+            span = self._warmup[-1][0] - self._warmup[0][0]
+            if span > 0:
+                self._fps = max(1.0, min(240.0, (len(self._warmup) - 1) / span))
+
+        directory = os.path.dirname(self._filepath)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
+        # Prefer H.264 so the file plays in a browser / the frontend preview;
+        # 'mp4v' (MPEG-4 Part 2) is the legacy fallback and does not.
+        candidates = [self._codec] if self._codec else ['avc1', 'mp4v']
+        for codec in candidates:
+            writer = cv2.VideoWriter(
+                self._filepath, cv2.VideoWriter_fourcc(*codec),
+                self._fps, self._frame_size
+            )
+            if writer.isOpened():
+                try:
+                    writer.set(cv2.VIDEOWRITER_PROP_QUALITY, self._quality)
+                except Exception:
+                    pass  # not supported by every backend/codec
+                self._writer = writer
+                self._codec = codec
+                self._logger.info(
+                    f"MP4 writer opened: {self._frame_size[0]}x{self._frame_size[1]} "
+                    f"@ {self._fps:.2f} fps, codec={codec}, quality={self._quality}"
+                    + (f", intensity window={self._window}" if self._window else "")
+                )
+                return
+            writer.release()
+        raise RuntimeError(
+            f"Could not open a VideoWriter for {self._filepath} "
+            f"(tried {candidates})"
+        )
+
+    def _flush_warmup(self):
+        """Write the frames held back while the frame rate was measured."""
+        for _, frame in self._warmup:
+            self._write_prepared(self._prepare(frame))
+        self._warmup = []
+        self._warmup_bytes = 0
+
+    def _write_prepared(self, frame: np.ndarray):
+        h, w = frame.shape[:2]
+        if (w, h) != self._frame_size:
+            frame = cv2.resize(frame, self._frame_size)
+        self._writer.write(frame)
+        self._frame_count += 1
+
     def write_frame(self, frame: np.ndarray):
         """Write a frame to the video."""
-        if not self._is_recording:
+        if not self._is_recording or frame is None:
             return
-        # apparently, opencv swaps axes, so we do that here too 
-        if len(frame.shape) >=2:
-            frame = frame.transpose(1,0,2) if frame.ndim ==3 else frame.T
-        else:
-            frame = frame.T
+        now = time.time()
         with self._lock:
-            # Initialize writer on first frame
+            if self._first_frame_time is None:
+                self._first_frame_time = now
+            self._last_frame_time = now
+
             if self._writer is None:
-                h, w = frame.shape[:2]
-                if self._frame_size is None:
-                    self._frame_size = (h, w)
-                
-                os.makedirs(os.path.dirname(self._filepath), exist_ok=True) if os.path.dirname(self._filepath) else None
-                fourcc = cv2.VideoWriter_fourcc(*self._codec)
-                self._writer = cv2.VideoWriter(
-                    self._filepath, fourcc, self._fps, self._frame_size # requieres height, width
-                )
-            
-            # Convert grayscale to BGR
-            if frame.ndim == 2:
-                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-            elif frame.shape[2] == 4:
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-            
-            # Resize if needed
-            h, w = frame.shape[:2]
-            if (w, h) != self._frame_size:
-                frame = cv2.resize(frame, self._frame_size)
-            
-            self._writer.write(frame)
-            self._frame_count += 1
-    
+                # Hold the first frames back just long enough to measure the
+                # real frame rate, then open the writer and flush them.
+                self._warmup.append((now, frame))
+                self._warmup_bytes += frame.nbytes
+                if (self._nominal_fps is not None
+                        or len(self._warmup) >= self._WARMUP_FRAMES
+                        or self._warmup_bytes >= self._WARMUP_MAX_BYTES):
+                    self._open_writer()
+                    self._flush_warmup()
+                return
+
+            self._write_prepared(self._prepare(frame))
+
     @property
     def is_recording(self) -> bool:
         return self._is_recording
-    
+
     @property
     def frame_count(self) -> int:
         return self._frame_count
-    
+
+    @property
+    def measured_fps(self) -> Optional[float]:
+        """Actual rate frames arrived at, or None before the 2nd frame."""
+        if (self._first_frame_time is None or self._last_frame_time is None
+                or self._frame_count < 2):
+            return None
+        span = self._last_frame_time - self._first_frame_time
+        return (self._frame_count - 1) / span if span > 0 else None
+
     @property
     def elapsed_time(self) -> float:
         """Get elapsed recording time in seconds."""
         if self._start_time is None:
             return 0.0
         return time.time() - self._start_time
-    
+
     @property
     def filepath(self) -> str:
         return self._filepath
@@ -996,15 +1165,15 @@ class RecordingService(SignalInterface):
     # Video Recording (MP4 with start/stop)
     # =========================================================================
     
-    def start_video_recording(self, filepath: str, fps: float = 30.0,
+    def start_video_recording(self, filepath: str, fps: Optional[float] = None,
                                detector_name: str = None,
                                auto_capture: bool = True) -> bool:
         """
         Start MP4 video recording.
-        
+
         Args:
             filepath: Output file path
-            fps: Frames per second
+            fps: Frames per second; None (default) measures the real stream rate
             detector_name: Detector to record from (None = first detector or all)
             auto_capture: If True, automatically capture frames via signal callback
             

@@ -82,6 +82,23 @@ const liveStreamPersistConfig = {
 };
 
 //#####################################################################################
+// Nested persist config for liveViewState
+// Persists user preferences only. isSnapping/snapStartedAt describe a request
+// that is in flight *right now* — restoring them after a reload would leave the
+// UI stuck showing a snap-progress bar for a snap that no longer exists. The
+// long-exposure flags are re-read from the backend on mount for the same reason.
+const liveViewPersistConfig = {
+  key: "liveViewState",
+  storage,
+  whitelist: [
+    "showPositionController",
+    "snapFormat",
+    "recordFormat",
+    "lastCapturePath",
+  ],
+};
+
+//#####################################################################################
 // Nested persist config for lightsheetState
 // Persist axis configuration and camera state for 3D viewer
 const lightsheetPersistConfig = {
@@ -138,7 +155,7 @@ const rootReducer = combineReducers({
   homing: homingReducer, // runtime-only frame-homing progress (not persisted)
   LEDMatrixState: LEDMatrixReducer,
   experimentWorkflowState: experimentStateReducer,
-  liveViewState: liveViewReducer,
+  liveViewState: persistReducer(liveViewPersistConfig, liveViewReducer), // Nested persist
   histoScanState: histoScanReducer,
   widgetState: widgetReducer,
   lepmon: lepmonReducer,
@@ -201,9 +218,8 @@ const persistConfig = {
     "themeState",
     "mazeGameState",
     "appManager", // Persist user's app preferences
-    "liveViewState", // Persist position controller visibility
     "onboardingState", // Persist the "intro tour was done" flag (first-run UX)
-    // liveStreamState uses nested persist config above
+    // liveStreamState and liveViewState use nested persist configs above
   ],
   //blacklist: ['webSocketState'],  // Do not persist these
 };

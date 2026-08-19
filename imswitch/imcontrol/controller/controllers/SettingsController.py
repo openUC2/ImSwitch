@@ -1,13 +1,20 @@
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from pydantic import BaseModel
 
 from imswitch.imcommon.model import APIExport
 from imswitch.imcommon.framework import Signal, Timer
 from imswitch.imcontrol.model import configfiletools
 from imswitch.imcontrol.view import guitools as guitools
 from ..basecontrollers import ImConWidgetController
+
+
+class SetDetectorParameterRequest(BaseModel):
+    detectorName: Optional[str] = None
+    name: str
+    value: Any
 
 
 @dataclass
@@ -716,6 +723,9 @@ class SettingsController(ImConWidgetController):
         # collect binning
         try: mBinning = detector.binning
         except: mBinning = 1
+        # collect the binnings the camera accepts, so the UI can offer them
+        try: mSupportedBinnings = list(detector.supportedBinnings)
+        except: mSupportedBinnings = [1]
         # get Black Level
         try: mBlacklevel = detector.parameters['blacklevel'].value
         except: mBlacklevel = 0
@@ -725,14 +735,28 @@ class SettingsController(ImConWidgetController):
         # collect mode (auto/manual)
         try: camMode = detector.parameters['exposure_mode'].value
         except: camMode = 'manual'
+        # hardware limits, where the manager knows them (None otherwise)
+        def _limits(parameterName):
+            try:
+                parameter = detector.parameters[parameterName]
+                return getattr(parameter, 'valueMin', None), getattr(parameter, 'valueMax', None)
+            except Exception:
+                return None, None
+        mExposureMin, mExposureMax = _limits('exposure')
+        mGainMin, mGainMax = _limits('gain')
         mParameterDict = {
             'exposure': mExposureTime,
             'gain': mGain,
             'pixelSize': mPixelSize,
             'binning': mBinning,
+            'supportedBinnings': mSupportedBinnings,
             'blacklevel': mBlacklevel,
             'isRGB': mRGB,
-            'mode': camMode
+            'mode': camMode,
+            'exposureMin': mExposureMin,
+            'exposureMax': mExposureMax,
+            'gainMin': mGainMin,
+            'gainMax': mGainMax,
         }
 
         # Include white-balance info when available (RGB cameras)
@@ -754,17 +778,196 @@ class SettingsController(ImConWidgetController):
 
         return mParameterDict
 
+    # ========================
+    # Full camera parameter tree (advanced camera dialog)
+    # ========================
+
+    def _serializeDetector(self, detector) -> Dict[str, Any]:
+        """Turn a detector into the tree the advanced camera dialog renders.
+
+        Everything ``getCameraStatus()`` reports is passed through, so
+        camera-specific extras (temperature, firmware, trigger types, ...) show
+        up in the dialog without this controller knowing about them. The flat
+        ``parameters`` dict is additionally reshaped into ordered groups.
+        """
+        try:
+            detector.refreshParameters()
+        except Exception:
+            self._logger.warning(
+                f"Could not refresh parameters of '{detector.name}'", exc_info=True
+            )
+
+        status = detector.getCameraStatus()
+        parameters = status.pop('parameters', {}) or {}
+
+        # Group parameters, keeping the order in which the manager declared them
+        # so related settings stay together.
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        for name, info in parameters.items():
+            group = info.get('group') or 'Other'
+            groups.setdefault(group, []).append({'name': name, **info})
+
+        tree = dict(status)
+        tree['detectorName'] = detector.name
+        tree['groups'] = [{'name': g, 'parameters': p} for g, p in groups.items()]
+        tree['actions'] = list(getattr(detector, 'actions', {}) or {})
+        return tree
+
+    def _coerceParameterValue(self, detector, parameterName: str, value: Any) -> Any:
+        """Cast a value coming from JSON/query strings to the parameter's type."""
+        parameter = detector.parameters.get(parameterName)
+        if parameter is None:
+            return value
+
+        # DetectorNumberParameter / DetectorBooleanParameter / DetectorListParameter
+        typeName = type(parameter).__name__
+        if 'Number' in typeName:
+            number = float(value)
+            return int(number) if number.is_integer() else number
+        if 'Boolean' in typeName:
+            if isinstance(value, str):
+                return value.strip().lower() in ('1', 'true', 'yes', 'on')
+            return bool(value)
+        if 'List' in typeName:
+            return str(value)
+        return value
+
+    @APIExport()
+    def getDetectorParameterTree(self, detectorName: str = None) -> Dict[str, Any]:
+        """Return the full parameter tree of a detector for the camera dialog.
+
+        Includes hardware info (model, sensor size, binning, pixel size) and all
+        detector-specific parameters grouped by their manager group, each with
+        value, type, unit/options, editability and — where the manager knows
+        them — the allowed min/max.
+
+        Args:
+            detectorName: Detector to query. ``None`` → current detector.
+
+        Example::
+
+            GET /api/SettingsController/getDetectorParameterTree
+            GET /api/SettingsController/getDetectorParameterTree?detectorName=WidefieldCamera
+        """
+        try:
+            if detectorName is None:
+                detector = self._master.detectorsManager.getCurrentDetector()
+            else:
+                detector = self._master.detectorsManager[detectorName]
+            return self._serializeDetector(detector)
+        except Exception as e:
+            self._logger.error(
+                f"Failed to build parameter tree for '{detectorName}'", exc_info=True
+            )
+            return {'error': str(e), 'detectorName': detectorName}
+
+    @APIExport(requestType="POST")
+    def setDetectorParameterValue(self, body: SetDetectorParameterRequest) -> Dict[str, Any]:
+        """Set one detector parameter and return the refreshed parameter tree.
+
+        Unlike ``setDetectorParameter`` this accepts any JSON value (number,
+        string or boolean), casts it to the parameter's declared type and
+        answers with the detector's own view of the result, so the caller sees
+        values that the hardware clamped or rejected.
+
+        Body schema (JSON): ``{"detectorName": str|null, "name": str, "value": any}``.
+        """
+        if body.detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        else:
+            detectorName = body.detectorName
+        detector = self._master.detectorsManager[detectorName]
+
+        try:
+            value = self._coerceParameterValue(detector, body.name, body.value)
+            self._master.detectorsManager.execOn(
+                detectorName, lambda c: c.setParameter(body.name, value)
+            )
+        except Exception as e:
+            self._logger.warning(
+                f"Failed to set parameter '{body.name}' for detector '{detectorName}'",
+                exc_info=True,
+            )
+            tree = self._serializeDetector(detector)
+            tree['error'] = str(e)
+            return tree
+
+        self.updateSharedAttrs()
+        self._emit_detector_parameters_if_changed(force=True)
+        return self._serializeDetector(detector)
+
+    @APIExport()
+    def getDetectorParameter(self, detectorName: str=None, parameterName: str=None) -> Any:
+        """ Returns the value of the specified detector-specific parameter. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        if parameterName is None:
+            return None
+        try:
+            return self._master.detectorsManager.execOn(
+                detectorName, lambda c: c.getParameter(parameterName)
+            )
+        except Exception:
+            self._logger.warning(
+                f"Failed to get parameter '{parameterName}' for detector '{detectorName}'",
+                exc_info=True,
+            )
+            return None
+        
     @APIExport()
     def getDetectorNames(self) -> List[str]:
         """ Returns the device names of all detectors. These device names can
         be passed to other detector-related functions. """
         return self._master.detectorsManager.getAllDeviceNames()
 
+    @APIExport()
+    def getDetectorSupportedBinnings(self, detectorName: str = None) -> List[int]:
+        """ Returns the binning values the specified detector accepts. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        try:
+            return list(self._master.detectorsManager[detectorName].supportedBinnings)
+        except Exception:
+            self._logger.warning(
+                f"Failed to read supported binnings for '{detectorName}'", exc_info=True
+            )
+            return [1]
+
     @APIExport(runOnUIThread=True)
-    def setDetectorBinning(self, detectorName: str, binning: int) -> None:
-        """ Sets binning value for the specified detector. """
-        self.allParams[detectorName].binning.setValue(binning)
-        self._master.detectorsManager[detectorName].setBinning(binning)
+    def setDetectorBinning(self, detectorName: str = None, binning: int = 1) -> Dict[str, Any]:
+        """ Sets binning value for the specified detector.
+
+        Binning changes the delivered frame size, so the new shape is broadcast
+        to the viewers and returned to the caller.
+        """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+
+        detector = self._master.detectorsManager[detectorName]
+        try:
+            detector.setBinning(int(binning))
+        except Exception as e:
+            self._logger.warning(
+                f"Failed to set binning {binning} for detector '{detectorName}'",
+                exc_info=True,
+            )
+            return {'status': 'error', 'detectorName': detectorName, 'error': str(e)}
+
+        # Keep the (Qt-only) parameter tree in sync when it exists.
+        if detectorName in self.allParams:
+            self.allParams[detectorName].binning.setValue(binning)
+
+        if detectorName == self._master.detectorsManager.getCurrentDetectorName():
+            self._commChannel.sigAdjustFrame.emit(detector.shape)
+
+        self.setSharedAttr(detectorName, _binningAttr, detector.binning)
+        self._emit_detector_parameters_if_changed(force=True)
+        return {
+            'status': 'ok',
+            'detectorName': detectorName,
+            'binning': detector.binning,
+            'shape': list(detector.shape),
+        }
 
     @APIExport(runOnUIThread=True)
     def setDetectorROI(self, detectorName: str, frameStart: Tuple[int, int],
@@ -924,10 +1127,22 @@ class SettingsController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def setDetectorExposureTime(self, detectorName: str=None, exposureTime: float=None) -> None:
-        """ Sets the exposure time for the specified detector. """
+        """ Sets the exposure time for the specified detector (in milliseconds).
+
+        Raising the exposure past LiveViewController.LONG_EXPOSURE_THRESHOLD_MS
+        also stops any running live view: at multi-second exposures the stream
+        delivers frames slower than the worker's grab timeout, so it would only
+        spin on stale frames. Snap keeps working and arms the camera on demand.
+        """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'exposure', exposureTime)
+        try:
+            liveViewController = self._master.getController('LiveView')
+            if liveViewController is not None:
+                liveViewController.stopLiveViewForLongExposure(detectorName)
+        except Exception as e:
+            self._logger.debug(f"Could not apply long-exposure stream policy: {e}")
 
     @APIExport(runOnUIThread=True)
     def setDetectorBlackLevel(self, detectorName: str=None, blackLevel: float=0) -> None:

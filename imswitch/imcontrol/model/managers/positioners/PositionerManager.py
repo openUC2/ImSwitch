@@ -86,6 +86,18 @@ class PositionerManager(ABC):
         return self.__axes
 
     @property
+    def combinedAxes(self) -> List[str]:
+        """ Multi-axis groups this manager can move in ONE command, e.g.
+        ``["XY", "XYZ"]``.
+
+        A combined move takes a tuple ``value`` (one entry per axis of the
+        group) instead of a scalar, so the hardware performs a single
+        coordinated motion. Managers that only implement per-axis moves keep
+        the empty default; callers must then fall back to sequential moves.
+        """
+        return []
+
+    @property
     def forPositioning(self) -> bool:
         """ Whether the positioner is used for manual positioning. """
         return self.__forPositioning

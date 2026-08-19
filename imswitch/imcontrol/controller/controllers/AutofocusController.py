@@ -32,9 +32,10 @@ def _gaussian(x, a, x0, sigma, c):
 
 def _robust_gaussian_fit(x, y):
     """
-    Fit a 1D Gaussian to (x, y). Returns (x0, fit_y) where:
+    Fit a 1D Gaussian to (x, y). Returns (x0, fit_y, popt) where:
       - x0 is the fitted center
       - fit_y is the Gaussian evaluated on x (or None on failure)
+      - popt is (a, x0, sigma, c) from the fit (or None on failure)
     Falls back to argmax if fit fails.
     """
     x = np.asarray(x, dtype=float)
@@ -53,9 +54,135 @@ def _robust_gaussian_fit(x, y):
         popt, _ = curve_fit(_gaussian, x, y, p0=p0, bounds=bounds, maxfev=20000)
         a, x0, sigma, c = popt
         fit_y = _gaussian(x, a, x0, sigma, c)
-        return float(x0), fit_y
+        return float(x0), fit_y, popt
     except Exception:
-        return float(x0_0), None
+        return float(x0_0), None, None
+
+
+# Plausibility thresholds for _assess_focus_curve. The metric curve of a good
+# autofocus run is a single clear peak well inside the scan range; each check
+# below flags one way that assumption can break.
+_AF_MIN_CONTRAST = 0.15      # (max-min)/|min| below this = flat curve (no sample/texture)
+_AF_MIN_R_SQUARED = 0.5      # Gaussian fit explains less than this = don't trust the fit
+_AF_EDGE_MARGIN_STEPS = 1.0  # argmax within this many steps of the range edge = peak clipped
+
+
+def _assess_focus_curve(zs, fvals, x0_fit, fit_y, popt, step):
+    """
+    Plausibility checks for a focus-metric-vs-Z curve after an autofocus scan.
+
+    Returns a JSON-serialisable dict:
+      - suggested_z: best Z estimate (fitted center if the fit is trustworthy,
+        otherwise the argmax of the measured curve)
+      - used_fit: True if suggested_z comes from the Gaussian fit
+      - is_valid: overall verdict; False means the result should not be
+        trusted (flat curve or focus outside the scanned range)
+      - r_squared, contrast, sigma, z_argmax, peak_at_edge, fit_argmax_delta
+      - warnings: human-readable list of everything that was flagged
+    """
+    zs = np.asarray(zs, dtype=float)
+    fvals = np.asarray(fvals, dtype=float)
+    warnings = []
+
+    idx_max = int(np.argmax(fvals))
+    z_argmax = float(zs[idx_max])
+    f_min = float(np.min(fvals))
+    f_max = float(np.max(fvals))
+    z_lo, z_hi = float(np.min(zs)), float(np.max(zs))
+    z_span = max(z_hi - z_lo, 1e-9)
+    step = abs(float(step)) if step else z_span / max(len(zs) - 1, 1)
+
+    # 1) Contrast: a flat metric curve means there was nothing to focus on
+    #    (empty FOV, saturated image, illumination off).
+    contrast = (f_max - f_min) / (abs(f_min) + 1e-12) # TODO: Is this the a meaningful boundary?
+    flat_curve = contrast < _AF_MIN_CONTRAST
+    if flat_curve:
+        warnings.append(
+            f"focus curve is nearly flat (contrast={contrast:.3f} < {_AF_MIN_CONTRAST}) — "
+            "no sample/texture in FOV?"
+        )
+
+    # 2) Peak at the edge of the scan range: the true focus is likely outside
+    #    the range, so neither the fit nor the argmax can be trusted.
+    edge_margin = _AF_EDGE_MARGIN_STEPS * step
+    peak_at_edge = (z_argmax - z_lo) <= edge_margin or (z_hi - z_argmax) <= edge_margin
+    if peak_at_edge:
+        warnings.append(
+            f"metric peak at edge of scan range (argmax z={z_argmax:.2f}, "
+            f"range [{z_lo:.2f}, {z_hi:.2f}]) — increase the autofocus range"
+        )
+
+    # 3) Fit quality (R²) against the measured curve.
+    r_squared = None
+    if fit_y is not None:
+        ss_res = float(np.sum((fvals - fit_y) ** 2))
+        ss_tot = float(np.sum((fvals - np.mean(fvals)) ** 2))
+        r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+    # 4) Fitted center must lie inside the scanned interval; the fit bounds
+    #    allow it to drift outside, where it is pure extrapolation.
+    center_in_range = z_lo <= float(x0_fit) <= z_hi
+
+    # 5) Fit and argmax should roughly agree; a large discrepancy means the
+    #    Gaussian latched onto something other than the observed peak.
+    fit_argmax_delta = abs(float(x0_fit) - z_argmax)
+    max_delta = max(2.0 * step, 0.2 * z_span)
+
+    # 6) Fitted width must be physically plausible: narrower than half a step
+    #    is a single-sample noise spike, wider than the whole range is a
+    #    flat/tilted curve dressed up as a peak.
+    sigma = float(popt[2]) if popt is not None else None
+    sigma_ok = sigma is None or (0.5 * step <= sigma <= z_span)
+    sigma_ok = True # TODO: This feature is too strict as of now - especially for the virtualmicroscope
+    # A converged fit that is much narrower than the step size means the
+    # "peak" is a single elevated sample (hot frame / glitch), not a focus
+    # curve — neither the fit nor the argmax can be trusted then.
+    spike_like = (
+        sigma is not None and sigma < 0.5 * step
+        and r_squared is not None and r_squared > 0.8
+    )
+    if spike_like:
+        warnings.append(
+            f"metric peak is a single-sample spike (sigma={sigma:.2f} µm vs "
+            f"step {step:.2f} µm) — likely a corrupted frame, not focus"
+        )
+
+    fit_ok = (
+        fit_y is not None
+        and r_squared is not None and r_squared >= _AF_MIN_R_SQUARED
+        and center_in_range
+        and fit_argmax_delta <= max_delta
+        and sigma_ok
+    )
+    if fit_y is not None and not fit_ok:
+        reasons = []
+        if r_squared is not None and r_squared < _AF_MIN_R_SQUARED:
+            reasons.append(f"R²={r_squared:.3f} < {_AF_MIN_R_SQUARED}")
+        if not center_in_range:
+            reasons.append(f"fitted center {x0_fit:.2f} outside scan range")
+        if fit_argmax_delta > max_delta:
+            reasons.append(
+                f"fit/argmax disagree by {fit_argmax_delta:.2f} µm (> {max_delta:.2f})"
+            )
+        if not sigma_ok:
+            reasons.append(f"implausible fit width sigma={sigma:.2f}")
+        warnings.append(
+            "Gaussian fit rejected (" + ", ".join(reasons) + ") — using argmax instead"
+        )
+
+    return {
+        "suggested_z": float(x0_fit) if fit_ok else z_argmax,
+        "used_fit": bool(fit_ok),
+        "is_valid": bool(not flat_curve and not peak_at_edge and not spike_like),
+        "r_squared": None if r_squared is None else float(r_squared),
+        "contrast": float(contrast),
+        "sigma": None if sigma is None else float(sigma),
+        "z_argmax": z_argmax,
+        "peak_at_edge": bool(peak_at_edge),
+        "fit_argmax_delta": float(fit_argmax_delta),
+        "n_points": int(len(zs)),
+        "warnings": warnings,
+    }
 
 
 class MovementController:
@@ -153,6 +280,10 @@ class AutofocusController(ImConWidgetController):
         self._minZ = -np.inf  # Will be updated from stage manager if available
         self._maxZ = np.inf   # Will be updated from stage manager if available
         self._positionValidated = False  # Track if position has been validated since startup
+
+        # Plausibility metrics of the most recent scan (_assess_focus_curve),
+        # exposed via getAutofocusStatus so callers can reject bad results.
+        self._lastFocusQuality = None
 
         if self._setupInfo.autofocus is not None:
             self.cameraName = self._setupInfo.autofocus.camera
@@ -329,6 +460,7 @@ class AutofocusController(ImConWidgetController):
             "positionError": error,
             "minZ": self._minZ if self._minZ != -np.inf else None,
             "maxZ": self._maxZ if self._maxZ != np.inf else None,
+            "lastQuality": self._lastFocusQuality,
         }
 
 
@@ -964,7 +1096,7 @@ class AutofocusController(ImConWidgetController):
 
             self._setAutofocusState(AutofocusState.FINISHED)
             self._commChannel.sigAutoFocusRunning.emit(False)
-            self.sigUpdateFocusValue.emit({"bestzpos": final_z})
+            self.sigUpdateFocusValue.emit({"bestzpos": final_z, "quality": self._lastFocusQuality})
             self.__logger.info(f"Autofocus Value is: {final_z:.2f}")
             return final_z
         except Exception as e:
@@ -1101,10 +1233,17 @@ class AutofocusController(ImConWidgetController):
                 pass
 
             # Fit Gaussian to find best position
-            x0_fit, fit_y = _robust_gaussian_fit(zs_valid, fv_valid)
+            x0_fit, fit_y, popt = _robust_gaussian_fit(zs_valid, fv_valid)
+
+            # Plausibility checks: fall back to argmax when the fit is not
+            # trustworthy, and flag flat curves / clipped peaks for callers.
+            quality = _assess_focus_curve(zs_valid, fv_valid, x0_fit, fit_y, popt, resolutionz)
+            self._lastFocusQuality = quality
+            for warning in quality["warnings"]:
+                self.__logger.warning(f"Autofocus plausibility: {warning}")
 
             # Calculate and clamp best target position
-            best_target = self._clampPosition(float(x0_fit) + static_offset, axis)
+            best_target = self._clampPosition(float(quality["suggested_z"]) + static_offset, axis)
 
             # Check abort before final move
             if self._getAutofocusState() == AutofocusState.ABORTED:
@@ -1225,9 +1364,16 @@ class AutofocusController(ImConWidgetController):
 
         # Fit Gaussian
         if len(zs) >= 5:
-            x0_fit, fit_y = _robust_gaussian_fit(zs, fvals)
+            x0_fit, fit_y, popt = _robust_gaussian_fit(zs, fvals)
+            step = float(np.median(np.abs(np.diff(zs)))) if len(zs) > 1 else 0.0
+            quality = _assess_focus_curve(zs, fvals, x0_fit, fit_y, popt, step)
+            self._lastFocusQuality = quality
+            for warning in quality["warnings"]:
+                self.__logger.warning(f"Autofocus plausibility: {warning}")
+            x0_fit = quality["suggested_z"]
         else:
-            x0_fit, fit_y = (float(zs[np.argmax(fvals)]) if len(zs) else z0, None)
+            x0_fit = float(zs[np.argmax(fvals)]) if len(zs) else z0
+            self._lastFocusQuality = None
 
 
         # Check abort before final move

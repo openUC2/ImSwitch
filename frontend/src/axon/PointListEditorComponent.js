@@ -6,7 +6,7 @@ import { useDispatch, useSelector } from "react-redux";
 import * as experimentSlice from "../state/slices/ExperimentSlice";
 import * as positionSlice from "../state/slices/PositionSlice.js";
 
-import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
+import apiPositionerControllerMovePositionerXYZ from "../backendapi/apiPositionerControllerMovePositionerXYZ.js";
 
 import { Shape } from "./WellSelectorCanvas.js";
 
@@ -96,69 +96,26 @@ const PointListEditorComponent = () => {
   // disturbed, while "Goto (incl. Z)" also drives Z to the stored value.
   const handleGotoButtonClick = (x, y, z, includeZ = false) => {
     console.log("handleGotoButtonClick", x, y, z, "includeZ", includeZ);
-    // Do something with x and y
-    apiPositionerControllerMovePositioner({
-      axis: "X",
-      dist: x,
+    // Single request for the whole move — the axes used to be sent as separate
+    // fire-and-forget calls that raced each other on the way to the point.
+    apiPositionerControllerMovePositionerXYZ({
+      x,
+      y,
+      // Only move Z when the user explicitly asked for it (Goto incl. Z).
+      ...(includeZ && z != null ? { z } : {}),
       isAbsolute: true,
       speed: 20000,
     })
       .then((positionerResponse) => {
-        console.log(
-          "apiPositionerControllerMovePositioner X",
-          positionerResponse
-        );
+        console.log("apiPositionerControllerMovePositionerXYZ", positionerResponse);
       })
       .catch((error) => {
         console.error(
-          "apiPositionerControllerMovePositioner X",
+          "apiPositionerControllerMovePositionerXYZ",
           "Error moving position:",
           error
         );
       });
-
-    apiPositionerControllerMovePositioner({
-      axis: "Y",
-      dist: y,
-      isAbsolute: true,
-      speed: 20000,
-    })
-      .then((positionerResponse) => {
-        console.log(
-          "apiPositionerControllerMovePositioner Y",
-          positionerResponse
-        );
-      })
-      .catch((error) => {
-        console.error(
-          "apiPositionerControllerMovePositioner Y",
-          "Error moving position:",
-          error
-        );
-      });
-
-    // Only move Z when the user explicitly asked for it (Goto incl. Z).
-    if (includeZ && z != null) {
-      apiPositionerControllerMovePositioner({
-        axis: "Z",
-        dist: z,
-        isAbsolute: true,
-        speed: 20000,
-      })
-        .then((positionerResponse) => {
-          console.log(
-            "apiPositionerControllerMovePositioner Z",
-            positionerResponse
-          );
-        })
-        .catch((error) => {
-          console.error(
-            "apiPositionerControllerMovePositioner Z",
-            "Error moving position:",
-            error
-          );
-        });
-    }
   };
 
   //##################################################################################

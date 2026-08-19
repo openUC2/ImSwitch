@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Box,
@@ -53,6 +53,8 @@ import HeightIcon from "@mui/icons-material/Height";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import GpsFixedIcon from "@mui/icons-material/GpsFixed";
+import RestoreIcon from "@mui/icons-material/Restore";
+import CloseIcon from "@mui/icons-material/Close";
 
 // State slices
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
@@ -65,6 +67,11 @@ import * as objectiveSlice from "../../state/slices/ObjectiveSlice";
 
 // Coordinate calculation
 import { calculateScanCoordinates } from "../CoordinateCalculator";
+import {
+  computePlannedFocusPoints,
+  filterRemovedPlannedPoints,
+  plannedPointKey,
+} from "./plannedFocusGrid";
 
 // API
 import apiExperimentControllerComputeFocusMap from "../../backendapi/apiExperimentControllerComputeFocusMap";
@@ -77,12 +84,13 @@ import apiExperimentControllerMeasureFocusMapFromPoints from "../../backendapi/a
 import apiExperimentControllerSaveFocusMaps from "../../backendapi/apiExperimentControllerSaveFocusMaps";
 import apiExperimentControllerLoadFocusMaps from "../../backendapi/apiExperimentControllerLoadFocusMaps";
 import apiPositionerControllerMovePositioner from "../../backendapi/apiPositionerControllerMovePositioner";
+import apiPositionerControllerMovePositionerXYZ from "../../backendapi/apiPositionerControllerMovePositionerXYZ";
 import apiPositionerControllerGetPositions from "../../backendapi/apiPositionerControllerGetPositions";
 import apiAutofocusControllerDoAutofocusBackground, { waitForAutofocusComplete } from "../../backendapi/apiAutofocusControllerDoAutofocusBackground";
 
 
 // Visualization
-import FocusMapVisualization from "./FocusMapVisualization";
+import FocusMapVisualization, { colorForValue } from "./FocusMapVisualization";
 
 /**
  * Extract Z from positions API response which may be nested:
@@ -134,6 +142,8 @@ const FocusMapDimension = () => {
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const showOverlayOnWellplate = useSelector(focusMapSlice.getShowOverlayOnWellplate);
   const manualPlacementActive = useSelector(focusMapSlice.getManualPlacementActive);
+  const highlightedPoint = useSelector(focusMapSlice.getFocusMapHighlightedPoint);
+  const plannedRemovedKeys = useSelector(focusMapSlice.getPlannedRemovedKeys);
 
   // Detect mutual exclusion: per-position AF enabled while Focus Map is also enabled
   const isAutoFocusPerPosition = parameterValue.autoFocus === true;
@@ -145,8 +155,10 @@ const FocusMapDimension = () => {
   // showManualPoints and showMeasuredPoints are persisted in Redux (focusMap.ui)
   const showManualPoints = ui.showManualPoints ?? false;
   const showMeasuredPoints = ui.showMeasuredPoints ?? false;
+  const showPlannedPoints = ui.showPlannedPoints ?? true;
   const setShowManualPoints = (val) => dispatch(focusMapSlice.setShowManualPoints(val));
   const setShowMeasuredPoints = (val) => dispatch(focusMapSlice.setShowMeasuredPoints(val));
+  const setShowPlannedPoints = (val) => dispatch(focusMapSlice.setShowPlannedPoints(val));
   const [previewData, setPreviewData] = useState(null);
   const [expandedFitGroup, setExpandedFitGroup] = useState(null);
   const [editingPointZ, setEditingPointZ] = useState(null); // { groupId, pointIndex, z }
@@ -212,6 +224,71 @@ const FocusMapDimension = () => {
     return null;
   }, [experimentState, objectiveState, wellSelectorState]);
 
+  // ── Planned automatic-grid preview ──────────────────────────────────
+  // The positions the automatic measurement WILL visit (per scan region),
+  // recomputed live from the current selection + grid config so they can be
+  // shown — and pruned — before anything moves.
+  const {
+    enabled: fmEnabled,
+    use_manual_map: fmUseManualMap,
+    rows: fmRows,
+    cols: fmCols,
+    add_margin: fmAddMargin,
+  } = config;
+
+  const plannedPoints = useMemo(
+    () =>
+      computePlannedFocusPoints(experimentState, objectiveState, wellSelectorState, {
+        enabled: fmEnabled,
+        use_manual_map: fmUseManualMap,
+        rows: fmRows,
+        cols: fmCols,
+        add_margin: fmAddMargin,
+      }),
+    [
+      experimentState,
+      objectiveState,
+      wellSelectorState,
+      fmEnabled,
+      fmUseManualMap,
+      fmRows,
+      fmCols,
+      fmAddMargin,
+    ],
+  );
+
+  const keptPlannedPoints = useMemo(
+    () => filterRemovedPlannedPoints(plannedPoints, plannedRemovedKeys),
+    [plannedPoints, plannedRemovedKeys],
+  );
+  const removedPlannedCount = plannedPoints.length - keptPlannedPoints.length;
+
+  // Delete a planned grid point (before measurement). Only the point's key is
+  // stored; the grid itself always mirrors the current selection.
+  const handleRemovePlannedPoint = useCallback(
+    (pt) => {
+      // Indices shift after removal – drop any stale highlight
+      dispatch(focusMapSlice.setFocusMapHighlightedPoint(null));
+      dispatch(focusMapSlice.removePlannedPointKey(plannedPointKey(pt)));
+    },
+    [dispatch],
+  );
+
+  // Move the stage to a planned point (XY only – Z is unknown until measured)
+  const handleGoToPlannedPoint = useCallback(async (pt, idx) => {
+    const key = `planned-${idx}`;
+    setGoToInProgress(key);
+    try {
+      await apiPositionerControllerMovePositionerXYZ({
+        x: pt.x, y: pt.y, isAbsolute: true, isBlocking: false, speed: 15000,
+      });
+    } catch (err) {
+      console.error("Failed to move to planned point:", err);
+    } finally {
+      setGoToInProgress(null);
+    }
+  }, []);
+
   // Compute focus map for all groups
   const handleComputeAll = useCallback(async () => {
     dispatch(focusMapSlice.setFocusMapComputing({ isComputing: true, groupId: null }));
@@ -240,6 +317,17 @@ const FocusMapDimension = () => {
       configWithAreas.af_max_attempts = parameterValue.autofocus_max_attempts ?? 2;
       configWithAreas.af_target_setpoint = parameterValue.autofocus_target_focus_setpoint ?? null;
 
+      // Send the (possibly pruned) planned grid so the backend measures
+      // exactly the previewed positions. Scan areas whose planned points were
+      // all deleted are skipped by the backend.
+      if (!config.use_manual_map && keptPlannedPoints.length > 0) {
+        configWithAreas.grid_points = keptPlannedPoints.map((p) => ({
+          x: p.x,
+          y: p.y,
+          group_id: p.groupId,
+        }));
+      }
+
       const data = await apiExperimentControllerComputeFocusMap(configWithAreas);
       dispatch(focusMapSlice.setFocusMapResults(data));
     } catch (err) {
@@ -247,7 +335,7 @@ const FocusMapDimension = () => {
     } finally {
       dispatch(focusMapSlice.setFocusMapComputing({ isComputing: false }));
     }
-  }, [config, parameterValue, buildScanAreas, dispatch]);
+  }, [config, parameterValue, buildScanAreas, keptPlannedPoints, dispatch]);
 
   // Interrupt ongoing computation
   const handleInterrupt = useCallback(async () => {
@@ -272,6 +360,7 @@ const FocusMapDimension = () => {
       await apiExperimentControllerClearFocusMap();
       dispatch(focusMapSlice.clearFocusMapResults());
       dispatch(focusMapSlice.clearManualPoints());
+      dispatch(focusMapSlice.restorePlannedPoints());
       dispatch(focusMapSlice.setFocusMapEnabled(false));
       setPreviewData(null);
     } catch (err) {
@@ -310,25 +399,11 @@ const FocusMapDimension = () => {
       const key = `${groupId}-${pointIndex}`;
       setGoToInProgress(key);
       try {
-        // Move X then Y (absolute, blocking)
-        await apiPositionerControllerMovePositioner({
-          axis: "X",
-          dist: pt.x,
-          isAbsolute: true,
-          isBlocking: false,
-          speed: 15000,
-        });
-        await apiPositionerControllerMovePositioner({
-          axis: "Y",
-          dist: pt.y,
-          isAbsolute: true,
-          isBlocking: false,
-          speed: 15000,
-        });
-        // Move Z
-        await apiPositionerControllerMovePositioner({
-          axis: "Z",
-          dist: pt.z,
+        // One coordinated XYZ move to the stored point
+        await apiPositionerControllerMovePositionerXYZ({
+          x: pt.x,
+          y: pt.y,
+          z: pt.z,
           isAbsolute: true,
           isBlocking: false,
           speed: 15000,
@@ -349,11 +424,8 @@ const FocusMapDimension = () => {
       setGoToInProgress(key);
       try {
         // Move stage to point XY
-        await apiPositionerControllerMovePositioner({
-          axis: "X", dist: pt.x, isAbsolute: true, isBlocking: false, speed: 15000
-        });
-        await apiPositionerControllerMovePositioner({
-          axis: "Y", dist: pt.y, isAbsolute: true, isBlocking: false, speed: 15000  
+        await apiPositionerControllerMovePositionerXYZ({
+          x: pt.x, y: pt.y, isAbsolute: true, isBlocking: false, speed: 15000,
         });
 
         // Run autofocus with current ExperimentSlice settings
@@ -405,15 +477,14 @@ const FocusMapDimension = () => {
     const key = `manual-${idx}`;
     setGoToInProgress(key);
     try {
-      await apiPositionerControllerMovePositioner({
-        axis: "X", dist: pt.x, isAbsolute: true, isBlocking: true, speed: 15000,
-      });
-      await apiPositionerControllerMovePositioner({
-        axis: "Y", dist: pt.y, isAbsolute: true, isBlocking: true, speed: 15000,
+      // XY blocking so the stage has arrived before Z is driven to the stored
+      // focus height; Z only moves when this point has actually been measured.
+      await apiPositionerControllerMovePositionerXYZ({
+        x: pt.x, y: pt.y, isAbsolute: true, isBlocking: true, speed: 15000,
       });
       if (pt.z != null) {
-        await apiPositionerControllerMovePositioner({
-          axis: "Z", dist: pt.z, isAbsolute: true, isBlocking: false, speed: 15000,
+        await apiPositionerControllerMovePositionerXYZ({
+          z: pt.z, isAbsolute: true, isBlocking: false, speed: 15000,
         });
       }
     } catch (err) {
@@ -426,11 +497,8 @@ const FocusMapDimension = () => {
   // Drive to a manual point's XY, run autofocus with the current settings, and
   // return the measured Z.
   const measureManualPointZ = useCallback(async (pt) => {
-    await apiPositionerControllerMovePositioner({
-      axis: "X", dist: pt.x, isAbsolute: true, isBlocking: false, speed: 15000,
-    });
-    await apiPositionerControllerMovePositioner({
-      axis: "Y", dist: pt.y, isAbsolute: true, isBlocking: false, speed: 15000,
+    await apiPositionerControllerMovePositionerXYZ({
+      x: pt.x, y: pt.y, isAbsolute: true, isBlocking: false, speed: 15000,
     });
     await apiAutofocusControllerDoAutofocusBackground({
       rangez: parameterValue.autoFocusRange ?? 100,
@@ -630,6 +698,49 @@ const FocusMapDimension = () => {
     [config, results, dispatch]
   );
 
+  // Delete a measured (auto-generated) calibration point, e.g. one that
+  // landed outside the sample. The surface is refitted from the remaining
+  // points right away so the map never reflects the deleted point. If no
+  // points remain, the whole group map is cleared (backend + frontend).
+  const handleDeleteMeasuredPoint = useCallback(
+    async (groupId, pointIndex) => {
+      const result = results[groupId];
+      if (!result?.points) return;
+      const remaining = result.points.filter((_, i) => i !== pointIndex);
+
+      // Indices shift after removal – drop any stale highlight
+      dispatch(focusMapSlice.setFocusMapHighlightedPoint(null));
+
+      if (remaining.length === 0) {
+        try {
+          await apiExperimentControllerClearFocusMap(groupId);
+        } catch (err) {
+          console.error("Failed to clear focus map group:", err);
+        }
+        dispatch(focusMapSlice.clearFocusMapResults(groupId));
+        setPreviewData((prev) => (prev?.groupId === groupId ? null : prev));
+        return;
+      }
+
+      dispatch(focusMapSlice.removeMeasuredPoint({ groupId, index: pointIndex }));
+      await handleRefitGroup(groupId, remaining);
+    },
+    [results, handleRefitGroup, dispatch]
+  );
+
+  // Hover helpers linking list rows to the wellplate / heatmap markers
+  const highlightPoint = useCallback(
+    (source, groupId, index) => {
+      dispatch(
+        focusMapSlice.setFocusMapHighlightedPoint({ source, groupId, index })
+      );
+    },
+    [dispatch]
+  );
+  const clearHighlight = useCallback(() => {
+    dispatch(focusMapSlice.setFocusMapHighlightedPoint(null));
+  }, [dispatch]);
+
   // Status icon helper
   const StatusIcon = ({ status }) => {
     switch (status) {
@@ -809,6 +920,140 @@ const FocusMapDimension = () => {
                 : <Chip label="No manual map yet" size="small" color="warning" sx={{ ml: 1 }} />
               }
             </Alert>
+          )}
+
+          {/* ── Planned Grid Points (automatic-mode preview) ─────────── */}
+          {!config.use_manual_map && (
+            <Accordion
+              expanded={showPlannedPoints}
+              onChange={() => setShowPlannedPoints(!showPlannedPoints)}
+              variant="outlined"
+              sx={{ mb: 2 }}
+            >
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Typography variant="body2">
+                  Planned Grid Points
+                  <Chip
+                    label={`${keptPlannedPoints.length} point(s)`}
+                    size="small"
+                    sx={{ ml: 1 }}
+                  />
+                  {removedPlannedCount > 0 && (
+                    <Chip
+                      label={`${removedPlannedCount} removed`}
+                      size="small"
+                      color="warning"
+                      variant="outlined"
+                      sx={{ ml: 0.5 }}
+                    />
+                  )}
+                </Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ mb: 1, display: "block" }}
+                >
+                  Positions "Automatic Measure and Fit" will visit (one{" "}
+                  {config.rows}×{config.cols} grid per scan region), shown as
+                  crosses on the plate map. Remove points that should not be
+                  measured (e.g. outside the sample) before starting the scan;
+                  a region with all points removed is skipped.
+                </Typography>
+
+                {plannedPoints.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    No scan areas selected yet — select positions on the plate
+                    map first.
+                  </Typography>
+                ) : (
+                  <>
+                    <TableContainer
+                      component={Paper}
+                      variant="outlined"
+                      sx={{ mb: 1, maxHeight: 300 }}
+                    >
+                      <Table size="small" stickyHeader>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>#</TableCell>
+                            <TableCell>Region</TableCell>
+                            <TableCell>X (µm)</TableCell>
+                            <TableCell>Y (µm)</TableCell>
+                            <TableCell align="right"></TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {keptPlannedPoints.map((pt, idx) => (
+                            <TableRow
+                              key={plannedPointKey(pt)}
+                              hover
+                              selected={
+                                highlightedPoint?.source === "planned" &&
+                                highlightedPoint?.index === idx
+                              }
+                              onMouseEnter={() =>
+                                highlightPoint("planned", pt.groupId, idx)
+                              }
+                              onMouseLeave={clearHighlight}
+                            >
+                              <TableCell>{idx + 1}</TableCell>
+                              <TableCell>
+                                <Typography variant="caption">
+                                  {pt.groupName}
+                                </Typography>
+                              </TableCell>
+                              <TableCell>{pt.x.toFixed(1)}</TableCell>
+                              <TableCell>{pt.y.toFixed(1)}</TableCell>
+                              <TableCell align="right">
+                                <Tooltip title="Move stage to this XY">
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      disabled={
+                                        goToInProgress === `planned-${idx}`
+                                      }
+                                      onClick={() =>
+                                        handleGoToPlannedPoint(pt, idx)
+                                      }
+                                    >
+                                      <MyLocationIcon fontSize="small" />
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
+                                <Tooltip title="Remove this point from the automatic scan">
+                                  <IconButton
+                                    size="small"
+                                    color="error"
+                                    onClick={() => handleRemovePlannedPoint(pt)}
+                                  >
+                                    <CloseIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+
+                    {removedPlannedCount > 0 && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<RestoreIcon />}
+                        onClick={() =>
+                          dispatch(focusMapSlice.restorePlannedPoints())
+                        }
+                      >
+                        Restore All ({removedPlannedCount})
+                      </Button>
+                    )}
+                  </>
+                )}
+              </AccordionDetails>
+            </Accordion>
           )}
 
           {/* ── Autofocus Settings (shared with Z/Focus tab) ─────────── */}
@@ -1193,7 +1438,16 @@ const FocusMapDimension = () => {
                     </TableHead>
                     <TableBody>
                       {manualPoints.map((pt, idx) => (
-                        <TableRow key={idx}>
+                        <TableRow
+                          key={idx}
+                          hover
+                          selected={
+                            highlightedPoint?.source === "manual" &&
+                            highlightedPoint?.index === idx
+                          }
+                          onMouseEnter={() => highlightPoint("manual", null, idx)}
+                          onMouseLeave={clearHighlight}
+                        >
                           <TableCell>{idx + 1}</TableCell>
                           <TableCell>
                             <TextField
@@ -1412,7 +1666,7 @@ const FocusMapDimension = () => {
               disabled={ui.isComputing || config.use_manual_map}
               title={config.use_manual_map ? "Disabled in manual map mode — use 'Fit from Points' instead" : ""}
             >
-              {ui.isComputing ? "Measuring..." : "Auomatic Measure and Fit"} {/* TODO: We should only be able to click this button if we have not already entered items for the manual scan*/}
+              {ui.isComputing ? "Measuring..." : "Automatic Measure and Fit"} {/* TODO: We should only be able to click this button if we have not already entered items for the manual scan*/}
             </Button>
 
             {/* Interrupt button – only visible during computation */}
@@ -1781,9 +2035,39 @@ const FocusMapDimension = () => {
                               const goToKey = `${groupId}-${idx}`;
                               const isMoving = goToInProgress === goToKey;
 
+                              const isHighlighted =
+                                highlightedPoint?.source === "measured" &&
+                                highlightedPoint?.groupId === groupId &&
+                                highlightedPoint?.index === idx;
+                              // Same colour ramp as the heatmap preview so the
+                              // row chip visually matches the drawn point.
+                              const zColor = colorForValue(
+                                zMax > zMin ? (pt.z - zMin) / (zMax - zMin) : 0.5
+                              );
+
                               return (
-                                <TableRow key={idx} hover>
-                                  <TableCell>{idx + 1}</TableCell>
+                                <TableRow
+                                  key={idx}
+                                  hover
+                                  selected={isHighlighted}
+                                  onMouseEnter={() => highlightPoint("measured", groupId, idx)}
+                                  onMouseLeave={clearHighlight}
+                                >
+                                  <TableCell>
+                                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+                                      <Box
+                                        sx={{
+                                          width: 10,
+                                          height: 10,
+                                          borderRadius: "50%",
+                                          bgcolor: zColor,
+                                          border: `1px solid ${theme.palette.text.primary}`,
+                                          flexShrink: 0,
+                                        }}
+                                      />
+                                      {idx + 1}
+                                    </Box>
+                                  </TableCell>
                                   {/* Editable X */}
                                   <TableCell>
                                     {editingPointXY?.groupId === groupId &&
@@ -2019,6 +2303,20 @@ const FocusMapDimension = () => {
                                           </IconButton>
                                         </span>
                                       </Tooltip>
+                                      <Tooltip title="Delete this point and refit the surface from the remaining points">
+                                        <span>
+                                          <IconButton
+                                            size="small"
+                                            color="error"
+                                            onClick={() =>
+                                              handleDeleteMeasuredPoint(groupId, idx)
+                                            }
+                                            disabled={isMoving || ui.isComputing}
+                                          >
+                                            <DeleteIcon fontSize="small" />
+                                          </IconButton>
+                                        </span>
+                                      </Tooltip>
                                     </Box>
                                   </TableCell>
                                 </TableRow>
@@ -2078,6 +2376,12 @@ const FocusMapDimension = () => {
               </Typography>
               <FocusMapVisualization
                 data={previewData}
+                highlightIndex={
+                  highlightedPoint?.source === "measured" &&
+                  highlightedPoint?.groupId === previewData.groupId
+                    ? highlightedPoint.index
+                    : null
+                }
                 onClickPosition={async (worldX, worldY) => {
                   // Move stage to clicked position on the heatmap, including
                   // interpolated Z from the preview grid.
@@ -2115,30 +2419,18 @@ const FocusMapDimension = () => {
                               + z11 * tx * ty;
                     }
 
-                    await apiPositionerControllerMovePositioner({
-                      axis: "X",
-                      dist: worldX,
+                    // Single move to the clicked XY, carrying Z along when the
+                    // surface could be interpolated there.
+                    await apiPositionerControllerMovePositionerXYZ({
+                      x: worldX,
+                      y: worldY,
+                      ...(targetZ != null && isFinite(targetZ)
+                        ? { z: targetZ }
+                        : {}),
                       isAbsolute: true,
                       isBlocking: false,
                       speed: 15000,
                     });
-                    await apiPositionerControllerMovePositioner({
-                      axis: "Y",
-                      dist: worldY,
-                      isAbsolute: true,
-                      isBlocking: false,
-                      speed: 15000,
-                    });
-                    // Move Z to the interpolated focus height
-                    if (targetZ != null && isFinite(targetZ)) {
-                      await apiPositionerControllerMovePositioner({
-                        axis: "Z",
-                        dist: targetZ,
-                        isAbsolute: true,
-                        isBlocking: false,
-                        speed: 15000,
-                      });
-                    }
                   } catch (err) {
                     console.error("Failed to move stage to heatmap position:", err);
                   }

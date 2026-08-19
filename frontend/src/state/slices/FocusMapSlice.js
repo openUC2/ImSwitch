@@ -70,6 +70,12 @@ const initialState = {
   // Toggled from the Manual Focus Points menu (FocusMapDimension).
   manualPlacementActive: false,
 
+  // Keys (see plannedFocusGrid.plannedPointKey) of planned automatic-grid
+  // points the user deleted in the preview list. The planned grid itself is
+  // always recomputed from the current selection + grid config, so only the
+  // deletions need to be remembered here.
+  plannedRemovedKeys: [],
+
   // UI state
   ui: {
     isComputing: false,
@@ -80,6 +86,11 @@ const initialState = {
     showOverlayOnWellplate: true, // Toggle: draw focus map points on wellplate canvas
     showManualPoints: false, // Accordion expand state (persisted)
     showMeasuredPoints: false, // Accordion expand state (persisted)
+    showPlannedPoints: true, // Accordion expand state for the planned-grid list
+    // Point currently hovered/selected in the point lists, mirrored as a
+    // highlight marker on the wellplate canvas and the heatmap preview.
+    // { source: "measured" | "manual", groupId: string|null, index: number } | null
+    highlightedPoint: null,
   },
 };
 
@@ -189,7 +200,31 @@ const focusMapSlice = createSlice({
       }
     },
 
+    // ── Planned automatic-grid points (preview pruning) ─────
+
+    removePlannedPointKey: (state, action) => {
+      // payload: planned point key string
+      if (!state.plannedRemovedKeys) state.plannedRemovedKeys = [];
+      if (!state.plannedRemovedKeys.includes(action.payload)) {
+        state.plannedRemovedKeys.push(action.payload);
+      }
+    },
+
+    restorePlannedPoints: (state) => {
+      state.plannedRemovedKeys = [];
+    },
+
     // ── Results management ──────────────────────────────────
+
+    removeMeasuredPoint: (state, action) => {
+      // payload: { groupId, index } – drop one auto-measured calibration
+      // point (e.g. a grid point that landed outside the sample).
+      const { groupId, index } = action.payload;
+      const result = state.results[groupId];
+      if (result?.points && index >= 0 && index < result.points.length) {
+        result.points.splice(index, 1);
+      }
+    },
 
     setFocusMapResults: (state, action) => {
       // Replace all results { groupId: resultObj, ... }
@@ -245,6 +280,15 @@ const focusMapSlice = createSlice({
       state.ui.showMeasuredPoints = action.payload;
     },
 
+    setShowPlannedPoints: (state, action) => {
+      state.ui.showPlannedPoints = action.payload;
+    },
+
+    setFocusMapHighlightedPoint: (state, action) => {
+      // payload: { source, groupId, index } | null
+      state.ui.highlightedPoint = action.payload || null;
+    },
+
     // ── Reset ───────────────────────────────────────────────
 
     resetFocusMapState: () => {
@@ -277,6 +321,9 @@ export const {
   clearManualPoints,
   setManualPlacementActive,
   updateManualPointZ,
+  removePlannedPointKey,
+  restorePlannedPoints,
+  removeMeasuredPoint,
   setFocusMapResults,
   updateFocusMapGroupResult,
   clearFocusMapResults,
@@ -287,6 +334,8 @@ export const {
   setShowOverlayOnWellplate,
   setShowManualPoints,
   setShowMeasuredPoints,
+  setShowPlannedPoints,
+  setFocusMapHighlightedPoint,
   resetFocusMapState,
 } = focusMapSlice.actions;
 
@@ -304,6 +353,10 @@ export const getManualPlacementActive = (state) =>
 export const getShowOverlayOnWellplate = (state) => state.focusMap.ui?.showOverlayOnWellplate ?? true;
 export const getShowManualPoints = (state) => state.focusMap.ui?.showManualPoints ?? false;
 export const getShowMeasuredPoints = (state) => state.focusMap.ui?.showMeasuredPoints ?? false;
+export const getShowPlannedPoints = (state) => state.focusMap.ui?.showPlannedPoints ?? true;
+export const getPlannedRemovedKeys = (state) => state.focusMap.plannedRemovedKeys || [];
+export const getFocusMapHighlightedPoint = (state) =>
+  state.focusMap.ui?.highlightedPoint ?? null;
 
 // Export reducer
 export default focusMapSlice.reducer;

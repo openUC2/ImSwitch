@@ -164,6 +164,12 @@ class CameraTucsen:
         self._open_camera(self.cameraNo)
         self.trigger_source = "Continuous"
 
+        # The camera powers on in whichever RESOLUTION/SENSITIVE mode it was
+        # last left in; force it to match the requested binning explicitly
+        # so SensorWidth/SensorHeight (and thus fullShape) are correct before
+        # any frame is ever grabbed.
+        self.setBinning(self.binning)
+
         # Setup callback like HIK camera
         self._setup_callback()
 
@@ -757,33 +763,30 @@ class CameraTucsen:
             self.__logger.error(f"Failed to set blacklevel: {e}")
 
     def setBinning(self, binning=1):
+        """Toggle the Libra between its 'RESOLUTION' (full pixel count) and
+        'SENSITIVE' (hardware 2x2-combined pixels, half width/height) readout
+        modes via the TUIDC_RESOLUTION capability.
+
+        TUIDC_RESOLUTION == 0 -> RESOLUTION mode (full sensor pixels)
+        TUIDC_RESOLUTION == 1 -> SENSITIVE mode (binned, half width/height)
+        """
         try:
             self.binning = binning
-            bin_attr = TUCAM_BIN_ATTR()
-            if binning <= 1:
-                # Normal mode: disable hardware binning (1x1)
-                bin_attr.bEnable = 0
-                bin_attr.nMode = 0
-                bin_attr.nWidth = 0
-                bin_attr.nHeight = 0
-            else:
-                # Sensitive/hardware-binning mode: nMode = bin factor (e.g. 2 = 2x2)
-                bin_attr.bEnable = 1
-                bin_attr.nMode = binning
-                bin_attr.nWidth = 0   # SDK fills in the output dimensions
-                bin_attr.nHeight = 0
-            ret = TUCAM_Cap_SetBIN(self.camera_handle, bin_attr)
-            if not self._ok(ret):
-                self.__logger.warning(f"TUCAM_Cap_SetBIN returned {ret} for binning={binning}")
-            else:
-                self.__logger.info(f"Binning set to {binning}x{binning} (bEnable={bin_attr.bEnable})")
-                # Re-query sensor dimensions to reflect the new output size
-                self._get_sensor_info()
+            resolution_value = 0 if binning <= 1 else 1
 
             capa = TUCAM_CAPA_ATTR()
             capa.idCapa = TUCAM_IDCAPA.TUIDC_RESOLUTION.value
-            TUCAM_Capa_GetAttr(self.TUCAMOPEN.hIdxTUCam, pointer(capa))
-            TUCAM_Capa_SetValue(self.TUCAMOPEN.hIdxTUCam, capa.idCapa, 1)
+            TUCAM_Capa_GetAttr(self.camera_handle, pointer(capa))
+            ret = TUCAM_Capa_SetValue(self.camera_handle, capa.idCapa, resolution_value)
+            if not self._ok(ret):
+                self.__logger.warning(
+                    f"TUCAM_Capa_SetValue(TUIDC_RESOLUTION, {resolution_value}) returned {ret} for binning={binning}"
+                )
+            else:
+                mode_name = "SENSITIVE (binned)" if resolution_value else "RESOLUTION (full)"
+                self.__logger.info(f"Resolution mode set to {mode_name} for binning={binning}")
+                # Re-query sensor dimensions to reflect the new output size
+                self._get_sensor_info()
 
         except Exception as e:
             self.__logger.error(f"Failed to set binning: {e}")

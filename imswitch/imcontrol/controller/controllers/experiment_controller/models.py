@@ -420,6 +420,16 @@ class FocusMapConfig(BaseModel):
         description="Manual focus points [{x, y, z?}]; Z is autofocus-measured when missing/null",
     )
 
+    # Explicit automatic-grid measurement positions, curated in the frontend
+    # preview (the user can delete planned grid points before the scan). A
+    # group uses the entries whose group_id matches (or is missing) instead of
+    # generating its own rows×cols grid; groups without any matching entry
+    # fall back to grid generation.
+    grid_points: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Curated grid positions [{x, y, group_id?}] replacing the generated focus grid per group",
+    )
+
 
 class Experiment(BaseModel):
     name: str

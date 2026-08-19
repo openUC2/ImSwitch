@@ -12,12 +12,10 @@ import {
   InputLabel,
   Select,
 } from "@mui/material";
-import { Camera, InfoOutlined } from "@mui/icons-material";
+import { Camera, InfoOutlined, Tune } from "@mui/icons-material";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
-import {
-  SUPPORTED_GAIN_VALUES,
-  normalizeGainValue,
-} from "../constants/cameraGainValues.js";
+import { normalizeGainValue } from "../constants/cameraGainValues.js";
+import CameraSettingsDialog from "./CameraSettingsDialog.jsx";
 
 const AUTO_ONCE_RESET_DELAY_MS = 1500;
 const AUTO_ONCE_UI_HOLD_MS = AUTO_ONCE_RESET_DELAY_MS + 300;
@@ -45,16 +43,38 @@ export default function DetectorParameters({ hostIP, hostPort }) {
   // the backend until the user commits (blur / Enter).
   const [localExposure, setLocalExposure] = useState("");
   const [localGain, setLocalGain] = useState("");
-  const [localBlacklevel, setLocalBlacklevel] = useState("");
   const [autoOncePending, setAutoOncePending] = useState(false);
+  const [cameraDialogOpen, setCameraDialogOpen] = useState(false);
 
   // Track whether a field is currently being edited so we don't
   // overwrite the user's in-progress typing with a WebSocket update.
   const editingRef = useRef({
     exposure: false,
     gain: false,
-    blacklevel: false,
   });
+
+  // Gain limits come from the camera when the manager knows them; otherwise the
+  // generic clamp in normalizeGainValue applies.
+  const gainMin = detectorParams.gainMin;
+  const gainMax = detectorParams.gainMax;
+  const clampGain = useCallback(
+    (value) => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return null;
+      const hasMin = gainMin !== null && gainMin !== undefined;
+      const hasMax = gainMax !== null && gainMax !== undefined;
+      if (!hasMin && !hasMax) return normalizeGainValue(num);
+      let result = num;
+      if (hasMin) result = Math.max(Number(gainMin), result);
+      if (hasMax) result = Math.min(Number(gainMax), result);
+      return result;
+    },
+    [gainMin, gainMax],
+  );
+
+  const supportedBinnings = Array.isArray(detectorParams.supportedBinnings)
+    ? detectorParams.supportedBinnings
+    : [];
 
   // Fetch existing detector parameters on mount and when connection changes
   useEffect(() => {
@@ -66,9 +86,12 @@ export default function DetectorParameters({ hostIP, hostPort }) {
         );
         if (!resp.ok || cancelled) return;
         const data = await resp.json();
+        // Keep every key the backend reports (supportedBinnings, gain limits,
+        // ...) so new camera capabilities show up without touching this list.
         const newParams = {
+          ...data,
           exposure: data.exposure ?? "",
-          gain: normalizeGainValue(data.gain) ?? "",
+          gain: data.gain ?? "",
           pixelSize: data.pixelSize ?? "",
           binning: data.binning ?? "",
           blacklevel: data.blacklevel ?? "",
@@ -80,8 +103,6 @@ export default function DetectorParameters({ hostIP, hostPort }) {
         if (!editingRef.current.exposure)
           setLocalExposure(String(newParams.exposure));
         if (!editingRef.current.gain) setLocalGain(String(newParams.gain));
-        if (!editingRef.current.blacklevel)
-          setLocalBlacklevel(String(newParams.blacklevel));
       } catch (error) {
         console.error("Error fetching detector parameters:", error);
       }
@@ -114,17 +135,10 @@ export default function DetectorParameters({ hostIP, hostPort }) {
       detectorParams.gain !== undefined &&
       detectorParams.gain !== null
     ) {
-      const normalizedGain = normalizeGainValue(detectorParams.gain);
-      setLocalGain(normalizedGain !== null ? String(normalizedGain) : "");
+      const gainValue = Number(detectorParams.gain);
+      setLocalGain(Number.isFinite(gainValue) ? String(gainValue) : "");
     }
-    if (
-      !editingRef.current.blacklevel &&
-      detectorParams.blacklevel !== undefined &&
-      detectorParams.blacklevel !== null
-    ) {
-      setLocalBlacklevel(String(Math.round(Number(detectorParams.blacklevel))));
-    }
-  }, [detectorParams.exposure, detectorParams.gain, detectorParams.blacklevel]);
+  }, [detectorParams.exposure, detectorParams.gain]);
 
   // Update numeric field immediately on change
   const handleImmediateFieldChange = useCallback(
@@ -133,9 +147,9 @@ export default function DetectorParameters({ hostIP, hostPort }) {
       if (rawValue === "" || isNaN(value)) return;
 
       if (field === "gain") {
-        const normalizedGain = normalizeGainValue(value);
-        if (normalizedGain === null) return;
-        value = normalizedGain;
+        const clampedGain = clampGain(value);
+        if (clampedGain === null) return;
+        value = clampedGain;
       }
 
       dispatch(detectorParametersSlice.updateParameter({ key: field, value }));
@@ -163,7 +177,7 @@ export default function DetectorParameters({ hostIP, hostPort }) {
         console.error(`Error updating '${field}' to '${value}':`, error);
       }
     },
-    [hostIP, hostPort, dispatch],
+    [hostIP, hostPort, dispatch, clampGain],
   );
 
   // Handle non-numeric fields (binning, isRGB, mode) immediately on change
@@ -207,8 +221,9 @@ export default function DetectorParameters({ hostIP, hostPort }) {
       const data = await resp.json();
       dispatch(
         detectorParametersSlice.setParameters({
+          ...data,
           exposure: data.exposure ?? "",
-          gain: normalizeGainValue(data.gain) ?? "",
+          gain: data.gain ?? "",
           pixelSize: data.pixelSize ?? "",
           binning: data.binning ?? "",
           blacklevel: data.blacklevel ?? "",
@@ -250,9 +265,7 @@ export default function DetectorParameters({ hostIP, hostPort }) {
 
   const isValidNumericInput = (field, value) => {
     if (value === "") return true;
-    // Exposure allows decimals while typing (e.g. "10."), black level is integer-only.
-    if (field === "exposure") return /^\d*\.?\d*$/.test(value);
-    if (field === "blacklevel") return /^\d*$/.test(value);
+    // Decimals are allowed while typing (e.g. "10.").
     return /^\d*\.?\d*$/.test(value);
   };
 
@@ -261,20 +274,6 @@ export default function DetectorParameters({ hostIP, hostPort }) {
     const raw = e.target.value;
     if (!isValidNumericInput(field, raw)) {
       return;
-    }
-    if (field === "blacklevel") {
-      // Keep empty string while typing, but prevent committing negative values.
-      if (raw === "") {
-        setValue(raw);
-        return;
-      }
-      const num = Number(raw);
-      if (!isNaN(num)) {
-        const clamped = Math.max(0, num);
-        setValue(String(clamped));
-        handleImmediateFieldChange(field, clamped);
-        return;
-      }
     }
     setValue(raw);
     handleImmediateFieldChange(field, raw);
@@ -286,15 +285,21 @@ export default function DetectorParameters({ hostIP, hostPort }) {
     }
   };
 
-  const handleGainChange = (event) => {
-    const selectedGain = Number(event.target.value);
-    if (!Number.isFinite(selectedGain)) return;
-
-    beginEditing("gain");
-    setLocalGain(String(selectedGain));
-    handleImmediateFieldChange("gain", selectedGain);
-    endEditing("gain");
+  // Binning changes the frame size, so re-read the parameters afterwards.
+  const handleBinningChange = async (event) => {
+    const value = Number(event.target.value);
+    if (!Number.isFinite(value)) return;
+    await handleParamChange("binning", value);
+    await refreshDetectorParameters();
   };
+
+  const gainHelperText =
+    gainMin !== null &&
+    gainMin !== undefined &&
+    gainMax !== null &&
+    gainMax !== undefined
+      ? `${gainMin} – ${gainMax}`
+      : " ";
 
   return (
     <Box
@@ -335,6 +340,20 @@ export default function DetectorParameters({ hostIP, hostPort }) {
           <IconButton size="small" sx={{ p: 0.25, color: "text.disabled" }}>
             <InfoOutlined fontSize="inherit" />
           </IconButton>
+        </Tooltip>
+        <Tooltip
+          arrow
+          title="All camera settings (black level, trigger, cooling, temperature, ...)"
+        >
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<Tune fontSize="small" />}
+            onClick={() => setCameraDialogOpen(true)}
+            sx={{ ml: 1, py: 0.1 }}
+          >
+            Camera settings
+          </Button>
         </Tooltip>
       </Box>
 
@@ -455,92 +474,79 @@ export default function DetectorParameters({ hostIP, hostPort }) {
           color="text.secondary"
           sx={{ fontWeight: 500 }}
         >
-          Advanced parameters
+          Gain and binning
         </Typography>
         <Box
           sx={{
             display: "grid",
             gridTemplateColumns: { xs: "1fr", md: "160px 160px" },
             gap: 1,
-            alignItems: "end",
+            alignItems: "start",
             mt: 0.25,
           }}
         >
-          <FormControl size="small" sx={{ minWidth: 160 }}>
-            <InputLabel id="detector-gain-label">Gain</InputLabel>
-            <Select
-              labelId="detector-gain-label"
-              label="Gain"
-              value={localGain === "" ? "" : Number(localGain)}
-              onChange={handleGainChange}
-              sx={{
-                "& .MuiInputBase-root": {
-                  height: 40,
-                },
-              }}
-            >
-              {SUPPORTED_GAIN_VALUES.map((val) => (
-                <MenuItem key={val} value={val}>
-                  {val}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
           <TextField
-            label="Black Level"
+            label="Gain"
             type="text"
             inputProps={{ inputMode: "decimal" }}
-            value={localBlacklevel}
-            onFocus={() => beginEditing("blacklevel")}
-            onChange={handleNumericFieldChange(
-              "blacklevel",
-              setLocalBlacklevel,
-            )}
-            onBlur={() => endEditing("blacklevel")}
+            value={localGain}
+            onFocus={() => beginEditing("gain")}
+            onChange={handleNumericFieldChange("gain", setLocalGain)}
+            onBlur={() => endEditing("gain")}
             onKeyDown={handleNumericFieldKeyDown}
             size="small"
+            helperText={gainHelperText}
+            FormHelperTextProps={{ sx: { minHeight: "1.2em", m: 0, mt: 0.25 } }}
             sx={{
               "& .MuiInputBase-root": {
                 height: 40,
               },
             }}
-            InputProps={{
-              endAdornment: (
-                <Box sx={{ display: "flex", flexDirection: "column", ml: 0.5 }}>
-                  <IconButton
-                    size="small"
-                    sx={{ p: 0, height: 18 }}
-                    aria-label="Increment black level"
-                    onClick={() => {
-                      const next = Number(localBlacklevel || 0) + 1;
-                      setLocalBlacklevel(String(next));
-                      handleImmediateFieldChange("blacklevel", next);
-                    }}
-                  >
-                    <span style={{ fontSize: 14, lineHeight: 1 }}>▲</span>
-                  </IconButton>
-                  <IconButton
-                    size="small"
-                    sx={{ p: 0, height: 18 }}
-                    aria-label="Decrement black level"
-                    onClick={() => {
-                      const next = Math.max(
-                        0,
-                        Number(localBlacklevel || 0) - 1,
-                      );
-                      setLocalBlacklevel(String(next));
-                      handleImmediateFieldChange("blacklevel", next);
-                    }}
-                  >
-                    <span style={{ fontSize: 14, lineHeight: 1 }}>▼</span>
-                  </IconButton>
-                </Box>
-              ),
-            }}
           />
+
+          <Tooltip
+            arrow
+            title="Combines neighbouring pixels: smaller, brighter and less noisy images at lower resolution."
+          >
+            <FormControl
+              size="small"
+              sx={{ minWidth: 160 }}
+              disabled={supportedBinnings.length < 2}
+            >
+              <InputLabel id="detector-binning-label">Binning</InputLabel>
+              <Select
+                labelId="detector-binning-label"
+                id="detector-binning-select"
+                label="Binning"
+                value={
+                  supportedBinnings.length
+                    ? Number(detectorParams.binning) || supportedBinnings[0]
+                    : Number(detectorParams.binning) || 1
+                }
+                onChange={handleBinningChange}
+                sx={{ height: 40 }}
+              >
+                {(supportedBinnings.length
+                  ? supportedBinnings
+                  : [Number(detectorParams.binning) || 1]
+                ).map((val) => (
+                  <MenuItem key={val} value={val}>
+                    {`${val} × ${val}`}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Tooltip>
         </Box>
       </Box>
+
+      <CameraSettingsDialog
+        open={cameraDialogOpen}
+        onClose={() => {
+          setCameraDialogOpen(false);
+          refreshDetectorParameters();
+        }}
+      />
     </Box>
   );
 }

@@ -11,13 +11,16 @@ import { useTheme, alpha } from "@mui/material/styles";
  *   data.preview_grid: { x: [], y: [], z: [[]] }  – fitted surface on regular grid
  *   data.fit_stats: { method, z_range, mean_abs_error, ... }
  *   onClickPosition: (worldX, worldY) => void  – callback when canvas is clicked
+ *   highlightIndex: number|null – index into measured points to emphasise
+ *     (set while the corresponding list row is hovered)
  */
 
 const CANVAS_SIZE = 320;
 const PADDING = 40;
 
 // Colour ramp: blue (low Z) → green → yellow → red (high Z)
-const colorForValue = (t) => {
+// Exported so list views (FocusMapDimension) can show matching colour chips.
+export const colorForValue = (t) => {
   // t in [0,1]
   const r = Math.round(255 * Math.min(1, Math.max(0, 1.5 * t - 0.25)));
   const g = Math.round(255 * Math.min(1, Math.max(0, t < 0.5 ? 2 * t : 2 - 2 * t)));
@@ -25,7 +28,7 @@ const colorForValue = (t) => {
   return `rgb(${r},${g},${b})`;
 };
 
-const FocusMapVisualization = ({ data, onClickPosition }) => {
+const FocusMapVisualization = ({ data, onClickPosition, highlightIndex = null }) => {
   const theme = useTheme();
   const canvasRef = useRef(null);
 
@@ -154,7 +157,7 @@ const FocusMapVisualization = ({ data, onClickPosition }) => {
     }
 
     // Draw measured points as circles with Z-coloured fill
-    measured_points.forEach((p) => {
+    measured_points.forEach((p, idx) => {
       const [cx, cy] = toCanvas(p.x, p.y);
       const t = normalizeZ(p.z);
       ctx.beginPath();
@@ -164,6 +167,15 @@ const FocusMapVisualization = ({ data, onClickPosition }) => {
       ctx.strokeStyle = theme.palette.text.primary;
       ctx.lineWidth = 1.5;
       ctx.stroke();
+
+      if (highlightIndex === idx) {
+        // Emphasise the hovered list row's point with an orange ring
+        ctx.beginPath();
+        ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+        ctx.strokeStyle = theme.palette.warning.main;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
     });
 
     // Axes labels
@@ -192,7 +204,7 @@ const FocusMapVisualization = ({ data, onClickPosition }) => {
     ctx.fillText(`${bounds.zMax.toFixed(1)}`, barX - 4, barY - 4);
     ctx.fillText(`${bounds.zMin.toFixed(1)}`, barX - 4, barY + barH + 10);
 
-  }, [data, bounds, theme]);
+  }, [data, bounds, theme, highlightIndex]);
 
   const hasData = measured_points.length > 0 || (preview_grid && preview_grid.z && preview_grid.z.length > 0);
 

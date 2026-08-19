@@ -30,6 +30,11 @@ class VirtualStageManager(PositionerManager):
         # get bootup position and write to GUI
         self._position = self.getPosition()
 
+    @property
+    def combinedAxes(self):
+        """The simulated stage applies X/Y (and X/Y/Z) in one step."""
+        return ["XY", "XYZ"]
+
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=1):
         # For absolute moves the caller passes user coordinates; the simulated
         # device sees user + offset (same convention as ESP32StageManager).

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useEffect, useState, useMemo } from "react";
 import { forwardRef, useImperativeHandle } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
@@ -8,9 +8,14 @@ import * as positionSlice from "../state/slices/PositionSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as focusMapSlice from "../state/slices/FocusMapSlice.js";
 import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js";
+import * as stageMapSlice from "../state/slices/StageMapSlice.js";
 
 import * as wsUtils from "./WellSelectorUtils.js";
-import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
+import {
+  computePlannedFocusPoints,
+  filterRemovedPlannedPoints,
+} from "./experiment-designer/plannedFocusGrid.js";
+import apiPositionerControllerMovePositionerXYZ from "../backendapi/apiPositionerControllerMovePositionerXYZ.js";
 import apiPositionerControllerSetStageOffsetAxis from "../backendapi/apiPositionerControllerSetStageOffsetAxis.js";
 import apiPositionerControllerGetDevicePositionAxis from "../backendapi/apiPositionerControllerGetDevicePositionAxis.js";
 
@@ -98,9 +103,35 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   const focusMapState = useSelector(focusMapSlice.getFocusMapState);
   const focusMapManualPoints = useSelector(focusMapSlice.getManualPoints);
   const overviewRegState = useSelector(overviewRegSlice.getOverviewRegistrationState);
+  const stageMapState = useSelector(stageMapSlice.getStageMapState);
 
   // Preloaded overlay images cache (HTML Image objects)
   const overlayImagesRef = useRef({});
+  // Stage map tile previews cache, keyed by tile id
+  const stageMapTileImagesRef = useRef({});
+
+  // Planned automatic focus-grid points (crosses shown BEFORE measurement so
+  // the user can prune them in the Focus Map panel). Mirrors the backend grid
+  // for the current selection; user deletions are subtracted via their keys.
+  const plannedFocusPoints = useMemo(() => {
+    const cfg = focusMapState?.config;
+    if (!cfg?.enabled || cfg?.use_manual_map) return [];
+    return filterRemovedPlannedPoints(
+      computePlannedFocusPoints(
+        experimentState,
+        objectiveState,
+        wellSelectorState,
+        cfg,
+      ),
+      focusMapState?.plannedRemovedKeys,
+    );
+  }, [
+    experimentState,
+    objectiveState,
+    wellSelectorState,
+    focusMapState?.config,
+    focusMapState?.plannedRemovedKeys,
+  ]);
 
   //##################################################################################
   useImperativeHandle(ref, () => ({
@@ -216,6 +247,11 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     overviewRegState.overlayEnabled,
     overviewRegState.overlayOpacity,
     overviewRegState.overlayData,
+    focusMapState,
+    focusMapManualPoints,
+    stageMapState.showOnWellplate,
+    stageMapState.tiles,
+    stageMapState.channels,
   ]);
 
   //##################################################################################
@@ -901,6 +937,9 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     //------------ draw overview camera overlay images
     drawOverviewOverlay(ctx);
 
+    //------------ draw collected stage-map scan tiles at their stage positions
+    drawStageMapTilesOverlay(ctx);
+
     //------------ draw focus map points overlay
     drawFocusMapOverlay(ctx);
 
@@ -985,6 +1024,52 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   };
 
   //##################################################################################
+  // Draw the tiles collected by the StageMapController (e.g. a 4x overview
+  // tilescan) at their true stage positions, underneath the selection/focus
+  // layers, so a ROI for a higher-magnification scan can be picked on the
+  // actual sample image. Tiles are centre-based stage µm rectangles with
+  // downscaled JPEG previews (same data StageMapController.jsx renders).
+  const drawStageMapTilesOverlay = (ctx) => {
+    if (!stageMapState?.showOnWellplate) return;
+    const tiles = stageMapState.tiles || [];
+    if (tiles.length === 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+
+    tiles.forEach((tile) => {
+      if (tile.x == null || tile.y == null || !tile.image) return;
+      // Respect the channel visibility toggles from the StageMap app
+      const channel = stageMapState.channels?.[tile.channel || "default"];
+      if (channel && channel.visible === false) return;
+
+      let cachedImg = stageMapTileImagesRef.current[tile.id];
+      if (!cachedImg) {
+        const img = new Image();
+        img.src = `data:image/jpeg;base64,${tile.image}`;
+        img.onload = () => {
+          stageMapTileImagesRef.current[tile.id] = img;
+          requestAnimationFrame(() => renderCanvas());
+        };
+        return; // Skip this tile until its preview is decoded
+      }
+
+      const px = calcPhy2Px(tile.x - tile.widthUm / 2);
+      const py = calcPhy2Px(tile.y - tile.heightUm / 2);
+      const pw = calcPhy2Px(tile.widthUm);
+      const ph = calcPhy2Px(tile.heightUm);
+
+      try {
+        ctx.drawImage(cachedImg, px, py, pw, ph);
+      } catch (e) {
+        // Image may have been evicted/not decodable
+      }
+    });
+
+    ctx.restore();
+  };
+
+  //##################################################################################
   // Draw focus map grid points as black crosses and manual points as blue circles
   const drawFocusMapOverlay = (ctx) => {
     if (!focusMapState?.config?.enabled) return;
@@ -993,29 +1078,84 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
     const results = focusMapState.results || {};
     const crossSize = 3; // px half-size of each cross arm
+    // Point hovered in the FocusMapDimension lists – emphasised here so the
+    // user can see which cross/circle a list row corresponds to.
+    const highlighted = focusMapState?.ui?.highlightedPoint || null;
 
     ctx.save();
     ctx.lineWidth = 2;
     ctx.lineCap = "round";
+
+    // Draw PLANNED (not yet measured) automatic grid points as gray crosses,
+    // so the grid is visible — and can be pruned in the Focus Map panel —
+    // before the automatic measurement starts. Groups that already have
+    // measured points draw their black crosses below instead.
+    if (!focusMapState?.config?.use_manual_map && plannedFocusPoints.length > 0) {
+      plannedFocusPoints.forEach((pt, idx) => {
+        if (results[pt.groupId]?.points?.length > 0) return;
+        const px = calcPhy2Px(pt.x);
+        const py = calcPhy2Px(pt.y);
+
+        const isHighlighted =
+          highlighted &&
+          highlighted.source === "planned" &&
+          highlighted.index === idx;
+
+        if (isHighlighted) {
+          ctx.strokeStyle = "#FF9800";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(px, py, crossSize * 3, 0, 2 * Math.PI);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = isHighlighted ? "#FF9800" : "rgba(70, 70, 70, 0.8)";
+        ctx.lineWidth = 2;
+        const s = isHighlighted ? crossSize * 2 : crossSize;
+        ctx.beginPath();
+        ctx.moveTo(px - s, py - s);
+        ctx.lineTo(px + s, py + s);
+        ctx.moveTo(px + s, py - s);
+        ctx.lineTo(px - s, py + s);
+        ctx.stroke();
+      });
+    }
 
     // Draw measured grid points from computed results as black crosses.
     // In manual-map mode the per-region auto grid is not used, so skip these
     // crosses (they otherwise clutter the map with a grid) — only the manual
     // points below matter.
     if (!focusMapState?.config?.use_manual_map) {
-      Object.values(results).forEach((group) => {
+      Object.entries(results).forEach(([groupId, group]) => {
         const points = group?.points || [];
-        points.forEach((pt) => {
+        points.forEach((pt, idx) => {
           if (pt.x == null || pt.y == null) return;
           const px = calcPhy2Px(pt.x);
           const py = calcPhy2Px(pt.y);
 
-          ctx.strokeStyle = "#000000";
+          const isHighlighted =
+            highlighted &&
+            highlighted.source === "measured" &&
+            highlighted.groupId === groupId &&
+            highlighted.index === idx;
+
+          if (isHighlighted) {
+            // Orange ring + enlarged cross for the hovered list row
+            ctx.strokeStyle = "#FF9800";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(px, py, crossSize * 3, 0, 2 * Math.PI);
+            ctx.stroke();
+          }
+
+          ctx.strokeStyle = isHighlighted ? "#FF9800" : "#000000";
+          ctx.lineWidth = 2;
+          const s = isHighlighted ? crossSize * 2 : crossSize;
           ctx.beginPath();
-          ctx.moveTo(px - crossSize, py - crossSize);
-          ctx.lineTo(px + crossSize, py + crossSize);
-          ctx.moveTo(px + crossSize, py - crossSize);
-          ctx.lineTo(px - crossSize, py + crossSize);
+          ctx.moveTo(px - s, py - s);
+          ctx.lineTo(px + s, py + s);
+          ctx.moveTo(px + s, py - s);
+          ctx.lineTo(px - s, py + s);
           ctx.stroke();
         });
       });
@@ -1027,6 +1167,19 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
         if (pt.x == null || pt.y == null) return;
         const px = calcPhy2Px(pt.x);
         const py = calcPhy2Px(pt.y);
+
+        const isHighlighted =
+          highlighted &&
+          highlighted.source === "manual" &&
+          highlighted.index === idx;
+
+        if (isHighlighted) {
+          ctx.strokeStyle = "#FF9800";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(px, py, 9, 0, 2 * Math.PI);
+          ctx.stroke();
+        }
 
         // Blue filled circle
         ctx.fillStyle = "rgba(33, 150, 243, 0.8)";
@@ -1515,31 +1668,20 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
     if (wellSelectorState.mode == Mode.MOVE_CAMERA) {
       const xySpeed = wellSelectorState.moveCameraSpeedXY ?? 20000;
-      //move camera
-      apiPositionerControllerMovePositioner({
-        axis: "X",
-        dist: calcPx2Phy(localPos.x),
+      // Move the camera with ONE coordinated XY command — the previous pair of
+      // fire-and-forget single-axis requests arrived in an undefined order and
+      // made the stage dog-leg/stutter across the plate.
+      apiPositionerControllerMovePositionerXYZ({
+        x: calcPx2Phy(localPos.x),
+        y: calcPx2Phy(localPos.y),
         isAbsolute: true,
         speed: xySpeed,
       })
         .then((positionerResponse) => {
-          console.log("apiMovePositioner X", positionerResponse);
+          console.log("apiMovePositionerXYZ", positionerResponse);
         })
         .catch((error) => {
-          console.error("apiMovePositioner X", "Error moving position:", error);
-        });
-
-      apiPositionerControllerMovePositioner({
-        axis: "Y",
-        dist: calcPx2Phy(localPos.y),
-        isAbsolute: true,
-        speed: xySpeed,
-      })
-        .then((positionerResponse) => {
-          console.log("apiMovePositioner Y", positionerResponse);
-        })
-        .catch((error) => {
-          console.error("apiMovePositioner Y", "Error moving position:", error);
+          console.error("apiMovePositionerXYZ", "Error moving position:", error);
         });
 
       //save target

@@ -1,10 +1,31 @@
-from typing import Dict, List
+from typing import Any, Dict, List, Tuple
+
+from fastapi import HTTPException
+from pydantic import BaseModel, Field
 
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import initLogger
 from typing import Optional
 from imswitch.imcontrol.model import configfiletools
+
+
+class PositionerMoveResult(BaseModel):
+    """Typed result of a positioner move, returned by the move endpoints.
+
+    ``movedAxes`` lists the axis groups actually commanded, in execution order
+    (e.g. ``["XY", "Z"]`` when the hardware coordinates X/Y but not Z), so a
+    caller can tell a single coordinated motion from a sequential fallback.
+    """
+    positionerName: str = Field(description="Positioner the move was sent to")
+    movedAxes: List[str] = Field(default_factory=list,
+                                 description='Axis groups commanded, in order (e.g. ["XY", "Z"])')
+    target: Dict[str, float] = Field(default_factory=dict,
+                                     description="Requested per-axis target (µm); absolute or relative per isAbsolute")
+    position: Dict[str, float] = Field(default_factory=dict,
+                                       description="Positioner position after the move (µm)")
+    isAbsolute: bool = Field(description="True when target is an absolute coordinate")
+    isBlocking: bool = Field(description="True when the call waited for the motion to finish")
 
 
 class PositionerController(ImConWidgetController):
@@ -103,6 +124,75 @@ class PositionerController(ImConWidgetController):
             self._logger.error(e)
             self._master.positionersManager[positionerName].move(value=dist, axis=axis)
         # self._commChannel.sigUpdateMotorPosition.emit(self.getPos()) # TODO: Unsure if this is needed - for the ESP motor not as it will update the position itself asynchronously
+
+    # ------------------------------------------------------------------
+    # Multi-axis moves
+    # ------------------------------------------------------------------
+
+    def _resolvePositionerName(self, positionerName: Optional[str] = None) -> str:
+        """Return a valid positioner name, defaulting to the first device."""
+        if (positionerName is None or positionerName == ""
+                or positionerName not in self._master.positionersManager):
+            return self._master.positionersManager.getAllDeviceNames()[0]
+        return positionerName
+
+    @staticmethod
+    def _planAxisGroups(manager, targets: Dict[str, float]) -> List[Tuple[str, Any]]:
+        """Group per-axis targets into the fewest moves the hardware supports.
+
+        Returns ``[(axisGroup, value), ...]`` in execution order, where value is
+        a scalar for a single axis and a tuple for a combined group. X/Y (and
+        X/Y/Z) collapse into one coordinated command when the manager declares
+        the group in ``combinedAxes``; otherwise the axes stay sequential. XY is
+        always ordered before Z, matching the existing move-then-focus
+        behaviour, and A is never combined.
+        """
+        combined = set(getattr(manager, "combinedAxes", None) or [])
+        present = [ax for ax in ("X", "Y", "Z") if targets.get(ax) is not None]
+
+        groups: List[Tuple[str, Any]] = []
+        if len(present) == 3 and "XYZ" in combined:
+            groups.append(("XYZ", (targets["X"], targets["Y"], targets["Z"])))
+            present = []
+        elif "X" in present and "Y" in present and "XY" in combined:
+            groups.append(("XY", (targets["X"], targets["Y"])))
+            present = [ax for ax in present if ax not in ("X", "Y")]
+
+        groups.extend((ax, targets[ax]) for ax in present)
+        if targets.get("A") is not None:
+            groups.append(("A", targets["A"]))
+        return groups
+
+    def _moveAxisGroup(self, manager, axis: str, value, isAbsolute: bool,
+                       isBlocking: bool, speed: Optional[float]) -> None:
+        """Send one (possibly combined) move to the manager.
+
+        A scalar ``speed`` is expanded to one entry per axis of a combined
+        group, since the managers expect a tuple there. Managers whose ``move``
+        predates the speed/blocking kwargs raise TypeError; only then do we
+        retry with the minimal signature — the motion cannot have started yet,
+        so this can never double-move.
+        """
+        kwargs = {"is_absolute": isAbsolute, "is_blocking": isBlocking}
+        if speed is not None:
+            kwargs["speed"] = (speed,) * len(axis) if len(axis) > 1 else speed
+        try:
+            manager.move(value=value, axis=axis, **kwargs)
+        except TypeError:
+            self.__logger.debug(
+                f"{manager.name}.move() does not accept {sorted(kwargs)}; retrying without them"
+            )
+            manager.move(value=value, axis=axis)
+
+    def _readPosition(self, manager) -> Dict[str, float]:
+        """Best-effort current position as a plain {axis: µm} dict."""
+        try:
+            position = manager.getPosition()
+            if isinstance(position, dict):
+                return {k: float(v) for k, v in position.items()}
+        except Exception:
+            pass  # manager needs an axis arg or cannot be queried – use cache
+        return {ax: float(v) for ax, v in (getattr(manager, "position", {}) or {}).items()}
 
     def moveForever(self, positionerName: str=None, axis="X", speed=0, is_stop:bool=False):
         """ Moves positioner forever. """
@@ -269,6 +359,68 @@ class PositionerController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(e)
             self.move(positionerName, axis, dist)
+
+    @APIExport(runOnUIThread=True)
+    def movePositionerXYZ(self,
+                          positionerName: Optional[str] = None,
+                          x: Optional[float] = None,
+                          y: Optional[float] = None,
+                          z: Optional[float] = None,
+                          a: Optional[float] = None,
+                          isAbsolute: bool = True,
+                          isBlocking: bool = False,
+                          speed: Optional[float] = None) -> PositionerMoveResult:
+        """ Move several axes in ONE request, coordinated where the hardware allows.
+
+        Each axis is its own typed float (µm) and only the axes you pass are
+        moved — ``x=1000&y=2000`` drives X and Y as a single coordinated motion
+        instead of two racing single-axis requests, which is what caused the
+        stutter/backlash when a click issued ``movePositioner(X)`` and
+        ``movePositioner(Y)`` back to back. X/Y (and X/Y/Z) collapse into one
+        command on stages that support it (see ``PositionerManager.combinedAxes``);
+        on stages that do not, the axes are moved sequentially in the same
+        request, so callers get identical semantics either way.
+
+        Args:
+            positionerName: Target positioner; defaults to the first device.
+            x, y, z, a: Per-axis target in µm. Omit an axis to leave it alone.
+            isAbsolute: True (default) treats values as absolute coordinates,
+                False as relative offsets.
+            isBlocking: Wait for the motion to finish before returning.
+            speed: Speed in µm/s applied to every commanded axis; None keeps
+                each axis' configured speed.
+
+        Returns:
+            PositionerMoveResult with the axis groups commanded and the
+            resulting position.
+        """
+        positionerName = self._resolvePositionerName(positionerName)
+        manager = self._master.positionersManager[positionerName]
+
+        targets = {ax: val for ax, val in (("X", x), ("Y", y), ("Z", z), ("A", a))
+                   if val is not None}
+        if not targets:
+            raise HTTPException(
+                status_code=422,
+                detail="At least one of x, y, z, a must be specified.",
+            )
+
+        groups = self._planAxisGroups(manager, targets)
+        self.__logger.debug(
+            f"Moving {positionerName} {'to' if isAbsolute else 'by'} "
+            f"{targets} as {[g[0] for g in groups]}"
+        )
+        for axis, value in groups:
+            self._moveAxisGroup(manager, axis, value, isAbsolute, isBlocking, speed)
+
+        return PositionerMoveResult(
+            positionerName=positionerName,
+            movedAxes=[axis for axis, _ in groups],
+            target={ax: float(val) for ax, val in targets.items()},
+            position=self._readPosition(manager),
+            isAbsolute=isAbsolute,
+            isBlocking=isBlocking,
+        )
 
     @APIExport(runOnUIThread=True)
     def movePositionerForever(self, positionerName: str=None, axis: str="X", speed: int=0, is_stop: bool=False):

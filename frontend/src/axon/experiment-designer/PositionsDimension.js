@@ -23,7 +23,7 @@ import SaveAltIcon from "@mui/icons-material/SaveAlt";
 import FileUploadIcon from "@mui/icons-material/FileUpload";
 
 import InfoPopup from "../InfoPopup";
-import apiPositionerControllerMovePositioner from "../../backendapi/apiPositionerControllerMovePositioner.js";
+import apiPositionerControllerMovePositionerXYZ from "../../backendapi/apiPositionerControllerMovePositionerXYZ.js";
 
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as positionSlice from "../../state/slices/PositionSlice";
@@ -107,17 +107,14 @@ const PositionsDimension = () => {
   // whether Z is moved too: the plain move stays in-plane (XY only) so focus
   // isn't disturbed, while "incl. Z" also drives Z to the stored value.
   const handleGoto = useCallback((point, includeZ = false) => {
-    apiPositionerControllerMovePositioner({ axis: "X", dist: point.x, isAbsolute: true, speed: 20000 }).catch(
-      (e) => console.error("Goto X failed", e),
-    );
-    apiPositionerControllerMovePositioner({ axis: "Y", dist: point.y, isAbsolute: true, speed: 20000 }).catch(
-      (e) => console.error("Goto Y failed", e),
-    );
-    if (includeZ && point.z != null && point.z !== "") {
-      apiPositionerControllerMovePositioner({ axis: "Z", dist: point.z, isAbsolute: true, speed: 20000 }).catch(
-        (e) => console.error("Goto Z failed", e),
-      );
-    }
+    // One request for the whole move so the axes cannot race each other.
+    apiPositionerControllerMovePositionerXYZ({
+      x: point.x,
+      y: point.y,
+      ...(includeZ && point.z != null && point.z !== "" ? { z: point.z } : {}),
+      isAbsolute: true,
+      speed: 20000,
+    }).catch((e) => console.error("Goto failed", e));
     infoPopupRef.current?.showMessage(
       `Moving stage to ${point.name || "position"}${includeZ ? " (incl. Z)" : " (XY only)"}`,
     );

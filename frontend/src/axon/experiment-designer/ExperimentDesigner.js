@@ -33,6 +33,10 @@ import ObjectiveDimension from "./ObjectiveDimension";
 
 // Utilities
 import * as coordinateCalculator from "../CoordinateCalculator";
+import {
+  generateGridForBounds,
+  filterRemovedPlannedPoints,
+} from "./plannedFocusGrid";
 import InfoPopup from "../InfoPopup";
 
 // State slices
@@ -98,6 +102,7 @@ const ExperimentDesigner = () => {
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const focusMapConfig = useSelector(focusMapSlice.getFocusMapConfig);
   const focusMapManualPoints = useSelector(focusMapSlice.getManualPoints);
+  const plannedRemovedKeys = useSelector(focusMapSlice.getPlannedRemovedKeys);
   const parameterRange = useSelector(
     parameterRangeSlice.getParameterRangeState,
   );
@@ -340,6 +345,37 @@ const ExperimentDesigner = () => {
       };
     });
 
+    // Curated automatic focus grid: apply the planned-point deletions made in
+    // the Focus Map panel to this run's focus-map phase as well. Regions whose
+    // group id matches use exactly the kept points; others (e.g. the merged
+    // "global" grid) keep the default generated grid.
+    let focusMapGridPoints = null;
+    if (
+      focusMapConfig.enabled &&
+      !focusMapConfig.use_manual_map &&
+      plannedRemovedKeys.length > 0
+    ) {
+      const planned = [];
+      (scanConfig.scanAreas || []).forEach((area) => {
+        generateGridForBounds(
+          area.bounds,
+          focusMapConfig.rows,
+          focusMapConfig.cols,
+          focusMapConfig.add_margin,
+        ).forEach(([x, y]) =>
+          planned.push({ x, y, groupId: area.areaId }),
+        );
+      });
+      const kept = filterRemovedPlannedPoints(planned, plannedRemovedKeys);
+      if (kept.length > 0) {
+        focusMapGridPoints = kept.map((p) => ({
+          x: p.x,
+          y: p.y,
+          group_id: p.groupId,
+        }));
+      }
+    }
+
     const experimentRequest = {
       name: experimentState.name,
       parameterValue: {
@@ -382,6 +418,9 @@ const ExperimentDesigner = () => {
                   })),
                 }
               : {}),
+            // Pruned automatic grid (only sent when the user deleted planned
+            // points, so unpruned runs behave exactly as before).
+            ...(focusMapGridPoints ? { grid_points: focusMapGridPoints } : {}),
           }
         : undefined,
     };

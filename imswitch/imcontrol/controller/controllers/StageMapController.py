@@ -619,12 +619,18 @@ class StageMapController(ImConWidgetController):
         return {"tiles": tiles, "sessionPath": self._sessionPath or ""}
 
     @APIExport()
-    def gotoStagePosition(self, x: float, y: float, isAbsolute: bool = True) -> bool:
-        """Move the XY stage (used for map double-click navigation)."""
+    def gotoStagePosition(self, x: float, y: float, isAbsolute: bool = True,
+                          isBlocking: bool = False) -> bool:
+        """Move the XY stage (used for map double-click / arrow-key navigation).
+
+        With isBlocking=True the call returns only after the move finished, so
+        the caller can immediately snap a tile at the settled position.
+        """
         if self._stage is None:
             return False
         try:
-            self._stage.move((float(x), float(y)), "XY", is_absolute=isAbsolute, is_blocking=False)
+            self._stage.move((float(x), float(y)), "XY", is_absolute=isAbsolute,
+                             is_blocking=isBlocking)
             return True
         except Exception as e:
             self._logger.error(f"Could not move stage: {e}")

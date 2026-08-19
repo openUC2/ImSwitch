@@ -8,9 +8,12 @@ The legacy RecordingManager has been removed - all recording functionality
 is now provided by the centralized io/writers ecosystem.
 """
 
+import base64
 import os
+import threading
 import time
 import traceback
+import uuid
 from typing import Optional, Union, List, Dict, Any
 import numpy as np
 import datetime
@@ -55,6 +58,15 @@ class RecordingController(ImConWidgetController):
 
 
         self.streamstarted = False
+
+        # Background snap jobs, keyed by jobId. A snap can take one full
+        # exposure (minutes for long-exposure work), which is far too long to
+        # hold an HTTP request open, so startSnap() runs the capture on a worker
+        # thread and the client polls getSnapStatus(). Guarded by a lock because
+        # the API thread and the worker thread both touch it.
+        self._snapJobs: Dict[str, dict] = {}
+        self._snapJobsLock = threading.Lock()
+        self._lastSnapJobId: Optional[str] = None
         
         # Recording service (lazy initialization)
         self._recording_service: Optional[RecordingService] = None
@@ -168,12 +180,79 @@ class RecordingController(ImConWidgetController):
         
         return stats
 
-    def snap(self, name=None, mSaveFormat=None) -> dict:
+    def _buildSnapPreview(self, detectorNames, maxSize: int = 1024) -> Optional[dict]:
+        """Encode the just-captured frame as a small 8-bit PNG data URL.
+
+        Reads the detector's *current* latest frame, so this must be called
+        while the detector is still armed and before a new exposure can start —
+        it then costs no extra exposure, which matters when a single frame takes
+        a minute. The frame is min/max windowed to 8 bit purely for display;
+        the file written to disk keeps the full bit depth.
+        """
+        for detectorName in detectorNames:
+            try:
+                frame = self._master.detectorsManager[detectorName].getLatestFrame()
+            except Exception as e:
+                self.__logger.debug(f"No preview frame from '{detectorName}': {e}")
+                continue
+            if frame is None:
+                continue
+            try:
+                image = np.asarray(frame)
+                if image.ndim == 3 and image.shape[2] >= 3:
+                    image = image[:, :, :3]
+                elif image.ndim != 2:
+                    continue
+
+                if image.dtype != np.uint8:
+                    lo = float(image.min())
+                    hi = float(image.max())
+                    scale = 255.0 / (hi - lo) if hi > lo else 0.0
+                    image = ((image.astype(np.float32) - lo) * scale)
+                    image = np.clip(image, 0, 255).astype(np.uint8)
+
+                # No explicit mode: Pillow infers "L" / "RGB" from the uint8
+                # array shape, and the mode argument is deprecated since 10.0.
+                pil = Image.fromarray(np.ascontiguousarray(image))
+                if maxSize > 0 and max(pil.size) > maxSize:
+                    ratio = maxSize / float(max(pil.size))
+                    pil = pil.resize(
+                        (max(1, int(pil.width * ratio)), max(1, int(pil.height * ratio))),
+                        Image.NEAREST,
+                    )
+                with python_io.BytesIO() as buf:
+                    pil.save(buf, format="PNG")
+                    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+                return {
+                    "previewDetector": detectorName,
+                    "previewImage": f"data:image/png;base64,{encoded}",
+                    "previewWidth": pil.width,
+                    "previewHeight": pil.height,
+                }
+            except Exception as e:
+                self.__logger.warning(
+                    f"Failed to build snap preview for '{detectorName}': {e}"
+                )
+        return None
+
+    def snap(self, name=None, mSaveFormat=None, returnPreview: bool = False,
+             previewMaxSize: int = 1024, cancelEvent: Optional[threading.Event] = None) -> dict:
         """
         Take a snap and save it to a file using RecordingService.
-        
+
         This method delegates to RecordingService from the io module for
         all snap operations.
+
+        When ``returnPreview`` is set, the captured frame is additionally
+        returned as a downscaled 8-bit PNG data URL so the UI can display it —
+        useful when the live stream is off (long exposures) and the viewport
+        would otherwise stay blank.
+
+        ``cancelEvent`` lets a caller abort while the camera is still
+        integrating (see startSnap/cancelSnap). It is checked during the
+        wait-for-exposure phase — the only part that can take minutes — and the
+        detector is then released without writing a file. The returned dict has
+        ``cancelled: True`` in that case.
         """
         self.updateRecAttrs(isSnapping=True)
 
@@ -220,9 +299,22 @@ class RecordingController(ImConWidgetController):
         # wait for one full fresh exposure, capture, then release the detector
         # again. Detectors that are already running (e.g. an active stream) are
         # left untouched.
-        armedDetectors = self._armDetectorsForSnap(detectorNames)
+        armedDetectors = self._armDetectorsForSnap(detectorNames, cancelEvent=cancelEvent)
+
+        # Aborted while the sensor was integrating: release the detector (which
+        # stops the exposure) and report back without writing anything.
+        if cancelEvent is not None and cancelEvent.is_set():
+            self._disarmDetectorsAfterSnap(armedDetectors)
+            self.__logger.info("Snap cancelled before the frame was captured")
+            return {
+                "cancelled": True,
+                "fullPath": None,
+                "relativePath": relativeFolder,
+                "relativeFilePath": None,
+            }
 
         # Use RecordingService for snap operations
+        preview = None
         try:
             result = self.recording_service.snap(
                 detector_names=detectorNames,
@@ -232,6 +324,10 @@ class RecordingController(ImConWidgetController):
                 attrs=attrs,
                 async_write=False,  # Synchronous write to ensure file is saved immediately
             )
+            if returnPreview:
+                # Still armed here, so this returns the frame we just captured
+                # instead of triggering another (possibly minute-long) exposure.
+                preview = self._buildSnapPreview(detectorNames, previewMaxSize)
         except Exception as e:
             self.__logger.error(f"Failed to snap: {e}")
             self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
@@ -276,11 +372,14 @@ class RecordingController(ImConWidgetController):
         except Exception:
             relative_file_path = None
 
-        return {
+        response = {
             "fullPath": saved_full_path,
             "relativePath": relativeFolder,
             "relativeFilePath": relative_file_path,
         }
+        if preview:
+            response.update(preview)
+        return response
 
     def _getDetectorExposureSeconds(self, detector) -> float:
         """Best-effort read of the detector exposure time, returned in seconds.
@@ -308,7 +407,8 @@ class RecordingController(ImConWidgetController):
                 return value / 1000.0
         return 0.0
 
-    def _armDetectorsForSnap(self, detectorNames) -> list:
+    def _armDetectorsForSnap(self, detectorNames,
+                             cancelEvent: Optional[threading.Event] = None) -> list:
         """Ensure the given detectors are acquiring so a fresh frame can be
         captured even when the live stream is stopped.
 
@@ -346,22 +446,39 @@ class RecordingController(ImConWidgetController):
         # Wait for a genuinely fresh frame on each detector we just armed so that
         # long exposures are fully integrated before the frame is grabbed.
         for detectorName in started:
+            if cancelEvent is not None and cancelEvent.is_set():
+                break
             try:
-                self._waitForFreshFrame(self._master.detectorsManager[detectorName])
+                self._waitForFreshFrame(self._master.detectorsManager[detectorName],
+                                        cancelEvent=cancelEvent)
             except Exception as e:
                 self.__logger.warning(
                     f"Error while waiting for a fresh frame on '{detectorName}': {e}"
                 )
         return started
 
+    @staticmethod
+    def _interruptibleSleep(seconds: float, cancelEvent: Optional[threading.Event]) -> bool:
+        """Sleep, but wake immediately if ``cancelEvent`` fires. True if cancelled."""
+        if cancelEvent is None:
+            time.sleep(max(0.0, seconds))
+            return False
+        return cancelEvent.wait(max(0.0, seconds))
+
     def _waitForFreshFrame(self, detector, framesToWait: int = 1,
-                           extraTimeout: float = 3.0) -> None:
+                           extraTimeout: float = 3.0,
+                           cancelEvent: Optional[threading.Event] = None) -> bool:
         """Block until the detector has produced a fresh frame after arming.
 
         Waits for the frame counter to advance so that a snap taken with the
         live stream off captures a real exposure rather than a stale buffered
         frame. The timeout scales with the configured exposure time so exposures
         of many seconds (e.g. 60 s or more) are supported.
+
+        Returns True if a fresh frame arrived (or we gave up waiting for one),
+        False if ``cancelEvent`` fired first. Note that the blocking part is
+        usually inside the driver's own grab call; cancelSnap() therefore also
+        stops the detector, which makes that call return early.
         """
         exposureSeconds = self._getDetectorExposureSeconds(detector)
         # Allow a full exposure for every frame we wait for, plus a safety margin.
@@ -369,24 +486,29 @@ class RecordingController(ImConWidgetController):
         startTime = time.time()
         baselineFrameNumber = None
         while True:
+            if cancelEvent is not None and cancelEvent.is_set():
+                return False
             try:
                 frame, frameNumber = detector.getLatestFrame(returnFrameNumber=True)
             except TypeError:
                 # Detector doesn't expose frame numbers - fall back to a
                 # time-based wait of roughly one exposure so we still capture a
                 # reasonably fresh frame.
-                time.sleep(min(timeout, exposureSeconds + 0.3))
-                return
+                return not self._interruptibleSleep(
+                    min(timeout, exposureSeconds + 0.3), cancelEvent)
             except Exception as e:
                 self.__logger.warning(f"Error reading frame while arming snap: {e}")
-                time.sleep(min(timeout, exposureSeconds + 0.3))
-                return
+                return not self._interruptibleSleep(
+                    min(timeout, exposureSeconds + 0.3), cancelEvent)
+
+            if cancelEvent is not None and cancelEvent.is_set():
+                return False
 
             if frameNumber is None:
                 # Driver doesn't report frame numbers via this path; wait ~one
                 # exposure and use whatever is available.
-                time.sleep(min(timeout, exposureSeconds + 0.3))
-                return
+                return not self._interruptibleSleep(
+                    min(timeout, exposureSeconds + 0.3), cancelEvent)
 
             if baselineFrameNumber is None or frameNumber < baselineFrameNumber:
                 # Establish the baseline (or reset it if the counter wrapped or
@@ -394,15 +516,16 @@ class RecordingController(ImConWidgetController):
                 baselineFrameNumber = frameNumber
 
             if frame is not None and frameNumber >= baselineFrameNumber + framesToWait:
-                return
+                return True
 
             if time.time() - startTime > timeout:
                 self.__logger.debug(
                     f"Timed out after {timeout:.1f}s waiting for a fresh frame; "
                     f"using the latest available frame."
                 )
-                return
-            time.sleep(0.02)
+                return True
+            if self._interruptibleSleep(0.02, cancelEvent):
+                return False
 
     def _disarmDetectorsAfterSnap(self, detectorNames) -> None:
         """Stop the detectors that were armed by :meth:`_armDetectorsForSnap`,
@@ -416,6 +539,224 @@ class RecordingController(ImConWidgetController):
             except Exception as e:
                 self.__logger.warning(
                     f"Failed to release detector '{detectorName}' after snap: {e}"
+                )
+
+    # ------------------------------------------------------------------
+    # Asynchronous snap jobs
+    #
+    # A snap costs at least one full exposure. For a 10 ms exposure that is
+    # invisible, but long-exposure work runs at tens of seconds per frame, and
+    # holding an HTTP request open that long ties up a server worker, trips
+    # proxy/browser timeouts, and leaves the UI unable to do anything at all --
+    # including telling the user to wait. startSnap() therefore hands the
+    # capture to a worker thread and returns a jobId immediately; the client
+    # polls getSnapStatus(jobId) and can abort with cancelSnap(jobId).
+    # ------------------------------------------------------------------
+
+    _SNAP_JOB_HISTORY = 20
+
+    def _estimateSnapDurationMs(self, detectorNames) -> float:
+        """Expected wall-clock time for a snap, so the UI can show a countdown.
+
+        One exposure has to be integrated after arming, plus readout/encode
+        overhead. Display only -- the job's real state always comes from its
+        status, never from this estimate running out.
+        """
+        longestExposureSeconds = 0.0
+        for detectorName in detectorNames:
+            try:
+                detector = self._master.detectorsManager[detectorName]
+            except Exception:
+                continue
+            longestExposureSeconds = max(
+                longestExposureSeconds, self._getDetectorExposureSeconds(detector)
+            )
+        return longestExposureSeconds * 1000.0 + 1500.0
+
+    def _pruneSnapJobs(self) -> None:
+        """Keep only the most recent jobs so the registry cannot grow forever."""
+        if len(self._snapJobs) <= self._SNAP_JOB_HISTORY:
+            return
+        finished = [
+            (job["finishedAt"] or 0, jobId)
+            for jobId, job in self._snapJobs.items()
+            if job["status"] in ("done", "error", "cancelled")
+        ]
+        finished.sort()
+        for _, jobId in finished[: len(self._snapJobs) - self._SNAP_JOB_HISTORY]:
+            self._snapJobs.pop(jobId, None)
+
+    def _snapJobPublicState(self, job: dict) -> dict:
+        """The subset of a job that is useful to a client."""
+        elapsedMs = ((job["finishedAt"] or time.time()) - job["startedAt"]) * 1000.0
+        expectedMs = job["expectedDurationMs"]
+        if job["status"] in ("done", "error", "cancelled"):
+            progress = 100.0
+        elif expectedMs > 0:
+            progress = min(99.0, elapsedMs / expectedMs * 100.0)
+        else:
+            progress = 0.0
+        state = {
+            "jobId": job["jobId"],
+            "status": job["status"],
+            "elapsedMs": elapsedMs,
+            "expectedDurationMs": expectedMs,
+            "progress": progress,
+            "detectors": job["detectors"],
+        }
+        if job["error"]:
+            state["error"] = job["error"]
+        if job["result"]:
+            state["result"] = job["result"]
+        return state
+
+    def _runSnapJob(self, jobId: str, name, mSaveFormat, returnPreview: bool,
+                    previewMaxSize: int) -> None:
+        """Worker body for startSnap(); runs on its own thread."""
+        with self._snapJobsLock:
+            job = self._snapJobs.get(jobId)
+            if job is None:
+                return
+            job["status"] = "running"
+            cancelEvent = job["cancelEvent"]
+
+        status, result, error = "done", None, None
+        try:
+            result = self.snap(name=name, mSaveFormat=mSaveFormat,
+                               returnPreview=returnPreview,
+                               previewMaxSize=previewMaxSize,
+                               cancelEvent=cancelEvent)
+            if result.get("cancelled"):
+                status = "cancelled"
+        except Exception as e:
+            status, error = "error", str(e)
+            self.__logger.error(f"Snap job {jobId} failed: {e}")
+            self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
+
+        with self._snapJobsLock:
+            job = self._snapJobs.get(jobId)
+            if job is None:
+                return
+            # A cancel that lands while we are already writing the file still
+            # wins for reporting purposes: the user asked to abort.
+            if job["cancelEvent"].is_set() and status == "done":
+                status = "cancelled"
+            job["status"] = status
+            job["result"] = result
+            job["error"] = error
+            job["finishedAt"] = time.time()
+
+    @APIExport(runOnUIThread=False)
+    def startSnap(self, fileName: Optional[str] = None,
+                  saveFormat: int = SaveFormat.TIFF,
+                  returnPreview: bool = True,
+                  previewMaxSize: int = 1024) -> dict:
+        """Start a snap in the background and return immediately.
+
+        Unlike ``snapImageToPath``, this does not block for the exposure. Poll
+        ``getSnapStatus(jobId)`` for progress and the finished image, and call
+        ``cancelSnap(jobId)`` to abort an exposure that is still running.
+
+        Parameters mirror ``snapImageToPath``. ``returnPreview`` defaults to
+        True here because the typical caller is a UI that wants to display the
+        result.
+
+        Returns a dict with ``jobId``, ``status`` and ``expectedDurationMs``
+        (an exposure-based estimate the UI can count down against).
+        """
+        detectorNames = self.getDetectorNamesToCapture()
+        jobId = uuid.uuid4().hex
+        job = {
+            "jobId": jobId,
+            "status": "pending",
+            "startedAt": time.time(),
+            "finishedAt": None,
+            "expectedDurationMs": self._estimateSnapDurationMs(detectorNames),
+            "detectors": list(detectorNames),
+            "result": None,
+            "error": None,
+            "cancelEvent": threading.Event(),
+        }
+        with self._snapJobsLock:
+            self._snapJobs[jobId] = job
+            self._lastSnapJobId = jobId
+            self._pruneSnapJobs()
+            state = self._snapJobPublicState(job)
+
+        threading.Thread(
+            target=self._runSnapJob,
+            args=(jobId, fileName, saveFormat, returnPreview, previewMaxSize),
+            name=f"SnapJob-{jobId[:8]}",
+            daemon=True,
+        ).start()
+        return state
+
+    @APIExport()
+    def getSnapStatus(self, jobId: Optional[str] = None) -> dict:
+        """Poll a background snap started with ``startSnap``.
+
+        ``jobId`` defaults to the most recently started job, so a single-user UI
+        does not have to track ids. Returns ``status`` (pending/running/done/
+        error/cancelled), ``progress`` (0-100, estimated from the exposure while
+        running), ``elapsedMs``, ``expectedDurationMs`` and, once finished, the
+        same ``result`` dict that ``snapImageToPath`` returns.
+        """
+        with self._snapJobsLock:
+            if jobId is None:
+                jobId = self._lastSnapJobId
+            job = self._snapJobs.get(jobId) if jobId else None
+            if job is None:
+                return {"jobId": jobId, "status": "unknown",
+                        "error": "No such snap job"}
+            return self._snapJobPublicState(job)
+
+    @APIExport()
+    def cancelSnap(self, jobId: Optional[str] = None) -> dict:
+        """Abort a running snap and stop the exposure.
+
+        Sets the job's cancel flag and immediately stops acquisition on the
+        detectors it armed, which ends the integration in the driver rather than
+        waiting it out. Detectors that were already running before the snap (an
+        active live stream) keep running.
+
+        ``jobId`` defaults to the most recently started job.
+        """
+        with self._snapJobsLock:
+            if jobId is None:
+                jobId = self._lastSnapJobId
+            job = self._snapJobs.get(jobId) if jobId else None
+            if job is None:
+                return {"jobId": jobId, "status": "unknown",
+                        "error": "No such snap job"}
+            alreadyFinished = job["status"] in ("done", "error", "cancelled")
+            if not alreadyFinished:
+                job["cancelEvent"].set()
+            detectorNames = list(job["detectors"])
+            state = self._snapJobPublicState(job)
+
+        if alreadyFinished:
+            return {**state, "cancelled": False,
+                    "message": "Job already finished"}
+
+        # Stop the sensor now. The worker thread is most likely parked inside a
+        # blocking grab; stopping acquisition ends the integration so that call
+        # returns instead of running out the full exposure.
+        self._abortSnapAcquisition(detectorNames)
+        self.__logger.info(f"Snap job {jobId} cancelled by request")
+        return {**state, "status": "cancelling", "cancelled": True}
+
+    def _abortSnapAcquisition(self, detectorNames) -> None:
+        """Stop acquisition on the detectors used by a snap, aborting exposure."""
+        for detectorName in detectorNames:
+            try:
+                detector = self._master.detectorsManager[detectorName]
+            except Exception:
+                continue
+            try:
+                detector.stopAcquisition()
+            except Exception as e:
+                self.__logger.warning(
+                    f"Could not stop acquisition on '{detectorName}': {e}"
                 )
 
     def snapNumpy(self) -> Dict[str, np.ndarray]:
@@ -444,9 +785,11 @@ class RecordingController(ImConWidgetController):
     def _start_frame_recording(self, save_format: SaveFormat):
         """Start recording for a specific number of frames."""
         if save_format == SaveFormat.MP4:
+            # fps=None: the writer measures the real stream rate. A hard-coded
+            # 30 fps produced videos that played back at the wrong speed.
             self.recording_service.start_video_recording(
                 filepath=f"{self.savename}.mp4",
-                fps=30.0
+                fps=None
             )
         else:
             # Use streaming for TIFF/other formats
@@ -463,9 +806,10 @@ class RecordingController(ImConWidgetController):
     def _start_continuous_recording(self, save_format: SaveFormat):
         """Start continuous recording until stopped."""
         if save_format == SaveFormat.MP4:
+            # fps=None: measured from the live stream (see _start_frame_recording).
             self.recording_service.start_video_recording(
                 filepath=f"{self.savename}.mp4",
-                fps=30.0
+                fps=None
             )
         elif save_format == SaveFormat.TIFF:
             self.start_streaming_recording(
@@ -662,13 +1006,18 @@ class RecordingController(ImConWidgetController):
 
 
     @APIExport(runOnUIThread=False)
-    def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: int = SaveFormat.TIFF) -> dict:
+    def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: int = SaveFormat.TIFF,
+                        returnPreview: bool = False, previewMaxSize: int = 1024) -> dict:
         """Take a snap and save it to a file at the given fileName.
 
         Parameters:
         - fileName: Optional suffix or filename to append to the generated name. If None,
             the default naming used by `snap()` will be applied.
         - saveFormat: Desired `SaveFormat` enum value (default: `SaveFormat.TIFF`).
+        - returnPreview: Also return the captured frame as a downscaled 8-bit PNG
+            data URL (`previewImage`), so a UI with the live stream stopped (long
+            exposures) can display the result without a second exposure.
+        - previewMaxSize: Longest edge of that preview in pixels.
         """
         '''
         numpy_array = list(self.snapNumpy().values())[0]
@@ -678,7 +1027,8 @@ class RecordingController(ImConWidgetController):
         print(deconvoled_image)
         '''
         # do nothing here
-        return self.snap(name=fileName, mSaveFormat=saveFormat)
+        return self.snap(name=fileName, mSaveFormat=saveFormat,
+                         returnPreview=returnPreview, previewMaxSize=previewMaxSize)
 
     @APIExport(runOnUIThread=False)
     def snapImage(self, output: bool = False, toList: bool = True) -> Union[None, list]:

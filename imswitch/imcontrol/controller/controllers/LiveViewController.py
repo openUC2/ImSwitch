@@ -20,6 +20,14 @@ from imswitch.imcommon.model import APIExport, initLogger
 from ..basecontrollers import LiveUpdatedController
 
 
+# Above this exposure a live stream delivers less than one frame every two
+# seconds, so the preview is a slideshow of stale frames and the worker's
+# grab timeouts start firing. Streams are refused/stopped above it and the
+# frontend switches to snap-on-demand; see the same constant in
+# imswitch.imcontrol.model.interfaces.toupcamcamera.
+LONG_EXPOSURE_THRESHOLD_MS = 2000.0
+
+
 @dataclass
 class StreamParams:
     """Unified dataclass for stream parameters that can be interpreted by frontend/backend."""
@@ -1136,18 +1144,109 @@ class LiveViewController(LiveUpdatedController):
 
         return bool(len(self._activeStreams) > 0)
 
+    def _getDetectorExposureMs(self, detector) -> float:
+        """Best-effort read of a detector's exposure time in milliseconds.
+
+        Exposure is stored in ms throughout ImSwitch, but the parameter key
+        differs between drivers. Returns 0.0 when it cannot be determined,
+        which callers treat as "not a long exposure".
+        """
+        try:
+            params = detector.parameters
+        except Exception:
+            return 0.0
+        for key in ("exposure", "exposureTime", "ExposureTime", "exposure_time"):
+            try:
+                param = params.get(key) if hasattr(params, "get") else params[key]
+            except Exception:
+                param = None
+            if param is None:
+                continue
+            try:
+                value = float(getattr(param, "value", param))
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return 0.0
+
+    @APIExport()
+    def getLongExposureInfo(self, detectorName: Optional[str] = None) -> Dict[str, Any]:
+        """Report whether the detector's exposure rules out a live stream.
+
+        The frontend calls this before auto-starting the stream on page load and
+        after every exposure change, so a long-exposure setup never ends up with
+        a stream that just times out.
+
+        Returns a dict with ``exposureMs``, ``thresholdMs`` and
+        ``isLongExposure``.
+        """
+        try:
+            if detectorName is None:
+                detectorName = self._master.detectorsManager.getCurrentDetectorName()
+            detector = self._master.detectorsManager[detectorName]
+            exposureMs = self._getDetectorExposureMs(detector)
+            return {
+                "detector": detectorName,
+                "exposureMs": exposureMs,
+                "thresholdMs": LONG_EXPOSURE_THRESHOLD_MS,
+                "isLongExposure": exposureMs > LONG_EXPOSURE_THRESHOLD_MS,
+            }
+        except Exception as e:
+            self._logger.warning(f"Could not determine long-exposure state: {e}")
+            return {
+                "detector": detectorName,
+                "exposureMs": 0.0,
+                "thresholdMs": LONG_EXPOSURE_THRESHOLD_MS,
+                "isLongExposure": False,
+                "error": str(e),
+            }
+
+    @APIExport()
+    def stopLiveViewForLongExposure(self, detectorName: Optional[str] = None) -> Dict[str, Any]:
+        """Stop any running stream if the exposure is now above the threshold.
+
+        Called after an exposure change. A no-op when the exposure is short or
+        no stream is running, so it is safe to fire on every change.
+        """
+        info = self.getLongExposureInfo(detectorName)
+        if not info.get("isLongExposure"):
+            return {**info, "stopped": False}
+
+        with self._streamLock:
+            streaming = list(self._activeStreams.keys())
+        stopped = []
+        for name in streaming:
+            try:
+                self.stopLiveView(name)
+                stopped.append(name)
+            except Exception as e:
+                self._logger.error(f"Failed to stop stream for {name}: {e}")
+        if stopped:
+            self._logger.info(
+                f"Stopped live view on {', '.join(stopped)}: exposure "
+                f"{info['exposureMs']:.0f} ms exceeds {LONG_EXPOSURE_THRESHOLD_MS:.0f} ms. "
+                f"Use Snap to capture single frames."
+            )
+        return {**info, "stopped": bool(stopped), "stoppedDetectors": stopped}
+
     @APIExport(requestType="POST")
     def startLiveView(self, detectorName: Optional[str] = None, protocol: str = "jpeg",
-                      params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                      params: Optional[Dict[str, Any]] = None,
+                      force: bool = False) -> Dict[str, Any]:
         """
         Start live streaming for a specific detector.
         Only one protocol can be active per detector at a time.
-        
+
         Args:
             detectorName: Name of detector to stream from (None = first available)
             protocol: Streaming protocol (binary, jpeg, mjpeg, webrtc)
             params: Optional parameters to override defaults
-        
+            force: Start even when the exposure exceeds
+                ``LONG_EXPOSURE_THRESHOLD_MS``. Without it such a request is
+                refused with ``status="long_exposure"`` so the UI can offer Snap
+                instead of a stream that would only time out.
+
         Returns:
             Dictionary with status and stream info
             
@@ -1166,6 +1265,30 @@ class LiveViewController(LiveUpdatedController):
             if detectorName is None:
                 detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
             detector = self._master.detectorsManager[detectorName]
+
+            # A stream at multi-second exposures delivers a frame slower than
+            # the worker's grab timeout, so it would spin on stale/None frames
+            # and stop itself anyway. Refuse up front and tell the caller to
+            # snap instead — unless it explicitly asked for it.
+            exposureMs = self._getDetectorExposureMs(detector)
+            if not force and exposureMs > LONG_EXPOSURE_THRESHOLD_MS:
+                self._logger.info(
+                    f"Not starting live view on {detectorName}: exposure "
+                    f"{exposureMs:.0f} ms exceeds {LONG_EXPOSURE_THRESHOLD_MS:.0f} ms."
+                )
+                return {
+                    "status": "long_exposure",
+                    "detector": detectorName,
+                    "protocol": protocol,
+                    "exposureMs": exposureMs,
+                    "thresholdMs": LONG_EXPOSURE_THRESHOLD_MS,
+                    "message": (
+                        f"Exposure is {exposureMs:.0f} ms (> "
+                        f"{LONG_EXPOSURE_THRESHOLD_MS:.0f} ms). Live streaming is "
+                        f"disabled at this exposure — use Snap to capture single "
+                        f"frames, or pass force=true to stream anyway."
+                    ),
+                }
 
             # ensure the detector is actually started
             if not detector._running:

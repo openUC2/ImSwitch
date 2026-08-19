@@ -11,7 +11,9 @@ import * as wellSelectorSlice from "../state/slices/WellSelectorSlice.js";
 import * as experimentSlice from "../state/slices/ExperimentSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
 import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js";
+import * as stageMapSlice from "../state/slices/StageMapSlice.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
+import { apiStageMapGetTiles } from "../backendapi/apiStageMapController.js";
 
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
@@ -67,6 +69,7 @@ const WellSelectorComponent = () => {
   const overviewRegState = useSelector(
     overviewRegSlice.getOverviewRegistrationState,
   );
+  const stageMapState = useSelector(stageMapSlice.getStageMapState);
 
   // Toggle the Overview camera overlay (stitched overview image) on the plate
   // map; lazily fetch the overlay data the first time it is switched on.
@@ -82,6 +85,28 @@ const WellSelectorComponent = () => {
         dispatch(overviewRegSlice.setOverlayData(data));
       } catch (e) {
         // best-effort; the Overview tab can load/refresh the overlay explicitly
+      }
+    }
+  };
+
+  // Toggle drawing of collected stage-map scan tiles (e.g. a 4x overview
+  // tilescan) on the plate map; lazily fetch the tiles from the backend the
+  // first time it is switched on (e.g. after a page reload).
+  const handleToggleStageMapOverlay = async () => {
+    const next = !stageMapState.showOnWellplate;
+    dispatch(stageMapSlice.setShowOnWellplate(next));
+    if (next && (stageMapState.tiles || []).length === 0) {
+      try {
+        const data = await apiStageMapGetTiles(0, true);
+        if (Array.isArray(data?.tiles) && data.tiles.length > 0) {
+          dispatch(stageMapSlice.setTiles(data.tiles));
+        } else if (infoPopupRef.current) {
+          infoPopupRef.current.showMessage(
+            "No stage map tiles collected yet — record a scan in the Stage Map app first.",
+          );
+        }
+      } catch (e) {
+        // best-effort; the Stage Map app can collect/reload tiles explicitly
       }
     }
   };
@@ -528,6 +553,19 @@ const WellSelectorComponent = () => {
               onClick={handleToggleOverviewOverlay}
             >
               {overviewRegState.overlayEnabled ? "Overlay on" : "Overlay off"}
+            </Button>
+          </Tooltip>
+          <Tooltip
+            title="Show/hide the collected stage-map scan tiles (e.g. a low-magnification overview scan) at their true stage positions, so a ROI for a higher-magnification scan can be selected on the sample image."
+            arrow
+          >
+            <Button
+              size="small"
+              variant={stageMapState.showOnWellplate ? "contained" : "outlined"}
+              color="secondary"
+              onClick={handleToggleStageMapOverlay}
+            >
+              {stageMapState.showOnWellplate ? "Tiles on" : "Tiles off"}
             </Button>
           </Tooltip>
         </Box>

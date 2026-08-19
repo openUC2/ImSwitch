@@ -374,7 +374,19 @@ const WellPlateWorkspace = () => {
   const active = viewports[viewport] || viewports[0];
 
   return (
-    <Box sx={{ width: "100%", px: 1 }}>
+    // Fills the height AxonTabComponent hands down; the two columns below get
+    // their own scrollbars (independent left/right scrolling) instead of one
+    // shared page scroll.
+    <Box
+      sx={{
+        width: "100%",
+        px: 1,
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
       {/* Linked-workspace hint + tour launcher */}
       <Box
         sx={{
@@ -384,6 +396,7 @@ const WellPlateWorkspace = () => {
           color: theme.palette.text.secondary,
           mb: 0.5,
           px: 0.5,
+          flexShrink: 0,
         }}
       >
         <LinkIcon sx={{ fontSize: 16 }} />
@@ -402,12 +415,22 @@ const WellPlateWorkspace = () => {
         sx={{
           display: "flex",
           gap: 1.5,
-          alignItems: "flex-start",
+          alignItems: "stretch",
           width: "100%",
+          flex: 1,
+          minHeight: 0,
         }}
       >
-        {/* LEFT — viewport tab strip + content */}
-        <Box sx={{ flex: 3, minWidth: 0 }}>
+        {/* LEFT — viewport tab strip + content (scrolls on its own) */}
+        <Box
+          sx={{
+            flex: 3,
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+          }}
+        >
           <Tabs
             value={viewport}
             onChange={(_e, v) => setViewport(v)}
@@ -417,6 +440,7 @@ const WellPlateWorkspace = () => {
             data-tour-wp="viewport-strip"
             sx={{
               minHeight: 48,
+              flexShrink: 0,
               borderBottom: 1,
               borderColor: "divider",
               "& .MuiTab-root": {
@@ -449,18 +473,32 @@ const WellPlateWorkspace = () => {
             ))}
           </Tabs>
 
-          <Box sx={{ mt: 1 }}>{active.render()}</Box>
+          {/* Viewport content — independent scroll area */}
+          <Box
+            sx={{
+              mt: 1,
+              flex: 1,
+              minHeight: 0,
+              overflowY: "auto",
+              overscrollBehavior: "contain",
+            }}
+          >
+            {active.render()}
+          </Box>
         </Box>
 
-        {/* RIGHT — experiment inspector, always mounted (existing design) */}
+        {/* RIGHT — experiment inspector, always mounted (existing design).
+            Scrolls independently of the left viewport. */}
         <Box
           data-tour-wp="inspector"
           sx={{
             flex: 2,
             minWidth: 380,
-            alignSelf: "stretch",
+            minHeight: 0,
             borderLeft: `1px solid ${theme.palette.divider}`,
             pl: 1,
+            overflowY: "auto",
+            overscrollBehavior: "contain",
           }}
         >
           <ParameterEditorWrapper />

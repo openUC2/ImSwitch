@@ -72,9 +72,32 @@ export const apiFlimStart = (hostIP, hostPort, {
   return jsonFetch(`${getApiBase(hostIP, hostPort)}/startFlimAcquisition?${params}`);
 };
 
-/** Stop the running acquisition (and the auto-driven galvo scan). */
-export const apiFlimStop = (hostIP, hostPort) =>
-  jsonFetch(`${getApiBase(hostIP, hostPort)}/stopFlimAcquisition`);
+/**
+ * Stop the running acquisition (and the auto-driven galvo scan).
+ * @param {boolean} releaseSocket also drop the /data WebSocket, handing the
+ *   card back to the FLIM LABS web UI. Prefer apiFlimDisarm for that.
+ */
+export const apiFlimStop = (hostIP, hostPort, releaseSocket = false) =>
+  jsonFetch(
+    `${getApiBase(hostIP, hostPort)}/stopFlimAcquisition?releaseSocket=${releaseSocket}`
+  );
+
+/**
+ * Take ownership of the FLIM card for ImSwitch.
+ *
+ * ImSwitch does not connect to the flim-imager server on startup - its /data
+ * stream takes exactly one consumer, so an idle connection would lock out the
+ * FLIM LABS web UI. Arming is the explicit "ImSwitch owns the card" step, and
+ * is what lets live view / experiments pick the detector up at all.
+ *
+ * @param {boolean} start also begin a scouting run right away (default).
+ */
+export const apiFlimArm = (hostIP, hostPort, start = true) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/armFlim?start=${start}`);
+
+/** Stop the card and release /data, so the FLIM LABS web UI can stream. */
+export const apiFlimDisarm = (hostIP, hostPort) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/disarmFlim`);
 
 /** Clear accumulated image, phasor histogram and calibration table. */
 export const apiFlimReset = (hostIP, hostPort) =>
@@ -131,6 +154,8 @@ const api = {
   apiFlimGetPhasor,
   apiFlimStart,
   apiFlimStop,
+  apiFlimArm,
+  apiFlimDisarm,
   apiFlimReset,
   apiFlimDetectLaserFrequency,
   apiFlimSetParameter,

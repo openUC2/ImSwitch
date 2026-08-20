@@ -14,6 +14,10 @@ const initialState = {
   serverHealthy: null, // null = unknown, true/false after /health probe
 
   // Acquisition state
+  // Whether the ImSwitch backend owns the flim-imager /data socket. False on
+  // startup: the stream takes one consumer, so ImSwitch stays off the card
+  // until the FLIM panel arms it, leaving it free for the FLIM LABS web UI.
+  armed: false,
   running: false,
   paused: false, // stopped but image buffer kept (Pause vs Reset)
   step: 'scouting', // 'scouting' | 'imaging' | 'calibration' | 'phasors'
@@ -84,8 +88,16 @@ const flimLabsSlice = createSlice({
       const idx = action.payload;
       state.channels[idx] = !state.channels[idx];
     },
+    setFlimArmed: (state, action) => {
+      state.armed = !!action.payload;
+      if (!state.armed) {
+        state.running = false;
+        state.cps = 0;
+      }
+    },
     setFlimRunning: (state, action) => {
       state.running = action.payload.running;
+      if (action.payload.armed !== undefined) state.armed = !!action.payload.armed;
       if (action.payload.step) state.step = action.payload.step;
       if (action.payload.firmware !== undefined) state.firmware = action.payload.firmware;
       if (action.payload.paused !== undefined) state.paused = action.payload.paused;
@@ -151,6 +163,7 @@ export const {
   setFlimParam,
   toggleFlimChannel,
   setFlimRunning,
+  setFlimArmed,
   setFlimProgress,
   setFlimDataFile,
   setFlimError,

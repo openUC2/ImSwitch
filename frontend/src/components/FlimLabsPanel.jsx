@@ -52,12 +52,15 @@ import SpeedIcon from '@mui/icons-material/Speed';
 import TuneIcon from '@mui/icons-material/Tune';
 import ScatterPlotIcon from '@mui/icons-material/ScatterPlot';
 import GridOnIcon from '@mui/icons-material/GridOn';
+import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
 import { useSelector, useDispatch } from 'react-redux';
 import { getConnectionSettingsState } from '../state/slices/ConnectionSettingsSlice';
 import {
   getFlimLabsState,
   setFlimParam,
   setFlimRunning,
+  setFlimArmed,
   setFlimProgress,
   setFlimError,
   clearFlimError,
@@ -72,6 +75,8 @@ import {
   apiFlimGetPhasor,
   apiFlimStart,
   apiFlimStop,
+  apiFlimArm,
+  apiFlimDisarm,
   apiFlimReset,
   apiFlimDetectLaserFrequency,
   apiFlimSetParameter,
@@ -326,7 +331,9 @@ const FlimLabsPanel = () => {
       }
       dispatch(setFlimHealth(!!st.serverHealthy));
       dispatch(setFlimConnected({ connected: !!st.cardSerial, cardSerial: st.cardSerial }));
-      dispatch(setFlimRunning({ running: !!st.running, step: st.step }));
+      dispatch(setFlimRunning({
+        running: !!st.running, step: st.step, armed: !!st.armed,
+      }));
       dispatch(setFlimProgress({ currentFrame: st.frameNumber, cps: st.cps }));
       if (st.calibrationReference) {
         dispatch(setFlimCalibrationReference({ referenceFile: st.calibrationReference }));
@@ -356,6 +363,10 @@ const FlimLabsPanel = () => {
   }, [hostIP, hostPort, drawPhasor]);
 
   const running = !!status?.running;
+  // Whether the ImSwitch backend holds the flim-imager /data socket. Nothing
+  // touches the card until this is true, which is what keeps the card free for
+  // the FLIM LABS web UI while ImSwitch is merely open in a browser.
+  const armed = !!status?.armed;
 
   useEffect(() => {
     pollStatus();
@@ -490,6 +501,36 @@ const FlimLabsPanel = () => {
     }
   };
 
+  const handleArm = async () => {
+    setBusy(true);
+    dispatch(clearFlimError());
+    try {
+      // start=false: arming only claims the card. The user picks the mode and
+      // presses "Start <mode>" - arming should not silently begin a run.
+      await apiFlimArm(hostIP, hostPort, false);
+      dispatch(setFlimArmed(true));
+      pollStatus();
+    } catch (e) {
+      dispatch(setFlimError(`Arm failed: ${e.message}`));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDisarm = async () => {
+    setBusy(true);
+    try {
+      await apiFlimDisarm(hostIP, hostPort);
+      dispatch(setFlimArmed(false));
+      setImageUrl(null);
+      pollStatus();
+    } catch (e) {
+      dispatch(setFlimError(`Disarm failed: ${e.message}`));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleReset = async () => {
     setBusy(true);
     try {
@@ -612,6 +653,41 @@ const FlimLabsPanel = () => {
           <Chip icon={<CableIcon />} label="no card" size="small" color="warning" variant="outlined" />
         )}
         {running && <Chip label={`${status.step} running`} size="small" color="info" />}
+        <Chip
+          label={armed ? 'ImSwitch owns card' : 'card released'}
+          size="small"
+          color={armed ? 'primary' : 'default'}
+          variant={armed ? 'filled' : 'outlined'}
+        />
+        {armed ? (
+          <Tooltip title="Stop the card and release the flim-imager /data socket, so the FLIM LABS web UI can stream. Live view will show no FLIM frames until you arm again.">
+            <span>
+              <Button
+                size="small"
+                color="warning"
+                startIcon={<LinkOffIcon />}
+                onClick={handleDisarm}
+                disabled={busy}
+              >
+                Disarm
+              </Button>
+            </span>
+          </Tooltip>
+        ) : (
+          <Tooltip title="Take ownership of the FLIM card. The flim-imager /data stream accepts one consumer, so close the FLIM LABS web UI first.">
+            <span>
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<PowerSettingsNewIcon />}
+                onClick={handleArm}
+                disabled={busy}
+              >
+                Arm
+              </Button>
+            </span>
+          </Tooltip>
+        )}
         <Tooltip title="Save FLIM settings into the ImSwitch setup file">
           <Button size="small" startIcon={<SaveIcon />} onClick={handleSaveConfig} disabled={busy}>
             Save
@@ -621,7 +697,9 @@ const FlimLabsPanel = () => {
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
         Acquisition is owned by the ImSwitch backend (detector{' '}
         <b>{status?.detectorName}</b> → {status?.serverUrl}), so it keeps running
-        independently of this browser tab.
+        independently of this browser tab. ImSwitch only connects to the card
+        once you <b>Arm</b> it — until then the FLIM LABS web UI can use it, and
+        the live view shows no FLIM frames.
       </Typography>
 
       {flim.error && (
@@ -635,7 +713,7 @@ const FlimLabsPanel = () => {
         </Alert>
       )}
       {status?.hint && (
-        <Alert severity="warning" sx={{ mt: 1 }}>
+        <Alert severity={armed ? 'warning' : 'info'} sx={{ mt: 1 }}>
           {status.hint}
         </Alert>
       )}

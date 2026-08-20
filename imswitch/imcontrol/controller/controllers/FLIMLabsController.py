@@ -96,6 +96,9 @@ class FLIMLabsController(ImConWidgetController):
             hint = (f'Only {linesLast}/{height} lines in the last frame - is another '
                     f'/data client (e.g. the FLIM LABS web UI) connected to the '
                     f'same server? Close it; the stream supports one consumer.')
+        if not running and not det.isArmed:
+            hint = ('FLIM is disarmed: ImSwitch holds no connection to the card, '
+                    'so the FLIM LABS web UI can use it. Press Arm to take over.')
         return {
             'available': True,
             'detectorName': det.name,
@@ -104,6 +107,7 @@ class FLIMLabsController(ImConWidgetController):
             # While running, the card is held by the acquisition -- probing it
             # would contend with that, so answer from the cached serial.
             'cardSerial': client.check_card(use_cache=det.isRunning),
+            'armed': det.isArmed,
             'running': det.isRunning,
             'step': det.step,
             'firmware': getattr(det, '_firmware', None),
@@ -314,8 +318,14 @@ class FLIMLabsController(ImConWidgetController):
             referenceFile=referenceFile, export=export)
 
     @APIExport(runOnUIThread=False)
-    def stopFlimAcquisition(self) -> Dict[str, Any]:
+    def stopFlimAcquisition(self, releaseSocket: bool = False) -> Dict[str, Any]:
         """Stop the running acquisition (and the galvo scan, if auto-driven).
+
+        Args:
+            releaseSocket: also drop the flim-imager /data WebSocket, handing
+                the card back to the FLIM LABS web UI. Kept False by default so
+                back-to-back runs stay on one connection; disarmFlim() is the
+                explicit handover.
 
         Example:
             GET /api/FLIMLabsController/stopFlimAcquisition
@@ -323,8 +333,48 @@ class FLIMLabsController(ImConWidgetController):
         det = self._detector
         if det is None:
             return {'error': 'No FLIM detector configured'}
-        det.stopAcquisition()
-        return {'status': 'stopped', 'calibrationReference': det.calibrationReference}
+        det.stopAcquisition(releaseSocket=releaseSocket)
+        return {'status': 'stopped', 'armed': det.isArmed,
+                'calibrationReference': det.calibrationReference}
+
+    # ------------------------------------------------------------------
+    # Arming: who owns the flim-imager /data socket
+    # ------------------------------------------------------------------
+    @APIExport(runOnUIThread=False)
+    def armFlim(self, start: bool = True) -> Dict[str, Any]:
+        """Take ownership of the FLIM card for ImSwitch.
+
+        ImSwitch does NOT connect to the flim-imager server on startup: the
+        server's /data stream is a single-consumer queue drain, so an idle
+        ImSwitch connection would block the FLIM LABS web UI (and a second
+        consumer silently splits the stream between the two). Arming is the
+        deliberate "ImSwitch owns the card now" step; until then the generic
+        detector startAcquisition() that live view and ExperimentController
+        trigger is a no-op for this detector.
+
+        Args:
+            start: also begin a scouting run immediately (default). False only
+                marks the detector armed, so the next live view starts it.
+
+        Example:
+            GET /api/FLIMLabsController/armFlim?start=true
+        """
+        det = self._detector
+        if det is None:
+            return {'error': 'No FLIM detector configured'}
+        return det.arm(start=start)
+
+    @APIExport(runOnUIThread=False)
+    def disarmFlim(self) -> Dict[str, Any]:
+        """Stop the card and release the /data socket for the FLIM LABS web UI.
+
+        Example:
+            GET /api/FLIMLabsController/disarmFlim
+        """
+        det = self._detector
+        if det is None:
+            return {'error': 'No FLIM detector configured'}
+        return det.disarm()
 
     @APIExport()
     def resetFlimBuffers(self) -> Dict[str, Any]:

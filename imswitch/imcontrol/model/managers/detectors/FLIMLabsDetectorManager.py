@@ -15,12 +15,21 @@ The card has no notion of geometry: frame/line/pixel boundaries come entirely
 from the galvo scanner's trigger outputs. So this detector behaves like a
 free-running camera whose "exposure" is one galvo frame:
 
+  * ``arm()`` claims the card for ImSwitch. Nothing else does: the flim-imager
+    server's /data stream is a single-consumer queue drain, so an ImSwitch
+    connection opened just because a browser tab connected would lock out (and
+    silently split the stream with) the FLIM LABS web UI. Until armed,
+    ``startAcquisition()`` - which ImSwitch calls for every ``forAcquisition``
+    detector at once - is a no-op here. ``disarm()`` stops the run and drops
+    the socket, handing the card back. ``"autoArm": true`` restores the old
+    arm-on-connect behaviour.
   * ``startAcquisition()`` arms the card in scouting mode with max_frames=0
     (continuous) and opens the binary WebSocket. The galvo scanner must be
     scanning for frames to arrive - either started separately, or by this
     manager when ``autoStartGalvo`` is enabled and a scanner has been bound
     via ``setGalvoScanner()``.
-  * ``getLatestFrame()`` returns the most recent COMPLETE frame.
+  * ``getLatestFrame()`` returns the most recent COMPLETE frame, or None while
+    disarmed/stopped so the live view shows nothing rather than a stale frame.
   * ``snapSync()`` waits for the *next* complete frame, so a grab issued right
     after a stage move never returns an image that was integrated while the
     stage was still travelling. ``framesToIntegrate`` > 1 sums consecutive
@@ -154,6 +163,16 @@ class FLIMLabsDetectorManager(DetectorManager):
         self._galvoScanner = None
 
         self._running = False
+        # Arming gate. ImSwitch starts every forAcquisition detector together
+        # (DetectorsManager.startAcquisition -> execOnAll, and
+        # LiveViewController.startLiveView), so merely opening the frontend
+        # used to arm the FLIM card and grab the flim-imager server's /data
+        # socket - which is single-consumer, so it also locked out the FLIM
+        # LABS web UI. The card is therefore only started when the FLIM panel
+        # explicitly asks for it; the generic startAcquisition() is a no-op
+        # until then. Set "autoArm": true in the setup file for the old
+        # behaviour.
+        self._armed = bool(props.get('autoArm', False))
         self._firmware = None
         self._step = 'scouting'
         self._acquisitionTimestamp = None
@@ -431,8 +450,54 @@ class FLIMLabsDetectorManager(DetectorManager):
 
     # -- Acquisition ------------------------------------------------------
     def startAcquisition(self) -> None:
-        """Free-running scouting acquisition (the detector/camera use case)."""
+        """Free-running scouting acquisition (the detector/camera use case).
+
+        This is the generic entry point ImSwitch calls for every detector at
+        once, so it must not touch the card unless the FLIM panel has armed
+        it - see the ``_armed`` note in __init__. arm() / startAcquisitionStep()
+        are the deliberate paths.
+        """
+        if not self._armed:
+            self.__logger.debug(
+                'startAcquisition ignored: FLIM is disarmed. Arm it from the '
+                'FLIM panel (or set "autoArm": true in the setup file).')
+            return
         self.startAcquisitionStep('scouting')
+
+    # -- Arming -----------------------------------------------------------
+    @property
+    def isArmed(self) -> bool:
+        return self._armed
+
+    def arm(self, start: bool = True) -> dict:
+        """Hand the FLIM card to ImSwitch.
+
+        Until this is called, ImSwitch never opens the flim-imager server's
+        /data socket, which leaves the card free for the FLIM LABS web UI.
+        With ``start=False`` the detector is only marked armed, so the next
+        live view / experiment start picks it up.
+        """
+        self._armed = True
+        if start and not self._running:
+            return self.startAcquisitionStep('scouting')
+        return {'status': 'armed', 'running': self._running}
+
+    def disarm(self) -> dict:
+        """Stop the card and release the server's /data socket.
+
+        Releasing the socket is the point: the flim-imager /data queue is a
+        single-consumer drain, so ImSwitch has to let go before the FLIM LABS
+        web UI can stream.
+        """
+        self._armed = False
+        self.stopAcquisition(releaseSocket=True)
+        # stopAcquisition() returns early when nothing was running, so drop the
+        # socket here too - it may have been left open by a previous run.
+        try:
+            self._client.close_ws()
+        except Exception as e:
+            self.__logger.warning(f'Could not close the FLIM /data socket: {e}')
+        return {'status': 'disarmed'}
 
     def startAcquisitionStep(self, step: str = 'scouting', maxFrames: int = 0,
                              tauNs=None, harmonics: int = 1,
@@ -445,6 +510,10 @@ class FLIMLabsDetectorManager(DetectorManager):
         """
         if self._running:
             self.stopAcquisition()
+        # An explicit run request is itself the arming decision, so a later
+        # generic startAcquisition() (live view, ExperimentController) keeps
+        # working without a separate arm() call.
+        self._armed = True
         self._syncGeometryFromGalvo()
         width, height, offsets = self._applyGeometry()
         try:
@@ -488,14 +557,16 @@ class FLIMLabsDetectorManager(DetectorManager):
         return {'status': 'started', 'step': step, 'firmware': self._firmware,
                 'acquisitionTimestamp': timestamp}
 
-    def stopAcquisition(self) -> None:
+    def stopAcquisition(self, releaseSocket: bool = False) -> None:
+        """Stop the run. ``releaseSocket`` also drops /data, handing the FLIM
+        server back to its own web UI (see disarm())."""
         if not self._running:
             return
         wasCalibration = self._step == 'calibration'
         calibrationTimestamp = self._acquisitionTimestamp
         self._stopGalvo()
         try:
-            self._client.stop()
+            self._client.stop(close_socket=releaseSocket)
         except Exception as e:
             self.__logger.warning(f'Failed to stop FLIM acquisition: {e}')
         self._running = False
@@ -514,7 +585,15 @@ class FLIMLabsDetectorManager(DetectorManager):
         return np.clip(frame, 0, 65535).astype(np.uint16)
 
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
-        """Return the most recent COMPLETE frame (no blocking), as uint16."""
+        """Return the most recent COMPLETE frame (no blocking), as uint16.
+
+        Returns None while the card is not acquiring: the client's buffer keeps
+        the last frame (and zeros before the first one), and streaming that
+        into the live view would show a stale or black FLIM image next to a
+        running camera. LiveViewController skips None frames.
+        """
+        if not self._running:
+            return (None, self._client.get_frame_number()) if returnFrameNumber else None
         if returnFrameNumber:
             frame, n = self._client.get_latest_frame(return_frame_number=True)
             return self._toU16(frame), n
@@ -561,7 +640,10 @@ class FLIMLabsDetectorManager(DetectorManager):
         self.flushBuffer()
 
     def getChunk(self):
-        return np.expand_dims(self.getLatestFrame(), 0)
+        frame = self.getLatestFrame()
+        if frame is None:
+            return np.zeros((0, *self.shape), dtype=np.uint16)
+        return np.expand_dims(frame, 0)
 
     # -- Parameters / info ------------------------------------------------
     def setParameter(self, name, value):

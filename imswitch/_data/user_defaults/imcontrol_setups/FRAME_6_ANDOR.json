@@ -170,10 +170,10 @@
             "Andor": {
                 "Advanced | Snap Image Additional Delay (ms)": 0.0,
                 "BaselineClamp": "Disabled",
-                "Binning": "8",
+                "Binning": "4",
                 "CCDTemperatureSetPoint": -100.0,
                 "CountConvertWavelength": 0.0,
-                "Exposure": 90000.0,
+                "Exposure": 600000.0,
                 "Gain": 1000.0,
                 "ReadoutMode": "1.000 MHz",
                 "Shutter Closing Time": 27.0,

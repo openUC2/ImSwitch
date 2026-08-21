@@ -22,6 +22,7 @@ import {
   Grid,
   IconButton,
   InputLabel,
+  LinearProgress,
   MenuItem,
   Select,
   Stack,
@@ -33,6 +34,7 @@ import {
 import RefreshIcon from "@mui/icons-material/Refresh";
 import PhotoCameraIcon from "@mui/icons-material/PhotoCamera";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import StopIcon from "@mui/icons-material/Stop";
 import SaveIcon from "@mui/icons-material/Save";
 import ThermostatIcon from "@mui/icons-material/Thermostat";
 
@@ -42,6 +44,8 @@ import apiMMCoreControllerSetMMCoreParameter from "../backendapi/apiMMCoreContro
 import apiMMCoreControllerSnapMMCoreToDisk from "../backendapi/apiMMCoreControllerSnapMMCoreToDisk";
 import apiMMCoreControllerGetMMCoreSnapStatus from "../backendapi/apiMMCoreControllerGetMMCoreSnapStatus";
 import apiMMCoreControllerGetLastSnapPreviewUrl from "../backendapi/apiMMCoreControllerGetLastSnapPreview";
+import apiMMCoreControllerCancelMMCoreSnap from "../backendapi/apiMMCoreControllerCancelMMCoreSnap";
+import apiMMCoreControllerStopMMCoreAcquisition from "../backendapi/apiMMCoreControllerStopMMCoreAcquisition";
 import apiMMCoreControllerGetMMCoreTemperature from "../backendapi/apiMMCoreControllerGetMMCoreTemperature";
 import apiMMCoreControllerSaveMMCoreSettings from "../backendapi/apiMMCoreControllerSaveMMCoreSettings";
 import apiMMCoreControllerResetMMCoreSettings from "../backendapi/apiMMCoreControllerResetMMCoreSettings";
@@ -67,6 +71,22 @@ function formatElapsed(ms) {
   if (h > 0) return `${h}h ${m}m ${s}s`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
+}
+
+// States in which the backend is no longer driving the camera. "cancelling"
+// is deliberately absent: the stop was requested but the worker has not
+// acknowledged it yet, so the UI keeps polling until it does.
+const JOB_TERMINAL_STATES = ["done", "error", "cancelled", "timeout"];
+
+function isTerminalJobState(state) {
+  return JOB_TERMINAL_STATES.includes(state);
+}
+
+function jobChipColor(state) {
+  if (state === "done") return "success";
+  if (state === "error" || state === "timeout") return "error";
+  if (state === "cancelled") return "default";
+  return "warning";
 }
 
 function formatLimits(min, max) {
@@ -212,6 +232,8 @@ const MMCoreController = () => {
   // type freely without it being clobbered by polling responses.
   const [exposureSec, setExposureSec] = useState("");
   const [snapName, setSnapName] = useState("");
+  const [stoppingJob, setStoppingJob] = useState(false);
+  const [uiTick, setUiTick] = useState(0);
   const [activeJob, setActiveJob] = useState(null);
   const [recentJobs, setRecentJobs] = useState([]);
   const pollRef = useRef(null);
@@ -391,6 +413,12 @@ const MMCoreController = () => {
   // ----------------------------------------------------------------------
   // Snap-to-disk + polling
   // ----------------------------------------------------------------------
+  // Every job payload from the backend is stamped with its arrival time, so
+  // the countdown can extrapolate from it instead of accumulating its own
+  // drift on top of the polled value.
+  const applyJobStatus = (status) =>
+    setActiveJob(status ? { ...status, receivedAt: Date.now() } : status);
+
   const stopPolling = () => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -403,8 +431,10 @@ const MMCoreController = () => {
     pollRef.current = setInterval(async () => {
       try {
         const status = await apiMMCoreControllerGetMMCoreSnapStatus(jobId);
-        setActiveJob(status);
-        if (status.state === "done" || status.state === "error") {
+        applyJobStatus(status);
+        // Any terminal state ends the poll -- "cancelled" and "timeout" used
+        // to be missing here, which left the UI polling a finished job forever.
+        if (isTerminalJobState(status.state)) {
           stopPolling();
           setRecentJobs((prev) => [status, ...prev].slice(0, 5));
           // Refresh device parameters so any device-side clamping is shown.
@@ -420,6 +450,18 @@ const MMCoreController = () => {
       }
     }, 1000);
   };
+
+  // Repaint tick for the countdown. The status poll stays the single source of
+  // truth; this only re-renders once a second so the displayed time advances
+  // between polls (see jobTiming, which extrapolates from the last sample).
+  useEffect(() => {
+    if (!activeJob || isTerminalJobState(activeJob.state)) return undefined;
+    const id = setInterval(() => setUiTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+    // Re-armed only when the job identity or its state changes -- activeJob
+    // itself is replaced on every poll, which would restart the timer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeJob?.jobId, activeJob?.state]);
 
   useEffect(() => () => stopPolling(), []);
 
@@ -474,12 +516,60 @@ const MMCoreController = () => {
         fileName: snapName || undefined,
         saveFormat: "tiff",
       });
-      setActiveJob(job);
-      if (job?.jobId && job.state !== "done" && job.state !== "error") {
+      applyJobStatus(job);
+      if (job?.jobId && !isTerminalJobState(job.state)) {
         startPolling(job.jobId);
       }
     } catch (e) {
       setLoadError(`Failed to start snap: ${e?.message || e}`);
+    }
+  };
+
+  // Abort the running exposure. The backend stops acquisition on the device,
+  // so this returns the camera immediately instead of waiting out a
+  // multi-minute integration.
+  const onCancelSnap = async () => {
+    if (!activeJob?.jobId) return;
+    setStoppingJob(true);
+    try {
+      const status = await apiMMCoreControllerCancelMMCoreSnap({
+        jobId: activeJob.jobId,
+        detectorName,
+      });
+      applyJobStatus(status);
+      setStatusMsg("Stop requested — aborting the exposure.");
+    } catch (e) {
+      setLoadError(`Failed to stop the acquisition: ${e?.message || e}`);
+    } finally {
+      setStoppingJob(false);
+    }
+  };
+
+  // Last-resort stop: cancels every job on this detector and releases a claim
+  // left behind by a worker that died, without restarting the backend.
+  const onStopAcquisition = async () => {
+    if (!detectorName) return;
+    setStoppingJob(true);
+    try {
+      const result = await apiMMCoreControllerStopMMCoreAcquisition({
+        detectorName,
+      });
+      const n = result?.cancelledJobs?.length || 0;
+      setStatusMsg(
+        n > 0
+          ? `Stopped acquisition (${n} job${n === 1 ? "" : "s"} cancelled).`
+          : "Acquisition stopped; camera released.",
+      );
+      if (activeJob?.jobId) {
+        const status = await apiMMCoreControllerGetMMCoreSnapStatus(
+          activeJob.jobId,
+        );
+        applyJobStatus(status);
+      }
+    } catch (e) {
+      setLoadError(`Failed to stop the acquisition: ${e?.message || e}`);
+    } finally {
+      setStoppingJob(false);
     }
   };
 
@@ -512,8 +602,28 @@ const MMCoreController = () => {
     return n;
   }, [tree]);
 
-  const isJobRunning =
-    activeJob && (activeJob.state === "running" || activeJob.state === "pending");
+  const isJobRunning = Boolean(activeJob) && !isTerminalJobState(activeJob.state);
+
+  // Displayed timing: the last polled sample plus the wall-clock time since it
+  // arrived. A stalled countdown therefore means the backend stopped
+  // answering, which is exactly the symptom worth seeing.
+  const jobTiming = useMemo(() => {
+    if (!activeJob) return { elapsedMs: 0, remainingMs: 0, progress: 0 };
+    const expected = activeJob.expectedDurationMs || 0;
+    const sinceSample =
+      isTerminalJobState(activeJob.state) || !activeJob.receivedAt
+        ? 0
+        : Math.max(0, Date.now() - activeJob.receivedAt);
+    const elapsedMs = (activeJob.elapsedMs || 0) + sinceSample;
+    return {
+      elapsedMs,
+      remainingMs: expected > 0 ? Math.max(0, expected - elapsedMs) : 0,
+      progress:
+        expected > 0 ? Math.min(99, (elapsedMs / expected) * 100) : 0,
+    };
+    // uiTick is what re-evaluates this once a second.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeJob, uiTick]);
 
   // The preview URL is keyed on the job's finishedAt so the browser refetches
   // when a new snap completes for what would otherwise be the same id.
@@ -739,16 +849,32 @@ const MMCoreController = () => {
                   />
                 </Grid>
                 <Grid item xs={12} sm={3}>
-                  <Button
-                    fullWidth
-                    variant="contained"
-                    startIcon={<PhotoCameraIcon />}
-                    onClick={onSnap}
-                    disabled={isJobRunning || !detectorName}
-                    sx={{ height: 40 }}
-                  >
-                    Snap
-                  </Button>
+                  <Stack direction="row" spacing={1}>
+                    <Button
+                      fullWidth
+                      variant="contained"
+                      startIcon={<PhotoCameraIcon />}
+                      onClick={onSnap}
+                      disabled={isJobRunning || !detectorName}
+                      sx={{ height: 40 }}
+                    >
+                      Snap
+                    </Button>
+                    <Tooltip title="Abort the running exposure and release the camera">
+                      <span>
+                        <Button
+                          variant="outlined"
+                          color="error"
+                          startIcon={<StopIcon />}
+                          onClick={isJobRunning ? onCancelSnap : onStopAcquisition}
+                          disabled={stoppingJob || !detectorName}
+                          sx={{ height: 40, minWidth: 96 }}
+                        >
+                          Stop
+                        </Button>
+                      </span>
+                    </Tooltip>
+                  </Stack>
                 </Grid>
               </Grid>
 
@@ -757,21 +883,20 @@ const MMCoreController = () => {
                   <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
                     <Chip
                       label={activeJob.state}
-                      color={
-                        activeJob.state === "done"
-                          ? "success"
-                          : activeJob.state === "error"
-                            ? "error"
-                            : "warning"
-                      }
+                      color={jobChipColor(activeJob.state)}
                       icon={isJobRunning ? <CircularProgress size={14} /> : undefined}
                     />
                     <Typography variant="body2">
                       Exposure: {activeJob.exposureMs?.toFixed?.(0) ?? "?"} ms
                     </Typography>
                     <Typography variant="body2">
-                      Elapsed: {formatElapsed(activeJob.elapsedMs)}
+                      Elapsed: {formatElapsed(jobTiming.elapsedMs)}
                     </Typography>
+                    {isJobRunning && activeJob.expectedDurationMs > 0 && (
+                      <Typography variant="body2">
+                        Remaining: {formatElapsed(jobTiming.remainingMs)}
+                      </Typography>
+                    )}
                     {activeJob.filePath && (
                       <Typography variant="body2" noWrap sx={{ flex: 1 }}>
                         Saved: {activeJob.relativeFilePath || activeJob.filePath}
@@ -783,6 +908,17 @@ const MMCoreController = () => {
                       </Typography>
                     )}
                   </Stack>
+                  {isJobRunning && (
+                    <LinearProgress
+                      variant={
+                        activeJob.expectedDurationMs > 0
+                          ? "determinate"
+                          : "indeterminate"
+                      }
+                      value={jobTiming.progress}
+                      sx={{ mt: 1 }}
+                    />
+                  )}
                 </Box>
               )}
 

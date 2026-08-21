@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -69,6 +70,19 @@ _BASE_PROPERTY_NAMES = {
 # Property names (case-insensitive) that report the sensor/CCD temperature.
 _TEMPERATURE_PROPERTY_NAMES = ("ccdtemperature", "temperature", "sensortemperature")
 _TEMPERATURE_SETPOINT_NAMES = ("ccdtemperaturesetpoint", "temperaturesetpoint")
+
+# Longest exposure for which the live-view poll may still fall back to a
+# blocking ``core.snap()``. ``snapImage()`` sits inside MMCore's device lock
+# for the whole integration, so anything longer would stall every other MMCore
+# call in the process (temperature polls, parameter reads, a running snap job)
+# and make the backend look frozen. Longer exposures must go through
+# ``acquireSingleFrame()`` / ``snapSync()`` instead.
+_IDLE_SNAP_MAX_EXPOSURE_S = 2.0
+
+# Minimum spacing between two "the idle snap failed" log lines. The live-view
+# loop polls many times a second; unthrottled, a camera that rejects the snap
+# (Andor DRV_ACQUIRING/DRV_IDLE) buries every other message in the console.
+_SNAP_ERROR_LOG_INTERVAL_S = 5.0
 
 
 def _is_internal_property(prop: str) -> bool:
@@ -235,8 +249,9 @@ class MMCoreDetectorManager(DetectorManager):
         # experiment thread firing snapSync). Without it the Andor adapter
         # raises DRV_ACQUIRING (20072) when two snaps overlap.
         #
-        # ``_triggerMode`` is the single source of truth for who owns the
-        # camera:
+        # ``_triggerMode`` says which acquisition style is in effect (a
+        # background job takes ownership through acquireExclusive() instead,
+        # see below):
         #   * "continuous" (default) — live view; getLatestFrame reads the
         #     circular buffer.
         #   * "software" — an experiment owns the camera and fires explicit
@@ -256,6 +271,30 @@ class MMCoreDetectorManager(DetectorManager):
         # the true camera rate, independent of our poll/encode rate — use it to
         # tell "the camera is slow" (cameraFps low) from "downstream is slow".
         self._camStats: Dict[str, Any] = {"fps": 0.0, "delivered": 0, "last_t": None}
+
+        # Exclusive-access bookkeeping. A background job (long-exposure snap,
+        # experiment step, ...) claims the sensor through acquireExclusive();
+        # while the claim is held, getLatestFrame() replays the cache and
+        # issues no hardware call at all.
+        #
+        # Without this the live-view poll thread and the job drove the same
+        # MMCore instance concurrently, which broke both of them:
+        #   * with a sequence running, the poll drained the circular buffer and
+        #     swallowed the job's single frame, so the job waited for an image
+        #     that was already gone -> "stuck" acquisition;
+        #   * with the sequence stopped, the poll's fallback core.snap() either
+        #     collided with the job (Andor 20072/20073 error spam) or blocked
+        #     inside MMCore's device lock for the entire exposure, stalling
+        #     every other API request -> frozen backend, no progress updates.
+        self._exclusiveLock = threading.Lock()
+        self._exclusiveOwner: Optional[str] = None
+        self._exclusiveSince: float = 0.0
+        self._exclusiveRestoreLive = False
+
+        # Throttling state for the idle-mode fallback snap and its error log.
+        self._lastIdleSnap = 0.0
+        self._lastSnapErrorLog = 0.0
+        self._snapErrorCount = 0
 
         super().__init__(
             detectorInfo,
@@ -402,26 +441,53 @@ class MMCoreDetectorManager(DetectorManager):
             return (placeholder, -1) if returnFrameNumber else placeholder
         return (frame, self._frameNunber) if returnFrameNumber else frame
 
+    def _log_snap_error(self, exc: Exception) -> None:
+        """Log a failed idle snap at most once per ``_SNAP_ERROR_LOG_INTERVAL_S``.
+
+        The live-view loop calls the idle path many times a second. When the
+        device rejects the snap — Andor raises 20072/20073 whenever another
+        acquisition owns the sensor — an unthrottled logger produces hundreds
+        of identical tracebacks per second and hides everything else.
+        """
+        self._snapErrorCount += 1
+        now = time.time()
+        if now - self._lastSnapErrorLog < _SNAP_ERROR_LOG_INTERVAL_S:
+            return
+        suppressed = self._snapErrorCount - 1
+        self._lastSnapErrorLog = now
+        self._snapErrorCount = 0
+        extra = f" ({suppressed} further failures suppressed)" if suppressed > 0 else ""
+        self._logger.warning(f"Idle snap from MMCore failed: {exc}{extra}")
+
     def getLatestFrame(self, returnFrameNumber=False) -> np.ndarray:
         """Return the most recent frame for display / non-deterministic reads.
 
-        This method NEVER fires a new exposure while the camera is owned by an
-        experiment (``_triggerMode == "software"``). In that mode it simply
-        replays the last cached frame (updated by ``snapSync``), so the
-        live-view poll loop can't compete with the experiment for the sensor —
-        that competition was what produced the Andor DRV_ACQUIRING (20072)
-        crashes and the endless ``Frame number: -1`` spam.
+        This method NEVER fires a new exposure while somebody else owns the
+        camera — an experiment (``_triggerMode == "software"``) or a background
+        job holding an exclusive claim (``acquireExclusive``). In those cases it
+        simply replays the last cached frame, so the live-view poll loop cannot
+        compete with the owner for the sensor. That competition was what
+        produced the Andor DRV_ACQUIRING (20072/20073) spam, the endless
+        ``Frame number: -1``, and snap jobs that never finished because the poll
+        had already drained their frame out of the circular buffer.
 
         In continuous (live) mode it drains the circular buffer down to the
         NEWEST frame (discarding stale FIFO frames) so live view never
         accumulates latency. Only when the camera is genuinely idle (no live
-        sequence, not in software mode) does it fall back to a single snap.
+        sequence, no owner) does it fall back to a single snap — throttled, and
+        only for exposures short enough that blocking in the device lock is
+        harmless.
         """
-        # ── Software-trigger mode: replay cache, touch no hardware ──────────
-        if self._triggerMode == "software":
+        # ── Somebody else owns the sensor: replay cache, touch no hardware ──
+        if self._triggerMode == "software" or self._exclusiveOwner is not None:
             return self._return_stored(returnFrameNumber)
 
-        with self._grabLock:
+        # Never queue the poll thread up behind a grab that is already in
+        # flight — piling threads on the lock only adds latency, and the frame
+        # they would eventually read is the one we already have cached.
+        if not self._grabLock.acquire(blocking=False):
+            return self._return_stored(returnFrameNumber)
+        try:
             try:
                 sequence_running = bool(self._core.isSequenceRunning())
             except Exception:
@@ -463,15 +529,33 @@ class MMCoreDetectorManager(DetectorManager):
                 # so live view shows a stable image instead of black flicker.
                 return self._return_stored(returnFrameNumber)
 
-            # Idle (no live sequence, not software mode): single fresh snap so
-            # occasional on-demand callers still get real data. Lock-guarded.
+            # Idle (no live sequence, nobody owns the sensor): fall back to a
+            # single fresh snap so occasional on-demand callers still get real
+            # data. Guarded twice over, because core.snap() blocks inside
+            # MMCore's device lock for the whole integration:
+            #   * skip it entirely for long exposures — a multi-minute Andor
+            #     snap fired from the poll thread freezes every other MMCore
+            #     call in the process;
+            #   * fire at most one per exposure period, so a camera that keeps
+            #     refusing cannot be hammered at poll rate.
+            try:
+                exposure_s = float(self._core.getExposure()) / 1000.0
+            except Exception:
+                exposure_s = 0.1
+            if exposure_s > _IDLE_SNAP_MAX_EXPOSURE_S:
+                return self._return_stored(returnFrameNumber)
+            now = time.time()
+            if now - self._lastIdleSnap < exposure_s:
+                return self._return_stored(returnFrameNumber)
+            self._lastIdleSnap = now
             try:
                 image = np.asarray(self._core.snap())
                 self._store_latest(image)
-            except Exception:
-                self._logger.error(
-                    "Failed to snap a frame from MMCore", exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - throttled below
+                self._log_snap_error(exc)
             return self._return_stored(returnFrameNumber)
+        finally:
+            self._grabLock.release()
 
     def getChunk(self) -> np.ndarray:
         frames = []
@@ -502,6 +586,15 @@ class MMCoreDetectorManager(DetectorManager):
         if getattr(self, "_triggerMode", "continuous") == "software":
             self._logger.debug(
                 "startAcquisition ignored — camera in software-trigger mode")
+            return
+        # Same rule for a background job that has claimed the sensor: starting
+        # a continuous sequence underneath it would feed the live-view poll the
+        # job's own frames and leave the job waiting for an image that was
+        # already consumed.
+        if getattr(self, "_exclusiveOwner", None) is not None:
+            self._logger.debug(
+                f"startAcquisition ignored — camera claimed by "
+                f"'{self._exclusiveOwner}'")
             return
         with self._grabLock:
             if not self._core.isSequenceRunning():
@@ -555,17 +648,31 @@ class MMCoreDetectorManager(DetectorManager):
         # Stop the continuous sequence AND clear the circular buffer, so a
         # subsequent snap() reads a fresh exposure taken with the current
         # parameters rather than a stale frame left over from live view.
-        with self._grabLock:
+        #
+        # Never wait indefinitely for _grabLock: a single-frame acquisition
+        # holds it for the whole exposure, and "stop live view" must not block
+        # an API worker for minutes behind a long snap. If the lock is busy we
+        # stop the sequence anyway — stopSequenceAcquisition is exactly the
+        # call that unblocks the holder.
+        locked = self._grabLock.acquire(timeout=1.0)
+        try:
             try:
                 if self._core.isSequenceRunning():
                     self._core.stopSequenceAcquisition()
                 self._running = False
             except Exception:
                 self._logger.warning("Failed to stop MMCore acquisition", exc_info=True)
+            if not locked:
+                # Someone is mid-acquisition; clearing the buffer under them
+                # would drop the frame they are waiting for.
+                return
             try:
                 self._core.clearCircularBuffer()
             except Exception:
                 self._logger.debug("Could not clear circular buffer on stop", exc_info=True)
+        finally:
+            if locked:
+                self._grabLock.release()
 
     def flushBuffer(self) -> None:
         """Alias for :meth:`flushBuffers` — ExperimentController.grabCameraFrame
@@ -676,69 +783,261 @@ class MMCoreDetectorManager(DetectorManager):
         """Fire one exposure and block until the resulting frame is available.
 
         The single deterministic-grab primitive used by the ExperimentController
-        for every acquisition. It:
+        for every acquisition. It delegates to :meth:`acquireSingleFrame`, so:
 
-        1. Takes ``_grabLock`` so no live-view poll can touch the sensor
-           concurrently (that overlap is what raised Andor DRV_ACQUIRING/20072).
-        2. Makes sure no sequence acquisition is still running and clears any
-           stale buffered frames.
-        3. Runs ``core.snap()`` in a worker thread and waits up to
-           ``timeout`` seconds. The snap blocks for the full exposure, so the
-           timeout is derived from the current exposure (× 4 + 5 s margin) when
-           not given — long (multi-minute) exposures therefore never time out
-           spuriously, while a genuinely stuck camera is not waited on forever.
-        4. Caches the frame as the latest so the live view can display it.
+        1. ``_grabLock`` keeps any live-view poll off the sensor for the whole
+           exposure (that overlap is what raised Andor DRV_ACQUIRING/20072).
+        2. Any running sequence is stopped and stale buffered frames cleared
+           before the exposure is triggered.
+        3. The wait is a polling loop, not a blocking ``core.snap()``. Only
+           this thread blocks; MMCore's device lock stays free, so parameter
+           reads, temperature polls and the REST API keep working through a
+           multi-minute exposure instead of freezing the backend.
+        4. A stuck camera is not waited on forever — the timeout defaults to
+           ``exposure x 4 + 5 s``, generous enough that legitimate long
+           exposures never trip it.
+        5. The frame is cached as the latest so the live view can display it.
+
+        On timeout or failure the last cached frame is returned, matching the
+        previous behaviour (callers treat a repeated frame as "no new data").
+        """
+        if timeout is None or timeout <= 0:
+            try:
+                exp_s = float(self._core.getExposure()) / 1000.0
+            except Exception:
+                exp_s = 0.1
+            timeout = max(5.0, exp_s * 4.0 + 5.0)
+
+        image, status = self.acquireSingleFrame(timeout=timeout)
+        if status == "done" and image is not None:
+            return image
+
+        self._logger.error(
+            f"snapSync: no frame ({status}) — returning last cached frame.")
+        return self._return_stored(False)
+
+    # ------------------------------------------------------------------
+    # Exclusive access + cancellable single-frame acquisition
+    # ------------------------------------------------------------------
+    # Long acquisitions (a snap job, an experiment step) must own the sensor
+    # for their whole duration. These primitives are what makes that safe: the
+    # owner is announced to getLatestFrame() (which then replays its cache
+    # instead of touching MMCore), the exposure is driven through a polling
+    # loop rather than a blocking snap (so the interpreter and MMCore's device
+    # lock stay free and the backend keeps answering requests), and the whole
+    # thing can be aborted from another thread.
+    @property
+    def exclusiveOwner(self) -> Optional[str]:
+        """Name of the caller currently owning the sensor, or ``None``."""
+        return self._exclusiveOwner
+
+    def acquireExclusive(self, owner: str, timeout: float = 0.0) -> bool:
+        """Claim the camera for ``owner``. Returns False if already claimed.
+
+        Stops a running live sequence and remembers that it did, so
+        ``releaseExclusive`` can put live view back exactly as it found it.
+        ``timeout`` > 0 waits that many seconds for a competing claim to end.
+        """
+        if timeout and timeout > 0:
+            acquired = self._exclusiveLock.acquire(timeout=timeout)
+        else:
+            acquired = self._exclusiveLock.acquire(blocking=False)
+        if not acquired:
+            return False
+
+        self._exclusiveOwner = str(owner)
+        self._exclusiveSince = time.time()
+        try:
+            self._exclusiveRestoreLive = bool(self._core.isSequenceRunning())
+        except Exception:
+            self._exclusiveRestoreLive = False
+        if self._exclusiveRestoreLive:
+            try:
+                self._core.stopSequenceAcquisition()
+                self._running = False
+            except Exception:
+                self._logger.debug(
+                    "acquireExclusive: could not stop live sequence",
+                    exc_info=True)
+        self._logger.debug(f"Camera claimed by '{owner}'")
+        return True
+
+    def releaseExclusive(self, owner: Optional[str] = None,
+                         restoreLive: Optional[bool] = None) -> None:
+        """Release a claim taken with :meth:`acquireExclusive`.
+
+        ``restoreLive`` defaults to whatever the live state was when the claim
+        was taken; pass False to leave the camera idle.
+        """
+        if self._exclusiveOwner is None:
+            return
+        if owner is not None and self._exclusiveOwner != str(owner):
+            self._logger.warning(
+                f"releaseExclusive('{owner}') ignored -- camera is owned by "
+                f"'{self._exclusiveOwner}'")
+            return
+
+        shouldRestore = (self._exclusiveRestoreLive if restoreLive is None
+                         else bool(restoreLive))
+        self._exclusiveOwner = None
+        self._exclusiveRestoreLive = False
+        try:
+            self._exclusiveLock.release()
+        except RuntimeError:
+            pass
+
+        # Only bring live view back if the camera isn't owned by an experiment
+        # through the software-trigger path.
+        if shouldRestore and self._triggerMode != "software":
+            try:
+                self.startAcquisition()
+            except Exception:
+                self._logger.debug(
+                    "releaseExclusive: could not restart live acquisition",
+                    exc_info=True)
+
+    @contextmanager
+    def exclusiveAccess(self, owner: str, timeout: float = 0.0,
+                        restoreLive: Optional[bool] = None):
+        """Context manager form of :meth:`acquireExclusive`.
+
+        Raises ``RuntimeError`` if the camera is already claimed, so a caller
+        never silently runs an acquisition on a busy sensor.
+        """
+        if not self.acquireExclusive(owner, timeout=timeout):
+            raise RuntimeError(
+                f"Camera '{self.name}' is busy -- currently owned by "
+                f"'{self._exclusiveOwner}'")
+        try:
+            yield self
+        finally:
+            self.releaseExclusive(owner, restoreLive=restoreLive)
+
+    def abortAcquisition(self) -> None:
+        """Stop whatever the camera is doing *right now*.
+
+        Ends an integration in the driver instead of waiting it out, which is
+        what makes a long exposure cancellable. Deliberately does NOT take
+        ``_grabLock``: the whole point is to interrupt the thread that holds it.
+        """
+        try:
+            if self._core.isSequenceRunning():
+                self._core.stopSequenceAcquisition()
+        except Exception:
+            self._logger.debug("abortAcquisition: stop failed", exc_info=True)
+        self._running = False
+
+    def acquireSingleFrame(self, cancelEvent: Optional[threading.Event] = None,
+                           timeout: Optional[float] = None,
+                           pollInterval: float = 0.05):
+        """Acquire exactly one frame, cancellably, without freezing the process.
+
+        Returns ``(image, status)`` where ``status`` is one of ``"done"``,
+        ``"cancelled"``, ``"timeout"`` or ``"error"``; ``image`` is ``None``
+        unless the status is ``"done"``.
+
+        Uses ``startSequenceAcquisition(1)`` + polling rather than
+        ``core.snap()``. ``snapImage()`` sits inside MMCore's device lock for
+        the entire integration, so a multi-minute Andor exposure would block
+        every other MMCore call in the process -- temperature polls, parameter
+        reads, the live view, and the very status endpoint the UI polls for
+        progress. The sequence variant returns immediately, so we can sleep
+        between polls, keep the backend responsive, honour ``cancelEvent``, and
+        give up on a camera that never delivers instead of hanging forever.
+
+        The caller is expected to hold an exclusive claim
+        (:meth:`acquireExclusive`); otherwise the live-view poll can drain the
+        frame out of the circular buffer before we read it.
         """
         with self._grabLock:
-            # (2) Ensure the sensor is free before triggering.
+            try:
+                exposure_s = float(self._core.getExposure()) / 1000.0
+            except Exception:
+                exposure_s = 0.1
+            if timeout is None or timeout <= 0:
+                # Generous: readout and adapter overhead scale with exposure,
+                # but a stuck camera must not be waited on forever.
+                timeout = max(15.0, exposure_s * 2.0 + 15.0)
+
+            # Start from a clean slate: no sequence running, no stale frames.
             try:
                 if self._core.isSequenceRunning():
                     self._core.stopSequenceAcquisition()
-                    self._running = False
+                self._running = False
             except Exception:
-                self._logger.debug("snapSync: failed to stop running sequence",
-                                   exc_info=True)
+                self._logger.debug(
+                    "acquireSingleFrame: could not stop running sequence",
+                    exc_info=True)
             try:
                 self._core.clearCircularBuffer()
             except Exception:
                 pass
 
-            # (3) Derive a generous, exposure-proportional timeout.
-            if timeout is None or timeout <= 0:
-                try:
-                    exp_s = float(self._core.getExposure()) / 1000.0
-                except Exception:
-                    exp_s = 0.1
-                timeout = max(5.0, exp_s * 4.0 + 5.0)
-
-            result: Dict[str, Any] = {}
-
-            def _worker():
-                try:
-                    # CMMCorePlus.snap() does snapImage()+getImage() and returns
-                    # the numpy array; it blocks for the whole exposure.
-                    result["img"] = np.asarray(self._core.snap())
-                except Exception as e:  # noqa: BLE001 - reported to caller below
-                    result["err"] = e
-
-            th = threading.Thread(target=_worker, name="MMCoreSnapSync",
-                                  daemon=True)
-            th.start()
-            th.join(timeout)
-
-            if th.is_alive():
+            try:
+                self._core.startSequenceAcquisition(1, 0, True)
+            except Exception:
                 self._logger.error(
-                    f"snapSync: timed out after {timeout:.1f}s waiting for the "
-                    f"camera — returning last cached frame.")
-                return self._return_stored(False)
+                    "acquireSingleFrame: could not start acquisition",
+                    exc_info=True)
+                return None, "error"
 
-            if "img" in result:
-                self._store_latest(result["img"])
-                return result["img"]
+            deadline = time.time() + timeout
+            status = "done"
+            sawRunning = False
+            try:
+                while True:
+                    try:
+                        remaining = int(self._core.getRemainingImageCount())
+                    except Exception:
+                        remaining = 0
+                    if remaining > 0:
+                        break
+                    if cancelEvent is not None and cancelEvent.is_set():
+                        status = "cancelled"
+                        break
+                    if time.time() > deadline:
+                        status = "timeout"
+                        self._logger.error(
+                            f"acquireSingleFrame: no frame after {timeout:.1f}s "
+                            f"(exposure {exposure_s:.3f}s) -- giving up")
+                        break
+                    # The driver dropping out of "running" with an empty buffer
+                    # means the adapter aborted; don't wait out the timeout.
+                    # Only trusted once we have actually seen it run, since
+                    # isSequenceRunning() can lag the start call.
+                    try:
+                        running = bool(self._core.isSequenceRunning())
+                    except Exception:
+                        running = True
+                    if running:
+                        sawRunning = True
+                    elif sawRunning:
+                        status = "error"
+                        self._logger.error(
+                            "acquireSingleFrame: acquisition stopped without "
+                            "delivering a frame")
+                        break
+                    time.sleep(pollInterval)
+            finally:
+                try:
+                    if self._core.isSequenceRunning():
+                        self._core.stopSequenceAcquisition()
+                except Exception:
+                    pass
 
-            self._logger.error(
-                f"snapSync: snap failed ({result.get('err')})")
-            return self._return_stored(False)
+            if status != "done":
+                return None, status
+
+            try:
+                image = np.asarray(self._core.popNextImage())
+            except Exception:
+                self._logger.error(
+                    "acquireSingleFrame: failed to read the delivered frame",
+                    exc_info=True)
+                return None, "error"
+
+            self._store_latest(image)
+            return image, "done"
 
     def crop(self, hpos: int, vpos: int, hsize: int, vsize: int) -> None:
         try:
@@ -1077,6 +1376,10 @@ class MMCoreDetectorManager(DetectorManager):
         status["temperatureC"] = self.getTemperatureC()
         status["temperatureSetpointC"] = self.getTemperatureSetpointC()
         status["exposureMs"] = params.get("Exposure", {}).get("value")
+        # Who currently owns the sensor, so a client can explain "camera busy"
+        # instead of just failing.
+        status["exclusiveOwner"] = self._exclusiveOwner
+        status["busy"] = self._exclusiveOwner is not None
         return status
 
 

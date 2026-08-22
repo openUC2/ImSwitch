@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 600" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- CONFIG-MODEL.md §6 — how the two hashes are built and what each one keys. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#9333ea"/>
+    </marker>
+    <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#ea580c"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1020" height="600" fill="#ffffff"/>
+
+  <text x="510" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">Two hashes: what the light path <tspan font-style="italic">is</tspan>, and what it <tspan font-style="italic">does to a pixel</tspan></text>
+  <text x="510" y="54" text-anchor="middle" font-size="12.5" fill="#64748b">both are computed from the resolved system + runtime state — neither is ever authored by hand</text>
+
+  <!-- inputs -->
+  <g font-size="11.5">
+    <rect x="34" y="92" width="228" height="48" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.4"/>
+    <text x="50" y="112" font-size="12.5" font-weight="700" fill="#1e3a8a">design_sha256</text>
+    <text x="50" y="130" fill="#334155">the whole optikit design, pinned</text>
+
+    <rect x="34" y="152" width="228" height="48" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.4"/>
+    <text x="50" y="172" font-size="12.5" font-weight="700" fill="#1e3a8a">active variants</text>
+    <text x="50" y="190" fill="#334155">{turret.objective: obj_20x, …}</text>
+
+    <rect x="34" y="212" width="228" height="48" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.4"/>
+    <text x="50" y="232" font-size="12.5" font-weight="700" fill="#14532d">selector slots</text>
+    <text x="50" y="250" fill="#334155">discrete: turret, filter wheel, flip</text>
+
+    <rect x="34" y="272" width="228" height="48" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.4"/>
+    <text x="50" y="292" font-size="12.5" font-weight="700" fill="#713f12">enabled sources</text>
+    <text x="50" y="310" fill="#334155">which lasers/LEDs are on, at what λ</text>
+
+    <rect x="34" y="332" width="228" height="60" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1.4"/>
+    <text x="50" y="352" font-size="12.5" font-weight="700" fill="#0f172a">dof_values (quantised)</text>
+    <text x="50" y="370" fill="#334155">"objective.dz": 1.85 mm, rounded to</text>
+    <text x="50" y="386" fill="#334155">the DOF's own <tspan font-family="ui-monospace, monospace">resolution</tspan></text>
+
+    <rect x="34" y="404" width="228" height="60" rx="8" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="4 3"/>
+    <text x="50" y="424" font-size="12.5" font-weight="700" fill="#334155">stage x, y</text>
+    <text x="50" y="442" fill="#475569">continuous, unquantised —</text>
+    <text x="50" y="458" fill="#475569">deliberately in NEITHER hash</text>
+  </g>
+
+  <!-- path_hash -->
+  <path d="M262 116 C 320 116, 330 190, 380 190" stroke="#475569" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
+  <path d="M262 176 C 320 176, 330 190, 380 190" stroke="#475569" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
+  <path d="M262 236 C 320 236, 330 196, 380 196" stroke="#475569" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
+  <path d="M262 296 C 320 296, 330 202, 380 202" stroke="#475569" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
+  <path d="M262 360 C 320 360, 330 210, 380 208" stroke="#475569" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
+
+  <rect x="382" y="150" width="252" height="98" rx="10" fill="#faf5ff" stroke="#9333ea" stroke-width="1.9"/>
+  <text x="508" y="176" text-anchor="middle" font-size="15" font-weight="700" fill="#581c87">path_hash</text>
+  <text x="508" y="198" text-anchor="middle" font-size="11.5" fill="#334155">"this exact optical configuration"</text>
+  <text x="508" y="218" text-anchor="middle" font-size="11.5" fill="#334155">everything above, canonically encoded</text>
+  <text x="508" y="236" text-anchor="middle" font-size="11.5" font-style="italic" fill="#7e22ce">changes when the instrument changes</text>
+
+  <!-- transform_hash -->
+  <rect x="382" y="290" width="252" height="98" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.9"/>
+  <text x="508" y="316" text-anchor="middle" font-size="15" font-weight="700" fill="#7c2d12">transform_hash</text>
+  <text x="508" y="338" text-anchor="middle" font-size="11.5" fill="#334155">the subset that moves sample µm ↔ px:</text>
+  <text x="508" y="356" text-anchor="middle" font-size="11.5" fill="#334155">objective variant, detector, tube lens,</text>
+  <text x="508" y="374" text-anchor="middle" font-size="11.5" fill="#334155">binning, z DOF. Not λ, not intensity.</text>
+
+  <path d="M508 248 L508 288" stroke="#475569" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
+  <text x="600" y="274" text-anchor="middle" font-size="11" font-style="italic" fill="#64748b">a coarser projection</text>
+
+  <!-- consumers -->
+  <path d="M634 178 L700 152" stroke="#9333ea" stroke-width="1.6" fill="none" marker-end="url(#ap)"/>
+  <path d="M634 210 L700 236" stroke="#9333ea" stroke-width="1.6" fill="none" marker-end="url(#ap)"/>
+  <path d="M634 330 L700 332" stroke="#ea580c" stroke-width="1.6" fill="none" marker-end="url(#ao)"/>
+  <path d="M634 350 L700 418" stroke="#ea580c" stroke-width="1.6" fill="none" marker-end="url(#ao)"/>
+
+  <g>
+    <rect x="702" y="112" width="284" height="76" rx="9" fill="#ffffff" stroke="#9333ea" stroke-width="1.5"/>
+    <text x="720" y="134" font-size="13" font-weight="700" fill="#0f172a">calibration lookup</text>
+    <text x="720" y="154" font-size="11.5" fill="#334155">the store is keyed by path_hash. No entry →</text>
+    <text x="720" y="172" font-size="11.5" fill="#334155"><tspan font-family="ui-monospace, monospace">W_CALIBRATION_MISSING</tspan>, never a guessed one.</text>
+  </g>
+
+  <g>
+    <rect x="702" y="200" width="284" height="76" rx="9" fill="#ffffff" stroke="#9333ea" stroke-width="1.5"/>
+    <text x="720" y="222" font-size="13" font-weight="700" fill="#0f172a">snapshot identity</text>
+    <text x="720" y="242" font-size="11.5" fill="#334155">two frames with the same path_hash were</text>
+    <text x="720" y="260" font-size="11.5" fill="#334155">taken under the same instrument — provable.</text>
+  </g>
+
+  <g>
+    <rect x="702" y="296" width="284" height="76" rx="9" fill="#ffffff" stroke="#ea580c" stroke-width="1.5"/>
+    <text x="720" y="318" font-size="13" font-weight="700" fill="#0f172a">affine reuse</text>
+    <text x="720" y="338" font-size="11.5" fill="#334155">unchanged transform_hash → the previous</text>
+    <text x="720" y="356" font-size="11.5" fill="#334155">4×4 still holds. This is the per-frame fast path.</text>
+  </g>
+
+  <g>
+    <rect x="702" y="384" width="284" height="76" rx="9" fill="#ffffff" stroke="#ea580c" stroke-width="1.5"/>
+    <text x="720" y="406" font-size="13" font-weight="700" fill="#0f172a">stitching / expanse</text>
+    <text x="720" y="426" font-size="11.5" fill="#334155">tiles sharing a transform_hash compose by</text>
+    <text x="720" y="444" font-size="11.5" fill="#334155">stage offset alone — no re-registration.</text>
+  </g>
+
+  <rect x="34" y="492" width="952" height="76" rx="10" fill="#f8fafc" stroke="#334155" stroke-width="1.4"/>
+  <text x="56" y="516" font-size="12.5" font-weight="700" fill="#0f172a">Why stage x/y are excluded on purpose</text>
+  <text x="56" y="538" font-size="12" fill="#334155">Putting them in either hash would mint a new key on every move, so no calibration would ever be found twice and no affine reused. Stage position</text>
+  <text x="56" y="556" font-size="12" fill="#334155">is <tspan font-style="italic">where</tspan> the sample is, not <tspan font-style="italic">what</tspan> the optics do to it — it belongs in the per-frame record (§9), next to the timestamp, and nowhere else.</text>
+</svg>

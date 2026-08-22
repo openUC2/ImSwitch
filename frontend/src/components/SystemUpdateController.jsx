@@ -8,8 +8,6 @@ import apiUC2ConfigControllerSetBusPower from "../backendapi/apiUC2ConfigControl
 import apiUC2ConfigControllerGetFanState from "../backendapi/apiUC2ConfigControllerGetFanState";
 import apiUC2ConfigControllerSetFanMode from "../backendapi/apiUC2ConfigControllerSetFanMode";
 import apiUC2ConfigControllerGetBoardTemperature from "../backendapi/apiUC2ConfigControllerGetBoardTemperature";
-import apiUC2ConfigControllerGetJoystickDirection from "../backendapi/apiUC2ConfigControllerGetJoystickDirection";
-import apiUC2ConfigControllerSetJoystickDirection from "../backendapi/apiUC2ConfigControllerSetJoystickDirection";
 import {
   Box,
   Typography,
@@ -37,6 +35,11 @@ import {
   Slider,
   ToggleButton,
   ToggleButtonGroup,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  IconButton,
 } from "@mui/material";
 import {
   Memory,
@@ -47,12 +50,12 @@ import {
   AutoFixHigh as WizardIcon,
   Usb as UsbIcon,
   Bluetooth as BluetoothIcon,
-  Gamepad,
   LightbulbOutlined as LedIcon,
   Bolt as BoltIcon,
   Air as AirIcon,
   Thermostat as ThermostatIcon,
   ReportProblem as ReportProblemIcon,
+  HelpOutline as HelpOutlineIcon,
 } from "@mui/icons-material";
 
 import CanOtaWizard from "./CanOtaWizard";
@@ -92,42 +95,8 @@ const SystemUpdateController = () => {
   // UC2 Hardware Control toggle
   const [enableHardwareControl, setEnableHardwareControl] = useState(false);
 
-  // PS-controller joystick direction (per-axis inversion)
-  const JOYSTICK_AXES = ["X", "Y", "Z", "A"];
-  const [joystickDir, setJoystickDir] = useState({});
-  const [joystickBusy, setJoystickBusy] = useState(false);
-
-  const loadJoystickDir = async () => {
-    if (!isBackendConnected) return;
-    try {
-      const dirs = await apiUC2ConfigControllerGetJoystickDirection();
-      if (dirs && typeof dirs === "object" && !dirs.status) {
-        setJoystickDir(dirs);
-      }
-    } catch (e) {
-      // non-fatal; firmware may not report joystick state
-    }
-  };
-
-  const handleSetJoystick = async (axis, inverted) => {
-    // Optimistic update, then persist to the device.
-    setJoystickDir((prev) => ({ ...prev, [axis]: inverted }));
-    try {
-      setJoystickBusy(true);
-      await apiUC2ConfigControllerSetJoystickDirection(axis, inverted);
-    } catch (e) {
-      dispatch(
-        setNotification({
-          message: `Failed to set joystick direction for ${axis}: ${e.message || e}`,
-          type: "error",
-        }),
-      );
-      // revert on failure
-      setJoystickDir((prev) => ({ ...prev, [axis]: !inverted }));
-    } finally {
-      setJoystickBusy(false);
-    }
-  };
+  // Bluetooth pairing help dialog
+  const [showBtPairingHelp, setShowBtPairingHelp] = useState(false);
 
   // --- USB serial override state (lives inside UC2 Hardware Control card) ---
   const [serialPorts, setSerialPorts] = useState([]);
@@ -159,14 +128,6 @@ const SystemUpdateController = () => {
   useEffect(() => {
     if (enableHardwareControl && isBackendConnected && serialPorts.length === 0) {
       loadSerialPorts();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enableHardwareControl, isBackendConnected]);
-
-  // Load joystick directions when hardware control becomes available.
-  useEffect(() => {
-    if (enableHardwareControl && isBackendConnected) {
-      loadJoystickDir();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enableHardwareControl, isBackendConnected]);
@@ -513,36 +474,14 @@ const SystemUpdateController = () => {
             >
               Bluetooth Pairing
             </Button>
-          </Box>
-
-          {/* Joystick direction (PS controller) */}
-          <Divider sx={{ my: 3 }} />
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
-            <Gamepad color="action" fontSize="small" />
-            <Typography variant="subtitle2">Joystick Direction</Typography>
-          </Box>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Invert the PS-controller joystick per axis if it drives the stage the
-            wrong way.
-          </Typography>
-          <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-            {JOYSTICK_AXES.map((axis) => (
-              <FormControlLabel
-                key={axis}
-                control={
-                  <Switch
-                    checked={!!joystickDir[axis]}
-                    disabled={
-                      !enableHardwareControl ||
-                      !isBackendConnected ||
-                      joystickBusy
-                    }
-                    onChange={(e) => handleSetJoystick(axis, e.target.checked)}
-                  />
-                }
-                label={`${axis} inverted`}
-              />
-            ))}
+            <Tooltip title="How do I pair a PS4/PS5 controller?">
+              <IconButton
+                size="small"
+                onClick={() => setShowBtPairingHelp(true)}
+              >
+                <HelpOutlineIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
           </Box>
 
           {/* USB connection override */}
@@ -983,6 +922,47 @@ const SystemUpdateController = () => {
           </Alert>
         </CardContent>
       </Card>
+
+      {/* Bluetooth Pairing Help Dialog */}
+      <Dialog
+        open={showBtPairingHelp}
+        onClose={() => setShowBtPairingHelp(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>Pairing a PS4/PS5 Controller</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Put the controller into pairing mode, then press{" "}
+            <strong>Bluetooth Pairing</strong> above so the ESP32 can find it:
+          </Typography>
+          <List dense sx={{ mb: 2 }}>
+            <ListItem>
+              <ListItemText primary="1. Hold the PS button and the Share/Create button together until the light bar starts flashing rapidly." />
+            </ListItem>
+            <ListItem>
+              <ListItemText primary="2. Click Bluetooth Pairing on this page while the controller is still flashing." />
+            </ListItem>
+            <ListItem>
+              <ListItemText primary="3. Once paired, the light bar turns solid — the controller will reconnect automatically next time." />
+            </ListItem>
+          </List>
+          <Box
+            component="img"
+            src={`${process.env.PUBLIC_URL}/assets/ps4-bluetooth-pairing.svg`}
+            alt="PS4 controller Bluetooth pairing steps"
+            sx={{
+              width: "100%",
+              borderRadius: 1,
+              border: "1px solid",
+              borderColor: "divider",
+            }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowBtPairingHelp(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* CAN OTA Wizard */}
       <CanOtaWizard

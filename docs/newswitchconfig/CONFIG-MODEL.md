@@ -8,6 +8,9 @@ and what state it was in when a given image was taken.*
 the repo root and describe the code as of `DEV_BD` (2026-08-22).
 **Scope:** the schema and the rules. Implementation, migration tooling and the
 frontend surface are named where they are affected but are not specified here.
+**Continued by:** [OPTIKIT-INTEGRATION.md](OPTIKIT-INTEGRATION.md) (2026-08-23),
+which ratifies §15's open questions and specifies the optikit runtime seam.
+Where the two disagree, the newer document wins.
 
 ---
 
@@ -317,10 +320,11 @@ devices:
     roles: [acquisition]
     params:
       serial: "CS165MU-4711"
-      pixel_size_um: 3.45        # not in the design record → bindings owns it
-      width_px: 1440
-      height_px: 1080
       default_binning: 1
+    # NOTE: no pixel_size_um, no sensor dimensions. The design's detector
+    # record owns the sensor geometry (R1); the driver reports what the
+    # physical camera says and the loader cross-checks the two
+    # (E_SENSOR_MISMATCH). See OPTIKIT-INTEGRATION.md §3.
 
   illumination.ex488:
     driver: uc2.laser
@@ -709,6 +713,7 @@ Codes are **stable and append-only** — never repurposed, never removed
 | `E_DOF_NOT_ACTUATABLE` | error | an axis drives a DOF with `actuatable: false` |
 | `E_DOF_DOUBLE_DRIVEN` | error | two axes drive one DOF |
 | `E_RANGE_MISMATCH` | error | axis limits exceed the DOF's declared `range` |
+| `E_SENSOR_MISMATCH` | error | driver-reported sensor geometry disagrees with the design's detector record |
 | `E_SLOT_VARIANT_UNKNOWN` | error | a slot names a variant the design does not define |
 | `E_OVERRIDE_FORBIDDEN` | error | an objective file overrides a `general`-owned field |
 | `E_RESTATED_FACT` | error | bindings/profile restate a fact the design owns (R1) |
@@ -896,6 +901,12 @@ to serialize a light path per frame.
 
 ![design to kubes](diagrams/design-to-kubes.svg)
 
+> **Ratified 2026-08-23:** the "derive" arrow below is implemented by the
+> **optikit service**, not reimplemented in newswitch. newswitch sends the
+> design + current `dof_values`/variants and receives the traced path; the
+> kube/edge mapping in §12.2 is the projection of that response. Caching is
+> keyed by `path_hash`. See [OPTIKIT-INTEGRATION.md](OPTIKIT-INTEGRATION.md) §2.
+
 ### 12.1 What is derived
 
 `LightPathManager.calculate_possible_light_paths()` currently invents the
@@ -919,7 +930,7 @@ computed:
 | `dichroic` | `DichroicKube` | bands from `optics.fragment.surfaces[*].response` |
 | `filter` | `FilterKube` | ditto |
 | `lens` (selected by a turret) | `ObjectiveKube` + `ObjectiveTurretKube` | turret = the `selects` device |
-| `detector` | `DetectorKube` | pixel pitch from the binding's `params` |
+| `detector` | `DetectorKube` | sensor geometry from the design record; driver + serial from the binding |
 | `sample` | `StageKube` | the thing the stage moves |
 | `slm`, `display` | `GenericKube` | `state_accessor` points at the driving state |
 | `electronics`, `mechanics` | *not in the light path* | BOM identity only |
@@ -960,30 +971,29 @@ Degraded, explicitly, with one warning — rather than a second code path.
 
 ---
 
-## 13 · Migration
+## 13 · Clean slate — no migration
 
-The existing configs (`backend/configs/uc2_canopen.json`,
-`backend/configs/uc2_serial.json`) and `NEWSWITCH_CONFIG` keep working.
+*Ratified 2026-08-23: the current config system was a scaffold to have
+something running; it is removed outright. No converter, no v0 shim, no
+compatibility window.*
 
-1. **`NEWSWITCH_CONFIG` gains a `v1` branch.** A file with
-   `newswitch-version: v1` is loaded as a `MicroscopeFile`; anything else is
-   loaded as today's `ImswitchConfig` and passed through a **v0 shim** that
-   synthesizes a `BindingsFile` from the flat fields. Both produce a
-   `ResolvedSystem`, so only the loader is dual-path — no manager sees the
-   difference.
-2. **`convert_imswitch_setup.py` retargets.**
-   [backend/scripts/convert_imswitch_setup.py](../backend/scripts/convert_imswitch_setup.py)
-   already maps ImSwitch `managerName`/`managerProperties` onto newswitch fields;
-   it emits `bindings.yml` instead of a flat JSON. Its `skipped` list becomes
-   `W_*` diagnostics rather than printed notes.
-3. **`provide_managers` becomes a loop.** One iteration per
-   `resolved.devices` entry, driver registry supplying manager and state type.
-   The 27-element return tuple goes away with it.
-4. **Design binding is opt-in.** §12.4 means step 4 can land long after steps
-   1–3, on the benches that have a design.
+- `ImswitchConfig`, the flat `uc2_*` dict fields, and the per-transport
+  branches in `provide_managers` are **deleted**, not wrapped.
+- [backend/scripts/convert_imswitch_setup.py](../backend/scripts/convert_imswitch_setup.py)
+  and the old flat configs (`backend/configs/uc2_canopen.json`,
+  `backend/configs/uc2_serial.json`) go with them. Their contents are
+  re-authored once as a `bindings.yml` — worked examples, not migration
+  targets.
+- `NEWSWITCH_CONFIG` points at a `microscope.yml` and accepts nothing else;
+  any other input is `E_FILE_MISSING`/a parse error, never a fallback.
+- `provide_managers` is rewritten as the registry loop (§9 step 6) in the
+  same change — the 27-element return tuple goes away with the config it
+  parsed.
 
-Order matters: 1 → 3 is a refactor with no user-visible change, and it is worth
-landing on its own before any of the optikit work starts.
+The one thing preserved from the old system is knowledge, not code: the
+driver params models for `uc2.canopen` / `uc2.rest` / `uc2.stage` / … are
+transcriptions of today's `UC2CanBusConfig`, `UC2RestBusConfig`,
+`UC2StageConfig` dataclasses into registry-owned pydantic models.
 
 ---
 
@@ -1005,24 +1015,33 @@ than one of the two silently winning.
 
 ---
 
-## 15 · Open questions
+## 15 · Decisions (ratified 2026-08-23; details in OPTIKIT-INTEGRATION.md)
 
-1. **Where does the design live?** Vendored folder, git submodule, or fetched
-   from an optikit library registry by id + semver? The hash pin works either
-   way; the ergonomics do not.
-2. **Multi-detector paths.** `LightPath.detector` is a single slot today. A
-   design with two cameras produces two paths — is the "current" light path a
-   single value, or one per acquisition device? The latter is more honest and
-   affects `LightPathState`.
-3. **Sample formats.** Squid's `sample_formats.csv` (well plates) has no home in
-   this model. Profile layer, or a fifth layer with its own store? Well positions
-   are neither instrument nor preference.
-4. **Fibers.** optikit models fiber links as non-geometric hops (`FiberSpec`).
-   Kube/edge derivation needs a rule for them.
-5. **Who may write L3?** The UI edits the objective files at runtime (Squid does
-   this). Does newswitch write YAML back, or hold profile edits in state and
-   export on request?
-6. **`path_hash` stability across optikit versions.** If optikit renames a
-   component, every calibration key changes. Does an entry need a migration
-   pointer, or is recalibration the honest answer?
+Formerly the open questions. Each was answered in Bene's review; the ones
+that grew into designs are specified in
+[OPTIKIT-INTEGRATION.md](OPTIKIT-INTEGRATION.md).
+
+1. **Where does the design live?** → In a **versioned optikit-core service**
+   running next to newswitch (one compose file). `microscope.yml` keeps the
+   hash pin; the service holds the design and serves the light path on
+   demand. §12's derivation is a *service call*, not a newswitch
+   reimplementation. Details: OPTIKIT-INTEGRATION §2.
+2. **Multi-detector paths.** → **One light path per acquisition device.**
+   `LightPathState` becomes `paths: dict[DeviceRef, LightPath]`; `path_hash`
+   is per-device (its inputs already include the detector). OPTIKIT-INTEGRATION §10.
+3. **Sample formats.** → **The sample becomes an optikit primitive**
+   long-term (a carrier record: well geometry, A1 offset). Until that
+   primitive exists, well-plate definitions sit in the profile as an interim
+   home, marked as such.
+4. **Fibers.** → **A fiber is a teleport.** The kube graph re-anchors the
+   source (or point detector) at the far port; the fiber contributes optical
+   path length but no geometric edge. `LightEdge` gains `kind: fiber`.
+   OPTIKIT-INTEGRATION §10.
+5. **Who may write L3?** → **Profile edits live in reactive state and are
+   exported to YAML on explicit save.** The file on disk stays the authored
+   truth at boot; the running system never writes it behind the user's back.
+6. **`path_hash` stability across renames.** → **Recalibration is the honest
+   answer.** A rename is a design change like any other: it re-hashes, old
+   entries become `W_CALIBRATION_STALE`, and nothing migrates keys — per the
+   persistence rule (OPTIKIT-INTEGRATION §8).
 ```

@@ -19,6 +19,13 @@ Verification commands (newswitch backend): `uv run --python 3.13 pytest tests/ -
 adding `@register`/`@state` surface. Note: the backend does **not** import on Python 3.14
 (rekuest state decorator bug) — stick to 3.13.
 
+Debugging (VS Code): use the `newswitch backend: debug (...)` configurations in
+`.vscode/launch.json` (virtual / UC2 serial / UC2 CANopen — the hardware ones set
+`NEWSWITCH_CONFIG` to the matching `backend/configs/*.json`). They run uvicorn **without**
+`--reload` on purpose: the reloader moves the server into a child process and breakpoints
+never bind. `backend/main.py` is also directly runnable (F5) — it serves the app object
+in-process on :8099. For hot-reload (no debugging) keep using `just dev-backend`.
+
 ---
 
 ## Status after the 2026-07-15 session (already implemented, uncommitted)
@@ -47,6 +54,76 @@ adding `@register`/`@state` surface. Note: the backend does **not** import on Py
   reference only); `VirtualSerialManager` fills the deprecated `SerialManager` slot.
 
 Open hardening items from this session are folded into WP0/WP3 below.
+
+**Update 2026-07-21 (also uncommitted):**
+
+- **Placeholder purge done:** the mock JSON transport is deleted —
+  `managers/uc2/serial_manager.py`, `managers/virtual/virtual_serial_manager.py`,
+  `protocols/serial_manager.py` are gone; `SerialManager`/`SerialState` removed from
+  `provide_managers` and `protocols/__init__`. Only real transports + `VirtualUC2Bus` remain.
+  Frontend codegen regenerated (SerialState.ts dropped, UC2State.ts added).
+- **Config files work:** `main.py` loads `NEWSWITCH_CONFIG=<file>.json` into `ImswitchConfig`;
+  nested per-component overrides (`uc2_can`, `uc2_rest`, `uc2_stage`, `uc2_illumination`)
+  flow into the typed bus/manager configs. Two complete setups ship in `backend/configs/`:
+  `uc2_serial.json` (one ESP32 master, UC2-REST, port autodetect, 500000 baud) and
+  `uc2_canopen.json` (Waveshare USB-CAN-A on `/dev/cu.SLAB_USBtoUART`, full node map;
+  socketcan/can0 variant documented inline). Covered by tests.
+- **First hardware validation (REST transport, corrected):** the bench device on
+  `/dev/cu.SLAB_USBtoUART` is a **UC2 CAN-HAT master** running firmware
+  `UC2_canopen_master` V2.0 (Jul 2026) — its serial link runs at **921600 baud** (115200/
+  500000 yield undecodable bytes and uc2rest falls back to MockSerial gracefully). With the
+  right baud, the full path works end-to-end on hardware: `UC2RestBus` → `uc2rest.aio` →
+  board; firmware identity + isMaster land in `UC2State`, live positions read through the
+  bus (steps→µm), clean shutdown; and the whole backend boots from
+  `configs/uc2_serial.json` with the bus connecting during startup. Topology note: a
+  USB-connected CAN-HAT master is driven via the **REST** transport (it bridges serial
+  JSON→CAN itself); the **canopen** transport is for direct host CAN interfaces
+  (SocketCAN HAT / Waveshare USB-CAN-A). An earlier claim that the CAN path was validated
+  against this device was wrong — port-open + empty scan proves nothing; real CAN
+  validation still needs a CAN interface + nodes (WP3).
+- **Dev env:** local UC2-REST + UC2-REST-CANOPEN installed editable in the backend venv
+  (part of WP0); backend venv re-synced to Python 3.13. Backend boots in virtual mode with
+  the new wiring; backend 39 pytest + frontend 13 vitest green.
+- **lefthook fixed:** `rc: .lefthookrc` added — hooks now find `uv`/`yarn` when committing
+  from GUI/IDE shells.
+
+**Update 2026-07-22 — WP1–WP7 software complete (uncommitted):**
+
+- **WP1 DONE:** reconnect-with-backoff in both buses (transport errors → `BusError` +
+  `UC2State.last_error`, capped exponential retry, never kills the agent; REST treats the
+  MockSerial fallback as a failure so replug-recovery is real); `_require_client` fails fast
+  with a readable error; REST `PositionUpdate` throttled per axis (50 ms default); CAN
+  shared-node sub-axis mapping (`sub_x..sub_a`, `axis_for_node(node, sub)`). Covered by a
+  fake-transport reconnect test.
+- **WP2 DONE:** facade tests added in both library repos — uc2canopen `tests/test_aio.py`
+  (synthetic TPDO/heartbeat frames → typed events; move_and_wait done-edge + stop-on-cancel;
+  lock-deadlock regression test) 4/4 + 14/14 features; uc2rest `uc2rest/TEST/TEST_aio_mock.py`
+  (MockSerial + pattern-frame injection) passing.
+- **WP4 DONE:** `newswitch/registers/uc2.py` — home_stage (Z-first), stop_stage (lock-free),
+  led_matrix_fill/off, uc2_scan_nodes, home_objective, galvo_set_position/raster_scan/stop/
+  get_status (typed `GalvoStatus`; plain dict returns hit the FastApiAgent shelving gap).
+  Agent-level tests green; frontend hooks regenerated.
+- **WP5 DONE (converter):** `scripts/convert_imswitch_setup.py` converts ImSwitch setups
+  (transport from rs232 manager, stepsize→signed steps_per_um, speeds, laser channels →
+  illumination sources) with skipped-item reporting; `tests/fixtures/{example_uc2,canopen}.json`
+  round-trip-validated against `ImswitchConfig` + bus configs.
+- **WP6 DONE:** bus verbs `aobjective_move/home/status` + `ascan_nodes` on all three
+  transports (REST = native firmware objective module via new uc2rest.aio wrappers; CAN =
+  configurable motor-node with calibrated slot positions; virtual = simulated).
+  `UC2ObjectiveManager` and `UC2FilterBankManager` (wheel on a configurable rotation axis
+  with per-slot positions) implement the existing protocols and replace the virtual ones in
+  hardware mode; stale placeholder copies (`managers/uc2/detector_manager.py`, old
+  filter_bank) removed. Config dicts `uc2_objective`/`uc2_filter_bank` added.
+- **WP7 DONE:** `routines/autofocus.py` — `compute_focus_metric` (Laplacian/intensity
+  variance), plain `autofocus_sweep` core (shared with the hook), registered `run_autofocus`
+  with progress/pausepoints + `AutofocusState` (@state, in the provide_managers tuple);
+  `hooks/software_autofocus.py` now does a real sweep instead of the random stub. Verified
+  against the virtual detector's defocus model (finds z≈0 from a defocused start).
+- Suite: backend 54 passed / 1 skipped, frontend 13 passed, ruff clean, codegen regenerated.
+- **WP3 partially blocked:** the UC2 HAT vanished from `/dev` mid-session (was
+  `cu.SLAB_USBtoUART`, expected UC2-REST JSON at 921600 baud per Bene) — REST-transport
+  hardware validation pending replug. Earlier note: the port answered with binary frames at
+  115200/500000; retry at 921600 once reconnected.
 
 ---
 
@@ -439,17 +516,78 @@ just drift-check. Do not commit.
 
 ---
 
+## WP13 — Firmware update pipeline (port from ImSwitch)
+
+**Goal:** bring ImSwitch's complete firmware/OTA tooling into newswitch so a microscope can
+be flashed and fleet-updated from the web UI. **Repos:** newswitch (reference: ImSwitch
+`imswitch/imcontrol/controller/controllers/UC2ConfigController.py` — ~83 endpoints, the
+firmware subset only — plus its vendored `espota.py`), uc2rest, uc2canopen.
+**Depends:** WP4 (actions pattern), WP10.1 (node discovery); hardware for acceptance.
+
+What ImSwitch has today (port all four mechanisms):
+1. **USB master flash via esptool**: `import esptool`, `_run_esptool` subprocess with a
+   cooperative cancel flag; flashes `esp32_UC2_canopen_master_release.bin` onto the
+   USB-connected master (HAT v2).
+2. **Firmware server + cache**: `_firmware_server_url` (default
+   `http://host.docker.internal/firmware`), download into a temp cache dir
+   (`_download_firmware_for_device`, `clearOTAFirmwareCache`), and the **CAN-ID→binary
+   mapping** (`_get_can_id_firmware_mapping`: 1=master, motor/LED/laser slaves…) used by
+   `listAvailableFirmware`/`getOTADeviceMapping`.
+3. **WiFi (Arduino) OTA for slaves**: `startSingleDeviceOTA`/`startMultipleDeviceOTA` —
+   device joins WiFi (`setOTAWiFiCredentials`, default password "youseetoo"), then
+   `espota.upload_ota(esp_ip, firmware_path, esp_port=3232, ...)` with progress callbacks
+   (`sigOTAStatusUpdate` → in newswitch: an `OTAState` @state + task `progress()`),
+   `getOTAStatus`/`clearOTAStatus`.
+4. **CAN streaming OTA**: `startCANStreamingOTA(can_id, firmware_url, baud=921600)` /
+   `startMultipleCANStreamingOTA`/`cancelCANStreamingOTA` — delegates to uc2rest `.canota`
+   (`start_can_streaming_ota[_blocking]`); on the CANopen transport, the OD OTA group
+   (`0x2F00-0x2F05`, DOMAIN firmware data) exists in uc2canopen's OD but has **no client
+   implementation yet** — decide: reuse the REST-master streaming path or implement
+   SDO-segmented OTA in uc2canopen.
+
+newswitch shape: an `OTAManager` @context + `OTAState` @state (per-node status/progress),
+registered actions mirroring the four mechanisms, firmware files served/cached through the
+IO layer, esptool/espota vendored or added as optional deps. Long flashes are rekuest tasks
+(progress + cancel), one node at a time, guarded by a `firmware_update` lock so motion apps
+can't run mid-flash.
+
+**Acceptance:** flash the USB master from the UI; OTA one CAN slave via WiFi OTA and (if
+implemented) via CAN streaming; status/progress visible live; cancel works; a failed
+download leaves a readable error in `OTAState`.
+
+```text
+Claude Code prompt (run in newswitch/backend):
+Port ImSwitch's firmware-update pipeline. Read
+~/.../ImSwitch/imswitch/imcontrol/controller/controllers/UC2ConfigController.py (only the
+firmware/OTA members: _get_can_id_firmware_mapping, _download_firmware_for_device,
+_upload_firmware_to_device, startSingleDeviceOTA/startMultipleDeviceOTA,
+startCANStreamingOTA, setOTAWiFiCredentials/setOTAFirmwareServer, getOTAStatus,
+_run_esptool) and its espota.py. Create protocols/ota.py (OTAManager protocol + OTAState
+with per-node {phase, progress, error}) and managers/ota/ with: firmware cache +
+server-download helper, esptool USB flash (subprocess, cancellable), espota WiFi OTA
+(vendor espota.py), and CAN streaming OTA via uc2rest .canota (REST transport only for
+now; raise a clear NotImplementedError on the CANopen bus and note the OD 0x2F00 group as
+the future path). Register actions flash_master, start_device_ota, start_can_streaming_ota,
+ota_status, set_ota_credentials, set_firmware_server, clear_firmware_cache — all as
+long-running tasks with progress() and a "firmware_update" lock. Unit-test the mapping,
+cache, and status bookkeeping without hardware (mock the uploaders). pytest + ruff +
+drift-check. Do not commit.
+```
+
+---
+
 ## Sequencing
 
 ```
 WP0 ──► WP1 ──► WP3 (bench, human-in-loop)
          │
          ├──► WP4 ──► WP6, WP7, WP12
-         │      └──► WP10 (Wave 3), WP11 (§6.4 completion)
+         │      └──► WP10 (Wave 3) ──► WP13 (firmware/OTA)
+         │             └──► WP11 (§6.4 completion)
          ├──► WP5 (setup files)
          └──  WP8 (parallel) ──► WP9 (Wave 2, also needs WP4+WP5)
 ```
 
-Wave 1 = WP4 + WP6 + WP7 + WP12. Wave 2 = WP8 + WP9. Wave 3 = WP10 (+ WP11 spans all).
-Cameras/detector work is explicitly out of scope (other team) — coordinate only on the
-`CameraState`/`AcquistionManager` contract before WP9.
+Wave 1 = WP4 + WP6 + WP7 + WP12. Wave 2 = WP8 + WP9. Wave 3 = WP10 + WP13 (+ WP11 spans
+all). Cameras/detector work is explicitly out of scope (other team) — coordinate only on
+the `CameraState`/`AcquistionManager` contract before WP9.

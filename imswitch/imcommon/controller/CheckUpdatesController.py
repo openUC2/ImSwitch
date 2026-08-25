@@ -10,7 +10,8 @@ import threading
 import datetime
 
 from imswitch import __version__
-from imswitch.imcommon.framework import Signal, Thread
+from qtpy.QtCore import Signal as _QtSignal
+from imswitch.imcommon.framework import Thread
 from imswitch.imcommon.model import initLogger
 from .basecontrollers import WidgetController
 
@@ -45,13 +46,15 @@ class CheckUpdatesController(WidgetController):
 
 
 class CheckUpdatesThread(Thread):
+    # Signals must be class-level for both PyQt5 and PySide6
+    sigFailed = _QtSignal()
+    sigNoUpdate = _QtSignal()
+    sigNewVersionPyInstaller = _QtSignal(str)
+    sigNewVersionPyPI = _QtSignal(str)
+    sigNewVersionShowInfo = _QtSignal(str)
+
     def __init__(self):
         super().__init__()
-        self.sigFailed = Signal()
-        self.sigNoUpdate = Signal()
-        self.sigNewVersionPyInstaller = Signal(str)  # (latestVersion)
-        self.sigNewVersionPyPI = Signal(str)  # (latestVersion)
-        self.sigNewVersionShowInfo = Signal(str) # (someText)
         self.__logger = initLogger(self, tryInheritParent=True)
 
     def run(self):

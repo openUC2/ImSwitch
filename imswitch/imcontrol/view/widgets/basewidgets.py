@@ -7,7 +7,12 @@ from imswitch.imcommon.view.guitools import naparitools
 
 
 class _QObjectABCMeta(type(QtCore.QObject), ABCMeta):
-    pass
+    def __new__(mcs, name, bases, namespace, **kwargs):
+        cls = super().__new__(mcs, name, bases, namespace, **kwargs)
+        if not hasattr(cls, '_abc_impl'):
+            from _abc import _abc_init
+            _abc_init(cls)
+        return cls
 
 
 class WidgetFactory:

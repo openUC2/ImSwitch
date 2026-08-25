@@ -9,7 +9,21 @@ import json
 import os
 import time
 import uuid
-import fcntl
+try:
+    import fcntl  # Linux/macOS only
+except ImportError:
+    # Windows stub — file locking is a no-op (single-user desktop use)
+    import msvcrt as _msvcrt
+
+    class fcntl:
+        LOCK_EX = 0x2
+        LOCK_NB = 0x4
+        LOCK_SH = 0x1
+        LOCK_UN = 0x8
+
+        @staticmethod
+        def flock(fd, operation):
+            pass  # no-op on Windows
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 from pathlib import Path

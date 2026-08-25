@@ -313,6 +313,28 @@ class LaserController(ImConWidgetController):
         else: self.valueChanged(laserName, value) #TODO: !!!
 
     @APIExport()
+    def setLaserGalvo(self, laserName: str = None, frequency: float = 10,
+                      amplitude: float = 1, offset: float = 0, channel: int = 1,
+                      clk_div: int = 0, phase: float = 0, invert: int = 1) -> None:
+        """ Configure the ESP32 galvo that forms the light sheet for a laser.
+
+        frequency=0 stops the sweep. If laserName is None or unknown, the first
+        laser is used. Added for napari-lsft LSFT acquisition so the galvo
+        (light sheet) can be activated programmatically at measurement start
+        while staying manually controllable via the Holo widget. """
+        names = self._master.lasersManager.getAllDeviceNames()
+        if laserName is None or laserName not in names:
+            laserName = names[0]
+        manager = self._master.lasersManager[laserName]
+        if not hasattr(manager, "setGalvo"):
+            raise RuntimeError(
+                f"Laser {laserName!r} ({type(manager).__name__}) has no galvo; "
+                "expected an ESP32LEDLaserManager.")
+        manager.setGalvo(channel=channel, frequency=frequency, offset=offset,
+                         amplitude=amplitude, clk_div=clk_div, phase=phase,
+                         invert=invert)
+
+    @APIExport()
     def changeScanPower(self, laserName, laserValue):
         defaultPreset = self._setupInfo.laserPresets[self._setupInfo.defaultLaserPresetForScan]
         defaultPreset[laserName] = guitools.LaserPresetInfo(value=laserValue)

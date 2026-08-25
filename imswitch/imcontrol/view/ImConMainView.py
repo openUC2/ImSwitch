@@ -24,6 +24,7 @@ else:
 class ImConMainView(QMainWindow):
     sigPickSetup = Signal()
     sigClosing = Signal()
+    sigLoadParamsFromHDF5 = Signal()
 
     def __init__(self, options, viewSetupInfo, *args, **kwargs):
         self.__logger = initLogger(self)
@@ -49,6 +50,10 @@ class ImConMainView(QMainWindow):
         self.shortcuts = menuBar.addMenu('&Shortcuts')
 
 
+
+        self.loadParamsFromHDF5Action = QtWidgets.QAction('Load parameters from HDF5…', self)
+        self.loadParamsFromHDF5Action.triggered.connect(self.sigLoadParamsFromHDF5)
+        file.addAction(self.loadParamsFromHDF5Action)
 
         self.pickSetupAction = QtWidgets.QAction('Pick hardware setup…', self)
         self.pickSetupAction.triggered.connect(self.sigPickSetup)
@@ -264,12 +269,13 @@ class ImConMainView(QMainWindow):
 
 class ImConMainViewNoQt(object):
     # FIXME: Hacky way to make this class compatible with the rest of the code without QT
+    sigClosing = Signal()
+
     def __init__(self, options, viewSetupInfo, *args, **kwargs):
         self.__logger = initLogger(self)
         self.__logger.debug('Initializing')
 
         super().__init__(*args, **kwargs)
-        self.sigClosing = Signal()
         self.docks = {}
         self.widgets = {}
         self.shortcuts = {}

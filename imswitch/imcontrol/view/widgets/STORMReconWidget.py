@@ -1,8 +1,8 @@
 from qtpy import QtCore, QtWidgets
 
 # microeye gui
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
+from qtpy.QtWidgets import *
+from qtpy.QtCore import *
 try:
     from microEye.fitting.fit import BlobDetectionWidget, DoG_FilterWidget, BandpassFilterWidget, TemporalMedianFilterWidget
     from microEye.fitting.results import FittingMethod, FittingResults

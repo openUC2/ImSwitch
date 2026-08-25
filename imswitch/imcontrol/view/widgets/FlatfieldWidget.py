@@ -1,6 +1,6 @@
 import numpy as np
 from qtpy import QtWidgets
-from PyQt5 import QtWidgets
+from qtpy import QtWidgets
 from imswitch.imcommon.model import initLogger
 from .basewidgets import NapariHybridWidget
 

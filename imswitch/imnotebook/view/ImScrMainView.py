@@ -3,9 +3,9 @@ from .LaunchNotebookServer import LaunchNotebookServer
 
 if not IS_HEADLESS:
     from qtpy import QtCore, QtWidgets
-    from PyQt5.QtCore import QUrl
-    from PyQt5.QtWidgets import QMessageBox
-    from PyQt5.QtCore import QObject, pyqtSignal
+    from qtpy.QtCore import QUrl
+    from qtpy.QtWidgets import QMessageBox
+    from qtpy.QtCore import QObject, Signal
     from .MainWindow import MainWindow
 try:
     IS_QTWEBENGINE = True
@@ -42,7 +42,7 @@ class ImScrMainView(QtWidgets.QMainWindow):
 
         # redirect logging to self.view.loggerdock.log
         class QtLogger(QObject):
-            newlog = pyqtSignal(str)
+            newlog = Signal(str)
 
             def __init__(self, parent):
                 super(QtLogger, self).__init__(parent)

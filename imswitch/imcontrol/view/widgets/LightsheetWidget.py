@@ -1,9 +1,9 @@
 import numpy as np
 from qtpy.QtCore import Signal
 # PyQt5 imports
-from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QGroupBox, QLabel, QSpinBox, QHBoxLayout, QVBoxLayout, QGridLayout, QPushButton, QSizePolicy
-from PyQt5.QtGui import QIcon, QFont
+from qtpy import QtCore, QtGui, QtWidgets
+from qtpy.QtWidgets import QGroupBox, QLabel, QSpinBox, QHBoxLayout, QVBoxLayout, QGridLayout, QPushButton, QSizePolicy
+from qtpy.QtGui import QIcon, QFont
 import pyqtgraph.opengl as gl
 
 

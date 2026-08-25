@@ -3,7 +3,7 @@ from qtpy import QtCore, QtWidgets
 from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
 
-from PyQt5.QtWidgets import (QTabWidget, QWidget,
+from qtpy.QtWidgets import (QTabWidget, QWidget,
                              QVBoxLayout, QHBoxLayout, QComboBox, QPushButton,
                              QCheckBox, QLabel, QLineEdit)
 

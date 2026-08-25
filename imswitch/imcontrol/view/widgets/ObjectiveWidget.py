@@ -1,5 +1,5 @@
-from PyQt5.QtWidgets import QLabel, QPushButton, QTextEdit
-from PyQt5.QtWidgets import QGridLayout
+from qtpy.QtWidgets import QLabel, QPushButton, QTextEdit
+from qtpy.QtWidgets import QGridLayout
 
 from .basewidgets import NapariHybridWidget
 

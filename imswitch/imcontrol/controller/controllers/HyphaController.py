@@ -102,14 +102,14 @@ class MyMicroscope(object):
 
 if IS_HEADLESS:
     QThread = object
-    pyqtSignal = None
+    Signal = None
 else:
-    from PyQt5.QtCore import QThread, pyqtSignal
+    from qtpy.QtCore import QThread, Signal
 
 class AsyncioThread(QThread):
     # We need this in order to get asynchronous behavior in the HyphaController for the GUI-case
     if not IS_HEADLESS:
-        started = pyqtSignal()
+        started = Signal()
 
     def __init__(self, loop):
         super().__init__()

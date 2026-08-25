@@ -1,9 +1,9 @@
 from imswitch import IS_HEADLESS
 
 if not IS_HEADLESS:
-    from PyQt5.QtCore import pyqtSlot, QSettings, QTimer, QUrl, Qt
-    from PyQt5.QtGui import QCloseEvent
-    from PyQt5.QtWidgets import QMainWindow, QMessageBox, QDockWidget, QPlainTextEdit, QTabWidget
+    from qtpy.QtCore import Slot, QSettings, QTimer, QUrl, Qt
+    from qtpy.QtGui import QCloseEvent
+    from qtpy.QtWidgets import QMainWindow, QMessageBox, QDockWidget, QPlainTextEdit, QTabWidget
 try:
     from .CustomWebView import CustomWebView
     IS_QTWEBENGINE = True
@@ -22,7 +22,7 @@ class LoggerDock(QDockWidget):
         self.textView.setReadOnly(True)
         self.setWidget(self.textView)
 
-    @pyqtSlot(str)
+    @Slot(str)
     def log(self, message):
         self.textView.appendPlainText(message)
 
@@ -65,7 +65,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(v.tabIndex)
         return v
 
-    @pyqtSlot(int)
+    @Slot(int)
     def destroyBrowserTab(self, which):
         closeevent = QCloseEvent()
         win = self.tabs.widget(which)
@@ -76,7 +76,7 @@ class MainWindow(QMainWindow):
             if closeevent.isAccepted():
                 self.tabs.removeTab(which)
 
-    @pyqtSlot()
+    @Slot()
     def initialload(self):
         if self.homepage:
             self.basewebview.load(QUrl(self.homepage))

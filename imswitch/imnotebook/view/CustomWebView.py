@@ -1,9 +1,9 @@
-from PyQt5.QtCore import pyqtSlot, QTimer, QUrl
-from PyQt5.QtWidgets import QMessageBox
+from qtpy.QtCore import Slot, QTimer, QUrl
+from qtpy.QtWidgets import QMessageBox
 try:
-    from PyQt5.QtWebEngineWidgets import QWebEngineView as QWebView, QWebEnginePage as QWebPage
-    from PyQt5.QtWebEngineCore import QWebEngineUrlRequestInterceptor
-    from PyQt5.QtWebEngineWidgets import QWebEngineProfile
+    from qtpy.QtWebEngineWidgets import QWebEngineView as QWebView, QWebEnginePage as QWebPage
+    from qtpy.QtWebEngineCore import QWebEngineUrlRequestInterceptor
+    from qtpy.QtWebEngineWidgets import QWebEngineProfile
     IS_QTWEBENGINE = True
 except:
     IS_QTWEBENGINE = False
@@ -24,7 +24,7 @@ class CustomWebView(QWebView):
         self.loadedPage = None
         self.loadFinished.connect(self.onpagechange)
 
-    @pyqtSlot(bool)
+    @Slot(bool)
     def onpagechange(self, ok):
         self.log("on page change: %s, %s" % (self.url(), ok))
         if self.loadedPage is not None:
@@ -45,7 +45,7 @@ class CustomWebView(QWebView):
         if not ok:
             QMessageBox.information(self, "Error", "Error loading page!", QMessageBox.Ok)
 
-    @pyqtSlot(QUrl)
+    @Slot(QUrl)
     def handlelink(self, url):
         urlstr = url.toString()
         self.log("handling link : %s" % urlstr)

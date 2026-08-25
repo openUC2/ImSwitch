@@ -1,5 +1,5 @@
 from qtpy import QtCore
-from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QListWidget
+from qtpy.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QListWidget
 
 from .basewidgets import NapariHybridWidget
 

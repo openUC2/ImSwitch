@@ -1,7 +1,7 @@
 import webbrowser
-from PyQt5 import QtWidgets
+from qtpy import QtWidgets
 try:
-    from PyQt5 import QtWebEngineWidgets
+    from qtpy import QtWebEngineWidgets
 except:
     QtWebEngineWidgets = None
 from qtpy import QtCore, QtWidgets

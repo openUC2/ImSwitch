@@ -1,12 +1,12 @@
 import numpy as np
 from qtpy import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QLabel
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QRect
-from PyQt5.QtGui import QPainter, QPen, QColor
+from qtpy.QtWidgets import QLabel
+from qtpy.QtCore import Qt, Signal, QPoint, QRect
+from qtpy.QtGui import QPainter, QPen, QColor
 from imswitch import IS_HEADLESS
 
-from PyQt5 import QtGui, QtWidgets
-import PyQt5
+from qtpy import QtGui, QtWidgets
+import qtpy
 from imswitch.imcommon.model import initLogger
 from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
@@ -660,8 +660,8 @@ class ScanSelectView(QtWidgets.QGraphicsView):
 
 # Webcam View
 class ImageLabel(QLabel):
-    doubleClicked = pyqtSignal()
-    dragPosition = pyqtSignal(QPoint, QPoint)
+    doubleClicked = Signal()
+    dragPosition = Signal(QPoint, QPoint)
 
     def __init__(self):
         super().__init__()

@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import tifffile as tf
 import zarr
-#from PyQt5.QtCore import *
+#from qtpy.QtCore import *
 
 
 class uImage():

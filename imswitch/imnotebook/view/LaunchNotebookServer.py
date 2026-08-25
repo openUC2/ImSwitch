@@ -5,7 +5,7 @@ import os
 from imswitch.imcommon.model import dirtools
 import sys
 if not IS_HEADLESS:
-    from PyQt5.QtWidgets import QMessageBox
+    from qtpy.QtWidgets import QMessageBox
 from .notebook_process import testnotebook, startnotebook, stopnotebook
 
 class LaunchNotebookServer:

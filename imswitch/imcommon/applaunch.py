@@ -4,9 +4,27 @@ import sys
 import traceback
 import time
 
-# Force Qt backend BEFORE any qtpy/pyqtgraph/vispy import
-os.environ['QT_API'] = 'pyqt5'
-os.environ['PYQTGRAPH_QT_LIB'] = 'PyQt5'
+# Pin the Qt backend BEFORE any qtpy/pyqtgraph/vispy import, so all three
+# agree. Which backend is chosen follows what is actually installed; an
+# explicit QT_API set by the caller always wins.
+#
+# PyQt5 ships Qt 5.15.2 (the newest the PyPI wheels offer on Windows), whose
+# window presentation is broken on hybrid-GPU machines — the client area is
+# rendered sheared. PySide6 carries a current Qt and does not show it, so it
+# is preferred when present.
+def _pick_qt_backend() -> str:
+    import importlib.util
+    forced = os.environ.get('QT_API', '').strip().lower()
+    if forced in ('pyside6', 'pyqt5'):
+        return forced
+    if importlib.util.find_spec('PySide6') is not None:
+        return 'pyside6'
+    return 'pyqt5'
+
+
+_QT_API = _pick_qt_backend()
+os.environ['QT_API'] = _QT_API
+os.environ['PYQTGRAPH_QT_LIB'] = 'PySide6' if _QT_API == 'pyside6' else 'PyQt5'
 
 # somewhere after all your variables & functions exist
 try:
@@ -40,8 +58,10 @@ def prepareApp():
 
     # Create app
     os.environ['IMSWITCH_FULL_APP'] = '1'  # Indicator that non-plugin version of ImSwitch is used
-    os.environ['QT_API'] = 'pyqt5'            # Force all of qtpy/napari/vispy to PySide6
-    os.environ['PYQTGRAPH_QT_LIB'] = 'PyQt5' # Force pyqtgraph/vispy backend
+    os.environ['QT_API'] = _QT_API            # qtpy / napari / vispy
+    os.environ['PYQTGRAPH_QT_LIB'] = (        # pyqtgraph / vispy
+        'PySide6' if _QT_API == 'pyside6' else 'PyQt5'
+    )
     os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'  # Force HDF5 to not lock files
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
     # Set application attributes (Qt5 only — these are removed/always-on in Qt6)

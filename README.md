@@ -1,5 +1,46 @@
 # ImSwitch
 
+> ## This branch: `nematostella-rig`
+>
+> A fork for the Nematostella time-lapse rig. It runs ImSwitch as a **Qt desktop
+> application** rather than headless with the React web GUI, because the recording
+> plugin [napari-timelapse-capture](https://github.com/s1alknau/Nematostella-time-series)
+> docks into the Qt window and drives the camera through `DetectorsManager`
+> directly.
+>
+> **Clone this, not upstream:**
+>
+> ```bash
+> git clone -b nematostella-rig https://github.com/s1alknau/ImSwitch.git
+> ```
+>
+> `openUC2/ImSwitch` does not work for this setup. Three things fail:
+>
+> | | |
+> |---|---|
+> | Qt mode aborts on startup | signals are assigned in `__init__`, but `pyqtSignal` only binds as a class attribute — `AttributeError: 'pyqtSignal' object has no attribute 'connect'` |
+> | `fcntl` is missing on Windows | `imcontrol/model/io/session.py` |
+> | `setLaserGalvo()` does not exist | [napari-lsft](https://github.com/s1alknau/napari-lsft) calls this endpoint over the HTTP API to start the light-sheet galvo sweep at the beginning of an acquisition |
+>
+> Install **without** a Qt binding, then choose one:
+>
+> ```bash
+> pip install -e .
+> pip install "PySide6==6.8.3"   # Qt 6.8.3 — recommended
+> # or: pip install PyQt5        # Qt 5.15.2; shears the client area on dual-GPU machines
+> ```
+>
+> With PySide6, `site-packages/PyQt5` must be **fully removed** — `pyqtgraph` treats
+> even an emptied directory as an installed package and picks the wrong binding.
+>
+> Setup instructions for the whole rig are in
+> [Nematostella-time-series](https://github.com/s1alknau/Nematostella-time-series),
+> section 3. The changes this branch carries are documented commit by commit and
+> mirrored as patch files under `imswitch-patches/` there.
+>
+> Everything below is upstream's README and describes the headless/web setup.
+
+
 [![DOI](https://joss.theoj.org/papers/10.21105/joss.03394/status.svg)](https://doi.org/10.21105/joss.03394)
 
 ImSwitch is a Python program which aims at generalizing microscope control. Here is an intro video from Jacopo (developer of the original ImSwitch project) about ImSwitch: <https://www.youtube.com/watch?v=B54QCt5OQPI>

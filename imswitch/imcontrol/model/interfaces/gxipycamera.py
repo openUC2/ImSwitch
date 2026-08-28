@@ -715,37 +715,36 @@ class CameraGXIPY:
         try:
             numpy_image = None
 
-            # Check if frame has RGB/Bayer data by checking if convert method works
-            # This is more robust than relying on isRGB flag
-            try:
-                rgb_image = frame.convert("RGB")
-                if rgb_image is not None:
-                    # This is an RGB/Bayer frame
-                    # improve image quality if parameters are available
-                    if self.contrast_lut is not None or self.gamma_lut is not None:
-                        try:
-                            rgb_image.image_improvement(self.color_correction_param, self.contrast_lut, self.gamma_lut)
-                        except Exception as e:
-                            self.__logger.debug(f"Image improvement failed: {e}")
+            # Only attempt Bayer->RGB conversion for sensors already identified
+            # as colour cameras (via PixelColorFilter, see _detect_rgb_camera).
+            # RawImage.convert("RGB") does NOT check the pixel color filter
+            # before demosaicing: on a genuine mono sensor it still runs and
+            # returns a non-None RGBImage, whose get_numpy_array() is
+            # hardcoded to uint8. Calling it unconditionally therefore
+            # silently truncated every mono frame (Mono10/12/14/16, natively
+            # uint16) down to an 8-bit, incorrectly-demosaiced RGB triplet,
+            # and made isRGB "stick" to True afterwards.
+            if self.isRGB:
+                try:
+                    rgb_image = frame.convert("RGB")
+                    if rgb_image is not None:
+                        # improve image quality if parameters are available
+                        if self.contrast_lut is not None or self.gamma_lut is not None:
+                            try:
+                                rgb_image.image_improvement(self.color_correction_param, self.contrast_lut, self.gamma_lut)
+                            except Exception as e:
+                                self.__logger.debug(f"Image improvement failed: {e}")
 
-                    # create numpy array with data from RGB image
-                    numpy_image = rgb_image.get_numpy_array()
+                        # create numpy array with data from RGB image
+                        numpy_image = rgb_image.get_numpy_array()
+                except Exception as e:
+                    self.__logger.debug(f"RGB conversion failed, falling back to mono: {e}")
 
-                    if numpy_image is not None and not self.isRGB:
-                        # Update flag if we detected RGB capability
-                        self.isRGB = True
-                        self.__logger.info("RGB capability detected from frame conversion")
-            except Exception as e:
-                # convert() failed, likely a mono camera
-                self.__logger.debug(f"RGB conversion not available: {e}")
-
-            # Fallback to mono if RGB conversion failed
+            # Mono path - also the fallback if RGB conversion failed above.
+            # Preserves the native bit depth (uint16 container for
+            # Mono10/12/14/16) instead of RGBImage's fixed uint8 output.
             if numpy_image is None:
                 numpy_image = frame.get_numpy_array()
-                if self.isRGB:
-                    # Update flag if RGB conversion failed
-                    self.isRGB = False
-                    self.__logger.info("Switching to mono mode - RGB conversion unavailable")
 
             if numpy_image is None:
                 self.__logger.error("Failed to get numpy array from frame")

@@ -30,6 +30,16 @@ _MMCORE_MANAGER_NAME = "MMCoreDetectorManager"
 # Cap preview size so the PNG conversion is cheap even for 4k+ frames.
 _PREVIEW_MAX_DIM = 1024
 
+# How many finished jobs to keep in the registry before pruning the oldest.
+_JOB_HISTORY = 20
+
+# Fixed overhead added to the exposure for the duration estimate the UI counts
+# down against: arming, readout, file write.
+_SNAP_OVERHEAD_MS = 2000.0
+
+# Job states that mean "no longer touching the camera".
+_TERMINAL_STATES = ("done", "error", "cancelled", "timeout")
+
 
 class SetParameterRequest(BaseModel):
     detectorName: Optional[str] = None
@@ -59,7 +69,8 @@ class SnapRequest(BaseModel):
 
 
 class CancelSnapRequest(BaseModel):
-    jobId: str
+    jobId: Optional[str] = None
+    detectorName: Optional[str] = None
 
 
 def _is_mmcore_detector(detector) -> bool:
@@ -84,6 +95,9 @@ class MMCoreController(ImConWidgetController):
         self._maxCachedSnaps = 4
         # Per-job cancel events so the frontend can abort in-flight snaps.
         self._cancelEvents: Dict[str, threading.Event] = {}
+        # Most recently started job, so a single-user UI can poll and cancel
+        # without tracking ids (mirrors RecordingController's snap jobs).
+        self._lastJobId: Optional[str] = None
 
         # Re-apply any camera settings persisted from a previous session.
         try:
@@ -356,6 +370,66 @@ class MMCoreController(ImConWidgetController):
     # ------------------------------------------------------------------
     # Long-exposure snap
     # ------------------------------------------------------------------
+    def _jobPublicState(self, job: Dict[str, Any]) -> Dict[str, Any]:
+        """A JSON-friendly view of a job, with live timing fields.
+
+        ``elapsedMs``/``remainingMs``/``progress`` are recomputed on every read
+        so the UI can count down against ``expectedDurationMs`` even though the
+        worker thread only writes the job dict at state transitions.
+        """
+        snapshot = dict(job)
+        startedAt = snapshot.get("startedAt")
+        finishedAt = snapshot.get("finishedAt")
+        expectedMs = float(snapshot.get("expectedDurationMs") or 0.0)
+
+        if startedAt is None:
+            elapsedMs = 0.0
+        else:
+            elapsedMs = ((finishedAt or time.time()) - startedAt) * 1000.0
+        snapshot["elapsedMs"] = int(elapsedMs)
+
+        if snapshot["state"] in _TERMINAL_STATES:
+            snapshot["progress"] = 100.0
+            snapshot["remainingMs"] = 0
+        elif expectedMs > 0:
+            # Cap at 99 %: only the worker may declare the job finished, so a
+            # camera that overruns the estimate shows "99 %", never "done".
+            snapshot["progress"] = round(min(99.0, elapsedMs / expectedMs * 100.0), 1)
+            snapshot["remainingMs"] = int(max(0.0, expectedMs - elapsedMs))
+        else:
+            snapshot["progress"] = 0.0
+            snapshot["remainingMs"] = 0
+
+        # Alias for parity with RecordingController's job API, whose clients
+        # read "status" rather than "state".
+        snapshot["status"] = snapshot["state"]
+        return snapshot
+
+    def _pruneJobs(self) -> None:
+        """Drop the oldest finished jobs so the registry cannot grow forever.
+
+        Caller must hold ``_jobsLock``.
+        """
+        if len(self._jobs) <= _JOB_HISTORY:
+            return
+        finished = sorted(
+            (job.get("finishedAt") or 0.0, jobId)
+            for jobId, job in self._jobs.items()
+            if job["state"] in _TERMINAL_STATES
+        )
+        for _, jobId in finished[: len(self._jobs) - _JOB_HISTORY]:
+            self._jobs.pop(jobId, None)
+            self._cancelEvents.pop(jobId, None)
+
+    def _runningJobsFor(self, detectorName: Optional[str]) -> List[str]:
+        """Ids of pending/running jobs, optionally filtered by detector."""
+        with self._jobsLock:
+            return [
+                jobId for jobId, job in self._jobs.items()
+                if job["state"] not in _TERMINAL_STATES
+                and (detectorName is None or job["detectorName"] == detectorName)
+            ]
+
     @APIExport(requestType="POST")
     def snapMMCoreToDisk(self, body: SnapRequest) -> Dict[str, Any]:
         """Run a single software-triggered snap and write it to the recordings folder.
@@ -388,13 +462,31 @@ class MMCoreController(ImConWidgetController):
         except Exception:
             effectiveExposureMs = 0.0
 
+        # One acquisition at a time per detector. Starting a second one would
+        # have both jobs fighting over the same sensor, which is exactly the
+        # collision that used to leave a job waiting forever for a frame that
+        # the other one had already popped.
+        busy = self._runningJobsFor(resolvedName)
+        if busy:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Detector '{resolvedName}' is already running snap job "
+                    f"{busy[0]}. Cancel it first (cancelMMCoreSnap / "
+                    f"stopMMCoreAcquisition)."
+                ),
+            )
+
         jobId = uuid.uuid4().hex
         job = {
             "jobId": jobId,
             "detectorName": resolvedName,
             "state": "pending",
             "exposureMs": effectiveExposureMs,
-            "startedAt": None,
+            # What the UI counts down against. Display only — the real state
+            # always comes from the job, never from this estimate running out.
+            "expectedDurationMs": effectiveExposureMs + _SNAP_OVERHEAD_MS,
+            "startedAt": time.time(),
             "finishedAt": None,
             "elapsedMs": 0,
             "filePath": None,
@@ -407,6 +499,9 @@ class MMCoreController(ImConWidgetController):
         with self._jobsLock:
             self._jobs[jobId] = job
             self._cancelEvents[jobId] = cancelEvent
+            self._lastJobId = jobId
+            self._pruneJobs()
+            state = self._jobPublicState(job)
 
         thread = threading.Thread(
             target=self._runSnapJob,
@@ -416,52 +511,131 @@ class MMCoreController(ImConWidgetController):
         )
         thread.start()
 
-        return dict(job)
+        return state
 
     @APIExport()
-    def getMMCoreSnapStatus(self, jobId: str) -> Dict[str, Any]:
-        """Return the current state of a snap job."""
+    def getMMCoreSnapStatus(self, jobId: Optional[str] = None) -> Dict[str, Any]:
+        """Return the current state of a snap job.
+
+        ``jobId`` defaults to the most recently started job, so a single-user
+        UI does not have to track ids. Besides the job fields, the reply
+        carries ``progress`` (0-100), ``elapsedMs`` and ``remainingMs``, all
+        recomputed at read time so a countdown keeps ticking while the exposure
+        integrates.
+        """
         with self._jobsLock:
-            job = self._jobs.get(jobId)
+            if jobId is None:
+                jobId = self._lastJobId
+            job = self._jobs.get(jobId) if jobId else None
             if job is None:
-                return {"jobId": jobId, "state": "unknown"}
-            snapshot = dict(job)
-        # Live-update elapsed time while still running
-        if snapshot["state"] == "running" and snapshot["startedAt"] is not None:
-            snapshot["elapsedMs"] = int((time.time() - snapshot["startedAt"]) * 1000)
-        return snapshot
+                return {"jobId": jobId, "state": "unknown", "status": "unknown"}
+            return self._jobPublicState(job)
 
     @APIExport()
     def listMMCoreSnapJobs(self) -> List[Dict[str, Any]]:
         """Return all snap jobs (running + recent)."""
         with self._jobsLock:
-            return [dict(j) for j in self._jobs.values()]
+            return [self._jobPublicState(j) for j in self._jobs.values()]
 
     @APIExport(requestType="POST")
     def cancelMMCoreSnap(self, body: CancelSnapRequest) -> Dict[str, Any]:
         """Cancel a pending or running snap job.
 
-        Sets the cancel flag for the background thread; it will stop the
-        sequence acquisition and mark the job as ``'cancelled'`` within one
-        poll cycle (~50 ms). Jobs that are already ``'done'``, ``'error'``, or
-        ``'cancelled'`` are returned unchanged.
+        Sets the job's cancel flag *and* stops the acquisition on the device,
+        which ends the integration in the driver rather than waiting out the
+        remaining exposure — a 10-minute snap therefore aborts within one poll
+        cycle (~50 ms) instead of ten minutes. Jobs that already finished are
+        returned unchanged.
 
-        Body schema (JSON): ``{"jobId": str}``.
+        Body schema (JSON): ``{"jobId": str|null, "detectorName": str|null}``.
+        ``jobId`` defaults to the most recently started job.
         """
+        jobId = body.jobId
         with self._jobsLock:
-            job = self._jobs.get(body.jobId)
+            if jobId is None:
+                jobId = self._lastJobId
+            job = self._jobs.get(jobId) if jobId else None
             if job is None:
                 raise HTTPException(
-                    status_code=404, detail=f"Job '{body.jobId}' not found"
+                    status_code=404, detail=f"Job '{jobId}' not found"
                 )
-            if job["state"] not in ("pending", "running"):
-                return dict(job)
-            event = self._cancelEvents.get(body.jobId)
+            if job["state"] in _TERMINAL_STATES:
+                return {**self._jobPublicState(job), "cancelled": False,
+                        "message": "Job already finished"}
+            event = self._cancelEvents.get(jobId)
+            detectorName = job["detectorName"]
+            job["state"] = "cancelling"
 
         if event is not None:
             event.set()
 
-        return self.getMMCoreSnapStatus(body.jobId)
+        # Stop the sensor now. The worker is parked in its poll loop waiting
+        # for a frame; ending the integration makes that wait return
+        # immediately with a "cancelled" status.
+        self._abortDetector(detectorName)
+        self._logger.info(f"MMCore snap job {jobId} cancelled by request")
+
+        return {**self.getMMCoreSnapStatus(jobId), "cancelled": True}
+
+    @APIExport(requestType="POST")
+    def stopMMCoreAcquisition(self, body: DetectorNameRequest = None) -> Dict[str, Any]:
+        """Stop everything the detector is doing — the "stop acquisition" button.
+
+        Cancels every pending/running snap job on the detector, aborts the
+        exposure in the driver, and drops any exclusive claim left behind by a
+        worker that died, so the camera is usable again without a restart.
+
+        Body schema (JSON): ``{"detectorName": str|null}``.
+        """
+        detectorName = body.detectorName if body is not None else None
+        resolvedName, detector = self._getDetector(detectorName)
+
+        cancelled = self._runningJobsFor(resolvedName)
+        with self._jobsLock:
+            for jobId in cancelled:
+                event = self._cancelEvents.get(jobId)
+                if event is not None:
+                    event.set()
+                job = self._jobs.get(jobId)
+                if job is not None and job["state"] not in _TERMINAL_STATES:
+                    job["state"] = "cancelling"
+
+        self._abortDetector(resolvedName)
+
+        # A worker that was killed mid-flight would leave the claim held and
+        # every later acquisition would fail with "camera is busy".
+        owner = getattr(detector, "exclusiveOwner", None)
+        if owner is not None and not cancelled:
+            try:
+                detector.releaseExclusive(owner)
+                self._logger.warning(
+                    f"Released stale camera claim by '{owner}' on "
+                    f"'{resolvedName}'"
+                )
+            except Exception:
+                self._logger.error("Could not release camera claim", exc_info=True)
+
+        return {
+            "detectorName": resolvedName,
+            "cancelledJobs": cancelled,
+            "stopped": True,
+        }
+
+    def _abortDetector(self, detectorName: str) -> None:
+        """Stop acquisition on a detector, ending an in-flight exposure."""
+        try:
+            detector = self._master.detectorsManager[detectorName]
+        except Exception:
+            return
+        try:
+            if hasattr(detector, "abortAcquisition"):
+                detector.abortAcquisition()
+            else:
+                detector.stopAcquisition()
+        except Exception:
+            self._logger.warning(
+                f"Could not stop acquisition on '{detectorName}'", exc_info=True
+            )
 
     @APIExport()
     def getLastSnapPreview(self, jobId: str) -> Response:
@@ -518,7 +692,7 @@ class MMCoreController(ImConWidgetController):
             if job is None:
                 return None
             job.update(fields)
-            snapshot = dict(job)
+            snapshot = self._jobPublicState(job)
         try:
             self.sigSnapJobUpdate.emit(snapshot)
         except Exception:
@@ -539,17 +713,23 @@ class MMCoreController(ImConWidgetController):
         self._updateJob(jobId, state="running", startedAt=started)
 
         previousTimeout = None
-        wasSequenceRunning = False
+        claimed = False
         try:
-            # Halt any continuous acquisition before snapping — the MMCore
-            # circular buffer and the live loop will otherwise race with our
-            # single-frame call.
-            try:
-                wasSequenceRunning = bool(core.isSequenceRunning())
-                if wasSequenceRunning:
-                    core.stopSequenceAcquisition()
-            except Exception:
-                self._logger.debug("Could not query sequence state", exc_info=True)
+            # Claim the sensor for the whole job. While the claim is held the
+            # live-view poll replays its cached frame instead of driving
+            # MMCore, so nothing else can pop our frame out of the circular
+            # buffer or fire a competing snap (the Andor 20072/20073 errors).
+            # acquireExclusive also stops a running live sequence and restarts
+            # it on release.
+            if not detector.acquireExclusive(f"snapJob:{jobId[:8]}"):
+                raise RuntimeError(
+                    f"Camera is busy — owned by '{detector.exclusiveOwner}'"
+                )
+            claimed = True
+
+            if cancelEvent.is_set():
+                self._finishJob(jobId, started, state="cancelled")
+                return
 
             if exposureMs is not None:
                 detector.setParameter("Exposure", float(exposureMs))
@@ -571,53 +751,44 @@ class MMCoreController(ImConWidgetController):
             except Exception:
                 self._logger.debug("Could not raise MMCore TimeOut", exc_info=True)
 
-            self._updateJob(jobId, exposureMs=currentExposure)
+            self._updateJob(
+                jobId,
+                exposureMs=currentExposure,
+                expectedDurationMs=currentExposure + _SNAP_OVERHEAD_MS,
+            )
 
-            # Drop any leftover frames from the circular buffer (e.g. residue
-            # from a live stream we just stopped) so the snap reads a clean
-            # exposure rather than a stale frame.
-            try:
-                core.clearCircularBuffer()
-            except Exception:
-                pass
+            # The manager owns the acquisition protocol: it arms a
+            # single-frame sequence and polls, instead of calling the blocking
+            # core.snap(). snapImage() holds MMCore's device lock for the whole
+            # integration, which stalls every other MMCore call in the process
+            # — including the status endpoint this job's own progress display
+            # polls, which is why a long exposure looked like a frozen backend
+            # with a frozen timer. It also gives us cancellation and a timeout
+            # instead of an unbounded wait.
+            image, status = detector.acquireSingleFrame(
+                cancelEvent=cancelEvent,
+                timeout=max(30.0, currentExposure / 1000.0 * 2.0 + 30.0),
+            )
 
-            # Use startSequenceAcquisition(1) instead of the blocking
-            # core.snap() / snapImage().  snapImage() holds the Python GIL for
-            # the entire exposure because many camera adapters (Andor, etc.)
-            # perform the hardware wait inside the C extension without releasing
-            # it — that freezes the FastAPI thread pool and makes the server
-            # unresponsive for the full exposure duration.
-            #
-            # startSequenceAcquisition() returns immediately; we poll with a
-            # short sleep so the GIL is released on every iteration, the event
-            # loop stays live, and the cancel flag can be honoured.
-            core.startSequenceAcquisition(1, 0, True)
-            _cancelled = False
-            try:
-                while core.getRemainingImageCount() == 0:
-                    if cancelEvent.is_set():
-                        _cancelled = True
-                        break
-                    time.sleep(0.05)
-            finally:
-                # Always stop the sequence — harmless if it already finished.
-                try:
-                    if core.isSequenceRunning():
-                        core.stopSequenceAcquisition()
-                except Exception:
-                    pass
-
-            if _cancelled:
-                finished = time.time()
-                self._updateJob(
-                    jobId,
-                    state="cancelled",
-                    finishedAt=finished,
-                    elapsedMs=int((finished - started) * 1000),
+            if status == "cancelled" or cancelEvent.is_set():
+                self._finishJob(jobId, started, state="cancelled")
+                return
+            if status == "timeout":
+                self._finishJob(
+                    jobId, started, state="timeout",
+                    error=(
+                        f"The camera did not deliver a frame within the "
+                        f"timeout for a {currentExposure:.0f} ms exposure."
+                    ),
                 )
                 return
-
-            image = np.asarray(core.popNextImage())
+            if status != "done" or image is None:
+                self._finishJob(
+                    jobId, started, state="error",
+                    error="The camera aborted the acquisition without "
+                          "delivering a frame.",
+                )
+                return
 
             # Save to disk using the same convention as RecordingController.snap
             data_root = dirtools.UserFileDirs.getValidatedDataPath()
@@ -682,12 +853,9 @@ class MMCoreController(ImConWidgetController):
                     oldest = self._snapImageOrder.pop(0)
                     self._snapImages.pop(oldest, None)
 
-            finished = time.time()
-            self._updateJob(
-                jobId,
+            self._finishJob(
+                jobId, started,
                 state="done",
-                finishedAt=finished,
-                elapsedMs=int((finished - started) * 1000),
                 filePath=fullPath,
                 relativeFilePath=relativePath,
                 hasPreview=True,
@@ -695,12 +863,8 @@ class MMCoreController(ImConWidgetController):
 
         except Exception as exc:
             self._logger.error("MMCore snap job failed", exc_info=True)
-            finished = time.time()
-            self._updateJob(
-                jobId,
-                state="error",
-                finishedAt=finished,
-                elapsedMs=int((finished - started) * 1000),
+            self._finishJob(
+                jobId, started, state="error",
                 error=f"{type(exc).__name__}: {exc}",
             )
         finally:
@@ -710,9 +874,29 @@ class MMCoreController(ImConWidgetController):
                     core.setProperty(label, "TimeOut", str(previousTimeout))
                 except Exception:
                     self._logger.debug("Could not restore MMCore TimeOut", exc_info=True)
+            # Hand the camera back (and restart live view if we stopped it).
+            # This must happen even on the error paths, or the detector stays
+            # claimed forever and every later acquisition reports "busy".
+            if claimed:
+                try:
+                    detector.releaseExclusive(f"snapJob:{jobId[:8]}")
+                except Exception:
+                    self._logger.error(
+                        "Could not release the camera claim", exc_info=True)
             # Drop the cancel event so the dict doesn't grow unbounded.
             with self._jobsLock:
                 self._cancelEvents.pop(jobId, None)
+
+    def _finishJob(self, jobId: str, started: float, state: str, **fields):
+        """Mark a job as finished in ``state`` and stamp its timing."""
+        finished = time.time()
+        return self._updateJob(
+            jobId,
+            state=state,
+            finishedAt=finished,
+            elapsedMs=int((finished - started) * 1000),
+            **fields,
+        )
 
 
 # Copyright (C) 2020-2026 ImSwitch developers

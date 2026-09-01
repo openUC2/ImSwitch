@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Box,
@@ -33,6 +33,7 @@ import * as focusMapSlice from "../../state/slices/FocusMapSlice";
 import { DIMENSIONS, Z_FOCUS_MODES } from "../../state/slices/ExperimentUISlice";
 import apiFocusLockControllerGetCurrentFocusValue from "../../backendapi/apiFocusLockControllerGetCurrentFocusValue";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import ZStackPanel from "./ZStackPanel";
 
 /**
  * ZFocusDimension - Z/Focus configuration interface
@@ -60,25 +61,13 @@ const ZFocusDimension = () => {
   // Check if focus map is enabled (for mutual-exclusion warning)
   const focusMapEnabled = useSelector(focusMapSlice.isFocusMapEnabled);
 
-  // Local string states for Z-stack inputs so the user can type negative
-  // values (e.g. "-10") without the field resetting to 0 on each keystroke.
-  const [zMinRaw, setZMinRaw] = useState(String(parameterValue.zStackMin ?? -10));
-  const [zMaxRaw, setZMaxRaw] = useState(String(parameterValue.zStackMax ?? 10));
-  const [zStepRaw, setZStepRaw] = useState(String(parameterValue.zStackStepSize ?? 1));
-
-  // Keep local strings in sync when Redux changes from outside (e.g. reset)
-  useEffect(() => { setZMinRaw(String(parameterValue.zStackMin)); }, [parameterValue.zStackMin]);
-  useEffect(() => { setZMaxRaw(String(parameterValue.zStackMax)); }, [parameterValue.zStackMax]);
-  useEffect(() => { setZStepRaw(String(parameterValue.zStackStepSize)); }, [parameterValue.zStackStepSize]);
-
-  // Commit helper: parse raw string and dispatch; on NaN restore to Redux value
-  const commitZMin  = () => { const v = parseFloat(zMinRaw);  if (!isNaN(v)) dispatch(experimentSlice.setZStackMin(v));  else setZMinRaw(String(parameterValue.zStackMin)); };
-  const commitZMax  = () => { const v = parseFloat(zMaxRaw);  if (!isNaN(v)) dispatch(experimentSlice.setZStackMax(v));  else setZMaxRaw(String(parameterValue.zStackMax)); };
-  const commitZStep = () => { const v = parseFloat(zStepRaw); if (!isNaN(v) && v > 0) dispatch(experimentSlice.setZStackStepSize(v)); else setZStepRaw(String(parameterValue.zStackStepSize)); };
-
-  // Calculate Z stack info
+  // Calculate Z stack info. In "individual" mode the plane count is just the
+  // hand-picked slice list; "range" mode derives it from Start/Stop/Step.
   const zStackRange = parameterValue.zStackMax - parameterValue.zStackMin;
-  const zStackSteps = Math.max(1, Math.ceil(zStackRange / (parameterValue.zStackStepSize || 1)) + 1);
+  const zStackSteps =
+    parameterValue.zStackMode === "individual"
+      ? Math.max(1, parameterValue.zStackOffsets.length)
+      : Math.max(1, Math.ceil(zStackRange / (parameterValue.zStackStepSize || 1)) + 1);
 
   // Update summary based on mode and settings
   useEffect(() => {
@@ -238,64 +227,14 @@ const ZFocusDimension = () => {
 
           {/* Relative-position hint */}
           <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 2 }}>
-            Values are <strong>relative offsets</strong> from the current Z position.
+            First/Last are shown as absolute Z once anchored (see below), but are always sent to
+            the backend as <strong>relative offsets</strong> from each tile's Z base.
             {focusMapEnabled
               ? " With Focus Map enabled, this offset is applied on top of the per-position interpolated Z."
               : " The stack is centred on the Z origin at each scan position."}
           </Typography>
 
-          <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "flex-start" }}>
-            {/* Start offset */}
-            <TextField
-              label="Start (µm)"
-              type="number"
-              size="small"
-              value={zMinRaw}
-              onChange={(e) => {
-                setZMinRaw(e.target.value);
-                const v = parseFloat(e.target.value);
-                if (!isNaN(v)) dispatch(experimentSlice.setZStackMin(v));
-              }}
-              onBlur={commitZMin}
-              inputProps={{ step: 1 }}
-              helperText="Relative start offset"
-              sx={{ width: 130 }}
-            />
-
-            {/* Stop offset */}
-            <TextField
-              label="Stop (µm)"
-              type="number"
-              size="small"
-              value={zMaxRaw}
-              onChange={(e) => {
-                setZMaxRaw(e.target.value);
-                const v = parseFloat(e.target.value);
-                if (!isNaN(v)) dispatch(experimentSlice.setZStackMax(v));
-              }}
-              onBlur={commitZMax}
-              inputProps={{ step: 1 }}
-              helperText="Relative stop offset"
-              sx={{ width: 130 }}
-            />
-
-            {/* Step size */}
-            <TextField
-              label="Step Size (µm)"
-              type="number"
-              size="small"
-              value={zStepRaw}
-              onChange={(e) => {
-                setZStepRaw(e.target.value);
-                const v = parseFloat(e.target.value);
-                if (!isNaN(v) && v > 0) dispatch(experimentSlice.setZStackStepSize(v));
-              }}
-              onBlur={commitZStep}
-              inputProps={{ step: 0.5, min: 0.01 }}
-              helperText="Distance per step"
-              sx={{ width: 130 }}
-            />
-          </Box>
+          <ZStackPanel />
 
           {/* Summary: planes & total range */}
           <Box
@@ -316,9 +255,11 @@ const ZFocusDimension = () => {
             <Typography variant="caption">
               Range: <strong>{(parameterValue.zStackMax - parameterValue.zStackMin).toFixed(1)} µm</strong>
             </Typography>
-            <Typography variant="caption">
-              Step: <strong>{Number(parameterValue.zStackStepSize).toFixed(2)} µm</strong>
-            </Typography>
+            {parameterValue.zStackMode !== "individual" && (
+              <Typography variant="caption">
+                Step: <strong>{Number(parameterValue.zStackStepSize).toFixed(2)} µm</strong>
+              </Typography>
+            )}
           </Box>
         </Box>
       )}

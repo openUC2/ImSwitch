@@ -1043,9 +1043,14 @@ class ExperimentController(ImConWidgetController):
         # (focus-map Z, per-point Z, or the global initial Z captured below).
         # This is the single authoritative place that converts UI values to offsets.
         if isZStack:
-            # Build a list of relative offsets; do NOT add currentZ here.
-            z_offsets_arr = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize)
-            z_positions = list(z_offsets_arr)
+            if getattr(p, "zStackMode", "range") == "individual" and p.zStackOffsets:
+                # Hand-picked, non-uniform Z planes (Individual Slices / Table
+                # tabs on the frontend) — use them verbatim instead of arange.
+                z_positions = sorted(float(v) for v in p.zStackOffsets)
+            else:
+                # Build a list of relative offsets; do NOT add currentZ here.
+                z_offsets_arr = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize)
+                z_positions = list(z_offsets_arr)
         else:
             z_positions = [0.0]  # Single Z: zero offset → stay at the tile's base Z
 

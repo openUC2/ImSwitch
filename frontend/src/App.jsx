@@ -51,6 +51,10 @@ import ShitScopeComponent from "./components/ShitScopeComponent.js";
 
 // ImSwitch Navigation Drawer
 import { NavigationDrawer, TopBar } from "./components/navigation";
+
+// Kiosk/touchscreen UI (#/mobile)
+import MobileApp from "./mobile/MobileApp";
+import { useMobileRoute } from "./mobile/mobileRoutes";
 import AppManagerPage from "./components/AppManagerPage.jsx";
 import OnboardingTour from "./components/OnboardingTour.jsx";
 
@@ -172,6 +176,10 @@ function App() {
     connectionSettingsSlice.getConnectionSettingsState,
   );
   const { isDarkMode } = useSelector(getThemeState);
+
+  // Kiosk/touchscreen UI: #/mobile renders the reduced MobileApp shell
+  // instead of the full desktop layout (see mobile/mobileRoutes.js).
+  const { page: mobileKioskPage } = useMobileRoute();
 
   // Hook to detect mobile screens
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
@@ -555,6 +563,22 @@ function App() {
     return widgets;
   }
   const plugins = usePluginWidgets();
+
+  // Kiosk branch: mount only the cross-cutting providers (single
+  // WebSocketHandler!) and the touch shell — no drawer/topbar/file manager.
+  if (mobileKioskPage !== null) {
+    return (
+      <PWAProvider>
+        <ThemeProvider theme={darkTheme}>
+          <SnackbarProvider maxSnack={6} dense>
+            <ReduxNotificationBridge />
+            <WebSocketHandler />
+            <MobileApp />
+          </SnackbarProvider>
+        </ThemeProvider>
+      </PWAProvider>
+    );
+  }
 
   return (
     <PWAProvider>

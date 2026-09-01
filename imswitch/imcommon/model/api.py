@@ -20,60 +20,6 @@ class APIExport:
         return func
 
 
-class UIExport:
-    """
-    Attach a small manifest to a controller class
-    and remember where its built widget‑bundle lives.
-    """
-    def __init__(self, *,
-                 path:str,                 # directory that contains remoteEntry.js
-                 name:str,
-                 icon:str,
-    ):
-        self._UIExport = True
-        self._UIPath   = path
-        self._UIName   = name
-        self._UIIcon   = icon
-
-
-    def __call__(self, cls):
-        cls._UIExport = self._UIExport
-        cls._ui_meta  = {
-            "path"   : self._UIPath,
-            "name"   : self._UIName,
-            "icon"   : self._UIIcon,
-        }
-        return cls
-
-def generateUI(widgetClassList, *, missingAttributeErrorMsg=None):
-    """ Generates a UI from UIExport-decorated classes in the object. Must be
-    called from the main thread. """
-
-    from imswitch.imcommon.model import pythontools
-
-    exportedFuncs = {}
-    for widgetClass in widgetClassList.values():
-        # list comes from the UIExport decorator and contains
-        # the path to the widget, the name of the widget and
-        # the class itself
-        widgetClassName = widgetClass[0]
-        widgetModule = widgetClass[1]
-        widgetClassObj = widgetClass[2]
-        if widgetClassObj is None:
-            continue
-        for subObjName in dir(widgetClassObj):
-            subObj = getattr(widgetClassObj, subObjName)
-            if not callable(subObj):
-                continue
-            if not hasattr(subObj, '_UIExport') or not subObj._UIExport:
-                continue
-            if subObjName in exportedFuncs:
-                raise NameError(f'UI method name "{widgetClassName}" is already in use')
-            exportedFuncs[subObjName] = subObj
-
-    return pythontools.dictToROClass(exportedFuncs,
-                                     missingAttributeErrorMsg=missingAttributeErrorMsg)
-
 def generateAPI(objs, *, missingAttributeErrorMsg=None):
     """ Generates an API from APIExport-decorated methods in the objects in the
     passed array objs. Must be called from the main thread. """

@@ -112,9 +112,6 @@ setup(
         "console_scripts": [
             "imswitch = imswitch.__main__:main",
         ],
-        'imswitch.implugins.detectors': [],
-        'imswitch.implugins.lasers': [],
-        'imswitch.implugins.positioner': [],
         "jupyter.kernel_provisioners": [ # has to point to jupyter_connection.py -> ExistingProvisioner
             "imswitch-provisioner = imswitch.imcontrol.model.jupyter_connection:ExistingProvisioner",
         ]

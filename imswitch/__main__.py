@@ -13,6 +13,7 @@ from imswitch.config import get_config
 
 def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
          data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None, jupyter_port:int=None,
+         plugin_dir:str=None,
          default_firmware_route:str="http://localhost/firmware"):
     '''
     default_config: str => path to the config file
@@ -24,6 +25,13 @@ def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_fold
     ext_data_folder: str => path to the directory of mount points for external drives (default: None, optionally pointing to e.g. /Volumes or /media)
     with_kernel: bool => start with embedded Jupyter kernel for external notebook connections
     jupyter_port: int => Jupyter notebook port (default: 8888)
+    plugin_dir: str => directory scanned for plugins. One subdirectory per plugin, each
+        containing a Python package with a register() function. Defaults to
+        $IMSWITCH_PLUGIN_DIR, then /opt/imswitch/plugins (the path the Docker image
+        bind-mounts). Set this when running natively — the default is a container path
+        that does not exist on Windows or macOS. Example:
+            main(default_config=".../example_virtual_microscope.json",
+                 plugin_dir=r"C:\\Users\\me\\Documents\\ImSwitchPlugins", ssl=0)
 
     To start imswitch using the arguments, you can call the main file with the following arguments:
         python -m imswitch --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes --with-kernel
@@ -53,7 +61,7 @@ def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_fold
         if (default_config is None and http_port is None and
             ssl is None and config_folder is None and
             data_folder is None and scan_ext_data_folder is None and ext_data_folder is None and
-            with_kernel is None and jupyter_port is None):
+            with_kernel is None and jupyter_port is None and plugin_dir is None):
             # @ethanjli this is the actual code that parses the variables from commandline - needs a review probably?
             try: # TODO: Google Colab does not support argparse
                 parser = argparse.ArgumentParser(description='ImSwitch microscope control framework.')
@@ -89,6 +97,11 @@ def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_fold
                 parser.add_argument('--jupyter-port', dest='jupyter_port', type=int, default=8888,
                                     help='specify Jupyter notebook port (default: 8888)')
 
+                parser.add_argument('--plugin-dir', dest='plugin_dir', type=str, default=None,
+                                    help='directory scanned for plugins (one subdirectory per '
+                                         'plugin). Defaults to $IMSWITCH_PLUGIN_DIR, then '
+                                         '/opt/imswitch/plugins')
+
                 # Add Jupyter/Colab specific arguments to prevent errors
                 parser.add_argument('-f', '--connection-file', dest='connection_file', type=str, default=None,
                                     help='Jupyter connection file (ignored)')
@@ -115,6 +128,8 @@ def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_fold
                     config.config_folder = args.config_folder
                 if hasattr(args, 'data_folder') and args.data_folder and os.path.isdir(args.data_folder):
                     config.data_folder = args.data_folder
+                if getattr(args, 'plugin_dir', None):
+                    plugin_dir = args.plugin_dir
 
                 # Update legacy globals
                 config.to_legacy_globals(imswitch) # TODO @ethanjli review if this is necessary here?
@@ -147,8 +162,19 @@ def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_fold
         except Exception as e:
             logging.warning(f"Could not enable signal emission for logging: {e}")
 
+        # Publish the plugin directory before the server thread starts, so
+        # PluginManager.discover() sees it. Non-fatal by design: a plugin
+        # subsystem problem must never stop a microscope from booting.
+        try:
+            from imswitch.plugin_manager import dropin_root, set_plugin_dir
+            set_plugin_dir(plugin_dir)
+            _plugin_root = dropin_root()
+        except Exception as e:
+            _plugin_root = f'<unavailable: {e}>'
+
         logger = initLogger('main')
         logger.info(f'Starting ImSwitch {config.version}')
+        logger.info(f'Plugin folder: {_plugin_root}')
         logger.info(f'SSL: {config.ssl}')
         logger.info(f'Config file: {config.default_config}')
         logger.info(f'Config folder: {config.config_folder}')

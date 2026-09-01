@@ -1,6 +1,5 @@
 import importlib
 from abc import ABC, abstractmethod
-from importlib.metadata import entry_points
 
 from imswitch.imcommon.model import initLogger
 from imswitch.imcommon.model import pythontools
@@ -29,16 +28,11 @@ class MultiManager(ABC):
                         managedDeviceInfo, managedDeviceName, **lowLevelManagers)
 
                 except Exception as e:
-                    # try to import from the implugins
+                    # No plugin fallback: a plugin cannot contribute a Manager
+                    # class. Device types are host surface, because a new one
+                    # also needs the setup-file schema and this instantiation
+                    # path. See docs/plugins/DECISIONS.md (ADR-002).
                     self.__logger.error(e)
-                    try:
-                        eps = entry_points(group=f'imswitch.implugins.{subManagersPackage}')
-                        for entry_point in eps:
-                            manager = entry_point.load()
-                            self._subManagers[managedDeviceName] = manager(
-                                managedDeviceInfo, managedDeviceName, **lowLevelManagers)
-                    except Exception as e:
-                        self.__logger.error(e)
 
     def hasDevices(self):
         """ Returns whether this manager manages any devices. """

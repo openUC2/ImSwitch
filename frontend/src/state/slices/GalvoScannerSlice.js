@@ -22,6 +22,8 @@ const initialState = {
   selectedScanner: '',
   
   // Scan configuration (persisted)
+  // Defaults = the empirically validated FLIM raster (25 µs dwell, eased
+  // flyback + settle, overscan) — matches the backend GalvoScanConfig defaults.
   config: {
     nx: 256,
     ny: 256,
@@ -29,17 +31,17 @@ const initialState = {
     x_max: 3500,
     y_min: 500,
     y_max: 3500,
-    sample_period_us: 1,
+    sample_period_us: 25,
     frame_count: 0,
     bidirectional: false,
-    pre_samples: 0,
-    fly_samples: 0,
+    pre_samples: 64,
+    fly_samples: 256,
     trig_delay_us: 0,
     trig_width_us: 0,
-    line_settle_samples: 0,
+    line_settle_samples: 128,
     enable_trigger: 1,
     apply_x_lut: 0,
-    overscan_samples: 0,
+    overscan_samples: 32,
     laser_blanking: 0,
     hw_pixel_clock: 0
   },

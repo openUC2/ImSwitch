@@ -788,6 +788,17 @@ class SetupInfo:
     """ Galvo scanners in this setup. This is a map from unique galvo scanner names
     to GalvoScannerInfo objects. Used for high-speed laser scanning microscopy. """
 
+    flimLabs: Optional[dict] = field(default_factory=lambda: None)
+    """ Persisted settings for the FLIM LABS bridge (remote flim-imager server
+    host/port, laser sync, channels, calibration reference, galvo-sync options).
+    Free-form dict written by GalvoScannerController.setFlimLabsConfig; ``null``
+    when nothing has been saved.
+
+    Note: this is the *browser-side* bridge panel's state. To use the FLIM card
+    as a regular 2D detector from the backend (ExperimentController, autofocus,
+    snap), add a ``FLIMLabsDetectorManager`` entry under ``detectors`` instead —
+    see that manager's docstring for the property list. """
+
     rs232devices: Dict[str, RS232Info] = field(default_factory=dict)
     """ RS232 connections in this setup. This is a map from unique RS232
     connection names to RS232Info objects. Some detector/laser/positioner

@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 620" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- OPTIKIT-INTEGRATION.md §9 — exact keys vs ISCC similarity codes:
+       which hash keys what, and where "nearby" actually comes from. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1020" height="620" fill="#ffffff"/>
+
+  <text x="510" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">Two families of identity: exact keys, and ISCC similarity codes</text>
+  <text x="510" y="54" text-anchor="middle" font-size="12.5" fill="#64748b">a calibration key must match exactly or not at all; discovery wants "show me acquisitions like this one" — different jobs, different hashes</text>
+
+  <!-- left: exact -->
+  <rect x="34" y="84" width="460" height="286" rx="12" fill="#f8fafc" stroke="#334155" stroke-width="1.8"/>
+  <text x="264" y="110" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">exact — keys and pins (unchanged)</text>
+
+  <g font-size="11.5" fill="#334155">
+    <rect x="56" y="128" width="416" height="50" rx="7" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="72" y="148" font-weight="700" fill="#0f172a">design_sha256</text>
+    <text x="72" y="166">pins the design in microscope.yml — drift = refuse to boot</text>
+
+    <rect x="56" y="188" width="416" height="50" rx="7" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="72" y="208" font-weight="700" fill="#0f172a">path_hash · transform_hash</text>
+    <text x="72" y="226">key calibrations and affine reuse — CONFIG-MODEL §8</text>
+
+    <rect x="56" y="248" width="416" height="50" rx="7" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="72" y="268" font-weight="700" fill="#0f172a">snapshot_id</text>
+    <text x="72" y="286">content hash of a SystemSnapshot — dedupes identical states</text>
+  </g>
+  <text x="264" y="330" text-anchor="middle" font-size="11" font-style="italic" fill="#7f1d1d">a near-match here would be silently wrong:</text>
+  <text x="264" y="348" text-anchor="middle" font-size="11" font-style="italic" fill="#7f1d1d">the 20× affine must never "approximately apply" at 10×</text>
+
+  <!-- right: ISCC -->
+  <rect x="526" y="84" width="460" height="286" rx="12" fill="#faf5ff" stroke="#9333ea" stroke-width="1.8"/>
+  <text x="756" y="110" text-anchor="middle" font-size="14" font-weight="700" fill="#581c87">similar — ISCC codes (ISO 24138), added</text>
+
+  <g font-size="11.5" fill="#334155">
+    <rect x="548" y="128" width="416" height="50" rx="7" fill="#ffffff" stroke="#c084fc" stroke-width="1.2"/>
+    <text x="564" y="148" font-weight="700" fill="#0f172a">Instance-Code</text>
+    <text x="564" y="166">exact checksum of the bytes — integrity, interop with sha256</text>
+
+    <rect x="548" y="188" width="416" height="50" rx="7" fill="#ffffff" stroke="#c084fc" stroke-width="1.2"/>
+    <text x="564" y="208" font-weight="700" fill="#0f172a">Data-Code</text>
+    <text x="564" y="226">similarity over the bitstream (CDC + minhash) — dedup, versions</text>
+
+    <rect x="548" y="248" width="416" height="50" rx="7" fill="#ffffff" stroke="#c084fc" stroke-width="1.2"/>
+    <text x="564" y="268" font-weight="700" fill="#0f172a">Content-Code Image · Meta-Code</text>
+    <text x="564" y="286">perceptual frame similarity · simprint over the metadata header</text>
+  </g>
+  <text x="756" y="330" text-anchor="middle" font-size="11" font-style="italic" fill="#6b21a8">small Hamming distance = similar content —</text>
+  <text x="756" y="348" text-anchor="middle" font-size="11" font-style="italic" fill="#6b21a8">made for discovery, never for keying</text>
+
+  <!-- rollout -->
+  <rect x="34" y="392" width="952" height="120" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="56" y="418" font-size="13" font-weight="700" fill="#14532d">Rollout, in order</text>
+  <g font-size="11.5" fill="#334155">
+    <text x="56" y="442"><tspan font-weight="700">1 · design_iscc</tspan> — optikit emits ISCC-SUM (Data + Instance) of the canonical design folder next to design_sha256; microscope.yml and every SystemSnapshot pin both.</text>
+    <text x="56" y="466"><tspan font-weight="700">2 · dataset codes</tspan> — per acquisition: Instance + Data over the written files, Content-Code Image over frames/thumbnails, Meta-Code over the canonical snapshot header.</text>
+    <text x="56" y="490"><tspan font-weight="700">3 · discovery</tspan> — nearest-neighbour on the similarity units, served by the <tspan font-family="ui-monospace, monospace">iscc</tspan> capability; no config schema change (R4).</text>
+  </g>
+
+  <!-- the honest note -->
+  <rect x="34" y="530" width="952" height="72" rx="10" fill="#fefce8" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="56" y="554" font-size="12.5" font-weight="700" fill="#713f12">Where "nearby x/y → nearby code" actually comes from</text>
+  <text x="56" y="576" font-size="11.5" fill="#334155">Not from hashing the setup: a one-scalar change flips Data-Code chunks unpredictably at that granularity. Neighbourhood comes from (a) Content-Code Image — adjacent</text>
+  <text x="56" y="594" font-size="11.5" fill="#334155">fields of the same sample <tspan font-style="italic">look</tspan> similar; (b) range queries on the structured snapshot store (<tspan font-family="ui-monospace, monospace">stage_um</tspan>); (c) if one sortable key is wanted: a quantised Morton code of (x, y) in the Meta-Code seed.</text>
+</svg>

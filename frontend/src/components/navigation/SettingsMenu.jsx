@@ -480,7 +480,7 @@ const SettingsMenu = ({ onNavigate }) => {
             />
           </ListItemIcon>
           <ListItemText
-            primary="Updates"
+            primary="ESP32 & Updates"
             secondary={
               allowAccess
                 ? isDeveloperMode && !isBackendConnected

@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 560" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- OPTIKIT-INTEGRATION.md §3 — one physical camera, two descriptions,
+       one seam with a cross-check. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1020" height="560" fill="#ffffff"/>
+
+  <text x="510" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">One camera, two descriptions — where the boundary runs</text>
+  <text x="510" y="54" text-anchor="middle" font-size="12.5" fill="#64748b">the record answers "what does the silicon do to light"; the binding answers "how do I talk to it"</text>
+
+  <!-- the physical camera in the middle -->
+  <rect x="428" y="220" width="164" height="120" rx="12" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+  <text x="510" y="250" text-anchor="middle" font-size="13.5" font-weight="700" fill="#0f172a">HIK USB3 camera</text>
+  <text x="510" y="270" text-anchor="middle" font-size="11" fill="#334155">serial CS165MU-4711</text>
+  <text x="510" y="292" text-anchor="middle" font-size="10.5" font-style="italic" fill="#64748b">one physical object,</text>
+  <text x="510" y="308" text-anchor="middle" font-size="10.5" font-style="italic" fill="#64748b">both columns describe it</text>
+
+  <!-- optikit side -->
+  <rect x="34" y="96" width="360" height="368" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="1.8"/>
+  <text x="214" y="122" text-anchor="middle" font-size="14" font-weight="700" fill="#1e3a8a">optikit — the detector record (L1)</text>
+  <text x="214" y="140" text-anchor="middle" font-size="10.5" font-style="italic" fill="#1d4ed8">library component, category: detector</text>
+
+  <g font-size="11.5" fill="#334155">
+    <text x="56" y="168" font-weight="700" fill="#0f172a">mechanics + optics — the physics</text>
+    <text x="56" y="190">· housing mesh (STEP/GLB), mesh-pose, envelope</text>
+    <text x="56" y="208">· sensor plane = the <tspan font-family="ui-monospace, monospace">sensor</tspan> port + frame (F2)</text>
+    <text x="56" y="226">· sensor size mm · <tspan font-weight="700">pixel pitch µm</tspan> · cover glass</text>
+    <text x="56" y="244">· vendor + MPN (the BOM identity)</text>
+    <text x="56" y="270" font-weight="700" fill="#0f172a">why here</text>
+    <text x="56" y="292">FOV, sampling and magnification checks are</text>
+    <text x="56" y="310">optics questions — the ray trace ends on this</text>
+    <text x="56" y="328">plane, and µm-per-px starts from this pitch.</text>
+    <text x="56" y="354" font-weight="700" fill="#7f1d1d">never here</text>
+    <text x="56" y="376" fill="#991b1b">driver, exposure, gain, pixel formats,</text>
+    <text x="56" y="394" fill="#991b1b">serial numbers, streaming, visualization</text>
+  </g>
+
+  <!-- newswitch side -->
+  <rect x="626" y="96" width="360" height="368" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.8"/>
+  <text x="806" y="122" text-anchor="middle" font-size="14" font-weight="700" fill="#14532d">newswitch — the device binding (L2)</text>
+  <text x="806" y="140" text-anchor="middle" font-size="10.5" font-style="italic" fill="#166534">devices.camera.main, driver uc2.rest.camera</text>
+
+  <g font-size="11.5" fill="#334155">
+    <text x="648" y="168" font-weight="700" fill="#0f172a">software — the stack</text>
+    <text x="648" y="190">· driver key + typed params (serial, binning)</text>
+    <text x="648" y="208">· exposure/gain ranges, pixel formats, triggers</text>
+    <text x="648" y="226">· streaming (FrameBroadcaster, encoders)</text>
+    <text x="648" y="244">· roles: <tspan font-family="ui-monospace, monospace">acquisition</tspan> / <tspan font-family="ui-monospace, monospace">focus_lock</tspan>, visualization</text>
+    <text x="648" y="270" font-weight="700" fill="#0f172a">why here</text>
+    <text x="648" y="292">these facts need a process talking to the</text>
+    <text x="648" y="310">hardware — they change with an SDK update,</text>
+    <text x="648" y="328">not with the instrument's geometry.</text>
+    <text x="648" y="354" font-weight="700" fill="#7f1d1d">never here</text>
+    <text x="648" y="376" fill="#991b1b">pixel pitch, sensor size, sensor position —</text>
+    <text x="648" y="394" fill="#991b1b">restating them is E_RESTATED_FACT (R1)</text>
+  </g>
+
+  <!-- the seam -->
+  <path d="M394 258 L426 258" stroke="#475569" stroke-width="1.6" marker-end="url(#a)"/>
+  <path d="M626 258 L594 258" stroke="#475569" stroke-width="1.6" marker-end="url(#a)"/>
+  <text x="510" y="204" text-anchor="middle" font-size="11.5" font-weight="700" fill="#334155">mounts: camera</text>
+  <text x="510" y="188" text-anchor="middle" font-size="10" font-style="italic" fill="#64748b">the one stored link</text>
+
+  <!-- the cross-check -->
+  <rect x="240" y="486" width="540" height="56" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="510" y="508" text-anchor="middle" font-size="12" font-weight="700" fill="#7f1d1d">the seam is checked, not trusted</text>
+  <text x="510" y="528" text-anchor="middle" font-size="11" fill="#991b1b">at connect, the driver asks the hardware for its sensor geometry and compares with the record — disagreement is E_SENSOR_MISMATCH, named per field</text>
+  <path d="M470 340 L400 484" stroke="#dc2626" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+  <path d="M550 340 L620 484" stroke="#dc2626" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+</svg>

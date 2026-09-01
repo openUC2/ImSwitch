@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>newswitch — Architecture &amp; Developer Guide</title>
+<style>
+  :root {
+    --bg: #f3f6f4;
+    --surface: #ffffff;
+    --surface-2: #eaefec;
+    --ink: #131e19;
+    --ink-soft: #55675f;
+    --ink-faint: #7d8e86;
+    --line: #d8e0db;
+    --line-soft: #e6ebe8;
+    --accent: #0c7f57;
+    --accent-soft: #0c7f5714;
+    --clay: #9a6327;
+    --clay-soft: #9a632714;
+    --code-bg: #eef2f0;
+    --shadow: 0 1px 2px rgba(19, 30, 25, .05), 0 8px 28px rgba(19, 30, 25, .05);
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Charter, Georgia, ui-serif, serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1512;
+      --surface: #171f1b;
+      --surface-2: #1d2723;
+      --ink: #dbe5df;
+      --ink-soft: #8ea095;
+      --ink-faint: #6d7f76;
+      --line: #27332d;
+      --line-soft: #202a25;
+      --accent: #35c98d;
+      --accent-soft: #35c98d1f;
+      --clay: #cf9d5e;
+      --clay-soft: #cf9d5e1f;
+      --code-bg: #111815;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 28px rgba(0, 0, 0, .25);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1512; --surface: #171f1b; --surface-2: #1d2723;
+    --ink: #dbe5df; --ink-soft: #8ea095; --ink-faint: #6d7f76;
+    --line: #27332d; --line-soft: #202a25;
+    --accent: #35c98d; --accent-soft: #35c98d1f;
+    --clay: #cf9d5e; --clay-soft: #cf9d5e1f;
+    --code-bg: #111815;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 28px rgba(0, 0, 0, .25);
+  }
+  :root[data-theme="light"] {
+    --bg: #f3f6f4; --surface: #ffffff; --surface-2: #eaefec;
+    --ink: #131e19; --ink-soft: #55675f; --ink-faint: #7d8e86;
+    --line: #d8e0db; --line-soft: #e6ebe8;
+    --accent: #0c7f57; --accent-soft: #0c7f5714;
+    --clay: #9a6327; --clay-soft: #9a632714;
+    --code-bg: #eef2f0;
+    --shadow: 0 1px 2px rgba(19, 30, 25, .05), 0 8px 28px rgba(19, 30, 25, .05);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 16.5px;
+    line-height: 1.62;
+  }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .masthead-inner {
+    max-width: 1180px; margin: 0 auto; padding: 40px 32px 30px;
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 12px;
+  }
+  .masthead h1 {
+    font-family: var(--sans); font-weight: 680; letter-spacing: -.022em;
+    font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1;
+    margin: 0 0 14px; text-wrap: balance;
+  }
+  .lede {
+    margin: 0; max-width: 66ch; color: var(--ink-soft); font-size: 17.5px;
+  }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 22px 0 0;
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint);
+  }
+  .meta span { white-space: nowrap; }
+  .meta b { color: var(--ink-soft); font-weight: 500; }
+
+  /* ---------- layout ---------- */
+  .shell {
+    max-width: 1180px; margin: 0 auto; padding: 34px 32px 90px;
+    display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 48px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: minmax(0, 1fr); gap: 26px; padding: 26px 20px 70px; }
+    .masthead-inner { padding: 32px 20px 24px; }
+  }
+
+  /* ---------- toc ---------- */
+  .toc { position: sticky; top: 24px; }
+  @media (max-width: 900px) {
+    .toc {
+      position: static; background: var(--surface); border: 1px solid var(--line);
+      border-radius: 12px; padding: 16px 18px;
+    }
+  }
+  .toc h2 {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--ink-faint); margin: 0 0 12px; font-weight: 500;
+  }
+  .toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+  .toc a {
+    display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 4px;
+    padding: 5px 8px 5px 0; border-radius: 6px;
+    font-family: var(--sans); font-size: 13.5px; line-height: 1.35;
+    color: var(--ink-soft); text-decoration: none; border-left: 2px solid transparent;
+    padding-left: 8px;
+  }
+  .toc a .n { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+  .toc a:hover { color: var(--ink); background: var(--accent-soft); }
+  .toc a.is-active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); }
+  .toc a.is-active .n { color: var(--accent); }
+  .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* ---------- sections ---------- */
+  section { scroll-margin-top: 20px; }
+  section + section { margin-top: 54px; padding-top: 46px; border-top: 1px solid var(--line); }
+  .h2row { display: flex; align-items: baseline; gap: 12px; margin: 0 0 18px; }
+  .h2row .num {
+    font-family: var(--mono); font-size: 12px; color: var(--accent);
+    font-variant-numeric: tabular-nums; padding-top: 2px;
+  }
+  h2 {
+    font-family: var(--sans); font-weight: 660; letter-spacing: -.017em;
+    font-size: 25px; line-height: 1.22; margin: 0; text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--sans); font-weight: 640; letter-spacing: -.01em;
+    font-size: 17.5px; margin: 30px 0 8px; text-wrap: balance;
+  }
+  h4 {
+    font-family: var(--mono); font-weight: 600; font-size: 12px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-faint); margin: 24px 0 8px;
+  }
+  p { margin: 0 0 14px; max-width: 72ch; }
+  ul, ol.prose { max-width: 72ch; margin: 0 0 14px; padding-left: 22px; }
+  li { margin: 0 0 7px; }
+  li > ul { margin-top: 7px; }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  strong { font-weight: 640; }
+  em.term { font-style: normal; font-weight: 640; color: var(--ink); }
+
+  code {
+    font-family: var(--mono); font-size: .855em;
+    background: var(--code-bg); border: 1px solid var(--line-soft);
+    padding: .1em .34em; border-radius: 4px; white-space: nowrap;
+  }
+  pre {
+    font-family: var(--mono); font-size: 13px; line-height: 1.55;
+    background: var(--code-bg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; margin: 0 0 16px;
+    overflow-x: auto;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; white-space: pre; }
+
+  /* ---------- figure ---------- */
+  figure { margin: 22px 0 26px; }
+  .figbox {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 14px; padding: 18px; box-shadow: var(--shadow); overflow-x: auto;
+  }
+  .figbox svg { display: block; width: 100%; min-width: 660px; height: auto; }
+  figcaption {
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint);
+    margin-top: 10px; line-height: 1.5;
+  }
+  .sv-band { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 3; rx: 10; }
+  .sv-bandlabel {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .14em;
+    text-transform: uppercase; fill: var(--ink-faint);
+  }
+  .sv-box { fill: var(--surface-2); stroke: var(--line); stroke-width: 1; rx: 7; }
+  .sv-box-accent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; rx: 7; }
+  .sv-box-clay { fill: var(--clay-soft); stroke: var(--clay); stroke-width: 1; rx: 7; }
+  .sv-t { font-family: var(--sans); font-size: 13px; font-weight: 620; fill: var(--ink); }
+  .sv-s { font-family: var(--mono); font-size: 10.5px; fill: var(--ink-soft); }
+  .sv-line { stroke: var(--ink-faint); stroke-width: 1.4; fill: none; }
+  .sv-line-dash { stroke: var(--accent); stroke-width: 1.4; fill: none; stroke-dasharray: 4 3; }
+  .sv-lbl { font-family: var(--mono); font-size: 10px; fill: var(--ink-faint); }
+  .sv-lbl-accent { font-family: var(--mono); font-size: 10px; fill: var(--accent); }
+
+  /* ---------- tables ---------- */
+  .tablewrap { overflow-x: auto; margin: 0 0 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-family: var(--sans); font-size: 14px; }
+  thead th {
+    text-align: left; font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-faint); font-weight: 500;
+    padding: 11px 14px; border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  tbody td { padding: 11px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; line-height: 1.5; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody td:first-child { white-space: nowrap; }
+  tbody td:first-child code { white-space: nowrap; }
+  table.wrapfirst tbody td:first-child { white-space: normal; min-width: 150px; }
+
+  /* ---------- callouts ---------- */
+  .note {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    padding: 13px 16px; border-radius: 0 8px 8px 0; margin: 0 0 18px; max-width: 72ch;
+  }
+  .note p:last-child { margin-bottom: 0; }
+  .note .tag {
+    display: block; font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 5px;
+  }
+  .note.clay { border-left-color: var(--clay); background: var(--clay-soft); }
+  .note.clay .tag { color: var(--clay); }
+
+  /* ---------- boot timeline ---------- */
+  .steps { list-style: none; margin: 20px 0 0; padding: 0; display: grid; gap: 0; max-width: 78ch; }
+  .steps li {
+    display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 16px;
+    padding: 0 0 20px; margin: 0; position: relative;
+  }
+  .steps li::before {
+    content: ""; position: absolute; left: 15px; top: 26px; bottom: -2px;
+    width: 1px; background: var(--line);
+  }
+  .steps li:last-child { padding-bottom: 0; }
+  .steps li:last-child::before { display: none; }
+  .steps .idx {
+    font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums;
+    width: 31px; height: 22px; display: grid; place-items: center;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: var(--surface); color: var(--ink-soft); position: relative; z-index: 1;
+  }
+  .steps .body { padding-top: 1px; }
+  .steps .body b { font-family: var(--sans); font-weight: 640; font-size: 15.5px; display: block; margin-bottom: 3px; }
+  .steps .body p { margin: 0; font-size: 15.5px; }
+  .steps .where {
+    display: block; font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint);
+    margin-top: 5px; word-break: break-word;
+  }
+
+  footer {
+    border-top: 1px solid var(--line); background: var(--surface);
+    font-family: var(--mono); font-size: 12px; color: var(--ink-faint);
+  }
+  footer .fi { max-width: 1180px; margin: 0 auto; padding: 22px 32px 30px; }
+  @media (max-width: 900px) { footer .fi { padding: 20px; } }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <p class="eyebrow">newswitch · backend</p>
+    <h1>Architecture &amp; Developer Guide</h1>
+    <p class="lede">How the FastAPI server, the rekuest-next agent, the device managers and the
+      generated frontend fit together — and what every decorator in the codebase actually does.</p>
+    <p class="meta">
+      <span><b>Target:</b> rekuest-next 2.x</span>
+      <span><b>Repo:</b> newswitch/backend</span>
+      <span><b>Python:</b> 3.11–3.13</span>
+      <span><b>Revised:</b> July 2026</span>
+    </p>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="toc" aria-label="Table of contents">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#big-picture"><span class="n">01</span><span>The big picture</span></a></li>
+      <li><a href="#concepts"><span class="n">02</span><span>rekuest concepts</span></a></li>
+      <li><a href="#boot"><span class="n">03</span><span>Boot lifecycle</span></a></li>
+      <li><a href="#request"><span class="n">04</span><span>Request lifecycle</span></a></li>
+      <li><a href="#state"><span class="n">05</span><span>State flow</span></a></li>
+      <li><a href="#video"><span class="n">06</span><span>Video streaming</span></a></li>
+      <li><a href="#modules"><span class="n">07</span><span>Module reference</span></a></li>
+      <li><a href="#uc2"><span class="n">08</span><span>UC2 hardware layer</span></a></li>
+      <li><a href="#expanse"><span class="n">09</span><span>The Expanse</span></a></li>
+      <li><a href="#frontend"><span class="n">10</span><span>Frontend</span></a></li>
+      <li><a href="#glossary"><span class="n">11</span><span>Glossary</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- ============ 1 ============ -->
+    <section id="big-picture">
+      <div class="h2row"><span class="num">01</span><h2>The big picture</h2></div>
+
+      <p>newswitch is a FastAPI app whose entire functional surface is managed by a
+        <em class="term">rekuest-next agent</em> embedded in the server. Nothing in the backend
+        defines REST endpoints for microscope features by hand. Instead:</p>
+
+      <ul>
+        <li><strong>functions</strong> decorated with <code>@register</code> become remotely callable <em class="term">actions</em>;</li>
+        <li><strong>data classes</strong> decorated with <code>@state</code> become reactive shared state, pushed to every browser as JSON-patches;</li>
+        <li><strong>service classes</strong> marked with <code>@context</code> (the “managers”) are dependency-injected into those functions by type annotation;</li>
+        <li>the frontend <strong>generates typed React hooks</strong> from the running backend’s schema endpoints, so UI code never hand-writes API calls.</li>
+      </ul>
+
+      <figure>
+        <div class="figbox">
+          <svg viewBox="0 0 820 470" role="img" aria-label="Layered diagram: browser talks over REST and websockets to the FastAPI process hosting the rekuest agent, which drives managers, states and the UC2 hardware bus.">
+            <defs>
+              <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-faint)"></path>
+              </marker>
+              <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"></path>
+              </marker>
+            </defs>
+
+            <!-- Band A: browser -->
+            <rect class="sv-band" x="16" y="14" width="788" height="104"></rect>
+            <text class="sv-bandlabel" x="30" y="32">Browser</text>
+            <rect class="sv-box" x="40" y="44" width="220" height="56"></rect>
+            <text class="sv-t" x="56" y="68">React components</text>
+            <text class="sv-s" x="56" y="86">src/components</text>
+            <rect class="sv-box" x="300" y="44" width="220" height="56"></rect>
+            <text class="sv-t" x="316" y="68">Generated hooks</text>
+            <text class="sv-s" x="316" y="86">src/apps/default · zod</text>
+            <rect class="sv-box-accent" x="560" y="44" width="220" height="56"></rect>
+            <text class="sv-t" x="576" y="68">Transport + stores</text>
+            <text class="sv-s" x="576" y="86">src/lib/rekuest · zustand</text>
+            <path class="sv-line" d="M 260 72 L 296 72" marker-end="url(#ah)"></path>
+            <path class="sv-line" d="M 520 72 L 556 72" marker-end="url(#ah)"></path>
+
+            <!-- Band B: agent -->
+            <rect class="sv-band" x="16" y="150" width="788" height="200"></rect>
+            <text class="sv-bandlabel" x="30" y="168">FastAPI process — rekuest agent</text>
+            <rect class="sv-box" x="40" y="180" width="220" height="56"></rect>
+            <text class="sv-t" x="56" y="204">Agent state store</text>
+            <text class="sv-s" x="56" y="222">revisions · patches · SQLite</text>
+            <rect class="sv-box" x="300" y="180" width="220" height="56"></rect>
+            <text class="sv-t" x="316" y="204">FastApiAgent</text>
+            <text class="sv-s" x="316" y="222">contexts · states · locks</text>
+            <rect class="sv-box-accent" x="560" y="180" width="220" height="56"></rect>
+            <text class="sv-t" x="576" y="204">Agent routes</text>
+            <text class="sv-s" x="576" y="222">/ws · /assign · /cancel</text>
+            <rect class="sv-box" x="40" y="276" width="220" height="56"></rect>
+            <text class="sv-t" x="56" y="300">States @state</text>
+            <text class="sv-s" x="56" y="318">evented · lock-guarded</text>
+            <rect class="sv-box" x="300" y="276" width="220" height="56"></rect>
+            <text class="sv-t" x="316" y="300">Managers @context</text>
+            <text class="sv-s" x="316" y="318">stage · illumination · io</text>
+            <rect class="sv-box" x="560" y="276" width="220" height="56"></rect>
+            <text class="sv-t" x="576" y="300">Actors</text>
+            <text class="sv-s" x="576" y="318">run one @register fn</text>
+
+            <!-- vertical browser -> routes -->
+            <path class="sv-line" d="M 670 100 L 670 176" marker-end="url(#ah)"></path>
+            <text class="sv-lbl" x="682" y="132">REST /assign</text>
+            <path class="sv-line-dash" d="M 640 176 L 640 100" marker-end="url(#ahg)"></path>
+            <text class="sv-lbl-accent" x="486" y="132">WS /ws events</text>
+
+            <!-- inside band B -->
+            <path class="sv-line" d="M 556 208 L 524 208" marker-end="url(#ah)"></path>
+            <path class="sv-line" d="M 670 236 L 670 272" marker-end="url(#ah)"></path>
+            <path class="sv-line" d="M 556 304 L 524 304" marker-end="url(#ah)"></path>
+            <path class="sv-line" d="M 296 304 L 264 304" marker-end="url(#ah)"></path>
+            <path class="sv-line-dash" d="M 150 276 L 150 240" marker-end="url(#ahg)"></path>
+            <text class="sv-lbl-accent" x="160" y="262">patches</text>
+            <path class="sv-line" d="M 264 208 L 296 208" marker-end="url(#ah)"></path>
+
+            <!-- Band C: hardware -->
+            <rect class="sv-band" x="272" y="382" width="532" height="72"></rect>
+            <text class="sv-bandlabel" x="286" y="400">Hardware</text>
+            <rect class="sv-box-clay" x="300" y="406" width="220" height="40"></rect>
+            <text class="sv-t" x="316" y="431">UC2BusManager</text>
+            <rect class="sv-box-clay" x="560" y="406" width="220" height="40"></rect>
+            <text class="sv-t" x="576" y="425">openUC2 hardware</text>
+            <text class="sv-s" x="576" y="440">CANopen · serial · virtual</text>
+            <path class="sv-line" d="M 410 332 L 410 402" marker-end="url(#ah)"></path>
+            <path class="sv-line" d="M 520 426 L 556 426" marker-end="url(#ah)"></path>
+            <path class="sv-line-dash" d="M 300 426 L 150 426 L 150 336" marker-end="url(#ahg)"></path>
+            <text class="sv-lbl-accent" x="160" y="420">telemetry</text>
+          </svg>
+        </div>
+        <figcaption>Solid arrows: commands travelling down. Dashed green: state and telemetry
+          travelling back up. Video bypasses this path entirely — see §06.</figcaption>
+      </figure>
+
+      <div class="note">
+        <span class="tag">Companion</span>
+        <p>An interactive walkthrough of the same material — four lifecycles as clickable
+          swimlanes — exists as the <strong>newswitch runtime explorer</strong> artifact.
+          This document is the reference; that one is the map.</p>
+      </div>
+    </section>
+
+    <!-- ============ 2 ============ -->
+    <section id="concepts">
+      <div class="h2row"><span class="num">02</span><h2>rekuest concepts, one by one</h2></div>
+
+      <h3>Agent and actors (the docstring, decoded)</h3>
+      <p>rekuest uses the classic <em class="term">distributed actor model</em>. Translated to newswitch:</p>
+      <p>The <strong>Agent</strong> (<code>FastApiAgent</code>, created by <code>configure_fastapi</code>
+        in <code>create_app</code>) is the <em class="term">runtime container</em> for the whole app. It
+        does not do microscope work itself. It owns:</p>
+      <ul>
+        <li><code>contexts</code> — the live manager instances (everything <code>@context</code>);</li>
+        <li><code>states</code> — the live state instances (everything <code>@state</code>), each with a revision counter and a serialized (“shrunk”) copy;</li>
+        <li><code>locks</code> — named task locks such as <code>stage_position</code>;</li>
+        <li>the <strong>implementation map</strong> — one entry per <code>@register</code>ed function;</li>
+        <li>the collected <code>@startup</code> hooks and <code>@background</code> workers;</li>
+        <li>all running <strong>assignments</strong> (tasks) and the actors executing them;</li>
+        <li>a SQLite sink/retriever (<code>agent_data.db</code>) recording task history — what the frontend <code>/replay</code> page reads.</li>
+      </ul>
+      <p>An <strong>actor</strong> is the execution vehicle for one implementation. When a client
+        <em class="term">assigns</em> a task (“run <code>move_stage</code> with these args”), the agent routes the
+        assignment to that implementation’s actor, which runs the function — sync functions in a
+        worker thread via koil, async ones on the loop — and reports lifecycle events back:
+        <code>STARTED</code>, <code>PROGRESS</code>, <code>YIELD</code>, <code>PAUSED</code>,
+        <code>CANCELLED</code>, <code>COMPLETED</code>, <code>FAILED</code>.</p>
+      <p><strong>Guardian vs non-guardian actors:</strong> actors the agent spawns directly (one per
+        registered implementation) are “guardian” actors; an actor may itself call other actions
+        (<code>acall</code> inside a function body), spawning subordinate actors whose lifetime it owns.
+        That is the “hierarchical structure” the docstring describes. In newswitch you mostly interact
+        with the first level.</p>
+      <div class="note">
+        <span class="tag">Why it looks different from Arkitekt</span>
+        <p>In upstream Arkitekt the agent connects <em>out</em> to an arkitekt server and receives
+          assignments from there. In newswitch the <strong>FastAPI contrib</strong> replaces that
+          transport: the agent lives inside uvicorn and browsers talk to it directly over
+          <code>/ws</code> plus a few REST routes. Same model, no external server.</p>
+      </div>
+
+      <h3><code>AppContext</code> and <code>@app_context</code></h3>
+      <p><code>rekuest_next.agents.base.AppContext</code> is nothing more than a <strong>marker
+        protocol</strong> — a class with one attribute, <code>__rekuest_app_context__</code>. The
+        <code>@app_context</code> decorator stamps that attribute onto your class. That is all; no behaviour.</p>
+      <p>Its purpose: the object you pass as <code>app_context=</code> into <code>configure_fastapi</code>
+        (newswitch passes <code>ImswitchConfig</code>) travels into <code>agent.aprovide(context=…)</code>
+        and becomes <strong>injectable by type</strong> into hooks and registered functions. That is why
+        <code>provide_managers(app_context: ImswitchConfig)</code> receives the config: the parameter’s
+        <em>type annotation</em> is matched against the app-context class. Think of it as the DI slot
+        reserved for “the configuration of this deployment”.</p>
+
+      <h3><code>@startup</code> — the composition root</h3>
+<pre><code>@startup
+async def provide_managers(app_context: ImswitchConfig) -&gt; Tuple[
+    FrameBroadcaster, UC2BusManager, UC2State, StageManager, …, StageState, …
+]:</code></pre>
+      <p>Startup hooks run <strong>once, when the agent boots</strong> (inside <code>aprovide</code>,
+        before anything is callable). Two pieces of magic, both driven purely by type annotations:</p>
+      <ol class="prose">
+        <li><strong>Parameter inspection</strong> — the “app-context, state, and context dependencies”:
+          each parameter is matched by its annotated type against (a) the app-context class,
+          (b) already-published <code>@state</code> classes, (c) already-published <code>@context</code>
+          classes. Matching objects are injected.</li>
+        <li><strong>Return annotation → publication</strong> — the <code>Tuple[…]</code> return annotation
+          tells the agent what each returned object <em>is</em>. Objects whose class or protocol is
+          <code>@context</code> go into <code>agent.contexts</code>; objects whose class is
+          <code>@state</code> go into <code>agent.states</code> (serialized, revision 0, immediately
+          subscribable).</li>
+      </ol>
+      <p>So <code>provide_managers</code> is the <strong>composition root</strong>: everything it returns
+        is published for the rest of the agent lifecycle and becomes injectable into every
+        <code>@register</code>/<code>@background</code> function.</p>
+      <div class="note clay">
+        <span class="tag">Footgun</span>
+        <p>If you build a new manager and forget to add it to <strong>both</strong> the returned value
+          <em>and</em> the return annotation, injection fails at call time with
+          <code>StateRequirementsNotMet</code>.</p>
+      </div>
+      <p><em class="term">Context dependency</em> means “give me the live manager instance of this type”
+        (e.g. <code>stage: StageManager</code>). <em class="term">State dependency</em> means “give me the
+        live shared state instance” (e.g. <code>state: StageState</code>). Contexts are never serialized;
+        states are.</p>
+
+      <h3><code>@register</code> — actions</h3>
+      <p>Any function becomes a remotely callable action:</p>
+<pre><code>@register(locks=["stage_position"], optimistics=[…])
+def move_stage(stage: StageManager, x: float | None = None, …) -&gt; None: …</code></pre>
+      <ul>
+        <li>Parameters that are contexts or states are injected and stay invisible to callers; everything
+          else becomes the action’s <em class="term">argument schema</em> (its “ports”), which is what the
+          frontend codegen turns into a zod schema.</li>
+        <li><code>locks=[…]</code> serializes conflicting actions and surfaces “locked” to the UI.</li>
+        <li><code>optimistics=[…]</code> describes how the UI should <em>predict</em> the state change before
+          the backend confirms it — instant slider and position feedback.</li>
+        <li>Inside the body, <code>progress(pct, msg)</code> and <code>pausepoint()</code> power the live
+          progress bar and the pause/step buttons.</li>
+        <li>Registration happens at <strong>import time</strong> into the default app registry — which is why
+          <code>app.py</code> imports <code>newswitch.registers.uc2</code> and the routines purely for their
+          side effects.</li>
+      </ul>
+
+      <h3><code>@background</code> — daemons</h3>
+      <p><code>@background</code> functions are long-running workers started right after the startup hooks;
+        async ones run on the event loop, sync ones in a dedicated thread. They use the same injection:
+        <code>run_uc2_bus(uc2_bus: UC2BusManager)</code> gets the live bus. newswitch runs three — the
+        detector acquisition loop, the UC2 bus connection pump, and the UC2 event → state dispatcher.</p>
+
+      <h3>The four class decorators</h3>
+      <div class="tablewrap">
+        <table class="wrapfirst">
+          <thead><tr><th>Decorator</th><th>From</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>@context</code></td>
+              <td><code>rekuest_next.agents.context</code></td>
+              <td>Marks a class (usually a <code>Protocol</code>) as an <strong>injectable service</strong> — a “manager”. Optionally declares <code>locks=[…]</code> shared by all its users. Stores only marker attributes; no wrapping.</td>
+            </tr>
+            <tr>
+              <td><code>@state</code></td>
+              <td><code>rekuest_next.state.decorator</code></td>
+              <td>The heavy one. Introspects the class into a <strong>state schema</strong> (a port per field), registers it, and rewrites the class so instances are <em>evented</em>: every <code>setattr</code> (1) checks that <code>required_locks</code> are held, (2) applies the change, (3) publishes a JSON-patch with a new revision to all subscribers.</td>
+            </tr>
+            <tr>
+              <td><code>@model</code></td>
+              <td><code>rekuest_next</code></td>
+              <td>Marks a dataclass as a <strong>serializable data structure</strong> so it can appear inside action arguments, returns and state fields. Used for config and value objects (<code>StageConfig</code>, <code>Illumination</code>, <code>UC2CanBusConfig</code>). No reactivity.</td>
+            </tr>
+            <tr>
+              <td><code>@runtime_checkable</code></td>
+              <td>stdlib <code>typing</code></td>
+              <td>Not rekuest at all. Allows structural <code>isinstance(obj, SomeProtocol)</code> checks, which the tests use (<code>isinstance(bus, UC2BusManager)</code>).</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>The app registry and bloks</h3>
+      <p><code>get_default_app_registry()</code> returns the global <strong>AppRegistry</strong> — the
+        accumulator for everything above: implementations, state schemas, locks, bloks.
+        <code>@register</code> writes into it implicitly; <code>registry.register(fn)</code> is the explicit
+        spelling used for the routines:</p>
+<pre><code>default_app_registry.register(acquire_multidimensional_acquisition)
+default_app_registry.register(scan_region)</code></pre>
+      <p>You can register <strong>any function</strong> whose non-injected parameters are serializable
+        types — that is how a new “app” (in the ImSwitch sense) gets its backend surface.</p>
+      <p><code>register_blok(name, jsx(…))</code> is different: it ships a <strong>server-defined UI
+        fragment</strong> — a JSX-like DSL parsed on the backend, sent to the frontend via the schema
+        endpoints, and rendered there. Bloks can bind to states
+        (<code>@self.ObjectiveState.mounted_lenses</code>), loop (<code>&lt;foreach&gt;</code>) and invoke
+        actions (<code>onClick="@self.switch_objective(lens.slot)"</code>). Use them for small panels that
+        should not require a frontend build.</p>
+      <div class="note clay">
+        <span class="tag">What is “jonda”?</span>
+        <p>Simply the arbitrary name of a demo blok left in <code>app.py</code> — the card itself reads
+          <em>“Bene don’t look at this yet, this is just a placeholder.”</em> It demonstrates the binding
+          syntax and can be renamed or removed freely.</p>
+      </div>
+    </section>
+
+    <!-- ============ 3 ============ -->
+    <section id="boot">
+      <div class="h2row"><span class="num">03</span><h2>Boot lifecycle, step by step</h2></div>
+      <p>What happens when you run <code>uvicorn main:app --port 8099</code>:</p>
+
+      <ol class="steps">
+        <li>
+          <span class="idx">01</span>
+          <div class="body">
+            <b>Import time</b>
+            <p>Importing <code>newswitch.app</code> executes every <code>@register</code>,
+              <code>@state</code>, <code>@context</code>, <code>@startup</code> and
+              <code>@background</code> decorator — the default app registry fills up.
+              <code>main.load_config()</code> optionally reads <code>NEWSWITCH_CONFIG</code>, then
+              <code>create_app(config)</code> runs.</p>
+            <span class="where">backend/main.py · backend/newswitch/app.py</span>
+          </div>
+        </li>
+        <li>
+          <span class="idx">02</span>
+          <div class="body">
+            <b>create_app builds the FastAPI app</b>
+            <p>Adds CORS, then calls <code>configure_fastapi(app, default_app_registry,
+              app_context=config, …)</code>.</p>
+            <span class="where">newswitch/app.py → create_app()</span>
+          </div>
+        </li>
+        <li>
+          <span class="idx">03</span>
+          <div class="body">
+            <b>The agent is constructed</b>
+            <p><code>configure_fastapi</code> builds the <code>FastApiAgent</code> from the registry,
+              wiring a SQLite sink and retriever for task history.</p>
+            <span class="where">rekuest_next/contrib/fastapi/routes.py:177</span>
+          </div>
+        </li>
+        <li>
+          <span class="idx">04</span>
+          <div class="body">
+            <b>Core routes mounted immediately</b>
+            <p><code>add_agent_routes(…)</code> mounts the single multiplexed websocket
+              <code>/ws</code> — carrying task events, state patches and lock events — plus
+              <code>/assign</code>, <code>/cancel</code>, <code>/pause</code>, <code>/resume</code>,
+              <code>/step</code>.</p>
+            <span class="where">rekuest_next/contrib/fastapi/routes.py:75</span>
+          </div>
+        </li>
+        <li>
+          <span class="idx">05</span>
+          <div class="body">
+            <b>Lifespan installed</b>
+            <p><code>app.router.lifespan_context = lifespan</code> replaces FastAPI’s own
+              startup/shutdown context manager, so agent boot rides the web server’s lifecycle.
+              A lifespan is an async context manager: everything before <code>yield</code> is startup,
+              after it is shutdown.</p>
+            <span class="where">rekuest_next/contrib/fastapi/routes.py:254</span>
+          </div>
+        </li>
+        <li>
+          <span class="idx">06</span>
+          <div class="body">
+            <b>Server start → lifespan enters</b>
+            <p>The deferred route groups mount: <code>/tasks</code>, <code>/states</code>,
+              <code>/locks</code>, per-implementation execution routes, and the three schema endpoints
+              the frontend codegen reads — <code>/schemas/implementations</code>,
+              <code>/schemas/states</code>, <code>/schemas/locks</code>. OpenAPI is configured and
+              <code>app.state.agent</code> is set.</p>
+            <span class="where">rekuest_next/contrib/fastapi/routes.py:212</span>
+          </div>
+        </li>
+        <li>
+          <span class="idx">07</span>
+          <div class="body">
+            <b>agent.aprovide(context=config) is spawned</b>
+            <p>Inside <code>async with agent:</code> the provide task starts and orchestrates the rest of
+              the boot. On shutdown this task is cancelled, tearing everything down — which is why
+              <code>abackground()</code> implementations must re-raise <code>CancelledError</code>.</p>
+            <span class="where">rekuest_next/contrib/fastapi/routes.py:236</span>
+          </div>
+        </li>
+        <li>
+          <span class="idx">08</span>
+          <div class="body">
+            <b>@startup provide_managers runs</b>
+            <p><code>ImswitchConfig</code> is injected by type. The body builds every state and manager,
+              choosing <code>VirtualUC2Bus</code>, <code>UC2CanBus</code> or <code>UC2RestBus</code> from
+              <code>config.uc2_transport</code>, and returns one big tuple.</p>
+            <span class="where">newswitch/app.py → provide_managers()</span>
+          </div>
+        </li>
+        <li>
+          <span class="idx">09</span>
+          <div class="body">
+            <b>Publication</b>
+            <p>Each returned object is filed by its annotated type: contexts become live service objects,
+              states are serialized at revision 0 and become subscribable. From this moment any
+              <code>@register</code> function can ask for <code>StageManager</code> or
+              <code>StageState</code> by annotation.</p>
+          </div>
+        </li>
+        <li>
+          <span class="idx">10</span>
+          <div class="body">
+            <b>@background workers start</b>
+            <p><code>run_detector_loop</code> (frames → FrameBroadcaster), <code>run_uc2_bus</code>
+              (connects the transport, pumps telemetry, reconnects with exponential backoff) and
+              <code>run_uc2_event_dispatch</code> (mirrors bus events into
+              <code>StageState</code>/<code>UC2State</code>).</p>
+            <span class="where">rekuest_next/agents/base.py → arun_background()</span>
+          </div>
+        </li>
+        <li>
+          <span class="idx">11</span>
+          <div class="body">
+            <b>Frontend connects</b>
+            <p>At build time the Vite plugin already fetched <code>/schemas/*</code> and generated typed
+              hooks. At runtime the browser opens <code>/ws</code>, checks out current state snapshots
+              with their revisions, and subscribes to patches, task events and locks.</p>
+            <span class="where">frontend/plugins/generate-app.ts · frontend/src/lib/rekuest/transport/</span>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <!-- ============ 4 ============ -->
+    <section id="request">
+      <div class="h2row"><span class="num">04</span><h2>Request lifecycle — what a button press does</h2></div>
+      <ol class="prose">
+        <li>A component calls a generated hook: <code>useMoveStage().call({x: 100})</code>.</li>
+        <li>The transport <code>POST</code>s to <code>/assign</code> with the implementation name and args;
+          the args were validated client-side against the generated zod schema.</li>
+        <li>The agent checks the action’s <strong>locks</strong>, records the assignment, and hands it to the
+          actor; the function body runs with its contexts and states injected.</li>
+        <li>Lifecycle events stream to every subscribed client over <code>/ws</code>; the UI’s
+          <code>ProgressDisplay</code> and lock indicators react.</li>
+        <li>Any <code>@state</code> mutation during the call — for example the UC2 dispatcher writing
+          <code>StageState.x</code> — is JSON-patched over the same socket.</li>
+        <li>Cancel, pause and step buttons hit <code>/cancel</code>, <code>/pause</code>,
+          <code>/step</code>. <code>pausepoint()</code> in the body is where pauses take effect;
+          cancellation raises <code>CancelledError</code> inside the body, which the UC2 bus turns into a
+          hardware stop command.</li>
+        <li>Terminal events and results are persisted to SQLite, feeding <code>/replay</code>.</li>
+      </ol>
+    </section>
+
+    <!-- ============ 5 ============ -->
+    <section id="state">
+      <div class="h2row"><span class="num">05</span><h2>State flow and optimistic updates</h2></div>
+      <ul>
+        <li>A <code>@state</code> instance is a normal Python object — <strong>mutating an attribute is the
+          entire API</strong> (<code>stage_state.x = 42.0</code>). The evented subclass publishes
+          <code>{op: replace, path: /x, value: 42.0, rev: n}</code> to the agent, which fans it out to
+          <code>/ws</code> subscribers; each frontend zustand store applies patches in revision order.</li>
+        <li>Writes require the state’s <code>required_locks</code> to be held: either you are inside an
+          action that declared the lock, or you wrap the write in
+          <code>with acquired_locks("stage_position"):</code> — what the UC2 event dispatcher does.</li>
+        <li><code>optimistics=[OptimisticInput(state=…, path=…, accessor=…)]</code> on <code>@register</code>
+          lets the UI apply a <em>predicted</em> patch immediately when the call is made; the real patch
+          reconciles it.</li>
+      </ul>
+    </section>
+
+    <!-- ============ 6 ============ -->
+    <section id="video">
+      <div class="h2row"><span class="num">06</span><h2>Video streaming (separate from /ws)</h2></div>
+      <p>Bulk pixels never travel through the state system. The detector background loop pushes frames
+        into the <strong>FrameBroadcaster</strong>, which owns shared encoders (zstd, H.264) keyed by
+        <code>(slot, config)</code> — ten browsers cost one encode. Browsers open
+        <code>WS /stream/zstd/{slot}</code> or <code>/stream/h264/{slot}</code> and decode with
+        <code>fzstd</code> / <code>jmuxer</code>. Scan and acquisition code can broadcast into additional
+        slots, for example stitched-map tiles.</p>
+      <p class="meta" style="margin:0"><span>backend/newswitch/broadcasters/</span>
+        <span>backend/newswitch/routes/ws/liveview.py</span>
+        <span>frontend/src/components/liveview/StreamingView.tsx</span></p>
+    </section>
+
+    <!-- ============ 7 ============ -->
+    <section id="modules">
+      <div class="h2row"><span class="num">07</span><h2>Module reference (backend)</h2></div>
+      <div class="tablewrap">
+        <table class="wrapfirst">
+          <thead><tr><th>Path</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td><code>newswitch/app.py</code></td><td>App assembly: <code>ImswitchConfig</code> (<code>@app_context</code>), <code>provide_managers</code> (<code>@startup</code>), background workers, most <code>@register</code> actions, blok demos, <code>create_app</code>.</td></tr>
+            <tr><td><code>newswitch/protocols/</code></td><td>The <strong>contracts</strong>: per-domain <code>Protocol</code> (<code>@context</code>) plus <code>@state</code> classes — <code>stage</code>, <code>illumination</code>, <code>detector</code>, <code>objective</code>, <code>filter_bank</code>, <code>uc2</code> (bus protocol and typed hardware events), <code>autofocus</code>, <code>light_path</code>/<code>core</code> (Kube optics model), <code>expanse</code>, <code>io</code>, <code>hook_manager</code>, <code>metadata</code>, <code>calibration</code>, <code>acquistion_manager</code>, <code>cache</code>.</td></tr>
+            <tr><td><code>newswitch/managers/virtual/</code></td><td>Full simulation implementations: stage, LED, detector with synthetic PSF, objective, filter bank.</td></tr>
+            <tr><td><code>newswitch/managers/uc2/</code></td><td>Real hardware: <code>canopen_bus.py</code>, <code>rest_bus.py</code>, <code>virtual_bus.py</code> (transports behind <code>UC2BusManager</code>), <code>event_broker.py</code> (fan-out), <code>dispatch.py</code> (events → states), plus bus-based device managers for stage, illumination, objective, filter bank and galvo.</td></tr>
+            <tr><td><code>newswitch/registers/</code></td><td>Standalone <code>@register</code> action modules, imported for side effects — e.g. <code>uc2.py</code> with home/stop/laser/LED/galvo/node-scan actions.</td></tr>
+            <tr><td><code>newswitch/routines/</code></td><td>Multi-step procedures registered as actions: <code>region_scan</code>, <code>multidimensional_acquisition</code>, <code>calibration</code>, <code>autofocus</code>. The template for porting ImSwitch “apps”.</td></tr>
+            <tr><td><code>newswitch/hooks/</code></td><td>Policy functions bound through the <code>HookManager</code>, e.g. software autofocus.</td></tr>
+            <tr><td><code>newswitch/broadcasters/</code></td><td>FrameBroadcaster and encoders.</td></tr>
+            <tr><td><code>newswitch/routes/</code></td><td>Hand-written non-rekuest routes: <code>/stream</code> websockets, file and cache HTTP.</td></tr>
+            <tr><td><code>configs/</code></td><td>Whole-microscope setup files loaded via <code>NEWSWITCH_CONFIG</code>: <code>uc2_serial.json</code>, <code>uc2_canopen.json</code>.</td></tr>
+            <tr><td><code>tests/</code></td><td>pytest; agent-level tests drive the app through <code>AsyncAgentTestClient</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>The controller / manager / widget mapping for ImSwitch veterans</h3>
+      <div class="tablewrap">
+        <table class="wrapfirst">
+          <thead><tr><th>ImSwitch</th><th>newswitch</th></tr></thead>
+          <tbody>
+            <tr><td><code>FooController</code> + <code>@APIExport</code></td><td><code>@register</code> functions in <code>registers/</code> or <code>routines/</code></td></tr>
+            <tr><td><code>FooManager</code> (device)</td><td><code>@context</code> Protocol in <code>protocols/</code> + implementation in <code>managers/</code></td></tr>
+            <tr><td><code>CommunicationChannel</code> signals</td><td><code>@state</code> mutations (auto-broadcast)</td></tr>
+            <tr><td><code>MasterController</code></td><td><code>@startup provide_managers</code></td></tr>
+            <tr><td>React widget + Redux slice + axios file</td><td>one component using <strong>generated</strong> hooks</td></tr>
+            <tr><td>setup JSON <code>availableWidgets</code></td><td><code>NEWSWITCH_CONFIG</code> file plus which managers <code>provide_managers</code> builds</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ 8 ============ -->
+    <section id="uc2">
+      <div class="h2row"><span class="num">08</span><h2>The UC2 hardware layer</h2></div>
+      <p><code>protocols/uc2.py</code> defines the transport-agnostic <strong>UC2BusManager</strong>:
+        stage verbs in micrometers, laser and LED in raw PWM, galvo in DAC counts, objective slots and
+        node scan — plus <code>subscribe()</code> yielding typed events (<code>PositionUpdate</code>,
+        <code>MotionDone</code>, <code>HomingChanged</code>, <code>EStopChanged</code>,
+        <code>ButtonPressed</code>, <code>NodeSeen</code>, <code>BusError</code>).</p>
+      <p>Three interchangeable implementations, selected in <code>provide_managers</code> from
+        <code>uc2_transport</code>: <strong>UC2CanBus</strong> (CANopen via <code>uc2canopen.aio</code> —
+        node map, µm↔steps scaling, event-driven motion-done from TPDO frames),
+        <strong>UC2RestBus</strong> (serial JSON via <code>uc2rest.aio</code> — single ESP32 master,
+        pattern-keyed firmware events) and <strong>VirtualUC2Bus</strong> (simulator). Both real buses
+        reconnect with exponential backoff and surface failures as <code>BusError</code> plus
+        <code>UC2State.last_error</code>.</p>
+      <p>Two background workers keep it alive: <code>run_uc2_bus</code> owns the connection and event
+        pump; <code>run_uc2_event_dispatch</code> consumes <code>subscribe()</code> and mirrors telemetry
+        into <code>StageState</code> and <code>UC2State</code> under the <code>stage_position</code>
+        lock — the “spontaneous events” path. Device managers such as <code>UC2StageManager</code> only
+        ever call bus verbs, never a concrete transport.</p>
+    </section>
+
+    <!-- ============ 9 ============ -->
+    <section id="expanse">
+      <div class="h2row"><span class="num">09</span><h2>What is the Expanse?</h2></div>
+      <p>The Expanse is newswitch’s <strong>infinite sample-space canvas</strong> — the world map of
+        everything that has been imaged. <code>ExpanseState</code> holds placed <code>Image</code>s, each
+        with its stage-space affine transform; position, pixel size and orientation come from the
+        <code>MetadataManager</code> and the Kube optics model. <code>ExpanseManager</code> adds and clears
+        entries; acquisitions push their frames into it. The frontend renders it as the three.js scene in
+        <code>frontend/src/components/stage/</code> — planes textured from zarr tiles, with camera
+        navigation. <code>clear_expanse</code> is the registered action that empties it.</p>
+      <p>Conceptually it replaces ImSwitch’s StageMap: a persistent, transform-correct mosaic of acquired
+        fields of view.</p>
+      <div class="note clay">
+        <span class="tag">Known wart</span>
+        <p>The module docstring in <code>protocols/expanse.py</code> still reads “Stage Manager Protocol”
+          — a copy-paste leftover, worth fixing.</p>
+      </div>
+    </section>
+
+    <!-- ============ 10 ============ -->
+    <section id="frontend">
+      <div class="h2row"><span class="num">10</span><h2>Frontend in one paragraph</h2></div>
+      <p><code>frontend/plugins/generate-app.ts</code> — a Vite plugin run on every dev and build — fetches
+        <code>/schemas/implementations|states|locks</code> from the running backend and emits
+        <code>src/apps/default/hooks/{actions,states,locks}/*.ts</code>: zod schemas plus typed hooks such as
+        <code>useMoveStage</code> and <code>useStageState</code>. These files are committed, and
+        <code>just drift-check</code> fails CI if they diverge from the backend. The hand-written runtime in
+        <code>src/lib/rekuest/</code> manages the <code>/ws</code> connection, task assignment, patch
+        application and locks. Components in <code>src/components/microscope/</code> consume only the
+        generated hooks.</p>
+      <div class="note">
+        <span class="tag">Workflow</span>
+        <p>If you add or rename a backend action or state: run the backend, then
+          <code>cd frontend &amp;&amp; yarn build</code>, and commit the regenerated files.</p>
+      </div>
+    </section>
+
+    <!-- ============ 11 ============ -->
+    <section id="glossary">
+      <div class="h2row"><span class="num">11</span><h2>Glossary</h2></div>
+      <div class="tablewrap">
+        <table class="wrapfirst">
+          <thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Agent</strong></td><td>Runtime container managing contexts, states, locks, actors and assignments. One per app; embedded in FastAPI here.</td></tr>
+            <tr><td><strong>Actor</strong></td><td>Executor for one registered implementation; handles one assignment at a time and reports lifecycle events.</td></tr>
+            <tr><td><strong>Assignment / task</strong></td><td>One invocation of an action, with id, args, lifecycle events and persisted history.</td></tr>
+            <tr><td><strong>Implementation</strong></td><td>The registered form of a function: name plus argument/return ports, locks and optimistics.</td></tr>
+            <tr><td><strong>Port</strong></td><td>Typed slot in a schema — an argument, a return value, or a state field.</td></tr>
+            <tr><td><strong>Shrinking / expanding</strong></td><td>rekuest’s serialization (Python object → JSON) and deserialization.</td></tr>
+            <tr><td><strong>Context</strong></td><td>Injectable long-lived service object (<code>@context</code>), a.k.a. manager.</td></tr>
+            <tr><td><strong>State</strong></td><td>Reactive shared data object (<code>@state</code>); mutations broadcast as revisioned JSON-patches.</td></tr>
+            <tr><td><strong>App context</strong></td><td>The one config object (<code>@app_context</code>) passed at boot and injectable by type.</td></tr>
+            <tr><td><strong>Lock</strong></td><td>Named mutex serializing actions and gating state writes; surfaced to the UI.</td></tr>
+            <tr><td><strong>Blok</strong></td><td>Server-defined UI fragment (JSX DSL) rendered by the frontend without a frontend build.</td></tr>
+            <tr><td><strong>Expanse</strong></td><td>Stage-space canvas of all placed and acquired images — the world map.</td></tr>
+            <tr><td><strong>Kube / light path</strong></td><td>Optics graph model (objective, filter and detector cubes with affine transforms) used to derive per-image metadata.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="fi">newswitch · architecture reference · generated from docs/ARCHITECTURE.md</div>
+</footer>
+
+<script>
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+    var sections = links
+      .map(function (a) { return document.querySelector(a.getAttribute('href')); })
+      .filter(Boolean);
+    if (!('IntersectionObserver' in window) || !sections.length) return;
+
+    var visible = new Set();
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) visible.add(entry.target.id);
+        else visible.delete(entry.target.id);
+      });
+      var activeId = null;
+      for (var i = 0; i < sections.length; i++) {
+        if (visible.has(sections[i].id)) { activeId = sections[i].id; break; }
+      }
+      links.forEach(function (a) {
+        a.classList.toggle('is-active', a.getAttribute('href') === '#' + activeId);
+      });
+    }, { rootMargin: '-10% 0px -70% 0px', threshold: 0 });
+
+    sections.forEach(function (s) { observer.observe(s); });
+  })();
+</script>
+
+</body>
+</html>

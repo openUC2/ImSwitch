@@ -233,6 +233,12 @@ class ParameterValue(BaseModel):
     zStackMin: float
     zStackMax: float
     zStackStepSize: Union[List[float], float] = 1.0
+    # "range": evenly spaced planes from zStackMin/zStackMax/zStackStepSize
+    # (via np.arange). "individual": use the explicit zStackOffsets list
+    # instead (hand-picked, non-uniform Z planes from the frontend's
+    # Individual Slices / Table tabs).
+    zStackMode: Literal["range", "individual"] = "range"
+    zStackOffsets: List[float] = Field(default_factory=list)
     exposureTimes: Union[List[float], float] = None
     gains: Union[List[float], float] = None
     speed: float = 20000.0

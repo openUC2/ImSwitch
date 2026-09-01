@@ -16,8 +16,13 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
  * @param {Object}   visibility   – { base, stage, turret } booleans
  * @param {Object}   cameraState  – persisted camera { position, target }
  * @param {Function} onCameraChange – callback for camera persistence
- * @param {number}   width
- * @param {number}   height
+ * @param {number|string} width  – number (px) or CSS size ("100%"); non-numeric
+ *                                 sizes are measured from the container at mount
+ * @param {number|string} height
+ * @param {boolean}  interactive  – false disables OrbitControls (static kiosk render)
+ * @param {boolean}  showAxes     – false hides the XYZ axes helper
+ * @param {string}   background   – scene/container background color
+ * @param {Object}   sx           – extra styles merged onto the container Box
  */
 const Frame3DViewer = ({
   positions = { x: 0, y: 0, z: 0, a: 0 },
@@ -27,6 +32,10 @@ const Frame3DViewer = ({
   onCameraChange = null,
   width = 600,
   height = 400,
+  interactive = true,
+  showAxes = true,
+  background = "#1a1a1a",
+  sx = {},
 }) => {
   const containerRef = useRef(null);
   const rendererRef = useRef(null);
@@ -88,26 +97,41 @@ const Frame3DViewer = ({
   useEffect(() => {
     if (!containerRef.current) return;
 
+    // Non-numeric sizes ("100%") are resolved against the container, which is
+    // laid out by the time this effect runs.
+    const initialW =
+      typeof width === "number" ? width : containerRef.current.clientWidth || 600;
+    const initialH =
+      typeof height === "number"
+        ? height
+        : containerRef.current.clientHeight || 400;
+
     // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(width, height);
+    renderer.setSize(initialW, initialH);
     containerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
     // Scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1a1a);
+    scene.background = new THREE.Color(background);
     sceneRef.current = scene;
 
     // Camera
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100000);
+    const camera = new THREE.PerspectiveCamera(
+      45,
+      initialW / initialH,
+      0.1,
+      100000
+    );
     camera.position.set(250, 160, 250);
     cameraRef.current = camera;
 
     // Controls
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controls.enabled = interactive;
     controlsRef.current = controls;
 
     // Lights
@@ -117,7 +141,7 @@ const Frame3DViewer = ({
     scene.add(dirLight);
 
     // Axes helper
-    scene.add(new THREE.AxesHelper(50));
+    if (showAxes) scene.add(new THREE.AxesHelper(50));
 
     // Assembly root + sub-groups
     const assemblyRoot = new THREE.Group();
@@ -142,6 +166,9 @@ const Frame3DViewer = ({
       (gltf) => {
         const model = gltf.scene;
         assemblyRoot.add(model);
+        // rotate the model to the correct initial orientation
+        model.rotation.x = -Math.PI/2;
+        //model.rotation.z = Math.PI;
 
         // Debug: log numeric-suffix nodes
         const numericNames = [];
@@ -235,8 +262,8 @@ const Frame3DViewer = ({
     // Resize handler
     const handleResize = () => {
       if (!containerRef.current || !cameraRef.current || !rendererRef.current) return;
-      const w = containerRef.current.clientWidth || width;
-      const h = containerRef.current.clientHeight || height;
+      const w = containerRef.current.clientWidth || initialW;
+      const h = containerRef.current.clientHeight || initialH;
       cameraRef.current.aspect = w / h;
       cameraRef.current.updateProjectionMatrix();
       rendererRef.current.setSize(w, h);
@@ -341,7 +368,8 @@ const Frame3DViewer = ({
         border: "1px solid #333",
         borderRadius: 1,
         overflow: "hidden",
-        backgroundColor: "#1a1a1a",
+        backgroundColor: background,
+        ...sx,
       }}
     />
   );

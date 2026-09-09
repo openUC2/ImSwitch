@@ -13,6 +13,8 @@ import {
   Box,
   Switch,
   Chip,
+  ToggleButton,
+  ToggleButtonGroup,
 } from "@mui/material";
 import {
   Settings,
@@ -29,6 +31,7 @@ import {
   Article,
   School,
   DesktopWindows,
+  Language as LanguageIcon,
 } from "@mui/icons-material";
 import { useDeveloperMode } from "../../utils/useDeveloperMode";
 
@@ -38,6 +41,8 @@ import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsS
 import * as uc2Slice from "../../state/slices/UC2Slice.js";
 import { getStorageState } from "../../state/slices/StorageSlice";
 import { startTour } from "../../state/slices/OnboardingSlice.js";
+import { setLanguage, getLanguage } from "../../state/slices/LanguageSlice.js";
+import { LANGUAGES, useT } from "../../i18n";
 
 /**
  * ImSwitch Settings Menu Component
@@ -53,6 +58,8 @@ const SettingsMenu = ({ onNavigate }) => {
   const { isDeveloperMode, deactivateDeveloperMode } = useDeveloperMode();
 
   const { isDarkMode } = useSelector(getThemeState);
+  const language = useSelector(getLanguage);
+  const t = useT();
   const connectionSettings = useSelector(
     connectionSettingsSlice.getConnectionSettingsState,
   );
@@ -276,13 +283,37 @@ const SettingsMenu = ({ onNavigate }) => {
               <DarkMode fontSize="small" />
             )}
           </ListItemIcon>
-          <ListItemText primary="Dark Mode" />
+          <ListItemText primary={t("Dark Mode")} />
           <Switch
             checked={isDarkMode}
             onChange={handleThemeToggle}
             size="small"
             onClick={(e) => e.stopPropagation()}
           />
+        </MenuItem>
+
+        {/* Language - frontend-only, persisted with the other UI preferences */}
+        <MenuItem disableRipple onClick={(e) => e.stopPropagation()}>
+          <ListItemIcon>
+            <LanguageIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary={t("Language")} />
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={language}
+            onChange={(e, value) => value && dispatch(setLanguage(value))}
+          >
+            {LANGUAGES.map((l) => (
+              <ToggleButton
+                key={l.code}
+                value={l.code}
+                sx={{ px: 1, py: 0.25, fontSize: "0.7rem" }}
+              >
+                {l.code.toUpperCase()}
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
         </MenuItem>
 
         <Divider />

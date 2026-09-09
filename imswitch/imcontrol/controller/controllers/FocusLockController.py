@@ -201,7 +201,9 @@ class FocusLockController(ImConWidgetController):
 
         # Camera ROI settings
         fovWidth = getattr(self._setupInfo.focusLock, "fovWidth", 1024)
-        fovHeight = getattr(self._setupInfo.focusLock, "fovHeight", fovWidth) # if not set, assume square FOV
+        # fovHeight is declared with a None default, so fall back on the value
+        # rather than on getattr's missing-attribute path.
+        fovHeight = getattr(self._setupInfo.focusLock, "fovHeight", None) or fovWidth
         fovCenter = getattr(self._setupInfo.focusLock, "fovCenter", [None, None])
         if fovCenter[0] is None or fovCenter[1] is None:
             # Default to image center
@@ -608,6 +610,14 @@ class FocusLockController(ImConWidgetController):
             "valid": False,
         }
 
+        # An external focus sensor (e.g. RemoteFocusSensorManager, a satellite
+        # Raspberry Pi) has already done the projection and peak fitting on its
+        # own CPU. Read its answer instead of pulling a frame across the wire
+        # and recomputing the same thing here.
+        detector = self._master.detectorsManager[self.camera]
+        if hasattr(detector, "getFocusValue"):
+            return self._readRemoteFocus(detector, result)
+
         with self._camera_lock:
             try:
                 # Step 1: Capture frame(s) and average if multiple
@@ -710,6 +720,56 @@ class FocusLockController(ImConWidgetController):
             except Exception as e:
                 self._logger.error(f"Error in _captureAndComputeFocus: {e}")
                 return result
+
+    def _readRemoteFocus(self, detector, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Take the focus value from an external focus sensor.
+
+        The sensor computes the same metric this controller would (x-projection
+        -> peak fit -> left spot position), so everything downstream — the PI
+        loop, calibration, the CSV log — is unchanged; only the arithmetic has
+        moved off this machine.
+
+        Two things differ from the local path and both matter:
+
+        * **Staleness.** A frozen link must not feed the PI loop the same value
+          forever, so a sample the detector marks stale is treated as a failed
+          measurement rather than a valid one.
+        * **Simulation.** When the sensor is synthetic it has no way of knowing
+          where the stage is, so the current Z is mirrored in first and the
+          sample exposed *after* that move comes back in the same round trip.
+          This is what lets the whole focus lock — including a calibration
+          sweep — run with no hardware at all.
+        """
+        with self._camera_lock:
+            sample = None
+            try:
+                if getattr(detector, "isSimulated", False):
+                    sample = detector.setSimulatedZ(self.stage.getPosition()["Z"])
+                if sample is None:
+                    sample = detector.getFocusValue()
+            except Exception as e:
+                self._logger.error(f"Error reading remote focus sensor: {e}")
+                return result
+
+            if not sample or not sample.get("valid"):
+                reason = sample.get("error") if sample else "no sample"
+                if sample and sample.get("stale"):
+                    reason = f"stale by {sample.get('age_s', 0.0) * 1000:.0f} ms"
+                self._logger.debug(f"Remote focus sample unusable ({reason})")
+                return result
+
+            focus_value = sample.get("focus")
+            if focus_value is None or np.isnan(focus_value):
+                return result
+
+            result["focus_value"] = float(focus_value)
+            result["raw_result"] = sample
+            result["timestamp"] = sample.get("t", result["timestamp"])
+            result["valid"] = True
+            self.current_focus_value = result["focus_value"]
+            # The frame itself is deliberately not fetched here: it is only
+            # needed for the alignment view, which pulls it on demand.
+            return result
 
     def _pollFrames(self):
         # Store a history of the last values and filter out outliers
@@ -993,10 +1053,15 @@ class FocusLockController(ImConWidgetController):
         """Return the last cropped image used for focus computation."""
         try:
             # Check if cropped_im exists and is valid
-            if not hasattr(self, 'cropped_im') or self.cropped_im is None:
+            arr = getattr(self, 'cropped_im', None)
+            if arr is None:
+                # An external focus sensor never populates cropped_im — it
+                # returns a number, not a frame. Fall back to its ROI image so
+                # the alignment view works the same either way.
+                arr = self._master.detectorsManager[self.camera].getLatestFrame()
+            if arr is None:
                 raise RuntimeError("No cropped image available. Please start focus measurement first.")
 
-            arr = self.cropped_im
             im = Image.fromarray(arr.astype(np.uint8))
             with io.BytesIO() as buf:
                 im = im.convert("L")

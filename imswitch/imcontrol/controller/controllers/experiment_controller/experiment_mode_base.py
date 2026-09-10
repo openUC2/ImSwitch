@@ -273,29 +273,30 @@ class ExperimentModeBase(ABC):
             
         Returns:
             Path to the saved protocol JSON file
+
+        Raises:
+            Whatever json.dumps raises. Serializing *before* opening the file is
+            the whole point: open(..., "w") truncates, so serializing inside the
+            with-block left a 0-byte protocol behind whenever anything in
+            snake_tiles or workflow_steps failed to serialize — a run that looks
+            like it produced nothing. And the error is not swallowed: a protocol
+            we cannot write means the run is not reproducible, which has to be
+            visible before the run starts rather than discovered afterwards.
         """
-        try:
-            # Create protocol filename
-            protocol_file = file_path + "_protocol.json"
-            
-            # Add timestamp and metadata
-            protocol_data["timestamp"] = datetime.now().isoformat()
-            protocol_data["mode"] = mode
-            protocol_data["imswitch_version"] = getattr(self.controller, 'version', 'unknown')
-            
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(protocol_file), exist_ok=True)
-            
-            # Save to JSON with pretty printing
-            with open(protocol_file, 'w') as f:
-                json.dump(protocol_data, f, indent=2, default=self._json_serializer)
-                
-            self._logger.info(f"Experiment protocol saved (one-time): {protocol_file}")
-            return protocol_file
-            
-        except Exception as e:
-            self._logger.error(f"Failed to save experiment protocol: {e}")
-            return None
+        protocol_file = file_path + "_protocol.json"
+
+        protocol_data["timestamp"] = datetime.now().isoformat()
+        protocol_data["mode"] = mode
+        protocol_data["imswitch_version"] = getattr(self.controller, 'version', 'unknown')
+
+        payload = json.dumps(protocol_data, indent=2, default=self._json_serializer)
+
+        os.makedirs(os.path.dirname(protocol_file), exist_ok=True)
+        with open(protocol_file, 'w') as f:
+            f.write(payload)
+
+        self._logger.info(f"Experiment protocol saved (one-time): {protocol_file}")
+        return protocol_file
     
     def _json_serializer(self, obj):
         """

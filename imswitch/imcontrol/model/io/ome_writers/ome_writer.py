@@ -306,6 +306,7 @@ class OMEWriter:
 
         # TIFF writers
         self.tiff_stitcher: Optional[OmeTiffStitcher] = None
+        self._finalized = False
         self.single_tiff_writer: Optional[SingleTiffWriter] = None
 
         # In-memory mosaic for the unified multi-dimensional OME-TIFF hyperstack
@@ -518,7 +519,7 @@ class OMEWriter:
         # before the stitcher opens its output file inside it.
         os.makedirs(self.file_paths.base_dir, exist_ok=True)
         stitched_tiff_path = os.path.join(self.file_paths.base_dir, "stitched.ome.tif")
-        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True, isRGB=self.isRGB, nx=self.nx, ny=self.ny, tile_w=self.tile_w, tile_h=self.tile_h)
+        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True, isRGB=self.isRGB, tile_w=self.tile_w, tile_h=self.tile_h)
         self.tiff_stitcher.start()
         if self.logger:
             self.logger.debug(f"TIFF stitcher initialized: {stitched_tiff_path}")
@@ -869,7 +870,16 @@ class OMEWriter:
         - Builds pyramid levels for OME-Zarr
         - Closes all TIFF writers
         - Waits for OMERO upload to complete (if owned)
+
+        Idempotent: the workflow finalizes each tile writer and then makes a
+        final cleanup pass over all of them, and an aborted run finalizes
+        whatever the workflow never reached. Rebuilding pyramids on the second
+        call is pure waste.
         """
+        if self._finalized:
+            return
+        self._finalized = True
+
         if self.config.write_zarr and self.store is not None:
             try:
                 self._build_vanilla_zarr_pyramids()

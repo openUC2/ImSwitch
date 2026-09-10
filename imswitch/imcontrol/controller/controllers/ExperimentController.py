@@ -1232,10 +1232,27 @@ class ExperimentController(ImConWidgetController):
             _trigger_cleanup_thread = self.workflow_manager.current_thread
 
             _timing_plot_dir = dirPath
+            # Held directly rather than read back from the workflow context:
+            # WorkflowsManager.workflow_finished() clears context.objects before
+            # the thread we join below exits, so the context is empty by then.
+            _cleanup_writers = list(file_writers)
 
             def _restore_freerun():
                 if _trigger_cleanup_thread is not None:
                     _trigger_cleanup_thread.join()
+                # Close any writer the workflow did not get to. A stop request
+                # makes Workflow.run break out of the step loop, so the
+                # "Finalize OME writer" steps never execute — which left the
+                # stitched TIFF open and unreadable (Franzi's "blank stitched
+                # image" on a failed run) and, now that the stitcher thread is
+                # non-daemon, would keep that thread alive for the rest of the
+                # process's life. OMEWriter.finalize() is idempotent, so this
+                # costs nothing on the normal path.
+                for _writer in _cleanup_writers:
+                    try:
+                        _writer.finalize()
+                    except Exception as err:
+                        self._logger.error(f"Post-workflow writer cleanup failed: {err}")
                 self._endTriggeredAcquisition()
                 # Export a per-step timing violin plot alongside the data.
                 self._export_step_timings_plot(_timing_plot_dir)

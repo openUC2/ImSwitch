@@ -1014,10 +1014,9 @@ class AutofocusController(ImConWidgetController):
                 self.camera.flushBuffer()
         except Exception:
             pass
-        # Wait for a genuinely fresh frame, but no longer than the camera could
-        # plausibly need. A flat 1 s meant that above a 1 s exposure *every*
-        # step timed out — and still paid the full second — which is most of
-        # why autofocus took minutes per point under fluorescence.
+        # Wait for a fresh frame, bounded by what the camera could need. A flat
+        # 1 s made every step time out (and still pay the second) above a 1 s
+        # exposure — most of why autofocus took minutes per point.
         timeoutFrameRequest = max(2.0 * self._exposureTimeSeconds(), 1.0)
         cTime = time.time()
 
@@ -1062,12 +1061,10 @@ class AutofocusController(ImConWidgetController):
 
     # ---------- Step-scan autofocus with Gaussian fit ----------
     def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=0, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False, twoStageDivisor:int=10):
-        # Squid's rule: autofocus reports a soft failure through its RESULT, not
-        # by raising. Callers must never fall back to "wherever the stage ended
-        # up" — on a failure that is the scan start (center - range/2), and
-        # feeding that to the Z-offset logic silently defocused the rest of the
-        # run. None here means "no usable focus", and it is also what a caller
-        # sees when the thread is still running after its join timeout.
+        # A soft failure is reported through the RESULT, not by raising: None
+        # means "no usable focus", and is also what a caller sees when the
+        # thread is still running after its join timeout. Callers must never
+        # fall back to the stage position — on failure that is the scan start.
         self._lastAutofocusZ = None
         af_started_at = time.time()
         try: # TODO: We should also provide the starting z in case we want to override the current z as its the default here
@@ -1094,10 +1091,8 @@ class AutofocusController(ImConWidgetController):
             # Stage 2: Fine scan if enabled
             if twoStage and self._getAutofocusState() != AutofocusState.ABORTED:
                 # Fine scan with 10x finer parameters around the coarse best position
-                # Divide the RANGE only. Dividing the resolution by the same
-                # factor gave the fine pass exactly as many steps as the coarse
-                # one — double the frames for no extra precision, since the step
-                # size shrank in proportion to the range.
+                # Divide the RANGE only: dividing the resolution too gave the
+                # fine pass the same step count — double the frames, no gain.
                 twoStageDivisor = max(2, twoStageDivisor)  # Ensure minimum divisor of 2
                 fine_rangez = rangez / float(twoStageDivisor)
                 fine_resolutionz = resolutionz
@@ -1249,10 +1244,8 @@ class AutofocusController(ImConWidgetController):
                 self.stages.move(value=center_position, axis=axis, is_absolute=True, is_blocking=True)
                 return center_position
 
-            # Update state to fitting.
-            # We deliberately do NOT drive back to the start of the range here:
-            # the fit needs no particular stage position, and the traverse back
-            # (then out again to the best Z) cost a full extra sweep per point.
+            # No drive back to the range start: the fit needs no particular
+            # stage position, and the traverse cost an extra sweep per point.
             self._setAutofocusState(AutofocusState.FITTING)
 
             # Drop NaN entries (failed frames) — alignment is preserved by index

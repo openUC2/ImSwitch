@@ -29,11 +29,6 @@ import {
   FormControl,
   InputLabel,
   Tooltip,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
 } from "@mui/material";
 import PlaceIcon from "@mui/icons-material/Place";
 import HighlightAltIcon from "@mui/icons-material/HighlightAlt";
@@ -53,7 +48,6 @@ const WellSelectorComponent = () => {
   ]);
 
   // Pending layout switch awaiting user confirmation when pointList is non-empty
-  const [pendingLayoutEvent, setPendingLayoutEvent] = useState(null);
 
   //child ref
   const childRef = useRef(); //canvas
@@ -201,33 +195,16 @@ const WellSelectorComponent = () => {
   };
 
   //##################################################################################
+  // Changing the plate redraws it and KEEPS the points: they are absolute
+  // stage micrometers, so a new plate definition does not invalidate their
+  // coordinates. Only the per-point well annotations belonged to the old plate.
   const handleLayoutChange = (event) => {
-    console.log("handleLayoutChange");
-    // Warn the user before swapping layouts when there are existing points,
-    // since their well coordinates will not match the new plate.
-    const newName = event?.target?.value;
-    if (
-      newName &&
-      newName !== experimentState?.wellLayout?.name &&
-      (experimentState?.pointList?.length || 0) > 0
-    ) {
-      setPendingLayoutEvent({ target: { value: newName } });
-      return;
+    if (event?.target?.value !== experimentState?.wellLayout?.name) {
+      dispatch(wellSelectorSlice.clearSelectedWellIds());
+      dispatch(wellSelectorSlice.clearConditionLabels());
     }
     applyLayoutChange(event);
   };
-
-  const handleConfirmLayoutChange = () => {
-    const evt = pendingLayoutEvent;
-    setPendingLayoutEvent(null);
-    if (!evt) return;
-    dispatch(experimentSlice.setPointList([]));
-    dispatch(wellSelectorSlice.clearSelectedWellIds());
-    dispatch(wellSelectorSlice.clearConditionLabels());
-    applyLayoutChange(evt);
-  };
-
-  const handleCancelLayoutChange = () => setPendingLayoutEvent(null);
 
   const applyLayoutChange = (event) => {
     //select layout
@@ -617,31 +594,6 @@ const WellSelectorComponent = () => {
 
       <InfoPopup ref={infoPopupRef} />
 
-      {/* Confirm before swapping layout (clears existing points) */}
-      <Dialog
-        open={pendingLayoutEvent != null}
-        onClose={handleCancelLayoutChange}
-      >
-        <DialogTitle>Switch layout?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Switching to <strong>{pendingLayoutEvent?.target?.value}</strong>{" "}
-            will remove all {experimentState?.pointList?.length || 0} point(s)
-            from the current experiment, since their coordinates are tied to the
-            old layout. Continue?
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCancelLayoutChange}>Cancel</Button>
-          <Button
-            onClick={handleConfirmLayoutChange}
-            color="error"
-            variant="contained"
-          >
-            Switch and clear
-          </Button>
-        </DialogActions>
-      </Dialog>
     </div>
   );
 };

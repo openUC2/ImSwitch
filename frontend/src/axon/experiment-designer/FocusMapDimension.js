@@ -126,6 +126,19 @@ const extractZFromPositions = (positions) => {
  * - Expanded fit statistics display
  * - Visualization of measured points and fitted surface
  */
+// The backend reports no error number when it cannot measure one — below four
+// points the residuals are taken against the very points that were fitted.
+const fitErrorLabel = (stats) =>
+  stats.mean_abs_error == null
+    ? "not validated"
+    : `MAE ${stats.mean_abs_error.toFixed(2)} µm`;
+
+const fitErrorColor = (stats) => {
+  if (stats.mean_abs_error == null) return "default";
+  if (stats.mean_abs_error < 1) return "success";
+  return stats.mean_abs_error < 5 ? "warning" : "error";
+};
+
 const FocusMapDimension = () => {
   const theme = useTheme();
   const dispatch = useDispatch();
@@ -849,19 +862,15 @@ const FocusMapDimension = () => {
               inputProps={{ min: 1, max: 20 }}
               sx={{ width: 100 }}
             />
-            <FormControl size="small" sx={{ minWidth: 120 }}>
-              <InputLabel>Fit Method</InputLabel>
-              <Select
-                value={config.method}
-                label="Fit Method"
-                onChange={(e) => dispatch(focusMapSlice.setFocusMapMethod(e.target.value))}
-              >
-                <MenuItem value="spline">Spline</MenuItem>
-                <MenuItem value="rbf">RBF</MenuItem>
-                <MenuItem value="constant">Constant</MenuItem>
-              </Select>
-            </FormControl>
           </Box>
+
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 2 }}>
+            {config.rows * config.cols < 3
+              ? "At least 3 points are needed for a tilted plane, and they must not lie on one line — below that the map is a flat Z."
+              : config.rows * config.cols < 4
+                ? "3 points give a tilted plane; 4 or more are needed for a curved surface."
+                : `${config.rows * config.cols} points per region — enough for a ${config.method} surface.`}
+          </Typography>
 
           {/* Fit mode toggles */}
           <Box sx={{ display: "flex", gap: 2, mb: 2, alignItems: "center", flexWrap: "wrap" }}>
@@ -1303,6 +1312,20 @@ const FocusMapDimension = () => {
             <AccordionDetails>
               <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+                  <FormControl size="small" sx={{ minWidth: 120 }}>
+                    <InputLabel>Fit Method</InputLabel>
+                    <Select
+                      value={config.method}
+                      label="Fit Method"
+                      onChange={(e) =>
+                        dispatch(focusMapSlice.setFocusMapMethod(e.target.value))
+                      }
+                    >
+                      <MenuItem value="spline">Spline</MenuItem>
+                      <MenuItem value="rbf">RBF</MenuItem>
+                      <MenuItem value="constant">Constant</MenuItem>
+                    </Select>
+                  </FormControl>
                   <TextField
                     label="Smoothing"
                     type="number"
@@ -1795,33 +1818,17 @@ const FocusMapDimension = () => {
                     {result.fit_stats && result.status === "ready" && (
                       <>
                         <Chip
-                          label={`${result.fit_stats.method}`}
+                          label={`${result.fit_stats.method} · n=${result.fit_stats.n_points}`}
                           size="small"
                           variant="outlined"
                         />
                         <Chip
-                          label={`MAE: ${result.fit_stats.mean_abs_error?.toFixed(3) ?? "?"}`}
+                          label={fitErrorLabel(result.fit_stats)}
                           size="small"
-                          color={
-                            result.fit_stats.mean_abs_error < 1
-                              ? "success"
-                              : result.fit_stats.mean_abs_error < 5
-                              ? "warning"
-                              : "error"
-                          }
-                          variant="outlined"
-                        />
-                        <Chip
-                          label={`n=${result.fit_stats.n_points}`}
-                          size="small"
+                          color={fitErrorColor(result.fit_stats)}
                           variant="outlined"
                         />
                       </>
-                    )}
-                    {result.fit_stats?.fallback_used && (
-                      <Tooltip title={result.fit_stats.fallback_reason}>
-                        <Chip label="Fallback" size="small" color="warning" />
-                      </Tooltip>
                     )}
                     <ExpandMoreIcon
                       fontSize="small"
@@ -1831,6 +1838,16 @@ const FocusMapDimension = () => {
                       }}
                     />
                   </Box>
+
+                  {result.fit_stats?.fallback_reason && (
+                    <Typography
+                      variant="caption"
+                      color="warning.main"
+                      sx={{ display: "block", ml: 4, mb: 0.5 }}
+                    >
+                      {result.fit_stats.fallback_reason}
+                    </Typography>
+                  )}
 
                   {/* Expanded fit statistics panel */}
                   {expandedFitGroup === groupId && result.fit_stats && (
@@ -1865,10 +1882,16 @@ const FocusMapDimension = () => {
                           MAE:
                         </Typography>
                         <Typography variant="caption">
-                          {result.fit_stats.mean_abs_error?.toFixed(4) ?? "N/A"} µm
+                          {result.fit_stats.mean_abs_error == null
+                            ? "not enough points to validate"
+                            : `${result.fit_stats.mean_abs_error.toFixed(4)} µm (${
+                                result.fit_stats.error_is_cross_validated
+                                  ? "cross-validated"
+                                  : "in-sample"
+                              })`}
                         </Typography>
 
-                        {result.fit_stats.r_squared !== undefined && (
+                        {result.fit_stats.r_squared != null && (
                           <>
                             <Typography variant="caption" color="text.secondary">
                               R²:

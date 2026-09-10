@@ -105,7 +105,7 @@ def test_region_metadata_is_not_copied_onto_every_fov():
 
 
 def test_z_is_homogeneous_across_a_region():
-    """Squid's rule: a region has Z on every FOV or on none."""
+    """A region has Z on every FOV or on none."""
     stub = _builder()
 
     with_z = stub.build_scan_regions(

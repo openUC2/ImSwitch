@@ -151,13 +151,11 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_hc_max_iterations = kwargs.get('autofocus_hc_max_iterations', 50)
         autofocus_max_attempts = kwargs.get('autofocus_max_attempts', 2)
         autofocus_target_focus_setpoint = kwargs.get('autofocus_target_focus_setpoint', None)
-        # Autofocus scheduling: every Nth FOV within a round (Squid's
-        # NUMBER_OF_FOVS_PER_AF), every Nth round, and whether the AF result
-        # updates the region Z offset that capture moves apply.
+        # Autofocus scheduling: every Nth FOV within a round, every Nth round,
+        # and whether the result updates the region's Z offset.
         autofocus_every_n_fovs = max(1, int(kwargs.get('autofocus_every_n_fovs', 1) or 1))
         autofocus_period_rounds = max(1, int(kwargs.get('autofocus_period_rounds', 1) or 1))
-        # FOV counter for the above, running across the whole round (all
-        # regions), exactly like Squid's af_fov_count. Reset per timepoint.
+        # FOV counter for the above, across all regions. Reset per timepoint.
         self._af_fov_count = 0
         autofocus_apply_global_offset = kwargs.get('autofocus_apply_global_offset', True)
         initial_z_position = kwargs.get('initial_z_position', None)
@@ -381,12 +379,9 @@ class ExperimentNormalMode(ExperimentModeBase):
             # Per-region metadata, looked up once by the region's own id.
             region_id = tiles[0]["region_id"]
             meta = region_meta.get(region_id, {})
-            # Region name appended to the base name, additively: the
-            # timestamp/experiment/index prefix is preserved so existing
-            # index-based tooling still resolves the files, while the file, the
-            # per-region folder (both derived from this base path) and the
-            # OME/OMERO image name now carry the region name.
-            # Empty name => byte-identical to the legacy index-only naming.
+            # Region name appended additively to the base name; the
+            # timestamp/experiment/index prefix is preserved so index-based
+            # tooling still resolves the files.
             area_name = _sanitize_name(meta.get("areaName") or "")
             m_file_path = os.path.join(
                 dir_path,
@@ -594,8 +589,8 @@ class ExperimentNormalMode(ExperimentModeBase):
         min_x, max_x, min_y, max_y, _, _ = self.compute_scan_ranges([tiles])
         m_pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
 
-        # Say which region this is and which focus map it will actually use, so
-        # "which map was this run on?" is answerable from the log alone.
+        # Name the region and the map it will use, so "which map was this run
+        # on?" is answerable from the log alone.
         region_id = tiles[0]["region_id"] if tiles else "?"
         if getattr(self.controller, "_focus_map_active", False):
             region_map = self.controller.focus_map_manager.get(region_id)
@@ -618,15 +613,10 @@ class ExperimentNormalMode(ExperimentModeBase):
             except Exception:
                 name = f"Move to point {m_point['x']}, {m_point['y']}"
 
-            # Per-point Z base: the point's own Z, else the global initial Z
-            # captured at experiment start. build_scan_regions guarantees Z is
-            # homogeneous across a region — every FOV has one or none does — so
-            # a present Z is always deliberate. (The old code additionally
-            # treated z == 0.0 as "not given", which silently ignored a request
-            # to image at absolute Z = 0.)
-            # (The "override per-group Z with current Z" Tiling toggle is applied
-            # entirely on the frontend, which rewrites each position's Z before
-            # sending; here we just consume the coordinates as-is.)
+            # Per-point Z base: the point's own Z, else the initial Z captured
+            # at experiment start. Z is homogeneous across a region, so a
+            # present Z is always deliberate (including 0.0). The Tiling
+            # "override per-group Z" toggle is applied on the frontend.
             point_z_origin = m_point.get("z")
             if point_z_origin is None:
                 point_z_origin = initial_z_position
@@ -648,15 +638,10 @@ class ExperimentNormalMode(ExperimentModeBase):
             # user cleared the focus map.  Also require fitted maps to exist.
             focus_map_z = None
             if getattr(self.controller, "_focus_map_active", False) and self.controller.focus_map_manager.get_all():
-                # The region's own map, looked up by the one identifier a
-                # region has. This used to be a four-term `or` chain over
-                # centerIndex / areaName / wellId / "default" that could not
-                # match what _run_focus_map_phase stored (the region id), so it
-                # fell through to the server-global "manual" map — which
-                # outlives the experiment and the sample. That is the
-                # out-of-focus scan people saw when an old map was left behind.
-                # A missing region_id is a bug in region construction, so let
-                # the KeyError surface rather than guessing an id.
+                # The region's own map, by the one identifier a region has.
+                # Guessing the id (the old `or` chain) fell through to the
+                # server-global "manual" map, which outlives the sample — the
+                # out-of-focus scan. A missing key is a bug: let it raise.
                 focus_map_group_id = m_point["region_id"]
                 focus_map_z = self.controller.apply_focus_map_z(
                     x=m_point["x"], y=m_point["y"], group_id=focus_map_group_id
@@ -695,14 +680,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                 ))
                 step_id += 1
 
-            # Perform autofocus if enabled (runs after focus map Z move if both
-            # active). Two independent axes:
-            #   - rounds: only where t % autofocus_period_rounds == 0 (skipped
-            #             rounds reuse the last measured offset)
-            #   - FOVs:   every Nth field of view within the round, counted
-            #             across all regions (Squid's NUMBER_OF_FOVS_PER_AF).
-            #             N=1 is the old "everyPosition"; N >= total FOVs is the
-            #             old "firstPositionOnly".
+            # Autofocus scheduling has two independent axes: every Nth round
+            # (skipped rounds reuse the last offset) and every Nth FOV within
+            # the round, counted across all regions.
             af_period = max(1, int(autofocus_period_rounds or 1))
             af_round_active = is_auto_focus and (t % af_period == 0)
             do_autofocus = af_round_active and (
@@ -763,9 +743,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                 # the keepIlluminationOn case where the per-frame illumination
                 # settle (its own post-wait below) is skipped and there would
                 # otherwise be no post-move settle at all. af_region_id adds
-                # THIS region's autofocus Z offset so the measured focus reaches
-                # the acquisition instead of being overwritten here — and so a
-                # neighbouring region's offset never leaks into this one.
+                # THIS region's autofocus Z offset, so no neighbouring region's
+                # offset can leak into it.
                 if is_z_stack or index_z == 0:
                     workflow_steps.append(WorkflowStep(
                         name=f"Move to Z {'plane ' + str(index_z) if is_z_stack else 'base position'} ({i_z:.1f} µm)",

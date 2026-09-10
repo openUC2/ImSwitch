@@ -21,7 +21,10 @@ import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 
 // Dimension components
 import DimensionBar from "./DimensionBar";
-import ExperimentSummary from "./ExperimentSummary";
+import ExperimentSummary, {
+  checkFitsOnDrive,
+  computeSummary,
+} from "./ExperimentSummary";
 import PositionsDimension from "./PositionsDimension";
 import ChannelsDimension from "./ChannelsDimension";
 import ZFocusDimension from "./ZFocusDimension";
@@ -51,6 +54,7 @@ import * as vizarrViewerSlice from "../../state/slices/VizarrViewerSlice";
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
 import * as positionSlice from "../../state/slices/PositionSlice";
+import { getStorageState } from "../../state/slices/StorageSlice";
 import { setNotification } from "../../state/slices/NotificationSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 
@@ -107,6 +111,7 @@ const ExperimentDesigner = () => {
     parameterRangeSlice.getParameterRangeState,
   );
   const positionState = useSelector(positionSlice.getPositionState);
+  const storageState = useSelector(getStorageState);
 
   // Progress tracking
   const [cachedStepId, setCachedStepId] = useState(0);
@@ -239,6 +244,24 @@ const ExperimentDesigner = () => {
     // click in that window started another run with its own output folder and
     // its own focus-map pass.
     if (startRequestedRef.current) return;
+
+    // Refuse to start a run that cannot fit, naming both numbers. The estimate
+    // was always shown but never compared to the drive it would be written to.
+    const needMB = computeSummary({
+      experimentState, experimentUI, parameterRange, objectiveState, wellSelectorState,
+    }).dataSizeMB;
+    const drive = checkFitsOnDrive(needMB, storageState?.status?.active_device);
+    if (drive && !drive.fits) {
+      const needText = `${(needMB / 1024).toFixed(1)} GB`;
+      // eslint-disable-next-line no-alert
+      if (!window.confirm(
+        `This run needs about ${needText} but only ${drive.freeText} is free ` +
+        `on ${drive.name}.\n\nStart anyway?`,
+      )) {
+        return;
+      }
+    }
+
     startRequestedRef.current = true;
     setStartPending(true);
     console.log("Experiment started");

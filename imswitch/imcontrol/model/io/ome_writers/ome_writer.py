@@ -19,6 +19,7 @@ Features:
     - OMERO streaming upload for real-time server storage
 """
 
+import inspect
 import os
 import time
 import threading
@@ -28,6 +29,7 @@ from dataclasses import dataclass
 import numpy as np
 import zarr
 import tifffile as tif
+import tifffile
 
 # Import from local writers module
 from .ome_tiff_stitcher import OmeTiffStitcher
@@ -87,6 +89,11 @@ class OMEWriterConfig:
     omero_queue_size: int = 100
     min_period: float = 0.2
     compression: str = "zlib"
+    # zlib level 1, not the library default of 6. On 12-bit-in-uint16 camera
+    # frames level 6 gains ~1 % over level 1 for 3x the CPU; the horizontal
+    # predictor is what actually helps (measured: 1.43x -> 1.56x).
+    compression_level: int = 1
+    predictor: bool = True
     zarr_compressor = None
     pixel_size: float = 1.0
     pixel_size_z: float = 1.0
@@ -100,6 +107,12 @@ class OMEWriterConfig:
     y_start: float = 0.0
     z_start: float = 0.0
     time_interval: float = 1.0
+
+    def tiff_write_kwargs(self) -> Dict[str, Any]:
+        """Compression kwargs for tifffile writes."""
+        return tiff_compression_kwargs(
+            self.compression, self.compression_level, self.predictor
+        )
 
     def __post_init__(self):
         """Initialize default compressor and channel metadata."""
@@ -115,6 +128,24 @@ class OMEWriterConfig:
             # Default colors: green, red, blue, cyan, magenta, yellow
             default_colors = ["00FF00", "FF0000", "0000FF", "00FFFF", "FF00FF", "FFFF00"]
             self.channel_colors = [default_colors[i % len(default_colors)] for i in range(self.n_channels)]
+
+
+def tiff_compression_kwargs(compression="zlib", level=1, predictor=True) -> Dict[str, Any]:
+    """Compression kwargs for a tifffile write, degrading on older tifffile.
+
+    ``compressionargs``/``predictor`` were added after the minimum tifffile we
+    support, so both are probed once and dropped when missing rather than
+    raising per frame.
+    """
+    if not compression:
+        return {}
+    kwargs: Dict[str, Any] = {"compression": compression}
+    supported = inspect.signature(tifffile.TiffWriter.write).parameters
+    if level is not None and "compressionargs" in supported:
+        kwargs["compressionargs"] = {"level": level}
+    if predictor and "predictor" in supported:
+        kwargs["predictor"] = True
+    return kwargs
 
 
 def _get_zarr_compressor():
@@ -519,7 +550,11 @@ class OMEWriter:
         # before the stitcher opens its output file inside it.
         os.makedirs(self.file_paths.base_dir, exist_ok=True)
         stitched_tiff_path = os.path.join(self.file_paths.base_dir, "stitched.ome.tif")
-        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True, isRGB=self.isRGB, tile_w=self.tile_w, tile_h=self.tile_h)
+        self.tiff_stitcher = OmeTiffStitcher(
+            stitched_tiff_path, bigtiff=True, isRGB=self.isRGB,
+            tile_w=self.tile_w, tile_h=self.tile_h,
+            write_kwargs=self.config.tiff_write_kwargs(),
+        )
         self.tiff_stitcher.start()
         if self.logger:
             self.logger.debug(f"TIFF stitcher initialized: {stitched_tiff_path}")
@@ -798,15 +833,15 @@ class OMEWriter:
                 # Build OME-XML string
                 ome_xml = build_ome_metadata_from_dict(ome_metadata)
                 if ome_xml:
-                    tif.imwrite(filepath, frame, compression=self.config.compression, description=ome_xml, photometric=photometric)
+                    tif.imwrite(filepath, frame, description=ome_xml, photometric=photometric, **self.config.tiff_write_kwargs())
                 else:
-                    tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
+                    tif.imwrite(filepath, frame, photometric=photometric, **self.config.tiff_write_kwargs())
             else:
-                tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
+                tif.imwrite(filepath, frame, photometric=photometric, **self.config.tiff_write_kwargs())
         except Exception as e:
             if self.logger:
                 self.logger.warning(f"Failed to write OME metadata to individual TIFF: {e}")
-            tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
+            tif.imwrite(filepath, frame, photometric=photometric, **self.config.tiff_write_kwargs())
 
     def _write_omero_tile(self, frame, metadata: Dict[str, Any]):
         """
@@ -973,9 +1008,9 @@ class OMEWriter:
             self.tiff_mosaic,
             photometric=photometric,
             metadata=ome_metadata,
-            compression=self.config.compression,
             ome=True,
             bigtiff=True,
+            **self.config.tiff_write_kwargs(),
         )
 
         # Release the buffer promptly — a full mosaic can be large.

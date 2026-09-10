@@ -25,14 +25,10 @@ class OmeTiffStitcher:
     can be read by Fiji and other image analysis tools with proper tile
     positioning metadata.
 
-    The writer makes no assumption about how many images it will receive: it
-    writes whatever is queued until stop() is called and the queue has drained.
-    An earlier version exited only after seeing exactly nx*ny images, which hung
-    stop() forever on a short run (dropped frame, aborted scan, site with fewer
-    tiles than the grid) and discarded the tail of the queue on a long one
-    (any Z-stack or second channel). Both failure modes ended in the same place:
-    the "Finalize OME writer" step never returned, the next site never started,
-    and the daemon thread was killed mid-write leaving an unreadable file.
+    It makes no assumption about how many images it will receive: it writes
+    whatever is queued until stop() is called and the queue has drained.
+    Exiting on an expected tile count instead hung stop() forever on a short
+    run and discarded the tail of the queue on a long one.
 
     Example:
         >>> from imswitch.imcontrol.model.io.writers import OmeTiffStitcher
@@ -44,7 +40,8 @@ class OmeTiffStitcher:
     """
 
     def __init__(self, file_path: str, bigtiff: bool = True, isRGB: bool = False,
-                 tile_w: Optional[int] = None, tile_h: Optional[int] = None):
+                 tile_w: Optional[int] = None, tile_h: Optional[int] = None,
+                 write_kwargs: Optional[dict] = None):
         """
         Initialize the OME-TIFF stitcher.
 
@@ -54,8 +51,11 @@ class OmeTiffStitcher:
             isRGB: Whether images are RGB format (vs grayscale)
             tile_w: Width of each tile in pixels (optional, for metadata)
             tile_h: Height of each tile in pixels (optional, for metadata)
+            write_kwargs: Compression kwargs passed to every tifffile write
+                (see OMEWriterConfig.tiff_write_kwargs). This is the largest
+                file a run produces and it used to be written uncompressed.
         """
-        self._logger = initLogger(self, tryInheritParent=True)
+        self._logger = initLogger(self)
         self.file_path = file_path
         self.bigtiff = bigtiff
         self.queue = deque()  # Holds (image_array, metadata_dict)
@@ -69,15 +69,15 @@ class OmeTiffStitcher:
         self.tile_w = tile_w
         self.tile_h = tile_h
         self.images_written = 0
+        self._write_kwargs = write_kwargs or {}
 
     def start(self):
         """Begin the background thread that writes images to disk as they arrive."""
         if self._thread is not None:
             return
         self.is_running = True
-        # Deliberately NOT a daemon: interpreter shutdown must not kill this
-        # thread inside the TiffWriter context, which is what produced blank
-        # stitched files.
+        # Not a daemon: interpreter shutdown killing this thread inside the
+        # TiffWriter context is what produced blank stitched files.
         self._thread = threading.Thread(
             target=self._process_queue, daemon=False, name="OmeTiffStitcher"
         )
@@ -145,10 +145,8 @@ class OmeTiffStitcher:
                     if not self.is_running:
                         break
                     if not threading.main_thread().is_alive():
-                        # Interpreter is shutting down and nobody closed us.
-                        # Being non-daemon, we would otherwise block the exit
-                        # forever; drain what is queued and close the file
-                        # properly instead.
+                        # Shutting down with nobody to close us. Non-daemon,
+                        # so drain and close rather than block the exit.
                         self._logger.warning(
                             "Interpreter shutting down with the stitcher still "
                             "open — draining and closing"
@@ -162,9 +160,10 @@ class OmeTiffStitcher:
 
                 try:
                     if image.ndim == 2:
-                        tif.write(data=image, metadata=metadata)
+                        tif.write(data=image, metadata=metadata, **self._write_kwargs)
                     else:
-                        tif.write(data=image, metadata=metadata, photometric=photometric)
+                        tif.write(data=image, metadata=metadata,
+                                  photometric=photometric, **self._write_kwargs)
                     self.images_written += 1
                 except Exception as e:
                     self._logger.error(f"Error writing image to stitched TIFF: {e}")

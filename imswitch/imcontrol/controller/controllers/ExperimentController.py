@@ -54,9 +54,15 @@ from imswitch.imcontrol.controller.controllers.experiment_controller import (
     StartExperimentResponse,
     SyntheticChannel,
 )
-from imswitch.imcontrol.model.focus_map import FocusMap, FocusMapManager, FocusMapResult
+from imswitch.imcontrol.model.focus_map import FocusMap, FocusMapManager, FocusMapResult, fit_quality_text
 from imswitch.imcontrol.model.overview_registration import OverviewRegistrationService, PixelPoint, StagePoint, SlotDefinition
 from imswitch.imcontrol.model import configfiletools
+
+
+def _sanitize_sample(sample: str) -> str:
+    """Subfolder name for a sample's focus maps ("" -> the shared default)."""
+    cleaned = "".join(c for c in (sample or "") if c.isalnum() or c in "-_")[:40]
+    return cleaned or "default"
 
 
 class ExperimentController(ImConWidgetController):
@@ -99,9 +105,8 @@ class ExperimentController(ImConWidgetController):
         # experiment. Capture Z-moves add this on top of their base Z so the
         # measured focus is actually applied (see move_stage_z / autofocus).
         # Reset to 0.0 at the start of every experiment.
-        # Autofocus Z offset per region_id. It used to be ONE scalar shared by
-        # the whole run, so a single bad point silently defocused every region
-        # after it. Squid keeps these per region for the same reason.
+        # Autofocus Z offset per region_id. A single shared scalar let one bad
+        # point defocus every region after it.
         self._experiment_af_offsets = {}
         self._af_successes = 0
         self._af_failures = 0
@@ -671,12 +676,7 @@ class ExperimentController(ImConWidgetController):
     @staticmethod
     def _build_region_meta(area_name, area_type, well_id=None, well_row=None,
                      well_column=None, labware_load_name=None, condition_label=None):
-        """The per-region metadata block. Carried ONCE per region.
-
-        It used to be copied onto every FOV of every region — eight keys times
-        every position — even though every consumer only ever read it off the
-        first FOV of a tile.
-        """
+        """Per-region metadata, carried once per region (not on every FOV)."""
         return {
             "areaName": area_name,
             "areaType": area_type,
@@ -691,14 +691,9 @@ class ExperimentController(ImConWidgetController):
     def _region_fovs(region_id, raw_fovs):
         """Validate and normalise one region's FOV list before anything is stored.
 
-        Two rules, both borrowed from Squid's ``add_region_from_fovs``:
-
-        * validate before mutating — a bad coordinate names itself here rather
-          than failing somewhere deep in the workflow;
-        * Z is homogeneous per region — a region either carries a Z on every FOV
-          or on none of them. The previous code kept per-FOV Z and then treated
-          ``z == 0.0`` as "no Z given", which silently discarded a legitimate
-          request to image at absolute Z = 0.
+        Two rules: a bad coordinate raises here naming itself rather than
+        failing deep in the workflow, and Z is homogeneous — a region carries a
+        Z on every FOV or on none.
         """
         raw_fovs = list(raw_fovs)
         if not raw_fovs:
@@ -729,13 +724,8 @@ class ExperimentController(ImConWidgetController):
 
     @staticmethod
     def regions_to_areas(regions, region_meta):
-        """Region id + name + XY bounds, the shape the focus-map code wants.
-
-        Derived from the regions themselves so there is one definition of what
-        a region is and where it lies. This used to be built twice from
-        ``mExperiment.scanAreas`` — once for the focus-map API and once inside
-        the mapping phase — and neither construction agreed with the region ids
-        the acquisition loop later looked maps up by.
+        """Region id + name + XY bounds, derived from the regions themselves so
+        the focus-map phase and the acquisition loop agree on what a region is.
         """
         areas = []
         for fovs in regions:
@@ -755,20 +745,13 @@ class ExperimentController(ImConWidgetController):
     def build_scan_regions(self, mExperiment):
         """Convert the experiment's coordinates into per-region FOV lists.
 
-        Returns ``(regions, region_meta)`` where ``regions`` is one ordered FOV
-        list per region and ``region_meta[region_id]`` holds that region's
-        well/labware/condition metadata.
+        Returns ``(regions, region_meta)``: one ordered FOV list per region,
+        plus that region's well/labware/condition metadata.
 
-        This generates nothing and reorders nothing despite the old name
-        (``generate_snake_tiles``): traversal order is decided in exactly one
-        place, the frontend's ``CoordinateCalculator``, and is already baked
-        into the coordinate list that arrives here.
+        Nothing is generated or reordered here — traversal order is decided in
+        one place, the frontend's ``CoordinateCalculator``.
 
-        ``region_id`` is a **string**, always, and is the only identifier a
-        region has. It used to be written as an area id, an integer index and a
-        literal ``0`` depending on which branch produced the tile — and ``0`` is
-        falsy, so the first region's focus map never resolved and the run fell
-        back to whatever global map happened to be in memory.
+        ``region_id`` is a string, always, and is a region's only identifier.
         """
         regions = []
         region_meta = {}
@@ -859,9 +842,7 @@ class ExperimentController(ImConWidgetController):
             # Check normal mode status
             workflow_status = self.workflow_manager.get_status()
 
-        # Autofocus outcome for this run. A run that "completed" while every
-        # autofocus failed produced defocused data, and until now nothing said
-        # so — the failures were only visible as a line in the log.
+        # Autofocus outcome: a run can "complete" with every autofocus failed.
         return {
             **workflow_status,
             "autofocus": {
@@ -875,13 +856,10 @@ class ExperimentController(ImConWidgetController):
     def startWellplateExperiment(self, mExperiment: Experiment):
         """Start a wellplate experiment, refusing a second concurrent start.
 
-        Setting a run up takes minutes when focus mapping is enabled, and the
-        workflow guard inside only reports "running" once the workflow itself
-        starts — which is *after* the focus-map phase. So a second click during
-        focus mapping sailed past every check and produced a second run: two
-        experiment folders and two focus-map phases. This flag covers exactly
-        that window; the workflow / performance-scan status guards take over
-        once the run is actually under way.
+        Setup takes minutes with focus mapping on, and the workflow guard
+        inside only reports "running" once the workflow starts — after the
+        focus-map phase. This flag covers that window; the workflow /
+        performance-scan status guards take over from there.
         """
         if self._experiment_starting:
             raise HTTPException(
@@ -1090,11 +1068,7 @@ class ExperimentController(ImConWidgetController):
         # acquisition loop gates focus-map Z moves on this flag.
         self._focus_map_active = False
 
-        # Build the scan regions BEFORE the focus-map phase: they define the
-        # region ids the maps get stored under, so the mapping phase and the
-        # acquisition loop cannot disagree about what a region is called.
-        # build_scan_regions validates and raises on a bad coordinate rather
-        # than filtering it out silently.
+        # Regions first: they define the ids the focus maps are stored under.
         snake_tiles, region_meta = self.build_scan_regions(mExperiment)
         self._last_scan_areas = self.regions_to_areas(snake_tiles, region_meta)
 
@@ -1322,14 +1296,10 @@ class ExperimentController(ImConWidgetController):
             def _restore_freerun():
                 if _trigger_cleanup_thread is not None:
                     _trigger_cleanup_thread.join()
-                # Close any writer the workflow did not get to. A stop request
-                # makes Workflow.run break out of the step loop, so the
-                # "Finalize OME writer" steps never execute — which left the
-                # stitched TIFF open and unreadable (Franzi's "blank stitched
-                # image" on a failed run) and, now that the stitcher thread is
-                # non-daemon, would keep that thread alive for the rest of the
-                # process's life. OMEWriter.finalize() is idempotent, so this
-                # costs nothing on the normal path.
+                # Close any writer the workflow did not get to: a stop request
+                # breaks out of the step loop before the "Finalize OME writer"
+                # steps, leaving the stitched TIFF open and unreadable.
+                # finalize() is idempotent, so this is free on the normal path.
                 for _writer in _cleanup_writers:
                     try:
                         _writer.finalize()
@@ -1826,11 +1796,8 @@ class ExperimentController(ImConWidgetController):
     @staticmethod
     def _autofocus_timeout_s(af_range: float, af_resolution: float,
                              af_settle_time: float, two_stage: bool) -> float:
-        """How long this autofocus scan may take before we give up on it.
-
-        Derived from the scan itself — steps x (settle + a frame) with a 3x
-        safety factor — instead of a flat two minutes, so a hang costs seconds
-        on a fast scan rather than always costing the ceiling.
+        """Budget for one autofocus scan: steps x (settle + a frame), 3x safety.
+        A flat two minutes made every hang cost the ceiling.
         """
         steps = max(1, int(abs(af_range) / max(abs(af_resolution), 1e-6)) + 1)
         per_step_s = max(af_settle_time, 0.0) + 1.0
@@ -1950,12 +1917,9 @@ class ExperimentController(ImConWidgetController):
                     af_range, af_resolution, af_settle_time, af_two_stage
                 ))
 
-            # Autofocus's OWN result, never the stage position. Reading
-            # getPosition() here meant that on a failure or a timed-out join we
-            # recorded wherever the stage happened to sit — usually the start of
-            # the scan range — and fed that into the Z offset, silently
-            # defocusing the rest of the run. None means "no usable focus"; the
-            # caller keeps the previous offset and counts the failure.
+            # Autofocus's own result, never the stage position: on a failure
+            # or timed-out join the stage sits at the start of the scan range,
+            # and feeding that into the Z offset defocused the rest of the run.
             result = getattr(autofocusController, '_lastAutofocusZ', None)
             elapsed = time.time() - af_started_at
             if result is None:
@@ -2367,15 +2331,10 @@ class ExperimentController(ImConWidgetController):
                          **kwargs):
         """Post-func for the Autofocus workflow step: store the region's Z offset.
 
-        Reads the measured focus Z from ``metadata["result"]`` (the return value
-        of the preceding ``autofocus`` main-func) and records
-        ``measured - expected_z`` as this region's offset. Capture Z-moves add
-        it via ``move_stage_z(af_region_id=...)``, so the measured focus reaches
-        the acquisition instead of being discarded by the next absolute Z-move.
-
-        A failed autofocus returns None (never the stage position) and leaves
-        the offset untouched — it is counted, logged, and the run continues at
-        the region's unmodified base Z.
+        Records ``metadata["result"] - expected_z`` as this region's offset;
+        capture Z-moves add it via ``move_stage_z(af_region_id=...)``.
+        A failed autofocus returns None, leaves the offset untouched, and is
+        counted — the run continues at the region's unmodified base Z.
         """
         if not apply_global_offset:
             return None
@@ -3485,8 +3444,7 @@ class ExperimentController(ImConWidgetController):
 
         Args:
             areas: regions_to_areas() output — the same region ids the
-                acquisition loop will look maps up by. Deriving the areas here
-                from ``mExperiment`` independently is what let the two drift.
+                acquisition loop will look maps up by.
         """
         # Store config for channel_offsets access during acquisition
         self._focus_map_config = config
@@ -3522,11 +3480,9 @@ class ExperimentController(ImConWidgetController):
                 for area in areas:
                     self.focus_map_manager.clear(area["areaId"])
             else:
-                # No points supplied this run: reuse the map the user explicitly
-                # fitted from points ("manual"), and nothing else. The old
-                # helper here searched manual → global → *any fitted map*, so a
-                # leftover surface from a different sample could be adopted
-                # silently. Reuse is a deliberate UI choice, not an inference.
+                # Reuse only the map the user explicitly fitted from points.
+                # Falling back to "any fitted map" adopted stale surfaces from
+                # a different sample.
                 source_fm = self.focus_map_manager.get("manual")
 
             if source_fm is not None and source_fm.is_fitted:
@@ -3870,7 +3826,7 @@ class ExperimentController(ImConWidgetController):
             stats = fm.fit()
             self._logger.info(
                 f"Focus map [{group_id}]: fitted {stats.method}, "
-                f"MAE={stats.mean_abs_error:.4f}, n={stats.n_points}"
+                f"n={stats.n_points}, {fit_quality_text(stats)}"
             )
         except ValueError as e:
             self._logger.error(f"Focus map [{group_id}]: fit failed: {e}")
@@ -3949,7 +3905,7 @@ class ExperimentController(ImConWidgetController):
             stats = fm.fit()
             self._logger.info(
                 f"Focus map [{group_id}]: measured+fitted {stats.method}, "
-                f"MAE={stats.mean_abs_error:.4f}, n={stats.n_points}"
+                f"n={stats.n_points}, {fit_quality_text(stats)}"
             )
         except ValueError as e:
             self._logger.error(f"Focus map [{group_id}]: fit failed: {e}")
@@ -3992,6 +3948,37 @@ class ExperimentController(ImConWidgetController):
                 raise HTTPException(status_code=404, detail=f"No focus map for group '{group_id}'")
             return fm.to_result().to_dict()
         return self.focus_map_manager.to_dict()
+
+    @APIExport(requestType="GET")
+    def getFocusMapSummary(self):
+        """One line per region: which map a run would use, and how good it is.
+
+        Answers "which map is this run using?" without opening the focus panel.
+        """
+        regions = []
+        for area in (self._last_scan_areas or []):
+            fm = self.focus_map_manager.get(area["areaId"])
+            stats = fm.fit_stats if (fm is not None and fm.is_fitted) else None
+            regions.append({
+                "region_id": area["areaId"],
+                "region_name": area["areaName"],
+                "has_map": stats is not None,
+                "method": stats.method if stats else None,
+                "n_points": stats.n_points if stats else 0,
+                "z_offset_um": stats.z_offset if stats else 0.0,
+                "quality": fit_quality_text(stats) if stats else "no map — per-point Z will be used",
+                "reason": stats.fallback_reason if stats else "",
+            })
+        return {
+            "regions": regions,
+            "focus_map_active": bool(getattr(self, "_focus_map_active", False)),
+            # The other additive Z corrections, so their sum is visible in one
+            # place instead of being spread over four independent knobs.
+            "channel_offsets_um": (
+                getattr(getattr(self, "_focus_map_config", None), "channel_offsets", None) or {}
+            ),
+            "autofocus_offsets_um": dict(self._experiment_af_offsets),
+        }
 
     @APIExport(requestType="POST")
     def getFocusMapPreview(self, group_id: str, resolution: int = 30):
@@ -4044,36 +4031,40 @@ class ExperimentController(ImConWidgetController):
         return {"status": "interrupt_requested"}
 
     @APIExport(requestType="GET")
-    def saveFocusMaps(self, path: str = ""):
+    def saveFocusMaps(self, path: str = "", sample: str = ""):
         """
         Save all current focus maps to disk as JSON files.
 
         Args:
             path: Directory to save into. Empty string uses default location.
+            sample: Optional sample name. Map sets are kept in their own
+                subfolder per sample; one shared folder made it impossible to
+                tell whose surface a stored map belonged to.
 
         Returns:
             Dict with saved file info
         """
         if not path:
-            path = os.path.join(self.save_dir, "focus_maps")
+            path = os.path.join(self.save_dir, "focus_maps", _sanitize_sample(sample))
         os.makedirs(path, exist_ok=True)
         saved = self.focus_map_manager.save_all(path)
         self._logger.info(f"Saved {len(saved)} focus maps to {path}")
         return {"saved_files": saved, "count": len(saved), "path": path}
 
     @APIExport(requestType="GET")
-    def loadFocusMaps(self, path: str = ""):
+    def loadFocusMaps(self, path: str = "", sample: str = ""):
         """
-        Load focus maps from disk, restoring previously saved maps.
+        Load focus maps from disk, REPLACING the maps currently in memory.
 
         Args:
             path: Directory to load from. Empty string uses default location.
+            sample: Optional sample name, matching saveFocusMaps.
 
         Returns:
             Dict with loaded map info
         """
         if not path:
-            path = os.path.join(self.save_dir, "focus_maps")
+            path = os.path.join(self.save_dir, "focus_maps", _sanitize_sample(sample))
         if not os.path.isdir(path):
             return {"loaded_count": 0, "path": path, "error": "Directory not found"}
         count = self.focus_map_manager.load_all(path)
@@ -4138,7 +4129,7 @@ class ExperimentController(ImConWidgetController):
             stats = fm.fit()
             self._logger.info(
                 f"Focus map [{group_id}]: fitted {stats.method} from manual points, "
-                f"MAE={stats.mean_abs_error:.4f}, n={stats.n_points}"
+                f"n={stats.n_points}, {fit_quality_text(stats)}"
             )
         except ValueError as e:
             self._logger.error(f"Focus map [{group_id}]: fit failed: {e}")

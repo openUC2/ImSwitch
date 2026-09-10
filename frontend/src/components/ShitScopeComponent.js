@@ -115,53 +115,22 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
     experimentStatusSlice.getExperimentStatusState
   );
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
+  const wellSelectorStateRef = useRef(wellSelectorState);
+  wellSelectorStateRef.current = wellSelectorState;
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const positionState = useSelector(positionSlice.getPositionState);
 
-  // Initialize the ShitScope layout on mount
+  // Click-to-move on the Overview canvas needs the shared selector mode, so
+  // restore whatever it was on the way out. A mount effect may read shared
+  // experiment state; it must never leave it changed — this one used to
+  // overwrite wellLayout and wipe pointList, and both are persisted, so the
+  // damage outlived the visit and survived a reload.
   useEffect(() => {
-    // Set the well layout to the shitscope single-area rectangle
-    dispatch(
-      experimentSlice.setWellLayout({
-        name: "ShitScope",
-        unit: "um",
-        width: SHITSCOPE_SCAN_WIDTH * 1.2, // Canvas padding
-        height: SHITSCOPE_SCAN_HEIGHT * 1.2,
-        wells: [
-          {
-            id: "A1",
-            name: "Scan Area",
-            shape: "rectangle",
-            x: SHITSCOPE_SCAN_WIDTH * 1.2 / 2,
-            y: SHITSCOPE_SCAN_HEIGHT * 1.2 / 2,
-            width: SHITSCOPE_SCAN_WIDTH,
-            height: SHITSCOPE_SCAN_HEIGHT,
-            row: 0,
-            col: 0,
-          },
-        ],
-      })
-    );
-
-    // Set mode to MOVE_CAMERA so canvas clicks move the stage instead of adding points
+    const previousMode = wellSelectorStateRef.current.mode;
     dispatch(wellSelectorSlice.setMode("camera"));
-    dispatch(wellSelectorSlice.setAreaSelectSnakescan(true));
-
-    // Create a single point covering the entire scan area
-    dispatch(experimentSlice.setPointList([]));
-    dispatch(
-      experimentSlice.createPoint({
-        x: SHITSCOPE_SCAN_WIDTH / 2,
-        y: SHITSCOPE_SCAN_HEIGHT / 2,
-        z: 0,
-        name: "ShitScope Scan",
-        shape: "rectangle",
-        rectPlusX: SHITSCOPE_SCAN_WIDTH / 2,
-        rectPlusY: SHITSCOPE_SCAN_HEIGHT / 2,
-        rectMinusX: SHITSCOPE_SCAN_WIDTH / 2,
-        rectMinusY: SHITSCOPE_SCAN_HEIGHT / 2,
-      })
-    );
+    return () => {
+      dispatch(wellSelectorSlice.setMode(previousMode));
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Periodic experiment status polling
@@ -337,26 +306,25 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
         experimentSlice.setOverlapHeight(wellSelectorState.areaSelectOverlap)
       );
 
-      // Step 2: "We are here" – use current stage position as scan center so
-      // the scan starts from where the stage currently is without homing.
-      const weAreHerePoint = experimentState.pointList[0]
-        ? {
-            ...experimentState.pointList[0],
-            x: positionState.x,
-            y: positionState.y,
-          }
-        : null;
-      if (weAreHerePoint) {
-        // Also update canvas visualisation
-        dispatch(
-          experimentSlice.replacePoint({ index: 0, newPoint: weAreHerePoint })
-        );
-      }
-
-      // Step 3: Calculate scan coordinates using current stage position
-      const scanExperimentState = weAreHerePoint
-        ? { ...experimentState, pointList: [weAreHerePoint] }
-        : experimentState;
+      // Step 2: the scan region — the fixed ShitScope rectangle centred on the
+      // current stage position. Built here from local constants rather than
+      // read back out of the shared point list, which this component has no
+      // business writing.
+      const scanExperimentState = {
+        ...experimentState,
+        pointList: [{
+          id: "shitscope_scan",
+          name: "ShitScope Scan",
+          x: positionState.x,
+          y: positionState.y,
+          z: 0,
+          shape: "rectangle",
+          rectPlusX: SHITSCOPE_SCAN_WIDTH / 2,
+          rectPlusY: SHITSCOPE_SCAN_HEIGHT / 2,
+          rectMinusX: SHITSCOPE_SCAN_WIDTH / 2,
+          rectMinusY: SHITSCOPE_SCAN_HEIGHT / 2,
+        }],
+      };
 
       const scanConfig = coordinateCalculator.calculateScanCoordinates(
         scanExperimentState,

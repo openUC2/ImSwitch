@@ -255,13 +255,10 @@ class ExperimentModeBase(ABC):
             Path to the saved protocol JSON file
 
         Raises:
-            Whatever json.dumps raises. Serializing *before* opening the file is
-            the whole point: open(..., "w") truncates, so serializing inside the
-            with-block left a 0-byte protocol behind whenever anything in
-            snake_tiles or workflow_steps failed to serialize — a run that looks
-            like it produced nothing. And the error is not swallowed: a protocol
-            we cannot write means the run is not reproducible, which has to be
-            visible before the run starts rather than discovered afterwards.
+            Whatever json.dumps raises. Serializing before opening matters:
+            open("w") truncates, so serializing inside the with-block left a
+            0-byte protocol behind on any failure. The error is not swallowed —
+            a protocol we cannot write means the run is not reproducible.
         """
         protocol_file = file_path + "_protocol.json"
 

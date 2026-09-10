@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useSelector } from "react-redux";
 import { Box, Typography, Divider, Chip } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
@@ -8,14 +8,24 @@ import LayersIcon from "@mui/icons-material/Layers";
 import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import TimerIcon from "@mui/icons-material/Timer";
 import StorageIcon from "@mui/icons-material/Storage";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import FilterCenterFocusIcon from "@mui/icons-material/FilterCenterFocus";
+import Tooltip from "@mui/material/Tooltip";
 
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
 import * as objectiveSlice from "../../state/slices/ObjectiveSlice";
 import * as wellSelectorSlice from "../../state/slices/WellSelectorSlice";
+import { getStorageState } from "../../state/slices/StorageSlice";
+import apiExperimentControllerGetFocusMapSummary from "../../backendapi/apiExperimentControllerGetFocusMapSummary";
 import { DIMENSIONS, Z_FOCUS_MODES } from "../../state/slices/ExperimentUISlice";
 import * as coordinateCalculator from "../CoordinateCalculator";
+
+const formatSize = (megabytes) =>
+  megabytes < 1024
+    ? `${Math.round(megabytes)} MB`
+    : `${(megabytes / 1024).toFixed(1)} GB`;
 
 /**
  * Summary stat item with icon
@@ -68,28 +78,30 @@ const SummaryStat = ({ icon: Icon, label, value, color = "primary" }) => {
 };
 
 /**
- * ExperimentSummary - Always-visible compact summary panel
- * 
- * Shows:
- * - Number of positions
- * - Channels count
- * - Z planes
- * - Timepoints
- * - Estimated duration
- * - Estimated data size
+ * Does this run fit on the drive it will be written to? Returns null when we
+ * have no free-space reading. The estimate was always shown but never compared
+ * to the drive, so a run could only fail once the disk filled up.
  */
-const ExperimentSummary = () => {
-  const theme = useTheme();
-  
-  // Get experiment state
-  const experimentState = useSelector(experimentSlice.getExperimentState);
-  const experimentUI = useSelector(experimentUISlice.getExperimentUIState);
-  const parameterRange = useSelector(parameterRangeSlice.getParameterRangeState);
-  const objectiveState = useSelector(objectiveSlice.getObjectiveState);
-  const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
-  
-  // Calculate summary values
-  const summaryData = useMemo(() => {
+export const checkFitsOnDrive = (dataSizeMB, device) => {
+  const freeBytes = device?.usage?.free;
+  if (typeof freeBytes !== "number") return null;
+  const freeMB = freeBytes / (1024 * 1024);
+  return {
+    name: device.label || device.path || "the active drive",
+    freeText: formatSize(freeMB),
+    freeMB,
+    fits: dataSizeMB <= freeMB,
+  };
+};
+
+/**
+ * Positions x channels x Z planes x timepoints, and what that costs in time and
+ * bytes. Exported so the Start guard can check the same number the summary bar
+ * shows instead of estimating it a second way.
+ */
+export const computeSummary = ({
+  experimentState, experimentUI, parameterRange, objectiveState, wellSelectorState,
+}) => {
     const dimensions = experimentUI.dimensions;
     const params = experimentState.parameterValue;
     
@@ -173,12 +185,7 @@ const ExperimentSummary = () => {
     const totalImages = totalPositions * enabledChannels * zPlanes * timepoints;
     const totalDataMB = totalImages * imageSizeMB;
     
-    let dataSizeStr;
-    if (totalDataMB < 1024) {
-      dataSizeStr = `${Math.round(totalDataMB)} MB`;
-    } else {
-      dataSizeStr = `${(totalDataMB / 1024).toFixed(1)} GB`;
-    }
+    const dataSizeStr = formatSize(totalDataMB);
     
     return {
       positions: totalPositions,
@@ -187,9 +194,61 @@ const ExperimentSummary = () => {
       timepoints,
       duration: durationStr,
       dataSize: dataSizeStr,
+      dataSizeMB: totalDataMB,
       totalImages,
+  };
+};
+
+/**
+ * ExperimentSummary - Always-visible compact summary panel
+ * 
+ * Shows:
+ * - Number of positions
+ * - Channels count
+ * - Z planes
+ * - Timepoints
+ * - Estimated duration
+ * - Estimated data size
+ */
+const ExperimentSummary = () => {
+  const theme = useTheme();
+  
+  // Get experiment state
+  const experimentState = useSelector(experimentSlice.getExperimentState);
+  const experimentUI = useSelector(experimentUISlice.getExperimentUIState);
+  const parameterRange = useSelector(parameterRangeSlice.getParameterRangeState);
+  const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+  const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
+  const storageState = useSelector(getStorageState);
+
+  // Which focus map each region would actually run on. Refreshed on the same
+  // cadence as the rest of the bar so it reflects the latest fit.
+  const [focusMaps, setFocusMaps] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      apiExperimentControllerGetFocusMapSummary()
+        .then((data) => !cancelled && setFocusMaps(data))
+        .catch(() => !cancelled && setFocusMaps(null));
+    load();
+    const timer = setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
     };
-  }, [experimentState, experimentUI, parameterRange, objectiveState, wellSelectorState]);
+  }, []);
+
+  const summaryData = useMemo(
+    () => computeSummary({
+      experimentState, experimentUI, parameterRange, objectiveState, wellSelectorState,
+    }),
+    [experimentState, experimentUI, parameterRange, objectiveState, wellSelectorState],
+  );
+
+  const storage = useMemo(
+    () => checkFitsOnDrive(summaryData.dataSizeMB, storageState?.status?.active_device),
+    [storageState, summaryData.dataSizeMB],
+  );
 
   return (
     <Box
@@ -261,10 +320,60 @@ const ExperimentSummary = () => {
       <SummaryStat
         icon={StorageIcon}
         label="Est. Size"
-        value={summaryData.dataSize}
-        color="error"
+        value={
+          storage
+            ? `${summaryData.dataSize} / ${storage.freeText} free`
+            : summaryData.dataSize
+        }
+        color={storage && !storage.fits ? "error" : "success"}
       />
+
+      {storage && !storage.fits && (
+        <Tooltip
+          title={`This run needs about ${summaryData.dataSize}, but only ${storage.freeText} is free on ${storage.name}.`}
+        >
+          <Chip
+            size="small"
+            icon={<WarningAmberIcon />}
+            color="error"
+            label="Will not fit"
+            sx={{ fontSize: "0.7rem", height: "22px" }}
+          />
+        </Tooltip>
+      )}
       
+      {focusMaps?.focus_map_active && focusMaps.regions?.length > 0 && (
+        <Tooltip
+          title={
+            <Box sx={{ whiteSpace: "pre-line" }}>
+              {focusMaps.regions
+                .map(
+                  (r) =>
+                    `${r.region_name} [${r.region_id}]: ${
+                      r.has_map ? `${r.method}, n=${r.n_points}` : "no map"
+                    } — ${r.quality}`,
+                )
+                .join("\n")}
+            </Box>
+          }
+        >
+          <Chip
+            size="small"
+            icon={<FilterCenterFocusIcon />}
+            color={
+              focusMaps.regions.every((r) => r.has_map && !r.reason)
+                ? "success"
+                : "warning"
+            }
+            variant="outlined"
+            label={`Focus map: ${
+              focusMaps.regions.filter((r) => r.has_map).length
+            }/${focusMaps.regions.length} regions`}
+            sx={{ fontSize: "0.7rem", height: "22px" }}
+          />
+        </Tooltip>
+      )}
+
       {/* Total images chip */}
       <Chip
         size="small"

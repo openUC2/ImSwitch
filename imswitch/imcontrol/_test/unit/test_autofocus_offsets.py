@@ -6,7 +6,7 @@ Two field symptoms shared one cause. The experiment read the focus result from
 failed or timed-out autofocus recorded wherever the stage happened to sit —
 usually the start of the scan range. That value became a single global Z offset
 added to every later capture move, so one bad point silently defocused the rest
-of the run. Squid keeps these per region and gates on an explicit success flag.
+of the run. Offsets are now per region, gated on an explicit success flag.
 
 Runs standalone: `.venv/bin/python <this file>`.
 """

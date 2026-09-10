@@ -273,6 +273,10 @@ class ExperimentController(ImConWidgetController):
         # True while startWellplateExperiment is setting a run up — see the
         # guard there for why the workflow status alone is not enough.
         self._experiment_starting = False
+        # Scan areas of the most recent run. Read by the focus-map endpoints,
+        # which can be called before any run has happened.
+        self._last_scan_areas = None
+        self._focus_map_active = False
 
         # Initialize focus map manager
         self.focus_map_manager = FocusMapManager(logger=self._logger)
@@ -3938,7 +3942,7 @@ class ExperimentController(ImConWidgetController):
         Answers "which map is this run using?" without opening the focus panel.
         """
         regions = []
-        for area in (self._last_scan_areas or []):
+        for area in (getattr(self, "_last_scan_areas", None) or []):
             fm = self.focus_map_manager.get(area["areaId"])
             stats = fm.fit_stats if (fm is not None and fm.is_fitted) else None
             regions.append({

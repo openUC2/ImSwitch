@@ -176,6 +176,19 @@ def _stitched_tiffs(run_dir: str) -> list:
     )
 
 
+def test_focus_map_summary_before_any_run(api_server):
+    """The focus-map endpoints must answer on a fresh server.
+
+    getFocusMapSummary read _last_scan_areas, which only existed once a run had
+    set it, so the first call after a restart was a 500.
+    """
+    response = api_server.get(f"{API}/ExperimentController/getFocusMapSummary")
+    assert response.status_code == 200, response.text[:300]
+    body = response.json()
+    assert body["regions"] == []
+    assert body["focus_map_active"] is False
+
+
 @pytest.fixture(scope="module")
 def multisite_run(api_server):
     """Run the four-site acquisition once; share the result across assertions."""

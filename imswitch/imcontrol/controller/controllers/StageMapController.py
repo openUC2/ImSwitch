@@ -72,6 +72,44 @@ class StageMapStatus(BaseModel):
         arbitrary_types_allowed = True
 
 
+class _NonBlockingMove:
+    """Run one blocking stage move on a thread so the caller can grab frames.
+
+    The stage API only offers a blocking move; every controller that needs to
+    acquire *during* a move has grown its own copy of this. This one is
+    deliberately local — importing another controller to borrow a helper drags
+    an entire unrelated module in with it.
+    """
+
+    def __init__(self, stage, value, axis, speed):
+        self._stage = stage
+        self._value = value
+        self._axis = axis
+        self._speed = speed
+        self.finished = False
+        self.error: Optional[str] = None
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name="StageMapPrescanMove")
+        self._thread.start()
+
+    def _run(self):
+        try:
+            self._stage.move(value=self._value, axis=self._axis, speed=self._speed,
+                             is_absolute=False, is_blocking=True)
+        except Exception as e:
+            # Never leave the polling loop spinning on a move that died.
+            self.error = str(e)
+        finally:
+            self.finished = True
+
+    def join(self, timeout=None):
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+
 class StageMapController(ImConWidgetController):
     """MicroMagellan/Google-Maps-style stage mapping.
 
@@ -245,6 +283,19 @@ class StageMapController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Could not write tile index: {e}")
 
+    def _trimTiles(self):
+        """Drop the oldest previews once the map gets large.
+
+        Each tile carries a base64 JPEG in RAM, and mapping runs for as long as
+        the operator leaves it on. The metadata is kept (tiles.json on disk has
+        everything); only the in-memory image of the oldest tiles is released.
+        Call with _tilesLock held.
+        """
+        withPreview = [t for t in self._tiles if t.get("preview")]
+        excess = len(withPreview) - self.MAX_TILE_PREVIEWS
+        for tile in withPreview[:max(0, excess)]:
+            tile["preview"] = None
+
     def _makePreview(self, frame: np.ndarray) -> Optional[str]:
         """Downscale + JPEG-encode a frame, return base64 string."""
         try:
@@ -353,6 +404,7 @@ class StageMapController(ImConWidgetController):
         }
         with self._tilesLock:
             self._tiles.append(tile)
+            self._trimTiles()
         self._writeTileIndex()
 
         if preview is not None:
@@ -372,6 +424,14 @@ class StageMapController(ImConWidgetController):
     # ------------------------------------------------------------------ #
     # Prescan
     # ------------------------------------------------------------------ #
+
+    # Newest tiles whose preview image stays in RAM (see _trimTiles).
+    MAX_TILE_PREVIEWS = 600
+
+    # Hard ceiling on frames held per line, and how much of each frame is kept.
+    PRESCAN_MAX_FRAMES = 400
+    PRESCAN_BAND_FRACTION = 0.25
+
 
     def _prescanLoop(self, minX, maxX, minY, maxY, dy, speedX):
         """One continuous X sweep per Y line, each pushed as one wide tile."""
@@ -401,28 +461,57 @@ class StageMapController(ImConWidgetController):
             self._emitStatus()
             self._logger.info("Prescan finished")
 
+    def _centreBand(self, frame: np.ndarray) -> np.ndarray:
+        """The vertical slice of a frame that a prescan strip actually uses.
+
+        The stage never stops, so only the middle of each frame corresponds to
+        the position we recorded. Keeping just that band is what makes the
+        buffer affordable: a whole 3000x3000 uint16 frame is 18 MB, its centre
+        band is a few hundred kB. Copied so the detector can reuse its buffer.
+        """
+        if frame.ndim == 3:
+            frame = frame[:, :, 0]
+        width = frame.shape[1]
+        band = max(1, min(width, int(width * self.PRESCAN_BAND_FRACTION)))
+        start = max(0, width // 2 - band // 2)
+        return np.array(frame[:, start:start + band], copy=True)
+
     def _prescanLine(self, minX, maxX, y, speedX) -> Optional[np.ndarray]:
         """Drive X once and return the frames re-spaced into one strip image."""
-        # Reuse the existing non-blocking mover rather than writing a fourth copy.
-        from .LightsheetController import MovementController
-
         if "XY" in (getattr(self._stage, "combinedAxes", None) or []):
             self._stage.move(value=(minX, y), axis="XY", is_absolute=True, is_blocking=True)
         else:
             self._stage.move(value=minX, axis="X", is_absolute=True, is_blocking=True)
             self._stage.move(value=y, axis="Y", is_absolute=True, is_blocking=True)
 
-        mover = MovementController(self._stage)
-        mover.move_to_position(maxX - minX, "X", speedX, is_absolute=False)
+        mover = _NonBlockingMove(self._stage, maxX - minX, "X", speedX)
+        mover.start()
 
         # Position is derived from speed x elapsed time, never polled: a
         # getPosition() per frame would block the shared serial bus and starve
         # the live view.
         started = time.time()
         span = maxX - minX
+        # A full-frame buffer is the one thing here that can eat the machine:
+        # a 3000x3000 uint16 frame is 18 MB, and a slow line at 30 fps would
+        # collect hundreds. Only the centre band of each frame ever reaches the
+        # strip, so keep just that band and cap how many we hold. The cap is
+        # the strip's own pixel width — more samples than that cannot add
+        # detail, they only overwrite each other.
+        pixelSize = self._getPixelSizeUm()
+        maxFrames = min(self.PRESCAN_MAX_FRAMES,
+                        max(2, int(span / max(pixelSize, 1e-6))))
+        minSpacingUm = span / maxFrames
+
+        # A hung move never sets finished (the serial bus can block), so the
+        # loop is also bounded by how long the sweep could possibly take.
+        deadline = started + (span / max(speedX, 1e-6)) * 3.0 + 10.0
+
         frames: List[tuple] = []
         lastFrameNumber = -1
-        while not mover.is_target_reached() and not self._shouldStop.is_set():
+        lastTravelled = -minSpacingUm
+        while (not mover.finished and not self._shouldStop.is_set()
+               and time.time() < deadline):
             try:
                 frame, frameNumber = self._detector.getLatestFrame(returnFrameNumber=True)
             except TypeError:
@@ -430,8 +519,23 @@ class StageMapController(ImConWidgetController):
             if frame is not None and getattr(frame, "size", 0) > 0 and frameNumber != lastFrameNumber:
                 lastFrameNumber = frameNumber
                 travelled = min(speedX * (time.time() - started), span)
-                frames.append((frame if frame.ndim == 2 else frame[:, :, 0], travelled))
+                # Throttle by distance, not by frame count: a fast sweep keeps
+                # every frame, a slow one drops the redundant ones.
+                if travelled - lastTravelled >= minSpacingUm:
+                    lastTravelled = travelled
+                    frames.append((self._centreBand(frame), travelled))
             time.sleep(0.005)
+
+        mover.join(timeout=5.0)
+        if mover.error:
+            self._logger.error(f"Prescan line y={y:.0f}: move failed: {mover.error}")
+            return None
+        if not mover.finished:
+            self._logger.error(f"Prescan line y={y:.0f}: move did not finish in time")
+            return None
+        if len(frames) >= maxFrames:
+            self._logger.debug(
+                f"Prescan line y={y:.0f}: frame buffer capped at {maxFrames}")
 
         if len(frames) < 2:
             self._logger.warning(f"Prescan line y={y:.0f}: only {len(frames)} frame(s)")
@@ -454,14 +558,14 @@ class StageMapController(ImConWidgetController):
         for frame, travelled in frames:
             centre = int(round(travelled / span * (stripW - 1)))
             frameW = frame.shape[1]
-            # Band width follows the frame spacing, capped by the frame itself.
+            # Band width follows the frame spacing, capped by what we kept.
             band = min(max(1, stripW // len(frames)), frameW)
             x0 = max(0, centre - band // 2)
             x1 = min(stripW, x0 + band)
             if x1 <= x0:
                 continue
             # Both bands are centred: the destination on where the stage was,
-            # the source on the middle of the frame.
+            # the source on the middle of what we kept of the frame.
             width = x1 - x0
             fx0 = max(0, frameW // 2 - width // 2)
             strip[:, x0:x1] = frame[:, fx0:fx0 + width]
@@ -488,6 +592,7 @@ class StageMapController(ImConWidgetController):
         }
         with self._tilesLock:
             self._tiles.append(tile)
+            self._trimTiles()
         self._writeTileIndex()
         self.sigStageMapTileAdded.emit({
             "id": tileId, "x": tile["x"], "y": tile["y"],

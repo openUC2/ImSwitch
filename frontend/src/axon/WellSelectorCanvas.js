@@ -1081,6 +1081,13 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     ctx.save();
     ctx.globalAlpha = 0.9;
 
+    // Drop decoded bitmaps for tiles that are gone: the cache is one Image per
+    // tile and a long mapping session would otherwise hold them all.
+    const liveIds = new Set(tiles.map((t) => t.id));
+    Object.keys(stageMapTileImagesRef.current).forEach((id) => {
+      if (!liveIds.has(Number(id))) delete stageMapTileImagesRef.current[id];
+    });
+
     tiles.forEach((tile) => {
       if (tile.x == null || tile.y == null || !tile.image) return;
       // Respect the channel visibility toggles from the StageMap app

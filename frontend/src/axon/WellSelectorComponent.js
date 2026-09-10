@@ -11,6 +11,7 @@ import * as wellSelectorSlice from "../state/slices/WellSelectorSlice.js";
 import * as experimentSlice from "../state/slices/ExperimentSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
 import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js";
+import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as stageMapSlice from "../state/slices/StageMapSlice.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 import { apiStageMapGetTiles } from "../backendapi/apiStageMapController.js";
@@ -47,9 +48,6 @@ import {
 //##################################################################################
 const WellSelectorComponent = () => {
   //local state
-  // Prescan settings: line spacing and sweep speed (see handleStartPrescan).
-  const [prescanDy, setPrescanDy] = useState(500);
-  const [prescanSpeed, setPrescanSpeed] = useState(10000);
   const [prescanRunning, setPrescanRunning] = useState(false);
   const [wellLayoutFileList] = useState([
     "image/test.json", //TODO remove test
@@ -73,6 +71,7 @@ const WellSelectorComponent = () => {
     overviewRegSlice.getOverviewRegistrationState,
   );
   const stageMapState = useSelector(stageMapSlice.getStageMapState);
+  const objectiveState = useSelector(objectiveSlice.getObjectiveState);
 
   // Toggle the Overview camera overlay (stitched overview image) on the plate
   // map; lazily fetch the overlay data the first time it is switched on.
@@ -321,6 +320,20 @@ const WellSelectorComponent = () => {
       maxY: Math.max(...ys),
     };
   };
+
+  // Line spacing is the tile spacing already in use (objective FOV minus the
+  // configured overlap) and the sweep speed is the stage speed already set —
+  // a prescan should cover the sample the same way the scan will.
+  const prescanDy = Math.max(
+    1,
+    Math.round(
+      (objectiveState?.fovY || 0) * (1 - (wellSelectorState.areaSelectOverlap || 0)),
+    ) || 500,
+  );
+  const prescanSpeed = Math.max(
+    1,
+    parseFloat(wellSelectorState.moveCameraSpeedXY) || 20000,
+  );
 
   const handleStartPrescan = () => {
     const bounds = selectionBounds();
@@ -623,7 +636,7 @@ const WellSelectorComponent = () => {
             </>
           )}
           <Tooltip
-            title="Sweep the selected area fast and lay the result under the map, so you can see the tissue and trace it. Uses the current illumination and exposure."
+            title={`Sweep the selected area fast and lay the result under the map, so you can see the tissue and trace it. Uses the tile spacing (${prescanDy} µm), the stage speed (${prescanSpeed} µm/s) and the illumination you already have set.`}
             arrow
           >
             <Button
@@ -636,24 +649,6 @@ const WellSelectorComponent = () => {
               {prescanRunning ? "Stop prescan" : "Prescan"}
             </Button>
           </Tooltip>
-          <TextField
-            size="small"
-            label="Line dy (µm)"
-            type="number"
-            value={prescanDy}
-            onChange={(e) => setPrescanDy(Math.max(1, Number(e.target.value) || 1))}
-            sx={{ width: 110 }}
-            disabled={prescanRunning}
-          />
-          <TextField
-            size="small"
-            label="Speed (µm/s)"
-            type="number"
-            value={prescanSpeed}
-            onChange={(e) => setPrescanSpeed(Math.max(1, Number(e.target.value) || 1))}
-            sx={{ width: 120 }}
-            disabled={prescanRunning}
-          />
           <Tooltip title="Add the current stage XYZ as a new position." arrow>
             <Button
               size="small"

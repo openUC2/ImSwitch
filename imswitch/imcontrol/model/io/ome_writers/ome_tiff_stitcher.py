@@ -39,6 +39,11 @@ class OmeTiffStitcher:
         >>> stitcher.stop()
     """
 
+    # Frames the writer may fall behind by before producers are throttled.
+    MAX_QUEUED_FRAMES = 32
+    # How long add_image waits for room before giving up on a frame.
+    QUEUE_WAIT_S = 30.0
+
     def __init__(self, file_path: str, bigtiff: bool = True, isRGB: bool = False,
                  tile_w: Optional[int] = None, tile_h: Optional[int] = None,
                  write_kwargs: Optional[dict] = None):
@@ -59,6 +64,11 @@ class OmeTiffStitcher:
         self.file_path = file_path
         self.bigtiff = bigtiff
         self.queue = deque()  # Holds (image_array, metadata_dict)
+        # Bounded on purpose: every entry is a whole frame, so a writer that
+        # cannot keep up (compression on a Pi, a slow SD card) would otherwise
+        # grow this until the machine dies. add_image blocks briefly instead,
+        # which slows acquisition rather than the whole system.
+        self._queueSpace = threading.Semaphore(self.MAX_QUEUED_FRAMES)
         self.lock = threading.Lock()
         # Set before the thread starts and cleared by stop(); the thread also
         # waits on _wake so an idle queue costs nothing.
@@ -119,6 +129,15 @@ class OmeTiffStitcher:
                 "IndexY": index_y
             },
         }
+        if not self._queueSpace.acquire(timeout=self.QUEUE_WAIT_S):
+            # The writer is wedged, not merely slow. Dropping one frame is bad;
+            # blocking the acquisition thread for ever is worse, and silence is
+            # worst of all.
+            self._logger.error(
+                f"Stitched-TIFF writer has not drained in {self.QUEUE_WAIT_S:.0f}s "
+                f"({len(self.queue)} frames queued) — dropping this frame"
+            )
+            return
         with self.lock:
             self.queue.append((image, metadata))
         self._wake.set()
@@ -140,6 +159,8 @@ class OmeTiffStitcher:
             while True:
                 with self.lock:
                     image, metadata = self.queue.popleft() if self.queue else (None, None)
+                if image is not None:
+                    self._queueSpace.release()
 
                 if image is None:
                     if not self.is_running:
@@ -175,4 +196,8 @@ class OmeTiffStitcher:
     def close(self):
         """Close the OME-TIFF stitcher and cleanup resources."""
         self.stop()
-        self.queue.clear()
+        with self.lock:
+            dropped = len(self.queue)
+            self.queue.clear()
+        for _ in range(dropped):
+            self._queueSpace.release()

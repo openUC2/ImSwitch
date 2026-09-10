@@ -115,6 +115,7 @@ class StageMapController(ImConWidgetController):
         self._shouldStop = threading.Event()
         self._monitorThread: Optional[threading.Thread] = None
         self._snapRequested = threading.Event()
+        self._prescanThread: Optional[threading.Thread] = None
         self._lastError = ""
 
         self._logger.info("StageMapController initialized")
@@ -369,6 +370,132 @@ class StageMapController(ImConWidgetController):
         return True
 
     # ------------------------------------------------------------------ #
+    # Prescan
+    # ------------------------------------------------------------------ #
+
+    def _prescanLoop(self, minX, maxX, minY, maxY, dy, speedX):
+        """One continuous X sweep per Y line, each pushed as one wide tile."""
+        acqHandle = None
+        try:
+            try:
+                acqHandle = self._master.detectorsManager.startAcquisition()
+            except Exception as e:
+                self._logger.warning(f"Could not start acquisition: {e}")
+
+            y = minY
+            while y <= maxY + 1e-6 and not self._shouldStop.is_set():
+                strip = self._prescanLine(minX, maxX, y, speedX)
+                if strip is not None:
+                    self._addStrip(strip, minX, maxX, y)
+                y += dy
+        except Exception as e:
+            self._lastError = f"Prescan failed: {e}"
+            self._logger.error(self._lastError)
+        finally:
+            if acqHandle is not None:
+                try:
+                    self._master.detectorsManager.stopAcquisition(acqHandle)
+                except Exception:
+                    pass
+            self._prescanThread = None
+            self._emitStatus()
+            self._logger.info("Prescan finished")
+
+    def _prescanLine(self, minX, maxX, y, speedX) -> Optional[np.ndarray]:
+        """Drive X once and return the frames re-spaced into one strip image."""
+        # Reuse the existing non-blocking mover rather than writing a fourth copy.
+        from .LightsheetController import MovementController
+
+        if "XY" in (getattr(self._stage, "combinedAxes", None) or []):
+            self._stage.move(value=(minX, y), axis="XY", is_absolute=True, is_blocking=True)
+        else:
+            self._stage.move(value=minX, axis="X", is_absolute=True, is_blocking=True)
+            self._stage.move(value=y, axis="Y", is_absolute=True, is_blocking=True)
+
+        mover = MovementController(self._stage)
+        mover.move_to_position(maxX - minX, "X", speedX, is_absolute=False)
+
+        # Position is derived from speed x elapsed time, never polled: a
+        # getPosition() per frame would block the shared serial bus and starve
+        # the live view.
+        started = time.time()
+        span = maxX - minX
+        frames: List[tuple] = []
+        lastFrameNumber = -1
+        while not mover.is_target_reached() and not self._shouldStop.is_set():
+            try:
+                frame, frameNumber = self._detector.getLatestFrame(returnFrameNumber=True)
+            except TypeError:
+                frame, frameNumber = self._detector.getLatestFrame(), lastFrameNumber + 1
+            if frame is not None and getattr(frame, "size", 0) > 0 and frameNumber != lastFrameNumber:
+                lastFrameNumber = frameNumber
+                travelled = min(speedX * (time.time() - started), span)
+                frames.append((frame if frame.ndim == 2 else frame[:, :, 0], travelled))
+            time.sleep(0.005)
+
+        if len(frames) < 2:
+            self._logger.warning(f"Prescan line y={y:.0f}: only {len(frames)} frame(s)")
+            return None
+        return self._composeStrip(frames, span)
+
+    def _composeStrip(self, frames, span) -> np.ndarray:
+        """Place each frame's centre column band at its own X along the strip.
+
+        Only the middle slice of every frame is used: the stage never stops, so
+        the rest of the frame is the same sample smeared over a different
+        moment. Slice width follows the frame spacing, which keeps the strip's
+        scale honest however fast the sweep ran.
+        """
+        pixelSize = self._getPixelSizeUm()
+        height = frames[0][0].shape[0]
+        stripW = max(2, int(round(span / max(pixelSize, 1e-6))))
+        strip = np.zeros((height, stripW), dtype=frames[0][0].dtype)
+
+        for frame, travelled in frames:
+            centre = int(round(travelled / span * (stripW - 1)))
+            frameW = frame.shape[1]
+            # Band width follows the frame spacing, capped by the frame itself.
+            band = min(max(1, stripW // len(frames)), frameW)
+            x0 = max(0, centre - band // 2)
+            x1 = min(stripW, x0 + band)
+            if x1 <= x0:
+                continue
+            # Both bands are centred: the destination on where the stage was,
+            # the source on the middle of the frame.
+            width = x1 - x0
+            fx0 = max(0, frameW // 2 - width // 2)
+            strip[:, x0:x1] = frame[:, fx0:fx0 + width]
+        return strip
+
+    def _addStrip(self, strip: np.ndarray, minX: float, maxX: float, y: float):
+        """Push one prescan line into the existing tile store as a wide tile."""
+        preview = self._makePreview(strip)
+        if preview is None:
+            return
+        pixelSize = self._getPixelSizeUm()
+        with self._tilesLock:
+            tileId = len(self._tiles)
+        tile = {
+            "id": tileId,
+            "x": float((minX + maxX) / 2.0),
+            "y": float(y),
+            "widthUm": float(maxX - minX),
+            "heightUm": float(strip.shape[0] * pixelSize),
+            "channel": self._getActiveChannel(),
+            "rawPath": "",
+            "timestamp": time.time(),
+            "preview": preview,
+        }
+        with self._tilesLock:
+            self._tiles.append(tile)
+        self._writeTileIndex()
+        self.sigStageMapTileAdded.emit({
+            "id": tileId, "x": tile["x"], "y": tile["y"],
+            "widthUm": tile["widthUm"], "heightUm": tile["heightUm"],
+            "channel": tile["channel"], "image": preview, "format": "jpeg",
+        })
+
+    # ------------------------------------------------------------------ #
     # Monitor loop
     # ------------------------------------------------------------------ #
 
@@ -532,6 +659,138 @@ class StageMapController(ImConWidgetController):
         self._monitorThread.start()
         self._emitStatus()
         self._logger.info("Stage map started")
+        return True
+
+    @APIExport(requestType="POST")
+    def startPrescan(self, minX: float, maxX: float, minY: float, maxY: float,
+                     dy: float = 500.0, speedX: float = 10000.0) -> Dict:
+        """Sweep an area fast and drop the result on the map as an overlay.
+
+        The stage runs continuously in X while the camera free-runs; frames are
+        re-spaced along X from elapsed time, downsampled, and pushed into the
+        SAME tile store the stage map uses, one strip per Y line. Coarse in Y
+        and motion-blurred in X on purpose: this is a locator for finding
+        tissue, not data.
+
+        Illumination, exposure and gain are used exactly as the operator left
+        them. Nothing here switches channels or auto-exposes, and nothing
+        should be added that does.
+
+        Coordinates are stage micrometres throughout, so a prescan taken with a
+        10x objective lines up with a 20x acquisition without rescaling.
+        """
+        if self._isRunning or self._prescanThread is not None:
+            return {"success": False, "error": "A scan is already running"}
+        if self._detector is None or self._stage is None:
+            return {"success": False, "error": "Detector or stage not available"}
+        if maxX <= minX or maxY < minY or dy <= 0 or speedX <= 0:
+            return {"success": False, "error": "Invalid area, dy or speed"}
+
+        if self._sessionPath is None:
+            self._createSession()
+        self._shouldStop.clear()
+        self._prescanThread = threading.Thread(
+            target=self._prescanLoop,
+            args=(float(minX), float(maxX), float(minY), float(maxY),
+                  float(dy), float(speedX)),
+            daemon=True,
+        )
+        self._prescanThread.start()
+        nLines = int((maxY - minY) / dy) + 1
+        self._logger.info(
+            f"Prescan started: X {minX:.0f}->{maxX:.0f} um, {nLines} line(s) "
+            f"every {dy:.0f} um at {speedX:.0f} um/s"
+        )
+        return {"success": True, "lines": nLines}
+
+    @APIExport()
+    def getStageMapOverview(self, maxWidthPx: int = 2048) -> Dict:
+        """The whole map as one image plus the stage extent it covers.
+
+        For consumers outside the React app (napari, a notebook, a script):
+        everything is in stage micrometres, so an overview taken at 10x can be
+        used to plan an acquisition at 20x without rescaling anything.
+
+        Returns ``image`` (base64 JPEG), ``bounds`` (min/max X/Y in um) and
+        ``umPerPixel`` — position in um = bounds.minX + column * umPerPixel.
+        """
+        with self._tilesLock:
+            tiles = [t for t in self._tiles if t.get("preview")]
+        if not tiles:
+            return {"success": False, "error": "No tiles captured yet"}
+
+        minX = min(t["x"] - t["widthUm"] / 2 for t in tiles)
+        maxX = max(t["x"] + t["widthUm"] / 2 for t in tiles)
+        minY = min(t["y"] - t["heightUm"] / 2 for t in tiles)
+        maxY = max(t["y"] + t["heightUm"] / 2 for t in tiles)
+        spanX, spanY = maxX - minX, maxY - minY
+        if spanX <= 0 or spanY <= 0:
+            return {"success": False, "error": "Empty map extent"}
+
+        umPerPixel = max(spanX / max(1, int(maxWidthPx)), self._getPixelSizeUm())
+        width = max(1, int(round(spanX / umPerPixel)))
+        height = max(1, int(round(spanY / umPerPixel)))
+        canvas = np.zeros((height, width), dtype=np.uint8)
+
+        for tile in tiles:
+            img = self._decodePreview(tile["preview"])
+            if img is None:
+                continue
+            tw = max(1, int(round(tile["widthUm"] / umPerPixel)))
+            th = max(1, int(round(tile["heightUm"] / umPerPixel)))
+            img = self._resizeGray(img, tw, th)
+            x0 = int(round((tile["x"] - tile["widthUm"] / 2 - minX) / umPerPixel))
+            y0 = int(round((tile["y"] - tile["heightUm"] / 2 - minY) / umPerPixel))
+            x1, y1 = min(width, x0 + tw), min(height, y0 + th)
+            x0, y0 = max(0, x0), max(0, y0)
+            if x1 > x0 and y1 > y0:
+                canvas[y0:y1, x0:x1] = img[: y1 - y0, : x1 - x0]
+
+        encoded = self._makePreview(canvas)
+        if encoded is None:
+            return {"success": False, "error": "Could not encode overview"}
+        return {
+            "success": True,
+            "image": encoded,
+            "format": "jpeg",
+            "widthPx": width,
+            "heightPx": height,
+            "umPerPixel": float(umPerPixel),
+            "bounds": {"minX": float(minX), "maxX": float(maxX),
+                       "minY": float(minY), "maxY": float(maxY)},
+            "tileCount": len(tiles),
+        }
+
+    def _decodePreview(self, preview: str) -> Optional[np.ndarray]:
+        """base64 JPEG -> 2-D uint8 array."""
+        try:
+            raw = base64.b64decode(preview)
+            if HAS_CV2:
+                return cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_GRAYSCALE)
+            from PIL import Image
+            import io
+            return np.array(Image.open(io.BytesIO(raw)).convert("L"))
+        except Exception as e:
+            self._logger.debug(f"Could not decode tile preview: {e}")
+            return None
+
+    @staticmethod
+    def _resizeGray(img: np.ndarray, width: int, height: int) -> np.ndarray:
+        if img.shape[0] == height and img.shape[1] == width:
+            return img
+        if HAS_CV2:
+            return cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+        ys = (np.linspace(0, img.shape[0] - 1, height)).astype(int)
+        xs = (np.linspace(0, img.shape[1] - 1, width)).astype(int)
+        return img[np.ix_(ys, xs)]
+
+    @APIExport()
+    def stopPrescan(self) -> bool:
+        """Stop a running prescan; strips already produced are kept."""
+        self._shouldStop.set()
+        if self._prescanThread is not None and self._prescanThread.is_alive():
+            self._prescanThread.join(timeout=10.0)
+        self._prescanThread = None
         return True
 
     @APIExport()

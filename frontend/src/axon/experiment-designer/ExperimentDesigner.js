@@ -133,30 +133,9 @@ const ExperimentDesigner = () => {
     return () => clearInterval(intervalId);
   }, [dispatch]);
 
-  // Trigger Ashlar stitching automatically when the experiment finishes.
-  // Use a boolean ref so we catch any IDLE transition that follows a RUNNING
-  // phase — including RUNNING→STOPPING→IDLE flows.
-  const wasRunningRef = useRef(false);
-  useEffect(() => {
-    const curr = experimentStatus.status;
-    if (curr === Status.RUNNING) {
-      wasRunningRef.current = true;
-    } else if (wasRunningRef.current && curr === Status.IDLE) {
-      wasRunningRef.current = false;
-      if (experimentState.parameterValue.ome_write_ashlar_stitch) {
-        // Backend auto-starts stitching once all tiles are written.
-        // Start polling so we can show progress as soon as it begins.
-        setAshlarRunning(true);
-      }
-    }
-  }, [
-    experimentStatus.status,
-    experimentState.parameterValue.ome_write_ashlar_stitch,
-    experimentState.parameterValue.ashlar_pixel_size,
-    experimentState.parameterValue.ashlar_maximum_shift,
-    experimentState.parameterValue.ashlar_align_channel,
-  ]);
-
+  // Ashlar no longer runs by itself when the experiment finishes — it is a
+  // second stitching path and its failures used to land inside every run.
+  // Start it from the Output panel when you want it (handleRunAshlar).
   // Poll stitching progress until the background job finishes
   useEffect(() => {
     if (!ashlarRunning) return;
@@ -519,7 +498,7 @@ const ExperimentDesigner = () => {
       });
   };
 
-  const handleRestartStitch = () => {
+  const handleRunAshlar = () => {
     setAshlarInterrupted(false);
     apiExperimentControllerRunAshlarStitching({
       pixelSize: experimentState.parameterValue.ashlar_pixel_size,
@@ -529,7 +508,7 @@ const ExperimentDesigner = () => {
       .then((data) => {
         if (data?.started) {
           setAshlarRunning(true);
-          infoPopupRef.current?.showMessage("Ashlar stitching restarted");
+          infoPopupRef.current?.showMessage("Ashlar stitching started");
         } else {
           setAshlarInterrupted(true);
           infoPopupRef.current?.showMessage(
@@ -663,19 +642,21 @@ const ExperimentDesigner = () => {
             </Button>
           </Tooltip>
         )}
-        {ashlarInterrupted && !ashlarRunning && (
-          <Tooltip title="Restart Ashlar stitching from the beginning">
-            <Button
-              size="small"
-              variant="outlined"
-              color="secondary"
-              startIcon={<AutoFixHighIcon />}
-              onClick={handleRestartStitch}
-            >
-              Restart Stitching
-            </Button>
-          </Tooltip>
-        )}
+        {!ashlarRunning &&
+          experimentState.parameterValue.ome_write_ashlar_stitch &&
+          experimentState.parameterValue.ome_write_individual_tiffs && (
+            <Tooltip title="Run Ashlar over the last experiment's tiles. It does not start on its own.">
+              <Button
+                size="small"
+                variant="outlined"
+                color="secondary"
+                startIcon={<AutoFixHighIcon />}
+                onClick={handleRunAshlar}
+              >
+                {ashlarInterrupted ? "Restart Stitching" : "Stitch Now"}
+              </Button>
+            </Tooltip>
+          )}
 
         {/* Status */}
         <Typography

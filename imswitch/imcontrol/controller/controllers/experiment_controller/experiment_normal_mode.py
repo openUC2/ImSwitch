@@ -494,6 +494,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 # Clean position name for the OME/OMERO image-name metadata
                 # (falls back to the file basename when no name is set).
                 image_name=area_name or None,
+                region_id=region_id,
             )
             file_writers.append(ome_writer)
 

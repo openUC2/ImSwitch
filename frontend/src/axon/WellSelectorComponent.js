@@ -38,10 +38,19 @@ import PanToolIcon from "@mui/icons-material/PanTool";
 import ScatterPlotIcon from "@mui/icons-material/ScatterPlot";
 import AddLocationIcon from "@mui/icons-material/AddLocation";
 import GpsFixedIcon from "@mui/icons-material/GpsFixed";
+import BlurLinearIcon from "@mui/icons-material/BlurLinear";
+import {
+  apiStageMapStartPrescan,
+  apiStageMapStopPrescan,
+} from "../backendapi/apiStageMapController";
 
 //##################################################################################
 const WellSelectorComponent = () => {
   //local state
+  // Prescan settings: line spacing and sweep speed (see handleStartPrescan).
+  const [prescanDy, setPrescanDy] = useState(500);
+  const [prescanSpeed, setPrescanSpeed] = useState(10000);
+  const [prescanRunning, setPrescanRunning] = useState(false);
   const [wellLayoutFileList] = useState([
     "image/test.json", //TODO remove test
     "image/test1.json", //TODO remove test
@@ -288,6 +297,86 @@ const WellSelectorComponent = () => {
     }
   };
 
+  // ── Fast prescan overlay ─────────────────────────────────────────────
+  // Sweeps the bounding box of whatever is currently selected and drops the
+  // result onto the map through the existing stage-map tile overlay, so there
+  // is something real to trace over. Illumination and exposure are used as the
+  // operator left them.
+  const selectionBounds = () => {
+    const xs = [];
+    const ys = [];
+    (experimentState.pointList || []).forEach((p) => {
+      xs.push(p.x - (p.rectMinusX || 0), p.x + (p.rectPlusX || 0));
+      ys.push(p.y - (p.rectMinusY || 0), p.y + (p.rectPlusY || 0));
+      (p.neighborPointList || []).forEach((n) => {
+        xs.push(n.x);
+        ys.push(n.y);
+      });
+    });
+    if (xs.length === 0) return null;
+    return {
+      minX: Math.min(...xs),
+      maxX: Math.max(...xs),
+      minY: Math.min(...ys),
+      maxY: Math.max(...ys),
+    };
+  };
+
+  const handleStartPrescan = () => {
+    const bounds = selectionBounds();
+    if (!bounds) {
+      infoPopupRef.current?.showMessage(
+        "Select an area or place positions first — the prescan sweeps their bounding box.",
+      );
+      return;
+    }
+    setPrescanRunning(true);
+    apiStageMapStartPrescan({ ...bounds, dy: prescanDy, speedX: prescanSpeed })
+      .then((res) => {
+        if (res?.success) {
+          infoPopupRef.current?.showMessage(`Prescan running — ${res.lines} line(s)`);
+        } else {
+          setPrescanRunning(false);
+          infoPopupRef.current?.showMessage(res?.error || "Prescan failed to start");
+        }
+      })
+      .catch(() => {
+        setPrescanRunning(false);
+        infoPopupRef.current?.showMessage("Prescan failed to start");
+      });
+  };
+
+  const handleStopPrescan = () => {
+    apiStageMapStopPrescan().finally(() => setPrescanRunning(false));
+  };
+
+  // ── Boundary from dropped points (freehand mode) ─────────────────────
+  const handleAddCurrentAsVertex = () => {
+    childRef.current?.addFreehandVertex?.({
+      x: positionState.x,
+      y: positionState.y,
+    });
+    infoPopupRef.current?.showMessage(
+      `Vertex at X=${positionState.x}, Y=${positionState.y}`,
+    );
+  };
+
+  const handleCloseFreehand = () => {
+    const closed = childRef.current?.closeFreehand?.();
+    infoPopupRef.current?.showMessage(
+      closed ? "Region closed — press Convert to tile it."
+             : "Need at least 3 vertices to close a region.",
+    );
+  };
+
+  const handleWrapPoints = () => {
+    const n = childRef.current?.wrapPointsIntoFreehand?.() || 0;
+    infoPopupRef.current?.showMessage(
+      n ? `Wrapped ${n} boundary vertices around the existing positions.`
+        : "Need at least 3 positions to wrap.",
+    );
+  };
+
   //##################################################################################
   const handleCalibrateOffset = () => {
     // Stage offset calibration is now available via right-click context menu on the canvas.
@@ -479,21 +568,92 @@ const WellSelectorComponent = () => {
         {/* Stage actions */}
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
           {wellSelectorState.mode === Mode.FREEHAND_DRAW && (
-            <Tooltip
-              title="Convert the drawn freehand region into tiled scan points."
-              arrow
-            >
-              <Button
-                size="small"
-                variant="outlined"
-                color="secondary"
-                startIcon={<ScatterPlotIcon />}
-                onClick={handleConvertFreehandToPoints}
+            <>
+              <Tooltip
+                title="Add the current stage XY as a boundary vertex — drive to a tissue edge, tap, repeat."
+                arrow
               >
-                Convert
-              </Button>
-            </Tooltip>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<AddLocationIcon />}
+                  onClick={handleAddCurrentAsVertex}
+                >
+                  Add vertex
+                </Button>
+              </Tooltip>
+              <Tooltip
+                title="Close the boundary you have been tapping out."
+                arrow
+              >
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={handleCloseFreehand}
+                >
+                  Close region
+                </Button>
+              </Tooltip>
+              <Tooltip
+                title="Wrap the existing positions in a boundary (convex hull)."
+                arrow
+              >
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={handleWrapPoints}
+                >
+                  Wrap points
+                </Button>
+              </Tooltip>
+              <Tooltip
+                title="Convert the drawn freehand region into tiled scan points."
+                arrow
+              >
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="secondary"
+                  startIcon={<ScatterPlotIcon />}
+                  onClick={handleConvertFreehandToPoints}
+                >
+                  Convert
+                </Button>
+              </Tooltip>
+            </>
           )}
+          <Tooltip
+            title="Sweep the selected area fast and lay the result under the map, so you can see the tissue and trace it. Uses the current illumination and exposure."
+            arrow
+          >
+            <Button
+              size="small"
+              variant={prescanRunning ? "contained" : "outlined"}
+              color="info"
+              startIcon={<BlurLinearIcon />}
+              onClick={prescanRunning ? handleStopPrescan : handleStartPrescan}
+            >
+              {prescanRunning ? "Stop prescan" : "Prescan"}
+            </Button>
+          </Tooltip>
+          <TextField
+            size="small"
+            label="Line dy (µm)"
+            type="number"
+            value={prescanDy}
+            onChange={(e) => setPrescanDy(Math.max(1, Number(e.target.value) || 1))}
+            sx={{ width: 110 }}
+            disabled={prescanRunning}
+          />
+          <TextField
+            size="small"
+            label="Speed (µm/s)"
+            type="number"
+            value={prescanSpeed}
+            onChange={(e) => setPrescanSpeed(Math.max(1, Number(e.target.value) || 1))}
+            sx={{ width: 120 }}
+            disabled={prescanRunning}
+          />
           <Tooltip title="Add the current stage XYZ as a new position." arrow>
             <Button
               size="small"

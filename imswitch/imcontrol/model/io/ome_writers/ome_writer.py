@@ -130,6 +130,11 @@ class OMEWriterConfig:
             self.channel_colors = [default_colors[i % len(default_colors)] for i in range(self.n_channels)]
 
 
+def _sanitize_region_tag(region_id: Optional[str]) -> str:
+    """Region id reduced to what a filename can carry, or "" when unset."""
+    return "".join(c for c in (region_id or "") if c.isalnum())[:24]
+
+
 def tiff_compression_kwargs(compression="zlib", level=1, predictor=True) -> Dict[str, Any]:
     """Compression kwargs for a tifffile write, degrading on older tifffile.
 
@@ -294,6 +299,7 @@ class OMEWriter:
         shared_omero_key: Optional[str] = None,
         well_metadata: Optional[Dict[str, Any]] = None,
         image_name: Optional[str] = None,
+        region_id: Optional[str] = None,
     ):
         """
         Initialize the OME writer.
@@ -338,6 +344,10 @@ class OMEWriter:
         # TIFF writers
         self.tiff_stitcher: Optional[OmeTiffStitcher] = None
         self._finalized = False
+        # Goes into every individual-TIFF filename so downstream tooling can
+        # tell one scan region's tiles from another's without relying on the
+        # directory layout.
+        self._region_tag = _sanitize_region_tag(region_id)
         self.single_tiff_writer: Optional[SingleTiffWriter] = None
 
         # In-memory mosaic for the unified multi-dimensional OME-TIFF hyperstack
@@ -809,7 +819,11 @@ class OMEWriter:
 
         timepoint_dir = self.file_paths.get_timepoint_dir(t_idx)
         current_time = time.strftime("%Y%m%d_%H%M%S")
-        filename = f"t{current_time}_x{x_microns}_y{y_microns}_z{z_microns}_c{c_idx}_{channel}_i{iterator:04d}_p{laser_power}.tif"
+        region = f"_r{self._region_tag}" if self._region_tag else ""
+        filename = (
+            f"t{current_time}{region}_x{x_microns}_y{y_microns}_z{z_microns}"
+            f"_c{c_idx}_{channel}_i{iterator:04d}_p{laser_power}.tif"
+        )
         filepath = os.path.join(timepoint_dir, filename)
 
         # RGB tiles (H, W, 3) must be tagged photometric="rgb" or tifffile would

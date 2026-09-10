@@ -1313,29 +1313,11 @@ class ExperimentController(ImConWidgetController):
                 target=_restore_freerun, daemon=True, name="TriggeredAcqCleanup"
             ).start()
 
-            # Auto-trigger Ashlar stitching once the workflow thread finishes,
-            # guaranteeing all individual TIFFs are on disk before stitching starts.
-            if p.ome_write_ashlar_stitch and p.ome_write_individual_tiffs:
-                _wf_thread = self.workflow_manager.current_thread
-                _pixel_size = getattr(p, 'ashlar_pixel_size', 1.0)
-                _max_shift = getattr(p, 'ashlar_maximum_shift', 50.0)
-                _align_ch = getattr(p, 'ashlar_align_channel', 0)
-                _exp_dir = dirPath
-
-                def _auto_stitch():
-                    if _wf_thread is not None:
-                        _wf_thread.join()
-                    self._logger.info("Experiment complete — auto-starting Ashlar stitching")
-                    self.runAshlarStitching(
-                        pixelSize=_pixel_size,
-                        maximumShift=_max_shift,
-                        alignChannel=_align_ch,
-                        experimentDir=_exp_dir,
-                    )
-
-                threading.Thread(
-                    target=_auto_stitch, daemon=True, name="AshlarAutoTrigger"
-                ).start()
+            # Ashlar is NOT started automatically. It is a second stitching
+            # path (the OME writer already produces stitched.ome.tif), it only
+            # runs when individual TIFFs are on — the most expensive output we
+            # write — and a failure in it used to land inside every run. Use
+            # runAshlarStitching() explicitly when you want it.
 
         return {"status": "running"}
 

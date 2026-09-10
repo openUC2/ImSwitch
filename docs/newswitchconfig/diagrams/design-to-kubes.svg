@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 620" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- CONFIG-MODEL.md §10 — the cube arrangement in the optikit design becomes
+       the LightPath kubes + edges newswitch already has, by derivation. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="beam" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#0891b2"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1020" height="620" fill="#ffffff"/>
+
+  <text x="510" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">Cube arrangement → light path: derived, never authored twice</text>
+  <text x="510" y="54" text-anchor="middle" font-size="12.5" fill="#64748b">every affine matrix in LightPathState comes from a design pose composed on the 50 / 50 / 55 mm grid</text>
+
+  <!-- LEFT: the design's cube grid -->
+  <text x="238" y="90" text-anchor="middle" font-size="13.5" font-weight="700" fill="#1e3a8a">L1 · the design says WHERE (F1, document frame)</text>
+
+  <g stroke="#cbd5e1" stroke-width="1">
+    <line x1="70" y1="120" x2="70" y2="480"/><line x1="140" y1="120" x2="140" y2="480"/>
+    <line x1="210" y1="120" x2="210" y2="480"/><line x1="280" y1="120" x2="280" y2="480"/>
+    <line x1="350" y1="120" x2="350" y2="480"/><line x1="420" y1="120" x2="420" y2="480"/>
+    <line x1="70" y1="120" x2="420" y2="120"/><line x1="70" y1="192" x2="420" y2="192"/>
+    <line x1="70" y1="264" x2="420" y2="264"/><line x1="70" y1="336" x2="420" y2="336"/>
+    <line x1="70" y1="408" x2="420" y2="408"/><line x1="70" y1="480" x2="420" y2="480"/>
+  </g>
+  <text x="76" y="504" font-size="10.5" fill="#94a3b8">one cell = 50 mm</text>
+
+  <!-- cubes -->
+  <g font-size="10.5" text-anchor="middle">
+    <rect x="76" y="270" width="58" height="60" rx="6" fill="#fef3c7" stroke="#ca8a04" stroke-width="1.5"/>
+    <text x="105" y="294" font-weight="700" fill="#713f12">laser</text>
+    <text x="105" y="310" fill="#713f12">488</text>
+
+    <rect x="146" y="270" width="58" height="60" rx="6" fill="#ecfeff" stroke="#0891b2" stroke-width="1.5"/>
+    <text x="175" y="294" font-weight="700" fill="#155e75">ex</text>
+    <text x="175" y="310" fill="#155e75">filter</text>
+
+    <rect x="216" y="270" width="58" height="60" rx="6" fill="#f1f5f9" stroke="#475569" stroke-width="1.7"/>
+    <text x="245" y="294" font-weight="700" fill="#0f172a">dichroic</text>
+    <text x="245" y="310" fill="#334155">505</text>
+
+    <rect x="216" y="342" width="58" height="60" rx="6" fill="#dcfce7" stroke="#16a34a" stroke-width="1.7"/>
+    <text x="245" y="366" font-weight="700" fill="#14532d">objective</text>
+    <text x="245" y="382" fill="#166534">dz DOF</text>
+
+    <rect x="216" y="414" width="58" height="60" rx="6" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+    <text x="245" y="438" font-weight="700" fill="#7f1d1d">sample</text>
+    <text x="245" y="454" fill="#991b1b">on stage</text>
+
+    <rect x="216" y="198" width="58" height="60" rx="6" fill="#ecfeff" stroke="#0891b2" stroke-width="1.5"/>
+    <text x="245" y="222" font-weight="700" fill="#155e75">tube</text>
+    <text x="245" y="238" fill="#155e75">lens</text>
+
+    <rect x="216" y="126" width="58" height="60" rx="6" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="245" y="150" font-weight="700" fill="#4c1d95">camera</text>
+    <text x="245" y="166" fill="#5b21b6">CS165</text>
+  </g>
+
+  <!-- beam -->
+  <g stroke="#0891b2" stroke-width="2.4" fill="none" opacity="0.85">
+    <path d="M134 300 L214 300" marker-end="url(#beam)"/>
+    <path d="M245 330 L245 412" marker-end="url(#beam)"/>
+    <path d="M245 268 L245 190" marker-end="url(#beam)" stroke-dasharray="6 3"/>
+  </g>
+  <text x="330" y="300" font-size="10.5" fill="#0e7490">excitation</text>
+  <text x="330" y="240" font-size="10.5" fill="#0e7490" font-style="italic">emission</text>
+
+  <rect x="70" y="518" width="350" height="76" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.3"/>
+  <text x="86" y="540" font-size="11.5" font-weight="700" fill="#1e3a8a">pose composes as p = anchor + S·g + δ</text>
+  <text x="86" y="558" font-size="11" fill="#334155">S = (50, 50, 55) mm · g = integer cells · δ = offset-mm</text>
+  <text x="86" y="576" font-size="11" fill="#334155">R = R24 · ΔR — the 24 grid orientations, plus a residual</text>
+
+  <!-- arrow across -->
+  <path d="M438 300 L512 300" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <text x="475" y="288" text-anchor="middle" font-size="11" font-weight="700" fill="#334155">derive</text>
+  <text x="475" y="322" text-anchor="middle" font-size="10" font-style="italic" fill="#64748b">pure function</text>
+
+  <!-- RIGHT: newswitch light path graph -->
+  <text x="770" y="90" text-anchor="middle" font-size="13.5" font-weight="700" fill="#14532d">newswitch · LightPathState (already exists in protocols/core.py)</text>
+
+  <g font-size="10.5" text-anchor="middle">
+    <rect x="534" y="140" width="148" height="46" rx="8" fill="#fef3c7" stroke="#ca8a04" stroke-width="1.4"/>
+    <text x="608" y="160" font-weight="700" fill="#713f12">IlluminationKube</text>
+    <text x="608" y="176" font-family="ui-monospace, monospace" font-size="9.5" fill="#713f12">affine ← laser.pose</text>
+
+    <rect x="534" y="212" width="148" height="46" rx="8" fill="#ecfeff" stroke="#0891b2" stroke-width="1.4"/>
+    <text x="608" y="232" font-weight="700" fill="#155e75">FilterKube</text>
+    <text x="608" y="248" font-family="ui-monospace, monospace" font-size="9.5" fill="#155e75">band ← optics.response</text>
+
+    <rect x="534" y="284" width="148" height="46" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="608" y="304" font-weight="700" fill="#0f172a">DichroicKube</text>
+    <text x="608" y="320" font-family="ui-monospace, monospace" font-size="9.5" fill="#334155">affine ← dichroic.pose</text>
+
+    <rect x="534" y="356" width="148" height="46" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="1.6"/>
+    <text x="608" y="376" font-weight="700" fill="#14532d">ObjectiveKube</text>
+    <text x="608" y="392" font-family="ui-monospace, monospace" font-size="9.5" fill="#166534">z ← dof_values[dz]</text>
+
+    <rect x="534" y="428" width="148" height="46" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="1.4"/>
+    <text x="608" y="448" font-weight="700" fill="#7f1d1d">StageKube</text>
+    <text x="608" y="464" font-family="ui-monospace, monospace" font-size="9.5" fill="#991b1b">x,y ← stage state</text>
+
+    <rect x="746" y="212" width="148" height="46" rx="8" fill="#ecfeff" stroke="#0891b2" stroke-width="1.4"/>
+    <text x="820" y="232" font-weight="700" fill="#155e75">GenericKube</text>
+    <text x="820" y="248" font-size="9.5" fill="#155e75">tube lens</text>
+
+    <rect x="746" y="140" width="148" height="46" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.4"/>
+    <text x="820" y="160" font-weight="700" fill="#4c1d95">DetectorKube</text>
+    <text x="820" y="176" font-family="ui-monospace, monospace" font-size="9.5" fill="#5b21b6">px ← device params</text>
+  </g>
+
+  <g stroke="#0891b2" stroke-width="1.8" fill="none">
+    <path d="M608 186 L608 208" marker-end="url(#beam)"/>
+    <path d="M608 258 L608 280" marker-end="url(#beam)"/>
+    <path d="M608 330 L608 352" marker-end="url(#beam)"/>
+    <path d="M608 402 L608 424" marker-end="url(#beam)"/>
+    <path d="M682 372 C 726 372, 742 268, 744 248" marker-end="url(#beam)" stroke-dasharray="6 3"/>
+    <path d="M820 212 L820 190" marker-end="url(#beam)" stroke-dasharray="6 3"/>
+  </g>
+  <text x="726" y="336" font-size="10.5" font-style="italic" fill="#0e7490">LightEdge, one per</text>
+  <text x="726" y="352" font-size="10.5" font-style="italic" fill="#0e7490">chain hop in paths:</text>
+
+  <rect x="534" y="500" width="438" height="94" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.4"/>
+  <text x="568" y="524" font-size="12.5" font-weight="700" fill="#7f1d1d">What this replaces</text>
+  <text x="568" y="546" font-size="11.5" fill="#334155"><tspan font-family="ui-monospace, monospace">LightPathManager.calculate_possible_light_paths()</tspan> currently</text>
+  <text x="568" y="563" font-size="11.5" fill="#334155">invents the geometry — <tspan font-family="ui-monospace, monospace">translate_z(120)</tspan>, a 40 mm illumination</text>
+  <text x="568" y="580" font-size="11.5" fill="#334155">ring, hardcoded edges. With a design bound, all of it is computed.</text>
+</svg>

@@ -113,6 +113,10 @@ class InLineHoloState:
     has_background: bool = False
     # True while a high-quality refinement is running (drives the UI spinner).
     is_refining: bool = False
+    # Fraction (0..1) of ROI pixels sitting at the sensor's clip level on the
+    # last processed frame. The frontend warns above a few percent: clipped
+    # pixels carry no fringe information, so the reconstruction degrades.
+    saturated_fraction: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -126,6 +130,7 @@ class InLineHoloState:
             "mjpeg_client_count": self.mjpeg_client_count,
             "has_background": self.has_background,
             "is_refining": self.is_refining,
+            "saturated_fraction": self.saturated_fraction,
         }
 
 
@@ -191,6 +196,10 @@ class InLineHoloController(LiveUpdatedController):
 
         self._state = InLineHoloState()
         self._processing_lock = threading.Lock()
+
+        # Largest raw sample ever seen, used to infer the sensor's real bit
+        # depth for the overexposure warning (see _measure_saturation).
+        self._max_sample_seen = 0
 
         # Background normalization: the averaged raw frame (full resolution,
         # native channels). Reduced through the live pipeline at divide time.
@@ -469,6 +478,34 @@ class InLineHoloController(LiveUpdatedController):
 
         return image
 
+    def _measure_saturation(self, roi):
+        """Store the fraction of ROI pixels at the sensor's clip level.
+
+        Measured on the raw ROI across all colour channels and *before* the
+        background division, which would otherwise rescale the values away from
+        the clip level and hide the overexposure we are trying to report.
+        """
+        try:
+            if not np.issubdtype(roi.dtype, np.integer):
+                return
+            full_scale = np.iinfo(roi.dtype).max
+            if full_scale > 255:
+                # 10/12/14-bit sensors ship in a uint16 container, so the clip
+                # level is not iinfo().max. Infer the container's real depth
+                # from the largest sample we have ever seen.
+                # ponytail: heuristic. If a detector ever exposes its bit depth,
+                # read it from the manager instead of guessing.
+                self._max_sample_seen = max(self._max_sample_seen, int(roi.max()))
+                full_scale = 65535
+                for bits in (8, 10, 12, 14, 16):
+                    if self._max_sample_seen < (1 << bits):
+                        full_scale = (1 << bits) - 1
+                        break
+            clipped = np.count_nonzero(roi >= full_scale - 1)
+            self._state.saturated_fraction = float(clipped) / float(roi.size)
+        except Exception as e:  # never let a diagnostic break the live path
+            self._logger.debug(f"Saturation measurement failed: {e}")
+
     def _prepared_gray(self, image):
         """Shared preprocessing: ROI -> colour -> transforms -> binning, then
         (optionally) divide by the stored background.
@@ -479,6 +516,7 @@ class InLineHoloController(LiveUpdatedController):
         ``sqrt`` -> field amplitude. Returns a float32 array.
         """
         roi = self._extract_roi(image)
+        self._measure_saturation(roi)
         gray = self._extract_color_channel(roi)
         gray = self._apply_transforms(gray)
         gray = self._apply_binning(gray)

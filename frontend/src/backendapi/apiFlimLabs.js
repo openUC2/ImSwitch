@@ -1,189 +1,168 @@
 /**
- * apiFlimLabs.js - Direct client for the FLIM LABS flim-imager standalone server.
+ * apiFlimLabs.js - Client for the FLIM LABS card, via the ImSwitch backend.
  *
- * Unlike the other backendapi modules this does NOT talk to the ImSwitch
- * backend: the FLIM server (Rust warp, default port 5249) runs in its own
- * Docker container (possibly on a different host) and allows any CORS origin,
- * so the browser can control it directly. Used by the dev-mode FLIM bridge
- * panel inside the galvo scanner UI.
+ * The ImSwitch backend (FLIMLabsController + FLIMLabsDetectorManager) is the
+ * SINGLE owner of the flim-imager server connection: its `/data` WebSocket is a
+ * single-consumer queue drain upstream, so two clients would split the stream
+ * between them. The browser therefore never talks to the FLIM server directly
+ * any more - it goes through ImSwitch, which means the FLIM panel keeps working
+ * while an ExperimentController acquisition uses the same card as a detector.
  *
- * Targets flim-imager 2.x (the "flim-imager-2.0" repository). The /start
- * payload mirrors what the v2 Svelte frontend sends (see
- * svelte/src/lib/network/web.service.ts, buildImagingExperimentPayload) -
- * the v1 payload schema is NOT accepted by the v2 server.
+ * (Before, this module spoke to the FLIM server's REST/WS directly. The payload
+ * construction, binary-protocol parsing and frame assembly now live in
+ * imswitch/imcontrol/model/interfaces/flimlabsclient.py.)
  */
 
-export const FLIM_DEFAULT_PORT = 5249;
-
-/** Normalize "host[:port]" + port into an http base URL. */
-export const flimBaseUrl = (host, port = FLIM_DEFAULT_PORT) => {
-  let h = (host || 'localhost').trim();
-  if (!/^https?:\/\//.test(h)) h = `http://${h}`;
-  // strip trailing slash
-  h = h.replace(/\/+$/, '');
-  // if host already contains a port, keep it, else append
-  const hasPort = /:\d+$/.test(h.replace(/^https?:\/\//, ''));
-  return hasPort ? h : `${h}:${port}`;
-};
-
-export const flimWsUrl = (host, port = FLIM_DEFAULT_PORT) =>
-  `${flimBaseUrl(host, port).replace(/^http/, 'ws')}/data`;
+const getApiBase = (hostIP, hostPort) =>
+  `${hostIP}:${hostPort}/imswitch/api/FLIMLabsController`;
 
 const jsonFetch = async (url, options = {}) => {
-  const response = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
+  const response = await fetch(url, options);
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    const msg = body && (body.error || body.message);
-    throw new Error(msg || `FLIM server error ${response.status}`);
+    const msg = body && (body.error || body.detail || body.message);
+    throw new Error(msg || `ImSwitch error ${response.status}`);
   }
+  if (body && body.error) throw new Error(body.error);
   return body;
 };
 
-/** GET /api/card/check -> { success, data: <serial number> } */
-export const apiFlimCheckCard = (host, port) =>
-  jsonFetch(`${flimBaseUrl(host, port)}/api/card/check`);
-
-/** GET /api/card/list -> { success, data: [{card_id, serial_number, ...}] } */
-export const apiFlimListCards = (host, port) =>
-  jsonFetch(`${flimBaseUrl(host, port)}/api/card/list`);
-
-/** GET /health -> { success, data: "ok" } (no hardware access) */
-export const apiFlimHealth = (host, port) =>
-  jsonFetch(`${flimBaseUrl(host, port)}/health`);
+/**
+ * Full FLIM state: server health, card serial, acquisition status, CPS,
+ * frame number, calibration table and the calibration reference path.
+ */
+export const apiFlimGetStatus = (hostIP, hostPort) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/getFlimStatus`);
 
 /**
- * POST /api/firmware/resolve -> { success, data: <firmware path> }
- * The v2 server accepts both `is_pico_mode` and the legacy `enable100ps`
- * field name; the canonical name is sent here.
+ * Latest intensity frame as a base64 PNG data URL. Returns the progressively
+ * filling frame while one is being received (a FLIM frame takes seconds).
  */
-export const apiFlimResolveFirmware = (
-  host,
-  port,
-  { sync = 'in', frequencyMhz = 80, channels = [1], channel = 'sma', reconstruction = 'PLF', enable100ps = false }
-) =>
-  jsonFetch(`${flimBaseUrl(host, port)}/api/firmware/resolve`, {
-    method: 'POST',
-    body: JSON.stringify({
-      sync,
-      frequency_mhz: frequencyMhz,
-      channels,
-      channel,
-      sync_connection: 'sma',
-      reconstruction,
-      is_pico_mode: enable100ps,
-    }),
+export const apiFlimGetImage = (hostIP, hostPort, maxSize = 512) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/getFlimImage?maxSize=${maxSize}`);
+
+/** Accumulated phasor density as sparse [x, y, count] triplets. */
+export const apiFlimGetPhasor = (hostIP, hostPort, maxPoints = 20000) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/getFlimPhasor?maxPoints=${maxPoints}`);
+
+/**
+ * Start a run.
+ * @param {'scouting'|'calibration'|'phasors'} step
+ */
+export const apiFlimStart = (hostIP, hostPort, {
+  step = 'scouting',
+  maxFrames = 0,
+  tauNs = null,
+  harmonics = 1,
+  exportData = false,
+  exportFilename = '',
+  calibrationTimestamp = null, // which stored calibration a phasors run uses
+} = {}) => {
+  const params = new URLSearchParams({
+    step,
+    maxFrames: String(maxFrames),
+    harmonics: String(harmonics),
+    exportData: String(exportData),
+    exportFilename,
   });
-
-/**
- * The panel's "imaging" action maps to the v2 'tcspc' step: v2 renamed the
- * full acquisition (decay-collecting, exportable) step from v1's "imaging",
- * while 'scouting' remains the live intensity preview.
- */
-const V2_STEP = { scouting: 'scouting', imaging: 'tcspc' };
-
-/**
- * Build the /start payload for an imaging experiment (flim-imager 2.x schema).
- * All fields of ExperimentImagingParams that the server requires are present;
- * optional fields (max_frames, dwell_time for PLF, roi_masks...) are added
- * conditionally, mirroring the v2 frontend.
- */
-export const buildFlimImagingPayload = ({
-  firmware,
-  step = 'scouting', // 'scouting' | 'imaging' (mapped to v2 'tcspc')
-  frequencyMhz = 80,
-  enable100ps = false,
-  reconstruction = 'PLF',
-  imageWidth = 256,
-  imageHeight = 256,
-  scanWidth = null, // defaults to image + offsets
-  scanHeight = null,
-  offsets = { top: 0, right: 0, bottom: 0, left: 0 },
-  channels = [true, false, false, false, false, false, false, false],
-  dwellTime = 5, // microseconds; ignored for PLF (pixel clock defines geometry)
-  maxFrames = null,
-  cardId = null, // optional multi-card selection
-  serialNumber = null,
-}) => {
-  const enabledIdx = channels
-    .map((on, i) => (on ? i : -1))
-    .filter((i) => i >= 0);
-  const effScanWidth = scanWidth ?? imageWidth + offsets.left + offsets.right;
-  const effScanHeight = scanHeight ?? imageHeight + offsets.top + offsets.bottom;
-  const geometry = {
-    scan_width: effScanWidth,
-    scan_height: effScanHeight,
-    image_width: imageWidth,
-    image_height: imageHeight,
-    offset_top: offsets.top,
-    offset_right: offsets.right,
-    offset_bottom: offsets.bottom,
-    offset_left: offsets.left,
-  };
-  const params = {
-    acquisition_setup: 'Default',
-    reconstruction,
-    stop_acquisition_mode: 'Frames Count',
-    step: V2_STEP[step] ?? step,
-    is_preview: false,
-    frequency_mhz: frequencyMhz,
-    is_pico_mode: enable100ps,
-    calibration: false,
-    tau_ns: null,
-    harmonics: 1,
-    ...geometry,
-    skip_frames: 0,
-    calibration_offsets: [[], [], [], [], [], [], [], []],
-    channels,
-    bg_active_channels: enabledIdx,
-    channels_to_show: enabledIdx,
-    show_cps: true,
-    show_kcps: false,
-    show_sbr: true,
-    show_intensity_traces: false,
-    show_realtime_phasors: false,
-    bin_width: 3000, // v2 default intensity-trace bin width (unused while traces are off)
-    export_params: {
-      export_data: false,
-      export_filename: '',
-      export_path: '',
-      export_frames: false,
-      export_global_image: false,
-      export_notes: '',
-      export_tags: [],
-      channels_metadata: enabledIdx.map((i) => ({ id: i, alias: `Channel ${i + 1}` })),
-    },
-    acquisition_timestamp: Date.now(),
-    reference_file: null,
-    interleaving_type: null,
-    // decay_roi mirrors the full frame (no ROI restriction)
-    decay_roi: { ...geometry },
-  };
-  // The card slices lines by dwell time only in LF/F reconstruction; with
-  // per-pixel markers (PLF) the v2 frontend omits it entirely.
-  if (reconstruction !== 'PLF') params.dwell_time = dwellTime;
-  if (maxFrames && maxFrames > 0) params.max_frames = maxFrames;
-  const payload = {
-    firmware,
-    frequency: frequencyMhz,
-    experiment: { type: 'imaging', params },
-  };
-  if (cardId !== null && serialNumber !== null) {
-    payload.card_id = cardId;
-    payload.serial_number = serialNumber;
+  if (tauNs !== null && tauNs !== undefined) params.append('tauNs', String(tauNs));
+  if (calibrationTimestamp !== null && calibrationTimestamp !== undefined) {
+    params.append('calibrationTimestamp', String(calibrationTimestamp));
   }
-  return payload;
+  return jsonFetch(`${getApiBase(hostIP, hostPort)}/startFlimAcquisition?${params}`);
 };
 
-/** POST /start */
-export const apiFlimStart = (host, port, payload) =>
-  jsonFetch(`${flimBaseUrl(host, port)}/start`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
+/**
+ * Stop the running acquisition (and the auto-driven galvo scan).
+ * @param {boolean} releaseSocket also drop the /data WebSocket, handing the
+ *   card back to the FLIM LABS web UI. Prefer apiFlimDisarm for that.
+ */
+export const apiFlimStop = (hostIP, hostPort, releaseSocket = false) =>
+  jsonFetch(
+    `${getApiBase(hostIP, hostPort)}/stopFlimAcquisition?releaseSocket=${releaseSocket}`
+  );
 
-/** POST /stop */
-export const apiFlimStop = (host, port) =>
-  jsonFetch(`${flimBaseUrl(host, port)}/stop`, { method: 'POST' });
+/**
+ * Take ownership of the FLIM card for ImSwitch.
+ *
+ * ImSwitch does not connect to the flim-imager server on startup - its /data
+ * stream takes exactly one consumer, so an idle connection would lock out the
+ * FLIM LABS web UI. Arming is the explicit "ImSwitch owns the card" step, and
+ * is what lets live view / experiments pick the detector up at all.
+ *
+ * @param {boolean} start also begin a scouting run right away (default).
+ */
+export const apiFlimArm = (hostIP, hostPort, start = true) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/armFlim?start=${start}`);
+
+/** Stop the card and release /data, so the FLIM LABS web UI can stream. */
+export const apiFlimDisarm = (hostIP, hostPort) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/disarmFlim`);
+
+/** Clear accumulated image, phasor histogram and calibration table. */
+export const apiFlimReset = (hostIP, hostPort) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/resetFlimBuffers`);
+
+/** One-shot laser frequency measurement (sync signal must be connected). */
+export const apiFlimDetectLaserFrequency = (hostIP, hostPort) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/detectFlimLaserFrequency`);
+
+/** Set a FLIM detector parameter (dwell_time, frequency_mhz, reconstruction...). */
+export const apiFlimSetParameter = (hostIP, hostPort, name, value) =>
+  jsonFetch(
+    `${getApiBase(hostIP, hostPort)}/setFlimParameter?name=${encodeURIComponent(name)}` +
+    `&value=${encodeURIComponent(value)}`
+  );
+
+/**
+ * Decay histogram per channel: {channels: {<ch>: [counts]}, bins, timeNs,
+ * laserPeriodNs, frequencyMhz} - ready to plot counts vs timeNs.
+ */
+export const apiFlimGetDecay = (hostIP, hostPort, roi = false) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/getFlimDecayCurve?roi=${roi}`);
+
+/**
+ * Set the scanned field of view in µm and/or the sampling (nx/ny). Needs the
+ * scanner calibration (umPerDacUnit / fovUmFullScale) in the setup file.
+ */
+export const apiFlimSetFov = (hostIP, hostPort, { fovUmX, fovUmY, nx, ny } = {}) => {
+  const params = new URLSearchParams();
+  if (fovUmX != null) params.append('fovUmX', String(fovUmX));
+  if (fovUmY != null) params.append('fovUmY', String(fovUmY));
+  if (nx != null) params.append('nx', String(nx));
+  if (ny != null) params.append('ny', String(ny));
+  return jsonFetch(`${getApiBase(hostIP, hostPort)}/setFlimFieldOfView?${params}`);
+};
+
+/** Calibrations usable for a phasors run, newest first (+ 'current'). */
+export const apiFlimListCalibrations = (hostIP, hostPort) =>
+  jsonFetch(`${getApiBase(hostIP, hostPort)}/listFlimCalibrations`);
+
+/**
+ * Save intensity TIFF + decay + metadata into ImSwitch's data folder
+ * (<DataPath>/FLIM/). Returns file paths and the TIFF as a base64 data URL
+ * for a direct browser download.
+ */
+export const apiFlimSaveData = (hostIP, hostPort, filename = '') =>
+  jsonFetch(
+    `${getApiBase(hostIP, hostPort)}/saveFlimData?filename=${encodeURIComponent(filename)}`
+  );
+
+const api = {
+  apiFlimGetStatus,
+  apiFlimGetImage,
+  apiFlimGetPhasor,
+  apiFlimStart,
+  apiFlimStop,
+  apiFlimArm,
+  apiFlimDisarm,
+  apiFlimReset,
+  apiFlimDetectLaserFrequency,
+  apiFlimSetParameter,
+  apiFlimGetDecay,
+  apiFlimSetFov,
+  apiFlimListCalibrations,
+  apiFlimSaveData,
+};
+
+export default api;

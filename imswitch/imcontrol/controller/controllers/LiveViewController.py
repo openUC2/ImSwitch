@@ -294,6 +294,14 @@ class StreamWorker(Worker):
 
                     last_detector_frame_number = detector_frame_number
 
+                    # A detector that has nothing to show returns None (e.g. the
+                    # FLIM card while disarmed). Encoding that would raise inside
+                    # _captureAndEmit and log once per throttle tick, so skip the
+                    # emit and keep the worker alive for when frames resume.
+                    if frame is None:
+                        self._last_frame_time = time.time()
+                        continue
+
                     _t0 = time.time()
                     frameResult = self._captureAndEmit(frame, detector_frame_number)
                     _dt_ms = (time.time() - _t0) * 1000.0

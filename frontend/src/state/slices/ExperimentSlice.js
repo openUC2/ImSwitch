@@ -62,7 +62,7 @@ const initialExperimentState = {
     autofocus_max_attempts: 3, // Max attempts for hardware autofocus
     autofocus_target_focus_setpoint: 0, // Target focus setpoint for hardware autofocus
     // Autofocus scheduling
-    autoFocusScope: "everyPosition", // "everyPosition" (per XY tile) or "firstPositionOnly" (once per round → global Z offset)
+    autoFocusEveryNFovs: 1, // Autofocus every Nth field of view within a round (1 = every FOV)
     autoFocusPeriodRounds: 1, // Run autofocus only every Nth timelapse round (1 = every round)
     autoFocusApplyGlobalOffset: true, // Apply the AF result as a global Z offset to all capture moves
     zStack: false,
@@ -220,8 +220,11 @@ const experimentSlice = createSlice({
       console.log("setAutoFocusMode", action.payload);
       state.parameterValue.autoFocusMode = action.payload;
     },
-    setAutoFocusScope: (state, action) => {
-      state.parameterValue.autoFocusScope = action.payload;
+    setAutoFocusEveryNFovs: (state, action) => {
+      state.parameterValue.autoFocusEveryNFovs = Math.max(
+        1,
+        Math.round(action.payload || 1),
+      );
     },
     setAutoFocusPeriodRounds: (state, action) => {
       state.parameterValue.autoFocusPeriodRounds = Math.max(1, Math.round(action.payload || 1));
@@ -623,7 +626,7 @@ export const {
   setAutoFocusTwoStage,
   setAutoFocusAlgorithm,
   setAutoFocusMode,
-  setAutoFocusScope,
+  setAutoFocusEveryNFovs,
   setAutoFocusPeriodRounds,
   setAutoFocusApplyGlobalOffset,
   setAutoFocusSoftwareMethod,

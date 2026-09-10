@@ -232,53 +232,19 @@ const persistConfig = {
 const persistedReducer = persistReducer(persistConfig, rootReducer);
 
 //#####################################################################################
-// Action creator for syncing the state across tabs
-const SYNC_STATE = "SYNC_STATE";
-
-// Action creator for syncing the state across tabs
-const syncStateAction = (updatedState) => ({
-  type: SYNC_STATE,
-  payload: updatedState,
-});
-
-// Handle SYNC_STATE action to merge updated state from other tabs
-const rootReducerWithSync = (state, action) => {
-  // If SYNC_STATE action is dispatched, replace the state with the updated state
-  if (action.type === SYNC_STATE) {
-    return { ...state, ...action.payload }; // Merge updated state
-  }
-
-  // Use the persistedReducer otherwise
-  return persistedReducer(state, action);
-};
+// NOTE: there is deliberately no cross-tab state sync here.
+// A "storage" listener used to replace whole slices (experimentState,
+// wellSelectorState, position) with another tab's copy whenever redux-persist
+// wrote — which is on nearly every state change. Two open tabs therefore
+// overwrote each other's point lists continuously, which is what made a second
+// tab (or a second laptop) lose the operator's selections. Each tab now owns
+// its own state; persistence to localStorage is unaffected.
 
 //#####################################################################################
-// Sync state across tabs
-const syncStateAcrossTabs = () => {
-  window.addEventListener("storage", (event) => {
-    if (event.key === "persist:root") {
-      console.log("State change from another tab detected!");
-      const updatedState = JSON.parse(event.newValue);
-      // Check if any slice is stringified and needs parsing
-      Object.keys(updatedState).forEach((sliceKey) => {
-        if (typeof updatedState[sliceKey] === "string") {
-          updatedState[sliceKey] = JSON.parse(updatedState[sliceKey]);
-        }
-      });
-      // Dispatch SYNC_STATE action with updated state
-      store.dispatch(syncStateAction(updatedState));
-    }
-  });
-};
-
-// Activate the sync function
-syncStateAcrossTabs();
-
-//#####################################################################################
-// Create the Redux store with the sync logic
+// Create the Redux store
 // Disable expensive development middlewares for high-frequency WebSocket updates
 const store = configureStore({
-  reducer: rootReducerWithSync, // Use rootReducerWithSync to manage the state
+  reducer: persistedReducer,
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
       // Disable serializable check - our state contains some non-serializable data

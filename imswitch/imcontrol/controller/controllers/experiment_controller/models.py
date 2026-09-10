@@ -40,7 +40,6 @@ AutoFocusSoftwareMethod = Literal["scan", "hillClimbing"]
 #                         and apply the measured focus as a global Z offset to
 #                         all positions of that round (assumes drift is global,
 #                         e.g. thermal — cheaper and less photobleaching).
-AutoFocusScope = Literal["everyPosition", "firstPositionOnly"]
 TriggerMode = Literal["hardware", "software"]
 FocusFitMethod = Literal["spline", "rbf", "constant"]
 FocusAlgorithm = Literal["LAPE", "GLVA", "JPEG"]
@@ -209,12 +208,14 @@ class ParameterValue(BaseModel):
     autoFocusHillClimbingMaxIterations: int = 50
     autofocus_target_focus_setpoint: Optional[float] = None
     autofocus_max_attempts: int = 2
-    # --- Autofocus scheduling (see AutoFocusScope) ------------------------
-    autoFocusScope: AutoFocusScope = Field(
-        "everyPosition",
-        description="Where autofocus runs within a round: 'everyPosition' "
-                    "(per XY tile) or 'firstPositionOnly' (once per round at "
-                    "the first tile, applied as a global Z offset).",
+    # --- Autofocus scheduling --------------------------------------------
+    autoFocusEveryNFovs: int = Field(
+        1,
+        ge=1,
+        description="Run autofocus every Nth field of view within a round "
+                    "(1 = every FOV). Replaces the old everyPosition / "
+                    "firstPositionOnly pair, which were just N=1 and "
+                    "N=all-FOVs written as an enum.",
     )
     autoFocusPeriodRounds: int = Field(
         1,

@@ -99,7 +99,12 @@ class ExperimentController(ImConWidgetController):
         # experiment. Capture Z-moves add this on top of their base Z so the
         # measured focus is actually applied (see move_stage_z / autofocus).
         # Reset to 0.0 at the start of every experiment.
-        self._experiment_af_offset = 0.0
+        # Autofocus Z offset per region_id. It used to be ONE scalar shared by
+        # the whole run, so a single bad point silently defocused every region
+        # after it. Squid keeps these per region for the same reason.
+        self._experiment_af_offsets = {}
+        self._af_successes = 0
+        self._af_failures = 0
 
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
@@ -260,6 +265,9 @@ class ExperimentController(ImConWidgetController):
         # Initialize experiment execution modes
         self.performance_mode = ExperimentPerformanceMode(self)
         self.normal_mode = ExperimentNormalMode(self)
+        # True while startWellplateExperiment is setting a run up — see the
+        # guard there for why the workflow status alone is not enough.
+        self._experiment_starting = False
 
         # Initialize focus map manager
         self.focus_map_manager = FocusMapManager(logger=self._logger)
@@ -660,128 +668,176 @@ class ExperimentController(ImConWidgetController):
 
         return num_x_steps, num_y_steps
 
-    def generate_snake_tiles(self, mExperiment):
+    @staticmethod
+    def _build_region_meta(area_name, area_type, well_id=None, well_row=None,
+                     well_column=None, labware_load_name=None, condition_label=None):
+        """The per-region metadata block. Carried ONCE per region.
+
+        It used to be copied onto every FOV of every region — eight keys times
+        every position — even though every consumer only ever read it off the
+        first FOV of a tile.
         """
-        Generate tiles from experiment with pre-calculated coordinates.
+        return {
+            "areaName": area_name,
+            "areaType": area_type,
+            "wellId": well_id,
+            "wellRow": well_row,
+            "wellColumn": well_column,
+            "labwareLoadName": labware_load_name,
+            "conditionLabel": condition_label,
+        }
 
-        The frontend now calculates ALL coordinates including scan order.
-        This method simply converts the scanAreas format to the internal tiles format.
+    @staticmethod
+    def _region_fovs(region_id, raw_fovs):
+        """Validate and normalise one region's FOV list before anything is stored.
 
-        Args:
-            mExperiment: Experiment object containing scanAreas with pre-calculated positions
+        Two rules, both borrowed from Squid's ``add_region_from_fovs``:
 
-        Returns:
-            List of tiles, where each tile is a list of coordinate dictionaries
+        * validate before mutating — a bad coordinate names itself here rather
+          than failing somewhere deep in the workflow;
+        * Z is homogeneous per region — a region either carries a Z on every FOV
+          or on none of them. The previous code kept per-FOV Z and then treated
+          ``z == 0.0`` as "no Z given", which silently discarded a legitimate
+          request to image at absolute Z = 0.
         """
-        tiles = []
+        raw_fovs = list(raw_fovs)
+        if not raw_fovs:
+            raise ValueError(f"Region {region_id!r} has no positions")
 
-        # New workflow: Use pre-calculated coordinates from scanAreas
+        has_z = all(fov.get("z") is not None for fov in raw_fovs)
+        fovs = []
+        for index, fov in enumerate(raw_fovs):
+            try:
+                x = float(fov["x"])
+                y = float(fov["y"])
+            except (KeyError, TypeError, ValueError) as err:
+                raise ValueError(
+                    f"Position {index} of region {region_id!r} has no usable "
+                    f"x/y coordinate: {fov!r}"
+                ) from err
+            entry = {
+                "iterator": fov.get("iterator", index),
+                "region_id": region_id,
+                "iX": int(fov.get("iX", 0)),
+                "iY": int(fov.get("iY", 0)),
+                "x": x,
+                "y": y,
+                "z": float(fov["z"]) if has_z else None,
+            }
+            fovs.append(entry)
+        return fovs
+
+    @staticmethod
+    def regions_to_areas(regions, region_meta):
+        """Region id + name + XY bounds, the shape the focus-map code wants.
+
+        Derived from the regions themselves so there is one definition of what
+        a region is and where it lies. This used to be built twice from
+        ``mExperiment.scanAreas`` — once for the focus-map API and once inside
+        the mapping phase — and neither construction agreed with the region ids
+        the acquisition loop later looked maps up by.
+        """
+        areas = []
+        for fovs in regions:
+            region_id = fovs[0]["region_id"]
+            xs = [fov["x"] for fov in fovs]
+            ys = [fov["y"] for fov in fovs]
+            areas.append({
+                "areaId": region_id,
+                "areaName": region_meta.get(region_id, {}).get("areaName") or region_id,
+                "bounds": {
+                    "minX": min(xs), "maxX": max(xs),
+                    "minY": min(ys), "maxY": max(ys),
+                },
+            })
+        return areas
+
+    def build_scan_regions(self, mExperiment):
+        """Convert the experiment's coordinates into per-region FOV lists.
+
+        Returns ``(regions, region_meta)`` where ``regions`` is one ordered FOV
+        list per region and ``region_meta[region_id]`` holds that region's
+        well/labware/condition metadata.
+
+        This generates nothing and reorders nothing despite the old name
+        (``generate_snake_tiles``): traversal order is decided in exactly one
+        place, the frontend's ``CoordinateCalculator``, and is already baked
+        into the coordinate list that arrives here.
+
+        ``region_id`` is a **string**, always, and is the only identifier a
+        region has. It used to be written as an area id, an integer index and a
+        literal ``0`` depending on which branch produced the tile — and ``0`` is
+        falsy, so the first region's focus map never resolved and the run fell
+        back to whatever global map happened to be in memory.
+        """
+        regions = []
+        region_meta = {}
+
+        # Preferred: pre-calculated coordinates from the frontend's scanAreas.
         if mExperiment.scanAreas:
-            self._logger.info("Using pre-calculated coordinates from frontend scanAreas")
-
-            # Convert scanAreas to tiles format
             for area in mExperiment.scanAreas:
-                # Extract positions from scan area - already ordered by frontend
-                tile_positions = []
-                for pos in area.positions:
-                    tile_positions.append({
+                region_id = str(area.areaId)
+                fovs = self._region_fovs(region_id, [
+                    {
                         "iterator": pos.index,
-                        "centerIndex": area.areaId,
                         "iX": pos.iX,
                         "iY": pos.iY,
                         "x": pos.x,
                         "y": pos.y,
-                        "z": pos.z if pos.z is not None else (area.centerPosition.z if area.centerPosition.z is not None else None),
-                        "wellId": area.wellId,
-                        "wellRow": area.wellRow,
-                        "wellColumn": area.wellColumn,
-                        "labwareLoadName": area.labwareLoadName,
-                        "conditionLabel": area.conditionLabel,
-                        "areaName": area.areaName,
-                        "areaType": area.areaType
-                    })
+                        "z": pos.z if pos.z is not None else area.centerPosition.z,
+                    }
+                    for pos in area.positions
+                ])
+                regions.append(fovs)
+                region_meta[region_id] = self._build_region_meta(
+                    area.areaName, area.areaType, area.wellId, area.wellRow,
+                    area.wellColumn, area.labwareLoadName, area.conditionLabel,
+                )
+                self._logger.info(
+                    f"Scan region [{region_id}] '{area.areaName}': {len(fovs)} position(s)"
+                    f"{' with per-position Z' if fovs[0]['z'] is not None else ''}"
+                )
+            return regions, region_meta
 
-                if tile_positions:
-                    tiles.append(tile_positions)
+        # Fallback: pointList with a pre-ordered neighbourPointList.
+        if mExperiment.pointList:
+            for index, center in enumerate(mExperiment.pointList):
+                region_id = f"area_{index}"
+                neighbours = center.neighborPointList or [
+                    NeighborPoint(x=center.x, y=center.y, z=center.z, iX=0, iY=0)
+                ]
+                fovs = self._region_fovs(region_id, [
+                    {
+                        "iterator": i,
+                        "iX": n.iX,
+                        "iY": n.iY,
+                        "x": n.x,
+                        "y": n.y,
+                        "z": n.z if n.z is not None else center.z,
+                    }
+                    for i, n in enumerate(neighbours)
+                ])
+                regions.append(fovs)
+                region_meta[region_id] = self._build_region_meta(
+                    center.name, center.areaType or "free_scan", center.wellId,
+                    center.wellRow, center.wellColumn, center.labwareLoadName,
+                    center.conditionLabel,
+                )
+                self._logger.info(
+                    f"Scan region [{region_id}] '{center.name}': {len(fovs)} position(s)"
+                )
+            return regions, region_meta
 
-            self._logger.info(f"Loaded {len(tiles)} scan areas with {sum(len(t) for t in tiles)} total positions")
-            return tiles
-
-        # Fallback: Use pointList with pre-ordered neighborPointList
-        elif mExperiment.pointList:
-            self._logger.info("Using coordinates from pointList")
-
-            for iCenter, centerPoint in enumerate(mExperiment.pointList):
-                if not centerPoint.neighborPointList:
-                    # Single point - no neighbors
-                    tile_positions = [{
-                        "iterator": 0,
-                        "centerIndex": iCenter,
-                        "iX": 0,
-                        "iY": 0,
-                        "x": centerPoint.x,
-                        "y": centerPoint.y,
-                        "z": centerPoint.z,
-                        "wellId": centerPoint.wellId,
-                        "wellRow": centerPoint.wellRow,
-                        "wellColumn": centerPoint.wellColumn,
-                        "labwareLoadName": centerPoint.labwareLoadName,
-                        "conditionLabel": centerPoint.conditionLabel,
-                        "areaName": centerPoint.name,
-                        "areaType": centerPoint.areaType or 'free_scan'
-                    }]
-                else:
-                    # Use pre-ordered neighbor list (no sorting!)
-                    tile_positions = []
-                    for idx, neighbor in enumerate(centerPoint.neighborPointList):
-                        tile_positions.append({
-                            "iterator": idx,
-                            "centerIndex": iCenter,
-                            "iX": neighbor.iX,
-                            "iY": neighbor.iY,
-                            "x": neighbor.x,
-                            "y": neighbor.y,
-                            "z": neighbor.z if neighbor.z is not None else centerPoint.z,
-                            "wellId": centerPoint.wellId,
-                            "wellRow": centerPoint.wellRow,
-                            "wellColumn": centerPoint.wellColumn,
-                            "labwareLoadName": centerPoint.labwareLoadName,
-                            "conditionLabel": centerPoint.conditionLabel,
-                            "areaName": centerPoint.name,
-                            "areaType": centerPoint.areaType or 'free_scan'
-                        })
-
-                tiles.append(tile_positions)
-
-            self._logger.info(f"Loaded {len(tiles)} tiles from pointList")
-            return tiles
-
-        # No coordinates provided - create single point at current position
-        else:
-            self._logger.warning("No scan coordinates provided. Using current stage position.")
-
-            # Get current stage position
-            current_position = self.mStage.getPosition()
-            current_x = current_position.get("X", 0)
-            current_y = current_position.get("Y", 0)
-
-            fallback_tile = [{
-                "iterator": 0,
-                "centerIndex": 0,
-                "iX": 0,
-                "iY": 0,
-                "x": current_x,
-                "y": current_y,
-                "wellId": None,
-                "wellRow": None,
-                "wellColumn": None,
-                "labwareLoadName": None,
-                "conditionLabel": None,
-                "areaName": "Current Position",
-                "areaType": "free_scan"
-            }]
-            tiles.append(fallback_tile)
-            return tiles
+        # Nothing supplied: image wherever the stage currently is.
+        self._logger.warning("No scan coordinates provided. Using current stage position.")
+        position = self.mStage.getPosition()
+        region_id = "current"
+        regions.append(self._region_fovs(region_id, [{
+            "iterator": 0, "iX": 0, "iY": 0,
+            "x": position.get("X", 0), "y": position.get("Y", 0), "z": None,
+        }]))
+        region_meta[region_id] = self._build_region_meta("Current Position", "free_scan")
+        return regions, region_meta
 
     @APIExport()
     def getLastScanAsOMEZARR(self):
@@ -802,11 +858,42 @@ class ExperimentController(ImConWidgetController):
         else:
             # Check normal mode status
             workflow_status = self.workflow_manager.get_status()
-        #
-        return workflow_status
+
+        # Autofocus outcome for this run. A run that "completed" while every
+        # autofocus failed produced defocused data, and until now nothing said
+        # so — the failures were only visible as a line in the log.
+        return {
+            **workflow_status,
+            "autofocus": {
+                "successes": self._af_successes,
+                "failures": self._af_failures,
+                "offsets_um": dict(self._experiment_af_offsets),
+            },
+        }
 
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
+        """Start a wellplate experiment, refusing a second concurrent start.
+
+        Setting a run up takes minutes when focus mapping is enabled, and the
+        workflow guard inside only reports "running" once the workflow itself
+        starts — which is *after* the focus-map phase. So a second click during
+        focus mapping sailed past every check and produced a second run: two
+        experiment folders and two focus-map phases. This flag covers exactly
+        that window; the workflow / performance-scan status guards take over
+        once the run is actually under way.
+        """
+        if self._experiment_starting:
+            raise HTTPException(
+                status_code=400, detail="An experiment is already being started."
+            )
+        self._experiment_starting = True
+        try:
+            return self._start_wellplate_experiment(mExperiment)
+        finally:
+            self._experiment_starting = False
+
+    def _start_wellplate_experiment(self, mExperiment: Experiment):
         exp_name = mExperiment.name
         p = mExperiment.parameterValue
 
@@ -955,7 +1042,9 @@ class ExperimentController(ImConWidgetController):
 
         # Reset the runtime autofocus Z offset for this experiment so a value
         # left over from a previous run never leaks into a new acquisition.
-        self._experiment_af_offset = 0.0
+        self._experiment_af_offsets = {}
+        self._af_successes = 0
+        self._af_failures = 0
 
         # Autofocus and timepoint values are read from `p` (ParameterValue)
         # directly via ExecutionContext.to_kwargs(); no local aliases needed.
@@ -1000,18 +1089,14 @@ class ExperimentController(ImConWidgetController):
         # request focus mapping (e.g. after the user hit "Clear All").  The
         # acquisition loop gates focus-map Z moves on this flag.
         self._focus_map_active = False
-        if mExperiment.scanAreas:
-            self._last_scan_areas = [
-                {
-                    "areaId": sa.areaId,
-                    "areaName": sa.areaName,
-                    "bounds": sa.bounds.dict() if hasattr(sa.bounds, 'dict') else {
-                        "minX": sa.bounds.minX, "maxX": sa.bounds.maxX,
-                        "minY": sa.bounds.minY, "maxY": sa.bounds.maxY,
-                    },
-                }
-                for sa in mExperiment.scanAreas
-            ]
+
+        # Build the scan regions BEFORE the focus-map phase: they define the
+        # region ids the maps get stored under, so the mapping phase and the
+        # acquisition loop cannot disagree about what a region is called.
+        # build_scan_regions validates and raises on a bad coordinate rather
+        # than filtering it out silently.
+        snake_tiles, region_meta = self.build_scan_regions(mExperiment)
+        self._last_scan_areas = self.regions_to_areas(snake_tiles, region_meta)
 
         # ── Focus Mapping (optional) ──────────────────────────────────────
         # Store illumination info so autofocus_software can look up the
@@ -1027,15 +1112,10 @@ class ExperimentController(ImConWidgetController):
             # it (apply_during_scan, default True).  This is the single gate the
             # acquisition loop checks before applying any focus-map Z.
             self._focus_map_active = bool(getattr(focusMapConfig, "apply_during_scan", True))
-            self._run_focus_map_phase(mExperiment, focusMapConfig)
+            self._run_focus_map_phase(self._last_scan_areas, focusMapConfig)
         # Turn off illumination again after focus mapping so the
         # acquisition loop starts from a clean state.
         self._switch_off_all_illumination()
-
-        # Generate the list of points to scan from pre-calculated coordinates
-        snake_tiles = self.generate_snake_tiles(mExperiment) # TODO: Is this still needed?
-        # remove none values from all_points list
-        snake_tiles = [[pt for pt in tile if pt is not None] for tile in snake_tiles]
 
         # Generate Z-positions as PURE RELATIVE OFFSETS.
         # The frontend sends zStackMin/zStackMax as µm offsets (e.g. -10 / +10).
@@ -1131,6 +1211,7 @@ class ExperimentController(ImConWidgetController):
                 is_rgb=self.isRGB,
                 illumination_kinds=illuminationKinds,
                 illumination_params=illuminationParams,
+                region_meta=region_meta,
             )
             result = self.performance_mode.execute_experiment(ctx=ctx)
             return {"status": "running", "mode": "performance"}
@@ -1167,6 +1248,7 @@ class ExperimentController(ImConWidgetController):
                 is_rgb=self.isRGB,
                 illumination_kinds=illuminationKinds,
                 illumination_params=illuminationParams,
+                region_meta=region_meta,
             )
 
             for t in range(nTimes):
@@ -1741,6 +1823,20 @@ class ExperimentController(ImConWidgetController):
                 af_hc_max_iterations=af_hc_max_iterations,
             )
 
+    @staticmethod
+    def _autofocus_timeout_s(af_range: float, af_resolution: float,
+                             af_settle_time: float, two_stage: bool) -> float:
+        """How long this autofocus scan may take before we give up on it.
+
+        Derived from the scan itself — steps x (settle + a frame) with a 3x
+        safety factor — instead of a flat two minutes, so a hang costs seconds
+        on a fast scan rather than always costing the ceiling.
+        """
+        steps = max(1, int(abs(af_range) / max(abs(af_resolution), 1e-6)) + 1)
+        per_step_s = max(af_settle_time, 0.0) + 1.0
+        budget = 3.0 * steps * per_step_s * (2.0 if two_stage else 1.0)
+        return min(120.0, max(10.0, budget))
+
     def autofocus_software(self, af_range: float = 100.0, af_resolution: float = 10.0,
                            af_cropsize: int = 2048, af_algorithm: str = "LAPE",
                            af_settle_time: float = 0.1, af_static_offset: float = 0.0,
@@ -1798,6 +1894,7 @@ class ExperimentController(ImConWidgetController):
             except Exception as e:
                 self._logger.warning(f"Failed to set illumination channel {illuminationChannel}: {e}")
 
+        af_started_at = time.time()
         try:
             if af_software_method == "hillClimbing":
                 # Hill-climbing autofocus: iterative gradient ascent
@@ -1844,26 +1941,31 @@ class ExperimentController(ImConWidgetController):
                     twoStage=af_two_stage
                 )
 
-            # Wait for autofocus thread to finish (it runs in _AutofocusThead)
+            # Wait for the autofocus thread (it runs in _AutofocusThead), but
+            # only for as long as this scan could plausibly take. A flat 120 s
+            # meant a hung autofocus cost two minutes at every single point.
             af_thread = getattr(autofocusController, '_AutofocusThead', None)
             if af_thread is not None and af_thread.is_alive():
-                af_thread.join(timeout=120)  # 2 min timeout
+                af_thread.join(timeout=self._autofocus_timeout_s(
+                    af_range, af_resolution, af_settle_time, af_two_stage
+                ))
 
-            # Read the resulting Z position
-            result = self.mStage.getPosition().get("Z", None)
-
-            # Surface the scan's plausibility verdict (flat metric curve, peak
-            # clipped at the range edge, rejected fit) in the experiment log so
-            # bad focus-map points are traceable to their cause.
-            quality = getattr(autofocusController, '_lastFocusQuality', None)
-            if quality is not None and not quality.get("is_valid", True):
+            # Autofocus's OWN result, never the stage position. Reading
+            # getPosition() here meant that on a failure or a timed-out join we
+            # recorded wherever the stage happened to sit — usually the start of
+            # the scan range — and fed that into the Z offset, silently
+            # defocusing the rest of the run. None means "no usable focus"; the
+            # caller keeps the previous offset and counts the failure.
+            result = getattr(autofocusController, '_lastAutofocusZ', None)
+            elapsed = time.time() - af_started_at
+            if result is None:
                 self._logger.warning(
-                    "Autofocus result at Z=%s is implausible: %s",
-                    f"{result:.2f}" if result is not None else "?",
-                    "; ".join(quality.get("warnings", [])) or "unknown reason",
+                    f"Autofocus produced no usable Z after {elapsed:.1f}s "
+                    f"(alive={af_thread.is_alive() if af_thread else False})"
                 )
+                return None
 
-            self._logger.debug("Autofocus completed successfully")
+            self._logger.info(f"Autofocus settled at Z={result:.2f} in {elapsed:.1f}s")
             return result
 
         except Exception as e:
@@ -2247,13 +2349,13 @@ class ExperimentController(ImConWidgetController):
         return (posX, posY) # TODO: Need to adjust in case of relative move
 
     def move_stage_z(self, posZ: float, relative: bool = False, maxSpeedZ=5000,
-                     apply_af_offset: bool = False):
-        # When apply_af_offset is set (used by the per-plane capture moves in
+                     af_region_id: Optional[str] = None):
+        # When af_region_id is given (used by the per-plane capture moves in
         # the acquisition workflow), add the runtime autofocus Z offset on top
         # of the absolute target so the measured focus is actually applied to
         # acquisitions instead of being overwritten by this absolute move.
-        if apply_af_offset and not relative:
-            posZ = posZ + float(getattr(self, "_experiment_af_offset", 0.0))
+        if af_region_id is not None and not relative:
+            posZ = posZ + float(self._experiment_af_offsets.get(af_region_id, 0.0))
         self._logger.info(f"Moving stage to Z={posZ}")
         self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, maxSpeedZ)), axis="Z", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION_Z)
         #newPosition = self.mStage.getPosition()
@@ -2261,33 +2363,44 @@ class ExperimentController(ImConWidgetController):
         return posZ # TODO: Need to adjust in case of relative move
 
     def update_af_offset(self, context=None, metadata=None, expected_z: float = 0.0,
-                         apply_global_offset: bool = True, **kwargs):
-        """Post-func for the Autofocus workflow step: store the global Z offset.
+                         apply_global_offset: bool = True, region_id: str = "",
+                         **kwargs):
+        """Post-func for the Autofocus workflow step: store the region's Z offset.
 
         Reads the measured focus Z from ``metadata["result"]`` (the return value
         of the preceding ``autofocus`` main-func) and records
-        ``measured - expected_z`` as ``self._experiment_af_offset``. Every
-        capture Z-move in the acquisition workflow adds this offset (via
-        ``move_stage_z(apply_af_offset=True)``), so the measured focus is
-        actually applied to acquisitions instead of being discarded by the next
-        absolute Z-move. Leaves the previous offset untouched if autofocus
-        failed (result is None) or when apply_global_offset is False.
+        ``measured - expected_z`` as this region's offset. Capture Z-moves add
+        it via ``move_stage_z(af_region_id=...)``, so the measured focus reaches
+        the acquisition instead of being discarded by the next absolute Z-move.
+
+        A failed autofocus returns None (never the stage position) and leaves
+        the offset untouched — it is counted, logged, and the run continues at
+        the region's unmodified base Z.
         """
         if not apply_global_offset:
             return None
         measured = (metadata or {}).get("result")
         if measured is None:
-            self._logger.debug("Autofocus returned no Z; keeping previous global offset.")
+            self._af_failures += 1
+            self._logger.warning(
+                f"Autofocus failed for region [{region_id}] "
+                f"({self._af_failures} failure(s) so far); keeping its previous "
+                "Z offset and continuing."
+            )
             return None
         try:
-            self._experiment_af_offset = float(measured) - float(expected_z)
+            offset = float(measured) - float(expected_z)
+            self._experiment_af_offsets[region_id] = offset
+            self._af_successes += 1
             self._logger.info(
-                f"Autofocus global Z offset updated to {self._experiment_af_offset:+.2f} µm "
+                f"Autofocus Z offset for region [{region_id}] updated to {offset:+.2f} µm "
                 f"(measured={float(measured):.2f}, expected base={float(expected_z):.2f})"
             )
+            return offset
         except Exception as e:
-            self._logger.debug(f"Could not update autofocus global Z offset: {e}")
-        return self._experiment_af_offset
+            self._af_failures += 1
+            self._logger.debug(f"Could not update autofocus Z offset: {e}")
+            return None
 
     def set_detector_parameter(self, parameter: str, value: Any):
         """Set a detector parameter."""
@@ -3362,43 +3475,22 @@ class ExperimentController(ImConWidgetController):
     # Focus Map – internal helpers
     # ================================================================
 
-    def _run_focus_map_phase(self, mExperiment, config: FocusMapConfig):
+    def _run_focus_map_phase(self, areas, config: FocusMapConfig):
         """
         Run focus mapping before the main acquisition loop.
 
-        Iterates over all scan areas (groups), measures focus on a grid,
-        and fits a Z surface for each group.  Called from startWellplateExperiment
+        Measures focus on a grid within each region and fits a Z surface for it,
+        stored under that region's own id. Called from startWellplateExperiment
         when focusMap.enabled == True.
+
+        Args:
+            areas: regions_to_areas() output — the same region ids the
+                acquisition loop will look maps up by. Deriving the areas here
+                from ``mExperiment`` independently is what let the two drift.
         """
         # Store config for channel_offsets access during acquisition
         self._focus_map_config = config
         self.focus_map_manager.clear_abort()
-        areas = []
-        if mExperiment.scanAreas:
-            for sa in mExperiment.scanAreas:
-                areas.append({
-                    "areaId": sa.areaId,
-                    "areaName": sa.areaName,
-                    "bounds": {
-                        "minX": sa.bounds.minX,
-                        "maxX": sa.bounds.maxX,
-                        "minY": sa.bounds.minY,
-                        "maxY": sa.bounds.maxY,
-                    },
-                })
-        else:
-            # Fallback: derive bounds from pointList
-            if mExperiment.pointList:
-                xs = [pt.x for pt in mExperiment.pointList]
-                ys = [pt.y for pt in mExperiment.pointList]
-                areas.append({
-                    "areaId": "default",
-                    "areaName": "All Points",
-                    "bounds": {
-                        "minX": min(xs), "maxX": max(xs),
-                        "minY": min(ys), "maxY": max(ys),
-                    },
-                })
 
         if not areas:
             self._logger.warning("Focus map: no areas found – skipping")
@@ -3414,9 +3506,8 @@ class ExperimentController(ImConWidgetController):
             # over from a previous acquisition — an automatic "global"/per-area
             # map, or an earlier "manual" fit made with a *different* set of
             # points — can never override the points the user just placed.
-            # Without this, _find_reusable_manual_map() would happily return the
-            # stale map (its preference order is manual→global→any fitted) and
-            # the freshly supplied config.points would be silently ignored.
+            # Without this, the stale "manual" map would be reused below and
+            # the freshly supplied config.points silently ignored.
             if config.points:
                 self._logger.info(
                     f"Focus map: (re)measuring {len(config.points)} supplied manual "
@@ -3431,9 +3522,12 @@ class ExperimentController(ImConWidgetController):
                 for area in areas:
                     self.focus_map_manager.clear(area["areaId"])
             else:
-                # Classic reuse workflow: no points supplied this run, so reuse a
-                # previously fitted manual/global template as-is.
-                source_fm = self._find_reusable_manual_map()
+                # No points supplied this run: reuse the map the user explicitly
+                # fitted from points ("manual"), and nothing else. The old
+                # helper here searched manual → global → *any fitted map*, so a
+                # leftover surface from a different sample could be adopted
+                # silently. Reuse is a deliberate UI choice, not an inference.
+                source_fm = self.focus_map_manager.get("manual")
 
             if source_fm is not None and source_fm.is_fitted:
                 self._logger.info(
@@ -3560,26 +3654,6 @@ class ExperimentController(ImConWidgetController):
                     bounds=merged,
                     config=config,
                 )
-
-    def _find_reusable_manual_map(self) -> "Optional[FocusMap]":
-        """
-        Look for a pre-existing fitted focus map that can be reused as
-        a global template for all groups.  Preference order:
-          1. "manual" (from "Fit from Points" in the UI)
-          2. "global" (from a previous global computation)
-          3. any other fitted map
-        Returns None if nothing suitable is found.
-        """
-        from imswitch.imcontrol.model.focus_map import FocusMap  # noqa: local import
-        for candidate_id in ["manual", "global"]:
-            fm = self.focus_map_manager.get(candidate_id)
-            if fm is not None and fm.is_fitted:
-                return fm
-        # Fallback: any fitted map
-        for fm in self.focus_map_manager.get_all().values():
-            if fm.is_fitted:
-                return fm
-        return None
 
     # ================================================================
     # Focus Map API endpoints

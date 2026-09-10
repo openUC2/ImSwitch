@@ -223,7 +223,7 @@ def test_protocol_json_is_written_and_complete(multisite_run):
     assert protocol.get("workflow_steps"), "protocol has no workflow steps"
     assert len(protocol["snake_tiles"]) == SITES
 
-    area_ids = {point["centerIndex"] for tile in protocol["snake_tiles"] for point in tile}
+    area_ids = {point["region_id"] for tile in protocol["snake_tiles"] for point in tile}
     assert area_ids == {f"area_{i}" for i in range(SITES)}, (
         f"scan areas lost their identity between request and protocol: {area_ids}"
     )

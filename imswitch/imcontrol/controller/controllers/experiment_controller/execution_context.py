@@ -67,6 +67,10 @@ class ExecutionContext:
     # Kind-specific params keyed by channel name (e.g. radius, RGB).
     illumination_params: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
+    # Per-region metadata (well / labware / condition / area name+type), keyed
+    # by region_id. Carried once per region — see build_scan_regions.
+    region_meta: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
     @property
     def initial_z_position(self) -> float:
         return self.initial_xyz.get("Z", 0.0)
@@ -94,6 +98,7 @@ class ExecutionContext:
         p = self.experiment.parameterValue
         return {
             "snake_tiles": self.snake_tiles,
+            "region_meta": self.region_meta,
             "illumination_intensities": self.illumination_intensities,
             "illumination_sources": self.illumination_sources,
             "illumination_kinds": self.illumination_kinds,
@@ -120,7 +125,7 @@ class ExecutionContext:
             "autofocus_hc_max_iterations": p.autoFocusHillClimbingMaxIterations,
             "autofocus_target_focus_setpoint": p.autofocus_target_focus_setpoint,
             "autofocus_max_attempts": p.autofocus_max_attempts,
-            "autofocus_scope": p.autoFocusScope,
+            "autofocus_every_n_fovs": p.autoFocusEveryNFovs,
             "autofocus_period_rounds": p.autoFocusPeriodRounds,
             "autofocus_apply_global_offset": p.autoFocusApplyGlobalOffset,
             "t_period": self.t_period,
@@ -137,6 +142,13 @@ class ExecutionContext:
             "mExperiment": self.experiment,
             "tPeriod": self.t_period,
             "nTimes": self.n_times,
+            # The run's one and only output folder, created by
+            # startWellplateExperiment. Performance mode used to mint a second
+            # one of its own (with its own timestamp, so they never collided —
+            # they just both existed).
+            "dirPath": self.dir_path,
+            "mFileName": self.file_name,
+            "region_meta": self.region_meta,
         }
 
 

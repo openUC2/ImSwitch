@@ -114,6 +114,10 @@ const ExperimentDesigner = () => {
   const [cachedStepName, setCachedStepName] = useState("");
   const [ashlarRunning, setAshlarRunning] = useState(false);
   const [ashlarInterrupted, setAshlarInterrupted] = useState(false);
+  // Start-click debounce: the ref blocks a second click in the same tick, the
+  // state greys the button out until the request settles (see handleStart).
+  const startRequestedRef = useRef(false);
+  const [startPending, setStartPending] = useState(false);
 
   // Periodic status fetch
   useEffect(() => {
@@ -229,6 +233,14 @@ const ExperimentDesigner = () => {
 
   // Control handlers
   const handleStart = () => {
+    // Disable Start on the click, not on the response. The request does not
+    // resolve until the backend has finished the focus-map phase — minutes of
+    // autofocus — and until then the status is still IDLE, so every extra
+    // click in that window started another run with its own output folder and
+    // its own focus-map pass.
+    if (startRequestedRef.current) return;
+    startRequestedRef.current = true;
+    setStartPending(true);
     console.log("Experiment started");
     dispatch(
       experimentSlice.setIsSnakescan(wellSelectorState.areaSelectSnakescan),
@@ -435,6 +447,10 @@ const ExperimentDesigner = () => {
       })
       .catch(() => {
         infoPopupRef.current?.showMessage("Start Experiment failed");
+      })
+      .finally(() => {
+        startRequestedRef.current = false;
+        setStartPending(false);
       });
   };
 
@@ -544,6 +560,8 @@ const ExperimentDesigner = () => {
   };
 
   // Button visibility helpers
+  // startPending covers the gap between the click and the backend reporting
+  // RUNNING (the whole focus-map phase); see handleStart.
   const showStart =
     experimentStatus.status === Status.IDLE ||
     experimentStatus.status === Status.STOPPING;
@@ -577,7 +595,7 @@ const ExperimentDesigner = () => {
             <span>
               <Button
                 onClick={handleStart}
-                disabled={!showStart}
+                disabled={!showStart || startPending}
                 color="success"
                 startIcon={<PlayArrowIcon />}
               >

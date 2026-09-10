@@ -919,8 +919,10 @@ class ExperimentPerformanceMode(ExperimentModeBase):
 
         self._logger.debug("Setting up OME writers for single TIFF output in performance mode")
 
-        # Create experiment directory and file paths
-        timeStamp, dirPath, mFileName = self.create_experiment_directory("performance_scan")
+        # Use the run's existing directory — startWellplateExperiment already
+        # created it and named every other artefact after it.
+        dirPath = experiment_params["dirPath"]
+        mFileName = experiment_params["mFileName"]
 
         # Create a single OME writer for all tiles in single TIFF mode
         experiment_name = "0_performance_scan"
@@ -982,10 +984,11 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 if not tiles:
                     continue
                 first = tiles[0]
-                w_row = first.get("wellRow")
-                w_col = first.get("wellColumn")
-                w_load = first.get("labwareLoadName")
-                w_cond = first.get("conditionLabel")
+                meta = experiment_params.get("region_meta", {}).get(first["region_id"], {})
+                w_row = meta.get("wellRow")
+                w_col = meta.get("wellColumn")
+                w_load = meta.get("labwareLoadName")
+                w_cond = meta.get("conditionLabel")
                 if w_load and labware_load_name is None:
                     labware_load_name = w_load
                 if w_row and w_col is not None:

@@ -13,7 +13,6 @@ from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from abc import ABC, abstractmethod
 
-from imswitch.imcommon.model import dirtools
 # Import OME writers from the new io location
 from imswitch.imcontrol.model.io import (
     OMEWriterConfig,
@@ -192,25 +191,6 @@ class ExperimentModeBase(ABC):
             intensity_list[self.controller.availableIlluminations[i].channel_index] = intensity
             
         return intensity_list
-
-    def create_experiment_directory(self, exp_name: str) -> Tuple[str, str, str]:
-        """
-        Create experiment directory and generate file paths.
-        
-        Args:
-            exp_name: Experiment name
-            
-        Returns:
-            Tuple of (timeStamp, dirPath, mFileName)
-        """
-        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        drivePath = dirtools.UserFileDirs.getValidatedDataPath()
-        dirPath = os.path.join(drivePath, 'ExperimentController', timeStamp)
-        if not os.path.exists(dirPath):
-            os.makedirs(dirPath)
-        mFileName = f"{timeStamp}_{exp_name}"
-
-        return timeStamp, dirPath, mFileName
 
     def calculate_grid_parameters(self, tiles: List[Dict]) -> Tuple[Tuple[int, int], Tuple[float, float, float, float]]:
         """

@@ -284,6 +284,10 @@ class AutofocusController(ImConWidgetController):
         # Plausibility metrics of the most recent scan (_assess_focus_curve),
         # exposed via getAutofocusStatus so callers can reject bad results.
         self._lastFocusQuality = None
+        # Z the last background autofocus actually settled on, or None when it
+        # failed / was aborted / is still running. Callers read this instead of
+        # the stage position — see doAutofocusBackground.
+        self._lastAutofocusZ = None
 
         if self._setupInfo.autofocus is not None:
             self.cameraName = self._setupInfo.autofocus.camera
@@ -1010,8 +1014,11 @@ class AutofocusController(ImConWidgetController):
                 self.camera.flushBuffer()
         except Exception:
             pass
-        # ensure we get a fresh frame
-        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        # Wait for a genuinely fresh frame, but no longer than the camera could
+        # plausibly need. A flat 1 s meant that above a 1 s exposure *every*
+        # step timed out — and still paid the full second — which is most of
+        # why autofocus took minutes per point under fluorescence.
+        timeoutFrameRequest = max(2.0 * self._exposureTimeSeconds(), 1.0)
         cTime = time.time()
 
         lastFrameNumber=-1
@@ -1040,8 +1047,29 @@ class AutofocusController(ImConWidgetController):
 
 
 
+    def _exposureTimeSeconds(self) -> float:
+        """Current detector exposure in seconds (best effort, 0 when unknown)."""
+        try:
+            exposure_ms = self.camera.getParameter("exposure")
+            if exposure_ms is not None and float(exposure_ms) > 0:
+                return float(exposure_ms) / 1000.0
+        except Exception:
+            pass
+        try:
+            return float(self.camera._camera.exposure_time) / 1e6
+        except Exception:
+            return 0.0
+
     # ---------- Step-scan autofocus with Gaussian fit ----------
     def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=0, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False, twoStageDivisor:int=10):
+        # Squid's rule: autofocus reports a soft failure through its RESULT, not
+        # by raising. Callers must never fall back to "wherever the stage ended
+        # up" — on a failure that is the scan start (center - range/2), and
+        # feeding that to the Z-offset logic silently defocused the rest of the
+        # run. None here means "no usable focus", and it is also what a caller
+        # sees when the thread is still running after its join timeout.
+        self._lastAutofocusZ = None
+        af_started_at = time.time()
         try: # TODO: We should also provide the starting z in case we want to override the current z as its the default here
 
             self.__logger.info(f"Starting autofocus - Stage 1: Coarse scan (range=±{rangez}, resolution={resolutionz}), defocus={defocusz}, axis={axis}, tSettle={tSettle}, nGauss={nGauss}, nCropsize={nCropsize}, focusAlgorithm={focusAlgorithm}, static_offset={static_offset}, twoStage={twoStage}")
@@ -1066,9 +1094,13 @@ class AutofocusController(ImConWidgetController):
             # Stage 2: Fine scan if enabled
             if twoStage and self._getAutofocusState() != AutofocusState.ABORTED:
                 # Fine scan with 10x finer parameters around the coarse best position
+                # Divide the RANGE only. Dividing the resolution by the same
+                # factor gave the fine pass exactly as many steps as the coarse
+                # one — double the frames for no extra precision, since the step
+                # size shrank in proportion to the range.
                 twoStageDivisor = max(2, twoStageDivisor)  # Ensure minimum divisor of 2
                 fine_rangez = rangez / float(twoStageDivisor)
-                fine_resolutionz = resolutionz / float(twoStageDivisor)
+                fine_resolutionz = resolutionz
                 self.__logger.info(f"Starting autofocus - Stage 2: Fine scan (range=±{fine_rangez}, resolution={fine_resolutionz}, divisor={twoStageDivisor}) around z={best_z_coarse}")
 
                 # Move to coarse best position first (clamped)
@@ -1097,7 +1129,18 @@ class AutofocusController(ImConWidgetController):
             self._setAutofocusState(AutofocusState.FINISHED)
             self._commChannel.sigAutoFocusRunning.emit(False)
             self.sigUpdateFocusValue.emit({"bestzpos": final_z, "quality": self._lastFocusQuality})
-            self.__logger.info(f"Autofocus Value is: {final_z:.2f}")
+
+            elapsed = time.time() - af_started_at
+            quality = self._lastFocusQuality
+            if quality is not None and not quality.get("is_valid", True):
+                self.__logger.warning(
+                    f"Autofocus result {final_z:.2f} rejected after {elapsed:.1f}s: "
+                    + ("; ".join(quality.get("warnings", [])) or "implausible focus curve")
+                )
+                return None
+
+            self.__logger.info(f"Autofocus Value is: {final_z:.2f} (took {elapsed:.1f}s)")
+            self._lastAutofocusZ = final_z
             return final_z
         except Exception as e:
             self.__logger.error(f"Autofocus error: {e}")
@@ -1206,11 +1249,11 @@ class AutofocusController(ImConWidgetController):
                 self.stages.move(value=center_position, axis=axis, is_absolute=True, is_blocking=True)
                 return center_position
 
-            # Update state to fitting
+            # Update state to fitting.
+            # We deliberately do NOT drive back to the start of the range here:
+            # the fit needs no particular stage position, and the traverse back
+            # (then out again to the best Z) cost a full extra sweep per point.
             self._setAutofocusState(AutofocusState.FITTING)
-
-            # Move back to start position before fitting
-            self.stages.move(value=absolute_positions[0], axis=axis, is_absolute=True, is_blocking=True)
 
             # Drop NaN entries (failed frames) — alignment is preserved by index
             valid_mask = np.isfinite(allfocusvals)

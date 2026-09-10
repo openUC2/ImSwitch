@@ -103,6 +103,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         self._logger.debug("Normal mode is enabled. Creating workflow steps for precise control.")
 
         # Extract parameters
+        region_meta = kwargs.get('region_meta') or {}
         z_positions = kwargs.get('z_positions', [0])
         exposures = kwargs.get('exposures', [100])
         gains = kwargs.get('gains', [1])
@@ -150,11 +151,14 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_hc_max_iterations = kwargs.get('autofocus_hc_max_iterations', 50)
         autofocus_max_attempts = kwargs.get('autofocus_max_attempts', 2)
         autofocus_target_focus_setpoint = kwargs.get('autofocus_target_focus_setpoint', None)
-        # Autofocus scheduling: scope (per-position vs first-point-only),
-        # period (every Nth round), and whether the AF result updates the
-        # shared global Z offset that capture moves apply.
-        autofocus_scope = kwargs.get('autofocus_scope', 'everyPosition')
+        # Autofocus scheduling: every Nth FOV within a round (Squid's
+        # NUMBER_OF_FOVS_PER_AF), every Nth round, and whether the AF result
+        # updates the region Z offset that capture moves apply.
+        autofocus_every_n_fovs = max(1, int(kwargs.get('autofocus_every_n_fovs', 1) or 1))
         autofocus_period_rounds = max(1, int(kwargs.get('autofocus_period_rounds', 1) or 1))
+        # FOV counter for the above, running across the whole round (all
+        # regions), exactly like Squid's af_fov_count. Reset per timepoint.
+        self._af_fov_count = 0
         autofocus_apply_global_offset = kwargs.get('autofocus_apply_global_offset', True)
         initial_z_position = kwargs.get('initial_z_position', None)
         t_period = kwargs.get('t_period', 1)
@@ -181,7 +185,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             self._logger.debug(f"Reusing {len(file_writers)} shared file writers from previous timepoint")
         else:
             file_writers = self._setup_ome_writers(
-                snake_tiles, t, exp_name, dir_path, m_file_name,
+                snake_tiles, region_meta, t, exp_name, dir_path, m_file_name,
                 z_positions, illumination_intensities, isRGB=isRGB,
                 omero_connection_params=omero_connection_params,
                 shared_omero_key=shared_omero_key,
@@ -232,7 +236,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 keep_illumination_on=keep_illumination_on,
                 illumination_kinds=illumination_kinds,
                 illumination_params=illumination_params,
-                autofocus_scope=autofocus_scope,
+                autofocus_every_n_fovs=autofocus_every_n_fovs,
                 autofocus_period_rounds=autofocus_period_rounds,
                 autofocus_apply_global_offset=autofocus_apply_global_offset,
             )
@@ -327,54 +331,9 @@ class ExperimentNormalMode(ExperimentModeBase):
             "max_retries": step.max_retries
         }
 
-    def setup_shared_ome_writers(self,
-                                snake_tiles: List[List[Dict]],
-                                exp_name: str,
-                                dir_path: str,
-                                m_file_name: str,
-                                z_positions: List[float],
-                                illumination_intensities: List[float],
-                                isRGB: bool = False,
-                                omero_connection_params: Optional[OMEROConnectionParams] = None,
-                                shared_omero_key: Optional[str] = None,
-                                n_times: int = 1) -> List[OMEWriter]:
-        """
-        Set up shared OME writers for multi-timepoint experiments.
-
-        This method creates writers that can be reused across multiple timepoints
-        in a timelapse experiment. The writers are configured to handle all
-        timepoints without creating new files for each timepoint.
-
-        Args:
-            snake_tiles: List of tiles containing scan points
-            exp_name: Experiment name
-            dir_path: Directory path for saving
-            m_file_name: Base filename
-            z_positions: List of Z positions
-            illumination_intensities: List of illumination values
-            isRGB: Whether images are RGB
-            omero_connection_params: Optional OMERO connection parameters
-            shared_omero_key: Optional key for shared OMERO uploader
-            n_times: Total number of time points
-
-        Returns:
-            List of OMEWriter instances to be reused across timepoints
-        """
-        return self._setup_ome_writers(
-            snake_tiles=snake_tiles,
-            t=0,  # Initial timepoint
-            exp_name=exp_name,
-            dir_path=dir_path,
-            m_file_name=m_file_name,
-            z_positions=z_positions,
-            illumination_intensities=illumination_intensities,
-            isRGB=isRGB,
-            omero_connection_params=omero_connection_params,
-            shared_omero_key=shared_omero_key,
-            n_times=n_times,
-        )
     def _setup_ome_writers(self,
                           snake_tiles: List[List[Dict]],
+                          region_meta: Dict[str, Dict[str, Any]],
                           t: int,
                           exp_name: str,
                           dir_path: str,
@@ -419,14 +378,16 @@ class ExperimentNormalMode(ExperimentModeBase):
         condition_labels: Dict[str, str] = {}
         for position_center_index, tiles in enumerate(snake_tiles):
             experiment_name = f"{t}_{exp_name}_{position_center_index}"
-            # Per-area position name (frontend pointList → ScanArea.areaName,
-            # carried onto every tile by generate_snake_tiles). Appended to the
-            # base name, additively: the timestamp/experiment/index prefix is
-            # preserved so existing index-based tooling still resolves the files,
-            # while the file, the per-area folder (both derived from this base
-            # path) and the OME/OMERO image name now carry the position name.
+            # Per-region metadata, looked up once by the region's own id.
+            region_id = tiles[0]["region_id"]
+            meta = region_meta.get(region_id, {})
+            # Region name appended to the base name, additively: the
+            # timestamp/experiment/index prefix is preserved so existing
+            # index-based tooling still resolves the files, while the file, the
+            # per-region folder (both derived from this base path) and the
+            # OME/OMERO image name now carry the region name.
             # Empty name => byte-identical to the legacy index-only naming.
-            area_name = _sanitize_name(tiles[0].get("areaName") or tiles[0].get("name")) if tiles else ""
+            area_name = _sanitize_name(meta.get("areaName") or "")
             m_file_path = os.path.join(
                 dir_path,
                 m_file_name + str(position_center_index) + "_" + experiment_name + "_" + area_name + ".ome.tif"
@@ -502,16 +463,13 @@ class ExperimentNormalMode(ExperimentModeBase):
                 channel_names=channel_names_expanded,
             )
 
-            # Extract per-well labware metadata from the first tile in this group.
-            # Tiles within a single position_center_index share a well, so the
-            # first one is representative.
+            # Per-well labware metadata for this region.
             well_metadata: Optional[Dict[str, Any]] = None
-            if tiles:
-                first = tiles[0]
-                w_row = first.get("wellRow")
-                w_col = first.get("wellColumn")
-                w_load = first.get("labwareLoadName")
-                w_cond = first.get("conditionLabel")
+            if meta:
+                w_row = meta.get("wellRow")
+                w_col = meta.get("wellColumn")
+                w_load = meta.get("labwareLoadName")
+                w_cond = meta.get("conditionLabel")
                 if w_row or w_col or w_load:
                     well_metadata = {
                         "wellRow": w_row,
@@ -602,7 +560,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   autofocus_hc_max_iterations: int = 50,
                                   illumination_kinds: Optional[List[str]] = None,
                                   illumination_params: Optional[Dict[str, Dict[str, Any]]] = None,
-                                  autofocus_scope: str = "everyPosition",
+                                  autofocus_every_n_fovs: int = 1,
                                   autofocus_period_rounds: int = 1,
                                   autofocus_apply_global_offset: bool = True) -> int:
         """
@@ -636,6 +594,23 @@ class ExperimentNormalMode(ExperimentModeBase):
         min_x, max_x, min_y, max_y, _, _ = self.compute_scan_ranges([tiles])
         m_pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
 
+        # Say which region this is and which focus map it will actually use, so
+        # "which map was this run on?" is answerable from the log alone.
+        region_id = tiles[0]["region_id"] if tiles else "?"
+        if getattr(self.controller, "_focus_map_active", False):
+            region_map = self.controller.focus_map_manager.get(region_id)
+            map_desc = (
+                f"focus map [{region_id}] ({region_map.n_points} pts, "
+                f"fitted={region_map.is_fitted})"
+                if region_map is not None
+                else "no focus map for this region — falling back to per-point Z"
+            )
+        else:
+            map_desc = "focus map inactive"
+        self._logger.info(
+            f"Region [{region_id}]: {len(tiles)} position(s), {map_desc}"
+        )
+
         # Iterate over positions in the tile
         for m_index, m_point in enumerate(tiles):
             try:
@@ -643,16 +618,17 @@ class ExperimentNormalMode(ExperimentModeBase):
             except Exception:
                 name = f"Move to point {m_point['x']}, {m_point['y']}"
 
-            # Determine per-point Z base: prefer the point's own z, else fall
-            # back to the global initial Z captured at experiment start.
-            # z=0.0 is the frontend default for sub-tiles that have no explicit
-            # per-point Z – treat it the same as None so we always use the real
-            # stage Z (initial_z_position) in that case.
+            # Per-point Z base: the point's own Z, else the global initial Z
+            # captured at experiment start. build_scan_regions guarantees Z is
+            # homogeneous across a region — every FOV has one or none does — so
+            # a present Z is always deliberate. (The old code additionally
+            # treated z == 0.0 as "not given", which silently ignored a request
+            # to image at absolute Z = 0.)
             # (The "override per-group Z with current Z" Tiling toggle is applied
             # entirely on the frontend, which rewrites each position's Z before
             # sending; here we just consume the coordinates as-is.)
             point_z_origin = m_point.get("z")
-            if point_z_origin is None or point_z_origin == 0.0:
+            if point_z_origin is None:
                 point_z_origin = initial_z_position
 
             # Move to XY position
@@ -672,24 +648,23 @@ class ExperimentNormalMode(ExperimentModeBase):
             # user cleared the focus map.  Also require fitted maps to exist.
             focus_map_z = None
             if getattr(self.controller, "_focus_map_active", False) and self.controller.focus_map_manager.get_all():
-                # Resolve the group_id used when storing the focus map.
-                # _run_focus_map_phase stores under sa.areaId (e.g. "area_0").
-                focus_map_group_id = (
-                    m_point.get("centerIndex")
-                    or m_point.get("areaName")
-                    or m_point.get("wellId")
-                    or "default"
-                )
+                # The region's own map, looked up by the one identifier a
+                # region has. This used to be a four-term `or` chain over
+                # centerIndex / areaName / wellId / "default" that could not
+                # match what _run_focus_map_phase stored (the region id), so it
+                # fell through to the server-global "manual" map — which
+                # outlives the experiment and the sample. That is the
+                # out-of-focus scan people saw when an old map was left behind.
+                # A missing region_id is a bug in region construction, so let
+                # the KeyError surface rather than guessing an id.
+                focus_map_group_id = m_point["region_id"]
                 focus_map_z = self.controller.apply_focus_map_z(
                     x=m_point["x"], y=m_point["y"], group_id=focus_map_group_id
                 )
                 if focus_map_z is None and not getattr(self.controller, '_focus_map_fit_by_region', True):
+                    # A single global surface was requested for the whole run.
                     focus_map_z = self.controller.apply_focus_map_z(
                         x=m_point["x"], y=m_point["y"], group_id="global"
-                    )
-                if focus_map_z is None:
-                    focus_map_z = self.controller.apply_focus_map_z(
-                        x=m_point["x"], y=m_point["y"], group_id="manual"
                     )
 
             # -------------------------------------------------------------------
@@ -721,18 +696,19 @@ class ExperimentNormalMode(ExperimentModeBase):
                 step_id += 1
 
             # Perform autofocus if enabled (runs after focus map Z move if both
-            # active). Scheduling:
-            #   - period: only on rounds where t % period == 0 (skipped rounds
-            #             reuse the last measured global Z offset)
-            #   - scope:  'everyPosition' → every XY tile; 'firstPositionOnly' →
-            #             only the very first tile of the round, applied as a
-            #             global Z offset to all positions (thermal-drift model)
+            # active). Two independent axes:
+            #   - rounds: only where t % autofocus_period_rounds == 0 (skipped
+            #             rounds reuse the last measured offset)
+            #   - FOVs:   every Nth field of view within the round, counted
+            #             across all regions (Squid's NUMBER_OF_FOVS_PER_AF).
+            #             N=1 is the old "everyPosition"; N >= total FOVs is the
+            #             old "firstPositionOnly".
             af_period = max(1, int(autofocus_period_rounds or 1))
             af_round_active = is_auto_focus and (t % af_period == 0)
-            if autofocus_scope == "firstPositionOnly":
-                do_autofocus = af_round_active and position_center_index == 0 and m_index == 0
-            else:
-                do_autofocus = af_round_active
+            do_autofocus = af_round_active and (
+                self._af_fov_count % max(1, int(autofocus_every_n_fovs)) == 0
+            )
+            self._af_fov_count += 1
             if do_autofocus:
                 # When apply_global_offset is set, a post-func captures the
                 # measured focus Z and stores (measured - base_z) as the shared
@@ -744,7 +720,11 @@ class ExperimentNormalMode(ExperimentModeBase):
                 af_post_params = None
                 if autofocus_apply_global_offset:
                     af_post_funcs = [self.controller.update_af_offset]
-                    af_post_params = {"expected_z": base_z, "apply_global_offset": True}
+                    af_post_params = {
+                        "expected_z": base_z,
+                        "apply_global_offset": True,
+                        "region_id": region_id,
+                    }
                 workflow_steps.append(WorkflowStep(
                     name="Autofocus",
                     step_id=step_id,
@@ -782,15 +762,16 @@ class ExperimentNormalMode(ExperimentModeBase):
                 # unconditional (independent of illumination mode), which fixes
                 # the keepIlluminationOn case where the per-frame illumination
                 # settle (its own post-wait below) is skipped and there would
-                # otherwise be no post-move settle at all. apply_af_offset adds
-                # the runtime autofocus Z offset so the measured focus reaches
-                # the acquisition instead of being overwritten here.
+                # otherwise be no post-move settle at all. af_region_id adds
+                # THIS region's autofocus Z offset so the measured focus reaches
+                # the acquisition instead of being overwritten here — and so a
+                # neighbouring region's offset never leaks into this one.
                 if is_z_stack or index_z == 0:
                     workflow_steps.append(WorkflowStep(
                         name=f"Move to Z {'plane ' + str(index_z) if is_z_stack else 'base position'} ({i_z:.1f} µm)",
                         step_id=step_id,
                         main_func=self.controller.move_stage_z,
-                        main_params={"posZ": i_z, "relative": False, "apply_af_offset": True},
+                        main_params={"posZ": i_z, "relative": False, "af_region_id": region_id},
                         post_funcs=[self.controller.wait_time],
                         post_params={"seconds": t_pre_s},
                     ))
@@ -829,7 +810,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                                 name=f"Channel Z offset ({illu_source}: {channel_offset_z:+.1f} µm)",
                                 step_id=step_id,
                                 main_func=self.controller.move_stage_z,
-                                main_params={"posZ": adjusted_z, "relative": False, "apply_af_offset": True},
+                                main_params={"posZ": adjusted_z, "relative": False, "af_region_id": region_id},
                                 post_funcs=[self.controller.wait_time],
                                 post_params={"seconds": t_pre_s},
                             ))

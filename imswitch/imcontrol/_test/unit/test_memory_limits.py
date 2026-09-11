@@ -30,7 +30,7 @@ def test_stitcher_queue_does_not_grow_without_limit():
     """A writer that never drains must not swallow unbounded frames."""
     path = os.path.join(tempfile.mkdtemp(), "s.ome.tif")
     stitcher = OmeTiffStitcher(path)
-    stitcher.QUEUE_WAIT_S = 0.2          # don't wait 30 s in a test
+    stitcher.QUEUE_WAIT_S = 0.05         # don't wait 30 s in a test
     stitcher._logger = types.SimpleNamespace(
         error=lambda *a, **k: None, info=lambda *a, **k: None,
         warning=lambda *a, **k: None, debug=lambda *a, **k: None)
@@ -81,18 +81,19 @@ def test_only_the_newest_tile_previews_stay_in_memory():
     assert kept[-1]["id"] == StageMapController.MAX_TILE_PREVIEWS + 49
 
 
-def test_prescan_keeps_only_the_centre_band_of_each_frame():
-    stub = types.SimpleNamespace(PRESCAN_BAND_FRACTION=StageMapController.PRESCAN_BAND_FRACTION)
-    stub._centreBand = types.MethodType(StageMapController._centreBand, stub)
+def test_prescan_strip_is_built_coarser_until_it_fits_its_budget():
+    """The strip is the only buffer a prescan line holds. A 10 mm line at
+    0.12 um/px would be 83k columns at camera resolution; the layout grows the
+    subsample factor until the strip fits PRESCAN_MAX_STRIP_MB."""
+    from imswitch.imcontrol.controller.controllers.StageMapController import prescanLayout
 
-    frame = np.arange(100 * 400, dtype=np.uint16).reshape(100, 400)
-    band = stub._centreBand(frame)
-    assert band.shape == (100, 100)                 # a quarter of the width
-    assert band.base is None                        # a copy, not a view
-    np.testing.assert_array_equal(band, frame[:, 150:250])
-
-    colour = np.zeros((10, 40, 3), dtype=np.uint8)
-    assert stub._centreBand(colour).shape == (10, 10)
+    budget = StageMapController.PRESCAN_MAX_STRIP_MB * 1024 * 1024
+    slots, w, h, sub, dx = prescanLayout(
+        spanUm=10000.0, dxUm=300.0, pixelSizeUm=0.12, frameShape=(3000, 3000),
+        subsample=1, maxStripBytes=budget)
+    assert w * h * 2 <= budget
+    assert sub > 1                      # it had to coarsen
+    assert slots == int(np.ceil(10000.0 / 300.0))   # sampling is by tile pitch, not frame cap
 
 
 if __name__ == "__main__":

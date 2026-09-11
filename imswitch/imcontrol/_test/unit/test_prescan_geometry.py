@@ -27,40 +27,12 @@ def _controller(pixel_size=1.0):
             warning=lambda *a, **k: None, error=lambda *a, **k: None,
         ),
         _getPixelSizeUm=lambda: pixel_size,
+        PRESCAN_MAX_STRIP_MB=StageMapController.PRESCAN_MAX_STRIP_MB,
+        PRESCAN_SUBSAMPLE=StageMapController.PRESCAN_SUBSAMPLE,
     )
-    for name in ("_composeStrip", "_decodePreview"):
-        setattr(stub, name, types.MethodType(getattr(StageMapController, name), stub))
+    stub._centreBand = types.MethodType(StageMapController._centreBand, stub)
     stub._resizeGray = StageMapController._resizeGray
     return stub
-
-
-def test_strip_width_matches_the_distance_travelled():
-    """1000 um at 1 um/px must be a 1000 px strip, whatever the frame rate."""
-    c = _controller(pixel_size=1.0)
-    for n_frames in (5, 50, 500):
-        frames = [(np.full((16, 16), 100, np.uint8), i * 1000.0 / (n_frames - 1))
-                  for i in range(n_frames)]
-        strip = c._composeStrip(frames, span=1000.0)
-        assert strip.shape == (16, 1000), (n_frames, strip.shape)
-
-
-def test_strip_width_follows_the_pixel_size():
-    """The same sweep through a 2 um/px objective is half as many pixels."""
-    frames = [(np.zeros((8, 8), np.uint8), x) for x in (0.0, 500.0, 1000.0)]
-    assert _controller(1.0)._composeStrip(frames, 1000.0).shape[1] == 1000
-    assert _controller(2.0)._composeStrip(frames, 1000.0).shape[1] == 500
-
-
-def test_frames_land_in_travel_order_not_frame_order():
-    """A frame recorded at 90% of the sweep belongs at 90% of the strip."""
-    c = _controller(pixel_size=1.0)
-    frames = [
-        (np.full((4, 4), 10, np.uint8), 0.0),
-        (np.full((4, 4), 200, np.uint8), 900.0),
-    ]
-    strip = c._composeStrip(frames, span=1000.0)
-    assert strip[:, :50].max() == 10
-    assert strip[:, 850:950].max() == 200
 
 
 def test_resize_preserves_the_requested_shape():
@@ -69,19 +41,101 @@ def test_resize_preserves_the_requested_shape():
     assert StageMapController._resizeGray(img, 8, 8) is img  # no-op when it fits
 
 
-def test_a_single_frame_line_is_rejected_by_the_caller_not_composed():
-    """_prescanLine returns None below 2 frames; compose is never called with
-    one, but it must not blow up if it is."""
-    c = _controller()
-    strip = c._composeStrip([(np.ones((4, 4), np.uint8), 0.0)], span=100.0)
-    assert strip.shape[0] == 4 and strip.shape[1] == 100
+def test_centre_band_is_the_middle_of_the_frame_subsampled():
+    stub = _controller()
+    frame = np.arange(100 * 400, dtype=np.uint16).reshape(100, 400)
+    band = stub._centreBand(frame, widthPx=200, subsample=4)
+    assert band.shape == (25, 50)
+    assert band.base is None  # a copy — the camera may reuse its buffer
+    np.testing.assert_array_equal(band, frame[::4, 100:300:4])
 
 
+class _FakeClock:
+    """time.time() we can step, so the sweep runs in zero real time."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def time(self):
+        return self.now
+
+    def sleep(self, dt):
+        self.now += dt
 
 
-# ---------------------------------------------------------------------------
-# Serpentine sweep
-# ---------------------------------------------------------------------------
+def _sweep_controller(pixel_size, frame_shape, speed, frames_per_s):
+    """A controller whose camera returns a NEW frame every 1/frames_per_s of
+    fake time, valued by the X the stage had reached when it was exposed."""
+    c = _controller(pixel_size)
+    clock = _FakeClock()
+    c.clock = clock
+    c._shouldStop = types.SimpleNamespace(is_set=lambda: False)
+    c._stage = types.SimpleNamespace(move=lambda **kw: None, combinedAxes=["XY"])
+
+    started = {"t": None}
+
+    def latest(returnFrameNumber=False):
+        t = clock.now - (started["t"] if started["t"] is not None else clock.now)
+        n = int(t * frames_per_s)
+        x_when_exposed = speed * (n / frames_per_s)          # µm since the start
+        # +1 so that 0 can only mean "never written".
+        frame = np.full(frame_shape, min(65535, int(x_when_exposed) + 1), np.uint16)
+        return (frame, n) if returnFrameNumber else frame
+
+    c._detector = types.SimpleNamespace(shape=frame_shape, getLatestFrame=latest)
+    c._prescanLine = types.MethodType(StageMapController._prescanLine, c)
+    c._on_move_start = lambda: started.__setitem__("t", clock.now)
+    return c
+
+
+def test_exposure_k_lands_in_the_columns_slot_k_covers(monkeypatch):
+    """The whole point of clock-based sampling: at constant speed, exposure k
+    is due k·dx/speed after the start and must fill exactly the strip
+    columns [k·dx, (k+1)·dx) — whatever the frame rate."""
+    import imswitch.imcontrol.controller.controllers.StageMapController as sm
+
+    speed, dx, span, px = 10000.0, 300.0, 3000.0, 0.12
+    c = _sweep_controller(px, (400, 3000), speed, frames_per_s=1000.0)
+
+    class Move:
+        def __init__(self, stage, value, axis, speed_):
+            self.finished = False
+            self.error = None
+            self.t_end = c.clock.now + abs(value) / speed_
+
+        def start(self):
+            c._on_move_start()
+
+        @property
+        def finished(self):
+            return c.clock.now >= self.t_end
+
+        @finished.setter
+        def finished(self, _):
+            pass
+
+        def join(self, timeout=None):
+            c.clock.now = max(c.clock.now, self.t_end)
+
+    monkeypatch.setattr(sm, "_NonBlockingMove", Move)
+    monkeypatch.setattr(sm.time, "time", c.clock.time)
+    monkeypatch.setattr(sm.time, "sleep", c.clock.sleep)
+
+    strip, scale = c._prescanLine(0.0, span, 0.0, speed, dx, 4)
+
+    assert scale == px * 4
+    assert strip.shape[1] == int(np.ceil(span / scale))
+    slots = int(np.ceil(span / dx))
+    for k in range(slots):
+        c0 = int(round(k * dx / scale))
+        c1 = min(strip.shape[1], int(round((k + 1) * dx / scale)))
+        band = strip[0, c0:c1]
+        # Every column of slot k holds a frame exposed within one frame period
+        # of the moment the stage was at k·dx.
+        assert band.min() - 1 >= k * dx - speed / 1000.0 - 1, (k, band.min())
+        assert band.max() - 1 <= k * dx + speed / 1000.0 + 1, (k, band.max())
+    assert strip.min() > 0  # every column was written by some exposure
+
 
 def _recording_controller(pixel_size=1.0):
     """A controller stub that records the line sweeps it was asked to run."""
@@ -102,18 +156,17 @@ def _recording_controller(pixel_size=1.0):
         combinedAxes=["XY"],
     )
 
-    def fake_line(startX, endX, y, speedX):
+    def fake_line(startX, endX, y, speedX, dx, subsample):
         c.sweeps.append((startX, endX, y))
-        # _composeStrip places frames by DISTANCE TRAVELLED, so a strip always
-        # comes back in travel order: a return line is descending in X. Model
-        # that, or the flip under test has nothing to undo.
+        # The strip comes back in travel order: a return line is descending in
+        # X. Model that, or the flip under test has nothing to undo.
         ramp = np.arange(10, dtype=np.uint8)
         if startX > endX:
             ramp = ramp[::-1]
-        return np.tile(ramp, (2, 1))
+        return np.tile(ramp, (2, 1)), 1.0
 
     c._prescanLine = fake_line
-    c._addStrip = lambda strip, minX, maxX, y: c.strips.append((y, strip.copy()))
+    c._addStrip = lambda strip, minX, maxX, y, pixelSize: c.strips.append((y, strip.copy()))
     for name in ("_prescanLoop", "_enterPrescanOptics", "_restorePrescanOptics",
                  "_objectiveController"):
         setattr(c, name, types.MethodType(getattr(StageMapController, name), c))
@@ -123,7 +176,7 @@ def _recording_controller(pixel_size=1.0):
 def test_lines_alternate_direction():
     """The stage is already at the far end, so drive straight back."""
     c = _recording_controller()
-    c._prescanLoop(0.0, 1000.0, 0.0, 200.0, 100.0, 5000.0, None)
+    c._prescanLoop(0.0, 1000.0, 0.0, 200.0, 100.0, 5000.0, None, 0.0, 4)
 
     assert [(s[0], s[1]) for s in c.sweeps] == [
         (0.0, 1000.0), (1000.0, 0.0), (0.0, 1000.0),
@@ -134,7 +187,7 @@ def test_lines_alternate_direction():
 def test_reverse_lines_are_stored_left_to_right():
     """Otherwise every other line of the map is mirrored."""
     c = _recording_controller()
-    c._prescanLoop(0.0, 1000.0, 0.0, 100.0, 100.0, 5000.0, None)
+    c._prescanLoop(0.0, 1000.0, 0.0, 100.0, 100.0, 5000.0, None, 0.0, 4)
 
     forward, reverse = c.strips[0][1], c.strips[1][1]
     np.testing.assert_array_equal(forward[0], np.arange(10))
@@ -145,7 +198,7 @@ def test_stage_position_is_restored_after_the_sweep():
     c = _recording_controller()
     moves = []
     c._stage.move = lambda **kw: moves.append(kw)
-    c._prescanLoop(0.0, 1000.0, 0.0, 0.0, 100.0, 5000.0, None)
+    c._prescanLoop(0.0, 1000.0, 0.0, 0.0, 100.0, 5000.0, None, 0.0, 4)
 
     # Last moves put X/Y and Z back where they were found.
     assert moves[-2]["value"] == (1.0, 2.0)

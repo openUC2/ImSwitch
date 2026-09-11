@@ -332,6 +332,14 @@ const WellSelectorComponent = () => {
       (objectiveState?.fovY || 0) * (1 - (wellSelectorState.areaSelectOverlap || 0)),
     ) || 500,
   );
+  // Exposure pitch along the sweep: the same X tile spacing the scan uses, so
+  // one exposure lands per tile step and the strip has no gaps and no overlap.
+  const prescanDx = Math.max(
+    1,
+    Math.round(
+      (objectiveState?.fovX || 0) * (1 - (wellSelectorState.areaSelectOverlap || 0)),
+    ) || 0,
+  );
   const prescanSpeed = Math.max(
     1,
     parseFloat(wellSelectorState.moveCameraSpeedXY) || 20000,
@@ -381,6 +389,7 @@ const WellSelectorComponent = () => {
     setPrescanRunning(true);
     apiStageMapStartPrescan({
       ...bounds,
+      dx: prescanDx,
       dy: prescanDy,
       speedX: prescanSpeed,
       ...(objectiveSlot === undefined ? {} : { objectiveSlot }),

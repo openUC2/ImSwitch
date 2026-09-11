@@ -72,6 +72,34 @@ class StageMapStatus(BaseModel):
         arbitrary_types_allowed = True
 
 
+def prescanLayout(spanUm: float, dxUm: float, pixelSizeUm: float, frameShape,
+                  subsample: int, maxStripBytes: int, itemsize: int = 2):
+    """How one prescan line is laid out: the sample slots and the strip they fill.
+
+    A slot is one camera exposure, ``dxUm`` apart along the sweep, and it fills
+    exactly the strip columns it covers, so the strip is contiguous whatever the
+    speed. The strip is built ``subsample`` times coarser than the camera —
+    this is a locator, and a 10 mm line at 0.12 µm/px would be 80 000 columns —
+    and the factor grows until the strip fits ``maxStripBytes``.
+
+    Returns (slots, stripW, stripH, subsample, dxUm) with ``dxUm`` clamped to
+    the frame width: a pitch wider than the field would leave gaps.
+    """
+    frameH, frameW = int(frameShape[0]), int(frameShape[1])
+    pixelSizeUm = max(float(pixelSizeUm), 1e-6)
+    fieldUm = max(1, frameW) * pixelSizeUm
+    dxUm = fieldUm if dxUm <= 0 else min(max(float(dxUm), pixelSizeUm), fieldUm)
+    slots = max(2, int(np.ceil(spanUm / dxUm)))
+    subsample = max(1, int(subsample))
+    while True:
+        scale = pixelSizeUm * subsample
+        stripW = max(2, int(np.ceil(spanUm / scale)))
+        stripH = max(1, len(range(0, frameH, subsample)))
+        if stripW * stripH * itemsize <= maxStripBytes or subsample >= 64:
+            return slots, stripW, stripH, subsample, dxUm
+        subsample += 1
+
+
 class _NonBlockingMove:
     """Run one blocking stage move on a thread so the caller can grab frames.
 
@@ -428,12 +456,14 @@ class StageMapController(ImConWidgetController):
     # Newest tiles whose preview image stays in RAM (see _trimTiles).
     MAX_TILE_PREVIEWS = 600
 
-    # Hard ceiling on frames held per line, and how much of each frame is kept.
-    PRESCAN_MAX_FRAMES = 400
-    PRESCAN_BAND_FRACTION = 0.25
+    # The strip is the only buffer a line holds; past this it is built coarser.
+    PRESCAN_MAX_STRIP_MB = 64
+    # Camera pixels per strip pixel when the caller does not say.
+    PRESCAN_SUBSAMPLE = 4
 
 
-    def _prescanLoop(self, minX, maxX, minY, maxY, dy, speedX, objectiveSlot):
+    def _prescanLoop(self, minX, maxX, minY, maxY, dy, speedX, objectiveSlot,
+                     dx, subsample):
         """One continuous X sweep per Y line, each pushed as one wide tile.
 
         Lines alternate direction (serpentine): the stage is already at the far
@@ -453,13 +483,14 @@ class StageMapController(ImConWidgetController):
             forward = True
             while y <= maxY + 1e-6 and not self._shouldStop.is_set():
                 startX, endX = (minX, maxX) if forward else (maxX, minX)
-                strip = self._prescanLine(startX, endX, y, speedX)
-                if strip is not None:
+                result = self._prescanLine(startX, endX, y, speedX, dx, subsample)
+                if result is not None:
+                    strip, stripPixelSize = result
                     if not forward:
                         # Store every strip left-to-right whichever way it was
                         # driven, so the map does not mirror alternate lines.
                         strip = strip[:, ::-1]
-                    self._addStrip(strip, minX, maxX, y)
+                    self._addStrip(strip, minX, maxX, y, stripPixelSize)
                 forward = not forward
                 y += dy
         except Exception as e:
@@ -553,27 +584,28 @@ class StageMapController(ImConWidgetController):
         self._logger.warning("Objective move did not finish in time")
         return False
 
-    def _centreBand(self, frame: np.ndarray) -> np.ndarray:
-        """The vertical slice of a frame that a prescan strip actually uses.
+    def _centreBand(self, frame: np.ndarray, widthPx: int, subsample: int) -> np.ndarray:
+        """The centre ``widthPx`` camera columns of a frame, ``subsample`` times coarser.
 
         The stage never stops, so only the middle of each frame corresponds to
-        the position we recorded. Keeping just that band is what makes the
-        buffer affordable: a whole 3000x3000 uint16 frame is 18 MB, its centre
-        band is a few hundred kB. Copied so the detector can reuse its buffer.
+        the position we recorded. Copied so the detector can reuse its buffer.
         """
         if frame.ndim == 3:
             frame = frame[:, :, 0]
         width = frame.shape[1]
-        band = max(1, min(width, int(width * self.PRESCAN_BAND_FRACTION)))
+        band = max(1, min(width, widthPx))
         start = max(0, width // 2 - band // 2)
-        return np.array(frame[:, start:start + band], copy=True)
+        return np.array(frame[::subsample, start:start + band:subsample], copy=True)
 
-    def _prescanLine(self, startX, endX, y, speedX) -> Optional[np.ndarray]:
-        """Drive X once and return the frames re-spaced into one strip image.
+    def _prescanLine(self, startX, endX, y, speedX, dx, subsample):
+        """Drive X once; return the strip of one exposure per ``dx`` and its µm/px.
 
+        Sampling is on a clock, not on distance polled: with the sweep assumed
+        at constant speed, exposure k is due ``k·dx/speedX`` after the start
+        and fills the strip columns slot k covers. Nothing is buffered but the
+        strip itself, built ``subsample`` times coarser than the camera.
         ``startX``/``endX`` are the ends in travel order, so on a return line
-        startX > endX. Everything below works in distance travelled, never in
-        signed coordinates.
+        startX > endX; everything below works in distance travelled.
         """
         if "XY" in (getattr(self._stage, "combinedAxes", None) or []):
             self._stage.move(value=(startX, y), axis="XY", is_absolute=True, is_blocking=True)
@@ -581,47 +613,57 @@ class StageMapController(ImConWidgetController):
             self._stage.move(value=startX, axis="X", is_absolute=True, is_blocking=True)
             self._stage.move(value=y, axis="Y", is_absolute=True, is_blocking=True)
 
+        pixelSize = self._getPixelSizeUm()
+        span = abs(endX - startX)
+        # A (1, 1) fallback here would clamp dx to one pixel and schedule an
+        # exposure every few microseconds; learn the real shape from a frame.
+        frameShape = getattr(self._detector, "shape", None)
+        if not frameShape or min(frameShape[:2]) < 2:
+            probe = self._detector.getLatestFrame()
+            frameShape = probe.shape[:2] if probe is not None else (2048, 2048)
+        slots, stripW, stripH, subsample, dx = prescanLayout(
+            span, dx, pixelSize, frameShape, subsample,
+            self.PRESCAN_MAX_STRIP_MB * 1024 * 1024)
+        scale = pixelSize * subsample
+        strip = None  # allocated from the first frame: its dtype is the camera's
+        lastFrameNumber = -1
+        newFrames = 0
+
         mover = _NonBlockingMove(self._stage, endX - startX, "X", speedX)
         mover.start()
-
-        # Position is derived from speed x elapsed time, never polled: a
-        # getPosition() per frame would block the shared serial bus and starve
-        # the live view.
         started = time.time()
-        span = abs(endX - startX)
-        # A full-frame buffer is the one thing here that can eat the machine:
-        # a 3000x3000 uint16 frame is 18 MB, and a slow line at 30 fps would
-        # collect hundreds. Only the centre band of each frame ever reaches the
-        # strip, so keep just that band and cap how many we hold. The cap is
-        # the strip's own pixel width — more samples than that cannot add
-        # detail, they only overwrite each other.
-        pixelSize = self._getPixelSizeUm()
-        maxFrames = min(self.PRESCAN_MAX_FRAMES,
-                        max(2, int(span / max(pixelSize, 1e-6))))
-        minSpacingUm = span / maxFrames
-
         # A hung move never sets finished (the serial bus can block), so the
         # loop is also bounded by how long the sweep could possibly take.
         deadline = started + (span / max(speedX, 1e-6)) * 3.0 + 10.0
 
-        frames: List[tuple] = []
-        lastFrameNumber = -1
-        lastTravelled = -minSpacingUm
-        while (not mover.finished and not self._shouldStop.is_set()
-               and time.time() < deadline):
+        k = 0
+        while k < slots and not self._shouldStop.is_set() and time.time() < deadline:
+            due = started + k * dx / speedX
+            now = time.time()
+            if now < due:
+                if mover.finished:
+                    break  # the stage arrived early: the tail stays empty rather than smeared
+                time.sleep(min(0.005, due - now))
+                continue
             try:
                 frame, frameNumber = self._detector.getLatestFrame(returnFrameNumber=True)
             except TypeError:
                 frame, frameNumber = self._detector.getLatestFrame(), lastFrameNumber + 1
-            if frame is not None and getattr(frame, "size", 0) > 0 and frameNumber != lastFrameNumber:
+            if frame is None or getattr(frame, "size", 0) == 0:
+                time.sleep(0.005)
+                continue
+            if frameNumber != lastFrameNumber:
+                newFrames += 1
                 lastFrameNumber = frameNumber
-                travelled = min(speedX * (time.time() - started), span)
-                # Throttle by distance, not by frame count: a fast sweep keeps
-                # every frame, a slow one drops the redundant ones.
-                if travelled - lastTravelled >= minSpacingUm:
-                    lastTravelled = travelled
-                    frames.append((self._centreBand(frame), travelled))
-            time.sleep(0.005)
+            c0 = int(round(k * dx / scale))
+            c1 = min(stripW, int(round((k + 1) * dx / scale)))
+            if c1 > c0:
+                band = self._centreBand(frame, (c1 - c0) * subsample, subsample)
+                if strip is None:
+                    strip = np.zeros((band.shape[0], stripW), dtype=band.dtype)
+                width = min(c1 - c0, band.shape[1])
+                strip[:band.shape[0], c0:c0 + width] = band[:, :width]
+            k += 1
 
         mover.join(timeout=5.0)
         if mover.error:
@@ -630,50 +672,29 @@ class StageMapController(ImConWidgetController):
         if not mover.finished:
             self._logger.error(f"Prescan line y={y:.0f}: move did not finish in time")
             return None
-        if len(frames) >= maxFrames:
-            self._logger.debug(
-                f"Prescan line y={y:.0f}: frame buffer capped at {maxFrames}")
-
-        if len(frames) < 2:
-            self._logger.warning(f"Prescan line y={y:.0f}: only {len(frames)} frame(s)")
+        if strip is None or k < 2:
+            self._logger.warning(f"Prescan line y={y:.0f}: only {k} exposure(s)")
             return None
-        return self._composeStrip(frames, span)
+        if newFrames < k:
+            # The camera could not serve one frame per slot, so neighbouring
+            # slots repeated a frame. Say what speed it CAN keep up with.
+            elapsed = max(time.time() - started, 1e-3)
+            fps = newFrames / elapsed
+            self._logger.warning(
+                f"Prescan line y={y:.0f}: {newFrames} frames for {k} slots — "
+                f"a frame every {dx / speedX * 1000:.0f} ms is needed at {speedX:.0f} µm/s; "
+                f"this camera keeps up to about {fps * dx:.0f} µm/s")
+        return strip, scale
 
-    def _composeStrip(self, frames, span) -> np.ndarray:
-        """Place each frame's centre column band at its own X along the strip.
+    def _addStrip(self, strip: np.ndarray, minX: float, maxX: float, y: float,
+                  pixelSize: float):
+        """Push one prescan line into the existing tile store as a wide tile.
 
-        Only the middle slice of every frame is used: the stage never stops, so
-        the rest of the frame is the same sample smeared over a different
-        moment. Slice width follows the frame spacing, which keeps the strip's
-        scale honest however fast the sweep ran.
+        ``pixelSize`` is the strip's own µm/px (coarser than the camera's).
         """
-        pixelSize = self._getPixelSizeUm()
-        height = frames[0][0].shape[0]
-        stripW = max(2, int(round(span / max(pixelSize, 1e-6))))
-        strip = np.zeros((height, stripW), dtype=frames[0][0].dtype)
-
-        for frame, travelled in frames:
-            centre = int(round(travelled / span * (stripW - 1)))
-            frameW = frame.shape[1]
-            # Band width follows the frame spacing, capped by what we kept.
-            band = min(max(1, stripW // len(frames)), frameW)
-            x0 = max(0, centre - band // 2)
-            x1 = min(stripW, x0 + band)
-            if x1 <= x0:
-                continue
-            # Both bands are centred: the destination on where the stage was,
-            # the source on the middle of what we kept of the frame.
-            width = x1 - x0
-            fx0 = max(0, frameW // 2 - width // 2)
-            strip[:, x0:x1] = frame[:, fx0:fx0 + width]
-        return strip
-
-    def _addStrip(self, strip: np.ndarray, minX: float, maxX: float, y: float):
-        """Push one prescan line into the existing tile store as a wide tile."""
         preview = self._makePreview(strip)
         if preview is None:
             return
-        pixelSize = self._getPixelSizeUm()
         with self._tilesLock:
             tileId = len(self._tiles)
         tile = {
@@ -866,7 +887,8 @@ class StageMapController(ImConWidgetController):
     @APIExport(requestType="POST")
     def startPrescan(self, minX: float, maxX: float, minY: float, maxY: float,
                      dy: float = 500.0, speedX: float = 10000.0,
-                     objectiveSlot: Optional[int] = None) -> Dict:
+                     objectiveSlot: Optional[int] = None,
+                     dx: float = 0.0, subsample: int = 0) -> Dict:
         """Sweep an area fast and drop the result on the map as an overlay.
 
         The stage runs continuously in X while the camera free-runs; frames are
@@ -889,6 +911,11 @@ class StageMapController(ImConWidgetController):
         focus comes with it) and everything — objective, X, Y and Z — is put
         back afterwards. The caller is expected to have asked the operator
         first: moving the turret is a physical change.
+
+        ``dx`` is the exposure pitch along the sweep in µm — the same tile
+        spacing the scan uses; 0 means one field width. ``subsample`` is
+        camera pixels per strip pixel (0 = the default); the strip grows
+        coarser on its own if it would exceed ``PRESCAN_MAX_STRIP_MB``.
         """
         if self._isRunning or self._prescanThread is not None:
             return {"success": False, "error": "A scan is already running"}
@@ -904,7 +931,8 @@ class StageMapController(ImConWidgetController):
             target=self._prescanLoop,
             args=(float(minX), float(maxX), float(minY), float(maxY),
                   float(dy), float(speedX),
-                  None if objectiveSlot is None else int(objectiveSlot)),
+                  None if objectiveSlot is None else int(objectiveSlot),
+                  float(dx), int(subsample) or self.PRESCAN_SUBSAMPLE),
             daemon=True,
         )
         self._prescanThread.start()

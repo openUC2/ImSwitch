@@ -433,9 +433,16 @@ class StageMapController(ImConWidgetController):
     PRESCAN_BAND_FRACTION = 0.25
 
 
-    def _prescanLoop(self, minX, maxX, minY, maxY, dy, speedX):
-        """One continuous X sweep per Y line, each pushed as one wide tile."""
+    def _prescanLoop(self, minX, maxX, minY, maxY, dy, speedX, objectiveSlot):
+        """One continuous X sweep per Y line, each pushed as one wide tile.
+
+        Lines alternate direction (serpentine): the stage is already at the far
+        end when a line finishes, so driving straight back across it halves the
+        travel. Each strip is emitted as soon as its line ends, so the map fills
+        in line by line rather than at the end.
+        """
         acqHandle = None
+        restore = self._enterPrescanOptics(objectiveSlot)
         try:
             try:
                 acqHandle = self._master.detectorsManager.startAcquisition()
@@ -443,10 +450,17 @@ class StageMapController(ImConWidgetController):
                 self._logger.warning(f"Could not start acquisition: {e}")
 
             y = minY
+            forward = True
             while y <= maxY + 1e-6 and not self._shouldStop.is_set():
-                strip = self._prescanLine(minX, maxX, y, speedX)
+                startX, endX = (minX, maxX) if forward else (maxX, minX)
+                strip = self._prescanLine(startX, endX, y, speedX)
                 if strip is not None:
+                    if not forward:
+                        # Store every strip left-to-right whichever way it was
+                        # driven, so the map does not mirror alternate lines.
+                        strip = strip[:, ::-1]
                     self._addStrip(strip, minX, maxX, y)
+                forward = not forward
                 y += dy
         except Exception as e:
             self._lastError = f"Prescan failed: {e}"
@@ -457,9 +471,87 @@ class StageMapController(ImConWidgetController):
                     self._master.detectorsManager.stopAcquisition(acqHandle)
                 except Exception:
                     pass
+            self._restorePrescanOptics(restore)
             self._prescanThread = None
             self._emitStatus()
             self._logger.info("Prescan finished")
+
+    def _objectiveController(self):
+        try:
+            return self._master.getController("Objective")
+        except Exception:
+            return None
+
+    def _enterPrescanOptics(self, objectiveSlot: Optional[int]) -> Dict:
+        """Remember where we were, then move to the prescan objective.
+
+        Returns what _restorePrescanOptics needs to put everything back: the
+        prescan is a detour, and the operator should find the stage and the
+        turret exactly where they left them.
+        """
+        state: Dict = {"xyz": None, "slot": None}
+        try:
+            pos = self._stage.getPosition()
+            state["xyz"] = (float(pos.get("X", 0.0)), float(pos.get("Y", 0.0)),
+                            float(pos.get("Z", 0.0)))
+        except Exception as e:
+            self._logger.warning(f"Could not read stage position to restore later: {e}")
+
+        if objectiveSlot is None:
+            return state
+
+        objective = self._objectiveController()
+        if objective is None:
+            self._logger.warning("No objective controller — prescan runs on the current lens")
+            return state
+
+        try:
+            current, _ = objective.getCurrentObjective()
+            if current == objectiveSlot:
+                return state
+            self._logger.info(f"Prescan: switching objective {current} -> {objectiveSlot}")
+            # skipZ=False so the turret's own saved focus for that lens is
+            # applied — that is the refocus, and it is the only one available
+            # without a sample-dependent autofocus.
+            objective.moveToObjective(slot=objectiveSlot, skipZ=False)
+            self._waitForObjective(objective)
+            state["slot"] = current
+        except Exception as e:
+            self._logger.error(f"Could not switch objective for prescan: {e}")
+        return state
+
+    def _restorePrescanOptics(self, state: Dict):
+        objective = self._objectiveController()
+        if state.get("slot") is not None and objective is not None:
+            try:
+                self._logger.info(f"Prescan: restoring objective {state['slot']}")
+                objective.moveToObjective(slot=state["slot"], skipZ=False)
+                self._waitForObjective(objective)
+            except Exception as e:
+                self._logger.error(f"Could not restore objective: {e}")
+
+        xyz = state.get("xyz")
+        if xyz is not None:
+            try:
+                x, y, z = xyz
+                if "XY" in (getattr(self._stage, "combinedAxes", None) or []):
+                    self._stage.move(value=(x, y), axis="XY", is_absolute=True, is_blocking=True)
+                else:
+                    self._stage.move(value=x, axis="X", is_absolute=True, is_blocking=True)
+                    self._stage.move(value=y, axis="Y", is_absolute=True, is_blocking=True)
+                self._stage.move(value=z, axis="Z", is_absolute=True, is_blocking=True)
+            except Exception as e:
+                self._logger.error(f"Could not restore stage position: {e}")
+
+    def _waitForObjective(self, objective, timeout: float = 60.0):
+        """The turret move runs on its own thread; wait for it to settle."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not getattr(objective, "_isMovingObjective", False):
+                return True
+            time.sleep(0.1)
+        self._logger.warning("Objective move did not finish in time")
+        return False
 
     def _centreBand(self, frame: np.ndarray) -> np.ndarray:
         """The vertical slice of a frame that a prescan strip actually uses.
@@ -476,22 +568,27 @@ class StageMapController(ImConWidgetController):
         start = max(0, width // 2 - band // 2)
         return np.array(frame[:, start:start + band], copy=True)
 
-    def _prescanLine(self, minX, maxX, y, speedX) -> Optional[np.ndarray]:
-        """Drive X once and return the frames re-spaced into one strip image."""
+    def _prescanLine(self, startX, endX, y, speedX) -> Optional[np.ndarray]:
+        """Drive X once and return the frames re-spaced into one strip image.
+
+        ``startX``/``endX`` are the ends in travel order, so on a return line
+        startX > endX. Everything below works in distance travelled, never in
+        signed coordinates.
+        """
         if "XY" in (getattr(self._stage, "combinedAxes", None) or []):
-            self._stage.move(value=(minX, y), axis="XY", is_absolute=True, is_blocking=True)
+            self._stage.move(value=(startX, y), axis="XY", is_absolute=True, is_blocking=True)
         else:
-            self._stage.move(value=minX, axis="X", is_absolute=True, is_blocking=True)
+            self._stage.move(value=startX, axis="X", is_absolute=True, is_blocking=True)
             self._stage.move(value=y, axis="Y", is_absolute=True, is_blocking=True)
 
-        mover = _NonBlockingMove(self._stage, maxX - minX, "X", speedX)
+        mover = _NonBlockingMove(self._stage, endX - startX, "X", speedX)
         mover.start()
 
         # Position is derived from speed x elapsed time, never polled: a
         # getPosition() per frame would block the shared serial bus and starve
         # the live view.
         started = time.time()
-        span = maxX - minX
+        span = abs(endX - startX)
         # A full-frame buffer is the one thing here that can eat the machine:
         # a 3000x3000 uint16 frame is 18 MB, and a slow line at 30 fps would
         # collect hundreds. Only the centre band of each frame ever reaches the
@@ -768,7 +865,8 @@ class StageMapController(ImConWidgetController):
 
     @APIExport(requestType="POST")
     def startPrescan(self, minX: float, maxX: float, minY: float, maxY: float,
-                     dy: float = 500.0, speedX: float = 10000.0) -> Dict:
+                     dy: float = 500.0, speedX: float = 10000.0,
+                     objectiveSlot: Optional[int] = None) -> Dict:
         """Sweep an area fast and drop the result on the map as an overlay.
 
         The stage runs continuously in X while the camera free-runs; frames are
@@ -783,6 +881,14 @@ class StageMapController(ImConWidgetController):
 
         Coordinates are stage micrometres throughout, so a prescan taken with a
         10x objective lines up with a 20x acquisition without rescaling.
+
+        Lines are driven in a serpentine, and each strip is emitted over the
+        socket the moment its line finishes, so the map fills in as it goes.
+
+        ``objectiveSlot`` switches the turret before the sweep (its own saved
+        focus comes with it) and everything — objective, X, Y and Z — is put
+        back afterwards. The caller is expected to have asked the operator
+        first: moving the turret is a physical change.
         """
         if self._isRunning or self._prescanThread is not None:
             return {"success": False, "error": "A scan is already running"}
@@ -797,7 +903,8 @@ class StageMapController(ImConWidgetController):
         self._prescanThread = threading.Thread(
             target=self._prescanLoop,
             args=(float(minX), float(maxX), float(minY), float(maxY),
-                  float(dy), float(speedX)),
+                  float(dy), float(speedX),
+                  None if objectiveSlot is None else int(objectiveSlot)),
             daemon=True,
         )
         self._prescanThread.start()

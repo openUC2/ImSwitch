@@ -40,7 +40,9 @@ import ScatterPlotIcon from "@mui/icons-material/ScatterPlot";
 import AddLocationIcon from "@mui/icons-material/AddLocation";
 import GpsFixedIcon from "@mui/icons-material/GpsFixed";
 import BlurLinearIcon from "@mui/icons-material/BlurLinear";
+import LayersClearIcon from "@mui/icons-material/LayersClear";
 import {
+  apiStageMapClear,
   apiStageMapStartPrescan,
   apiStageMapStopPrescan,
 } from "../backendapi/apiStageMapController";
@@ -335,6 +337,13 @@ const WellSelectorComponent = () => {
     parseFloat(wellSelectorState.moveCameraSpeedXY) || 20000,
   );
 
+  // Slot 0/1 with the lower magnification — a prescan wants the widest field.
+  const lowMagSlot =
+    (objectiveState?.magnification2 || 0) > 0 &&
+    (objectiveState?.magnification2 || 0) < (objectiveState?.magnification1 || 0)
+      ? 1
+      : 0;
+
   const handleStartPrescan = () => {
     const bounds = selectionBounds();
     if (!bounds) {
@@ -343,8 +352,39 @@ const WellSelectorComponent = () => {
       );
       return;
     }
+
+    // Moving the turret is a physical change, so ask before doing it. The
+    // backend restores the objective, X, Y and Z afterwards either way.
+    let objectiveSlot;
+    const current = objectiveState?.currentObjective;
+    if (current != null && current !== lowMagSlot) {
+      const lowMag =
+        lowMagSlot === 0
+          ? objectiveState?.magnification1
+          : objectiveState?.magnification2;
+      // eslint-disable-next-line no-alert
+      if (
+        window.confirm(
+          `A prescan is quicker and covers more with the lower magnification` +
+            `${lowMag ? ` (${lowMag}x)` : ""}.\n\n` +
+            `Switch the objective for the prescan? Its own saved focus is applied, ` +
+            `and the objective and stage position are restored afterwards.\n\n` +
+            `Cancel to prescan with the current objective.`,
+        )
+      ) {
+        objectiveSlot = lowMagSlot;
+      }
+    }
+
+    // The strips arrive over the socket line by line; make sure they are visible.
+    dispatch(stageMapSlice.setShowOnWellplate(true));
     setPrescanRunning(true);
-    apiStageMapStartPrescan({ ...bounds, dy: prescanDy, speedX: prescanSpeed })
+    apiStageMapStartPrescan({
+      ...bounds,
+      dy: prescanDy,
+      speedX: prescanSpeed,
+      ...(objectiveSlot === undefined ? {} : { objectiveSlot }),
+    })
       .then((res) => {
         if (res?.success) {
           infoPopupRef.current?.showMessage(`Prescan running — ${res.lines} line(s)`);
@@ -361,6 +401,15 @@ const WellSelectorComponent = () => {
 
   const handleStopPrescan = () => {
     apiStageMapStopPrescan().finally(() => setPrescanRunning(false));
+  };
+
+  // Throw the overlay away — backend tiles and the local copy — so the next
+  // prescan starts on a clean map instead of layering over the old one.
+  const handleClearPrescan = () => {
+    dispatch(stageMapSlice.clearTiles());
+    apiStageMapClear()
+      .then(() => infoPopupRef.current?.showMessage("Prescan overlay cleared"))
+      .catch(() => infoPopupRef.current?.showMessage("Could not clear the overlay"));
   };
 
   // ── Boundary from dropped points (freehand mode) ─────────────────────
@@ -649,6 +698,20 @@ const WellSelectorComponent = () => {
               {prescanRunning ? "Stop prescan" : "Prescan"}
             </Button>
           </Tooltip>
+          {(stageMapState?.tiles?.length || 0) > 0 && (
+            <Tooltip title="Discard the overlay so the next prescan starts on a clean map." arrow>
+              <Button
+                size="small"
+                variant="outlined"
+                color="warning"
+                startIcon={<LayersClearIcon />}
+                onClick={handleClearPrescan}
+                disabled={prescanRunning}
+              >
+                Clear overlay
+              </Button>
+            </Tooltip>
+          )}
           <Tooltip title="Add the current stage XYZ as a new position." arrow>
             <Button
               size="small"

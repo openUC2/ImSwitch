@@ -29,6 +29,8 @@ import {
   TableHead,
   TableRow,
   Paper,
+  ToggleButton,
+  ToggleButtonGroup,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -36,6 +38,8 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import DeleteIcon from "@mui/icons-material/Delete";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import InfoIcon from "@mui/icons-material/Info";
+import GridOnIcon from "@mui/icons-material/GridOn";
+import PlaceIcon from "@mui/icons-material/Place";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorIcon from "@mui/icons-material/Error";
 import PendingIcon from "@mui/icons-material/Pending";
@@ -58,6 +62,7 @@ import CloseIcon from "@mui/icons-material/Close";
 
 // State slices
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
+import MeasuredFocusPoints from "./MeasuredFocusPoints";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
@@ -174,11 +179,7 @@ const FocusMapDimension = () => {
   const setShowPlannedPoints = (val) => dispatch(focusMapSlice.setShowPlannedPoints(val));
   const [previewData, setPreviewData] = useState(null);
   const [expandedFitGroup, setExpandedFitGroup] = useState(null);
-  const [editingPointZ, setEditingPointZ] = useState(null); // { groupId, pointIndex, z }
-  const [editingPointXY, setEditingPointXY] = useState(null); // { groupId, pointIndex, field: "x"|"y", value }
   const [goToInProgress, setGoToInProgress] = useState(null); // "groupId-pointIndex"
-  const [visiblePointCount, setVisiblePointCount] = useState({}); // { [groupId]: number } – pagination for measured points
-  const POINTS_PAGE_SIZE = 20; // Number of points to show at a time
 
   // ── Dimension summary ────────────────────────────────────────────────
   useEffect(() => {
@@ -249,6 +250,12 @@ const FocusMapDimension = () => {
     add_margin: fmAddMargin,
   } = config;
 
+  // Grid vs Points: the same flag the backend gates on, named for what it means.
+  const isPointsMode = Boolean(config.use_manual_map);
+  const hasManualMap = Object.keys(results).some(
+    (k) => results[k]?.status === "ready" && (k === "manual" || k === "global"),
+  );
+
   const plannedPoints = useMemo(
     () =>
       computePlannedFocusPoints(experimentState, objectiveState, wellSelectorState, {
@@ -315,20 +322,10 @@ const FocusMapDimension = () => {
         configWithAreas.scan_areas = scanAreas;
       }
 
-      // Merge autofocus parameters from ExperimentSlice so the backend
-      // uses the user-configured AF settings instead of hardcoded defaults.
-      configWithAreas.af_range = parameterValue.autoFocusRange ?? 100;
-      configWithAreas.af_resolution = parameterValue.autoFocusResolution ?? 10;
-      configWithAreas.af_cropsize = parameterValue.autoFocusCropsize ?? 2048;
-      configWithAreas.af_algorithm = parameterValue.autoFocusAlgorithm || "LAPE";
-      configWithAreas.af_settle_time = parameterValue.autoFocusSettleTime ?? 0.1;
-      configWithAreas.af_static_offset = parameterValue.autoFocusStaticOffset ?? 0;
-      configWithAreas.af_two_stage = parameterValue.autoFocusTwoStage ?? false;
-      configWithAreas.af_n_gauss = 0; // Gaussian kernel – not exposed in UI // TODO: expose in UI if requested by users!!
-      configWithAreas.af_illumination_channel = parameterValue.autoFocusIlluminationChannel || "";
-      configWithAreas.af_mode = parameterValue.autoFocusMode || "software";
-      configWithAreas.af_max_attempts = parameterValue.autofocus_max_attempts ?? 2;
-      configWithAreas.af_target_setpoint = parameterValue.autofocus_target_focus_setpoint ?? null;
+      // Send the experiment's own settings, not a field-by-field copy of them:
+      // the backend reads autofocus from exactly the object the Z / Focus tab
+      // edits, so the two cannot drift.
+      configWithAreas.autofocus = parameterValue;
 
       // Send the (possibly pruned) planned grid so the backend measures
       // exactly the previewed positions. Scan areas whose planned points were
@@ -562,18 +559,7 @@ const FocusMapDimension = () => {
           y: p.y,
           ...(p.z == null ? {} : { z: p.z }),
         })),
-        // Autofocus params (same mapping as handleComputeAll).
-        af_range: parameterValue.autoFocusRange ?? 100,
-        af_resolution: parameterValue.autoFocusResolution ?? 10,
-        af_cropsize: parameterValue.autoFocusCropsize ?? 2048,
-        af_algorithm: parameterValue.autoFocusAlgorithm || "LAPE",
-        af_settle_time: parameterValue.autoFocusSettleTime ?? 0.1,
-        af_static_offset: parameterValue.autoFocusStaticOffset ?? 0,
-        af_n_gauss: 0,
-        af_illumination_channel: parameterValue.autoFocusIlluminationChannel || "",
-        af_mode: parameterValue.autoFocusMode || "software",
-        af_max_attempts: parameterValue.autofocus_max_attempts ?? 2,
-        af_target_setpoint: parameterValue.autofocus_target_focus_setpoint ?? null,
+        autofocus: parameterValue,
       };
       const data = await apiExperimentControllerMeasureFocusMapFromPoints(cfg);
       const result = data?.manual;
@@ -842,7 +828,46 @@ const FocusMapDimension = () => {
             </Alert>
           )}
 
+          {/* ── Mode ─────────────────────────────────────────────────────
+              Grid and Points are two different jobs with no shared controls.
+              They used to be interleaved in one scroll behind a switch buried
+              in the toggles below, so half the panel was always inert and it
+              was not obvious which half. */}
+          <ToggleButtonGroup
+            exclusive
+            fullWidth
+            size="small"
+            value={isPointsMode ? "points" : "grid"}
+            onChange={(e, mode) =>
+              mode && dispatch(focusMapSlice.setFocusMapUseManualMap(mode === "points"))
+            }
+            sx={{ mb: 2 }}
+          >
+            <ToggleButton value="grid">
+              <GridOnIcon fontSize="small" sx={{ mr: 1 }} />
+              Grid — measure {config.rows}×{config.cols} per region
+            </ToggleButton>
+            <ToggleButton value="points">
+              <PlaceIcon fontSize="small" sx={{ mr: 1 }} />
+              Points — measure where I put them
+            </ToggleButton>
+          </ToggleButtonGroup>
+
+          {isPointsMode && (
+            <Alert severity="info" variant="outlined" sx={{ mb: 2 }} icon={<InfoIcon />}>
+              One surface is fitted from your points and interpolated onto every
+              region.{" "}
+              {hasManualMap ? (
+                <Chip label="Map fitted ✓" size="small" color="success" sx={{ ml: 0.5 }} />
+              ) : (
+                <Chip label="No map yet" size="small" color="warning" sx={{ ml: 0.5 }} />
+              )}
+            </Alert>
+          )}
+
           {/* ── Grid configuration ───────────────────────────────────── */}
+          {!isPointsMode && (
+          <>
           <Box sx={{ display: "flex", gap: 2, mb: 2, flexWrap: "wrap" }}>
             <TextField
               label="Grid Rows"
@@ -898,41 +923,10 @@ const FocusMapDimension = () => {
               }
               label="Add margin"
             />
-            <Tooltip
-              title="When enabled, a pre-existing manual or global focus map is interpolated for all scan groups instead of measuring a new focus grid per group. Create a manual map first using 'Manual Focus Points' → 'Fit from Points'."
-              arrow
-            >
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={config.use_manual_map ?? false}
-                    onChange={(e) =>
-                      dispatch(focusMapSlice.setFocusMapUseManualMap(e.target.checked))
-                    }
-                    size="small"
-                    color="secondary"
-                  />
-                }
-                label="Use manual map for all groups"
-              />
-            </Tooltip>
           </Box>
 
-          {/* Info alert when use_manual_map is enabled */}
-          {config.use_manual_map && (
-            <Alert severity="info" sx={{ mb: 2 }} icon={<InfoIcon />}>
-              <strong>Manual map mode:</strong> During acquisition, the pre-existing manual/global
-              focus map will be interpolated for each scan group instead of measuring new focus
-              points. Make sure you have fitted a manual map first (see Manual Focus Points below).
-              {Object.keys(results).some((k) => results[k]?.status === "ready" && (k === "manual" || k === "global"))
-                ? <Chip label="Manual map available ✓" size="small" color="success" sx={{ ml: 1 }} />
-                : <Chip label="No manual map yet" size="small" color="warning" sx={{ ml: 1 }} />
-              }
-            </Alert>
-          )}
-
           {/* ── Planned Grid Points (automatic-mode preview) ─────────── */}
-          {!config.use_manual_map && (
+          {(
             <Accordion
               expanded={showPlannedPoints}
               onChange={() => setShowPlannedPoints(!showPlannedPoints)}
@@ -1064,159 +1058,18 @@ const FocusMapDimension = () => {
               </AccordionDetails>
             </Accordion>
           )}
+          </>
+          )}
 
-          {/* ── Autofocus Settings (shared with Z/Focus tab) ─────────── */}
-          <Accordion
-            expanded={showAFSettings}
-            onChange={() => setShowAFSettings(!showAFSettings)}
-            variant="outlined"
-            sx={{ mb: 2 }}
-          >
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography variant="body2">
-                Autofocus Settings
-                <Chip
-                  label={parameterValue.autoFocusMode || "software"}
-                  size="small"
-                  sx={{ ml: 1 }}
-                />
-              </Typography>
-            </AccordionSummary>
-            <AccordionDetails>
-              <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: "block" }}>
-                These settings are shared with the Z/Focus tab. Changes apply to both.
-              </Typography>
-              <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                {/* Mode selector */}
-                <FormControl size="small" sx={{ minWidth: 140 }}>
-                  <InputLabel>AF Mode</InputLabel>
-                  <Select
-                    value={parameterValue.autoFocusMode || "software"}
-                    label="AF Mode"
-                    onChange={(e) => dispatch(experimentSlice.setAutoFocusMode(e.target.value))}
-                  >
-                    <MenuItem value="software">Software (Z-sweep)</MenuItem>
-                    <MenuItem value="hardware">Hardware (FocusLock)</MenuItem>
-                  </Select>
-                </FormControl>
-
-                {/* Software AF parameters */}
-                {(parameterValue.autoFocusMode || "software") === "software" && (
-                  <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-                    <TextField
-                      label="Range (µm)"
-                      type="number"
-                      size="small"
-                      value={parameterValue.autoFocusRange ?? 100}
-                      onChange={(e) => dispatch(experimentSlice.setAutoFocusRange(Number(e.target.value)))}
-                      sx={{ width: 110 }}
-                    />
-                    <TextField
-                      label="Resolution"
-                      type="number"
-                      size="small"
-                      value={parameterValue.autoFocusResolution ?? 10}
-                      onChange={(e) => dispatch(experimentSlice.setAutoFocusResolution(Number(e.target.value)))}
-                      sx={{ width: 110 }}
-                    />
-                    <TextField
-                      label="Crop Size"
-                      type="number"
-                      size="small"
-                      value={parameterValue.autoFocusCropsize ?? 2048}
-                      onChange={(e) => dispatch(experimentSlice.setAutoFocusCropsize(Number(e.target.value)))}
-                      sx={{ width: 110 }}
-                    />
-                    <FormControl size="small" sx={{ minWidth: 120 }}>
-                      <InputLabel>Algorithm</InputLabel>
-                      <Select
-                        value={parameterValue.autoFocusAlgorithm || "LAPE"}
-                        label="Algorithm"
-                        onChange={(e) => dispatch(experimentSlice.setAutoFocusAlgorithm(e.target.value))}
-                      >
-                        <MenuItem value="LAPE">LAPE</MenuItem>
-                        <MenuItem value="GLVA">GLVA</MenuItem>
-                        <MenuItem value="JPEG">JPEG</MenuItem>
-                      </Select>
-                    </FormControl>
-                  </Box>
-                )}
-
-                {/* Hardware AF parameters */}
-                {parameterValue.autoFocusMode === "hardware" && (
-                  <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-                    <TextField
-                      label="Max Attempts"
-                      type="number"
-                      size="small"
-                      value={parameterValue.autofocus_max_attempts ?? 3}
-                      onChange={(e) => dispatch(experimentSlice.setAutoFocusMaxAttempts(Number(e.target.value)))}
-                      inputProps={{ min: 1, max: 20 }}
-                      sx={{ width: 120 }}
-                    />
-                    <TextField
-                      label="Target Setpoint"
-                      type="number"
-                      size="small"
-                      value={parameterValue.autofocus_target_focus_setpoint ?? 0}
-                      onChange={(e) => dispatch(experimentSlice.setAutoFocusTargetSetpoint(Number(e.target.value)))}
-                      inputProps={{ step: 0.1 }}
-                      sx={{ width: 130 }}
-                    />
-                  </Box>
-                )}
-
-                {/* Illumination channel */}
-                <FormControl size="small" sx={{ minWidth: 180 }}>
-                  <InputLabel>AF Illumination Channel</InputLabel>
-                  <Select
-                    value={parameterValue.autoFocusIlluminationChannel || ""}
-                    label="AF Illumination Channel"
-                    onChange={(e) => dispatch(experimentSlice.setAutoFocusIlluminationChannel(e.target.value))}
-                  >
-                    <MenuItem value="">Auto (active channel)</MenuItem>
-                    {illuSources.map((src) => (
-                      <MenuItem key={src} value={src}>
-                        {src}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-
-                {/* Common AF parameters */}
-                <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-                  <TextField
-                    label="Settle Time (s)"
-                    type="number"
-                    size="small"
-                    value={parameterValue.autoFocusSettleTime ?? 0.1}
-                    onChange={(e) => dispatch(experimentSlice.setAutoFocusSettleTime(Number(e.target.value)))}
-                    inputProps={{ step: 0.05, min: 0 }}
-                    sx={{ width: 130 }}
-                  />
-                  <TextField
-                    label="Static Offset (µm)"
-                    type="number"
-                    size="small"
-                    value={parameterValue.autoFocusStaticOffset ?? 0}
-                    onChange={(e) => dispatch(experimentSlice.setAutoFocusStaticOffset(Number(e.target.value)))}
-                    inputProps={{ step: 0.5 }}
-                    sx={{ width: 140 }}
-                  />
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        checked={parameterValue.autoFocusTwoStage ?? false}
-                        onChange={(e) => dispatch(experimentSlice.setAutoFocusTwoStage(e.target.checked))}
-                        size="small"
-                      />
-                    }
-                    label="Two-stage AF"
-                  />
-                </Box>
-              </Box>
-            </AccordionDetails>
-          </Accordion>
+          {/* Autofocus is configured once, on the Z / Focus tab. This panel
+              rendered the same controls a second time, and until now the
+              focus-map phase used its own FocusMapConfig.af_* copy instead of
+              the values shown here — so the panel edited settings it ignored. */}
+          <Alert severity="info" variant="outlined" sx={{ mb: 2 }}>
+            Focus mapping uses the autofocus configured on the{" "}
+            <strong>Z / Focus</strong> tab — range, step, algorithm and channel
+            are set there.
+          </Alert>
 
           {/* ── Per-channel Z offsets ─────────────────────────────────── */}
           <Accordion
@@ -1419,7 +1272,8 @@ const FocusMapDimension = () => {
             </AccordionDetails>
           </Accordion>
 
-          {/* ── Manual Focus Points ──────────────────────────────────── */}
+          {/* ── Points mode: the points the operator places ───────────── */}
+          {isPointsMode && (<>
           <Accordion
             expanded={showManualPoints}
             onChange={() => setShowManualPoints(!showManualPoints)}
@@ -1676,6 +1530,7 @@ const FocusMapDimension = () => {
               </Box>
             </AccordionDetails>
           </Accordion>
+          </>)}
 
           {/* ── Action Buttons ────────────────────────────────────────── */}
           <Box sx={{ display: "flex", gap: 1, mb: 2, flexWrap: "wrap" }}>
@@ -1958,438 +1813,25 @@ const FocusMapDimension = () => {
             </Box>
           )}
 
-          {/* ── Measured Points List with Go-To and Refit ──────────── */}
-          {groupEntries.length > 0 && (
-            <Accordion
-              expanded={showMeasuredPoints}
-              onChange={() => setShowMeasuredPoints(!showMeasuredPoints)}
-              variant="outlined"
-              sx={{ mb: 2 }}
-            >
-              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Typography variant="body2">
-                  Measured Focus Points
-                  <Chip
-                    label={`${groupEntries.reduce(
-                      (sum, [, r]) => sum + (r.points?.length || 0),
-                      0
-                    )} point(s)`}
-                    size="small"
-                    sx={{ ml: 1 }}
-                  />
-                </Typography>
-              </AccordionSummary>
-              <AccordionDetails>
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ mb: 1, display: "block" }}
-                >
-                  Points measured by autofocus during focus map computation. Use "Go To" to move
-                  the stage, edit Z to fine-tune, and "Refit" to update the surface.
-                </Typography>
-
-                {groupEntries.map(([groupId, result]) => {
-                  const pts = result.points || [];
-                  if (pts.length === 0) return null;
-
-                  // Compute Z range summary for the group
-                  const zValues = pts.map((p) => p.z).filter((z) => z != null && isFinite(z));
-                  const zMin = zValues.length > 0 ? Math.min(...zValues) : 0;
-                  const zMax = zValues.length > 0 ? Math.max(...zValues) : 0;
-                  const maxVisible = visiblePointCount[groupId] || POINTS_PAGE_SIZE;
-                  const visiblePts = pts.slice(0, maxVisible);
-                  const hasMore = pts.length > maxVisible;
-
-                  return (
-                    <Box key={groupId} sx={{ mb: 2 }}>
-                      <Box
-                        sx={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 1,
-                          mb: 0.5,
-                        }}
-                      >
-                        <Typography variant="body2" fontWeight={500}>
-                          {result.group_name || groupId}
-                        </Typography>
-                        <Chip
-                          label={`${pts.length} pts`}
-                          size="small"
-                          variant="outlined"
-                        />
-                        <Chip
-                          label={`Z: ${zMin.toFixed(1)} – ${zMax.toFixed(1)} µm`}
-                          size="small"
-                          variant="outlined"
-                          color="info"
-                        />
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          startIcon={<RefreshIcon />}
-                          onClick={() => handleRefitGroup(groupId, pts)}
-                          disabled={ui.isComputing}
-                        >
-                          Refit
-                        </Button>
-                      </Box>
-                      <TableContainer
-                        component={Paper}
-                        variant="outlined"
-                        sx={{ maxHeight: 300 }}
-                      >
-                        <Table size="small" stickyHeader>
-                          <TableHead>
-                            <TableRow>
-                              <TableCell>#</TableCell>
-                              <TableCell>X (µm)</TableCell>
-                              <TableCell>Y (µm)</TableCell>
-                              <TableCell>Z (µm)</TableCell>
-                              <TableCell align="right">Actions</TableCell>
-                            </TableRow>
-                          </TableHead>
-                          <TableBody>
-                            {visiblePts.map((pt, idx) => {
-                              const isEditing =
-                                editingPointZ?.groupId === groupId &&
-                                editingPointZ?.pointIndex === idx;
-                              const goToKey = `${groupId}-${idx}`;
-                              const isMoving = goToInProgress === goToKey;
-
-                              const isHighlighted =
-                                highlightedPoint?.source === "measured" &&
-                                highlightedPoint?.groupId === groupId &&
-                                highlightedPoint?.index === idx;
-                              // Same colour ramp as the heatmap preview so the
-                              // row chip visually matches the drawn point.
-                              const zColor = colorForValue(
-                                zMax > zMin ? (pt.z - zMin) / (zMax - zMin) : 0.5
-                              );
-
-                              return (
-                                <TableRow
-                                  key={idx}
-                                  hover
-                                  selected={isHighlighted}
-                                  onMouseEnter={() => highlightPoint("measured", groupId, idx)}
-                                  onMouseLeave={clearHighlight}
-                                >
-                                  <TableCell>
-                                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-                                      <Box
-                                        sx={{
-                                          width: 10,
-                                          height: 10,
-                                          borderRadius: "50%",
-                                          bgcolor: zColor,
-                                          border: `1px solid ${theme.palette.text.primary}`,
-                                          flexShrink: 0,
-                                        }}
-                                      />
-                                      {idx + 1}
-                                    </Box>
-                                  </TableCell>
-                                  {/* Editable X */}
-                                  <TableCell>
-                                    {editingPointXY?.groupId === groupId &&
-                                     editingPointXY?.pointIndex === idx &&
-                                     editingPointXY?.field === "x" ? (
-                                      <TextField
-                                        type="number"
-                                        size="small"
-                                        variant="standard"
-                                        value={editingPointXY.value}
-                                        onChange={(e) =>
-                                          setEditingPointXY({
-                                            ...editingPointXY,
-                                            value: parseFloat(e.target.value) || 0,
-                                          })
-                                        }
-                                        onBlur={() => {
-                                          const updatedPts = [...pts];
-                                          updatedPts[idx] = { ...pt, x: editingPointXY.value };
-                                          dispatch(
-                                            focusMapSlice.updateFocusMapGroupResult({
-                                              groupId,
-                                              result: { ...result, points: updatedPts },
-                                            })
-                                          );
-                                          setEditingPointXY(null);
-                                        }}
-                                        onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                                        autoFocus
-                                        sx={{ width: 80 }}
-                                      />
-                                    ) : (
-                                      <Box
-                                        sx={{ display: "flex", alignItems: "center", gap: 0.5, cursor: "pointer", "&:hover": { color: "primary.main" } }}
-                                        onClick={() => setEditingPointXY({ groupId, pointIndex: idx, field: "x", value: pt.x })}
-                                      >
-                                        {pt.x?.toFixed(1)}
-                                        <EditIcon fontSize="inherit" sx={{ opacity: 0.4 }} />
-                                      </Box>
-                                    )}
-                                  </TableCell>
-                                  {/* Editable Y */}
-                                  <TableCell>
-                                    {editingPointXY?.groupId === groupId &&
-                                     editingPointXY?.pointIndex === idx &&
-                                     editingPointXY?.field === "y" ? (
-                                      <TextField
-                                        type="number"
-                                        size="small"
-                                        variant="standard"
-                                        value={editingPointXY.value}
-                                        onChange={(e) =>
-                                          setEditingPointXY({
-                                            ...editingPointXY,
-                                            value: parseFloat(e.target.value) || 0,
-                                          })
-                                        }
-                                        onBlur={() => {
-                                          const updatedPts = [...pts];
-                                          updatedPts[idx] = { ...pt, y: editingPointXY.value };
-                                          dispatch(
-                                            focusMapSlice.updateFocusMapGroupResult({
-                                              groupId,
-                                              result: { ...result, points: updatedPts },
-                                            })
-                                          );
-                                          setEditingPointXY(null);
-                                        }}
-                                        onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                                        autoFocus
-                                        sx={{ width: 80 }}
-                                      />
-                                    ) : (
-                                      <Box
-                                        sx={{ display: "flex", alignItems: "center", gap: 0.5, cursor: "pointer", "&:hover": { color: "primary.main" } }}
-                                        onClick={() => setEditingPointXY({ groupId, pointIndex: idx, field: "y", value: pt.y })}
-                                      >
-                                        {pt.y?.toFixed(1)}
-                                        <EditIcon fontSize="inherit" sx={{ opacity: 0.4 }} />
-                                      </Box>
-                                    )}
-                                  </TableCell>
-                                  <TableCell>
-                                    {isEditing ? (
-                                      <TextField
-                                        type="number"
-                                        size="small"
-                                        variant="standard"
-                                        value={editingPointZ.z}
-                                        onChange={(e) =>
-                                          setEditingPointZ({
-                                            ...editingPointZ,
-                                            z: parseFloat(e.target.value) || 0,
-                                          })
-                                        }
-                                        onBlur={() => {
-                                          // Save edited Z back into the result points
-                                          // (local only, use Refit to apply)
-                                          const updatedPts = [...pts];
-                                          updatedPts[idx] = {
-                                            ...pt,
-                                            z: editingPointZ.z,
-                                          };
-                                          dispatch(
-                                            focusMapSlice.updateFocusMapGroupResult({
-                                              groupId,
-                                              result: {
-                                                ...result,
-                                                points: updatedPts,
-                                              },
-                                            })
-                                          );
-                                          setEditingPointZ(null);
-                                        }}
-                                        onKeyDown={(e) => {
-                                          if (e.key === "Enter") e.target.blur();
-                                        }}
-                                        autoFocus
-                                        sx={{ width: 80 }}
-                                      />
-                                    ) : (
-                                      <Box
-                                        sx={{
-                                          display: "flex",
-                                          alignItems: "center",
-                                          gap: 0.5,
-                                          cursor: "pointer",
-                                          "&:hover": {
-                                            color: "primary.main",
-                                          },
-                                        }}
-                                        onClick={() =>
-                                          setEditingPointZ({
-                                            groupId,
-                                            pointIndex: idx,
-                                            z: pt.z,
-                                          })
-                                        }
-                                      >
-                                        {pt.z?.toFixed(2)}
-                                        <EditIcon
-                                          fontSize="inherit"
-                                          sx={{ opacity: 0.4 }}
-                                        />
-                                      </Box>
-                                    )}
-                                  </TableCell>
-                                  <TableCell align="right">
-                                    <Box sx={{ display: "flex", gap: 0.25, justifyContent: "flex-end" }}>
-                                      <Tooltip title="Move stage to this XYZ position">
-                                        <span>
-                                          <IconButton
-                                            size="small"
-                                            color="primary"
-                                            onClick={() =>
-                                              handleGoToPoint(pt, groupId, idx)
-                                            }
-                                            disabled={isMoving}
-                                          >
-                                            {isMoving ? (
-                                              <CircularProgress size={16} />
-                                            ) : (
-                                              <MyLocationIcon fontSize="small" />
-                                            )}
-                                          </IconButton>
-                                        </span>
-                                      </Tooltip>
-                                      <Tooltip title="Run autofocus at this XY, update Z">
-                                        <span>
-                                          <IconButton
-                                            size="small"
-                                            color="secondary"
-                                            onClick={() =>
-                                              handleAutofocusAtPoint(pt, groupId, idx)
-                                            }
-                                            disabled={isMoving}
-                                          >
-                                            <CenterFocusStrongIcon fontSize="small" />
-                                          </IconButton>
-                                        </span>
-                                      </Tooltip>
-                                      <Tooltip title="Step Z up (+5 µm)">
-                                        <span>
-                                          <IconButton
-                                            size="small"
-                                            onClick={() =>
-                                              handleStepZ(pt, groupId, idx, "up")
-                                            }
-                                            disabled={isMoving}
-                                          >
-                                            <ArrowUpwardIcon fontSize="small" />
-                                          </IconButton>
-                                        </span>
-                                      </Tooltip>
-                                      <Tooltip title="Step Z down (−5 µm)">
-                                        <span>
-                                          <IconButton
-                                            size="small"
-                                            onClick={() =>
-                                              handleStepZ(pt, groupId, idx, "down")
-                                            }
-                                            disabled={isMoving}
-                                          >
-                                            <ArrowDownwardIcon fontSize="small" />
-                                          </IconButton>
-                                        </span>
-                                      </Tooltip>
-                                      <Tooltip title="Set this point's Z to current stage Z">
-                                        <span>
-                                          <IconButton
-                                            size="small"
-                                            color="success"
-                                            onClick={() =>
-                                              handleSetCurrentZ(pt, groupId, idx)
-                                            }
-                                            disabled={isMoving}
-                                          >
-                                            <GpsFixedIcon fontSize="small" />
-                                          </IconButton>
-                                        </span>
-                                      </Tooltip>
-                                      <Tooltip title="Set this point's XYZ to current stage position">
-                                        <span>
-                                          <IconButton
-                                            size="small"
-                                            color="info"
-                                            onClick={() =>
-                                              handleSetCurrentXYZ(pt, groupId, idx)
-                                            }
-                                            disabled={isMoving}
-                                          >
-                                            <MyLocationIcon fontSize="small" sx={{ color: theme.palette.info.main }} />
-                                          </IconButton>
-                                        </span>
-                                      </Tooltip>
-                                      <Tooltip title="Delete this point and refit the surface from the remaining points">
-                                        <span>
-                                          <IconButton
-                                            size="small"
-                                            color="error"
-                                            onClick={() =>
-                                              handleDeleteMeasuredPoint(groupId, idx)
-                                            }
-                                            disabled={isMoving || ui.isComputing}
-                                          >
-                                            <DeleteIcon fontSize="small" />
-                                          </IconButton>
-                                        </span>
-                                      </Tooltip>
-                                    </Box>
-                                  </TableCell>
-                                </TableRow>
-                              );
-                            })}
-                          </TableBody>
-                        </Table>
-                      </TableContainer>
-                      {/* Pagination controls for large point lists */}
-                      {(hasMore || maxVisible > POINTS_PAGE_SIZE) && (
-                        <Box sx={{ display: "flex", gap: 1, mt: 0.5, alignItems: "center" }}>
-                          <Typography variant="caption" color="text.secondary">
-                            Showing {Math.min(maxVisible, pts.length)} of {pts.length} points
-                          </Typography>
-                          {hasMore && (
-                            <Button
-                              size="small"
-                              variant="text"
-                              onClick={() =>
-                                setVisiblePointCount((prev) => ({
-                                  ...prev,
-                                  [groupId]: (prev[groupId] || POINTS_PAGE_SIZE) + POINTS_PAGE_SIZE,
-                                }))
-                              }
-                            >
-                              Show More
-                            </Button>
-                          )}
-                          {maxVisible > POINTS_PAGE_SIZE && (
-                            <Button
-                              size="small"
-                              variant="text"
-                              onClick={() =>
-                                setVisiblePointCount((prev) => ({
-                                  ...prev,
-                                  [groupId]: POINTS_PAGE_SIZE,
-                                }))
-                              }
-                            >
-                              Collapse
-                            </Button>
-                          )}
-                        </Box>
-                      )}
-                    </Box>
-                  );
-                })}
-              </AccordionDetails>
-            </Accordion>
-          )}
+          {/* ── Measured Points (own component) ─────────────────────── */}
+          <MeasuredFocusPoints
+            groupEntries={groupEntries}
+            ui={ui}
+            showMeasuredPoints={showMeasuredPoints}
+            setShowMeasuredPoints={setShowMeasuredPoints}
+            highlightedPoint={highlightedPoint}
+            dispatch={dispatch}
+            handleGoToPoint={handleGoToPoint}
+            handleDeleteMeasuredPoint={handleDeleteMeasuredPoint}
+            handleAutofocusAtPoint={handleAutofocusAtPoint}
+            handleRefitGroup={handleRefitGroup}
+            handleSetCurrentZ={handleSetCurrentZ}
+            handleSetCurrentXYZ={handleSetCurrentXYZ}
+            handleStepZ={handleStepZ}
+            goToInProgress={goToInProgress}
+            highlightPoint={highlightPoint}
+            clearHighlight={clearHighlight}
+          />
 
           {/* ── Visualization ─────────────────────────────────────────── */}
           {previewData && (

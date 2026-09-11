@@ -77,6 +77,81 @@ def test_a_single_frame_line_is_rejected_by_the_caller_not_composed():
     assert strip.shape[0] == 4 and strip.shape[1] == 100
 
 
+
+
+# ---------------------------------------------------------------------------
+# Serpentine sweep
+# ---------------------------------------------------------------------------
+
+def _recording_controller(pixel_size=1.0):
+    """A controller stub that records the line sweeps it was asked to run."""
+    c = _controller(pixel_size)
+    c.sweeps = []
+    c.strips = []
+    c._shouldStop = types.SimpleNamespace(is_set=lambda: False)
+    c._prescanThread = None
+    c._emitStatus = lambda: None
+    c._master = types.SimpleNamespace(
+        detectorsManager=types.SimpleNamespace(
+            startAcquisition=lambda: None, stopAcquisition=lambda h: None),
+        getController=lambda name: None,
+    )
+    c._stage = types.SimpleNamespace(
+        getPosition=lambda: {"X": 1.0, "Y": 2.0, "Z": 3.0},
+        move=lambda **kw: None,
+        combinedAxes=["XY"],
+    )
+
+    def fake_line(startX, endX, y, speedX):
+        c.sweeps.append((startX, endX, y))
+        # _composeStrip places frames by DISTANCE TRAVELLED, so a strip always
+        # comes back in travel order: a return line is descending in X. Model
+        # that, or the flip under test has nothing to undo.
+        ramp = np.arange(10, dtype=np.uint8)
+        if startX > endX:
+            ramp = ramp[::-1]
+        return np.tile(ramp, (2, 1))
+
+    c._prescanLine = fake_line
+    c._addStrip = lambda strip, minX, maxX, y: c.strips.append((y, strip.copy()))
+    for name in ("_prescanLoop", "_enterPrescanOptics", "_restorePrescanOptics",
+                 "_objectiveController"):
+        setattr(c, name, types.MethodType(getattr(StageMapController, name), c))
+    return c
+
+
+def test_lines_alternate_direction():
+    """The stage is already at the far end, so drive straight back."""
+    c = _recording_controller()
+    c._prescanLoop(0.0, 1000.0, 0.0, 200.0, 100.0, 5000.0, None)
+
+    assert [(s[0], s[1]) for s in c.sweeps] == [
+        (0.0, 1000.0), (1000.0, 0.0), (0.0, 1000.0),
+    ]
+    assert [s[2] for s in c.sweeps] == [0.0, 100.0, 200.0]
+
+
+def test_reverse_lines_are_stored_left_to_right():
+    """Otherwise every other line of the map is mirrored."""
+    c = _recording_controller()
+    c._prescanLoop(0.0, 1000.0, 0.0, 100.0, 100.0, 5000.0, None)
+
+    forward, reverse = c.strips[0][1], c.strips[1][1]
+    np.testing.assert_array_equal(forward[0], np.arange(10))
+    np.testing.assert_array_equal(reverse[0], np.arange(10))  # un-mirrored
+
+
+def test_stage_position_is_restored_after_the_sweep():
+    c = _recording_controller()
+    moves = []
+    c._stage.move = lambda **kw: moves.append(kw)
+    c._prescanLoop(0.0, 1000.0, 0.0, 0.0, 100.0, 5000.0, None)
+
+    # Last moves put X/Y and Z back where they were found.
+    assert moves[-2]["value"] == (1.0, 2.0)
+    assert moves[-1]["value"] == 3.0 and moves[-1]["axis"] == "Z"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

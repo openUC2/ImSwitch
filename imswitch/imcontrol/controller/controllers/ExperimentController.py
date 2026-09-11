@@ -1090,7 +1090,10 @@ class ExperimentController(ImConWidgetController):
             # it (apply_during_scan, default True).  This is the single gate the
             # acquisition loop checks before applying any focus-map Z.
             self._focus_map_active = bool(getattr(focusMapConfig, "apply_during_scan", True))
-            self._run_focus_map_phase(self._last_scan_areas, focusMapConfig)
+            self._run_focus_map_phase(
+                self._last_scan_areas, focusMapConfig,
+                af_kwargs=self._focus_map_af_kwargs(p),
+            )
         # Turn off illumination again after focus mapping so the
         # acquisition loop starts from a clean state.
         self._switch_off_all_illumination()
@@ -3420,7 +3423,27 @@ class ExperimentController(ImConWidgetController):
     # Focus Map – internal helpers
     # ================================================================
 
-    def _run_focus_map_phase(self, areas, config: FocusMapConfig):
+    def _focus_map_af_kwargs(self, parameterValue=None) -> Dict[str, Any]:
+        """Autofocus settings for the focus-map phase.
+
+        Taken from the experiment's own ParameterValue when there is one, so
+        there is a single place in the app to configure autofocus. Falls back to
+        the model defaults for a standalone computeFocusMap call.
+        """
+        from .experiment_controller.models import ParameterValue
+        if parameterValue is None:
+            parameterValue = ParameterValue(
+                timeLapsePeriod=0.0, numberOfImages=1, autoFocus=True,
+                autoFocusMin=-100.0, autoFocusMax=100.0, autoFocusStepSize=10.0,
+                zStack=False, zStackMin=0.0, zStackMax=0.0,
+            )
+        kwargs = parameterValue.autofocus_kwargs()
+        # Mapping wants a general Z surface, not a perfect focus per point:
+        # no Gaussian smoothing keeps it fast and avoids fit trouble at low SNR.
+        kwargs["af_n_gauss"] = 0
+        return kwargs
+
+    def _run_focus_map_phase(self, areas, config: FocusMapConfig, af_kwargs=None):
         """
         Run focus mapping before the main acquisition loop.
 
@@ -3434,6 +3457,7 @@ class ExperimentController(ImConWidgetController):
         """
         # Store config for channel_offsets access during acquisition
         self._focus_map_config = config
+        af_kwargs = af_kwargs or self._focus_map_af_kwargs()
         self.focus_map_manager.clear_abort()
 
         if not areas:
@@ -3458,7 +3482,8 @@ class ExperimentController(ImConWidgetController):
                     f"point(s) before the tiled scan (overriding any stale map)"
                 )
                 self.focus_map_manager.clear("manual")
-                self._measure_focus_map_from_points(config.points, config)
+                self._measure_focus_map_from_points(
+                    config.points, config, af_kwargs=af_kwargs)
                 source_fm = self.focus_map_manager.get("manual")
                 # Drop stale per-area maps so the fresh manual surface is actually
                 # interpolated onto every area below, instead of being shadowed by
@@ -3507,7 +3532,8 @@ class ExperimentController(ImConWidgetController):
                             group_name=area["areaName"],
                             bounds=area["bounds"],
                             config=config,
-                        )
+                            af_kwargs=af_kwargs,
+)
                 return
             else:
                 self._logger.warning(
@@ -3576,7 +3602,8 @@ class ExperimentController(ImConWidgetController):
                     group_name=area["areaName"],
                     bounds=area["bounds"],
                     config=config,
-                )
+                            af_kwargs=af_kwargs,
+)
         else:
             # Fit globally: merge all bounds
             all_min_x = min(a["bounds"]["minX"] for a in areas)
@@ -3595,7 +3622,8 @@ class ExperimentController(ImConWidgetController):
                     group_name="Global Fit",
                     bounds=merged,
                     config=config,
-                )
+                            af_kwargs=af_kwargs,
+)
 
     # ================================================================
     # Focus Map API endpoints
@@ -3622,9 +3650,12 @@ class ExperimentController(ImConWidgetController):
         """
         if focusMapConfig is None:
             focusMapConfig = FocusMapConfig(enabled=True)
-        focusMapConfig.af_n_gauss=0  # TODO: Force n_gauss=0 for autofocus during focus mapping to speed it up and avoid fitting issues at low SNR. The main purpose of the focus map is to get a general Z surface, not perfect autofocus results at each point, so this is an acceptable tradeoff. The config parameter is still kept for potential future use if we want to allow more flexible autofocus settings during focus mapping.
         # Store config for channel_offsets access during acquisition
         self._focus_map_config = focusMapConfig
+        # Autofocus settings come from the experiment's own ParameterValue —
+        # the one place they are configured — with model defaults when this is
+        # called standalone from the focus-map panel.
+        af_kwargs = self._focus_map_af_kwargs(focusMapConfig.autofocus)
 
         # Clear any previous abort request
         self.focus_map_manager.clear_abort()
@@ -3683,6 +3714,7 @@ class ExperimentController(ImConWidgetController):
                 group_name=area_name,
                 bounds=bounds,
                 config=focusMapConfig,
+                af_kwargs=af_kwargs,
             )
             results[area_id] = result
 
@@ -3709,7 +3741,8 @@ class ExperimentController(ImConWidgetController):
 
     def _compute_focus_map_for_group(self, group_id: str, group_name: str,
                                      bounds: Dict[str, float],
-                                     config: FocusMapConfig) -> Dict[str, Any]:
+                                     config: FocusMapConfig,
+                                     af_kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Compute focus map for a single group by moving stage and running autofocus.
 
@@ -3754,6 +3787,7 @@ class ExperimentController(ImConWidgetController):
                 cols=config.cols,
                 add_margin=config.add_margin,
             )
+        af_kwargs = af_kwargs or self._focus_map_af_kwargs()
         self._logger.info(f"Focus map [{group_id}]: measuring {len(grid)} points")
 
         # Measure each grid point
@@ -3767,34 +3801,18 @@ class ExperimentController(ImConWidgetController):
                 self.move_stage_xy(posX=gx, posY=gy, relative=False)
                 time.sleep(0.1)  # Settle time
 
-                # Run autofocus to find best Z using config parameters
-                best_z = self.autofocus(
-                    mode=config.af_mode,
-                    af_range=config.af_range,
-                    af_resolution=config.af_resolution,
-                    af_cropsize=config.af_cropsize,
-                    af_algorithm=config.af_algorithm,
-                    af_settle_time=config.af_settle_time,
-                    af_static_offset=config.af_static_offset,
-                    af_two_stage=config.af_two_stage,
-                    af_n_gauss=config.af_n_gauss,
-                    illuminationChannel=config.af_illumination_channel,
-                    max_attempts=config.af_max_attempts,
-                    target_focus_setpoint=config.af_target_setpoint,
-                    af_software_method=config.af_software_method,
-                    af_hc_initial_step=config.af_hc_initial_step,
-                    af_hc_min_step=config.af_hc_min_step,
-                    af_hc_step_reduction=config.af_hc_step_reduction,
-                    af_hc_max_iterations=config.af_hc_max_iterations,
-                )
+                best_z = self.autofocus(**af_kwargs)
 
                 if best_z is None:
-                    # If autofocus failed, read current Z as fallback
-                    best_z = self.mStage.getPosition().get("Z", 0)
+                    # SKIP the point. Using the stage position instead would
+                    # plant the scan-range start into the surface and tilt the
+                    # whole map; a map fitted from fewer, real points is honest
+                    # about what it knows (see fit stats).
                     self._logger.warning(
-                        f"Focus map [{group_id}]: autofocus failed at ({gx:.1f}, {gy:.1f}), "
-                        f"using current Z={best_z:.3f}"
+                        f"Focus map [{group_id}]: autofocus failed at "
+                        f"({gx:.1f}, {gy:.1f}) — skipping this point"
                     )
+                    continue
 
                 fm.add_point(gx, gy, float(best_z))
                 self._logger.debug(
@@ -3831,7 +3849,8 @@ class ExperimentController(ImConWidgetController):
     def _measure_focus_map_from_points(self, points: List[Dict[str, Any]],
                                        config: "FocusMapConfig",
                                        group_id: str = "manual",
-                                       group_name: str = "Manual Points") -> Dict[str, Any]:
+                                       group_name: str = "Manual Points",
+                                       af_kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Drive to each manual XY point, autofocus to MEASURE Z, then fit.
 
         Unlike ``computeFocusMapFromPoints`` (which fits already-known XYZ), this
@@ -3846,6 +3865,7 @@ class ExperimentController(ImConWidgetController):
             z_min=config.z_min, z_max=config.z_max,
         )
         fm.clear_points()
+        af_kwargs = af_kwargs or self._focus_map_af_kwargs()
         self._logger.info(f"Focus map [{group_id}]: measuring {len(points)} manual point(s)")
 
         for i, pt in enumerate(points):
@@ -3864,24 +3884,13 @@ class ExperimentController(ImConWidgetController):
                 else:
                     self.move_stage_xy(posX=gx, posY=gy, relative=False)
                     time.sleep(0.4)  # settle
-                    best_z = self.autofocus(
-                        mode=config.af_mode, af_range=config.af_range,
-                        af_resolution=config.af_resolution, af_cropsize=config.af_cropsize,
-                        af_algorithm=config.af_algorithm, af_settle_time=config.af_settle_time,
-                        af_static_offset=config.af_static_offset, af_two_stage=config.af_two_stage,
-                        af_n_gauss=config.af_n_gauss, illuminationChannel=config.af_illumination_channel,
-                        max_attempts=config.af_max_attempts, target_focus_setpoint=config.af_target_setpoint,
-                        af_software_method=config.af_software_method,
-                        af_hc_initial_step=config.af_hc_initial_step, af_hc_min_step=config.af_hc_min_step,
-                        af_hc_step_reduction=config.af_hc_step_reduction,
-                        af_hc_max_iterations=config.af_hc_max_iterations,
-                    )
+                    best_z = self.autofocus(**af_kwargs)
                     if best_z is None:
-                        best_z = self.mStage.getPosition().get("Z", 0)
                         self._logger.warning(
-                            f"Focus map [{group_id}]: autofocus failed at ({gx:.1f}, {gy:.1f}), "
-                            f"using current Z={best_z:.3f}"
+                            f"Focus map [{group_id}]: autofocus failed at "
+                            f"({gx:.1f}, {gy:.1f}) — skipping this point"
                         )
+                        continue
                 fm.add_point(gx, gy, float(best_z))
                 time.sleep(0.3)
             except Exception as e:
@@ -3911,10 +3920,12 @@ class ExperimentController(ImConWidgetController):
         points = focusMapConfig.points or []
         if not points:
             return {"error": "No manual points provided (focusMapConfig.points is empty)"}
-        focusMapConfig.af_n_gauss = 0  # speed up AF during mapping (see computeFocusMap)
         self._focus_map_config = focusMapConfig
         self.focus_map_manager.clear_abort()
-        result = self._measure_focus_map_from_points(points, focusMapConfig)
+        result = self._measure_focus_map_from_points(
+            points, focusMapConfig,
+            af_kwargs=self._focus_map_af_kwargs(focusMapConfig.autofocus),
+        )
         return {"manual": result}
 
     @APIExport(requestType="GET")

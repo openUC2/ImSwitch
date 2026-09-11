@@ -29,6 +29,7 @@ def _controller(pixel_size=1.0):
         _getPixelSizeUm=lambda: pixel_size,
         PRESCAN_MAX_STRIP_MB=StageMapController.PRESCAN_MAX_STRIP_MB,
         PRESCAN_SUBSAMPLE=StageMapController.PRESCAN_SUBSAMPLE,
+        PRESCAN_MAX_FRAMES=StageMapController.PRESCAN_MAX_FRAMES,
     )
     stub._centreBand = types.MethodType(StageMapController._centreBand, stub)
     stub._resizeGray = StageMapController._resizeGray
@@ -76,7 +77,7 @@ def _sweep_controller(pixel_size, frame_shape, speed, frames_per_s):
 
     def latest(returnFrameNumber=False):
         t = clock.now - (started["t"] if started["t"] is not None else clock.now)
-        n = int(t * frames_per_s)
+        n = max(0, int(t * frames_per_s))
         x_when_exposed = speed * (n / frames_per_s)          # µm since the start
         # +1 so that 0 can only mean "never written".
         frame = np.full(frame_shape, min(65535, int(x_when_exposed) + 1), np.uint16)
@@ -84,6 +85,7 @@ def _sweep_controller(pixel_size, frame_shape, speed, frames_per_s):
 
     c._detector = types.SimpleNamespace(shape=frame_shape, getLatestFrame=latest)
     c._prescanLine = types.MethodType(StageMapController._prescanLine, c)
+    c._spreadSamples = types.MethodType(StageMapController._spreadSamples, c)
     c._on_move_start = lambda: started.__setitem__("t", clock.now)
     return c
 
@@ -125,16 +127,38 @@ def test_exposure_k_lands_in_the_columns_slot_k_covers(monkeypatch):
 
     assert scale == px * 4
     assert strip.shape[1] == int(np.ceil(span / scale))
-    slots = int(np.ceil(span / dx))
-    for k in range(slots):
-        c0 = int(round(k * dx / scale))
-        c1 = min(strip.shape[1], int(round((k + 1) * dx / scale)))
-        band = strip[0, c0:c1]
-        # Every column of slot k holds a frame exposed within one frame period
-        # of the moment the stage was at k·dx.
-        assert band.min() - 1 >= k * dx - speed / 1000.0 - 1, (k, band.min())
-        assert band.max() - 1 <= k * dx + speed / 1000.0 + 1, (k, band.max())
     assert strip.min() > 0  # every column was written by some exposure
+    # Each column holds a frame exposed when the stage was near that column's
+    # position: within one exposure pitch, plus one frame period of jitter.
+    xs = np.arange(strip.shape[1]) * scale
+    err = np.abs(strip[0].astype(float) - 1 - xs)
+    assert err.max() <= dx + speed / 1000.0 + scale, err.max()
+
+
+def test_spread_places_bands_by_measured_time_not_assumed_speed():
+    """The stage took twice as long as speedX predicted (acceleration, wrong
+    units, whatever) — placement must still pin the ends of the line to the
+    ends of the strip, so the middle exposure lands in the middle."""
+    c = _controller(pixel_size=1.0)
+    c._spreadSamples = types.MethodType(StageMapController._spreadSamples, c)
+    # Bands 1.25x wider than their spacing, as the real loop keeps them.
+    band = lambda v: np.full((3, 625), v, np.uint16)
+    t0, t1 = 100.0, 120.0                     # 20 s measured
+    samples = [(100.0, band(1)), (110.0, band(2)), (120.0, band(3))]
+    strip = c._spreadSamples(samples, t0, t1, span=1000.0, scale=1.0)
+    assert strip.shape == (3, 1000)
+    assert strip[0, 500] == 2                 # the t=110 exposure is at 50 %
+    assert strip[0, 5] == 1 and strip[0, 994] == 3
+    assert strip.min() > 0                    # no gaps between bands
+
+
+def test_spread_leaves_a_gap_dark_rather_than_stretching_a_narrow_band():
+    c = _controller(pixel_size=1.0)
+    c._spreadSamples = types.MethodType(StageMapController._spreadSamples, c)
+    band = lambda v: np.full((2, 10), v, np.uint16)   # 10 px bands, 500 px apart
+    strip = c._spreadSamples([(0.0, band(1)), (1.0, band(2))], 0.0, 1.0, 1000.0, 1.0)
+    filled = np.count_nonzero(strip[0])
+    assert filled == 20                       # exactly the two bands, unstretched
 
 
 def _recording_controller(pixel_size=1.0):

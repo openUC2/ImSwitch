@@ -50,7 +50,6 @@ import {
 //##################################################################################
 const WellSelectorComponent = () => {
   //local state
-  const [prescanRunning, setPrescanRunning] = useState(false);
   const [wellLayoutFileList] = useState([
     "image/test.json", //TODO remove test
     "image/test1.json", //TODO remove test
@@ -74,6 +73,17 @@ const WellSelectorComponent = () => {
   );
   const stageMapState = useSelector(stageMapSlice.getStageMapState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+
+  // The backend says whether a prescan is running (status over the socket);
+  // the local flag only bridges the click until that first status arrives.
+  // Keeping this purely local is why the button used to stay on "Stop" for
+  // ever after a prescan finished on its own.
+  const [prescanPending, setPrescanPending] = useState(false);
+  const prescanRunning =
+    Boolean(stageMapState?.status?.prescanRunning) || prescanPending;
+  useEffect(() => {
+    if (stageMapState?.status?.prescanRunning !== undefined) setPrescanPending(false);
+  }, [stageMapState?.status?.prescanRunning]);
 
   // Toggle the Overview camera overlay (stitched overview image) on the plate
   // map; lazily fetch the overlay data the first time it is switched on.
@@ -386,7 +396,7 @@ const WellSelectorComponent = () => {
 
     // The strips arrive over the socket line by line; make sure they are visible.
     dispatch(stageMapSlice.setShowOnWellplate(true));
-    setPrescanRunning(true);
+    setPrescanPending(true);
     apiStageMapStartPrescan({
       ...bounds,
       dx: prescanDx,
@@ -398,18 +408,18 @@ const WellSelectorComponent = () => {
         if (res?.success) {
           infoPopupRef.current?.showMessage(`Prescan running — ${res.lines} line(s)`);
         } else {
-          setPrescanRunning(false);
+          setPrescanPending(false);
           infoPopupRef.current?.showMessage(res?.error || "Prescan failed to start");
         }
       })
       .catch(() => {
-        setPrescanRunning(false);
+        setPrescanPending(false);
         infoPopupRef.current?.showMessage("Prescan failed to start");
       });
   };
 
   const handleStopPrescan = () => {
-    apiStageMapStopPrescan().finally(() => setPrescanRunning(false));
+    apiStageMapStopPrescan().finally(() => setPrescanPending(false));
   };
 
   // Throw the overlay away — backend tiles and the local copy — so the next

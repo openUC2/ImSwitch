@@ -344,6 +344,7 @@ class OMEWriter:
         # TIFF writers
         self.tiff_stitcher: Optional[OmeTiffStitcher] = None
         self._finalized = False
+        self._pyramid_failures = 0
         # Goes into every individual-TIFF filename so downstream tooling can
         # tell one scan region's tiles from another's without relying on the
         # directory layout.
@@ -931,9 +932,15 @@ class OMEWriter:
 
         if self.config.write_zarr and self.store is not None:
             try:
+                self._pyramid_failures = 0
                 self._build_vanilla_zarr_pyramids()
                 if self.logger:
-                    self.logger.info("Vanilla Zarr pyramid generated successfully")
+                    if self._pyramid_failures:
+                        self.logger.error(
+                            f"Zarr pyramid INCOMPLETE: {self._pyramid_failures} level(s) failed — "
+                            "the full-resolution data is intact, lower levels are missing")
+                    else:
+                        self.logger.info("Vanilla Zarr pyramid generated successfully")
             except Exception as err:
                 if self.logger:
                     self.logger.warning(f"Pyramid generation failed: {err}")
@@ -1103,23 +1110,43 @@ class OMEWriter:
 
         self._update_multiscales_metadata()
 
+    # Rows of the full-resolution canvas read per pyramid step. Bounds the
+    # working set to a band, whatever the canvas size.
+    PYRAMID_BAND_ROWS = 4096
+
     def _downsample_all_dimensions(self, source_canvas, target_canvas, level, n_t, n_c, n_z):
-        """Downsample data for all t, c, z dimensions."""
-        downsample_factor = 2 ** level
+        """Downsample data for all t, c, z dimensions, one row band at a time.
+
+        This used to materialise the whole full-resolution plane with
+        ``np.array(source_canvas[t, c, z])`` before slicing it ``[::f, ::f]``.
+        On a large slide scan that is a request for the entire canvas in RAM —
+        a 270k x 172k RGB canvas is 130 GiB — which either fails outright or,
+        if the OS grants it, takes the machine down with it. Reading a band
+        at a time keeps the working set at a few hundred MB regardless of how
+        big the scan was.
+        """
+        f = 2 ** level
+        height = source_canvas.shape[3]
+        band = max(f, (self.PYRAMID_BAND_ROWS // f) * f)  # keep bands aligned to the stride
 
         for t_idx in range(n_t):
             for c_idx in range(n_c):
                 for z_idx in range(n_z):
                     try:
-                        if self.isRGB:
-                            source_data = np.array(source_canvas[t_idx, c_idx, z_idx, :, :, :])
-                            downsampled = source_data[::downsample_factor, ::downsample_factor, :]
-                            target_canvas[t_idx, c_idx, z_idx, :, :, :] = downsampled
-                        else:
-                            source_data = np.array(source_canvas[t_idx, c_idx, z_idx, :, :])
-                            downsampled = source_data[::downsample_factor, ::downsample_factor]
-                            target_canvas[t_idx, c_idx, z_idx, :, :] = downsampled
+                        for y0 in range(0, height, band):
+                            y1 = min(height, y0 + band)
+                            if self.isRGB:
+                                block = np.asarray(source_canvas[t_idx, c_idx, z_idx, y0:y1, :, :])
+                                small = block[::f, ::f, :]
+                                target_canvas[t_idx, c_idx, z_idx,
+                                              y0 // f:y0 // f + small.shape[0], :small.shape[1], :] = small
+                            else:
+                                block = np.asarray(source_canvas[t_idx, c_idx, z_idx, y0:y1, :])
+                                small = block[::f, ::f]
+                                target_canvas[t_idx, c_idx, z_idx,
+                                              y0 // f:y0 // f + small.shape[0], :small.shape[1]] = small
                     except Exception as e:
+                        self._pyramid_failures += 1
                         if self.logger:
                             self.logger.warning(f"Failed to downsample t={t_idx}, c={c_idx}, z={z_idx}: {e}")
 

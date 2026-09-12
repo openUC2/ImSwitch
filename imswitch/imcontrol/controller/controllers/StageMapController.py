@@ -621,8 +621,8 @@ class StageMapController(ImConWidgetController):
         lines. Returns ``(strip, um_per_strip_px)`` or None.
         """
         # One axis at a time — a combined move drives the stage diagonally.
-        self._stage.move(value=startX, axis="X", is_absolute=True, is_blocking=True)
-        self._stage.move(value=y, axis="Y", is_absolute=True, is_blocking=True)
+        self._stage.move(value=startX, axis="X", speed=speedX, is_absolute=True, is_blocking=True)
+        self._stage.move(value=y, axis="Y", speed=speedX, is_absolute=True, is_blocking=True)
 
         span = abs(endX - startX)
         pixelSize = self._getPixelSizeUm()
@@ -668,7 +668,11 @@ class StageMapController(ImConWidgetController):
             lastKept = now
             samples.append((now, self._centreBand(frame, bandPx, subsample)))
         t1 = time.time()
-
+        if 0: # debug
+            import tifffile as tif
+            for sample in samples: 
+                tif.imwrite(f"test.tif", sample[1], append=True)
+                print(sample[1])
         mover.join(timeout=5.0)
         if mover.error:
             self._logger.error(f"Prescan line y={y:.0f}: move failed: {mover.error}")

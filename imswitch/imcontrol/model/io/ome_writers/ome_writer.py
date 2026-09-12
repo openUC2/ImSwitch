@@ -87,7 +87,7 @@ class OMEWriterConfig:
     write_individual_tiffs: bool = False
     write_omero: bool = False
     omero_queue_size: int = 100
-    min_period: float = 0.2
+    min_period: float = 0.2   # inert: the writer no longer throttles itself
     compression: str = "zlib"
     # zlib level 1, not the library default of 6. On 12-bit-in-uint16 camera
     # frames level 6 gains ~1 % over level 1 for 3x the CPU; the horizontal
@@ -362,8 +362,19 @@ class OMEWriter:
         self.omero_uploader: Optional[OMEROUploader] = None
         self._owns_omero_uploader = False  # Track if we own the uploader
 
-        # Timing for throttling
-        self.t_last = time.time()
+        # Per-output write timings, summarised to the log every N frames
+        # (see write_frame). Cheap, and the only way to see what a slow Pi is
+        # actually spending its time on from a field log.
+        self._timing_ms = {}
+        self._timing_frames = 0
+
+        # A stitched canvas (zarr / in-RAM mosaic / stitched TIFF) costs at
+        # least one full pass over the whole scan at the end. On a Pi that is
+        # minutes of I/O for a slide and, for the in-RAM mosaic, an allocation
+        # the OS may grant and then kill us for touching. Above the budget the
+        # run keeps only the per-tile outputs; downstream tools (napari
+        # plugin, Ashlar) stitch from those on a machine that can afford it.
+        self._apply_large_scan_policy()
 
         # Initialize storage backends
         if config.write_zarr:
@@ -380,6 +391,42 @@ class OMEWriter:
 
         if config.write_omero:
             self._setup_omero_uploader()
+
+    TIMING_LOG_EVERY = 100
+
+    # Canvas budgets. The mosaic lives in RAM, so it gets the tighter one.
+    LARGE_SCAN_CANVAS_BYTES = 2 * 1024 ** 3      # 2 GiB, any stitched canvas
+    IN_RAM_MOSAIC_BYTES = 512 * 1024 ** 2         # 512 MiB, write_tiff mosaic
+
+    def canvas_bytes(self) -> int:
+        """Size of one full stitched canvas for this writer's geometry."""
+        per_px = 3 if self.isRGB else 2
+        return (int(self.config.n_time_points) * int(self.config.n_channels)
+                * int(self.config.n_z_planes) * int(self.ny) * int(self.tile_h)
+                * int(self.nx) * int(self.tile_w) * per_px)
+
+    def _apply_large_scan_policy(self):
+        size = self.canvas_bytes()
+        self.large_scan = size > self.LARGE_SCAN_CANVAS_BYTES
+        dropped = []
+        if self.config.write_tiff and size > self.IN_RAM_MOSAIC_BYTES:
+            self.config.write_tiff = False
+            dropped.append("OME-TIFF mosaic (in RAM)")
+        if self.large_scan:
+            for flag, label in (("write_zarr", "OME-Zarr canvas"),
+                                ("write_stitched_tiff", "stitched TIFF")):
+                if getattr(self.config, flag):
+                    setattr(self.config, flag, False)
+                    dropped.append(label)
+            if not self.config.write_individual_tiffs:
+                self.config.write_individual_tiffs = True
+                dropped.append("→ individual TIFFs enabled instead")
+        if dropped and self.logger:
+            self.logger.warning(
+                f"Large scan: stitched canvas would be {size / 1024 ** 3:.1f} GiB "
+                f"({self.nx}x{self.ny} tiles). Skipping: {', '.join(dropped)}. "
+                "Stitch offline from the individual tiles."
+            )
 
     def _setup_zarr_store(self):
         """Set up the OME-Zarr store and canvas with proper OME-NGFF metadata."""
@@ -660,36 +707,30 @@ class OMEWriter:
             Dictionary with information about the written chunk (for Zarr)
         """
         result = {}
+        cfg = self.config
+        outputs = (
+            ("mosaic", cfg.write_tiff and self.tiff_mosaic is not None, self._write_tiff_mosaic_tile),
+            ("zarr", cfg.write_zarr and self.canvas is not None, self._write_zarr_tile),
+            ("stitched", cfg.write_stitched_tiff and self.tiff_stitcher is not None, self._write_stitched_tiff_tile),
+            ("single", cfg.write_tiff_single and self.single_tiff_writer is not None, self._write_single_tiff_tile),
+            ("individual", cfg.write_individual_tiffs, self._write_individual_tiff),
+            ("omero", cfg.write_omero and self.omero_uploader is not None, self._write_omero_tile),
+        )
+        for name, enabled, write in outputs:
+            if not enabled:
+                continue
+            t0 = time.perf_counter()
+            out = write(frame, metadata)
+            self._timing_ms[name] = self._timing_ms.get(name, 0.0) + (time.perf_counter() - t0) * 1e3
+            if name == "zarr" and out:
+                result.update(out)
 
-        # Accumulate into the in-memory multi-dimensional OME-TIFF mosaic.
-        # The full hyperstack is flushed to disk once in finalize().
-        if self.config.write_tiff and self.tiff_mosaic is not None:
-            self._write_tiff_mosaic_tile(frame, metadata)
-
-        # Write to Zarr canvas if requested
-        if self.config.write_zarr and self.canvas is not None:
-            chunk_info = self._write_zarr_tile(frame, metadata)
-            result.update(chunk_info)
-
-        # Write to stitched TIFF if requested
-        if self.config.write_stitched_tiff and self.tiff_stitcher is not None:
-            self._write_stitched_tiff_tile(frame, metadata)
-
-        # Write to single TIFF if requested
-        if self.config.write_tiff_single and self.single_tiff_writer is not None:
-            self._write_single_tiff_tile(frame, metadata)
-
-        # Write individual TIFF files with position-based naming if requested
-        if self.config.write_individual_tiffs:
-            self._write_individual_tiff(frame, metadata)
-
-        # Write to OMERO if requested
-        if self.config.write_omero and self.omero_uploader is not None:
-            self._write_omero_tile(frame, metadata)
-
-        # Throttle writes if needed
-        self._throttle_writes()
-
+        self._timing_frames += 1
+        if self._timing_frames % self.TIMING_LOG_EVERY == 0 and self.logger:
+            n = self.TIMING_LOG_EVERY
+            parts = ", ".join(f"{k}={v / n:.0f}" for k, v in self._timing_ms.items())
+            self.logger.info(f"Writer timing, ms/frame over last {n}: {parts}")
+            self._timing_ms = {}
         return result
 
     def _write_tiff_mosaic_tile(self, frame, metadata: Dict[str, Any]):
@@ -905,13 +946,6 @@ class OMEWriter:
 
         # Queue the tile for upload
         self.omero_uploader.queue_tile(tile_meta)
-
-    def _throttle_writes(self):
-        """Throttle disk writes if needed."""
-        t_now = time.time()
-        if t_now - self.t_last < self.config.min_period:
-            time.sleep(self.config.min_period - (t_now - self.t_last))
-        self.t_last = t_now
 
     def finalize(self):
         """

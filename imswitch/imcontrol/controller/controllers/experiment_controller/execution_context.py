@@ -149,6 +149,8 @@ class ExecutionContext:
             "dirPath": self.dir_path,
             "mFileName": self.file_name,
             "region_meta": self.region_meta,
+            "exposures": self.exposures,
+            "z_positions": self.z_positions,
         }
 
 

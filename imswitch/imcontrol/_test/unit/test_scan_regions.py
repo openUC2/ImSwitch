@@ -17,9 +17,7 @@ import types
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
-from imswitch.imcontrol.controller.controllers.ExperimentController import (  # noqa: E402
-    ExperimentController,
-)
+from imswitch.imcontrol.controller.controllers.experiment_controller import scan_plan  # noqa: E402
 from imswitch.imcontrol.controller.controllers.experiment_controller.models import (  # noqa: E402
     CenterPosition,
     Experiment,
@@ -39,19 +37,14 @@ PARAMS = ParameterValue(
 
 
 def _builder():
-    """build_scan_regions + helpers bound to a bare stub."""
-    stub = types.SimpleNamespace(
-        _logger=types.SimpleNamespace(info=lambda *a, **k: None,
-                                      warning=lambda *a, **k: None),
-        mStage=types.SimpleNamespace(getPosition=lambda: {"X": 7.0, "Y": 8.0, "Z": 9.0}),
+    """build_scan_regions + helpers with a stub logger and stage position."""
+    log = types.SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None)
+    return types.SimpleNamespace(
+        build_scan_regions=lambda exp: scan_plan.build_scan_regions(
+            exp, lambda: {"X": 7.0, "Y": 8.0, "Z": 9.0}, log),
+        _region_fovs=scan_plan.region_fovs,
+        regions_to_areas=scan_plan.regions_to_areas,
     )
-    stub.build_scan_regions = types.MethodType(
-        ExperimentController.build_scan_regions, stub
-    )
-    # The rest are @staticmethod — attach them as plain functions.
-    for name in ("_build_region_meta", "_region_fovs", "regions_to_areas"):
-        setattr(stub, name, getattr(ExperimentController, name))
-    return stub
 
 
 def _area(area_id, n=3, z=None):

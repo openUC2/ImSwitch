@@ -12,18 +12,8 @@ import numpy as np
 
 from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowStep
 from imswitch.imcontrol.model.io import OMEWriter, OMEROConnectionParams
-from imswitch.imcontrol.model.io.ome_writers import write_plate_metadata_sidecar
-from .experiment_mode_base import ExperimentModeBase
+from .experiment_mode_base import ExperimentModeBase, DPC_SUB_DIRS
 
-
-# Module-level constant so every method in this file can reference the same
-# tuple.  Used by:
-#   - execute_experiment (size-of-channel calc)
-#   - _setup_ome_writers (channel-name expansion)
-#   - _create_tile_workflow_steps (per-position DPC step expansion)
-# Order matters: it's the order frames are acquired and saved per XY
-# position, and the OME channel-name ordering ("DPC_top", "DPC_bottom", ...).
-DPC_SUB_DIRS = ("top", "bottom", "left", "right")
 
 
 def _sanitize_name(name: str, max_len: int = 40) -> str:
@@ -343,185 +333,39 @@ class ExperimentNormalMode(ExperimentModeBase):
                           shared_omero_key: Optional[str] = None,
                           n_times: int = 1,
                           illumination_kinds: Optional[List[str]] = None) -> List[OMEWriter]:
-
-        """
-        Set up OME writers for each tile.
-
-        Args:
-            snake_tiles: List of tiles containing scan points
-            t: Time index
-            exp_name: Experiment name
-            dir_path: Directory path for saving
-            m_file_name: Base filename
-            z_positions: List of Z positions
-            illumination_intensities: List of illumination values
-            isRGB: Whether images are RGB
-            omero_connection_params: Optional OMERO connection parameters
-            shared_omero_key: Optional key for shared OMERO uploader
-            n_times: Total number of time points
-
-        Returns:
-            List of OMEWriter instances
-        """
+        """One OMEWriter per region (a well, a slide area, a single point)."""
+        n_channels, channel_names = self.channel_layout(
+            illumination_intensities, getattr(self.controller, "_illuminationSources", None), illumination_kinds)
+        write_omero = omero_connection_params is not None and getattr(self.controller, "_ome_write_omero", False)
         file_writers = []
-
-        # Create shared directory for individual TIFFs - all tiles go under experiment folder
-        # Structure: dir_path/m_file_name/tiles/timepoint_XXXX/
-        shared_individual_tiffs_dir = None  # No longer needed - OMEFileStorePaths handles it internally
-
-        # Original behavior: create separate writers for each tile position
-        # but use shared individual_tiffs directory
-        wells_used: List[tuple] = []
-        labware_load_name: Optional[str] = None
-        condition_labels: Dict[str, str] = {}
-        for position_center_index, tiles in enumerate(snake_tiles):
-            experiment_name = f"{t}_{exp_name}_{position_center_index}"
-            # Per-region metadata, looked up once by the region's own id.
+        for i, tiles in enumerate(snake_tiles):
             region_id = tiles[0]["region_id"]
             meta = region_meta.get(region_id, {})
-            # Region name appended additively to the base name; the
-            # timestamp/experiment/index prefix is preserved so index-based
-            # tooling still resolves the files.
             area_name = _sanitize_name(meta.get("areaName") or "")
-            m_file_path = os.path.join(
-                dir_path,
-                m_file_name + str(position_center_index) + "_" + experiment_name + "_" + area_name + ".ome.tif"
-            )
-            self._logger.debug(f"OME-TIFF path: {m_file_path}")
-
-            # Create file paths with shared individual_tiffs directory
-            file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
-
-            # Calculate tile and grid parameters
-            tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
+            # Index prefix kept so index-based tooling still resolves the files.
+            base = os.path.join(dir_path, f"{m_file_name}{i}_{t}_{exp_name}_{i}_{area_name}")
             grid_shape, grid_geometry = self.calculate_grid_parameters(tiles)
-
-            # Create writer configuration.
-            # Effective channel count: active normal/ring channels contribute
-            # one frame each; an active DPC channel contributes four (one per
-            # half-illumination quadrant).  We have to size the OME writer's
-            # channel axis to fit the expanded total so DPC sub-frames land
-            # in distinct channel slots rather than overwriting each other.
-            # We also build the parallel channel_names list so OME-Zarr root
-            # metadata (omero.channels[].label) shows "DPC_top" etc. instead
-            # of generic "Channel_0", which makes the resulting stores
-            # immediately readable in napari/Fiji without manual renaming.
-            _ints = list(illumination_intensities) if illumination_intensities is not None else []
-            _sources_for_naming: List[str] = []
-            try:
-                _sources_for_naming = list(getattr(self.controller, '_illuminationSources', []) or [])
-            except Exception:
-                _sources_for_naming = []
-            # Look kinds up by source name (defence-in-depth against array
-            # misalignment — the parallel arrays SHOULD match here, but
-            # name-based dispatch keeps us correct even when they don't).
-            _kind_by_name_local = {
-                n: k for n, k in zip(_sources_for_naming or [], list(illumination_kinds or []))
-            }
-            n_channels = 0
-            channel_names_expanded: List[str] = []
-            for src_idx, _intensity in enumerate(_ints):
-                if _intensity is None or _intensity <= 0:
-                    continue
-                src_name = (
-                    _sources_for_naming[src_idx]
-                    if src_idx < len(_sources_for_naming)
-                    else f"Channel_{src_idx}"
-                )
-                _kind = _kind_by_name_local.get(src_name, "default")
-                if _kind == "dpc":
-                    for _d in DPC_SUB_DIRS:
-                        channel_names_expanded.append(f"DPC_{_d}")
-                    n_channels += 4
-                elif _kind == "ring":
-                    channel_names_expanded.append("Ring")
-                    n_channels += 1
-                else:
-                    channel_names_expanded.append(src_name)
-                    n_channels += 1
-            if n_channels == 0:
-                # Fallback to legacy behaviour when nothing is active.
-                n_channels = max(1, int(sum(np.array(_ints) > 0)))
-                channel_names_expanded = None  # let OMEWriter default to "Channel_N"
-            write_omero = omero_connection_params is not None and getattr(self.controller, '_ome_write_omero', False)
+            # A config per writer: the writer edits it when the canvas is too large.
             writer_config = self.create_writer_config(
                 write_tiff=self.controller._ome_write_tiff,
                 write_zarr=self.controller._ome_write_zarr,
                 write_stitched_tiff=self.controller._ome_write_stitched_tiff,
-                write_tiff_single=False,  # Disable single TIFF for multi-tile mode
+                write_tiff_single=False,
                 write_individual_tiffs=self.controller._ome_write_individual_tiffs,
                 write_omero=write_omero,
-                min_period=0.1,  # Faster for normal mode
-                n_time_points=n_times,
-                n_z_planes=len(z_positions),
-                n_channels=n_channels,
-                channel_names=channel_names_expanded,
+                min_period=0.1,
+                n_time_points=n_times, n_z_planes=len(z_positions),
+                n_channels=n_channels, channel_names=channel_names,
             )
-
-            # Per-well labware metadata for this region.
-            well_metadata: Optional[Dict[str, Any]] = None
-            if meta:
-                w_row = meta.get("wellRow")
-                w_col = meta.get("wellColumn")
-                w_load = meta.get("labwareLoadName")
-                w_cond = meta.get("conditionLabel")
-                if w_row or w_col or w_load:
-                    well_metadata = {
-                        "wellRow": w_row,
-                        "wellColumn": w_col,
-                        "labwareLoadName": w_load,
-                        "conditionLabel": w_cond,
-                    }
-                    if w_row and w_col is not None:
-                        wells_used.append((str(w_row), str(int(w_col))))
-                    if w_load and labware_load_name is None:
-                        labware_load_name = w_load
-                    if w_cond and w_row and w_col is not None:
-                        condition_labels[f"{w_row}{int(w_col)}"] = w_cond
-
-            # Create OME writer
-            ome_writer = OMEWriter(
-                file_paths=file_paths,
-                tile_shape=tile_shape,
-                grid_shape=grid_shape,
-                grid_geometry=grid_geometry,
-                config=writer_config,
-                logger=self._logger,
-                isRGB=isRGB,
-                omero_connection_params=omero_connection_params,
-                shared_omero_key=shared_omero_key,
-                well_metadata=well_metadata,
-                # Clean position name for the OME/OMERO image-name metadata
-                # (falls back to the file basename when no name is set).
-                image_name=area_name or None,
-                region_id=region_id,
-            )
-            file_writers.append(ome_writer)
-
-        # Emit OME-NGFF plate sidecar once per acquisition (only on the first
-        # timepoint to avoid clobbering on every loop iteration).
-        if labware_load_name and t == 0 and self.controller.labware_manager is not None:
-            try:
-                lab = self.controller.labware_manager.get(labware_load_name)
-                if lab is not None:
-                    rows = list(lab.rows)
-                    columns = [str(c) for c in lab.columns]
-                    write_plate_metadata_sidecar(
-                        output_dir=dir_path,
-                        plate_name=labware_load_name,
-                        rows=rows,
-                        columns=columns,
-                        wells_used=wells_used,
-                        extra={
-                            "imswitch_labware": {
-                                "loadName": labware_load_name,
-                                "conditionLabels": condition_labels or None,
-                            }
-                        },
-                    )
-            except Exception as exc:  # noqa: BLE001 - sidecar is best-effort
-                self._logger.warning(f"Failed to write plate metadata sidecar: {exc}")
-
+            file_writers.append(OMEWriter(
+                file_paths=self.create_ome_file_paths(base, None),
+                tile_shape=self.tile_shape(), grid_shape=grid_shape, grid_geometry=grid_geometry,
+                config=writer_config, logger=self._logger, isRGB=isRGB,
+                omero_connection_params=omero_connection_params, shared_omero_key=shared_omero_key,
+                well_metadata=self.well_metadata(meta), image_name=area_name or None, region_id=region_id,
+            ))
+        if t == 0:
+            self.write_plate_sidecar(snake_tiles, region_meta, dir_path)
         return file_writers
 
     def _create_tile_workflow_steps(self,

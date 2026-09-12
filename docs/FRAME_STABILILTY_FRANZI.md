@@ -36,7 +36,7 @@ WP-11 all depend on reading it first.
 2. **Stop losing operator work** — WP-01, WP-02, WP-04. The complaint that opens her list.
 3. **Make state legible** — WP-11, WP-15. Focus-map provenance and honesty; size vs. free space.
 4. **Downstream + new capability** — WP-16, WP-17, WP-12. Hand tiles to the napari processor; fast prescan overlay; boundary-from-points.
-5. **Cleanup and deferred** — WP-14, WP-10. Dead-path deletion, and storage last (likely Docker/OS-related — see the WP).
+5. **Cleanup and deferred** — WP-18, WP-14, WP-10. Dead-path deletion, and storage last (likely Docker/OS-related — see the WP).
 
 ## Index
 
@@ -57,6 +57,7 @@ WP-11 all depend on reading it first.
 | 16 | Disable Ashlar, hand tiles to napari-openuc2-processor | High | Both | M | 0+4 |
 | 17 | Fast prescan overlay for tissue selection | Medium | Both | L | 4 |
 | 12 | Boundary from dropped points | Medium | Frontend | M | 4 |
+| 18 | Split the focus-map panel into two jobs | Medium | Frontend | L | 5 |
 | 14 | Delete the dead paths | Medium | Both | S | 5 |
 | 10 | Observe the drive, don't infer it | High | Both | M | 5 |
 
@@ -457,7 +458,7 @@ Plus provenance and Z-offset arithmetic:
   addition. One number, applied once, visible in the preview.
 - Show the map that will actually be used (region id, point count, fit method)
   in the Start summary.
-- **UX pass on the whole panel** (Bene: "review the overall UX in the
+- **UX pass on the whole panel** — split out as [WP-18](#wp-18--split-the-focus-map-panel-into-two-jobs) (Bene: "review the overall UX in the
   frontend"). `FocusMapDimension.js` is 113 KB / ~2900 lines in one file with
   four nested accordions, three point lists (manual / planned / measured) and
   a heatmap. Worth a design pass in its own right — consider whether Squid's
@@ -571,6 +572,11 @@ fine. It is a locator, not data.
 - Illumination/exposure stay exactly as the user left them — no channel
   switching, no auto-exposure. State that explicitly in the endpoint docstring
   so nobody "helpfully" adds it later.
+- Important: It has to be in physical coordinates, so that in case we acquire with a 10x
+  the overlay should work equally well as when we acquire with a 20x
+  e.g. we want to aquire with low mang preview and high magnification later
+  => for this we should expose a dedicated endpoint to retreive this map outside the 
+  react app too
 
 **Shape of the work:** one `startPrescan(area, dy, speed_x)` API on a
 controller (StageMap is the natural home given the overlay reuse), a background
@@ -581,7 +587,8 @@ number fields in the WellPlate toolbar.
 **Open question:** whether to store prescan strips as one tile per line or
 subdivide into square-ish tiles. Per-line is simpler and the existing tile
 store is centre-based rectangles, so a long thin rect should already draw
-correctly — verify before assuming.
+correctly — verify before assuming. => I would even be fine to have this as a
+a large canvas in the end, so line based is fine 
 
 **Done when:** a prescan over one slide produces a recognisable tissue overlay
 on the plate map in under a minute, and freehand/point selection can be drawn
@@ -618,6 +625,66 @@ handles the corner cases we don't.
 ---
 
 ## Phase 5 — Cleanup and deferred
+
+### WP-18 — Split the focus-map panel into two jobs
+`Medium · Frontend · L · net deletion expected`
+
+The honesty fixes landed in WP-11, but the panel they live in is
+`frontend/src/axon/experiment-designer/FocusMapDimension.js`: **2470 lines,
+112 KB, 18 `<Accordion>` blocks, 13 API clients and ~25 Redux setters in one
+component.** Nothing here is broken; it is unreadable, which is why WP-11 had to
+stop at the parts that could be verified in isolation.
+
+**The structural finding: there are two products in one panel.**
+
+| | Automatic | Manual |
+|---|---|---|
+| Input | `rows` x `cols` grid over each region's bounds | points the user drops on the plate map |
+| Preview list | "Planned Grid Points" + `plannedRemovedKeys` pruning | "Manual Focus Points" |
+| Fit trigger | `computeFocusMap` | `measureFocusMapFromPoints` / `computeFocusMapFromPoints` |
+| Gate | — | `use_manual_map` |
+
+Both then produce the same third list ("Measured Points"). The two modes share
+no controls but are interleaved in one scroll, so at any moment roughly half the
+panel is inert and the operator cannot tell which half.
+
+**The duplication: autofocus is configured twice.** `focusMapConfig.af_*` has 12
+fields (`af_range`, `af_resolution`, `af_algorithm`, `af_two_stage`, ...) and
+`parameterValue.autoFocus*` has 19 setters for the same physical settings, each
+with its own UI — this panel's "Autofocus Settings (shared with Z/Focus tab)"
+accordion, and `ZFocusDimension.js`. They are not shared; they are two copies
+that happen to be adjacent. This is C2 in its purest form. Which one reaches the
+hardware depends on whether the run goes through the focus-map phase or the
+per-point autofocus step.
+
+**Fix, in order — each step is independently shippable:**
+
+1. **Delete one of the two autofocus configs.** The focus-map phase should use
+   the same `parameterValue.autoFocus*` settings as everything else; a focus map
+   is autofocus at N positions, not a different instrument. Drop the `af_*`
+   block from `FocusMapConfig` and its accordion. Biggest single deletion, and
+   it removes a real "which setting won?" ambiguity.
+2. **Pick the mode explicitly.** One `ToggleButtonGroup` — *Grid* / *Points* —
+   at the top, rendering only that mode's controls. `use_manual_map` becomes the
+   toggle's value rather than a switch buried in Advanced.
+3. **One point list, not three.** Planned / manual / measured are the same
+   table with a `state` column (`planned` / `placed` / `measured` / `rejected`).
+   The Go-To, delete and refit actions are already written three times.
+4. **Extract the pieces that are already components in all but name:** the fit
+   result rows (`:1783-1960`), the measured-point table (`:1961-2393`) and the
+   heatmap (`:2394+`). Three files, no new abstraction — this is moving code,
+   not designing it.
+5. Only then decide whether spline/RBF belong in front of the operator at all.
+   With WP-11's rules in place the honest options are: <3 points = flat,
+   3 = tilted plane, 4+ = curved. That is a sentence, not a dropdown, and the
+   method selector can stay in Advanced where WP-11 already put it.
+
+**Explicitly not in scope:** changing what the backend computes. WP-11 settled
+the maths; this is about which of it the operator is asked to think about.
+
+**Done when:** the panel fits on one screen in each mode, no setting appears
+twice in the app, and `FocusMapDimension.js` is under ~600 lines with the rest
+in named sibling components.
 
 ### WP-14 — Delete the dead paths
 `Medium · Both · S · ~-500 lines`

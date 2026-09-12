@@ -20,6 +20,10 @@ from imswitch.imcontrol.model.io import (
     OMEROConnectionParams,
     is_omero_available,
 )
+from imswitch.imcontrol.model.io.ome_writers import write_plate_metadata_sidecar
+
+# DPC half-illumination sub-frames, in acquisition (= OME channel) order.
+DPC_SUB_DIRS = ("top", "bottom", "left", "right")
 
 
 class ExperimentModeBase(ABC):
@@ -131,6 +135,69 @@ class ExperimentModeBase(ABC):
             n_channels=n_channels,
             channel_names=channel_names,
         )
+
+    def tile_shape(self) -> Tuple[int, int]:
+        """(width, height) of one camera frame."""
+        shape = getattr(self.controller.mDetector, "_shape", (512, 512))
+        return (shape[-1], shape[-2])
+
+    @staticmethod
+    def channel_layout(intensities, sources, kinds) -> Tuple[int, Optional[List[str]]]:
+        """Writer channel axis: one slot per active channel, four for a DPC channel.
+
+        Kinds are looked up by source name so a misaligned kinds list cannot
+        put a DPC sub-frame into the wrong slot. (1, None) when nothing is
+        active, which lets OMEWriter default to "Channel_N".
+        """
+        sources = list(sources or [])
+        kind_by_name = dict(zip(sources, list(kinds or [])))
+        names: List[str] = []
+        for i, intensity in enumerate(intensities or []):
+            if intensity is None or intensity <= 0:
+                continue
+            name = sources[i] if i < len(sources) else f"Channel_{i}"
+            kind = kind_by_name.get(name, "default")
+            if kind == "dpc":
+                names += [f"DPC_{d}" for d in DPC_SUB_DIRS]
+            elif kind == "ring":
+                names.append("Ring")
+            else:
+                names.append(name)
+        return (len(names), names) if names else (1, None)
+
+    @staticmethod
+    def well_metadata(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Per-well labware metadata of one region, None when the region is not a well."""
+        if not (meta.get("wellRow") or meta.get("wellColumn") or meta.get("labwareLoadName")):
+            return None
+        return {k: meta.get(k) for k in ("wellRow", "wellColumn", "labwareLoadName", "conditionLabel")}
+
+    def write_plate_sidecar(self, snake_tiles, region_meta: Dict[str, Dict[str, Any]], dir_path: str) -> None:
+        """Best-effort OME-NGFF plate sidecar listing the wells this run touches."""
+        wells_used, condition_labels, labware_load_name = [], {}, None
+        for tiles in snake_tiles:
+            meta = region_meta.get(tiles[0]["region_id"], {}) if tiles else {}
+            row, col, load, cond = (meta.get(k) for k in ("wellRow", "wellColumn", "labwareLoadName", "conditionLabel"))
+            if load and labware_load_name is None:
+                labware_load_name = load
+            if row and col is not None:
+                wells_used.append((str(row), str(int(col))))
+                if cond:
+                    condition_labels[f"{row}{int(col)}"] = cond
+        if not labware_load_name or getattr(self.controller, "labware_manager", None) is None:
+            return
+        try:
+            lab = self.controller.labware_manager.get(labware_load_name)
+            if lab is None:
+                return
+            write_plate_metadata_sidecar(
+                output_dir=dir_path, plate_name=labware_load_name,
+                rows=list(lab.rows), columns=[str(c) for c in lab.columns], wells_used=wells_used,
+                extra={"imswitch_labware": {"loadName": labware_load_name,
+                                            "conditionLabels": condition_labels or None}},
+            )
+        except Exception as exc:  # the sidecar is best-effort
+            self._logger.warning(f"Failed to write plate metadata sidecar: {exc}")
 
     def prepare_omero_connection_params(self) -> Optional[OMEROConnectionParams]:
         """

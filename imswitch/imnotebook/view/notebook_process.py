@@ -41,6 +41,14 @@ def startnotebook(notebook_executable="jupyter-lab", port=None, directory='',
     
     if _process is not None:
         raise ValueError("Cannot start jupyter lab: one is already running in this module")
+
+    # Notebooks run on the same machine as the server, so tell them where the
+    # API is: ImSwitchClient() picks IMSWITCH_API_URL up as its default. Port 80
+    # / Caddy is only the outside view - from in here it is always the raw port.
+    env = dict(os.environ)
+    env["IMSWITCH_API_URL"] = (
+        f"{'https' if config.ssl else 'http'}://localhost:{config.http_port}/imswitch/api"
+    )
     print("Starting Jupyter lab process")
     print("Notebook executable: %s" % notebook_executable)
     print("Jupyter port: %s" % port)
@@ -62,7 +70,7 @@ def startnotebook(notebook_executable="jupyter-lab", port=None, directory='',
                                     "--config=%s" % configfile,
                                     "--notebook-dir=%s" % directory,
                                     "--KernelProvisionerFactory.default_provisioner_name=imswitch-provisioner"
-                                    ], bufsize=1, stderr=subprocess.PIPE)
+                                    ], bufsize=1, stderr=subprocess.PIPE, env=env)
         else:
             notebookp = subprocess.Popen([notebook_executable,
                                     "--port=%s" % port,
@@ -74,7 +82,7 @@ def startnotebook(notebook_executable="jupyter-lab", port=None, directory='',
                                     "--ip=0.0.0.0",
                                     "--config=%s" % configfile,
                                     "--notebook-dir=%s" % directory,
-                                    ], bufsize=1, stderr=subprocess.PIPE)
+                                    ], bufsize=1, stderr=subprocess.PIPE, env=env)
 
         print("Starting jupyter with: %s" % " ".join(notebookp.args))
         print("Waiting for server to start...")

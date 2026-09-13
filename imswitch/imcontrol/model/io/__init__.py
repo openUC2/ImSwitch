@@ -50,13 +50,12 @@ Alternative APIs:
        store.write_frame(detector_name, frame, frame_event)
        store.close()
 
-3. StitchedTiffWriter - For mosaic/tile acquisitions
-       from imswitch.imcontrol.model.io import StitchedTiffWriter, MosaicConfig
-       config = MosaicConfig(nx=5, ny=5, tile_width=2048, tile_height=2048)
-       writer = StitchedTiffWriter('/path/to/mosaic.ome.tiff', config)
-       writer.open()
-       writer.add_tile(tile_info, image)
-       writer.close()
+3. OmeTiffStitcher - For mosaic/tile acquisitions
+       from imswitch.imcontrol.model.io import OmeTiffStitcher
+       stitcher = OmeTiffStitcher('/path/to/mosaic.ome.tif')
+       stitcher.start()
+       stitcher.add_image(image, pos_x, pos_y, index_x, index_y, pixel_size)
+       stitcher.stop()
 
 """
 
@@ -90,14 +89,6 @@ from .recording_service import (
     create_recording_service,
     shutdown_recording_service,
 )
-from .stitched_tiff_writer import (
-    StitchedTiffWriter,
-    StreamingStitchedTiffWriter,
-    MosaicConfig,
-    TileInfo,
-    create_stitched_writer,
-)
-
 # OME Writers (migrated from experiment_controller)
 from .ome_writers import (
     OMEWriter,
@@ -132,11 +123,6 @@ __all__ = [
     
     # === Specialized Writers ===
     'MP4Writer',
-    'StitchedTiffWriter',
-    'StreamingStitchedTiffWriter',
-    'MosaicConfig',
-    'TileInfo',
-    'create_stitched_writer',
     
     # === Core data store (low-level) ===
     'AcquisitionDataStore',

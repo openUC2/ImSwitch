@@ -59,7 +59,18 @@ class HikCamManager(DetectorManager):
             binning = detectorInfo.managerProperties['binning']
         except:
             binning = 1
-        self._camera = self._getHikObj(cameraId, isRGB, binning, flipImage)
+        # Frame rate must reach the CONSTRUCTOR: openCamera() decides there
+        # whether to enable the rate limiter at all, and CameraHIK's default is
+        # 30 fps. Leaving it out meant a setup file asking for -1 ("no cap")
+        # still got a hard 30 fps cap applied behind its back — and on a link
+        # that only carries ~29 fps that surplus queues inside the camera and
+        # shows up as live-view latency that grows until the stream restarts.
+        try:
+            frame_rate = float(detectorInfo.managerProperties['hikcam']['frame_rate'])
+        except (KeyError, TypeError, ValueError):
+            frame_rate = -1
+
+        self._camera = self._getHikObj(cameraId, isRGB, binning, flipImage, frame_rate)
 
         for propertyName, propertyValue in detectorInfo.managerProperties['hikcam'].items():
             self._camera.setPropertyValue(propertyName, propertyValue)
@@ -94,6 +105,11 @@ class HikCamManager(DetectorManager):
         except Exception:
             initial_gain = 1
 
+        try:
+            initial_frame_rate = self._camera.getPropertyValue('frame_rate')
+        except Exception:
+            initial_frame_rate = frame_rate
+
         # Prepare parameters
         parameters = {
             'exposure': DetectorNumberParameter(group='Misc', value=initial_exposure, valueUnits='ms',
@@ -107,8 +123,10 @@ class HikCamManager(DetectorManager):
                         editable=False),
             'image_height': DetectorNumberParameter(group='Misc', value=fullShape[1], valueUnits='arb.u.',
                         editable=False),
-            'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
-                                    editable=True),
+            # Seeded from the camera, not from a constant: a hard-coded -1 here
+            # reported "no cap" in the UI while the camera was actually capped.
+            'frame_rate': DetectorNumberParameter(group='Misc', value=initial_frame_rate,
+                                    valueUnits='fps', editable=True),
             'frame_number': DetectorNumberParameter(group='Misc', value=1, valueUnits='frames',
                                     editable=False),
             'exposure_mode': DetectorListParameter(group='Misc', value='manual',
@@ -383,11 +401,12 @@ class HikCamManager(DetectorManager):
         """Get the available trigger types for the camera."""
         return self._camera.getTriggerTypes()
 
-    def _getHikObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False)):
+    def _getHikObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False), frame_rate=-1):
         try:
             from imswitch.imcontrol.model.interfaces.hikcamera import CameraHIK
             self.__logger.debug(f'Trying to initialize Hik camera {cameraId}')
-            camera = CameraHIK(cameraNo=cameraId, isRGB=isRGB, binning=binning, flipImage=flipImage)
+            camera = CameraHIK(cameraNo=cameraId, isRGB=isRGB, binning=binning,
+                               flipImage=flipImage, frame_rate=frame_rate)
         except Exception as e:
             self.__logger.error(e)
             self.__logger.warning(f'Failed to initialize CameraHik {cameraId}, loading TIS mocker')

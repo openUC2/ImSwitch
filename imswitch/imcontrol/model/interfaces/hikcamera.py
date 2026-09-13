@@ -323,9 +323,15 @@ class CameraHIK:
             if ret != 0:
                 self.__logger.debug("Set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
             ret = self.camera.MV_CC_SetFloatValue("AcquisitionFrameRate", self.frame_rate)
+            # Only claim success when the write succeeded: this line used to be
+            # unconditional with the failure logged at DEBUG, so the log read
+            # "Set frame rate to 30 fps" for a rate the camera never took.
             if ret != 0:
-                self.__logger.debug("Set AcquisitionFrameRate fail! ret[0x%x]" % ret)
-            self.__logger.info(f"Set frame rate to {self.frame_rate} fps")
+                self.__logger.warning(
+                    f"Set AcquisitionFrameRate to {self.frame_rate} fps FAILED ret[0x{ret:x}] "
+                    f"— the camera keeps its previous rate")
+            else:
+                self.__logger.info(f"Set frame rate to {self.frame_rate} fps")
         else:
             stBool.value = False
             ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", stBool)
@@ -587,6 +593,7 @@ class CameraHIK:
                 getattr(info, "nHostTimeStamp", 0),
                 fid,
                 getattr(info, "nLostPacket", 0),
+                dev_ts=ts,
             )
 
         return _cb
@@ -718,6 +725,10 @@ class CameraHIK:
 
         # Fresh latency stats for this streaming session.
         self._streamStats = self._newStreamStats()
+        # What the camera itself expects to deliver (exposure/bandwidth-limited).
+        # If the callback fps ends up BELOW this, the surplus is piling up in the
+        # camera's on-board memory (see cam_lag_ms_* in the stream stats).
+        self._refreshResultingFrameRate()
 
         try:
             ret = self.camera.MV_CC_StartGrabbing()
@@ -793,12 +804,94 @@ class CameraHIK:
         self.camera.MV_CC_SetFloatValue("Gain", self.gain)
 
     def set_frame_rate(self, frame_rate):
+        """Cap the acquisition rate; ``frame_rate <= 0`` means "no cap".
+
+        Returns the rate the camera actually ended up with (``-1`` when the
+        limiter is off), which is NOT necessarily what was asked for.
+
+        Three things used to go wrong here and each one hid the next:
+
+        * ``frame_rate`` arrives as a *string* from the REST API (the query
+          parameter is typed ``Any``), and ``c_float("25")`` raises TypeError
+          before the SDK is ever called — so setting the rate from the UI
+          silently did nothing at all.
+        * "no cap" is expressed as ``-1`` in the setup file, but that was
+          written straight into the node; the SDK rejects it with
+          MV_E_GC_RANGE (0x80000102) and LEAVES THE PREVIOUS CAP IN FORCE.
+          Disabling AcquisitionFrameRateEnable is how you actually free-run.
+        * ``self.frame_rate`` was never updated, so ``getPropertyValue`` kept
+          reporting the requested value while the camera ran at another rate.
+
+        A cap set above what the link can carry is the root of the growing
+        live-view latency: the sensor keeps producing, the host drains slower,
+        and the surplus queues in the camera's on-board memory (watch
+        ``cam_lag_ms_*`` in getStreamDiagnostics).
+        """
+        try:
+            frame_rate = float(frame_rate)
+        except (TypeError, ValueError):
+            self.__logger.error(
+                f"set_frame_rate: {frame_rate!r} is not a number; frame rate left unchanged")
+            return self.frame_rate
+
+        # <= 0 means free-run: turn the limiter OFF instead of writing a
+        # negative value that the SDK will reject.
+        if frame_rate <= 0:
+            ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", False)
+            if ret != 0:
+                self.__logger.error(f"Disable AcquisitionFrameRateEnable failed 0x{ret:x}")
+                return self.frame_rate
+            self.frame_rate = -1
+            self.__logger.info("Frame rate limiter disabled (free-run)")
+            self._refreshResultingFrameRate()
+            return self.frame_rate
+
         ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", True)
         if ret != 0:
-            self.__logger.error("set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
+            self.__logger.error(f"Enable AcquisitionFrameRateEnable failed 0x{ret:x}")
+
+        # Clamp into the node's writable range, so an out-of-range request
+        # lands on the nearest legal rate instead of being dropped.
+        stRate = MVCC_FLOATVALUE()
+        if self.camera.MV_CC_GetFloatValue("AcquisitionFrameRate", stRate) == 0:
+            lo, hi = float(stRate.fMin), float(stRate.fMax)
+            if frame_rate < lo or frame_rate > hi:
+                clamped = min(max(frame_rate, lo), hi)
+                self.__logger.warning(
+                    f"Frame rate {frame_rate:.3f} fps outside the camera range "
+                    f"[{lo:.3f}, {hi:.3f}] — using {clamped:.3f} fps")
+                frame_rate = clamped
+
         ret = self.camera.MV_CC_SetFloatValue("AcquisitionFrameRate", frame_rate)
         if ret != 0:
-            self.__logger.error("set AcquisitionFrameRate fail! ret[0x%x]" % ret)
+            self.__logger.error(f"set AcquisitionFrameRate fail! ret[0x{ret:x}]")
+            return self.frame_rate
+
+        # Read back: the camera may quantise the value.
+        applied = frame_rate
+        if self.camera.MV_CC_GetFloatValue("AcquisitionFrameRate", stRate) == 0:
+            applied = float(stRate.fCurValue)
+        self.frame_rate = applied
+        self.__logger.info(f"Frame rate set to {applied:.3f} fps (requested {frame_rate:.3f})")
+        self._refreshResultingFrameRate()
+        return applied
+
+    def _refreshResultingFrameRate(self):
+        """Record what the camera says it will now deliver.
+
+        ResultingFrameRate folds in exposure and link bandwidth. Compare it
+        against ``fps_callback``: if the host drains slower than this, the
+        difference is what piles up inside the camera.
+        """
+        try:
+            stFps = MVCC_FLOATVALUE()
+            for node in ("ResultingFrameRate", "AcquisitionResultingFrameRate"):
+                if self.camera.MV_CC_GetFloatValue(node, stFps) == 0:
+                    self._streamStats["resulting_fps"] = float(stFps.fCurValue)
+                    self.__logger.info(f"Camera ResultingFrameRate is now {stFps.fCurValue:.3f} fps")
+                    return
+        except Exception as e:
+            self.__logger.debug(f"ResultingFrameRate read failed: {e}")
 
     def set_blacklevel(self, blacklevel):
         self.blacklevel = blacklevel
@@ -1014,6 +1107,15 @@ class CameraHIK:
         elif property_name == "roi_size":
             return self.roi_size
         elif property_name == "frame_rate":
+            # Report what the camera holds, not what was last requested: a
+            # rejected or clamped write must be visible in the UI.
+            stEnable = c_bool(False)
+            if self.camera.MV_CC_GetBoolValue("AcquisitionFrameRateEnable", stEnable) == 0 \
+                    and not stEnable.value:
+                return -1
+            stRate = MVCC_FLOATVALUE()
+            if self.camera.MV_CC_GetFloatValue("AcquisitionFrameRate", stRate) == 0:
+                return float(stRate.fCurValue)
             return self.frame_rate
         elif property_name == "trigger_source":
             return self.trigger_source
@@ -1111,16 +1213,55 @@ class CameraHIK:
             "sdk_lag_ms_max": None,
             "frame_gaps": 0,           # frames the SDK dropped (nFrameNum jumps)
             "lost_packets": 0,         # GigE packet loss reported by the driver
+            # Camera-side latency: (host receive time - device exposure time),
+            # relative to the first frame of the session. GROWING => frames are
+            # being held BEFORE the host driver sees them, i.e. in the camera's
+            # on-board frame memory (sensor faster than the link/host drains).
+            # sdk_lag_ms_* cannot see this: nHostTimeStamp is stamped on arrival.
+            "cam_lag_ms_now": None,
+            "cam_lag_ms_max": None,
+            "dev_tick_hz": None,       # device timestamp tick rate (estimated, snapped)
+            "resulting_fps": None,     # camera's own ResultingFrameRate node at start
+            "_dev_ts0": None,
+            "_host_ts0": None,
+            "_cam_lag0": None,
             "_last_frame_num": None,
             "_last_entry_t": None,
             "_started": time.time(),
         }
 
-    def _updateStreamStats(self, t_entry, host_ts_ms, frame_num, lost_packets):
+    _DEV_TICK_CANDIDATES_HZ = (1e9, 5e8, 2.5e8, 1.25e8, 1e8, 6.25e7, 1e7, 1e6, 1e5, 1e3)
+
+    def _updateStreamStats(self, t_entry, host_ts_ms, frame_num, lost_packets, dev_ts=0):
         """Update EMA latency stats; runs on the SDK callback thread (keep cheap)."""
         s = self._streamStats
         a = 0.05  # EMA weight
         s["frames"] += 1
+        # Camera-side buffering: compare the device (exposure) clock against the
+        # host receive clock. The tick rate of the device clock is not exposed
+        # by this binding, so estimate it from the first ~2 s and snap it to the
+        # nearest conventional rate; the drift we look for is seconds, not
+        # the few percent that snapping tolerates.
+        if dev_ts and host_ts_ms:
+            if s["_dev_ts0"] is None:
+                s["_dev_ts0"], s["_host_ts0"] = dev_ts, float(host_ts_ms)
+            elif s["dev_tick_hz"] is None:
+                d_host = (float(host_ts_ms) - s["_host_ts0"]) / 1000.0
+                d_dev = dev_ts - s["_dev_ts0"]
+                if d_host >= 2.0 and d_dev > 0:
+                    raw = d_dev / d_host
+                    s["dev_tick_hz"] = min(self._DEV_TICK_CANDIDATES_HZ,
+                                           key=lambda c: abs(np.log(c) - np.log(raw)))
+                    self.__logger.info(
+                        f"HIK device clock: ~{raw:.3g} ticks/s, using {s['dev_tick_hz']:.3g} Hz")
+            else:
+                dev_ms = (dev_ts - s["_dev_ts0"]) * 1000.0 / s["dev_tick_hz"]
+                lag = (float(host_ts_ms) - s["_host_ts0"]) - dev_ms
+                if s["_cam_lag0"] is None:
+                    s["_cam_lag0"] = lag
+                lag -= s["_cam_lag0"]
+                s["cam_lag_ms_now"] = lag
+                s["cam_lag_ms_max"] = lag if s["cam_lag_ms_max"] is None else max(s["cam_lag_ms_max"], lag)
         cb_ms = (time.time() - t_entry) * 1000.0
         s["callback_ms_avg"] = cb_ms if s["frames"] == 1 else (1 - a) * s["callback_ms_avg"] + a * cb_ms
         if cb_ms > s["callback_ms_max"]:
@@ -1148,9 +1289,14 @@ class CameraHIK:
                 f"HIK stream: n={s['frames']} fps={s['fps_callback']:.1f} "
                 f"cb={s['callback_ms_avg']:.1f}/{s['callback_ms_max']:.0f}ms "
                 f"sdk_lag(now/avg/max)={fmt(s['sdk_lag_ms_now'])}/{fmt(s['sdk_lag_ms_avg'])}/{fmt(s['sdk_lag_ms_max'])}ms "
+                f"cam_lag(now/max)={fmt(s['cam_lag_ms_now'])}/{fmt(s['cam_lag_ms_max'])}ms "
+                f"cam_fps={fmt(s['resulting_fps'])} "
                 f"gaps={s['frame_gaps']} lost_pkts={s['lost_packets']}"
             )
-            if s["sdk_lag_ms_avg"] is not None and s["sdk_lag_ms_avg"] > 300:
+            if s["cam_lag_ms_now"] is not None and s["cam_lag_ms_now"] > 300:
+                self.__logger.warning(line + "  <-- frames held in the CAMERA before the host sees them "
+                                      "(sensor outruns the link/host; cap AcquisitionFrameRate below cam_fps)")
+            elif s["sdk_lag_ms_avg"] is not None and s["sdk_lag_ms_avg"] > 300:
                 self.__logger.warning(line + "  <-- frame backlog building upstream of Python (SDK/driver queue)")
             else:
                 self.__logger.info(line)
@@ -1159,8 +1305,13 @@ class CameraHIK:
         """Snapshot of the streaming pipeline health (poll while live view runs).
 
         How to read it:
+        * ``cam_lag_ms_*`` growing over time  -> frames are held INSIDE the camera
+          (on-board memory) because the sensor runs faster than the USB/GigE
+          link or host drains it; ``fps_callback`` < ``resulting_fps`` says the
+          same thing. Only a stream stop/start empties that memory. Fix: cap
+          AcquisitionFrameRate below the sustained callback rate.
         * ``sdk_lag_ms_*`` growing over time  -> backlog in the SDK/driver queue
-          (before Python). Flat & small -> camera side is real-time.
+          (before Python). Flat & small -> SDK side is real-time.
         * ``latest_frame_age_ms`` small       -> Python has a fresh frame; if the
           browser still lags, the buildup is in encode/socket/frontend.
         * ``frame_gaps`` growing              -> SDK drops frames when its queue is

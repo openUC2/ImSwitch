@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 640" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- OPTIKIT-INTEGRATION.md §2 — the deployment: newswitch + a versioned
+       optikit-core service in one compose file, and who calls whom when. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#ea580c"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1020" height="640" fill="#ffffff"/>
+
+  <text x="510" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">The runtime: newswitch + a versioned optikit service, one compose file</text>
+  <text x="510" y="54" text-anchor="middle" font-size="12.5" fill="#64748b">the design lives in the service; newswitch pins it by hash and asks for the light path instead of reimplementing it</text>
+
+  <!-- compose boundary -->
+  <rect x="34" y="80" width="640" height="420" rx="14" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="7 5"/>
+  <text x="54" y="104" font-size="12" font-weight="700" fill="#64748b">docker compose — one deployment unit</text>
+
+  <!-- newswitch container -->
+  <rect x="56" y="122" width="280" height="356" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.8"/>
+  <text x="196" y="148" text-anchor="middle" font-size="14.5" font-weight="700" fill="#14532d">newswitch</text>
+  <text x="196" y="166" text-anchor="middle" font-size="11" font-style="italic" fill="#166534">the runtime — drivers, states, acquisition</text>
+
+  <rect x="76" y="182" width="240" height="56" rx="7" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="90" y="202" font-size="11.5" font-weight="700" fill="#0f172a">loader → ResolvedSystem</text>
+  <text x="90" y="220" font-size="10.5" fill="#334155">microscope.yml pins design id + sha256</text>
+
+  <rect x="76" y="250" width="240" height="56" rx="7" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="90" y="270" font-size="11.5" font-weight="700" fill="#0f172a">rekuest agent</text>
+  <text x="90" y="288" font-size="10.5" fill="#334155">states + patches; dof_values, slots, stage</text>
+
+  <rect x="76" y="318" width="240" height="56" rx="7" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="90" y="338" font-size="11.5" font-weight="700" fill="#0f172a">light-path cache</text>
+  <text x="90" y="356" font-size="10.5" fill="#334155">keyed by path_hash — hit = no service call</text>
+
+  <rect x="76" y="386" width="240" height="56" rx="7" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="90" y="406" font-size="11.5" font-weight="700" fill="#0f172a">GET /system/drivers</text>
+  <text x="90" y="424" font-size="10.5" fill="#334155">the driver manifest — the wizard's contract</text>
+
+  <!-- optikit container -->
+  <rect x="380" y="122" width="272" height="356" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.8"/>
+  <text x="516" y="148" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e3a8a">optikit-core service</text>
+  <text x="516" y="166" text-anchor="middle" font-size="11" font-style="italic" fill="#1d4ed8">versioned image — holds the pinned design</text>
+
+  <rect x="400" y="182" width="232" height="56" rx="7" fill="#ffffff" stroke="#2563eb" stroke-width="1.2"/>
+  <text x="414" y="202" font-size="11.5" font-weight="700" fill="#0f172a">instrument.dsn</text>
+  <text x="414" y="220" font-size="10.5" fill="#334155">the design + library records, at one sha</text>
+
+  <rect x="400" y="250" width="232" height="56" rx="7" fill="#ffffff" stroke="#2563eb" stroke-width="1.2"/>
+  <text x="414" y="270" font-size="11.5" font-weight="700" fill="#0f172a">/v1/validate · /v1/sequence</text>
+  <text x="414" y="288" font-size="10.5" fill="#334155">check at boot; trace per configuration</text>
+
+  <rect x="400" y="318" width="232" height="56" rx="7" fill="#ffffff" stroke="#2563eb" stroke-width="1.2"/>
+  <text x="414" y="338" font-size="11.5" font-weight="700" fill="#0f172a">/v1/scene  (WP-192)</text>
+  <text x="414" y="356" font-size="10.5" fill="#334155">GLBs + poses + kinematics table + rays</text>
+
+  <rect x="400" y="386" width="232" height="56" rx="7" fill="#ffffff" stroke="#2563eb" stroke-width="1.2"/>
+  <text x="414" y="406" font-size="11.5" font-weight="700" fill="#0f172a">/v1/export/channels</text>
+  <text x="414" y="424" font-size="10.5" fill="#334155">channel skeletons seeded from paths</text>
+
+  <!-- calls between the two -->
+  <path d="M316 210 L398 210" stroke="#2563eb" stroke-width="1.6" marker-end="url(#ab)"/>
+  <text x="357" y="200" text-anchor="middle" font-size="9.5" fill="#1d4ed8">boot: validate + sha</text>
+  <path d="M316 340 L398 296" stroke="#2563eb" stroke-width="1.6" marker-end="url(#ab)"/>
+  <text x="357" y="354" text-anchor="middle" font-size="9.5" fill="#1d4ed8">cache miss:</text>
+  <text x="357" y="366" text-anchor="middle" font-size="9.5" fill="#1d4ed8">sequence()</text>
+
+  <!-- browser -->
+  <rect x="716" y="122" width="270" height="300" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.8"/>
+  <text x="851" y="148" text-anchor="middle" font-size="14.5" font-weight="700" fill="#7c2d12">browser</text>
+  <text x="851" y="166" text-anchor="middle" font-size="11" font-style="italic" fill="#9a3412">newswitch frontend + live 3D view</text>
+
+  <rect x="736" y="182" width="230" height="56" rx="7" fill="#ffffff" stroke="#ea580c" stroke-width="1.2"/>
+  <text x="750" y="202" font-size="11.5" font-weight="700" fill="#0f172a">generated hooks + states</text>
+  <text x="750" y="220" font-size="10.5" fill="#334155">as today — WS patches, actions, locks</text>
+
+  <rect x="736" y="250" width="230" height="90" rx="7" fill="#ffffff" stroke="#ea580c" stroke-width="1.2"/>
+  <text x="750" y="270" font-size="11.5" font-weight="700" fill="#0f172a">instrument viewer</text>
+  <text x="750" y="288" font-size="10.5" fill="#334155">scene manifest fetched ONCE per design sha;</text>
+  <text x="750" y="304" font-size="10.5" fill="#334155">every later state patch re-poses GLB nodes</text>
+  <text x="750" y="320" font-size="10.5" fill="#334155">locally via the kinematics table</text>
+
+  <rect x="736" y="352" width="230" height="56" rx="7" fill="#ffffff" stroke="#ea580c" stroke-width="1.2"/>
+  <text x="750" y="372" font-size="11.5" font-weight="700" fill="#0f172a">ray overlay</text>
+  <text x="750" y="390" font-size="10.5" fill="#334155">refreshed only when path_hash changes</text>
+
+  <!-- browser calls -->
+  <path d="M736 224 C 698 236, 692 280, 692 430 C 692 476, 664 490, 500 490 L 220 490 L 220 481" stroke="#16a34a" stroke-width="1.6" fill="none" marker-end="url(#ag)"/>
+  <text x="452" y="485" text-anchor="middle" font-size="9.5" fill="#166534">WS /ws — state patches at hardware rate</text>
+  <path d="M736 308 C 702 316, 690 340, 656 346" stroke="#ea580c" stroke-width="1.6" marker-end="url(#ao)"/>
+  <text x="700" y="332" text-anchor="middle" font-size="9.5" fill="#c2410c">scene, once</text>
+
+  <!-- footnotes -->
+  <rect x="34" y="520" width="952" height="96" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.4"/>
+  <text x="56" y="544" font-size="12.5" font-weight="700" fill="#0f172a">Three rules keep this fast and honest</text>
+  <text x="56" y="566" font-size="11.5" fill="#334155">1 · The service is consulted per <tspan font-family="ui-monospace, monospace">path_hash</tspan>, never per frame or per move — stage motion re-poses meshes locally and touches no ray trace.</text>
+  <text x="56" y="584" font-size="11.5" fill="#334155">2 · A sha mismatch between the pin and the service's design is <tspan font-family="ui-monospace, monospace">E_DESIGN_DRIFT</tspan> at boot — the two containers version together in the compose file.</text>
+  <text x="56" y="602" font-size="11.5" fill="#334155">3 · Service unreachable → degraded mode (CONFIG-MODEL §12.4): synthetic design, identity affines, <tspan font-family="ui-monospace, monospace">W_NO_DESIGN</tspan>. Acquisition still works.</text>
+</svg>

@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 600" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- CONFIG-MODEL.md §11 — adding a new runtime state (calibration, autofocus,
+       anything) without touching the config schema. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1020" height="600" fill="#ffffff"/>
+
+  <text x="510" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">Growing the system description without growing the config schema</text>
+  <text x="510" y="54" text-anchor="middle" font-size="12.5" fill="#64748b">a capability is a unit of "this build can do X" — it declares what it needs, and contributes what it publishes</text>
+
+  <!-- capability anatomy -->
+  <rect x="34" y="86" width="420" height="352" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.8"/>
+  <text x="244" y="112" text-anchor="middle" font-size="14.5" font-weight="700" fill="#14532d">Capability · <tspan font-family="ui-monospace, monospace">calibration.affine</tspan></text>
+
+  <rect x="56" y="128" width="376" height="128" rx="8" fill="#ffffff" stroke="#16a34a" stroke-width="1.3"/>
+  <text x="74" y="150" font-size="12.5" font-weight="700" fill="#0f172a">requires — checked at boot, against ResolvedSystem</text>
+  <text x="74" y="172" font-size="11.5" fill="#334155">· a device with role <tspan font-family="ui-monospace, monospace">acquisition</tspan></text>
+  <text x="74" y="190" font-size="11.5" fill="#334155">· an actuatable DOF on <tspan font-family="ui-monospace, monospace">objective</tspan> or a stage axis pair</text>
+  <text x="74" y="208" font-size="11.5" fill="#334155">· a resolvable design <tspan font-family="ui-monospace, monospace">path</tspan> terminating at that detector</text>
+  <text x="74" y="232" font-size="11.5" font-style="italic" fill="#475569">unmet → the capability is absent, listed with its reason.</text>
+  <text x="74" y="248" font-size="11.5" font-style="italic" fill="#475569">Absent is a normal state, not an error.</text>
+
+  <rect x="56" y="268" width="376" height="152" rx="8" fill="#ffffff" stroke="#16a34a" stroke-width="1.3"/>
+  <text x="74" y="290" font-size="12.5" font-weight="700" fill="#0f172a">contributes — published when present</text>
+  <text x="74" y="312" font-size="11.5" fill="#334155">· states: <tspan font-family="ui-monospace, monospace">CalibrationState</tspan> (schema introspected by rekuest)</text>
+  <text x="74" y="330" font-size="11.5" fill="#334155">· actions: <tspan font-family="ui-monospace, monospace">run_affine_calibration</tspan>, <tspan font-family="ui-monospace, monospace">clear_calibration</tspan></text>
+  <text x="74" y="348" font-size="11.5" fill="#334155">· calibration kinds: <tspan font-family="ui-monospace, monospace">affine_v1</tspan> — a pydantic payload model</text>
+  <text x="74" y="366" font-size="11.5" fill="#334155">· snapshot fields: which entry was in effect</text>
+  <text x="74" y="384" font-size="11.5" fill="#334155">· optional UI: a blok, or nothing at all</text>
+  <text x="74" y="408" font-size="11.5" font-style="italic" fill="#475569">All of it registered in code. None of it in a YAML file.</text>
+
+  <!-- arrows to the right -->
+  <path d="M454 200 L520 200" stroke="#16a34a" stroke-width="1.7" marker-end="url(#ag)"/>
+  <path d="M454 340 L520 340" stroke="#16a34a" stroke-width="1.7" marker-end="url(#ag)"/>
+
+  <!-- right: runtime description -->
+  <rect x="524" y="120" width="462" height="160" rx="10" fill="#f8fafc" stroke="#334155" stroke-width="1.6"/>
+  <text x="546" y="146" font-size="14" font-weight="700" fill="#0f172a">GET /system → SystemDescription</text>
+  <text x="546" y="170" font-size="11.5" font-family="ui-monospace, monospace" fill="#334155">resolved:      the frozen ResolvedSystem</text>
+  <text x="546" y="188" font-size="11.5" font-family="ui-monospace, monospace" fill="#334155">capabilities:  [{id, present, reason, contributes}]</text>
+  <text x="546" y="206" font-size="11.5" font-family="ui-monospace, monospace" fill="#334155">states:        {name: {json_schema, revision}}</text>
+  <text x="546" y="224" font-size="11.5" font-family="ui-monospace, monospace" fill="#334155">snapshot:      {id, taken_at, path_hash}</text>
+  <text x="546" y="242" font-size="11.5" font-family="ui-monospace, monospace" fill="#334155">diagnostics:   [{code, severity, where, message}]</text>
+  <text x="546" y="266" font-size="11.5" font-style="italic" fill="#475569">The frontend already codegens from schema endpoints — a new state shows up without a frontend release.</text>
+
+  <rect x="524" y="300" width="462" height="138" rx="10" fill="#faf5ff" stroke="#9333ea" stroke-width="1.6"/>
+  <text x="546" y="326" font-size="14" font-weight="700" fill="#581c87">CalibrationEntry — one open discriminator</text>
+  <text x="546" y="350" font-size="11.5" font-family="ui-monospace, monospace" fill="#334155">kind: "affine_v1"      ← registered by the capability</text>
+  <text x="546" y="368" font-size="11.5" font-family="ui-monospace, monospace" fill="#334155">valid_for: {design_sha, path_hash}</text>
+  <text x="546" y="386" font-size="11.5" font-family="ui-monospace, monospace" fill="#334155">measured_at, operator, method, residual, superseded_by</text>
+  <text x="546" y="404" font-size="11.5" font-family="ui-monospace, monospace" fill="#334155">data: {…}              ← the kind's own pydantic model</text>
+  <text x="546" y="428" font-size="11.5" font-style="italic" fill="#7e22ce">An unknown kind is kept verbatim, never dropped — an older backend carries provenance it cannot interpret.</text>
+
+  <!-- bottom: the anti-pattern -->
+  <rect x="34" y="468" width="952" height="106" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="56" y="494" font-size="13.5" font-weight="700" fill="#7f1d1d">The shape this exists to prevent</text>
+  <text x="56" y="518" font-size="12" fill="#334155">Every new feature adding a field to the top-level config: <tspan font-family="ui-monospace, monospace">uc2_can</tspan>, <tspan font-family="ui-monospace, monospace">uc2_rest</tspan>, <tspan font-family="ui-monospace, monospace">uc2_stage</tspan>, <tspan font-family="ui-monospace, monospace">uc2_objective</tspan>, <tspan font-family="ui-monospace, monospace">uc2_filter_bank</tspan>, then</text>
+  <text x="56" y="538" font-size="12" fill="#334155"><tspan font-family="ui-monospace, monospace">uc2_galvo</tspan>, <tspan font-family="ui-monospace, monospace">uc2_autofocus</tspan>, <tspan font-family="ui-monospace, monospace">uc2_calibration</tspan> — each a <tspan font-family="ui-monospace, monospace">dict[str, Any]</tspan> that validates nothing, and a matching <tspan font-family="ui-monospace, monospace">if</tspan> branch in <tspan font-family="ui-monospace, monospace">provide_managers</tspan>.</text>
+  <text x="56" y="560" font-size="12" font-style="italic" fill="#991b1b">Devices are data in a registry; capabilities are code that declares its own needs. Neither one grows the schema.</text>
+</svg>

@@ -69,6 +69,10 @@ const initialExperimentState = {
     zStackMin: 0.0,
     zStackMax: 0.0,
     zStackStepSize: 0.1,
+    // "range": evenly spaced planes from zStackMin/Max/StepSize. "individual":
+    // hand-picked planes from zStackOffsets (Individual Slices / Table tabs).
+    zStackMode: "range",
+    zStackOffsets: [], // relative µm offsets, used when zStackMode === "individual"
     speed: 20000,
     z_speed: 5000,
     // Stage acceleration (steps/s²) for the scan. Applied to XY and Z moves.
@@ -263,6 +267,39 @@ const experimentSlice = createSlice({
     setZStackStepSize: (state, action) => {
       console.log("setZStackStepSize");
       state.parameterValue.zStackStepSize = action.payload;
+    },
+    setZStackMode: (state, action) => {
+      state.parameterValue.zStackMode = action.payload;
+    },
+    setZStackOffsets: (state, action) => {
+      state.parameterValue.zStackOffsets = Array.isArray(action.payload)
+        ? [...action.payload].sort((a, b) => a - b)
+        : [];
+    },
+    addZStackOffset: (state, action) => {
+      const value = action.payload;
+      const existing = state.parameterValue.zStackOffsets;
+      // Dedupe within 1 nm to avoid float-equality misses on repeated clicks.
+      if (existing.some((v) => Math.abs(v - value) < 1e-6)) return;
+      state.parameterValue.zStackOffsets = [...existing, value].sort((a, b) => a - b);
+    },
+    removeZStackOffsetAt: (state, action) => {
+      const index = action.payload;
+      state.parameterValue.zStackOffsets = state.parameterValue.zStackOffsets.filter(
+        (_, i) => i !== index,
+      );
+    },
+    updateZStackOffsetAt: (state, action) => {
+      // Intentionally does NOT re-sort: sorting here would reorder table rows
+      // out from under the user mid-edit whenever a typed value crosses a
+      // neighboring one. Execution order doesn't matter — the backend sorts
+      // zStackOffsets itself before building the Z-stack.
+      const { index, value } = action.payload;
+      const arr = [...state.parameterValue.zStackOffsets];
+      if (index >= 0 && index < arr.length) {
+        arr[index] = value;
+        state.parameterValue.zStackOffsets = arr;
+      }
     },
     setSpeed: (state, action) => {
       console.log("setSpeed");
@@ -600,6 +637,11 @@ export const {
   setZStackMin,
   setZStackMax,
   setZStackStepSize,
+  setZStackMode,
+  setZStackOffsets,
+  addZStackOffset,
+  removeZStackOffsetAt,
+  updateZStackOffsetAt,
   setSpeed,
   setZSpeed,
   setAcceleration,

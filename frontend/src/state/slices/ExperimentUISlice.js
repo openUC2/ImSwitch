@@ -49,6 +49,11 @@ const initialExperimentUIState = {
       summary: "Single Z",
       // Sub-state for Z/Focus mode selection
       mode: Z_FOCUS_MODES.SINGLE_Z,
+      // Absolute Z (µm) that a zStack offset of 0 corresponds to, captured
+      // live from the stage the first time the user presses Set First/Last.
+      // Display-only anchor for the Z-Stack panel — null means unanchored
+      // (First/Last are shown as plain relative offsets, today's behavior).
+      zStackAnchorZ: null,
     },
     [DIMENSIONS.FOCUS_MAP]: {
       enabled: false,
@@ -174,6 +179,11 @@ const experimentUISlice = createSlice({
       state.dimensions[DIMENSIONS.Z_FOCUS].summary = modeSummaries[action.payload] || "Single Z";
     },
 
+    // Set/clear the Z-Stack panel's display anchor (see initial state comment).
+    setZStackAnchorZ: (state, action) => {
+      state.dimensions[DIMENSIONS.Z_FOCUS].zStackAnchorZ = action.payload;
+    },
+
     // Update estimates
     setEstimates: (state, action) => {
       state.estimates = { ...state.estimates, ...action.payload };
@@ -211,6 +221,7 @@ export const {
   setDimensionSummary,
   setDimensionConfigured,
   setZFocusMode,
+  setZStackAnchorZ,
   setEstimates,
   toggleAdvancedVisible,
   setAdvancedVisible,

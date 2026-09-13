@@ -970,6 +970,93 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Could not save joystick settings: {e}")
 
+    ''' Joystick-jog speed multiplier '''
+
+    @APIExport(runOnUIThread=False, requestType="GET")
+    def setSpeedMultiplier(self, axis: str = "X", multiplier: float = 1):
+        """
+        Set the joystick-jog speed multiplier for one motor axis.
+        Updates the in-memory cache in the stage manager and persists the new
+        value to the JSON setup file so the setting survives a restart.
+
+        :param axis: Axis name ("A", "X", "Y", "Z").
+        :param multiplier: Speed multiplier applied on the device for joystick jogging.
+        """
+        try:
+            if self.stages is not None and hasattr(self.stages, "setSpeedMultiplierSettings"):
+                result = self.stages.setSpeedMultiplierSettings(axis=axis, multiplier=multiplier)
+                if not result.get("success"):
+                    return {"status": "error", "message": result.get("error", "unknown")}
+            else:
+                # Fallback: direct device call when stages are unavailable.
+                self._master.UC2ConfigManager.setSpeedMultiplier(axis=axis, multiplier=multiplier)
+            # Persist the updated settings to the JSON config.
+            self._saveSpeedMultiplierSettings()
+            return {"status": "success", "axis": str(axis).upper(), "multiplier": multiplier}
+        except Exception as e:
+            self.__logger.error(f"setSpeedMultiplier failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getSpeedMultiplier(self):
+        """
+        Read the joystick-jog speed multiplier per axis.
+
+        Reads from the in-memory stage-manager cache (no device round-trip).
+        Falls back to a live device query if the cache is unavailable.
+
+        :return: {"status": "ok", "axes": {"A": num, "X": num, "Y": num, "Z": num}}
+        """
+        try:
+            if self.stages is not None and hasattr(self.stages, "getSpeedMultiplierSettings"):
+                axes = self.stages.getSpeedMultiplierSettings()
+                return {"status": "ok", "axes": axes}
+            # Fallback: live device query.
+            idx_to_name = {0: "A", 1: "X", 2: "Y", 3: "Z"}
+            raw = self._master.UC2ConfigManager.getSpeedMultiplier(axis=None)
+            axes = {}
+            if isinstance(raw, list):
+                for entry in raw:
+                    name = idx_to_name.get(entry.get("axis"))
+                    if name:
+                        axes[name] = entry.get("multiplier", 1)
+            return {"status": "ok", "axes": axes}
+        except Exception as e:
+            self.__logger.error(f"getSpeedMultiplier failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    def _saveSpeedMultiplierSettings(self):
+        """Persist the current speed-multiplier cache to the JSON setup file.
+
+        Follows the same pattern as ``_saveJoystickSettings``.
+        """
+        try:
+            if self.stages is None or not hasattr(self.stages, "getSpeedMultiplierSettings"):
+                self.__logger.warning("Cannot save speed multiplier settings: stages not available")
+                return
+            if not hasattr(self, "_setupInfo") or self._setupInfo is None:
+                self.__logger.warning("Cannot save speed multiplier settings: _setupInfo not available")
+                return
+
+            positionerName = self.stages._name
+            speedMult = self.stages.getSpeedMultiplierSettings()
+            props_update = {f'speedMultiplier{ax}': v for ax, v in speedMult.items()}
+
+            if hasattr(self._setupInfo, "positioners") and positionerName in self._setupInfo.positioners:
+                for key, value in props_update.items():
+                    self._setupInfo.positioners[positionerName].managerProperties[key] = value
+
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                mOptions, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(mOptions, self._setupInfo)
+                self.__logger.info(f"Speed multiplier settings saved for positioner '{positionerName}'")
+            else:
+                self.__logger.warning(
+                    f"Positioner '{positionerName}' not found in setupInfo.positioners"
+                )
+        except Exception as e:
+            self.__logger.error(f"Could not save speed multiplier settings: {e}")
+
     ''' Fan & board temperature '''
 
     @APIExport(runOnUIThread=False)
@@ -3837,7 +3924,16 @@ class UC2ConfigController(ImConWidgetController):
                         motorSettings[f'joystickInverted{ax}'] = bool(inv)
                 except Exception as e:
                     self.__logger.warning(f"Could not fetch joystick settings: {e}")
-            
+
+            # Always save joystick-jog speed multiplier settings from the in-memory cache.
+            if hasattr(self.stages, "getSpeedMultiplierSettings"):
+                try:
+                    speedMult = self.stages.getSpeedMultiplierSettings()
+                    for ax, mult in speedMult.items():
+                        motorSettings[f'speedMultiplier{ax}'] = mult
+                except Exception as e:
+                    self.__logger.warning(f"Could not fetch speed multiplier settings: {e}")
+
             # Update setupInfo and save to config file
             if hasattr(self, '_setupInfo') and self._setupInfo is not None:
                 # Update the positioner's managerProperties in setupInfo

@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 700" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- CONFIG-MODEL.md §4 — the four authored layers, what each one owns,
+       and the single direction in which they are allowed to reference. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1020" height="700" fill="#ffffff"/>
+  <text x="510" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">The four authored layers — one owner per fact</text>
+  <text x="510" y="56" text-anchor="middle" font-size="12.5" fill="#64748b">references point downward only: profile → bindings → design. Nothing ever points back up.</text>
+
+  <!-- L1 design -->
+  <rect x="40" y="86" width="480" height="112" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="60" y="112" font-size="14.5" font-weight="700" fill="#1e3a8a">L1 · instrument.dsn</text>
+  <text x="500" y="112" text-anchor="end" font-size="11.5" font-style="italic" fill="#2563eb">optikit — imported, never edited here</text>
+  <text x="60" y="136" font-size="12" fill="#0f172a"><tspan font-weight="600">owns</tspan>  optics (surfaces, bands), cube poses on the 50/50/55 grid,</text>
+  <text x="60" y="153" font-size="12" fill="#0f172a">        frames + ports, declared DOFs, beam paths, variants</text>
+  <text x="60" y="176" font-size="12" fill="#7f1d1d"><tspan font-weight="600">never</tspan>  drivers, ports, serial numbers, exposure times</text>
+
+  <!-- L2 bindings -->
+  <rect x="40" y="214" width="480" height="112" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.6"/>
+  <text x="60" y="240" font-size="14.5" font-weight="700" fill="#14532d">L2 · bindings.yml</text>
+  <text x="500" y="240" text-anchor="end" font-size="11.5" font-style="italic" fill="#16a34a">newswitch owns this file</text>
+  <text x="60" y="264" font-size="12" fill="#0f172a"><tspan font-weight="600">owns</tspan>  transports, devices, driver keys + typed params,</text>
+  <text x="60" y="281" font-size="12" fill="#0f172a">        axis → DOF (<tspan font-family="ui-monospace, monospace">drives</tspan>), slot → variant (<tspan font-family="ui-monospace, monospace">selects</tspan>), roles</text>
+  <text x="60" y="304" font-size="12" fill="#7f1d1d"><tspan font-weight="600">never</tspan>  an optical fact the design already states</text>
+
+  <!-- L3 profile -->
+  <rect x="40" y="342" width="480" height="112" rx="10" fill="#fefce8" stroke="#ca8a04" stroke-width="1.6"/>
+  <text x="60" y="368" font-size="14.5" font-weight="700" fill="#713f12">L3 · profile/&lt;name&gt;/</text>
+  <text x="500" y="368" text-anchor="end" font-size="11.5" font-style="italic" fill="#a16207">per user / per experiment</text>
+  <text x="60" y="392" font-size="12" fill="#0f172a"><tspan font-weight="600">owns</tspan>  acquisition channels (each pinned to a design <tspan font-family="ui-monospace, monospace">path</tspan>),</text>
+  <text x="60" y="409" font-size="12" fill="#0f172a">        per-objective overrides, display colours, defaults</text>
+  <text x="60" y="432" font-size="12" fill="#7f1d1d"><tspan font-weight="600">never</tspan>  hardware topology; a channel names devices, never drivers</text>
+
+  <!-- L4 calibration -->
+  <rect x="40" y="470" width="480" height="112" rx="10" fill="#faf5ff" stroke="#9333ea" stroke-width="1.6"/>
+  <text x="60" y="496" font-size="14.5" font-weight="700" fill="#581c87">L4 · calibration/</text>
+  <text x="500" y="496" text-anchor="end" font-size="11.5" font-style="italic" fill="#9333ea">append-only, machine-written</text>
+  <text x="60" y="520" font-size="12" fill="#0f172a"><tspan font-weight="600">owns</tspan>  measured numbers keyed by <tspan font-family="ui-monospace, monospace">path_hash</tspan> + <tspan font-family="ui-monospace, monospace">design_sha</tspan>,</text>
+  <text x="60" y="537" font-size="12" fill="#0f172a">        open <tspan font-family="ui-monospace, monospace">kind</tspan> discriminator — plugins add kinds, not schema</text>
+  <text x="60" y="560" font-size="12" fill="#7f1d1d"><tspan font-weight="600">never</tspan>  hand-edited; a stale entry is superseded, not overwritten</text>
+
+  <!-- downward reference arrows on the left edge -->
+  <path d="M28 380 L28 250" stroke="#2563eb" stroke-width="1.6" fill="none" marker-end="url(#ab)"/>
+  <path d="M28 250 L28 250" stroke="#2563eb" stroke-width="1.6" fill="none"/>
+  <path d="M16 500 L16 130" stroke="#2563eb" stroke-width="1.6" fill="none" marker-end="url(#ab)" stroke-dasharray="4 3"/>
+
+  <!-- right column: resolve → runtime → snapshot -->
+  <path d="M520 142 L600 210" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <path d="M520 270 L600 240" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <path d="M520 398 L600 268" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <path d="M520 526 L600 296" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+
+  <rect x="612" y="196" width="368" height="112" rx="10" fill="#f8fafc" stroke="#334155" stroke-width="1.8"/>
+  <text x="632" y="222" font-size="14.5" font-weight="700" fill="#0f172a">ResolvedSystem</text>
+  <text x="632" y="244" font-size="12" fill="#334155">one frozen pydantic object; every reference already</text>
+  <text x="632" y="261" font-size="12" fill="#334155">resolved to an object, no strings left to look up.</text>
+  <text x="632" y="284" font-size="12" fill="#334155">Load fails loudly here — never at the first move.</text>
+
+  <path d="M796 308 L796 356" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+
+  <rect x="612" y="358" width="368" height="104" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+  <text x="632" y="384" font-size="14.5" font-weight="700" fill="#0f172a">rekuest agent</text>
+  <text x="632" y="406" font-size="12" fill="#334155">managers (@context) + reactive states (@state),</text>
+  <text x="632" y="423" font-size="12" fill="#334155">constructed from ResolvedSystem — not from raw YAML.</text>
+  <text x="632" y="446" font-size="12" fill="#334155">Capabilities publish their own state schemas.</text>
+
+  <path d="M796 462 L796 510" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+
+  <rect x="612" y="512" width="368" height="104" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+  <text x="632" y="538" font-size="14.5" font-weight="700" fill="#7c2d12">SystemSnapshot + patch stream</text>
+  <text x="632" y="560" font-size="12" fill="#334155">what the instrument was, at one instant — written into</text>
+  <text x="632" y="577" font-size="12" fill="#334155">every dataset and replayable to any past timestamp.</text>
+  <text x="632" y="600" font-size="12" fill="#334155">Layer 4 reads it back to key new calibrations.</text>
+
+  <path d="M612 564 C 545 600, 300 640, 160 588" stroke="#9333ea" stroke-width="1.4" fill="none" stroke-dasharray="5 4" marker-end="url(#a)"/>
+  <text x="380" y="648" text-anchor="middle" font-size="11.5" font-style="italic" fill="#9333ea">a calibration run writes back here, keyed by the snapshot's path_hash</text>
+</svg>

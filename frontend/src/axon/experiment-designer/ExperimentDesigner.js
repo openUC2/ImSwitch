@@ -281,21 +281,24 @@ const ExperimentDesigner = () => {
       dispatch(
         setNotification({
           message:
-            "Nothing to do: no positions and no channels selected. Please select at least one position and enable at least one channel.",
+            "Nothing to do: no positions and no channels selected. Please enable at least one channel to run at the current position.",
           type: "warning",
         }),
       );
       return;
     }
+    // No position/area selected: fall back to a single acquisition at the
+    // current stage location (with the selected channels and time-lapse
+    // settings). scanAreas/pointList stay empty; the backend resolves that
+    // to the live stage XY (ExperimentController.generate_snake_tiles).
     if (totalPositions <= 0) {
       dispatch(
         setNotification({
           message:
-            "Nothing to do: no positions selected. Please select at least one position before starting.",
-          type: "warning",
+            "No position selected — running at the current stage location instead.",
+          type: "info",
         }),
       );
-      return;
     }
     if (selectedChannelCount <= 0) {
       dispatch(

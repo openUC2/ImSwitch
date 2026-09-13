@@ -22,20 +22,20 @@ class GalvoScanConfig:
     x_max: int = 3500
     y_min: int = 500
     y_max: int = 3500
-    sample_period_us: int = 1
+    sample_period_us: int = 25
     frame_count: int = 0
     bidirectional: bool = False
-    pre_samples: int = 0
-    fly_samples: int = 0
+    pre_samples: int = 64
+    fly_samples: int = 256
     trig_delay_us: int = 0
     trig_width_us: int = 0
-    line_settle_samples: int = 0
+    line_settle_samples: int = 128
     enable_trigger: int = 1
     apply_x_lut: int = 0
     # Linear ramp extension (same per-pixel slope) on both sides of the imaging
     # window - compensates galvo lag so the mirror moves at constant velocity
     # when triggers/laser start
-    overscan_samples: int = 0
+    overscan_samples: int = 32
     # Gate the galvo laser pin HIGH only during the imaging window
     laser_blanking: int = 0
     # Hardware-equidistant pixel clock via the ESP32-S3 RMT peripheral
@@ -195,6 +195,10 @@ class GalvoScannerManager(ABC):
         
         # Initialize with default config from galvoScannerInfo or defaults
         props = galvoScannerInfo.managerProperties if galvoScannerInfo else {}
+        # Defaults = the empirically validated FLIM raster (2026-08): 25 us
+        # dwell (deterministic timing, hw pixel clock capable), eased flyback
+        # and settle so the mirror tracks, overscan so imaging happens at
+        # constant velocity. Override any of these via managerProperties.
         self._config = GalvoScanConfig(
             nx=props.get('nx', 256),
             ny=props.get('ny', 256),
@@ -202,17 +206,27 @@ class GalvoScannerManager(ABC):
             x_max=props.get('x_max', 3500),
             y_min=props.get('y_min', 500),
             y_max=props.get('y_max', 3500),
-            sample_period_us=props.get('sample_period_us', 1),
+            sample_period_us=props.get('sample_period_us', 25),
             frame_count=props.get('frame_count', 0),
             bidirectional=props.get('bidirectional', False),
-            pre_samples=props.get('pre_samples', 0),
-            fly_samples=props.get('fly_samples', 0),
+            pre_samples=props.get('pre_samples', 64),
+            fly_samples=props.get('fly_samples', 256),
             trig_delay_us=props.get('trig_delay_us', 0),
             trig_width_us=props.get('trig_width_us', 0),
-            line_settle_samples=props.get('line_settle_samples', 0),
+            line_settle_samples=props.get('line_settle_samples', 128),
             enable_trigger=props.get('enable_trigger', 1),
             apply_x_lut=props.get('apply_x_lut', 0)
         )
+        # Extended params (overscan etc.) if the config dataclass carries them
+        for key, default in (('overscan_samples', 32), ('laser_blanking', 0),
+                             ('hw_pixel_clock', 0)):
+            if hasattr(self._config, key):
+                setattr(self._config, key, props.get(key, default))
+
+        # Start scanning at ImSwitch boot with these defaults (the FLIM rig
+        # wants the trigger pattern present from the start). Disable with
+        # "autoStartScan": false in managerProperties.
+        self._autoStartScan = bool(props.get('autoStartScan', True))
         
         self._is_scanning = False
         self._current_frame = 0

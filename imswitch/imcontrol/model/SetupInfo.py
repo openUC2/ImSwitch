@@ -571,6 +571,55 @@ class FocusLockInfo:
     Contains position_data, focus_data, polynomial_coeffs, sensitivity, r_squared, 
     linear_range, timestamp, and lookup_table. """
 
+    # --- PI loop tuning -----------------------------------------------------
+    # FocusLockController reads all of the following out of this object. They
+    # have to be declared here to exist at all: an undeclared key in the setup
+    # JSON is dropped on load and erased the next time the setup is written
+    # back, so the controller would silently fall back to its own defaults.
+
+    piKd: float = 0.0
+    """ Default kd value of feedback loop. """
+
+    setPoint: float = 0.0
+    """ Initial focus setpoint. Overwritten by the measured value when the
+    lock is engaged. """
+
+    fovHeight: Optional[int] = None
+    """ Height of the focus lock field of view, in pixels. ``null`` uses
+    ``fovWidth`` (a square FOV). """
+
+    scaleUmPerUnit: float = 100.0
+    """ Microns of Z per unit of controller output. Only used until a
+    calibration has run — after that the measured sensitivity replaces it. """
+
+    minStepThreshold: float = 2.0
+    """ Deadband, in **microns**: corrections smaller than this are discarded.
+
+    The historical default of 2 um is larger than most corrections a
+    well-calibrated lock computes, which leaves the loop measuring but never
+    moving. It is kept as the default so existing setups do not change
+    behaviour; a real setup usually wants something like 0.05. """
+
+    safetyMoveLimit: float = 50.0
+    """ Largest single Z correction the lock may command, in microns. """
+
+    safetyDistanceLimit: float = 500.0
+    """ Total travel budget in microns; exceeding it releases the lock. Only
+    enforced when ``safetyMotionActive`` is true. """
+
+    safetyMotionActive: bool = False
+    """ Whether the travel budget above is enforced. """
+
+    integralLimit: float = 100.0
+    """ Anti-windup clamp on the integral term. """
+
+    outputLowpassAlpha: float = 0.0
+    """ EMA smoothing of the controller output. 0 disables it. """
+
+    measLowpassAlpha: float = 0.0
+    """ EMA smoothing of the measurement before it reaches the PI. 0 disables
+    it. Useful on a noisy sensor; costs loop phase margin. """
+
 @dataclass(frozen=False)
 class SiLA2Info:
     enabled: bool = True
@@ -787,6 +836,17 @@ class SetupInfo:
     galvoScanners: Dict[str, GalvoScannerInfo] = field(default_factory=dict)
     """ Galvo scanners in this setup. This is a map from unique galvo scanner names
     to GalvoScannerInfo objects. Used for high-speed laser scanning microscopy. """
+
+    flimLabs: Optional[dict] = field(default_factory=lambda: None)
+    """ Persisted settings for the FLIM LABS bridge (remote flim-imager server
+    host/port, laser sync, channels, calibration reference, galvo-sync options).
+    Free-form dict written by GalvoScannerController.setFlimLabsConfig; ``null``
+    when nothing has been saved.
+
+    Note: this is the *browser-side* bridge panel's state. To use the FLIM card
+    as a regular 2D detector from the backend (ExperimentController, autofocus,
+    snap), add a ``FLIMLabsDetectorManager`` entry under ``detectors`` instead —
+    see that manager's docstring for the property list. """
 
     rs232devices: Dict[str, RS232Info] = field(default_factory=dict)
     """ RS232 connections in this setup. This is a map from unique RS232

@@ -50,6 +50,7 @@ import {
   Layers as LayersIcon,
   PhotoCamera as PhotoCameraIcon,
   DeleteOutline as DeleteOutlineIcon,
+  MenuBook as MenuBookIcon,
 } from "@mui/icons-material";
 
 // Redux slice
@@ -79,117 +80,35 @@ import apiInLineHoloControllerClearBackground from "../backendapi/apiInLineHoloC
 import apiInLineHoloControllerSetBgEnabled from "../backendapi/apiInLineHoloControllerSetBgEnabled";
 import apiInLineHoloControllerReconstructHighQuality from "../backendapi/apiInLineHoloControllerReconstructHighQuality";
 import apiLiveViewControllerGetStreamParameters from "../backendapi/apiLiveViewControllerGetStreamParameters";
+import FreeNumberField from "./FreeNumberField";
+import { useT } from "../i18n";
 
 // How long without a server-side MJPEG emit before we declare the processed
 // stream "stalled" and surface a warning + restart button to the user.
 const PROCESSED_STREAM_STALL_MS = 5000;
+
+// One control for "what colour am I illuminating with": picking an entry sets
+// both the RGB channel that gets extracted and the wavelength the propagator
+// uses. Nominal LED peaks — override the exact value in Developer Options if a
+// particular unit is measured to differ.
+const ILLUMINATION_PRESETS = [
+  { channel: "red", label: "Red", wavelengthNm: 620 },
+  { channel: "green", label: "Green", wavelengthNm: 520 },
+  { channel: "blue", label: "Blue", wavelengthNm: 450 },
+  { channel: "white", label: "White (mean)", wavelengthNm: 500 },
+];
+
+// Warn about clipping above this fraction of the ROI (backend-measured on the
+// raw sensor samples, so it is not fooled by the JPEG preview).
+const SATURATION_WARN_FRACTION = 0.01;
+
 const AUTO_ONCE_RESET_DELAY_MS = 1500;
 const AUTO_ONCE_UI_HOLD_MS = AUTO_ONCE_RESET_DELAY_MS + 300;
-
-// A free-typing numeric TextField: stores the literal string the user types
-// (incl. empty / partially-typed values like "" or "0.") so the input never
-// snaps back to a default mid-edit. Commits a parsed number on blur or Enter.
-const FreeNumberField = ({
-  label,
-  value,
-  onCommit,
-  unitFactor = 1, // value-in-state = displayed-value * unitFactor
-  fixedDecimals = null,
-  helperText,
-  tooltip,
-  step,
-  min,
-  max,
-  fullWidth = true,
-  ...textFieldProps
-}) => {
-  const formatDisplay = useCallback(
-    (v) => {
-      if (v === null || v === undefined || Number.isNaN(v)) return "";
-      const display = v / unitFactor;
-      if (fixedDecimals !== null) {
-        return Number(display).toFixed(fixedDecimals);
-      }
-      return String(display);
-    },
-    [unitFactor, fixedDecimals]
-  );
-
-  const [draft, setDraft] = useState(() => formatDisplay(value));
-  const editingRef = useRef(false);
-
-  // Sync from outside (e.g. backend pushed new value) ONLY while the user
-  // is not editing — prevents the field from jumping while typing.
-  useEffect(() => {
-    if (!editingRef.current) {
-      setDraft(formatDisplay(value));
-    }
-  }, [value, formatDisplay]);
-
-  const handleChange = (e) => {
-    editingRef.current = true;
-    // Accept any string; don't reject empty / "-" / "." mid-edit.
-    setDraft(e.target.value);
-  };
-
-  const commit = () => {
-    editingRef.current = false;
-    const trimmed = draft.trim();
-    if (trimmed === "" || trimmed === "-" || trimmed === ".") {
-      // Nothing meaningful entered → restore last known value.
-      setDraft(formatDisplay(value));
-      return;
-    }
-    const parsed = Number(trimmed);
-    if (Number.isNaN(parsed)) {
-      setDraft(formatDisplay(value));
-      return;
-    }
-    let next = parsed * unitFactor;
-    if (min !== undefined && next < min) next = min;
-    if (max !== undefined && next > max) next = max;
-    setDraft(formatDisplay(next));
-    if (next !== value) onCommit(next);
-  };
-
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter") {
-      e.currentTarget.blur();
-    }
-  };
-
-  const field = (
-    <TextField
-      label={label}
-      type="text"
-      inputProps={{ inputMode: "decimal", step, min, max }}
-      value={draft}
-      onFocus={() => {
-        editingRef.current = true;
-      }}
-      onChange={handleChange}
-      onBlur={commit}
-      onKeyDown={handleKeyDown}
-      helperText={helperText}
-      fullWidth={fullWidth}
-      size="small"
-      {...textFieldProps}
-    />
-  );
-
-  if (tooltip) {
-    return (
-      <Tooltip title={tooltip} arrow placement="top-start">
-        <Box>{field}</Box>
-      </Tooltip>
-    );
-  }
-  return field;
-};
 
 const HoloController = () => {
   const dispatch = useDispatch();
   const theme = useTheme();
+  const t = useT();
 
   // Redux state
   const holoState = useSelector(holoSlice.getHoloState);
@@ -355,6 +274,10 @@ const HoloController = () => {
         dispatch(holoSlice.setHasBackground(!!state.has_background));
       if (state.is_refining !== undefined)
         dispatch(holoSlice.setIsRefining(!!state.is_refining));
+      if (state.saturated_fraction !== undefined)
+        dispatch(
+          holoSlice.setSaturatedFraction(state.saturated_fraction || 0)
+        );
     } catch (error) {
       console.error("Failed to load hologram state:", error);
     }
@@ -919,6 +842,31 @@ const HoloController = () => {
     [dispatch]
   );
 
+  // Illumination colour: sets the extracted RGB channel *and* the wavelength
+  // the propagator uses, in one request each, so the two can never drift apart.
+  const handleIlluminationChange = useCallback(
+    async (channel) => {
+      const preset = ILLUMINATION_PRESETS.find((p) => p.channel === channel);
+      if (!preset) return;
+      const wavelength = preset.wavelengthNm * 1e-9;
+      dispatch(holoSlice.setColorChannel(channel));
+      dispatch(holoSlice.setWavelength(wavelength));
+      try {
+        await apiInLineHoloControllerSetParams({
+          color_channel: channel,
+          wavelength,
+        });
+      } catch (error) {
+        console.error("Failed to set illumination colour:", error);
+      }
+    },
+    [dispatch]
+  );
+
+  // Docs are served by the same host that served this page (the frontend is
+  // shipped from the device), so the QR-code IP the user typed keeps working.
+  const docsUrl = `${connectionSettings.ip}/docs/`;
+
   // ---------------- Detector exposure/gain/AWB ----------------
 
   const detectorQuery = useMemo(() => {
@@ -1114,6 +1062,30 @@ const HoloController = () => {
     const centerYRel = (roiSelection.centerY + imageSize.height / 2) / imageSize.height;
     const sizeXRel = roiSizeInPreview / imageSize.width;
     const sizeYRel = roiSizeInPreview / imageSize.height;
+
+    // Every stroke is drawn twice: solid white underneath, dashed black on top.
+    // The dashes let the white show through, so the box and crosshair stay
+    // readable over a blown-out fringe pattern *and* over a black background —
+    // a single red line disappeared into both.
+    const box = {
+      x: (centerXRel - sizeXRel / 2) * 100,
+      y: (centerYRel - sizeYRel / 2) * 100,
+      width: sizeXRel * 100,
+      height: sizeYRel * 100,
+      fill: "none",
+    };
+    const hLine = {
+      x1: (centerXRel - 0.02) * 100,
+      y1: centerYRel * 100,
+      x2: (centerXRel + 0.02) * 100,
+      y2: centerYRel * 100,
+    };
+    const vLine = {
+      x1: centerXRel * 100,
+      y1: (centerYRel - 0.02) * 100,
+      x2: centerXRel * 100,
+      y2: (centerYRel + 0.02) * 100,
+    };
     return (
       <svg
         width="100%"
@@ -1122,35 +1094,43 @@ const HoloController = () => {
         preserveAspectRatio="none"
         style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
       >
-        <rect
-          x={(centerXRel - sizeXRel / 2) * 100}
-          y={(centerYRel - sizeYRel / 2) * 100}
-          width={sizeXRel * 100}
-          height={sizeYRel * 100}
-          fill="none"
-          stroke="red"
-          strokeWidth="0.5"
-          opacity="0.8"
-        />
-        <line
-          x1={(centerXRel - 0.02) * 100}
-          y1={centerYRel * 100}
-          x2={(centerXRel + 0.02) * 100}
-          y2={centerYRel * 100}
-          stroke="red"
-          strokeWidth="0.3"
-        />
-        <line
-          x1={centerXRel * 100}
-          y1={(centerYRel - 0.02) * 100}
-          x2={centerXRel * 100}
-          y2={(centerYRel + 0.02) * 100}
-          stroke="red"
-          strokeWidth="0.3"
-        />
+        <rect {...box} stroke="#fff" strokeWidth="0.5" />
+        <rect {...box} stroke="#000" strokeWidth="0.5" strokeDasharray="1.5 1.5" />
+        <line {...hLine} stroke="#fff" strokeWidth="0.4" />
+        <line {...hLine} stroke="#000" strokeWidth="0.4" strokeDasharray="1 1" />
+        <line {...vLine} stroke="#fff" strokeWidth="0.4" />
+        <line {...vLine} stroke="#000" strokeWidth="0.4" strokeDasharray="1 1" />
       </svg>
     );
   }, [imageSize, roiSelection, roiSizeInPreview, holoState.fullFrame]);
+
+  // True while the wavelength still matches the preset of the selected colour.
+  // Editing it in Developer Options is legitimate (a measured LED peak), so we
+  // flag the mismatch rather than silently showing a colour that lies.
+  const presetWavelengthActive = useMemo(() => {
+    const preset = ILLUMINATION_PRESETS.find(
+      (p) => p.channel === holoState.colorChannel
+    );
+    return (
+      !!preset &&
+      Math.abs(holoState.wavelength * 1e9 - preset.wavelengthNm) < 1
+    );
+  }, [holoState.colorChannel, holoState.wavelength]);
+
+  // Overexposure: the backend measures clipping on the raw sensor samples in
+  // the ROI, which the JPEG preview would otherwise hide.
+  const saturatedPercent = useMemo(
+    () => ((holoState.saturatedFraction || 0) * 100).toFixed(1),
+    [holoState.saturatedFraction]
+  );
+  const isOverexposed =
+    (holoState.saturatedFraction || 0) > SATURATION_WARN_FRACTION;
+
+  const handleReduceExposure = useCallback(() => {
+    const current = Number(detectorParams.exposure);
+    if (!(current > 0)) return;
+    commitExposure(Number((current * 0.7).toFixed(3)));
+  }, [detectorParams.exposure, commitExposure]);
 
   // Hint shown when dz=0: reconstruction is just the extracted channel
   const showZeroDzHint = useMemo(() => {
@@ -1165,20 +1145,53 @@ const HoloController = () => {
         alignItems="center"
         sx={{ mb: 1 }}
       >
-        <Typography variant="h5">Inline Hologram Processing</Typography>
+        <Typography variant="h5">{t("Inline Hologram Processing")}</Typography>
         {holoState.cameraName && (
           <Chip
             size="small"
-            label={`Detector: ${holoState.cameraName}${holoState.isRGB ? " · RGB" : ""}`}
+            label={`${t("Detector")}: ${holoState.cameraName}${holoState.isRGB ? " · RGB" : ""}`}
             variant="outlined"
           />
         )}
+        <Box sx={{ flex: 1 }} />
+        <Tooltip title={t("Open the HoloBox documentation in a new tab.")}>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<MenuBookIcon />}
+            href={docsUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {t("Documentation")}
+          </Button>
+        </Tooltip>
       </Stack>
+
+      {isOverexposed && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={
+            detectorParams.mode === "manual" &&
+            Number(detectorParams.exposure) > 0 ? (
+              <Button color="inherit" size="small" onClick={handleReduceExposure}>
+                {t("Reduce by 30%")}
+              </Button>
+            ) : null
+          }
+        >
+          {t(
+            "Overexposed: {percent}% of the ROI is clipped. Clipped pixels carry no fringe information — reduce the exposure time (or the illumination) until this clears.",
+            { percent: saturatedPercent }
+          )}
+        </Alert>
+      )}
 
       {/* Control Buttons */}
       <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
         <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-          <Tooltip title="Start streaming frames from the detector into the hologram reconstruction pipeline.">
+          <Tooltip title={t("Start streaming frames from the detector into the hologram reconstruction pipeline.")}>
             <span>
               <Button
                 variant="contained"
@@ -1187,13 +1200,13 @@ const HoloController = () => {
                 onClick={handleStartProcessing}
                 disabled={holoState.isProcessing && !holoState.isPaused}
               >
-                Start
+                {t("Start")}
               </Button>
             </span>
           </Tooltip>
 
           {holoState.isPaused ? (
-            <Tooltip title="Resume processing live frames (restores previous binning).">
+            <Tooltip title={t("Resume processing live frames (restores previous binning).")}>
               <span>
                 <Button
                   variant="contained"
@@ -1202,12 +1215,12 @@ const HoloController = () => {
                   onClick={handleResumeProcessing}
                   disabled={!holoState.isProcessing}
                 >
-                  Resume
+                  {t("Resume")}
                 </Button>
               </span>
             </Tooltip>
           ) : (
-            <Tooltip title="Pause processing — re-reconstructs only the last frame (binning=1) so you can scrub dz/ROI cheaply.">
+            <Tooltip title={t("Pause processing — re-reconstructs only the last frame (binning=1) so you can scrub dz/ROI cheaply.")}>
               <span>
                 <Button
                   variant="contained"
@@ -1216,13 +1229,13 @@ const HoloController = () => {
                   onClick={handlePauseProcessing}
                   disabled={!holoState.isProcessing || holoState.isPaused}
                 >
-                  Pause
+                  {t("Pause")}
                 </Button>
               </span>
             </Tooltip>
           )}
 
-          <Tooltip title="Stop processing entirely and close the worker.">
+          <Tooltip title={t("Stop processing entirely and close the worker.")}>
             <span>
               <Button
                 variant="contained"
@@ -1231,42 +1244,42 @@ const HoloController = () => {
                 onClick={handleStopProcessing}
                 disabled={!holoState.isProcessing}
               >
-                Stop
+                {t("Stop")}
               </Button>
             </span>
           </Tooltip>
 
-          <Tooltip title="Re-read all hologram parameters from the backend.">
+          <Tooltip title={t("Re-read all hologram parameters from the backend.")}>
             <Button
               variant="outlined"
               startIcon={<RefreshIcon />}
               onClick={loadParameters}
             >
-              Refresh
+              {t("Refresh")}
             </Button>
           </Tooltip>
         </Stack>
 
         <Stack direction="row" spacing={1} mt={2} flexWrap="wrap" useFlexGap>
           <Chip
-            label={holoState.isProcessing ? "Processing" : "Stopped"}
+            label={holoState.isProcessing ? t("Processing") : t("Stopped")}
             color={holoState.isProcessing ? "success" : "default"}
             size="small"
           />
           {holoState.isPaused && (
-            <Chip label="Paused" color="warning" size="small" />
+            <Chip label={t("Paused")} color="warning" size="small" />
           )}
-          <Chip label={`Frames: ${holoState.frameCount}`} variant="outlined" size="small" />
-          <Chip label={`Processed: ${holoState.processedCount}`} variant="outlined" size="small" />
+          <Chip label={`${t("Frames")}: ${holoState.frameCount}`} variant="outlined" size="small" />
+          <Chip label={`${t("Processed")}: ${holoState.processedCount}`} variant="outlined" size="small" />
           {holoState.isStreaming && (
             <Chip
-              label={`Stream clients: ${holoState.mjpegClientCount}`}
+              label={`${t("Stream clients")}: ${holoState.mjpegClientCount}`}
               variant="outlined"
               size="small"
             />
           )}
           {holoState.bgEnabled && (
-            <Chip label="BG divide ON" color="info" size="small" />
+            <Chip label={t("BG divide ON")} color="info" size="small" />
           )}
         </Stack>
       </Paper>
@@ -1279,13 +1292,13 @@ const HoloController = () => {
         variant="scrollable"
         scrollButtons="auto"
       >
-        <Tab icon={<PlayArrowIcon />} iconPosition="start" label="Live" />
+        <Tab icon={<PlayArrowIcon />} iconPosition="start" label={t("Live")} />
         <Tab
           icon={<LayersIcon />}
           iconPosition="start"
-          label={holoState.hasBackground ? "Background ●" : "Background"}
+          label={holoState.hasBackground ? `${t("Background")} ●` : t("Background")}
         />
-        <Tab icon={<AutoAwesomeIcon />} iconPosition="start" label="Refine (HQ)" />
+        <Tab icon={<AutoAwesomeIcon />} iconPosition="start" label={t("Refine (HQ)")} />
       </Tabs>
 
       {activeTab === 0 && (
@@ -1296,8 +1309,8 @@ const HoloController = () => {
           <Card sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
             <CardContent sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
               <Stack direction="row" alignItems="center" spacing={1}>
-                <Typography variant="h6">Camera Stream</Typography>
-                <Tooltip title="Live preview from the detector. Click to set the hologram ROI.">
+                <Typography variant="h6">{t("Camera Stream")}</Typography>
+                <Tooltip title={t("Live preview from the detector. Click to set the hologram ROI.")}>
                   <InfoOutlinedIcon fontSize="small" color="action" />
                 </Tooltip>
               </Stack>
@@ -1324,10 +1337,11 @@ const HoloController = () => {
                 />
               </Box>
               <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-                Click to set ROI center (auto-applies). Preview: {imageSize.width}×{imageSize.height}px
+                {t("Click to set ROI center (auto-applies).")} {t("Preview")}:{" "}
+                {imageSize.width}×{imageSize.height}px
                 {!holoState.fullFrame &&
-                  ` | ROI: ${roiSelection.size}px → ${Math.round(roiSizeInPreview)}px preview`}
-                {holoState.fullFrame && " | Full-frame mode (ROI disabled)"}
+                  ` | ROI: ${roiSelection.size}px → ${Math.round(roiSizeInPreview)}px`}
+                {holoState.fullFrame && ` | ${t("Full-frame mode (ROI disabled)")}`}
               </Typography>
             </CardContent>
           </Card>
@@ -1337,12 +1351,12 @@ const HoloController = () => {
           <Card sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
             <CardContent sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
               <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-                <Typography variant="h6">Processed Hologram</Typography>
-                <Tooltip title="Reconstructed intensity at the current propagation distance dz. When dz=0 this is just the selected colour channel of the ROI.">
+                <Typography variant="h6">{t("Processed Hologram")}</Typography>
+                <Tooltip title={t("Reconstructed intensity at the current propagation distance dz. When dz=0 this is just the selected colour channel of the ROI.")}>
                   <InfoOutlinedIcon fontSize="small" color="action" />
                 </Tooltip>
                 <Box sx={{ flex: 1 }} />
-                <Tooltip title="Show the raw, in-focus hologram (reconstruct at dz=0) instead of the dz set with the slider">
+                <Tooltip title={t("Show the raw, in-focus hologram (reconstruct at dz=0) instead of the dz set with the slider")}>
                   <FormControlLabel
                     control={
                       <Switch
@@ -1351,11 +1365,11 @@ const HoloController = () => {
                         onChange={handleShowRawToggle}
                       />
                     }
-                    label="Raw (dz=0)"
+                    label={t("Raw (dz=0)")}
                     sx={{ mr: 0 }}
                   />
                 </Tooltip>
-                <Tooltip title="Re-open the MJPEG stream (use if the processed view freezes).">
+                <Tooltip title={t("Re-open the MJPEG stream (use if the processed view freezes).")}>
                   <IconButton size="small" onClick={handleRestartProcessedStream}>
                     <RestartAltIcon fontSize="small" />
                   </IconButton>
@@ -1371,19 +1385,21 @@ const HoloController = () => {
                       size="small"
                       onClick={handleRestartProcessedStream}
                     >
-                      Restart
+                      {t("Restart")}
                     </Button>
                   }
                 >
-                  Processed stream stalled — no frames for &gt;
-                  {Math.round(PROCESSED_STREAM_STALL_MS / 1000)} s.
+                  {t("Processed stream stalled — no frames for more than {seconds} s.", {
+                    seconds: Math.round(PROCESSED_STREAM_STALL_MS / 1000),
+                  })}
                 </Alert>
               )}
               {showZeroDzHint && (
                 <Alert severity="info" sx={{ mt: 1, mb: 1 }}>
-                  dz = 0: showing the extracted{" "}
-                  <strong>{holoState.colorChannel}</strong> channel of the ROI
-                  (no propagation).
+                  {t(
+                    "dz = 0: showing the extracted {channel} channel of the ROI (no propagation).",
+                    { channel: t(holoState.colorChannel) }
+                  )}
                 </Alert>
               )}
               <Box
@@ -1422,8 +1438,8 @@ const HoloController = () => {
       {/* dz slider — with configurable max + step */}
       <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
         <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-          <Typography variant="h6">Propagation Distance (dz)</Typography>
-          <Tooltip title="Distance from sensor to virtual image plane. Larger values reconstruct objects farther from the sensor.">
+          <Typography variant="h6">{t("Propagation Distance (dz)")}</Typography>
+          <Tooltip title={t("Distance from sensor to virtual image plane. Larger values reconstruct objects farther from the sensor.")}>
             <InfoOutlinedIcon fontSize="small" color="action" />
           </Tooltip>
         </Stack>
@@ -1454,24 +1470,24 @@ const HoloController = () => {
           </Grid>
           <Grid item xs={6} md={2}>
             <FreeNumberField
-              label="Max dz (mm)"
+              label={t("Max dz (mm)")}
               value={holoState.dzMax}
               onCommit={commitDzMax}
               unitFactor={1e-3}
               fixedDecimals={2}
-              tooltip="Upper bound of the slider in millimeters."
+              tooltip={t("Upper bound of the slider in millimeters.")}
               min={1e-6}
               size="small"
             />
           </Grid>
           <Grid item xs={6} md={2}>
             <FreeNumberField
-              label="Step (µm)"
+              label={t("Step (µm)")}
               value={holoState.dzStep}
               onCommit={commitDzStep}
               unitFactor={1e-6}
               fixedDecimals={2}
-              tooltip="Slider step size in micrometers."
+              tooltip={t("Slider step size in micrometers.")}
               min={1e-9}
               size="small"
             />
@@ -1482,7 +1498,7 @@ const HoloController = () => {
       {/* Detector exposure / gain / colour panel */}
       <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
         <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-          <Typography variant="h6">Detector</Typography>
+          <Typography variant="h6">{t("Detector")}</Typography>
           <Tooltip
             title={
               <Box sx={{ whiteSpace: "pre-line" }}>
@@ -1506,52 +1522,87 @@ const HoloController = () => {
         </Stack>
         <Grid container spacing={2} alignItems="center">
           <Grid item xs={12} sm={6} md={3}>
+            <Tooltip
+              arrow
+              title={t(
+                "Illumination colour. Sets both the RGB channel that is reconstructed and the wavelength used for propagation. 'White' averages all channels."
+              )}
+            >
+              <FormControl size="small" fullWidth>
+                <InputLabel id="illumination-label">
+                  {t("Illumination colour")}
+                </InputLabel>
+                <Select
+                  labelId="illumination-label"
+                  value={holoState.colorChannel}
+                  label={t("Illumination colour")}
+                  onChange={(e) => handleIlluminationChange(e.target.value)}
+                >
+                  {ILLUMINATION_PRESETS.map((preset) => (
+                    <MenuItem key={preset.channel} value={preset.channel}>
+                      {t(preset.label)} — {preset.wavelengthNm} nm
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Tooltip>
+            <Typography
+              variant="caption"
+              color={presetWavelengthActive ? "text.secondary" : "warning.main"}
+            >
+              {t("Reconstructing at {nm} nm", {
+                nm: (holoState.wavelength * 1e9).toFixed(0),
+              })}
+              {!presetWavelengthActive && ` (${t("custom")})`}
+            </Typography>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
             <FreeNumberField
-              label="Exposure (ms)"
+              label={t("Exposure (ms)")}
               value={
                 detectorParams.exposure === ""
                   ? null
                   : Number(detectorParams.exposure)
               }
               onCommit={commitExposure}
-              tooltip="Sensor integration time in milliseconds."
+              tooltip={t("Sensor integration time in milliseconds.")}
               disabled={detectorParams.mode === "auto"}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
             <FreeNumberField
-              label="Gain"
+              label={t("Gain")}
               value={
                 detectorParams.gain === ""
                   ? null
                   : Number(detectorParams.gain)
               }
               onCommit={commitGain}
-              tooltip="Analog gain (sensor-dependent units)."
+              tooltip={t("Analog gain (sensor-dependent units).")}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
             <Tooltip
               arrow
-              title="Manual: fixed exposure. Auto: camera adapts exposure each frame."
+              title={t("Manual: fixed exposure. Auto: camera adapts exposure each frame.")}
               placement="top-start"
             >
               <FormControl size="small" fullWidth>
-                <InputLabel id="exposure-mode-label">Exposure mode</InputLabel>
+                <InputLabel id="exposure-mode-label">{t("Exposure mode")}</InputLabel>
                 <Select
                   labelId="exposure-mode-label"
                   value={detectorParams.mode}
-                  label="Exposure mode"
+                  label={t("Exposure mode")}
                   onChange={(e) => handleExposureModeChange(e.target.value)}
                 >
-                  <MenuItem value="manual">Manual</MenuItem>
-                  <MenuItem value="auto">Auto</MenuItem>
+                  <MenuItem value="manual">{t("Manual")}</MenuItem>
+                  <MenuItem value="auto">{t("Auto")}</MenuItem>
                 </Select>
               </FormControl>
             </Tooltip>
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
-            <Tooltip title="Run a single auto-exposure pass, then return to manual." arrow>
+            <Tooltip title={t("Run a single auto-exposure pass, then return to manual.")} arrow>
               <span>
                 <Button
                   size="small"
@@ -1560,7 +1611,7 @@ const HoloController = () => {
                   onClick={handleExposureAutoOnce}
                   disabled={detectorParams.mode !== "manual" || autoOncePending}
                 >
-                  Exposure Auto Once
+                  {t("Exposure Auto Once")}
                 </Button>
               </span>
             </Tooltip>
@@ -1571,8 +1622,8 @@ const HoloController = () => {
           <>
             <Divider sx={{ my: 2 }} />
             <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-              <Typography variant="subtitle1">White balance</Typography>
-              <Tooltip title="Tip: under a monochromatic laser, leave AWB on Manual with neutral (1.0/1.0) gains. AWB tries to balance the scene to white and pushes the opposite-channel gain way up under a single-colour source, which is what makes a red laser look blue.">
+              <Typography variant="subtitle1">{t("White balance")}</Typography>
+              <Tooltip title={t("Tip: under a monochromatic laser, leave AWB on Manual with neutral (1.0/1.0) gains. AWB tries to balance the scene to white and pushes the opposite-channel gain way up under a single-colour source, which is what makes a red laser look blue.")}>
                 <InfoOutlinedIcon fontSize="small" color="action" />
               </Tooltip>
             </Stack>
@@ -1580,53 +1631,53 @@ const HoloController = () => {
               <Grid item xs={12} sm={6} md={3}>
                 <Tooltip
                   arrow
-                  title="Auto: continuous (bad under laser). Manual: fixed gains. Once: measure now and lock."
+                  title={t("Auto: continuous (bad under laser). Manual: fixed gains. Once: measure now and lock.")}
                 >
                   <FormControl size="small" fullWidth>
-                    <InputLabel id="awb-mode-label">AWB mode</InputLabel>
+                    <InputLabel id="awb-mode-label">{t("AWB mode")}</InputLabel>
                     <Select
                       labelId="awb-mode-label"
                       value={detectorParams.awb_mode || "manual"}
-                      label="AWB mode"
+                      label={t("AWB mode")}
                       onChange={(e) => handleAwbModeChange(e.target.value)}
                     >
                       <MenuItem value="manual">Manual</MenuItem>
                       <MenuItem value="auto">Auto</MenuItem>
-                      <MenuItem value="once">Once (lock now)</MenuItem>
+                      <MenuItem value="once">{t("Once (lock now)")}</MenuItem>
                     </Select>
                   </FormControl>
                 </Tooltip>
               </Grid>
               <Grid item xs={6} sm={3} md={2}>
                 <FreeNumberField
-                  label="Red gain"
+                  label={t("Red gain")}
                   value={
                     detectorParams.red_gain === null
                       ? null
                       : Number(detectorParams.red_gain)
                   }
                   onCommit={(v) => commitColourGain("red", v)}
-                  tooltip="Red channel gain. Neutral = 1.0."
+                  tooltip={t("Red channel gain. Neutral = 1.0.")}
                   disabled={detectorParams.awb_mode === "auto"}
                 />
               </Grid>
               <Grid item xs={6} sm={3} md={2}>
                 <FreeNumberField
-                  label="Blue gain"
+                  label={t("Blue gain")}
                   value={
                     detectorParams.blue_gain === null
                       ? null
                       : Number(detectorParams.blue_gain)
                   }
                   onCommit={(v) => commitColourGain("blue", v)}
-                  tooltip="Blue channel gain. Neutral = 1.0."
+                  tooltip={t("Blue channel gain. Neutral = 1.0.")}
                   disabled={detectorParams.awb_mode === "auto"}
                 />
               </Grid>
               <Grid item xs={12} sm={6} md={2}>
                 <Tooltip
                   arrow
-                  title="Run AWB once, lock the resulting gains. Point camera at a white target first."
+                  title={t("Run AWB once, lock the resulting gains. Point camera at a white target first.")}
                 >
                   <span>
                     <Button
@@ -1636,7 +1687,7 @@ const HoloController = () => {
                       onClick={handleAwbOnce}
                       disabled={awbOncePending}
                     >
-                      AWB Once
+                      {t("AWB Once")}
                     </Button>
                   </span>
                 </Tooltip>
@@ -1644,7 +1695,7 @@ const HoloController = () => {
               <Grid item xs={12} sm={6} md={3}>
                 <Tooltip
                   arrow
-                  title="Reset both gains to 1.0 — neutral, no per-channel correction."
+                  title={t("Reset both gains to 1.0 — neutral, no per-channel correction.")}
                 >
                   <span>
                     <Button
@@ -1657,7 +1708,7 @@ const HoloController = () => {
                         await commitColourGain("blue", 1.0);
                       }}
                     >
-                      Neutral gains (1.0)
+                      {t("Neutral gains (1.0)")}
                     </Button>
                   </span>
                 </Tooltip>
@@ -1671,16 +1722,16 @@ const HoloController = () => {
       <Accordion sx={{ mb: 2 }}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <CenterFocusStrongIcon sx={{ mr: 1 }} />
-          <Typography>Focus Sweep (auto dz)</Typography>
+          <Typography>{t("Focus Sweep (auto dz)")}</Typography>
           {sweep.running && (
-            <Chip label="Running" color="success" size="small" sx={{ ml: 2 }} />
+            <Chip label={t("Running")} color="success" size="small" sx={{ ml: 2 }} />
           )}
         </AccordionSummary>
         <AccordionDetails>
           <Grid container spacing={2} alignItems="center">
             <Grid item xs={12} sm={4}>
               <TextField
-                label="Start dz (µm)"
+                label={t("Start dz (µm)")}
                 type="number"
                 value={sweep.startUm}
                 onChange={(e) =>
@@ -1693,7 +1744,7 @@ const HoloController = () => {
             </Grid>
             <Grid item xs={12} sm={4}>
               <TextField
-                label="End dz (µm)"
+                label={t("End dz (µm)")}
                 type="number"
                 value={sweep.endUm}
                 onChange={(e) =>
@@ -1706,7 +1757,7 @@ const HoloController = () => {
             </Grid>
             <Grid item xs={12} sm={4}>
               <TextField
-                label="Steps (< 20)"
+                label={t("Steps (< 20)")}
                 type="number"
                 value={sweep.steps}
                 onChange={(e) =>
@@ -1727,7 +1778,7 @@ const HoloController = () => {
               onClick={startFocusSweep}
               disabled={sweep.running}
             >
-              Start Sweep
+              {t("Start Sweep")}
             </Button>
             <Button
               variant="contained"
@@ -1744,8 +1795,9 @@ const HoloController = () => {
             color="text.secondary"
             sx={{ mt: 1, display: "block" }}
           >
-            Steps dz from start to end (1 step/second) and loops until stopped.
-            Stop keeps the currently active dz. Maximum 19 steps.
+            {t(
+              "Steps dz from start to end (1 step/second) and loops until stopped. Stop keeps the currently active dz. Maximum 19 steps."
+            )}
           </Typography>
         </AccordionDetails>
       </Accordion>
@@ -1754,13 +1806,13 @@ const HoloController = () => {
       <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
         <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
           <Stack direction="row" alignItems="center" spacing={1}>
-            <Typography variant="h6">ROI Selection</Typography>
-            <Tooltip title="Square crop in sensor pixels that gets propagated. Set to full-frame to skip cropping entirely.">
+            <Typography variant="h6">{t("ROI Selection")}</Typography>
+            <Tooltip title={t("Square crop in sensor pixels that gets propagated. Set to full-frame to skip cropping entirely.")}>
               <InfoOutlinedIcon fontSize="small" color="action" />
             </Tooltip>
           </Stack>
           <Stack direction="row" spacing={1} alignItems="center">
-            <Tooltip title="Bypass the ROI crop and reconstruct the full sensor (with software binning applied).">
+            <Tooltip title={t("Bypass the ROI crop and reconstruct the full sensor (with software binning applied).")}>
               <FormControlLabel
                 control={
                   <Switch
@@ -1769,10 +1821,10 @@ const HoloController = () => {
                     onChange={(e) => commitParam("full_frame", e.target.checked)}
                   />
                 }
-                label="Full frame"
+                label={t("Full frame")}
               />
             </Tooltip>
-            <Tooltip title="Reset ROI to image center, size 256px.">
+            <Tooltip title={t("Reset ROI to image center, size 256px.")}>
               <IconButton onClick={handleResetRoi} size="small">
                 <CenterFocusStrongIcon />
               </IconButton>
@@ -1782,7 +1834,7 @@ const HoloController = () => {
 
         <Grid container spacing={2}>
           <Grid item xs={12} sm={4}>
-            <Typography gutterBottom>Center X (relative to center)</Typography>
+            <Typography gutterBottom>{t("Center X (relative to center)")}</Typography>
             <Slider
               value={roiSelection.centerX}
               onChange={handleRoiCenterXChange}
@@ -1799,7 +1851,7 @@ const HoloController = () => {
             />
           </Grid>
           <Grid item xs={12} sm={4}>
-            <Typography gutterBottom>Center Y (relative to center)</Typography>
+            <Typography gutterBottom>{t("Center Y (relative to center)")}</Typography>
             <Slider
               value={roiSelection.centerY}
               onChange={handleRoiCenterYChange}
@@ -1817,8 +1869,8 @@ const HoloController = () => {
           </Grid>
           <Grid item xs={12} sm={4}>
             <Typography gutterBottom>
-              ROI Size: {roiSelection.size}px (backend) /{" "}
-              {Math.round(roiSizeInPreview)}px (preview)
+              {t("ROI Size")}: {roiSelection.size}px ({t("backend")}) /{" "}
+              {Math.round(roiSizeInPreview)}px ({t("preview")})
             </Typography>
             <Slider
               value={roiSelection.size}
@@ -1837,7 +1889,9 @@ const HoloController = () => {
               ]}
             />
             <Typography variant="caption" color="text.secondary">
-              Scaling: {totalScalingFactor}× (subsampling: {getActiveSubsamplingFactor()}, binning: {holoState.binning || 1})
+              {t("Scaling")}: {totalScalingFactor}× ({t("subsampling")}:{" "}
+              {getActiveSubsamplingFactor()}, {t("binning")}:{" "}
+              {holoState.binning || 1})
             </Typography>
           </Grid>
         </Grid>
@@ -1850,56 +1904,60 @@ const HoloController = () => {
           sx={{ mt: 2 }}
           disabled={holoState.fullFrame}
         >
-          Apply ROI
+          {t("Apply ROI")}
         </Button>
       </Paper>
 
-      {/* Developer Options */}
-      <Accordion>
+      {/* Developer Options — expanded by default: these are the knobs people
+          actually reach for (pixel size, binning, flips), and having to open an
+          accordion every visit was pure friction. */}
+      <Accordion defaultExpanded>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <SettingsIcon sx={{ mr: 1 }} />
-          <Typography>Developer Options</Typography>
+          <Typography>{t("Developer Options")}</Typography>
         </AccordionSummary>
         <AccordionDetails>
           <Grid container spacing={2}>
             <Grid item xs={12} sm={6} md={4}>
               <FreeNumberField
-                label="Pixel Size (µm)"
+                label={t("Pixel Size (µm)")}
                 value={holoState.pixelsize}
                 onCommit={(v) => commitParam("pixelsize", v)}
                 unitFactor={1e-6}
                 fixedDecimals={3}
-                tooltip="Effective sensor pixel size before binning. Binning factor is applied automatically by the propagator."
+                tooltip={t("Effective sensor pixel size before binning. Binning factor is applied automatically by the propagator.")}
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <FreeNumberField
-                label="Wavelength (nm)"
+                label={t("Wavelength (nm)")}
                 value={holoState.wavelength}
                 onCommit={(v) => commitParam("wavelength", v)}
                 unitFactor={1e-9}
                 fixedDecimals={1}
-                tooltip="Illumination wavelength in nanometers. Common values: 405, 488, 532, 638, 660 nm."
+                tooltip={t(
+                  "Illumination wavelength in nanometers. Normally set by the Illumination colour dropdown; override it here to match a measured LED peak."
+                )}
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <FreeNumberField
-                label="Numerical Aperture (NA)"
+                label={t("Numerical Aperture (NA)")}
                 value={holoState.na}
                 onCommit={(v) => commitParam("na", v)}
-                tooltip="Reserved for future band-limiting; currently informational only."
+                tooltip={t("Reserved for future band-limiting; currently informational only.")}
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <Tooltip
                 arrow
-                title="Software binning factor applied before propagation. Larger = faster, lower resolution."
+                title={t("Software binning factor applied before propagation. Larger = faster, lower resolution.")}
               >
                 <FormControl size="small" fullWidth>
-                  <InputLabel>Binning</InputLabel>
+                  <InputLabel>{t("Binning")}</InputLabel>
                   <Select
                     value={holoState.binning}
-                    label="Binning"
+                    label={t("Binning")}
                     onChange={(e) => commitParam("binning", e.target.value)}
                   >
                     <MenuItem value={1}>1×1</MenuItem>
@@ -1911,35 +1969,15 @@ const HoloController = () => {
               </Tooltip>
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
-              <Tooltip
-                arrow
-                title="Which colour channel of the (RGB) raw frame to reconstruct. 'White' takes the mean of all channels (luminance-like)."
-              >
-                <FormControl size="small" fullWidth>
-                  <InputLabel>Color Channel</InputLabel>
-                  <Select
-                    value={holoState.colorChannel}
-                    label="Color Channel"
-                    onChange={(e) => commitParam("color_channel", e.target.value)}
-                  >
-                    <MenuItem value="red">Red</MenuItem>
-                    <MenuItem value="green">Green</MenuItem>
-                    <MenuItem value="blue">Blue</MenuItem>
-                    <MenuItem value="white">White (mean)</MenuItem>
-                  </Select>
-                </FormControl>
-              </Tooltip>
-            </Grid>
-            <Grid item xs={12} sm={6} md={4}>
               <FreeNumberField
-                label="Update Frequency (Hz)"
+                label={t("Update Frequency (Hz)")}
                 value={holoState.updateFreq}
                 onCommit={(v) => commitParam("update_freq", v)}
-                tooltip="Target processing rate. Higher = more CPU. The actual rate is bounded by camera fps and reconstruction cost."
+                tooltip={t("Target processing rate. Higher = more CPU. The actual rate is bounded by camera fps and reconstruction cost.")}
               />
             </Grid>
             <Grid item xs={12} sm={4}>
-              <Tooltip arrow title="Mirror image horizontally before reconstruction.">
+              <Tooltip arrow title={t("Mirror image horizontally before reconstruction.")}>
                 <FormControlLabel
                   control={
                     <Switch
@@ -1947,12 +1985,12 @@ const HoloController = () => {
                       onChange={(e) => commitParam("flip_x", e.target.checked)}
                     />
                   }
-                  label="Flip X"
+                  label={t("Flip X")}
                 />
               </Tooltip>
             </Grid>
             <Grid item xs={12} sm={4}>
-              <Tooltip arrow title="Mirror image vertically before reconstruction.">
+              <Tooltip arrow title={t("Mirror image vertically before reconstruction.")}>
                 <FormControlLabel
                   control={
                     <Switch
@@ -1960,20 +1998,20 @@ const HoloController = () => {
                       onChange={(e) => commitParam("flip_y", e.target.checked)}
                     />
                   }
-                  label="Flip Y"
+                  label={t("Flip Y")}
                 />
               </Tooltip>
             </Grid>
             <Grid item xs={12} sm={4}>
               <Tooltip
                 arrow
-                title="Rotate image counter-clockwise before reconstruction (in degrees)."
+                title={t("Rotate image counter-clockwise before reconstruction (in degrees).")}
               >
                 <FormControl size="small" fullWidth>
-                  <InputLabel>Rotation</InputLabel>
+                  <InputLabel>{t("Rotation")}</InputLabel>
                   <Select
                     value={holoState.rotation}
-                    label="Rotation"
+                    label={t("Rotation")}
                     onChange={(e) => commitParam("rotation", e.target.value)}
                   >
                     <MenuItem value={0}>0°</MenuItem>
@@ -1996,25 +2034,28 @@ const HoloController = () => {
           <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
             <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
               <LayersIcon color="action" />
-              <Typography variant="h6">Background Normalization</Typography>
-              <Tooltip title="Divides every live frame by a stored background image. Removes the static illumination envelope, fixed-pattern speckle (dust on fiber tip / slide / sensor glass) and the |R|² pedestal — multiplicative artifacts, so we divide, not subtract. The single biggest cheap win.">
+              <Typography variant="h6">{t("Background Normalization")}</Typography>
+              <Tooltip title={t("Divides every live frame by a stored background image. Removes the static illumination envelope, fixed-pattern speckle (dust on fiber tip / slide / sensor glass) and the |R|² pedestal — multiplicative artifacts, so we divide, not subtract. The single biggest cheap win.")}>
                 <InfoOutlinedIcon fontSize="small" color="action" />
               </Tooltip>
             </Stack>
 
             <Alert severity="info" sx={{ mb: 2 }}>
-              <strong>Median burst</strong> — capture with the sample{" "}
-              <em>in view</em>; moving objects wash out, leaving the static
-              illumination/speckle.
+              <strong>{t("Median burst")}</strong>{" "}
+              {t(
+                "— capture with the sample in view; moving objects wash out, leaving the static illumination/speckle."
+              )}
               <br />
-              <strong>Snapshot</strong> — for static samples: move the sample{" "}
-              <em>out of the FOV</em> first, then capture.
+              <strong>{t("Snapshot")}</strong>{" "}
+              {t(
+                "— for static samples: move the sample out of the FOV first, then capture."
+              )}
             </Alert>
 
             <Grid container spacing={2} alignItems="center" sx={{ mb: 1 }}>
               <Grid item xs={6} sm={3} md={2}>
                 <TextField
-                  label="Burst frames"
+                  label={t("Burst frames")}
                   type="number"
                   size="small"
                   fullWidth
@@ -2040,7 +2081,7 @@ const HoloController = () => {
                   onClick={() => handleAcquireBackground("median")}
                   disabled={bgBusy}
                 >
-                  Acquire (median burst)
+                  {t("Acquire (median burst)")}
                 </Button>
               </Grid>
               <Grid item xs={12} sm={4} md={3}>
@@ -2057,11 +2098,11 @@ const HoloController = () => {
                   onClick={() => handleAcquireBackground("snapshot")}
                   disabled={bgBusy}
                 >
-                  Acquire (snapshot)
+                  {t("Acquire (snapshot)")}
                 </Button>
               </Grid>
               <Grid item xs={12} sm={12} md={3}>
-                <Tooltip title="Remove the stored background and turn off live division.">
+                <Tooltip title={t("Remove the stored background and turn off live division.")}>
                   <span>
                     <Button
                       variant="text"
@@ -2071,7 +2112,7 @@ const HoloController = () => {
                       onClick={handleClearBackground}
                       disabled={!holoState.hasBackground || bgBusy}
                     >
-                      Clear
+                      {t("Clear")}
                     </Button>
                   </span>
                 </Tooltip>
@@ -2085,7 +2126,7 @@ const HoloController = () => {
               flexWrap="wrap"
               useFlexGap
             >
-              <Tooltip title="Divide every live frame by this background. Disabled until a background is acquired.">
+              <Tooltip title={t("Divide every live frame by this background. Disabled until a background is acquired.")}>
                 <FormControlLabel
                   control={
                     <Switch
@@ -2094,13 +2135,15 @@ const HoloController = () => {
                       disabled={!holoState.hasBackground}
                     />
                   }
-                  label="Divide out background (live)"
+                  label={t("Divide out background (live)")}
                 />
               </Tooltip>
               <Chip
                 size="small"
                 label={
-                  holoState.hasBackground ? "Background stored" : "No background"
+                  holoState.hasBackground
+                    ? t("Background stored")
+                    : t("No background")
                 }
                 color={holoState.hasBackground ? "success" : "default"}
                 variant={holoState.hasBackground ? "filled" : "outlined"}
@@ -2109,7 +2152,7 @@ const HoloController = () => {
                 <Chip
                   size="small"
                   variant="outlined"
-                  label={`${holoState.backgroundMeta.mode} · ${holoState.backgroundMeta.width}×${holoState.backgroundMeta.height} · ${holoState.backgroundMeta.num_frames} frames`}
+                  label={`${holoState.backgroundMeta.mode} · ${holoState.backgroundMeta.width}×${holoState.backgroundMeta.height} · ${holoState.backgroundMeta.num_frames} ${t("frames")}`}
                 />
               )}
             </Stack>
@@ -2118,8 +2161,8 @@ const HoloController = () => {
           <Card>
             <CardContent>
               <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-                <Typography variant="h6">Background Preview</Typography>
-                <Tooltip title="The stored background (current colour channel), downsampled for display.">
+                <Typography variant="h6">{t("Background Preview")}</Typography>
+                <Tooltip title={t("The stored background (current colour channel), downsampled for display.")}>
                   <InfoOutlinedIcon fontSize="small" color="action" />
                 </Tooltip>
               </Stack>
@@ -2144,7 +2187,7 @@ const HoloController = () => {
                   />
                 ) : (
                   <Typography variant="body2" color="text.secondary">
-                    No background acquired yet.
+                    {t("No background acquired yet.")}
                   </Typography>
                 )}
               </Box>
@@ -2159,43 +2202,44 @@ const HoloController = () => {
           <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
             <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
               <AutoAwesomeIcon color="action" />
-              <Typography variant="h6">High-Quality Reconstruction</Typography>
-              <Tooltip title="Iterative single-shot reconstruction. Uses the current dz and (if enabled) the background normalization. Phase retrieval suppresses the twin image; TV-regularized additionally smooths speckle while preserving edges. Takes a few seconds.">
+              <Typography variant="h6">{t("High-Quality Reconstruction")}</Typography>
+              <Tooltip title={t("Iterative single-shot reconstruction. Uses the current dz and (if enabled) the background normalization. Phase retrieval suppresses the twin image; TV-regularized additionally smooths speckle while preserving edges. Takes a few seconds.")}>
                 <InfoOutlinedIcon fontSize="small" color="action" />
               </Tooltip>
             </Stack>
 
             <Alert severity="info" sx={{ mb: 2 }}>
-              Reconstructs the latest frame at the current <strong>dz</strong> (
-              {(holoState.dz * 1e6).toFixed(1)} µm)
+              {t("Reconstructs the latest frame at the current dz ({dz} µm)", {
+                dz: (holoState.dz * 1e6).toFixed(1),
+              })}
               {holoState.bgEnabled
-                ? " with background division."
+                ? ` ${t("with background division.")}`
                 : "."}{" "}
-              Focus dz on the <strong>Live</strong> tab first.
+              {t("Focus dz on the Live tab first.")}
             </Alert>
 
             <Grid container spacing={2} alignItems="center">
               <Grid item xs={12} sm={6} md={4}>
                 <FormControl size="small" fullWidth>
-                  <InputLabel id="refine-method-label">Method</InputLabel>
+                  <InputLabel id="refine-method-label">{t("Method")}</InputLabel>
                   <Select
                     labelId="refine-method-label"
                     value={holoState.refineMethod}
-                    label="Method"
+                    label={t("Method")}
                     onChange={(e) =>
                       dispatch(holoSlice.setRefineMethod(e.target.value))
                     }
                   >
                     <MenuItem value="phase_retrieval">
-                      Phase retrieval (twin-image removal)
+                      {t("Phase retrieval (twin-image removal)")}
                     </MenuItem>
-                    <MenuItem value="tv">TV-regularized</MenuItem>
+                    <MenuItem value="tv">{t("TV-regularized")}</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
               <Grid item xs={6} sm={3} md={2}>
                 <TextField
-                  label="Iterations"
+                  label={t("Iterations")}
                   type="number"
                   size="small"
                   fullWidth
@@ -2227,8 +2271,8 @@ const HoloController = () => {
                   disabled={reconstructing || holoState.isRefining}
                 >
                   {reconstructing || holoState.isRefining
-                    ? "Reconstructing..."
-                    : "Reconstruct (high quality)"}
+                    ? t("Reconstructing...")
+                    : t("Reconstruct (high quality)")}
                 </Button>
               </Grid>
             </Grid>
@@ -2236,13 +2280,13 @@ const HoloController = () => {
             <Accordion sx={{ mt: 2 }}>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                 <SettingsIcon sx={{ mr: 1 }} />
-                <Typography>Advanced</Typography>
+                <Typography>{t("Advanced")}</Typography>
               </AccordionSummary>
               <AccordionDetails>
                 <Grid container spacing={2}>
                   <Grid item xs={12} sm={6}>
                     <FreeNumberField
-                      label="Support threshold"
+                      label={t("Support threshold")}
                       value={holoState.refineSupportThreshold}
                       onCommit={(v) =>
                         dispatch(holoSlice.setRefineSupportThreshold(v))
@@ -2250,17 +2294,17 @@ const HoloController = () => {
                       fixedDecimals={2}
                       min={0}
                       max={1}
-                      tooltip="Object-support threshold (0–1). Higher = tighter support (less of the field is treated as object). Used by both methods."
+                      tooltip={t("Object-support threshold (0–1). Higher = tighter support (less of the field is treated as object). Used by both methods.")}
                     />
                   </Grid>
                   <Grid item xs={12} sm={6}>
                     <FreeNumberField
-                      label="TV weight"
+                      label={t("TV weight")}
                       value={holoState.refineTvWeight}
                       onCommit={(v) => dispatch(holoSlice.setRefineTvWeight(v))}
                       fixedDecimals={3}
                       min={0}
-                      tooltip="Total-variation regularization strength (TV-regularized method only). Higher = smoother, more speckle suppression, softer edges."
+                      tooltip={t("Total-variation regularization strength (TV-regularized method only). Higher = smoother, more speckle suppression, softer edges.")}
                       disabled={holoState.refineMethod !== "tv"}
                     />
                   </Grid>
@@ -2272,7 +2316,7 @@ const HoloController = () => {
           <Card>
             <CardContent>
               <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-                <Typography variant="h6">Reconstruction</Typography>
+                <Typography variant="h6">{t("Reconstruction")}</Typography>
                 <Box sx={{ flex: 1 }} />
                 <ToggleButtonGroup
                   size="small"
@@ -2280,8 +2324,8 @@ const HoloController = () => {
                   value={holoState.refineView}
                   onChange={(e, v) => v && dispatch(holoSlice.setRefineView(v))}
                 >
-                  <ToggleButton value="amplitude">Amplitude</ToggleButton>
-                  <ToggleButton value="phase">Phase</ToggleButton>
+                  <ToggleButton value="amplitude">{t("Amplitude")}</ToggleButton>
+                  <ToggleButton value="phase">{t("Phase")}</ToggleButton>
                 </ToggleButtonGroup>
               </Stack>
               {refineInfo && (
@@ -2291,9 +2335,10 @@ const HoloController = () => {
                   sx={{ mb: 1, display: "block" }}
                 >
                   {refineInfo.method === "tv"
-                    ? "TV-regularized"
-                    : "Phase retrieval"}{" "}
-                  · {refineInfo.iterations} iterations · {refineInfo.elapsed}s
+                    ? t("TV-regularized")
+                    : t("Phase retrieval")}{" "}
+                  · {refineInfo.iterations} {t("iterations")} ·{" "}
+                  {refineInfo.elapsed}s
                 </Typography>
               )}
               <Box
@@ -2323,7 +2368,7 @@ const HoloController = () => {
                   />
                 ) : (
                   <Typography variant="body2" color="text.secondary">
-                    Press "Reconstruct (high quality)" to compute.
+                    {t('Press "Reconstruct (high quality)" to compute.')}
                   </Typography>
                 )}
               </Box>

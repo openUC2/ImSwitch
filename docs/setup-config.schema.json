@@ -1,0 +1,1854 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/openUC2/ImSwitch/setup-config.schema.json",
+  "title": "ImSwitch setup configuration",
+  "description": "Schema for the hardware-control setup JSON consumed by ImSwitch (imswitch/imcontrol/model/SetupInfo.py + imswitch/imcontrol/view/guitools/ViewSetupInfo.py). additionalProperties is true at the top level because SetupInfo is parsed with dataclasses_json Undefined.INCLUDE, and per-device 'managerProperties' dicts are intentionally free-form / driver-specific and not modeled here. See docs/SETUP_JSON_SCHEMA_REFERENCE.md for the field-by-field reference and a list of known divergences between this schema and real-world config files.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "detectors": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/DetectorInfo"
+      },
+      "description": "Detectors in this setup. This is a map from unique detector names to DetectorInfo objects."
+    },
+    "lasers": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/LaserInfo"
+      },
+      "description": "Lasers in this setup. This is a map from unique laser names to LaserInfo objects."
+    },
+    "LEDs": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/LEDInfo"
+      },
+      "description": "LEDs in this setup. This is a map from unique laser names to LEDInfo objects."
+    },
+    "LEDMatrixs": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/LEDMatrixInfo"
+      },
+      "description": "LEDMatrixs in this setup. This is a map from unique LEDMatrix names to LEDMatrixInfo objects."
+    },
+    "positioners": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/PositionerInfo"
+      },
+      "description": "Positioners in this setup. This is a map from unique positioner names to DetectorInfo objects."
+    },
+    "galvoScanners": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/GalvoScannerInfo"
+      },
+      "description": "Galvo scanners in this setup. This is a map from unique galvo scanner names to GalvoScannerInfo objects. Used for high-speed laser scanning microscopy."
+    },
+    "flimLabs": {
+      "anyOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Persisted settings for the FLIM LABS bridge (remote flim-imager server host/port, laser sync, channels, calibration reference, galvo-sync options). Free-form dict written by GalvoScannerController.setFlimLabsConfig; ``null`` when nothing has been saved. Note: this is the *browser-side* bridge panel's state. To use the FLIM card as a regular 2D detector from the backend (ExperimentController, autofocus, snap), add a ``FLIMLabsDetectorManager`` entry under ``detectors`` instead \u2014 see that manager's docstring for the property list."
+    },
+    "rs232devices": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/RS232Info"
+      },
+      "description": "RS232 connections in this setup. This is a map from unique RS232 connection names to RS232Info objects. Some detector/laser/positioner managers will require a corresponding RS232 connection to be referenced in their properties."
+    },
+    "mmcoreSettings": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MMCoreSettingsInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Persisted MMCore (Micro-Manager) camera settings, re-applied on startup by the MMCoreController. ``null`` when no settings have been saved."
+    },
+    "slm": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SLMInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "SLM settings. Required to be defined to use SLM functionality."
+    },
+    "sim": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SIMInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "SIM settings. Required to be defined to use SIM functionality."
+    },
+    "dpc": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DPCInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "DPC settings. Required to be defined to use DPC functionality."
+    },
+    "objective": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ObjectiveInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Objective settings. Required to be defined to use Objective functionality."
+    },
+    "nidaq": {
+      "$ref": "#/$defs/NidaqInfo",
+      "description": "NI-DAQ settings."
+    },
+    "roiscan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ROIScanInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "ROIScan settings. Required to be defined to use ROIScan functionality."
+    },
+    "lightsheet": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LightsheetInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "lighthseet settings. Required to be defined to use Lightsheet functionality."
+    },
+    "webrtc": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WebRTCInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "WebRTC settings. Required to be defined to use WebRTC functionality."
+    },
+    "hypha": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HyphaInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Hypha settings. Required to be defined to use Hypha functionality."
+    },
+    "mockxx": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MockXXInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "MockXX settings. Required to be defined to use MockXX functionality."
+    },
+    "jetsonnano": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JetsonNanoInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Jetson Nano settings for jetson nano. Required to be defined to use jetson nano functionality."
+    },
+    "Stresstest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StresstestInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Stresstest settings. Required to be defined to use Stresstest functionality."
+    },
+    "HistoScan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HistoScanInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "HistoScan settings. Required to be defined to use HistoScan functionality."
+    },
+    "Workflow": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkflowInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Workflow settings. Required to be defined to use Workflow functionality."
+    },
+    "FlowStop": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FlowStopInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "FlowStop settings. Required to be defined to use FlowStop functionality."
+    },
+    "Lepmon": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LepmonInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Lepmon settings. Required to be defined to use Lepmon functionality."
+    },
+    "PixelCalibration": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PixelCalibrationInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "PixelCalibration settings. Required to be defined to use PixelCalibration functionality."
+    },
+    "experiment": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExperimentInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Experiment settings including OMERO configuration. Required to be defined for experiment functionality."
+    },
+    "uc2Config": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UC2ConfigInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "UC2Config settings. Required to be defined to use UC2Config functionality."
+    },
+    "ism": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ISMInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "ISM settings. Required to be defined to use ISM functionality."
+    },
+    "focusLock": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FocusLockInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Focus lock settings. Required to be defined to use focus lock functionality."
+    },
+    "arkitekt": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArkitektInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Arkitekt integration settings. Required to be defined to use Arkitekt functionality."
+    },
+    "sila2": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SiLA2Info"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "SiLA2 server settings. Required to be defined to use SiLA2 remote-control functionality."
+    },
+    "fovLock": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FOVLockInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Focus lock settings. Required to be defined to use fov lock functionality."
+    },
+    "autofocus": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AutofocusInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Autofocus settings. Required to be defined to use autofocus functionality."
+    },
+    "scan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ScanInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Scan settings. Required to be defined to use scan functionality."
+    },
+    "etSTED": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EtSTEDInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "EtSTED settings. Required to be defined to use etSTED functionality."
+    },
+    "rotators": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DeviceInfo"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Standa motorized rotator mounts settings. Required to be defined to use rotator functionality."
+    },
+    "microscopeStand": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MicroscopeStandInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Microscope stand settings. Required to be defined to use MotCorr widget."
+    },
+    "storage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StorageInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Storage configuration for data paths. Contains persistent storage settings."
+    },
+    "instrument": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InstrumentInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Instrument metadata for OME-types integration. Contains microscope identification, optical configuration, and UC2-specific metadata."
+    },
+    "overviewRegistration": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Overview-camera slide registration config (per camera/layout, including stage XYZ positions and homographies). Persisted by ExperimentController."
+    },
+    "pulseStreamer": {
+      "$ref": "#/$defs/PulseStreamerInfo",
+      "description": "Pulse Streamer settings."
+    },
+    "rois": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ROIInfo"
+      },
+      "description": "Additional ROIs available to select in detector settings."
+    },
+    "ledPresets": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/LEDPresetInfo"
+        }
+      },
+      "description": "LED presets available to select (map preset name -> LED name -> LEDPresetInfo)."
+    },
+    "defaultLEDPresetForScan": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Default LED preset for scanning."
+    },
+    "laserPresets": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/LaserPresetInfo"
+        }
+      },
+      "description": "Laser presets available to select (map preset name -> laser name -> LaserPresetInfo)."
+    },
+    "defaultLaserPresetForScan": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Default laser preset for scanning."
+    },
+    "availableWidgets": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "description": "Which widgets to load. The following values are possible to include (case sensitive): - ``Settings`` (detector settings widget) - ``View`` (image controls widget) - ``Recording`` (recording widget) - ``Image`` (image display widget) - ``FocusLock`` (focus lock widget; requires ``focusLock`` field to be defined) - ``Autofocus`` (autofocus widget; requires ``focusLock`` field to be defined) - ``SLM`` (SLM widget; requires ``slm`` field to be defined) - ``SIM`` (SIM widget; requires ``sim`` field to be defined) - ``Laser`` (laser control widget) - ``LED`` (LED control widget) - ``Deck`` (Deck control widget) - ``Positioner`` (positioners widget) - ``StandaPositioner`` (Standa positioners widget) - ``Scan`` (scan widget; requires ``scan`` field to be defined) - ``BeadRec`` (bead reconstruction widget) - ``AlignAverage`` (axial alignment tool widget) - ``AlignXY`` (rotation alignment tool widget) - ``AlignmentLine`` (line alignment tool widget) - ``uLenses`` (uLenses tool widget; requires ``Image`` widget) - ``FFT`` (FFT tool widget) - ``Console`` (Python console widget) - ``EtSTED`` (etSTED widget; requires ``etSTED`` field to be defined) - ``Rotator`` (Rotator widget; requires \"Rotator\" field to be defined) - ``RotationScan`` (Rotation scan widget; requires \"Rotator\" field to be defined) - ``MotCorr`` (Leica motorized correction collar widget; requires \"leicastand\" rs232 device to be defined) You can also set this to ``true`` to enable all widgets, or ``false`` to disable all widgets. This field is required."
+    }
+  },
+  "$defs": {
+    "DeviceInfo": {
+      "type": "object",
+      "properties": {
+        "analogChannel": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Channel for analog communication. ``null`` if the device is digital or doesn't use NI-DAQ. If an integer is specified, it will be translated to \"Dev1/ao{analogChannel}\"."
+        },
+        "digitalLine": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Line for digital communication. ``null`` if the device is analog or doesn't use NI-DAQ. If an integer is specified, it will be translated to \"Dev1/port0/line{digitalLine}\"."
+        },
+        "managerName": {
+          "type": "string",
+          "description": "Manager class name."
+        },
+        "managerProperties": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Properties to be read by the manager."
+        }
+      },
+      "required": [
+        "analogChannel",
+        "digitalLine",
+        "managerName",
+        "managerProperties"
+      ]
+    },
+    "DetectorInfo": {
+      "type": "object",
+      "properties": {
+        "forAcquisition": {
+          "type": "boolean",
+          "description": "Whether the detector is used for acquisition.",
+          "default": false
+        },
+        "forFocusLock": {
+          "type": "boolean",
+          "description": "Whether the detector is used for focus lock.",
+          "default": false
+        },
+        "defaultStreamSettings": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Optional per-detector defaults for the live stream applied at startup. Recognised top-level keys (all optional): - ``protocol``: ``\"binary\" | \"jpeg\" | \"mjpeg\" | \"webrtc\"`` - ``subsampling_factor``: int >= 1 - ``throttle_ms``: int - ``jpeg_quality``: int (0..100, JPEG-specific) - ``compression_algorithm``: ``\"lz4\" | \"zstd\" | ...`` (binary-specific) - ``compression_level``: int (binary-specific) - ``crop_size``: [width, height] or null These are baked into the per-detector params on first stream start, so the live view comes up with a sensible default per camera (e.g. heavy subsampling on a large overview camera, lossless binary on a widefield sensor). The frontend cannot mutate these \u2014 it can only override the *current* session via ``setStreamParameters``/``setDetectorStreamParameters``."
+        }
+      }
+    },
+    "LaserInfo": {
+      "type": "object",
+      "properties": {
+        "valueRangeMin": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Minimum value of the laser. ``null`` if laser doesn't setting a value."
+        },
+        "valueRangeMax": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "maximum value of the laser. ``null`` if laser doesn't setting a value."
+        },
+        "wavelength": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "description": "Laser wavelength in nanometres."
+        },
+        "freqRangeMin": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Minimum value of frequency modulation. Don't fill if laser doesn't support it.",
+          "default": 0
+        },
+        "freqRangeMax": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Minimum value of frequency modulation. Don't fill if laser doesn't support it.",
+          "default": 0
+        },
+        "freqRangeInit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Initial value of frequency modulation. Don't fill if laser doesn't support it.",
+          "default": 0
+        },
+        "valueRangeStep": {
+          "type": "number",
+          "description": "The default step size of the value range that the laser can be set to.",
+          "default": 1.0
+        }
+      },
+      "required": [
+        "valueRangeMin",
+        "valueRangeMax",
+        "wavelength"
+      ]
+    },
+    "LEDInfo": {
+      "type": "object",
+      "properties": {
+        "valueRangeMin": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Minimum value of the laser. ``null`` if laser doesn't setting a value."
+        },
+        "valueRangeMax": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "maximum value of the laser. ``null`` if laser doesn't setting a value."
+        },
+        "valueRangeStep": {
+          "type": "number",
+          "description": "The default step size of the value range that the laser can be set to.",
+          "default": 1.0
+        }
+      },
+      "required": [
+        "valueRangeMin",
+        "valueRangeMax"
+      ]
+    },
+    "LEDMatrixInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "PositionerInfo": {
+      "type": "object",
+      "properties": {
+        "axes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "A list of axes (names) that the positioner controls."
+        },
+        "isPositiveDirection": {
+          "type": "boolean",
+          "description": "Whether the direction of the positioner is positive.",
+          "default": true
+        },
+        "forPositioning": {
+          "type": "boolean",
+          "description": "Whether the positioner is used for manual positioning.",
+          "default": false
+        },
+        "forScanning": {
+          "type": "boolean",
+          "description": "Whether the positioner is used for scanning.",
+          "default": false
+        },
+        "resetOnClose": {
+          "type": "boolean",
+          "description": "Whether the positioner should be reset to 0-position upon closing ImSwitch.",
+          "default": true
+        },
+        "stageOffsets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          },
+          "description": "Stage offsets available to select (map preset name -> stage name ->"
+        }
+      },
+      "required": [
+        "axes"
+      ]
+    },
+    "RS232Info": {
+      "type": "object",
+      "properties": {
+        "managerName": {
+          "type": "string",
+          "description": "RS232 manager class name."
+        },
+        "managerProperties": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Properties to be read by the RS232 manager."
+        }
+      },
+      "required": [
+        "managerName",
+        "managerProperties"
+      ]
+    },
+    "SLMInfo": {
+      "type": "object",
+      "properties": {
+        "monitorIdx": {
+          "type": "integer",
+          "description": "Index of the monitor in the system list of monitors (indexing starts at 0)."
+        },
+        "width": {
+          "type": "integer",
+          "description": "Width of SLM, in pixels."
+        },
+        "height": {
+          "type": "integer",
+          "description": "Height of SLM, in pixels."
+        },
+        "wavelength": {
+          "type": "integer",
+          "description": "Wavelength of the laser line used with the SLM."
+        },
+        "pixelSize": {
+          "type": "number",
+          "description": "Pixel size or pixel pitch of the SLM, in millimetres."
+        },
+        "angleMount": {
+          "type": "number",
+          "description": "The angle of incidence and reflection of the laser line that is shaped by the SLM, in radians. For adding a blazed grating to create off-axis holography."
+        },
+        "correctionPatternsDir": {
+          "type": "string",
+          "description": "Directory of .bmp images provided by Hamamatsu for flatness correction at various wavelengths. A combination will be chosen based on the wavelength."
+        }
+      },
+      "required": [
+        "monitorIdx",
+        "width",
+        "height",
+        "wavelength",
+        "pixelSize",
+        "angleMount",
+        "correctionPatternsDir"
+      ]
+    },
+    "UC2ConfigInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "SIMInfo": {
+      "type": "object",
+      "properties": {
+        "monitorIdx": {
+          "type": "integer",
+          "description": "Index of the monitor in the system list of monitors (indexing starts at 0)."
+        },
+        "width": {
+          "type": "integer",
+          "description": "Width of SLM, in pixels."
+        },
+        "height": {
+          "type": "integer",
+          "description": "Height of SLM, in pixels."
+        },
+        "wavelength": {
+          "type": "integer",
+          "description": "Wavelength of the laser line used with the SLM."
+        },
+        "pixelSize": {
+          "type": "number",
+          "description": "Pixel size or pixel pitch of the SLM, in millimetres."
+        },
+        "angleMount": {
+          "type": "number",
+          "description": "The angle of incidence and reflection of the laser line that is shaped by the SLM, in radians. For adding a blazed grating to create off-axis holography.",
+          "default": 0.0
+        },
+        "patternsDir": {
+          "type": "string",
+          "description": "Directory of .bmp images provided by Hamamatsu for flatness correction at various wavelengths. A combination will be chosen based on the wavelength.",
+          "default": ""
+        },
+        "fastAPISIM_host": {
+          "type": "string",
+          "default": "192.168.xxx.xxx"
+        },
+        "fastAPISIM_port": {
+          "type": "string",
+          "default": "8000"
+        },
+        "isFastAPISIM": {
+          "type": "boolean",
+          "default": false
+        },
+        "nRotations": {
+          "type": "integer",
+          "default": 3
+        },
+        "nPhases": {
+          "type": "integer",
+          "default": 3
+        },
+        "simMagnefication": {
+          "type": "number",
+          "default": 1.0
+        },
+        "simPixelsize": {
+          "type": "number",
+          "default": 1.0
+        },
+        "simNA": {
+          "type": "number",
+          "default": 1.0
+        },
+        "simETA": {
+          "type": "number",
+          "default": 1.0
+        },
+        "simN": {
+          "type": "number",
+          "default": 1.0
+        },
+        "tWaitSequence": {
+          "type": "number",
+          "default": 0.0
+        }
+      },
+      "required": [
+        "monitorIdx",
+        "width",
+        "height",
+        "wavelength",
+        "pixelSize"
+      ]
+    },
+    "DPCInfo": {
+      "type": "object",
+      "properties": {
+        "wavelength": {
+          "type": "integer",
+          "description": "Wavelength of the laser line used with the SLM."
+        },
+        "pixelsize": {
+          "type": "number",
+          "description": "Pixel size or pixel pitch of the SLM, in millimetres."
+        },
+        "magnefication": {
+          "type": "number"
+        },
+        "NA": {
+          "type": "number"
+        },
+        "NAi": {
+          "type": "number"
+        },
+        "n": {
+          "type": "number"
+        },
+        "rotations": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "required": [
+        "wavelength",
+        "pixelsize",
+        "magnefication",
+        "NA",
+        "NAi",
+        "n",
+        "rotations"
+      ]
+    },
+    "ObjectiveInfo": {
+      "type": "object",
+      "properties": {
+        "pixelsizes": {
+          "type": "array"
+        },
+        "NAs": {
+          "type": "array"
+        },
+        "magnifications": {
+          "type": "array"
+        },
+        "objectiveNames": {
+          "type": "array"
+        },
+        "objectivePositions": {
+          "type": "array"
+        },
+        "zPositions": {
+          "type": "array"
+        },
+        "homeDirection": {
+          "type": "integer",
+          "default": -1
+        },
+        "homePolarity": {
+          "type": "integer",
+          "default": 1
+        },
+        "homeSpeed": {
+          "type": "integer",
+          "default": 20000
+        },
+        "homeAcceleration": {
+          "type": "integer",
+          "default": 20000
+        },
+        "moveSpeed": {
+          "type": "integer",
+          "default": 20000
+        },
+        "calibrateOnStart": {
+          "type": "boolean",
+          "default": true
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "pixelsizes",
+        "NAs",
+        "magnifications",
+        "objectiveNames",
+        "objectivePositions"
+      ]
+    },
+    "ROIScanInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "LightsheetInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "GalvoScannerInfo": {
+      "type": "object",
+      "properties": {
+        "nx": {
+          "type": "integer",
+          "description": "Number of X samples per line.",
+          "default": 256
+        },
+        "ny": {
+          "type": "integer",
+          "description": "Number of Y lines per frame.",
+          "default": 256
+        },
+        "x_min": {
+          "type": "integer",
+          "description": "Minimum X position (DAC units 0-4095).",
+          "default": 500
+        },
+        "x_max": {
+          "type": "integer",
+          "description": "Maximum X position (DAC units 0-4095).",
+          "default": 3500
+        },
+        "y_min": {
+          "type": "integer",
+          "description": "Minimum Y position (DAC units 0-4095).",
+          "default": 500
+        },
+        "y_max": {
+          "type": "integer",
+          "description": "Maximum Y position (DAC units 0-4095).",
+          "default": 3500
+        },
+        "sample_period_us": {
+          "type": "integer",
+          "description": "Microseconds per sample. 0 = maximum speed.",
+          "default": 1
+        },
+        "frame_count": {
+          "type": "integer",
+          "description": "Number of frames to acquire. 0 = infinite/continuous.",
+          "default": 0
+        },
+        "bidirectional": {
+          "type": "boolean",
+          "description": "Enable bidirectional scanning for faster acquisition.",
+          "default": false
+        }
+      }
+    },
+    "WebRTCInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "HyphaInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "MockXXInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "JetsonNanoInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "HistoScanInfo": {
+      "type": "object",
+      "properties": {
+        "PreviewCamera": {
+          "type": "string"
+        }
+      }
+    },
+    "StresstestInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "WorkflowInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "FlowStopInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "LepmonInfo": {
+      "type": "object",
+      "properties": {}
+    },
+    "InstrumentInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Instrument display name.",
+          "default": "openUC2 Microscope"
+        },
+        "microscopeType": {
+          "type": "string",
+          "description": "Microscope type: 'Inverted', 'Upright', or 'Other'.",
+          "default": "Inverted"
+        },
+        "manufacturer": {
+          "type": "string",
+          "description": "Instrument manufacturer.",
+          "default": "openUC2"
+        },
+        "model": {
+          "type": "string",
+          "description": "Instrument model.",
+          "default": "UC2 Frame"
+        },
+        "serialNumber": {
+          "type": "string",
+          "description": "Instrument serial number.",
+          "default": ""
+        },
+        "tubeLensFocalLengthMm": {
+          "type": "number",
+          "description": "Tube lens focal length in millimeters. Standard Nikon = 180mm.",
+          "default": 180.0
+        },
+        "tubeLensMagnification": {
+          "type": "number",
+          "description": "Tube lens magnification factor.",
+          "default": 1.0
+        },
+        "uc2FrameName": {
+          "type": "string",
+          "description": "Name of the UC2 frame configuration.",
+          "default": ""
+        },
+        "uc2FrameAuthor": {
+          "type": "string",
+          "description": "Author of the UC2 frame configuration.",
+          "default": ""
+        },
+        "uc2FrameVersion": {
+          "type": "string",
+          "description": "Version of the UC2 frame configuration.",
+          "default": "1.0.0"
+        },
+        "uc2Verified": {
+          "type": "boolean",
+          "description": "Whether the UC2 frame is verified.",
+          "default": false
+        },
+        "uc2OptiKitConfigPath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Path to UC2 OptiKit JSON configuration file."
+        },
+        "filters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "description": "List of optical filters. Each entry: {name, filterType, wavelengthNm, bandwidthNm}."
+        }
+      }
+    },
+    "StorageInfo": {
+      "type": "object",
+      "properties": {
+        "activeDataPath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Active data storage path. If set, ImSwitch will use this path for saving data. This is typically set via the Storage API when user selects external drives."
+        }
+      }
+    },
+    "PixelCalibrationInfo": {
+      "type": "object",
+      "properties": {
+        "affineCalibrations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "description": "Per-detector affine calibration data, keyed by detector name. Format: { \"<detectorName>\": { \"affine_matrix\": [[a11, a12, tx], [a21, a22, ty]], # 2x3 matrix \"metrics\": {...}, # scale_x_um_per_pixel, scale_y_um_per_pixel, ... \"timestamp\": \"...\", \"detector_name\": \"<detectorName>\" } } The affine matrix transforms pixel coordinates to stage coordinates: [stage_x] [a11 a12 tx] [pixel_x] [stage_y] = [a21 a22 ty] \u00d7 [pixel_y] [ 1 ] Sign of metrics.scale_x_um_per_pixel / scale_y_um_per_pixel encodes flip (negative => flip on that axis)."
+        },
+        "defaultAffineMatrix": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "description": "Default identity transformation when no calibration is available."
+        }
+      }
+    },
+    "ExperimentInfo": {
+      "type": "object",
+      "properties": {
+        "omeroServerUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "OMERO server URL.",
+          "default": "localhost"
+        },
+        "omeroUsername": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "OMERO username for authentication.",
+          "default": ""
+        },
+        "omeroPassword": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "OMERO password for authentication.",
+          "default": ""
+        },
+        "omeroPort": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "OMERO server port.",
+          "default": 4064
+        },
+        "omeroGroupId": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "OMERO group ID for uploads. -1 for default group.",
+          "default": -1
+        },
+        "omeroProjectId": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "OMERO project ID for uploads. -1 for no specific project.",
+          "default": -1
+        },
+        "omeroDatasetId": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "OMERO dataset ID for uploads. -1 for no specific dataset.",
+          "default": -1
+        },
+        "omeroEnabled": {
+          "type": "boolean",
+          "description": "Whether OMERO integration is enabled.",
+          "default": false
+        },
+        "omeroConnectionTimeout": {
+          "type": "integer",
+          "description": "Connection timeout for OMERO in seconds.",
+          "default": 30
+        },
+        "omeroUploadTimeout": {
+          "type": "integer",
+          "description": "Upload timeout for OMERO in seconds.",
+          "default": 300
+        },
+        "overviewCameraName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Name of the detector to use as overview camera. If ``None``, the ExperimentController will look for a detector named ``\"overviewcamera\"`` and otherwise leave the overview feature disabled."
+        }
+      }
+    },
+    "ISMInfo": {
+      "type": "object",
+      "properties": {
+        "wavelength": {
+          "type": "integer",
+          "description": "Wavelength of the laser line used with the SLM."
+        },
+        "angleMount": {
+          "type": "number",
+          "description": "The angle of incidence and reflection of the laser line that is shaped by the SLM, in radians. For adding a blazed grating to create off-axis holography."
+        },
+        "patternsDir": {
+          "type": "string",
+          "description": "Directory of .bmp images provided by Hamamatsu for flatness correction at various wavelengths. A combination will be chosen based on the wavelength."
+        }
+      },
+      "required": [
+        "wavelength",
+        "angleMount",
+        "patternsDir"
+      ]
+    },
+    "FocusLockInfo": {
+      "type": "object",
+      "properties": {
+        "camera": {
+          "type": "string",
+          "description": "Detector name."
+        },
+        "positioner": {
+          "type": "string",
+          "description": "Positioner name."
+        },
+        "updateFreq": {
+          "type": "integer",
+          "description": "Update frequency, in milliseconds."
+        },
+        "cropCenter": {
+          "type": "array",
+          "description": "Center point for cropping the camera image."
+        },
+        "cropSize": {
+          "type": "integer",
+          "description": "Size of the cropped camera image."
+        },
+        "piKp": {
+          "type": "number",
+          "description": "Default kp value of feedback loop."
+        },
+        "piKi": {
+          "type": "number",
+          "description": "Default ki value of feedback loop."
+        },
+        "focusLockMetric": {
+          "type": "string",
+          "description": "Method to use for focus lock. Options: 'astigmatism', 'phase', 'defocus'."
+        },
+        "laserName": {
+          "type": "string",
+          "description": "Name of the laser to use for focus lock."
+        },
+        "laserValue": {
+          "type": "integer",
+          "description": "Value of the laser to use for focus lock. This is usually a wavelength in nm."
+        },
+        "fovWidth": {
+          "type": "integer",
+          "description": "Width of the field of view for focus lock, in pixels.",
+          "default": 512
+        },
+        "fovCenter": {
+          "type": "array",
+          "description": "Center of the field of view for focus lock, in pixels. [x, y]"
+        },
+        "calibrationData": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Stored calibration data from previous calibration runs. Contains position_data, focus_data, polynomial_coeffs, sensitivity, r_squared, linear_range, timestamp, and lookup_table."
+        }
+      },
+      "required": [
+        "camera",
+        "positioner",
+        "updateFreq",
+        "cropCenter",
+        "cropSize",
+        "piKp",
+        "piKi",
+        "focusLockMetric",
+        "laserName",
+        "laserValue"
+      ]
+    },
+    "SiLA2Info": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether SiLA2 server integration is enabled.",
+          "default": true
+        },
+        "serverName": {
+          "type": "string",
+          "description": "Display name of the SiLA2 server.",
+          "default": "OpenUC2 ImSwitch"
+        },
+        "serverDescription": {
+          "type": "string",
+          "description": "Human-readable description of the server.",
+          "default": "SiLA2 server for OpenUC2 ImSwitch microscope control"
+        },
+        "serverHost": {
+          "type": "string",
+          "description": "Host address the SiLA2 server binds to.",
+          "default": "0.0.0.0"
+        },
+        "serverPort": {
+          "type": "integer",
+          "description": "TCP port the SiLA2 server listens on.",
+          "default": 50052
+        },
+        "serverVersion": {
+          "type": "string",
+          "description": "Semantic version of the SiLA2 server.",
+          "default": "0.1.0"
+        },
+        "vendorUrl": {
+          "type": "string",
+          "description": "Vendor URL reported in SiLA2 service discovery.",
+          "default": "https://openuc2.com"
+        }
+      }
+    },
+    "ArkitektInfo": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether Arkitekt integration is enabled.",
+          "default": true
+        },
+        "appName": {
+          "type": "string",
+          "description": "Application name for Arkitekt registration.",
+          "default": "imswitch"
+        },
+        "redeemToken": {
+          "type": "string",
+          "description": "Redeem token for Arkitekt authentication.",
+          "default": ""
+        },
+        "url": {
+          "type": "string",
+          "description": "Arkitekt server URL.",
+          "default": "http://go.arkitekt.io"
+        },
+        "syncInAsync": {
+          "type": "boolean",
+          "description": "Enable sync-in-async mode for Koil.",
+          "default": true
+        },
+        "deconvolveActionHash": {
+          "type": "string",
+          "description": "Hash of the deconvolution action in Arkitekt.",
+          "default": "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"
+        }
+      }
+    },
+    "FOVLockInfo": {
+      "type": "object",
+      "properties": {
+        "camera": {
+          "type": "string",
+          "description": "Detector name."
+        },
+        "positioner": {
+          "type": "string",
+          "description": "Positioner name."
+        },
+        "updateFreq": {
+          "type": "integer",
+          "description": "Update frequency, in milliseconds."
+        },
+        "frameCropx": {
+          "type": "integer",
+          "description": "Starting X position of camera frame crop."
+        },
+        "frameCropy": {
+          "type": "integer",
+          "description": "Starting Y position of camera frame crop."
+        },
+        "frameCropw": {
+          "type": "integer",
+          "description": "Width of camera frame crop."
+        },
+        "frameCroph": {
+          "type": "integer",
+          "description": "Height of camera frame crop."
+        },
+        "piKp": {
+          "type": "number",
+          "description": "Default kp value of feedback loop."
+        },
+        "piKi": {
+          "type": "number",
+          "description": "Default ki value of feedback loop."
+        }
+      },
+      "required": [
+        "camera",
+        "positioner",
+        "updateFreq",
+        "frameCropx",
+        "frameCropy",
+        "frameCropw",
+        "frameCroph",
+        "piKp",
+        "piKi"
+      ]
+    },
+    "AutofocusInfo": {
+      "type": "object",
+      "properties": {
+        "camera": {
+          "type": "string",
+          "description": "Detector name."
+        },
+        "positioner": {
+          "type": "string",
+          "description": "Positioner name."
+        },
+        "updateFreq": {
+          "type": "integer",
+          "description": "Update frequency, in milliseconds."
+        },
+        "frameCropx": {
+          "type": "integer",
+          "description": "Starting X position of frame crop."
+        },
+        "frameCropy": {
+          "type": "integer",
+          "description": "Starting Y position of frame crop."
+        },
+        "frameCropw": {
+          "type": "integer",
+          "description": "Width of frame crop."
+        },
+        "frameCroph": {
+          "type": "integer",
+          "description": "Height of frame crop."
+        }
+      },
+      "required": [
+        "camera",
+        "positioner",
+        "updateFreq",
+        "frameCropx",
+        "frameCropy",
+        "frameCropw",
+        "frameCroph"
+      ]
+    },
+    "ScanInfo": {
+      "type": "object",
+      "properties": {
+        "scanWidgetType": {
+          "type": "string",
+          "description": "Type of scan widget to generate: PointScan/MoNaLISA/Base/etc."
+        },
+        "scanDesigner": {
+          "type": "string",
+          "description": "Name of the scan designer class to use."
+        },
+        "scanDesignerParams": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Params to be read by the scan designer."
+        },
+        "TTLCycleDesigner": {
+          "type": "string",
+          "description": "Name of the TTL cycle designer class to use."
+        },
+        "TTLCycleDesignerParams": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Params to be read by the TTL cycle designer."
+        },
+        "sampleRate": {
+          "type": "integer",
+          "description": "Scan sample rate."
+        },
+        "lineClockLine": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Line for line clock output. ``null`` if not wanted or NI-DAQ is not used. If integer, it will be translated to \"Dev1/port0/line{lineClockLine}\"."
+        },
+        "frameClockLine": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Line for frame clock output. ``null`` if not wanted or NI-DAQ is not used. If integer, it will be translated to \"Dev1/port0/line{frameClockLine}\"."
+        }
+      },
+      "required": [
+        "scanWidgetType",
+        "scanDesigner",
+        "scanDesignerParams",
+        "TTLCycleDesigner",
+        "TTLCycleDesignerParams",
+        "sampleRate",
+        "lineClockLine",
+        "frameClockLine"
+      ]
+    },
+    "EtSTEDInfo": {
+      "type": "object",
+      "properties": {
+        "detectorFast": {
+          "type": "string",
+          "description": "Name of the STED detector to use."
+        },
+        "detectorSlow": {
+          "type": "string",
+          "description": "Name of the widefield detector to use."
+        },
+        "laserFast": {
+          "type": "string",
+          "description": "Name of the widefield laser to use."
+        }
+      },
+      "required": [
+        "detectorFast",
+        "detectorSlow",
+        "laserFast"
+      ]
+    },
+    "MicroscopeStandInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable model of the microscope stand (default: openUC2 FRAME).",
+          "default": "openUC2 FRAME"
+        },
+        "managerName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Name of the manager to use."
+        },
+        "rs232device": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Name of the rs232 device to use."
+        }
+      }
+    },
+    "NidaqInfo": {
+      "type": "object",
+      "properties": {
+        "timerCounterChannel": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Output for Counter for timing purposes. If an integer is specified, it will be translated to \"Dev1/ctr{timerCounterChannel}\"."
+        },
+        "startTrigger": {
+          "type": "boolean",
+          "description": "Boolean for start triggering for sync.",
+          "default": false
+        }
+      }
+    },
+    "PulseStreamerInfo": {
+      "type": "object",
+      "properties": {
+        "ipAddress": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "IP address of Pulse Streamer hardware."
+        }
+      }
+    },
+    "MMCoreSettingsInfo": {
+      "type": "object",
+      "properties": {
+        "savedProperties": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      }
+    },
+    "ROIInfo": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer",
+          "description": "Starting X position of ROI, in pixels."
+        },
+        "y": {
+          "type": "integer",
+          "description": "Starting Y position of ROI, in pixels."
+        },
+        "w": {
+          "type": "integer",
+          "description": "Width of ROI, in pixels."
+        },
+        "h": {
+          "type": "integer",
+          "description": "Height of ROI, in pixels."
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ]
+    },
+    "LaserPresetInfo": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "number",
+          "description": "Laser value."
+        }
+      },
+      "required": [
+        "value"
+      ]
+    },
+    "LEDPresetInfo": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "number",
+          "description": "LED value."
+        }
+      },
+      "required": [
+        "value"
+      ]
+    }
+  }
+}

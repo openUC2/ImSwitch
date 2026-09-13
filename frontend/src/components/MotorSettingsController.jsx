@@ -52,12 +52,17 @@ import {
   Error as ErrorIcon,
   Warning,
   DirectionsRun,
+  Gamepad,
 } from "@mui/icons-material";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
 import * as uc2Slice from "../state/slices/UC2Slice.js";
 import createAxiosInstance from "../backendapi/createAxiosInstance";
 import apiTMCSettingsGetForAxis from "../backendapi/apiTMCSettingsGetForAxis";
 import apiMotorSettingsGet from "../backendapi/apiMotorSettingsGet";
+import apiUC2ConfigControllerGetJoystickDirection from "../backendapi/apiUC2ConfigControllerGetJoystickDirection";
+import apiUC2ConfigControllerSetJoystickDirection from "../backendapi/apiUC2ConfigControllerSetJoystickDirection";
+import apiUC2ConfigControllerGetSpeedMultiplier from "../backendapi/apiUC2ConfigControllerGetSpeedMultiplier";
+import apiUC2ConfigControllerSetSpeedMultiplier from "../backendapi/apiUC2ConfigControllerSetSpeedMultiplier";
 
 // Tab panel component
 const TabPanel = ({ children, value, index, ...other }) => (
@@ -732,6 +737,128 @@ const GlobalSettingsPanel = ({ settings, onChange, onSave, isSaving }) => {
   );
 };
 
+// Joystick Direction & Speed Multiplier Panel component
+const JoystickSettingsPanel = () => {
+  const AXES = ["X", "Y", "Z", "A"];
+  const [inverted, setInverted] = useState({});
+  const [multiplier, setMultiplier] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [busyAxis, setBusyAxis] = useState(null);
+
+  const loadSettings = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [dirs, mults] = await Promise.all([
+        apiUC2ConfigControllerGetJoystickDirection(),
+        apiUC2ConfigControllerGetSpeedMultiplier(),
+      ]);
+      if (dirs && typeof dirs === "object") {
+        setInverted(dirs.axes || dirs);
+      }
+      if (mults && typeof mults === "object") {
+        setMultiplier(mults.axes || mults);
+      }
+    } catch (e) {
+      console.error("Error loading joystick settings:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
+
+  const handleToggleInverted = async (axis, checked) => {
+    // Optimistic update, then persist to the device.
+    setInverted((prev) => ({ ...prev, [axis]: checked }));
+    setBusyAxis(axis);
+    try {
+      await apiUC2ConfigControllerSetJoystickDirection(axis, checked);
+    } catch (e) {
+      console.error("Failed to set joystick direction:", e);
+      setInverted((prev) => ({ ...prev, [axis]: !checked }));
+    } finally {
+      setBusyAxis(null);
+    }
+  };
+
+  const handleMultiplierChange = (axis, value) => {
+    setMultiplier((prev) => ({ ...prev, [axis]: value }));
+  };
+
+  const handleMultiplierCommit = async (axis, value) => {
+    setBusyAxis(axis);
+    try {
+      await apiUC2ConfigControllerSetSpeedMultiplier(axis, value);
+    } catch (e) {
+      console.error("Failed to set speed multiplier:", e);
+    } finally {
+      setBusyAxis(null);
+    }
+  };
+
+  return (
+    <Box>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Invert the PS-controller joystick per axis if it drives the stage the
+        wrong way, and scale how fast each axis jogs per joystick tick.
+      </Typography>
+      {loading ? (
+        <Box sx={{ display: "flex", justifyContent: "center", p: 2 }}>
+          <CircularProgress size={24} />
+        </Box>
+      ) : (
+        <Grid container spacing={2}>
+          {AXES.map((axis) => (
+            <Grid item xs={12} sm={6} md={3} key={axis}>
+              <Box
+                sx={{
+                  p: 2,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  borderRadius: 1,
+                }}
+              >
+                <Typography variant="subtitle2" gutterBottom>
+                  Axis {axis}
+                </Typography>
+                <TextField
+                  fullWidth
+                  label="Speed Multiplier"
+                  type="number"
+                  size="small"
+                  value={multiplier[axis] ?? 1}
+                  onChange={(e) =>
+                    handleMultiplierChange(axis, parseFloat(e.target.value))
+                  }
+                  onBlur={(e) =>
+                    handleMultiplierCommit(axis, parseFloat(e.target.value) || 1)
+                  }
+                  disabled={busyAxis === axis}
+                  sx={{ mb: 1 }}
+                />
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={!!inverted[axis]}
+                      disabled={busyAxis === axis}
+                      onChange={(e) =>
+                        handleToggleInverted(axis, e.target.checked)
+                      }
+                    />
+                  }
+                  label={`${axis} inverted`}
+                />
+              </Box>
+            </Grid>
+          ))}
+        </Grid>
+      )}
+    </Box>
+  );
+};
+
 // Main component
 const MotorSettingsController = () => {
   const [tabIndex, setTabIndex] = useState(0);
@@ -892,7 +1019,7 @@ const MotorSettingsController = () => {
   };
 
   // Tabs for axes
-  const axisTabs = ["X", "Y", "Z", "A", "Global", "TMC"];
+  const axisTabs = ["X", "Y", "Z", "A", "Global", "Joystick", "TMC"];
 
   if (!isBackendConnected) {
     return (
@@ -957,6 +1084,8 @@ const MotorSettingsController = () => {
                   icon={
                     axis === "Global" ? (
                       <Tune />
+                    ) : axis === "Joystick" ? (
+                      <Gamepad />
                     ) : axis === "TMC" ? (
                       <Memory />
                     ) : (
@@ -992,8 +1121,13 @@ const MotorSettingsController = () => {
               />
             </TabPanel>
 
-            {/* TMC Settings Tab */}
+            {/* Joystick Direction & Speed Multiplier Tab */}
             <TabPanel value={tabIndex} index={5}>
+              <JoystickSettingsPanel />
+            </TabPanel>
+
+            {/* TMC Settings Tab */}
+            <TabPanel value={tabIndex} index={6}>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 Select an axis to configure its TMC stepper driver settings. 
                 Note: Changing microsteps will automatically scale the stepsize to maintain physical movement distance.

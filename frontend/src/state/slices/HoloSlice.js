@@ -49,6 +49,9 @@ const initialHoloState = {
   mjpegClientCount: 0,
   frameCount: 0,
   processedCount: 0,
+  // Fraction (0..1) of ROI pixels at the sensor clip level on the last frame.
+  // Drives the overexposure warning; measured backend-side on the raw ROI.
+  saturatedFraction: 0.0,
   
   // Images
   lastRawImage: null, // Last raw camera image
@@ -176,6 +179,9 @@ const holoSlice = createSlice({
     setFrameCount: (state, action) => {
       state.frameCount = action.payload;
     },
+    setSaturatedFraction: (state, action) => {
+      state.saturatedFraction = action.payload;
+    },
     setProcessedCount: (state, action) => {
       state.processedCount = action.payload;
     },
@@ -296,6 +302,7 @@ export const {
   setLastProcessTime,
   setFrameCount,
   setProcessedCount,
+  setSaturatedFraction,
   setLastRawImage,
   setLastProcessedImage,
   setShowDeveloperOptions,

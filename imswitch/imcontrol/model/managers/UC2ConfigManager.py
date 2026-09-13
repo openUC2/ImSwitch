@@ -94,6 +94,19 @@ class UC2ConfigManager(SignalInterface):
         {axis, inverted} for all axes; otherwise the bool for that axis."""
         return self.ESP32.motor.get_joystick_direction(axis=axis, timeout=timeout)
 
+    def setSpeedMultiplier(self, axis, multiplier=1, timeout=1):
+        """Set the joystick-jog speed multiplier for one motor axis.
+
+        axis: "A"/"X"/"Y"/"Z" (or 0..3). Maps to motor.set_speed_multiplier.
+        """
+        return self.ESP32.motor.set_speed_multiplier(axis=axis, multiplier=multiplier, timeout=timeout)
+
+    def getSpeedMultiplier(self, axis=None, timeout=1):
+        """Read the joystick-jog speed multiplier. With axis=None returns a
+        list of {axis, multiplier} for all axes; otherwise the value for that
+        axis."""
+        return self.ESP32.motor.get_speed_multiplier(axis=axis, timeout=timeout)
+
     def interruptSerialCommunication(self):
         self.ESP32.serial.interruptCurrentSerialCommunication()
 

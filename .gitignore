@@ -102,3 +102,4 @@ docker/HIK/cheatsheet.txt
 main2.py
 /LepmonOS_update
 /imswitch/_data
+imswitch/imcontrol/model/interfaces/toupcamsdk/lib/mac/libtoupcam.dylib

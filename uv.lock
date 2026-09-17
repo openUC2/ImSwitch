@@ -1928,7 +1928,7 @@ dependencies = [
     { name = "unitelabs-sila" },
     { name = "useq-schema" },
     { name = "uvicorn", extra = ["standard"] },
-    { name = "vmbpy" },
+    { name = "vmbpy", marker = "sys_platform == 'linux'" },
     { name = "zarr" },
 ]
 
@@ -2021,7 +2021,7 @@ requires-dist = [
     { name = "unitelabs-sila" },
     { name = "useq-schema" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.19.0" },
-    { name = "vmbpy", specifier = ">=1.2.2" },
+    { name = "vmbpy", marker = "sys_platform == 'linux'", specifier = ">=1.2.2" },
     { name = "zarr", specifier = ">=3.0.0a0" },
 ]
 provides-extras = ["microeye", "lepmon", "imjoy", "dev", "omero", "pymmcore"]
@@ -5619,7 +5619,6 @@ source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/13/16/6c4807e88bc6a6ab896bdcaae2428b4dda1c085e3eb2e37d98f631f20de1/vmbpy-1.2.2-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:e61ca30f6c8a02298f1c644c239b4f26ab5b9a2af701594ad0c33e7c58582898", size = 2651590, upload-time = "2026-07-09T12:46:51.425Z" },
     { url = "https://files.pythonhosted.org/packages/92/9b/04f6510378ec5a0eb889513c710419b03a00773fbff32ea87203dd340fb5/vmbpy-1.2.2-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:e187c56a014a05386215b86312873529c946e1a761e7955aadd24f1ad5ad980d", size = 2776272, upload-time = "2026-07-09T12:46:53.933Z" },
-    { url = "https://files.pythonhosted.org/packages/2d/ed/5bb4ab69e6412d5da6034d44bafd4eb68f0b9b0f36c732cf7d9dad9242bc/vmbpy-1.2.2-py3-none-win_amd64.whl", hash = "sha256:5c41b5887946e42af8638316638a7deb7e4bff71c19acf54e8c332d9fa7295b0", size = 1483685, upload-time = "2026-07-09T12:46:48.699Z" },
 ]
 
 [[package]]

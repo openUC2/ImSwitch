@@ -81,7 +81,7 @@ dependencies = [
     "useq-schema",
     "ashlarUC2>=1.18.5",
     "uc2canopen>=0.1.4",
-    "vmbpy>=1.2.2 ; sys_platform != 'darwin'",
+    "vmbpy>=1.2.2 ; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]

@@ -1928,6 +1928,7 @@ dependencies = [
     { name = "unitelabs-sila" },
     { name = "useq-schema" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "vmbpy" },
     { name = "zarr" },
 ]
 
@@ -2014,12 +2015,13 @@ requires-dist = [
     { name = "smbus", marker = "extra == 'lepmon'" },
     { name = "smbus2", marker = "extra == 'lepmon'" },
     { name = "tifffile", specifier = ">=2020.11.26" },
-    { name = "uc2-rest", specifier = "==0.2.0.36" },
+    { name = "uc2-rest", specifier = "==0.2.0.39" },
     { name = "uc2canopen", specifier = ">=0.1.4" },
     { name = "unitelabs-cdk" },
     { name = "unitelabs-sila" },
     { name = "useq-schema" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.19.0" },
+    { name = "vmbpy", specifier = ">=1.2.2" },
     { name = "zarr", specifier = ">=3.0.0a0" },
 ]
 provides-extras = ["microeye", "lepmon", "imjoy", "dev", "omero", "pymmcore"]
@@ -5451,16 +5453,16 @@ wheels = [
 
 [[package]]
 name = "uc2-rest"
-version = "0.2.0.36"
+version = "0.2.0.39"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "pyserial" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/50/75/b9c9271c5f9c75cee6d8e9a69a87ed43e71d22deadbb060836d9df4e8734/uc2_rest-0.2.0.36.tar.gz", hash = "sha256:3a5b735ce65a285d17ef3e309eb983473a27bbeb77e45d11610d4bd8773606df", size = 65573, upload-time = "2026-06-26T13:07:10.941Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/45/0f/85c64484c6039932327347103794a9f85584a721659ac4c15becd96d96a3/uc2_rest-0.2.0.39.tar.gz", hash = "sha256:96bc29f26e7b6e8f448dae7ac7af0ae6f1bd9151994dbb13b37bbd739c170129", size = 73744, upload-time = "2026-07-08T14:21:13.438Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f6/56/28742ce19b1258074fe527ddec94d8711fae6fa63edb18486cf74376ed7c/uc2_rest-0.2.0.36-py3-none-any.whl", hash = "sha256:ba446af601e64be99a9f5b1ca3a5463b0334c1e3e7a6e426a01306ffd9072517", size = 78167, upload-time = "2026-06-26T13:07:09.866Z" },
+    { url = "https://files.pythonhosted.org/packages/82/71/3867405fe298bbdeab10a2be688029e1245924f0851367d638137c51b607/uc2_rest-0.2.0.39-py3-none-any.whl", hash = "sha256:f6953b96c0dbe5095ae7034a47f86869e8706555d4d3d7a2079106c67db478f0", size = 87737, upload-time = "2026-07-08T14:21:12.453Z" },
 ]
 
 [[package]]
@@ -5608,6 +5610,16 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/19/f5b78616566ea68edd42aacaf645adbf71fbd83fc52281fba555dc27e3f1/uvloop-0.21.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f3df876acd7ec037a3d005b3ab85a7e4110422e4d9c1571d4fc89b0fc41b6816", size = 4701068, upload-time = "2024-10-14T23:38:06.385Z" },
     { url = "https://files.pythonhosted.org/packages/47/57/66f061ee118f413cd22a656de622925097170b9380b30091b78ea0c6ea75/uvloop-0.21.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:bd53ecc9a0f3d87ab847503c2e1552b690362e005ab54e8a48ba97da3924c0dc", size = 4454428, upload-time = "2024-10-14T23:38:08.416Z" },
     { url = "https://files.pythonhosted.org/packages/63/9a/0962b05b308494e3202d3f794a6e85abe471fe3cafdbcf95c2e8c713aabd/uvloop-0.21.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:a5c39f217ab3c663dc699c04cbd50c13813e31d917642d459fdcec07555cc553", size = 4660018, upload-time = "2024-10-14T23:38:10.888Z" },
+]
+
+[[package]]
+name = "vmbpy"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/13/16/6c4807e88bc6a6ab896bdcaae2428b4dda1c085e3eb2e37d98f631f20de1/vmbpy-1.2.2-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:e61ca30f6c8a02298f1c644c239b4f26ab5b9a2af701594ad0c33e7c58582898", size = 2651590, upload-time = "2026-07-09T12:46:51.425Z" },
+    { url = "https://files.pythonhosted.org/packages/92/9b/04f6510378ec5a0eb889513c710419b03a00773fbff32ea87203dd340fb5/vmbpy-1.2.2-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:e187c56a014a05386215b86312873529c946e1a761e7955aadd24f1ad5ad980d", size = 2776272, upload-time = "2026-07-09T12:46:53.933Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/ed/5bb4ab69e6412d5da6034d44bafd4eb68f0b9b0f36c732cf7d9dad9242bc/vmbpy-1.2.2-py3-none-win_amd64.whl", hash = "sha256:5c41b5887946e42af8638316638a7deb7e4bff71c19acf54e8c332d9fa7295b0", size = 1483685, upload-time = "2026-07-09T12:46:48.699Z" },
 ]
 
 [[package]]

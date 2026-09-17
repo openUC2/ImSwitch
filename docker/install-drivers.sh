@@ -102,9 +102,8 @@ if [ "$TARGETPLATFORM" = "linux/arm64" ]; then
   rm VimbaX_Setup-2025-1-Linux_ARM64.tar.gz
   cd /opt/VimbaX/cti
   ./Install_GenTL_Path.sh
-  # Install VmbPy using UV pip
-  uv pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl
-  export GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
+  # Note(ethanjli): VmbPy is installed by uv via the pyproject.toml file, so we don't do a
+  # `uv pip install` for it here!
 fi
 rm -rf /opt/VimbaX/doc
 

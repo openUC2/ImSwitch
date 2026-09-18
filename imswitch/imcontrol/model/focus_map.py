@@ -51,13 +51,23 @@ class FocusPoint:
 
 @dataclass
 class FitStats:
-    """Quality statistics for a fitted surface."""
+    """Quality statistics for a fitted surface.
+
+    The error fields are ``None`` when they cannot be measured. Residuals are
+    taken against the very points that were fitted, so with fewer points than
+    the fit has degrees of freedom they are trivially zero — a confident
+    "MAE 0.000" exactly when the surface is least trustworthy.
+    """
     method: str = "constant"
     n_points: int = 0
-    mean_abs_error: float = 0.0
-    std_error: float = 0.0
-    max_error: float = 0.0
-    r_squared: float = 0.0
+    mean_abs_error: Optional[float] = None
+    std_error: Optional[float] = None
+    max_error: Optional[float] = None
+    r_squared: Optional[float] = None
+    z_offset: float = 0.0
+    # True when the errors come from leave-one-out refits rather than from the
+    # points the surface was fitted to.
+    error_is_cross_validated: bool = False
     bounds_x: Tuple[float, float] = (0.0, 0.0)
     bounds_y: Tuple[float, float] = (0.0, 0.0)
     bounds_z: Tuple[float, float] = (0.0, 0.0)
@@ -66,6 +76,23 @@ class FitStats:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def fit_quality_text(stats: "FitStats") -> str:
+    """One line an operator can read: how good is this surface, and why.
+
+    Below 4 points the residuals are taken against the fitted points
+    themselves, so there is no number to report — say that instead of
+    printing a zero.
+    """
+    if stats.mean_abs_error is None:
+        detail = "not enough points to validate"
+    else:
+        kind = "cross-validated" if stats.error_is_cross_validated else "in-sample"
+        detail = f"MAE={stats.mean_abs_error:.3f} um ({kind})"
+    if stats.fallback_reason:
+        detail += f" ({stats.fallback_reason})"
+    return detail
 
 
 @dataclass
@@ -230,7 +257,8 @@ class FocusMap:
     # Surface fitting
     # ------------------------------------------------------------------
 
-    def fit(self, reject_outliers: bool = True, outlier_sigma: float = 3.0) -> FitStats:
+    def fit(self, reject_outliers: bool = True, outlier_sigma: float = 3.0,
+            cross_validate: bool = True) -> FitStats:
         """
         Fit a Z-surface through the measured focus points.
 
@@ -281,6 +309,7 @@ class FocusMap:
 
         self._fit_stats = FitStats(
             n_points=n,
+            z_offset=float(self.z_offset),
             bounds_x=(float(xs.min()), float(xs.max())),
             bounds_y=(float(ys.min()), float(ys.max())),
             bounds_z=(float(zs.min()), float(zs.max())),
@@ -294,56 +323,54 @@ class FocusMap:
 
         # --- Single point: constant ---
         if n == 1:
-            self._constant_z = float(zs[0])
-            self._interpolator = None
-            self._fit_stats.method = "constant"
-            self._fit_stats.mean_abs_error = 0.0
-            self._fit_stats.std_error = 0.0
-            self._is_fitted = True
+            self._fit_constant(zs)
             if self._logger:
                 self._logger.info(f"FocusMap [{self.group_id}]: 1 point → constant Z={self._constant_z:.3f}")
             return self._fit_stats
 
-        # --- 2-3 points: fit a tilted plane (least squares) ---
-        # A spline/RBF surface needs >= 4 points, but 3 non-collinear points
-        # define a plane exactly and 2 points define a ramp. lstsq returns the
-        # minimum-norm plane in degenerate (collinear / 2-point) cases, so a few
-        # manually-placed points still yield a useful tilted focus surface.
-        if n < 4 and self.method != "constant":
-            self._fit_plane(xs, ys, zs)
-            self._compute_fit_stats(xs, ys, zs, "plane",
-                                    fallback_used=True,
-                                    fallback_reason=f"{n} points -> planar fit (need >= 4 for {self.method})")
-            self._is_fitted = True
-            if self._logger:
-                self._logger.info(
-                    f"FocusMap [{self.group_id}]: {n} points -> planar (tilted) fit, "
-                    f"MAE={self._fit_stats.mean_abs_error:.4f}"
-                )
-            return self._fit_stats
-
-        if n < 4 and self.method == "constant":
-            self._constant_z = float(np.mean(zs))
-            self._interpolator = None
-            self._fit_stats.method = "constant"
-            self._fit_stats.mean_abs_error = float(np.mean(np.abs(zs - self._constant_z)))
-            self._fit_stats.std_error = float(np.std(zs - self._constant_z))
-            self._is_fitted = True
+        # --- fewer than 4 points: a plane at best, and only if it is defined ---
+        # A tilted plane needs 3 points that are not on one line. Two points, or
+        # three collinear ones, leave the tilt undetermined; lstsq returns the
+        # minimum-norm answer without complaint, which is how a 2-point map used
+        # to present itself as a confident "plane".
+        if n < 4:
+            if self.method == "constant":
+                self._fit_constant(zs)
+            elif n < 3:
+                self._fit_constant(
+                    zs, f"{n} point(s) cannot define a tilted plane - using constant Z")
+            elif self._is_collinear(xs, ys):
+                self._fit_constant(
+                    zs, "the points lie on one line, which does not define a "
+                        "plane - using constant Z")
+            else:
+                self._fit_plane(xs, ys, zs)
+                self._fit_stats.method = "plane"
+                self._fit_stats.fallback_used = True
+                self._fit_stats.fallback_reason = (
+                    f"3 points - planar fit (needs 4 for {self.method})")
+                self._is_fitted = True
+                if self._logger:
+                    self._logger.info(
+                        f"FocusMap [{self.group_id}]: 3 points -> planar (tilted) fit")
+            # Errors are deliberately left as None: with <4 points the residuals
+            # against the fitted points are meaningless.
             return self._fit_stats
 
         # --- >= 4 points: try requested method ---
+        # A whole row of points along one edge is a realistic operator mistake,
+        # and no 2-D surface is determined by it.
+        if self.method != "constant" and self._is_collinear(xs, ys):
+            self._fit_constant(
+                zs, "the points lie on one line, which does not define a "
+                    "surface - using constant Z")
+            return self._fit_stats
+
         if not HAS_SCIPY:
-            # Fallback to constant if scipy unavailable
-            self._constant_z = float(np.mean(zs))
-            self._interpolator = None
-            self._fit_stats.method = "constant"
-            self._fit_stats.fallback_used = True
-            self._fit_stats.fallback_reason = "scipy not available"
-            self._fit_stats.mean_abs_error = float(np.mean(np.abs(zs - self._constant_z)))
-            self._fit_stats.std_error = float(np.std(zs - self._constant_z))
-            self._is_fitted = True
-            if self._logger:
-                self._logger.warning(f"FocusMap [{self.group_id}]: scipy not available, using constant fit")
+            self._fit_constant(zs, "scipy not available - using constant Z")
+            self._compute_fit_stats(xs, ys, zs, "constant", True,
+                                    "scipy not available - using constant Z",
+                                    cross_validate=cross_validate)
             return self._fit_stats
 
         method = self.method
@@ -376,7 +403,8 @@ class FocusMap:
             self._interpolator = None
 
         # Compute fit statistics
-        self._compute_fit_stats(xs, ys, zs, method, fallback_used, fallback_reason)
+        self._compute_fit_stats(xs, ys, zs, method, fallback_used, fallback_reason,
+                                cross_validate=cross_validate)
         self._is_fitted = True
 
         if self._logger:
@@ -388,6 +416,33 @@ class FocusMap:
             )
 
         return self._fit_stats
+
+    @staticmethod
+    def _is_collinear(xs: np.ndarray, ys: np.ndarray) -> bool:
+        """True when the XY points lie on (or vanishingly close to) one line.
+
+        Collinear points do not define a plane: infinitely many planes contain
+        the line, and lstsq silently returns the minimum-norm one.
+        """
+        if len(xs) < 3:
+            return True
+        centred = np.column_stack([xs - np.mean(xs), ys - np.mean(ys)])
+        spread = np.linalg.svd(centred, compute_uv=False)
+        return bool(spread[-1] <= 1e-6 * max(spread[0], 1e-12))
+
+    def _fit_constant(self, zs: np.ndarray, reason: str = "") -> None:
+        """Flat surface at the mean Z — the honest answer when the points
+        cannot define a tilted one."""
+        self._constant_z = float(np.mean(zs))
+        self._interpolator = None
+        self._plane_coeffs = None
+        self._fit_stats.method = "constant"
+        self._fit_stats.n_points = len(zs)
+        self._fit_stats.fallback_used = bool(reason)
+        self._fit_stats.fallback_reason = reason
+        self._is_fitted = True
+        if reason and self._logger:
+            self._logger.warning(f"FocusMap [{self.group_id}]: {reason}")
 
     def _fit_plane(self, xs: np.ndarray, ys: np.ndarray, zs: np.ndarray) -> None:
         """Least-squares tilted plane: z = a*x + b*y + c.
@@ -427,12 +482,46 @@ class FocusMap:
             smoothing=self.smoothing_factor,
         )
 
-    def _compute_fit_stats(self, xs, ys, zs, method, fallback_used, fallback_reason):
-        """Compute leave-one-out or direct residual stats."""
-        predicted = np.array([self._interpolate_raw(x, y) for x, y in zip(xs, ys)])
-        residuals = zs - predicted
+    _LOO_MAX_POINTS = 40  # n refits; beyond this the wait stops being worth it
+
+    def _leave_one_out_residuals(self, xs, ys, zs):
+        """Predict each point from a surface fitted WITHOUT it.
+
+        Spline and RBF interpolate: they pass exactly through every point they
+        were given, so residuals against those same points are ~0 no matter how
+        wrong the surface is between them. Refitting without each point in turn
+        is the cheapest honest answer. Returns None when it cannot be done.
+        """
+        n = len(xs)
+        if n < 4 or n > self._LOO_MAX_POINTS:
+            return None
+        residuals = []
+        for i in range(n):
+            keep = np.arange(n) != i
+            fold = FocusMap(group_id=f"{self.group_id}:loo",
+                            method=self.method,
+                            smoothing_factor=self.smoothing_factor)
+            for x, y, z in zip(xs[keep], ys[keep], zs[keep]):
+                fold.add_point(float(x), float(y), float(z))
+            try:
+                fold.fit(reject_outliers=False, cross_validate=False)
+                residuals.append(zs[i] - fold._interpolate_raw(xs[i], ys[i]))
+            except Exception:
+                return None
+        return np.array(residuals)
+
+    def _compute_fit_stats(self, xs, ys, zs, method, fallback_used, fallback_reason,
+                           cross_validate=True):
+        """Residual stats, cross-validated where that is meaningful."""
+        residuals = self._leave_one_out_residuals(xs, ys, zs) if cross_validate else None
+        if residuals is None:
+            residuals = zs - np.array([self._interpolate_raw(x, y) for x, y in zip(xs, ys)])
+            self._fit_stats.error_is_cross_validated = False
+        else:
+            self._fit_stats.error_is_cross_validated = True
 
         self._fit_stats.method = method
+        self._fit_stats.z_offset = float(self.z_offset)
         self._fit_stats.mean_abs_error = float(np.mean(np.abs(residuals)))
         self._fit_stats.std_error = float(np.std(residuals))
         self._fit_stats.max_error = float(np.max(np.abs(residuals)))
@@ -787,10 +876,15 @@ class FocusMapManager:
         return saved
 
     def load_all(self, path: str) -> int:
-        """Load all focus maps from a directory."""
+        """Load all focus maps from a directory, REPLACING what is in memory.
+
+        Merging meant a map from an earlier sample survived a load and could
+        still be picked up by a later run.
+        """
         loaded = 0
         if not os.path.isdir(path):
             return loaded
+        self._maps.clear()
         for fname in os.listdir(path):
             if fname.startswith("focus_map_") and fname.endswith(".json"):
                 fpath = os.path.join(path, fname)

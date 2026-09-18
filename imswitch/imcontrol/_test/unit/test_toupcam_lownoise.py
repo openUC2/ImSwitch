@@ -84,6 +84,11 @@ def _make_camera(hcam=None, *, bits=16, maxBitDepth=14, heat=True,
     cam._hasCG = cg
     cam._hasCGHDR = cghdr
     cam._hasBlacklevel = blacklevel
+    cam._hasTEC = False
+    cam._hasGetTemperature = False
+    cam._hasFan = False
+    cam.targetTemperature = -10.0
+    cam.fanSpeed = -1
     cam._heatMax = 5
     cam.blacklevel = 0
     cam.heat = None
@@ -242,3 +247,79 @@ class TestBlackLevel:
         cam.set_blacklevel(100)
 
         assert any("reads back" in w for w in cam._CameraToupcam__logger.warnings)
+
+
+class FakeTecHcam(FakeHcam):
+    """FakeHcam with the TEC / temperature calls of a cooled model."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.options.setdefault(toupcam.TOUPCAM_OPTION_TEC, 0)
+        self.options.setdefault(toupcam.TOUPCAM_OPTION_TECTARGET, 100)
+        self.options.setdefault(toupcam.TOUPCAM_OPTION_FAN, 0)
+        self.sensorTemperature = 215  # 0.1 °C
+
+    def put_Temperature(self, nTemperature):
+        self.options[toupcam.TOUPCAM_OPTION_TECTARGET] = int(nTemperature)
+
+    def get_Temperature(self):
+        return self.sensorTemperature
+
+
+def _make_cooled_camera(hcam=None):
+    hcam = hcam if hcam is not None else FakeTecHcam()
+    cam = _make_camera(hcam)
+    cam._hasTEC = True
+    cam._hasGetTemperature = True
+    cam._hasFan = True
+    cam.targetTemperature = -10.0
+    cam.fanSpeed = -1
+    return cam
+
+
+class TestCooling:
+    def test_set_temperature_turns_tec_on_and_caches_target(self):
+        hcam = FakeTecHcam()
+        cam = _make_cooled_camera(hcam)
+
+        cam.set_temperature(-30)
+
+        assert hcam.options[toupcam.TOUPCAM_OPTION_TEC] == 1
+        assert hcam.options[toupcam.TOUPCAM_OPTION_TECTARGET] == -300
+        assert cam.targetTemperature == -30.0
+        assert cam.get_target_temperature() == -30.0
+        assert cam.get_tec_enabled() is True
+        assert cam.getPropertyValue("target_temperature") == -30.0
+        assert cam.getPropertyValue("temperature") == 21.5
+
+    def test_reapply_settings_restores_tec_target_after_reopen(self):
+        # A reopened handle comes up with the model default (here +10 °C, TEC
+        # off); the cached user target has to be pushed again.
+        cam = _make_cooled_camera()
+        cam.set_temperature(-30)
+        cam.set_fan_speed(2)
+        fresh = FakeTecHcam()
+        cam.hcam = fresh
+        cam.exposure_time = 0
+        cam.gain = 0
+        cam.binning = 1
+        cam.frame_rate = -1
+        cam.trigger_source = "Continous"
+        cam.set_frame_rate = lambda *_: None
+        cam.setTriggerSource = lambda *_: None
+
+        cam._reapply_settings()
+
+        assert fresh.options[toupcam.TOUPCAM_OPTION_TEC] == 1
+        assert fresh.options[toupcam.TOUPCAM_OPTION_TECTARGET] == -300
+        assert fresh.options[toupcam.TOUPCAM_OPTION_FAN] == 2
+
+    def test_invalid_target_is_ignored(self):
+        hcam = FakeTecHcam()
+        cam = _make_cooled_camera(hcam)
+        cam.set_temperature(-30)
+
+        cam.set_temperature("not a number")
+
+        assert hcam.options[toupcam.TOUPCAM_OPTION_TECTARGET] == -300
+        assert cam.targetTemperature == -30.0

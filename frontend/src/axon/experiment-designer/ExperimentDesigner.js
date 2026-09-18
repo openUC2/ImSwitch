@@ -21,7 +21,10 @@ import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 
 // Dimension components
 import DimensionBar from "./DimensionBar";
-import ExperimentSummary from "./ExperimentSummary";
+import ExperimentSummary, {
+  checkFitsOnDrive,
+  computeSummary,
+} from "./ExperimentSummary";
 import PositionsDimension from "./PositionsDimension";
 import ChannelsDimension from "./ChannelsDimension";
 import ZFocusDimension from "./ZFocusDimension";
@@ -51,6 +54,7 @@ import * as vizarrViewerSlice from "../../state/slices/VizarrViewerSlice";
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
 import * as positionSlice from "../../state/slices/PositionSlice";
+import { getStorageState } from "../../state/slices/StorageSlice";
 import { setNotification } from "../../state/slices/NotificationSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 
@@ -107,6 +111,7 @@ const ExperimentDesigner = () => {
     parameterRangeSlice.getParameterRangeState,
   );
   const positionState = useSelector(positionSlice.getPositionState);
+  const storageState = useSelector(getStorageState);
 
   // Progress tracking
   const [cachedStepId, setCachedStepId] = useState(0);
@@ -114,6 +119,10 @@ const ExperimentDesigner = () => {
   const [cachedStepName, setCachedStepName] = useState("");
   const [ashlarRunning, setAshlarRunning] = useState(false);
   const [ashlarInterrupted, setAshlarInterrupted] = useState(false);
+  // Start-click debounce: the ref blocks a second click in the same tick, the
+  // state greys the button out until the request settles (see handleStart).
+  const startRequestedRef = useRef(false);
+  const [startPending, setStartPending] = useState(false);
 
   // Periodic status fetch
   useEffect(() => {
@@ -124,30 +133,9 @@ const ExperimentDesigner = () => {
     return () => clearInterval(intervalId);
   }, [dispatch]);
 
-  // Trigger Ashlar stitching automatically when the experiment finishes.
-  // Use a boolean ref so we catch any IDLE transition that follows a RUNNING
-  // phase — including RUNNING→STOPPING→IDLE flows.
-  const wasRunningRef = useRef(false);
-  useEffect(() => {
-    const curr = experimentStatus.status;
-    if (curr === Status.RUNNING) {
-      wasRunningRef.current = true;
-    } else if (wasRunningRef.current && curr === Status.IDLE) {
-      wasRunningRef.current = false;
-      if (experimentState.parameterValue.ome_write_ashlar_stitch) {
-        // Backend auto-starts stitching once all tiles are written.
-        // Start polling so we can show progress as soon as it begins.
-        setAshlarRunning(true);
-      }
-    }
-  }, [
-    experimentStatus.status,
-    experimentState.parameterValue.ome_write_ashlar_stitch,
-    experimentState.parameterValue.ashlar_pixel_size,
-    experimentState.parameterValue.ashlar_maximum_shift,
-    experimentState.parameterValue.ashlar_align_channel,
-  ]);
-
+  // Ashlar no longer runs by itself when the experiment finishes — it is a
+  // second stitching path and its failures used to land inside every run.
+  // Start it from the Output panel when you want it (handleRunAshlar).
   // Poll stitching progress until the background job finishes
   useEffect(() => {
     if (!ashlarRunning) return;
@@ -229,6 +217,32 @@ const ExperimentDesigner = () => {
 
   // Control handlers
   const handleStart = () => {
+    // Disable Start on the click, not on the response. The request does not
+    // resolve until the backend has finished the focus-map phase — minutes of
+    // autofocus — and until then the status is still IDLE, so every extra
+    // click in that window started another run with its own output folder and
+    // its own focus-map pass.
+    if (startRequestedRef.current) return;
+
+    // Refuse to start a run that cannot fit, naming both numbers. The estimate
+    // was always shown but never compared to the drive it would be written to.
+    const needMB = computeSummary({
+      experimentState, experimentUI, parameterRange, objectiveState, wellSelectorState,
+    }).dataSizeMB;
+    const drive = checkFitsOnDrive(needMB, storageState?.status?.active_device);
+    if (drive && !drive.fits) {
+      const needText = `${(needMB / 1024).toFixed(1)} GB`;
+      // eslint-disable-next-line no-alert
+      if (!window.confirm(
+        `This run needs about ${needText} but only ${drive.freeText} is free ` +
+        `on ${drive.name}.\n\nStart anyway?`,
+      )) {
+        return;
+      }
+    }
+
+    startRequestedRef.current = true;
+    setStartPending(true);
     console.log("Experiment started");
     dispatch(
       experimentSlice.setIsSnakescan(wellSelectorState.areaSelectSnakescan),
@@ -435,6 +449,10 @@ const ExperimentDesigner = () => {
       })
       .catch(() => {
         infoPopupRef.current?.showMessage("Start Experiment failed");
+      })
+      .finally(() => {
+        startRequestedRef.current = false;
+        setStartPending(false);
       });
   };
 
@@ -480,7 +498,7 @@ const ExperimentDesigner = () => {
       });
   };
 
-  const handleRestartStitch = () => {
+  const handleRunAshlar = () => {
     setAshlarInterrupted(false);
     apiExperimentControllerRunAshlarStitching({
       pixelSize: experimentState.parameterValue.ashlar_pixel_size,
@@ -490,7 +508,7 @@ const ExperimentDesigner = () => {
       .then((data) => {
         if (data?.started) {
           setAshlarRunning(true);
-          infoPopupRef.current?.showMessage("Ashlar stitching restarted");
+          infoPopupRef.current?.showMessage("Ashlar stitching started");
         } else {
           setAshlarInterrupted(true);
           infoPopupRef.current?.showMessage(
@@ -544,6 +562,8 @@ const ExperimentDesigner = () => {
   };
 
   // Button visibility helpers
+  // startPending covers the gap between the click and the backend reporting
+  // RUNNING (the whole focus-map phase); see handleStart.
   const showStart =
     experimentStatus.status === Status.IDLE ||
     experimentStatus.status === Status.STOPPING;
@@ -577,7 +597,7 @@ const ExperimentDesigner = () => {
             <span>
               <Button
                 onClick={handleStart}
-                disabled={!showStart}
+                disabled={!showStart || startPending}
                 color="success"
                 startIcon={<PlayArrowIcon />}
               >
@@ -622,19 +642,21 @@ const ExperimentDesigner = () => {
             </Button>
           </Tooltip>
         )}
-        {ashlarInterrupted && !ashlarRunning && (
-          <Tooltip title="Restart Ashlar stitching from the beginning">
-            <Button
-              size="small"
-              variant="outlined"
-              color="secondary"
-              startIcon={<AutoFixHighIcon />}
-              onClick={handleRestartStitch}
-            >
-              Restart Stitching
-            </Button>
-          </Tooltip>
-        )}
+        {!ashlarRunning &&
+          experimentState.parameterValue.ome_write_ashlar_stitch &&
+          experimentState.parameterValue.ome_write_individual_tiffs && (
+            <Tooltip title="Run Ashlar over the last experiment's tiles. It does not start on its own.">
+              <Button
+                size="small"
+                variant="outlined"
+                color="secondary"
+                startIcon={<AutoFixHighIcon />}
+                onClick={handleRunAshlar}
+              >
+                {ashlarInterrupted ? "Restart Stitching" : "Stitch Now"}
+              </Button>
+            </Tooltip>
+          )}
 
         {/* Status */}
         <Typography

@@ -462,9 +462,9 @@ const OutputDimension = () => {
               sx={{ fontSize: 16, color: theme.palette.warning.main, mt: 0.25 }}
             />
             <Typography variant="caption" color="textSecondary">
-              Ashlar starts automatically once all tiles are written and runs in
-              the background. Depending on the number of tiles and channels it may
-              take several minutes until the fully stitched image is available.
+              Ashlar does not run on its own. Once the tiles are written, press
+              "Stitch Now" in the experiment toolbar. Depending on the number of
+              tiles and channels it may take several minutes.
             </Typography>
           </Box>
 

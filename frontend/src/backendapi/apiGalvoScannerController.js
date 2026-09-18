@@ -282,6 +282,36 @@ export const apiGetCalibrationPoints = async (hostIP, hostPort, scannerName = nu
   return response.json();
 };
 
+// ========================
+// Camera <-> scanner calibration (physical units)
+// ========================
+
+/**
+ * Calibration summary: affine + camera pixel size -> µm per DAC count, plus
+ * which 2D cameras are available. umPerDacX/Y are null while uncalibrated.
+ */
+export const apiGetGalvoCameraCalibration = async (hostIP, hostPort, scannerName = null, detectorName = null) => {
+  const params = new URLSearchParams();
+  if (scannerName) params.append('scannerName', scannerName);
+  if (detectorName) params.append('detectorName', detectorName);
+  const qs = params.toString();
+  const response = await fetch(`${getApiBase(hostIP, hostPort)}/getGalvoCameraCalibration${qs ? `?${qs}` : ''}`);
+  return response.json();
+};
+
+/**
+ * Grab one contrast-stretched camera frame (base64 PNG) to draw behind the
+ * scan pattern preview. Returns { image, width, height, frameWidth,
+ * frameHeight, subsampling, pixelSizeUmX, pixelSizeUmY, detectorName }.
+ */
+export const apiSnapGalvoCameraBackground = async (hostIP, hostPort, scannerName = null, detectorName = null, maxDim = 1024) => {
+  const params = new URLSearchParams({ maxDim: String(maxDim) });
+  if (scannerName) params.append('scannerName', scannerName);
+  if (detectorName) params.append('detectorName', detectorName);
+  const response = await fetch(`${getApiBase(hostIP, hostPort)}/snapGalvoCameraBackground?${params}`);
+  return response.json();
+};
+
 export default {
   apiGetGalvoScannerNames,
   apiGetGalvoScannerConfig,
@@ -307,4 +337,6 @@ export default {
   apiResetAffineTransform,
   apiRunAffineCalibration,
   apiGetCalibrationPoints,
+  apiGetGalvoCameraCalibration,
+  apiSnapGalvoCameraBackground,
 };

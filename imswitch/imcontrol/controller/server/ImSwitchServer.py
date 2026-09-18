@@ -667,17 +667,26 @@ class ImSwitchServer(Worker):
     @api_router.get("/jupyternotebookurl")
     def get_jupyter_notebook_url():
         """
-        Returns the Jupyter notebook URL with proper IP and port.
-        The URL is constructed from the actual server configuration.
+        Returns where the Jupyter Lab server can be reached.
+
+        `url` is the address the notebook module reported at startup (the
+        server's own LAN IP), which is only useful to a browser that can reach
+        that IP. `port` and `path` let the caller rebuild the address against
+        whatever host it is already talking to: behind Caddy (Docker) the path
+        is proxied on the API port, on a plain local instance Jupyter is only
+        reachable on its own port.
         """
         from imswitch.config import get_config
         config = get_config()
-        
-        # Get the jupyter_url from config which is set when notebook starts
-        jupyter_url = f"http://localhost:{config.jupyter_port}/jupyter/" # the frontend will substitute localhost:port accordingly
-        
 
-        return {"url": jupyter_url}
+        path = "/jupyter/"
+        # config.jupyter_url is set by imnotebook once the server is up; it
+        # still holds the "localhost" placeholder if the module never started.
+        jupyter_url = config.jupyter_url
+        if not isinstance(jupyter_url, str) or not jupyter_url.startswith("http"):
+            jupyter_url = f"http://localhost:{config.jupyter_port}{path}"
+
+        return {"url": jupyter_url, "port": config.jupyter_port, "path": path}
 
     @api_router.get("/plugins")
     def get_plugins():

@@ -420,6 +420,13 @@ class RecordingController(ImConWidgetController):
         preserves the previous snap behaviour for them.
         """
         started = []
+        # Frame counter of each detector right after it is armed, read without
+        # blocking. The first grab after arming blocks for a whole exposure on
+        # drivers such as Toupcam, and a baseline taken from that grab would
+        # cost a second full exposure (see _waitForFreshFrame). Read after the
+        # start so drivers that reset their counter per stream report the
+        # reset value, not the last frame of the previous stream.
+        baselines = {}
         for detectorName in detectorNames:
             try:
                 detector = self._master.detectorsManager[detectorName]
@@ -434,6 +441,7 @@ class RecordingController(ImConWidgetController):
                 try:
                     detector.startAcquisition()
                     started.append(detectorName)
+                    baselines[detectorName] = self._readFrameNumber(detector)
                     self.__logger.debug(
                         f"Armed detector '{detectorName}' on demand for snap "
                         f"(live stream not running)."
@@ -450,12 +458,24 @@ class RecordingController(ImConWidgetController):
                 break
             try:
                 self._waitForFreshFrame(self._master.detectorsManager[detectorName],
-                                        cancelEvent=cancelEvent)
+                                        cancelEvent=cancelEvent,
+                                        baselineFrameNumber=baselines.get(detectorName))
             except Exception as e:
                 self.__logger.warning(
                     f"Error while waiting for a fresh frame on '{detectorName}': {e}"
                 )
         return started
+
+    @staticmethod
+    def _readFrameNumber(detector) -> Optional[int]:
+        """Non-blocking read of the detector's last frame number, or None."""
+        getFrameNumber = getattr(detector, "getFrameNumber", None)
+        if getFrameNumber is None:
+            return None
+        try:
+            return int(getFrameNumber())
+        except Exception:
+            return None
 
     @staticmethod
     def _interruptibleSleep(seconds: float, cancelEvent: Optional[threading.Event]) -> bool:
@@ -467,13 +487,24 @@ class RecordingController(ImConWidgetController):
 
     def _waitForFreshFrame(self, detector, framesToWait: int = 1,
                            extraTimeout: float = 3.0,
-                           cancelEvent: Optional[threading.Event] = None) -> bool:
+                           cancelEvent: Optional[threading.Event] = None,
+                           baselineFrameNumber: Optional[int] = None) -> bool:
         """Block until the detector has produced a fresh frame after arming.
 
         Waits for the frame counter to advance so that a snap taken with the
         live stream off captures a real exposure rather than a stale buffered
         frame. The timeout scales with the configured exposure time so exposures
         of many seconds (e.g. 60 s or more) are supported.
+
+        ``baselineFrameNumber`` is the counter value read (without blocking)
+        right after the detector was armed, i.e. before any frame of the new
+        stream could arrive on a long exposure. With it, the first frame the
+        driver hands out is already recognised as fresh -- both when the
+        counter advanced past it and when it restarted (drivers that renumber
+        from 1 on every stream start and keep the old number until then).
+        Without it the baseline has to be taken from the first grab, and since
+        that grab blocks for a whole integration on drivers like Toupcam, the
+        snap then costs two full exposures (an hour at 30 min).
 
         Returns True if a fresh frame arrived (or we gave up waiting for one),
         False if ``cancelEvent`` fired first. Note that the blocking part is
@@ -484,7 +515,7 @@ class RecordingController(ImConWidgetController):
         # Allow a full exposure for every frame we wait for, plus a safety margin.
         timeout = max(2.0, (exposureSeconds + 0.2) * (framesToWait + 1) + extraTimeout)
         startTime = time.time()
-        baselineFrameNumber = None
+        preArmFrameNumber = baselineFrameNumber
         while True:
             if cancelEvent is not None and cancelEvent.is_set():
                 return False
@@ -509,6 +540,12 @@ class RecordingController(ImConWidgetController):
                 # exposure and use whatever is available.
                 return not self._interruptibleSleep(
                     min(timeout, exposureSeconds + 0.3), cancelEvent)
+
+            if (frame is not None and preArmFrameNumber is not None
+                    and frameNumber < preArmFrameNumber):
+                # The counter restarted when acquisition began, so this frame
+                # can only have been exposed after arming: it is fresh.
+                return True
 
             if baselineFrameNumber is None or frameNumber < baselineFrameNumber:
                 # Establish the baseline (or reset it if the counter wrapped or

@@ -105,6 +105,9 @@ def generateAPI(objs, *, missingAttributeErrorMsg=None):
                 exportedFuncs[subObjName] = wrapper
                 wrapper.module = subObj.__module__.split('.')[-1]
             else:
+                # Route prefix is the controller class, not the file the method
+                # lives in, so methods mixed in from other modules keep their URL.
+                getattr(subObj, "__func__", subObj).module = type(obj).__name__
                 exportedFuncs[subObjName] = subObj
 
     return pythontools.dictToROClass(exportedFuncs,

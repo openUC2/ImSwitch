@@ -7,8 +7,8 @@ from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberPara
 _HARDWARE_READABLE_PARAMS = (
     'exposure', 'gain', 'blacklevel', 'exposure_mode', 'frame_rate',
     'frame_number', 'image_width', 'image_height', 'trigger_source',
-    'temperature', 'pixel_format', 'conversion_gain', 'low_noise', 'heat',
-    'blacklevel_autoadjust',
+    'temperature', 'target_temperature', 'fan_speed', 'pixel_format',
+    'conversion_gain', 'low_noise', 'heat', 'blacklevel_autoadjust',
 )
 
 
@@ -200,16 +200,24 @@ class ToupCamManager(DetectorManager):
                 value=bool(self._camera.get_blacklevel_autoadjust()),
                 editable=True)
 
-        # TEC-cooled models get temperature control parameters
+        # TEC-cooled models get temperature control parameters. The values are
+        # read back from the camera so the dialog shows the target that is
+        # actually active rather than a placeholder.
         if getattr(self._camera, '_hasTEC', False):
+            target = self._camera.get_target_temperature()
+            if target is None:
+                target = getattr(self._camera, 'targetTemperature', 0)
             parameters['target_temperature'] = DetectorNumberParameter(
-                group='Cooling', value=0, valueUnits='°C', editable=True)
+                group='Cooling', value=target, valueUnits='°C', editable=True)
         if getattr(self._camera, '_hasGetTemperature', False):
             parameters['temperature'] = DetectorNumberParameter(
-                group='Cooling', value=0, valueUnits='°C', editable=False)
+                group='Cooling', value=self._camera.get_temperature() or 0,
+                valueUnits='°C', editable=False)
         if getattr(self._camera, '_hasFan', False):
+            fan = self._camera.get_fan_speed()
             parameters['fan_speed'] = DetectorNumberParameter(
-                group='Cooling', value=-1, valueUnits='arb.u.', editable=True)
+                group='Cooling', value=-1 if fan is None else fan,
+                valueUnits='arb.u.', editable=True)
 
         # Prepare actions
         actions = {

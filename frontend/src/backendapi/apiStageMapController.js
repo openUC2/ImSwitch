@@ -43,5 +43,24 @@ export const apiStageMapGetTiles = (fromId = 0, includePreviews = true) =>
 export const apiStageMapGotoPosition = (x, y, isAbsolute = true, isBlocking = false) =>
   get("gotoStagePosition", { x, y, isAbsolute, isBlocking });
 
+// Fast prescan: sweeps the area and drops strips into the same tile store the
+// map uses, so the existing overlay draws them with no new render path.
+export const apiStageMapStartPrescan = async (area) => {
+  const axiosInstance = createAxiosInstance();
+  const response = await axiosInstance.post(
+    "/StageMapController/startPrescan",
+    null,
+    { params: area },
+  );
+  return response.data;
+};
+
+export const apiStageMapStopPrescan = () => get("stopPrescan");
+
+// The whole map as one image plus the stage extent it covers (µm). For
+// consumers outside this app.
+export const apiStageMapGetOverview = (maxWidthPx = 2048) =>
+  get("getStageMapOverview", { maxWidthPx });
+
 export const apiStageMapSaveOmeTiff = (filename = "") =>
   get("saveStitchedOmeTiff", { filename });

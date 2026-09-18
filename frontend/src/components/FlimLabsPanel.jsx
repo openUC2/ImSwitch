@@ -54,6 +54,7 @@ import ScatterPlotIcon from '@mui/icons-material/ScatterPlot';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useSelector, useDispatch } from 'react-redux';
 import { getConnectionSettingsState } from '../state/slices/ConnectionSettingsSlice';
 import {
@@ -106,6 +107,30 @@ const MODE_TABS = ['scouting', 'calibration', 'phasors'];
 const STATUS_POLL_IDLE_MS = 5000;
 const STATUS_POLL_RUNNING_MS = 2000;
 const IMAGE_POLL_MS = 2000;
+const FLIM_WEB_UI_PORT = 5249;
+
+/**
+ * URL of the FLIM LABS web UI (flim-imager's own page) as seen from the
+ * browser: the ImSwitch host, port 5249. `serverUrl` in the status is the
+ * backend's view (typically http://localhost:5249) and only its port is
+ * reused, since "localhost" would point at the operator's laptop.
+ */
+export const flimWebUiUrl = (hostIP, serverUrl) => {
+  let port = FLIM_WEB_UI_PORT;
+  try {
+    const p = new URL(serverUrl).port;
+    if (p) port = Number(p);
+  } catch (e) { /* no/invalid serverUrl: keep the default */ }
+  let hostname = '';
+  try {
+    hostname = new URL(hostIP).hostname;
+  } catch (e) {
+    hostname = String(hostIP || '').replace(/^https?:\/\//, '').split(':')[0];
+  }
+  if (!hostname) return null;
+  // flim-imager serves plain http even when ImSwitch sits behind an https proxy
+  return `http://${hostname}:${port}`;
+};
 
 const FlimLabsPanel = () => {
   const dispatch = useDispatch();
@@ -612,6 +637,8 @@ const FlimLabsPanel = () => {
   const calibrationResults = status?.calibrationResults || [];
   const calibrationReference = status?.calibrationReference || null;
 
+  const webUiUrl = flimWebUiUrl(hostIP, status?.serverUrl);
+
   const healthChip =
     flim.serverHealthy === null ? (
       <Chip label="server: ?" size="small" />
@@ -693,6 +720,21 @@ const FlimLabsPanel = () => {
             Save
           </Button>
         </Tooltip>
+        {webUiUrl && (
+          <Tooltip title={`Open the FLIM LABS web UI running next to ImSwitch (${webUiUrl}). Its /data stream is single-consumer: disarm here before streaming there.`}>
+            <Button
+              size="small"
+              component="a"
+              href={webUiUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              endIcon={<OpenInNewIcon />}
+              data-testid="flim-web-ui-link"
+            >
+              FLIM LABS UI
+            </Button>
+          </Tooltip>
+        )}
       </Box>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
         Acquisition is owned by the ImSwitch backend (detector{' '}

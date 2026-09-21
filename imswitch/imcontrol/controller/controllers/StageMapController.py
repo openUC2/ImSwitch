@@ -49,6 +49,14 @@ class StageMapParams(BaseModel):
     # Channel handling
     activeChannel: str = ""             # empty = auto-detect from enabled illumination
 
+    # Prescan: how long after a frame was exposed it reaches us (exposure,
+    # readout, USB transfer, SDK callback, our poll). The stage keeps moving
+    # meanwhile, so every band would land ahead of where it was taken — by
+    # speed × lag, in the direction of travel — and serpentine lines would
+    # alternate. Negative = measure it at the start of every prescan by
+    # sweeping the first line both ways and correlating the two strips.
+    prescanLagMs: float = -1.0
+
     class Config:
         arbitrary_types_allowed = True
 
@@ -68,6 +76,7 @@ class StageMapStatus(BaseModel):
     detectorName: str = ""
     lastError: str = ""
     prescanRunning: bool = False
+    prescanLagMs: float = 0.0           # lag compensation in use (set or calibrated)
 
     class Config:
         arbitrary_types_allowed = True
@@ -99,6 +108,79 @@ def prescanLayout(spanUm: float, dxUm: float, pixelSizeUm: float, frameShape,
         if stripW * stripH * itemsize <= maxStripBytes or subsample >= 64:
             return slots, stripW, stripH, subsample, dxUm
         subsample += 1
+
+
+def estimateProfileShift(a: np.ndarray, b: np.ndarray, maxShiftPx: Optional[int] = None,
+                         minPeak: float = 0.2, minContrast: float = 0.01):
+    """How many columns strip ``a`` is shifted right of strip ``b`` (or None).
+
+    Both strips show the same line; only their placement along X differs.
+    The comparison is on the column-mean profiles, so it is insensitive to
+    the rolling-shutter skew inside each band, and it is a normalised FFT
+    cross-correlation so a 20 000-column strip costs milliseconds. Columns
+    left dark (never filled) in either strip are masked to the mean so the
+    strip end does not act as a feature that pins the shift to zero.
+
+    None means "don't trust it": a blank line (glass, no tissue) has no
+    contrast to correlate, and a weak peak is noise.
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    if a.ndim == 1:
+        a = a[None, :]
+    if b.ndim == 1:
+        b = b[None, :]
+    n = min(a.shape[1], b.shape[1])
+    if n < 8:
+        return None
+    a, b = a[:, :n], b[:, :n]
+    filled = (a.max(axis=0) > 0) & (b.max(axis=0) > 0)
+    if filled.sum() < n // 4:
+        return None
+    pa, pb = a.mean(axis=0), b.mean(axis=0)
+    level = max(float(pa[filled].mean()), float(pb[filled].mean()), 1e-9)
+    pa = np.where(filled, pa, pa[filled].mean()) - pa[filled].mean()
+    pb = np.where(filled, pb, pb[filled].mean()) - pb[filled].mean()
+    sa, sb = float(pa.std()), float(pb.std())
+    if sa < minContrast * level or sb < minContrast * level:
+        return None
+    size = 1
+    while size < 2 * n:
+        size *= 2
+    fa, fb = np.fft.rfft(pa, size), np.fft.rfft(pb, size)
+    # cc[k] = sum_x a[x + k] * b[x]: peaks at k = s when a[x] = b[x - s]
+    cc = np.fft.irfft(fa * np.conj(fb), size) / (n * sa * sb)
+    lags = np.arange(size)
+    lags[lags > size // 2] -= size
+    limit = n // 4 if maxShiftPx is None else max(1, int(maxShiftPx))
+    window = np.abs(lags) <= limit
+    k = int(np.argmax(np.where(window, cc, -np.inf)))
+    if cc[k] < minPeak:
+        return None
+    return int(lags[k])
+
+
+class _Sweep:
+    """What one drive along a prescan line produced, before it is placed.
+
+    ``samples`` are (grab time, centre band) pairs; ``t0``/``t1`` bracket
+    the move (command sent / reported done); ``span`` is the travel in µm
+    and ``scale`` the strip µm per pixel. Placement is a separate step so
+    the same sweep can be laid out again once the lag is known.
+    """
+
+    def __init__(self, samples, t0, t1, span, scale, forward):
+        self.samples = samples
+        self.t0 = t0
+        self.t1 = t1
+        self.span = span
+        self.scale = scale
+        self.forward = forward
+
+    @property
+    def speed(self) -> float:
+        """Mean speed actually achieved, µm/s — not what was asked for."""
+        return self.span / max(self.t1 - self.t0, 1e-6)
 
 
 class _NonBlockingMove:
@@ -155,6 +237,7 @@ class StageMapController(ImConWidgetController):
     """
 
     sigStageMapTileAdded = Signal(dict)
+    sigStageMapTilesRemoved = Signal(dict)
     sigStageMapStatus = Signal(dict)
 
     MAX_STITCH_PIXELS = 1.2e9  # safety cap for the stitched canvas (bytes ~ 2x for uint16)
@@ -174,6 +257,9 @@ class StageMapController(ImConWidgetController):
         # Session/tile state
         self._tiles: List[Dict] = []          # metadata for every captured tile
         self._tilesLock = threading.Lock()
+        # Ids only ever count up. The frontend keys tiles by id, so an id
+        # reused after tiles were removed would be dropped as a duplicate.
+        self._nextTileId = 0
         self._sessionPath: Optional[str] = None
         self._acqHandle = None
 
@@ -183,6 +269,7 @@ class StageMapController(ImConWidgetController):
         self._monitorThread: Optional[threading.Thread] = None
         self._snapRequested = threading.Event()
         self._prescanThread: Optional[threading.Thread] = None
+        self._prescanLagS = 0.0               # camera lag in use (see StageMapParams.prescanLagMs)
         self._lastError = ""
 
         self._logger.info("StageMapController initialized")
@@ -325,6 +412,29 @@ class StageMapController(ImConWidgetController):
         for tile in withPreview[:max(0, excess)]:
             tile["preview"] = None
 
+    def _allocTileId(self) -> int:
+        with self._tilesLock:
+            tileId = self._nextTileId
+            self._nextTileId += 1
+        return tileId
+
+    def _dropTiles(self, kind: str) -> List[int]:
+        """Remove every tile of one kind from the store and tell the frontend.
+
+        Used when a prescan starts: the previous overlay would otherwise stay
+        underneath the new one, and the two rarely agree pixel for pixel.
+        Tiles of other kinds (snapped while mapping) are left alone.
+        """
+        with self._tilesLock:
+            removed = [t["id"] for t in self._tiles if t.get("kind") == kind]
+            if removed:
+                self._tiles = [t for t in self._tiles if t.get("kind") != kind]
+        if removed:
+            self._writeTileIndex()
+            self.sigStageMapTilesRemoved.emit({"ids": removed, "kind": kind})
+            self._logger.info(f"Removed {len(removed)} {kind} tile(s)")
+        return removed
+
     def _makePreview(self, frame: np.ndarray) -> Optional[str]:
         """Downscale + JPEG-encode a frame, return base64 string."""
         try:
@@ -392,8 +502,7 @@ class StageMapController(ImConWidgetController):
         widthUm = widthPx * pixelSize
         heightUm = heightPx * pixelSize
 
-        with self._tilesLock:
-            tileId = len(self._tiles)
+        tileId = self._allocTileId()
 
         rawPath = ""
         if self.params.saveRawTiles and self._sessionPath and HAS_TIFFFILE:
@@ -427,6 +536,7 @@ class StageMapController(ImConWidgetController):
             "widthUm": float(widthUm),
             "heightUm": float(heightUm),
             "channel": channel,
+            "kind": "tile",
             "rawPath": rawPath,
             "timestamp": time.time(),
             "preview": preview,
@@ -473,6 +583,10 @@ class StageMapController(ImConWidgetController):
         end when a line finishes, so driving straight back across it halves the
         travel. Each strip is emitted as soon as its line ends, so the map fills
         in line by line rather than at the end.
+
+        Unless the operator pinned ``prescanLagMs``, the first line is driven
+        both ways first: the two strips differ only by the camera lag (see
+        StageMapParams), so their offset calibrates it for the whole prescan.
         """
         acqHandle = None
         restore = self._enterPrescanOptics(objectiveSlot)
@@ -482,19 +596,26 @@ class StageMapController(ImConWidgetController):
             except Exception as e:
                 self._logger.warning(f"Could not start acquisition: {e}")
 
+            lagS = None
+            if self.params.prescanLagMs is not None and self.params.prescanLagMs >= 0:
+                lagS = float(self.params.prescanLagMs) / 1000.0
+                self._prescanLagS = lagS
+
             y = minY
             forward = True
             while y <= maxY + 1e-6 and not self._shouldStop.is_set():
-                startX, endX = (minX, maxX) if forward else (maxX, minX)
-                result = self._prescanLine(startX, endX, y, speedX, dx, subsample)
-                if result is not None:
-                    strip, stripPixelSize = result
-                    if not forward:
-                        # Store every strip left-to-right whichever way it was
-                        # driven, so the map does not mirror alternate lines.
-                        strip = strip[:, ::-1]
-                    self._addStrip(strip, minX, maxX, y, stripPixelSize)
-                forward = not forward
+                if lagS is None:
+                    lagS, sweep = self._calibratePrescanLag(minX, maxX, y, speedX, dx, subsample)
+                    self._prescanLagS = lagS
+                    self._emitStatus()
+                    # Both calibration sweeps ended where they started, so the
+                    # next line is driven forward again.
+                else:
+                    startX, endX = (minX, maxX) if forward else (maxX, minX)
+                    sweep = self._sweepLine(startX, endX, y, speedX, dx, subsample)
+                    forward = not forward
+                if sweep is not None:
+                    self._addStrip(self._placeSweep(sweep, lagS), minX, maxX, y, sweep.scale)
                 y += dy
         except Exception as e:
             self._lastError = f"Prescan failed: {e}"
@@ -509,6 +630,40 @@ class StageMapController(ImConWidgetController):
             self._prescanThread = None
             self._emitStatus()
             self._logger.info("Prescan finished")
+
+    def _calibratePrescanLag(self, minX, maxX, y, speedX, dx, subsample):
+        """Drive one line forward and back; the strips' offset is 2 × speed × lag.
+
+        Returns ``(lagS, forwardSweep)``. The forward sweep is handed back so
+        the caller can place it with the lag it just paid for, and the stage
+        ends at ``minX`` again. Falls back to the last known lag when the line
+        has nothing to correlate (blank glass) or a sweep failed.
+        """
+        fallback = self._prescanLagS
+        fwd = self._sweepLine(minX, maxX, y, speedX, dx, subsample)
+        if fwd is None or self._shouldStop.is_set():
+            return fallback, fwd
+        bwd = self._sweepLine(maxX, minX, y, speedX, dx, subsample)
+        if bwd is None:
+            return fallback, fwd
+        a = self._placeSweep(fwd, 0.0)
+        b = self._placeSweep(bwd, 0.0)
+        # The lag cannot plausibly exceed half a second; look no further.
+        maxShiftPx = int(np.ceil(0.5 * (fwd.speed + bwd.speed) / fwd.scale))
+        shiftPx = estimateProfileShift(a, b, maxShiftPx=maxShiftPx)
+        if shiftPx is None:
+            self._logger.warning(
+                f"Prescan lag calibration: line y={y:.0f} has no usable contrast, "
+                f"keeping {fallback * 1000:.0f} ms")
+            return fallback, fwd
+        # Forward lands +speed·lag along X, backward −speed·lag: the strips
+        # are (vF + vB)·lag apart.
+        lagS = shiftPx * fwd.scale / max(fwd.speed + bwd.speed, 1e-6)
+        lagS = float(min(max(lagS, -0.5), 0.5))
+        self._logger.info(
+            f"Prescan lag calibration: strips {shiftPx * fwd.scale:.0f} µm apart at "
+            f"{fwd.speed:.0f}/{bwd.speed:.0f} µm/s -> lag {lagS * 1000:.0f} ms")
+        return lagS, fwd
 
     def _objectiveController(self):
         try:
@@ -600,16 +755,20 @@ class StageMapController(ImConWidgetController):
         start = max(0, width // 2 - band // 2)
         return np.array(frame[::subsample, start:start + band:subsample], copy=True)
 
-    def _prescanLine(self, startX, endX, y, speedX, dx, subsample):
-        """Drive X once; return the strip of the exposures taken on the way.
+    # Frames are still delivered after the stage has stopped; keep grabbing
+    # this long so the end of the line is covered too.
+    PRESCAN_TAIL_S = 0.3
+
+    def _sweepLine(self, startX, endX, y, speedX, dx, subsample) -> Optional[_Sweep]:
+        """Drive X once; return the timestamped exposures taken on the way.
 
         Two phases, deliberately separate:
 
         1. While the stage moves, keep the centre band of a fresh frame every
            ``dx`` worth of travel (by nominal time) — a short list, one entry
            per tile pitch, never more than PRESCAN_MAX_FRAMES.
-        2. Once the move has FINISHED, spread those bands across the strip by
-           where each was taken: ``x = span * (t - t0) / (t1 - t0)``.
+        2. Later (``_placeSweep``) spread those bands across the strip by
+           where each was taken: ``x = span * (t - lag - t0) / (t1 - t0)``.
 
         Placing by the measured sweep duration rather than by ``speedX`` is
         what makes the strip land in the right place: the stage accelerates,
@@ -617,8 +776,8 @@ class StageMapController(ImConWidgetController):
         none of that matters once the ends of the line are pinned to the ends
         of the strip. Everything is sized from the frames themselves, not
         from ``detector.shape`` (whose axis order differs between cameras).
-        ``startX``/``endX`` are in travel order; the caller un-mirrors return
-        lines. Returns ``(strip, um_per_strip_px)`` or None.
+        ``startX``/``endX`` are in travel order; ``_placeSweep`` un-mirrors
+        return lines. Returns None when the line yielded nothing usable.
         """
         # One axis at a time — a combined move drives the stage diagonally.
         self._stage.move(value=startX, axis="X", speed=speedX, is_absolute=True, is_blocking=True)
@@ -645,13 +804,19 @@ class StageMapController(ImConWidgetController):
         mover = _NonBlockingMove(self._stage, endX - startX, "X", speedX)
         mover.start()
         t0 = time.time()
+        t1 = None
         deadline = t0 + (span / max(speedX, 1e-6)) * 3.0 + 10.0
 
         samples = []  # (t, band)
         lastFrameNumber = -1
         lastKept = -1e9
-        while not mover.finished and not self._shouldStop.is_set() and time.time() < deadline:
+        while not self._shouldStop.is_set() and time.time() < deadline:
             now = time.time()
+            if mover.finished:
+                if t1 is None:
+                    t1 = now
+                elif now - t1 > self.PRESCAN_TAIL_S:
+                    break
             if now - lastKept < interval:
                 # Fixed 2 ms tick, never "the remainder": a remainder of a few
                 # microseconds is a busy-loop, not a sleep.
@@ -667,12 +832,6 @@ class StageMapController(ImConWidgetController):
             lastFrameNumber = frameNumber
             lastKept = now
             samples.append((now, self._centreBand(frame, bandPx, subsample)))
-        t1 = time.time()
-        if 0: # debug
-            import tifffile as tif
-            for sample in samples: 
-                tif.imwrite(f"test.tif", sample[1], append=True)
-                print(sample[1])
         mover.join(timeout=5.0)
         if mover.error:
             self._logger.error(f"Prescan line y={y:.0f}: move failed: {mover.error}")
@@ -680,6 +839,8 @@ class StageMapController(ImConWidgetController):
         if not mover.finished:
             self._logger.error(f"Prescan line y={y:.0f}: move did not finish in time")
             return None
+        if t1 is None:
+            t1 = time.time()
         if len(samples) < 2:
             self._logger.warning(f"Prescan line y={y:.0f}: only {len(samples)} exposure(s)")
             return None
@@ -689,26 +850,49 @@ class StageMapController(ImConWidgetController):
                 f"Prescan line y={y:.0f}: {len(samples)} exposures for {wanted} wanted — "
                 f"this camera keeps up to about {fps * dx:.0f} µm/s at this pitch")
 
-        scale = pixelSize * subsample
-        return self._spreadSamples(samples, t0, t1, span, scale), scale
+        return _Sweep(samples, t0, t1, span, pixelSize * subsample, endX >= startX)
 
-    def _spreadSamples(self, samples, t0, t1, span, scale):
+    def _placeSweep(self, sweep: _Sweep, lagS: float) -> np.ndarray:
+        """Lay a sweep out left-to-right in stage X, corrected for the camera lag.
+
+        A frame grabbed at ``t`` was exposed at ``t - lag``, when the stage
+        was ``speed × lag`` behind: shifting the move's time bracket by the
+        lag puts every band back where it was actually taken. The strip
+        reads minX→maxX whichever way the line was driven.
+        """
+        return self._spreadSamples(sweep.samples, sweep.t0 + lagS, sweep.t1 + lagS,
+                                   sweep.span, sweep.scale, forward=sweep.forward)
+
+    def _spreadSamples(self, samples, t0, t1, span, scale, forward=True):
         """Lay timestamped bands across a strip by where each was exposed.
 
-        Column of sample i is ``span * (t_i - t0) / (t1 - t0) / scale``. Each
-        band fills half the distance to its neighbours on either side, so the
-        strip is contiguous whatever the cadence; a band narrower than that
-        gap is centred and the remainder left dark rather than stretched.
+        Sample i sits ``span * (t_i - t0) / (t1 - t0)`` along the travel,
+        clamped to the strip: frames from before the stage set off or after
+        it stopped show the line's end points. The strip is always in stage
+        order (column 0 = lowest X); a return line (``forward=False``) walks
+        it from the far end. Bands are never mirrored — the camera does not
+        know which way the stage is going, so its pixel order is the same on
+        every line, and flipping a whole return strip would flip each field
+        of view inside it.
+
+        Each band fills half the distance to its neighbours on either side,
+        so the strip is contiguous whatever the cadence; a band narrower than
+        that gap is centred and the remainder left dark rather than stretched.
         """
         stripW = max(2, int(np.ceil(span / scale)))
         stripH = samples[0][1].shape[0]
         strip = np.zeros((stripH, stripW), dtype=samples[0][1].dtype)
         duration = max(t1 - t0, 1e-6)
-        centres = [int(round((t - t0) / duration * (stripW - 1))) for t, _ in samples]
+        placed = []
+        for t, band in samples:
+            along = min(stripW - 1, max(0, int(round((t - t0) / duration * (stripW - 1)))))
+            placed.append((along if forward else stripW - 1 - along, band))
+        placed.sort(key=lambda item: item[0])
+        centres = [c for c, _ in placed]
 
-        for i, (_, band) in enumerate(samples):
+        for i, (_, band) in enumerate(placed):
             left = 0 if i == 0 else (centres[i - 1] + centres[i]) // 2
-            right = stripW if i == len(samples) - 1 else (centres[i] + centres[i + 1]) // 2
+            right = stripW if i == len(placed) - 1 else (centres[i] + centres[i + 1]) // 2
             width = min(right - left, band.shape[1])
             if width <= 0:
                 continue
@@ -727,8 +911,7 @@ class StageMapController(ImConWidgetController):
         preview = self._makePreview(strip)
         if preview is None:
             return
-        with self._tilesLock:
-            tileId = len(self._tiles)
+        tileId = self._allocTileId()
         tile = {
             "id": tileId,
             "x": float((minX + maxX) / 2.0),
@@ -736,6 +919,7 @@ class StageMapController(ImConWidgetController):
             "widthUm": float(maxX - minX),
             "heightUm": float(strip.shape[0] * pixelSize),
             "channel": self._getActiveChannel(),
+            "kind": "prescan",
             "rawPath": "",
             "timestamp": time.time(),
             "preview": preview,
@@ -886,6 +1070,7 @@ class StageMapController(ImConWidgetController):
             positionY=pos[1],
             detectorName=self._detectorName,
             lastError=self._lastError,
+            prescanLagMs=float(self._prescanLagS * 1000.0),
         )
 
     @APIExport()
@@ -959,6 +1144,8 @@ class StageMapController(ImConWidgetController):
 
         if self._sessionPath is None:
             self._createSession()
+        # A new prescan replaces the old overlay rather than layering on it.
+        self._dropTiles("prescan")
         self._shouldStop.clear()
         self._prescanThread = threading.Thread(
             target=self._prescanLoop,
@@ -1144,6 +1331,7 @@ class StageMapController(ImConWidgetController):
                     "widthUm": tile["widthUm"],
                     "heightUm": tile["heightUm"],
                     "channel": tile["channel"],
+                    "kind": tile.get("kind", "tile"),
                     "timestamp": tile["timestamp"],
                 }
                 if includePreviews:

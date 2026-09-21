@@ -16,7 +16,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
 from imswitch.imcontrol.controller.controllers.StageMapController import (  # noqa: E402
-    StageMapController,
+    StageMapController, _Sweep,
 )
 
 
@@ -78,14 +78,18 @@ def _sweep_controller(pixel_size, frame_shape, speed, frames_per_s):
     def latest(returnFrameNumber=False):
         t = clock.now - (started["t"] if started["t"] is not None else clock.now)
         n = max(0, int(t * frames_per_s))
-        x_when_exposed = speed * (n / frames_per_s)          # µm since the start
+        # µm since the start; the stage stops at the end of the line, and
+        # frames grabbed after that show where it came to rest.
+        x_when_exposed = min(c.span, speed * (n / frames_per_s))
         # +1 so that 0 can only mean "never written".
         frame = np.full(frame_shape, min(65535, int(x_when_exposed) + 1), np.uint16)
         return (frame, n) if returnFrameNumber else frame
 
     c._detector = types.SimpleNamespace(shape=frame_shape, getLatestFrame=latest)
-    c._prescanLine = types.MethodType(StageMapController._prescanLine, c)
+    c._sweepLine = types.MethodType(StageMapController._sweepLine, c)
+    c._placeSweep = types.MethodType(StageMapController._placeSweep, c)
     c._spreadSamples = types.MethodType(StageMapController._spreadSamples, c)
+    c.PRESCAN_TAIL_S = StageMapController.PRESCAN_TAIL_S
     c._on_move_start = lambda: started.__setitem__("t", clock.now)
     return c
 
@@ -98,6 +102,7 @@ def test_exposure_k_lands_in_the_columns_slot_k_covers(monkeypatch):
 
     speed, dx, span, px = 10000.0, 300.0, 3000.0, 0.12
     c = _sweep_controller(px, (400, 3000), speed, frames_per_s=1000.0)
+    c.span = span
 
     class Move:
         def __init__(self, stage, value, axis, speed_):
@@ -123,7 +128,8 @@ def test_exposure_k_lands_in_the_columns_slot_k_covers(monkeypatch):
     monkeypatch.setattr(sm.time, "time", c.clock.time)
     monkeypatch.setattr(sm.time, "sleep", c.clock.sleep)
 
-    strip, scale = c._prescanLine(0.0, span, 0.0, speed, dx, 4)
+    sweep = c._sweepLine(0.0, span, 0.0, speed, dx, 4)
+    strip, scale = c._placeSweep(sweep, 0.0), sweep.scale
 
     assert scale == px * 4
     assert strip.shape[1] == int(np.ceil(span / scale))
@@ -180,19 +186,26 @@ def _recording_controller(pixel_size=1.0):
         combinedAxes=["XY"],
     )
 
+    # A pinned lag: the loop must not spend a calibration sweep.
+    c.params = types.SimpleNamespace(prescanLagMs=0.0)
+    c._prescanLagS = 0.0
+
     def fake_line(startX, endX, y, speedX, dx, subsample):
         c.sweeps.append((startX, endX, y))
-        # The strip comes back in travel order: a return line is descending in
-        # X. Model that, or the flip under test has nothing to undo.
-        ramp = np.arange(10, dtype=np.uint8)
-        if startX > endX:
-            ramp = ramp[::-1]
-        return np.tile(ramp, (2, 1)), 1.0
+        # Ten exposures along the travel, each a band whose value is the X it
+        # was taken at (in tenths of the line). Camera pixel order is the same
+        # whichever way the stage goes, so a band never needs mirroring.
+        samples = []
+        for k in range(10):
+            x = startX + (endX - startX) * (k + 0.5) / 10
+            samples.append((float(k), np.full((2, 100), int(x / 100), np.uint8)))
+        return _Sweep(samples, -0.5, 9.5, abs(endX - startX), 1.0, endX >= startX)
 
-    c._prescanLine = fake_line
+    c._sweepLine = fake_line
     c._addStrip = lambda strip, minX, maxX, y, pixelSize: c.strips.append((y, strip.copy()))
     for name in ("_prescanLoop", "_enterPrescanOptics", "_restorePrescanOptics",
-                 "_objectiveController"):
+                 "_objectiveController", "_placeSweep", "_spreadSamples",
+                 "_calibratePrescanLag"):
         setattr(c, name, types.MethodType(getattr(StageMapController, name), c))
     return c
 
@@ -214,8 +227,24 @@ def test_reverse_lines_are_stored_left_to_right():
     c._prescanLoop(0.0, 1000.0, 0.0, 100.0, 100.0, 5000.0, None, 0.0, 4)
 
     forward, reverse = c.strips[0][1], c.strips[1][1]
-    np.testing.assert_array_equal(forward[0], np.arange(10))
-    np.testing.assert_array_equal(reverse[0], np.arange(10))  # un-mirrored
+    # Column c of either strip shows the exposure taken nearest X = c.
+    cols = np.arange(50, 1000, 100)
+    np.testing.assert_array_equal(forward[0, cols], cols // 100)
+    np.testing.assert_array_equal(reverse[0, cols], cols // 100)  # un-mirrored
+
+
+def test_auto_lag_calibrates_on_the_first_line_then_alternates():
+    """Unpinned lag: the first line is driven out and back (which leaves the
+    stage at minX), and the serpentine continues from there."""
+    c = _recording_controller()
+    c.params = types.SimpleNamespace(prescanLagMs=-1.0)
+    c._prescanLoop(0.0, 1000.0, 0.0, 200.0, 100.0, 5000.0, None, 0.0, 4)
+
+    assert [(s[0], s[1]) for s in c.sweeps] == [
+        (0.0, 1000.0), (1000.0, 0.0),           # calibration pair, line 0
+        (0.0, 1000.0), (1000.0, 0.0),           # lines 1 and 2
+    ]
+    assert [y for y, _ in c.strips] == [0.0, 100.0, 200.0]
 
 
 def test_stage_position_is_restored_after_the_sweep():

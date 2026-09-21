@@ -198,34 +198,15 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
      * the current objective FOV (with optional overlap).
      * Returns an array of {x, y} in physical (µm) coordinates.
      */
-    generateFreehandScanPositions: (overlap = 0) => {
-      const polygon = freehandPoints;
-      if (!polygon || polygon.length < 3) return [];
-      const fovX = objectiveState?.fovX || 0;
-      const fovY = objectiveState?.fovY || 0;
-      if (fovX <= 0 || fovY <= 0) return [];
-      const stepX = fovX * (1 - overlap);
-      const stepY = fovY * (1 - overlap);
-      let minX = Infinity,
-        minY = Infinity,
-        maxX = -Infinity,
-        maxY = -Infinity;
-      polygon.forEach((p) => {
-        if (p.x < minX) minX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y > maxY) maxY = p.y;
-      });
-      const positions = [];
-      for (let y = minY; y <= maxY; y += stepY) {
-        for (let x = minX; x <= maxX; x += stepX) {
-          if (wsUtils.isPointInPolygon({ x, y }, polygon)) {
-            positions.push({ x, y });
-          }
-        }
-      }
-      return positions;
-    },
+    generateFreehandScanPositions: (overlap = 0) =>
+      wsUtils.generatePolygonScanPositions(
+        freehandPoints,
+        objectiveState?.fovX || 0,
+        objectiveState?.fovY || 0,
+        overlap,
+      ),
+    /** The closed freehand polygon as drawn, in physical (µm) coordinates. */
+    getFreehandPolygon: () => freehandPoints.map((p) => ({ x: p.x, y: p.y })),
   }));
 
   //##################################################################################

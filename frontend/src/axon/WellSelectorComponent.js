@@ -133,6 +133,51 @@ const WellSelectorComponent = () => {
     fetchObjectiveControllerGetStatus(dispatch);
   }, [dispatch]);
 
+  // A freehand region keeps its polygon, so when the objective changes (new
+  // FOV) or the area overlap is edited, re-tile it on the new pitch. Without
+  // this the positions computed for a 4x field stay frozen when scanning at
+  // 20x — a sparse grid with gaps between the fields.
+  const fovXForTiling = objectiveState?.fovX || 0;
+  const fovYForTiling = objectiveState?.fovY || 0;
+  const overlapForTiling = wellSelectorState.areaSelectOverlap || 0;
+  useEffect(() => {
+    if (fovXForTiling <= 0 || fovYForTiling <= 0) return;
+    experimentState.pointList.forEach((point, index) => {
+      if (!Array.isArray(point.polygon) || point.polygon.length < 3) return;
+      const positions = wsUtils.generatePolygonScanPositions(
+        point.polygon,
+        fovXForTiling,
+        fovYForTiling,
+        overlapForTiling,
+      );
+      if (positions.length === 0) return;
+      const current = point.neighborPointList || [];
+      const unchanged =
+        current.length === positions.length &&
+        current.every(
+          (n, i) =>
+            Math.abs(n.x - positions[i].x) < 1e-6 &&
+            Math.abs(n.y - positions[i].y) < 1e-6,
+        );
+      if (unchanged) return;
+      dispatch(
+        experimentSlice.replacePoint({
+          index,
+          newPoint: {
+            ...point,
+            neighborPointList: positions.map((p) => ({
+              x: p.x,
+              y: p.y,
+              z: point.z ?? 0,
+              iX: p.iX,
+              iY: p.iY,
+            })),
+          },
+        }),
+      );
+    });
+  }, [dispatch, experimentState.pointList, fovXForTiling, fovYForTiling, overlapForTiling]);
+
   // Convert the current freehand polygon (drawn on the canvas) into
   // experiment scan points using the current FOV and area-scan overlap.
   const handleConvertFreehandToPoints = () => {
@@ -160,6 +205,12 @@ const WellSelectorComponent = () => {
     const areaId = `freehand_${Date.now()}`;
     const cx = positions.reduce((s, p) => s + p.x, 0) / positions.length;
     const cy = positions.reduce((s, p) => s + p.y, 0) / positions.length;
+    // Keep the outline itself, not just this tiling of it: switching the
+    // objective changes the FOV, and the region must then be re-tiled on the
+    // new pitch (see the re-tiling effect above and CoordinateCalculator).
+    const polygon = childRef.current.getFreehandPolygon
+      ? childRef.current.getFreehandPolygon()
+      : [];
     dispatch(
       experimentSlice.createPoint({
         x: cx,
@@ -169,12 +220,13 @@ const WellSelectorComponent = () => {
         areaType: "free_scan",
         areaId,
         groupId: areaId,
+        polygon,
         neighborPointList: positions.map((p) => ({
           x: p.x,
           y: p.y,
           z: p.z ?? 0,
-          iX: 0,
-          iY: 0,
+          iX: p.iX ?? 0,
+          iY: p.iY ?? 0,
         })),
       }),
     );

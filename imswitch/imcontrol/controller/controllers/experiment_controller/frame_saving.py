@@ -128,6 +128,7 @@ class FrameSavingMixin:
             "y": kwargs.get("posY", 0),
             "z": kwargs.get("posZ", 0),
             "runningNumber": kwargs.get("runningNumber", 0),
+            "iterator": kwargs.get("iterator", kwargs.get("runningNumber", 0)),
             "illuminationChannel": kwargs.get("illuminationChannel", "unknown"),
             "illuminationValue": kwargs.get("illuminationValue", 0),
             "tile_index": kwargs.get("tile_index", 0),

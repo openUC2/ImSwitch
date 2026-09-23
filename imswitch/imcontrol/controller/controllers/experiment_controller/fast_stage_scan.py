@@ -12,6 +12,7 @@ import threading
 from imswitch.imcommon.model import dirtools, APIExport
 
 from imswitch.imcontrol.model.io import OMEFileStorePaths
+from .scan_plan import stage_scan_frame_table, stage_scan_frame_count, stage_scan_channel_sequence
 
 
 class FastStageScanMixin:
@@ -60,52 +61,19 @@ class FastStageScanMixin:
         if illumination is None:
             illumination = []
 
-        # Build illumination dict for metadata (maintain backward compatibility)
-        illum_dict = {}
-        for i, val in enumerate(illumination[:5]):  # Take up to 5 channels
-            illum_dict[f"illumination{i}"] = val
-        illum_dict["led"] = led
-
-        # Count how many illumination entries are valid (not None and > 0)
-        nIlluminations = sum(val is not None and val > 0 for val in illumination) + (1 if led and led > 0 else 0)
-        nScan = max(nIlluminations, 1)
-        total_frames = nx * ny * nz * nScan
+        # Channels in firmware order (lasers 0..4, then LED); the writer's
+        # channel axis is this list, at least one so the loop runs once.
+        nIlluminations = max(len(stage_scan_channel_sequence(illumination, led)), 1)
+        total_frames = stage_scan_frame_count(nx, ny, nz, illumination, led)
         self._logger.info(f"Stage-scan: {nx}×{ny}×{nz} ({total_frames} frames)")
 
-        def addDataPoint(metadataList, x, y, z, illuminationChannel, illuminationValue, runningNumber):
-            """Helper function to add metadata for each position."""
-            metadataList.append({
-                "x": x,
-                "y": y,
-                "z": z,
-                "illuminationChannel": illuminationChannel,
-                "illuminationValue": illuminationValue,
-                "runningNumber": runningNumber
-            })
-            return metadataList
-        # This corresponds to the metadataList in the UC2-ESP firmware e.g. here: https://github.com/youseetoo/uc2-esp32/blob/9addafaca538186e642e97f50c248df661a74637/main/src/motor/StageScan.cpp#L602
-        metadataList = []
-        runningNumber = 0
-        for ix in range(nx):
-            for iy in range(ny):
-                for iz in range(nz):
-                    z = zstart + iz * zstep
-                    x = xstart + ix * xstep
-                    y = ystart + iy * ystep
-                    # Snake pattern: reverse X direction on odd rows
-                    if isSnakeScan and iy % 2 == 1:
-                        x = xstart + (nx - 1 - ix) * xstep
-
-                    # If there's at least one valid illumination or LED set, take only one image as "default"
-                    if nIlluminations == 0:
-                        runningNumber += 1
-                        addDataPoint(metadataList, x, y, z, "default", -1, runningNumber)
-                    else:
-                        # Otherwise take an image for each illumination channel > 0
-                        for channel, value in illum_dict.items():
-                            if value is not None and value > 0:
-                                runningNumber += 1
-                                addDataPoint(metadataList, x, y, z, channel, value, runningNumber)
+        # One row per camera frame-id in the order the firmware triggers
+        # (rows outer, snake on odd rows, Z, then channels). The firmware
+        # only knows snake, so the metadata follows it regardless of the flag.
+        if not isSnakeScan:
+            self._logger.warning("Fast stage scan: firmware always scans in snake order; isSnakeScan=False ignored")
+        metadataList = stage_scan_frame_table(nx, ny, nz, xstart, ystart, zstart,
+                                              xstep, ystep, zstep, illumination, led, snake=True)
         # 2. start writer thread ----------------------------------------------
         nLastTime = time.time()
         for iTime in range(nTimes):

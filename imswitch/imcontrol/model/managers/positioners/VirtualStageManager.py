@@ -184,7 +184,8 @@ class VirtualStageManager(PositionerManager):
 
 
     def start_stage_scanning(self, xstart=0, xstep=1, nx=100,
-                             ystart=0, ystep=1, zstart=0, zstep=1, nz=100, ny=100, tsettle=0.1, tExposure=50, illumination=None, led=None):
+                             ystart=0, ystep=1, zstart=0, zstep=1, nz=100, ny=100, tsettle=0.1, tExposure=50, illumination=None, led=None,
+                             speed=None, acceleration=None, tTrig=None, **kwargs):
         """
         Start a stage scanning operation with the given parameters.
         Virtual implementation that simulates the scanning process.

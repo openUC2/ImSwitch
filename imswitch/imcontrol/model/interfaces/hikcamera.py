@@ -86,7 +86,7 @@ CALLBACK_SIG = CFUNCTYPE(
 class CameraHIK:
     """Minimal wrapper that grabs frames via SDK callback (no polling)."""
 
-    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=1, flipImage=(False, False)):
+    def __init__(self,cameraNo=None, exposure_time = None, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=1, flipImage=(False, False)):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -128,6 +128,10 @@ class CameraHIK:
         self._sdk_convert_works = (platform == "darwin")
 
         self._open_camera(self.cameraNo)
+        # exposure_time is in ms like set_exposure_time(); None keeps the
+        # camera's current value (what HikCamManager relies on).
+        if exposure_time is not None:
+            self.set_exposure_time(exposure_time)
 
         # use the parameter passed to __init__, or fall back to auto-detect
         if isRGB is not None:
@@ -1010,45 +1014,33 @@ class CameraHIK:
         self.lastFrameFromBuffer = frames[-1] if frames else None
         return np.array(frames), np.array(ids)
 
-    def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):
+    def setROI(self, hpos=None, vpos=None, hsize=None, vsize=None):
+        """Set sensor ROI; arguments left as None are unchanged.
 
+        The camera rejects a width/height that does not fit the *current*
+        offset, so offsets are zeroed before resizing and applied afterwards.
+        The SDK reports failures as return codes, not exceptions: a rejected
+        value is logged as an error and not recorded as applied.
+        """
+        def _set(node, value, attr):
+            ret = self.camera.MV_CC_SetIntValue(node, int(value))
+            if ret != 0:
+                self.__logger.error(f"setROI: {node}={value} rejected ret[0x{ret:x}]")
+                return
+            setattr(self, attr, value)
+
+        if hsize is not None or vsize is not None:
+            _set("OffsetX", 0, "ROI_hpos")
+            _set("OffsetY", 0, "ROI_vpos")
         if hsize is not None:
-            try:
-                c_width = self.camera.MV_CC_SetIntValue("Width",int(hsize))
-                self.ROI_width = hsize
-                self.__logger.debug(f"Width set to {self.ROI_width}")
-            except Exception as e:
-                self.__logger.error(e)
-                self.__logger.debug("Width is not implemented or not writable")
-
+            _set("Width", hsize, "ROI_width")
         if vsize is not None:
-            try:
-                c_height = self.camera.MV_CC_SetIntValue("Height",int(vsize))
-                self.ROI_height = vsize
-                self.__logger.debug(f"Height set to {self.ROI_height}")
-            except Exception as e:
-                self.__logger.error(e)
-                self.__logger.debug("Height is not implemented or not writable")
-
+            _set("Height", vsize, "ROI_height")
         if hpos is not None:
-            try:
-                c_offsetx = self.camera.MV_CC_SetIntValue("OffsetX",int(hpos))
-                self.ROI_hpos = hpos
-                self.__logger.debug(f"OffsetX set to {self.ROI_hpos}")
-            except Exception as e:
-                self.__logger.error(e)
-                self.__logger.debug("OffsetX is not implemented or not writable")
-
+            _set("OffsetX", hpos, "ROI_hpos")
         if vpos is not None:
-            try:
-                c_offsety = self.camera.MV_CC_SetIntValue("OffsetY",int(vpos))
-                self.ROI_vpos = vpos
-                self.__logger.debug(f"OffsetY set to {self.ROI_vpos}")
-            except Exception as e:
-                self.__logger.error(e)
-                self.__logger.debug("OffsetY is not implemented or not writable")
-
-        return hpos,vpos,hsize,vsize
+            _set("OffsetY", vpos, "ROI_vpos")
+        return hpos, vpos, hsize, vsize
 
     def setPropertyValue(self, property_name, property_value):
         if property_name == "gain":

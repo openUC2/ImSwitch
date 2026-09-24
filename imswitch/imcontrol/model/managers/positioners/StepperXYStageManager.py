@@ -12,10 +12,13 @@ success or ``ERR <reason>\n`` on failure.
   V sx sy             – set velocity: X = sx steps/s, Y = sy steps/s
   MOVE dx dy [speed]  – relative move in steps; optional per-move speed
   STOP                – stop immediately (device sends V 0 0 internally)
+  POS                 – query step counts, reply "<x> <y>" (microsteps)
+  BUSY                – reply "1" while a MOVE/SNAKE runs or motors step, else "0"
+  POWER [x y]         – get/set per-axis peak duty 0..32767 (0 = firmware default)
   PING                – connectivity check
   HELP                – print help text
-  MICROSTEP           – query current microstep setting
-  MICROSTEP N         – set microstep to N (stored in flash)
+  MICROSTEP           – query the microstep mode actually in use
+  MICROSTEP N         – store microstep N (active after device reboot)
   SNAKE nx ny sx sy speed pause [holdPct]
                       – execute a snake scan:
                         nx/ny    : number of steps in X/Y
@@ -27,8 +30,16 @@ success or ``ERR <reason>\n`` on failure.
 Configuration keys (managerProperties)
 ---------------------------------------
   rs232device        – key into rs232sManager (must be a SerialManager/RS232Manager)
-  stepsizeX          – µm per step in X (default: 1.0)
+  stepsizeX          – µm per step in X (default: 1.0); ignored if
+                       umPerElectricalCycleX is set
   stepsizeY          – µm per step in Y (default: 1.0)
+  umPerElectricalCycleX / Y
+                     – µm travelled per electrical cycle (nominally 4 × trace
+                       pitch).  If set, µm/step = this / MICROSTEP read from the
+                       device at startup, so changing MICROSTEP cannot silently
+                       break the scale.
+  powerX / powerY    – per-axis peak duty sent at startup via POWER (0..32767).
+                       Use to equalise current for unequal trace resistance.
   initialSpeedX      – default speed in steps/s for X (default: 800)
   initialSpeedY      – default speed in steps/s for Y (default: 800)
   microsteps         – microstep divisor to write on startup (optional)
@@ -140,6 +151,16 @@ class StepperXYStageManager(PositionerManager):
 
         # Optional microstep configuration on startup
         microsteps = positionerInfo.managerProperties.get("microsteps", None)
+        self._umPerCycle = (
+            positionerInfo.managerProperties.get("umPerElectricalCycleX"),
+            positionerInfo.managerProperties.get("umPerElectricalCycleY"),
+        )
+        power = (
+            positionerInfo.managerProperties.get("powerX"),
+            positionerInfo.managerProperties.get("powerY"),
+        )
+        # Firmware without BUSY/POS falls back to time-based waiting
+        self._has_busy: bool = True
 
         # --- X/Y axis swap (for stages mounted 90° rotated) ---
         self._swapXY: bool = bool(positionerInfo.managerProperties.get("swapXY", False))
@@ -192,6 +213,29 @@ class StepperXYStageManager(PositionerManager):
             except Exception as exc:
                 self.__logger.warning(f"{name}: could not set microsteps: {exc}")
 
+        # Derive µm/step from the microstep mode actually running on the device
+        if any(v is not None for v in self._umPerCycle):
+            try:
+                n = self.get_microsteps()
+                if self._umPerCycle[0] is not None:
+                    self._stepsizeX = float(self._umPerCycle[0]) / n
+                if self._umPerCycle[1] is not None:
+                    self._stepsizeY = float(self._umPerCycle[1]) / n
+                self.__logger.info(
+                    f"{name}: {n} microsteps/cycle -> "
+                    f"{self._stepsizeX:.3f} / {self._stepsizeY:.3f} µm/step (X/Y)"
+                )
+            except Exception as exc:
+                self.__logger.warning(
+                    f"{name}: MICROSTEP query failed ({exc}); keeping stepsizeX/Y"
+                )
+
+        if power[0] is not None and power[1] is not None:
+            try:
+                self.set_power(int(power[0]), int(power[1]))
+            except Exception as exc:
+                self.__logger.warning(f"{name}: could not set power: {exc}")
+
 
     # ------------------------------------------------------------------
     # Anti-overheat watchdog
@@ -213,18 +257,17 @@ class StepperXYStageManager(PositionerManager):
             elapsed = time.time() - self._last_active_time
             if elapsed < self._idle_stop_timeout_s:
                 continue
-            # Attempt to acquire the serial lock; if a command is in flight
-            # just skip this cycle and try again next tick.
-            acquired = self._lock.acquire(blocking=True, timeout=0.1)
-            if not acquired:
-                continue
             try:
-                self._serial.write("STOP")
-                self.__logger.debug("Watchdog: idle STOP sent (coils de-energised)")
+                # A long non-blocking MOVE or SNAKE must not be cut short.
+                if self.is_busy():
+                    self._last_active_time = time.time()
+                    continue
+                # query (not write) so the "OK" reply is consumed; a bare write
+                # left it in the buffer and shifted every later reply by a line.
+                self._send("STOP", log=False)
+                self.__logger.debug("Watchdog: idle STOP sent")
             except Exception as exc:
                 self.__logger.warning(f"Watchdog STOP failed: {exc}")
-            finally:
-                self._lock.release()
             # Reset timer so we do not spam STOP every 0.5 s
             self._last_active_time = time.time()
 
@@ -232,31 +275,74 @@ class StepperXYStageManager(PositionerManager):
     # Low-level serial helpers
     # ------------------------------------------------------------------
 
-    def _send(self, cmd: str) -> str:
+    def _send(self, cmd: str, log: bool = True) -> str:
         """
         Send a command string and return the reply.
         Logs a warning if the device responds with ERR.
-        Thread-safe.
+        Thread-safe.  ``log=False`` keeps status polling out of the log.
         """
         with self._lock:
-            self.__logger.info(f"TX: {cmd!r}")
+            if log:
+                self.__logger.info(f"TX: {cmd!r}")
             reply = self._serial.query(cmd).strip()
-            self.__logger.info(f"RX: {reply!r}")
+            if log:
+                self.__logger.info(f"RX: {reply!r}")
         # Refresh activity timestamp so the watchdog does not interrupt
         self._last_active_time = time.time()
         if reply.startswith("ERR"):
             self.__logger.warning(f"Device error for '{cmd}': {reply}")
         return reply
 
-    def _send_move(self, dx: int, dy: int, speed: Optional[float]) -> None:
-        """Build and send a single MOVE command."""
-        if speed is not None:
-            if isinstance(speed, tuple):
-                speed = int(speed[0])
-            speed = min(max(int(speed), 1), 500)
-            self._send(f"MOVE {dx} {dy} {int(speed)}")
+    def is_busy(self) -> bool:
+        """True while the firmware is executing a MOVE/SNAKE or still stepping."""
+        if not self._has_busy:
+            return False
+        reply = self._send("BUSY", log=False)
+        if reply not in ("0", "1"):
+            self._has_busy = False
+            self.__logger.warning(
+                f"BUSY not supported by firmware ({reply!r}); "
+                "falling back to time-based waiting"
+            )
+            return False
+        return reply == "1"
+
+    def wait_idle(self, timeout_s: float) -> bool:
+        """Poll BUSY until the stage stops.  Returns False on timeout."""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            if not self.is_busy():
+                return True
+            time.sleep(0.01)
+        self.__logger.warning(f"Stage still busy after {timeout_s:.1f}s")
+        return False
+
+    def _send_move(self, dx: int, dy: int, speed: Optional[float],
+                   wait: bool = True) -> None:
+        """Send one MOVE; optionally block until the firmware reports idle.
+
+        A new MOVE replaces a running one in the firmware, so we always wait
+        for the previous move to finish first; otherwise the software position
+        and the real position diverge.
+        """
+        if isinstance(speed, tuple):
+            speed = speed[0]
+        if speed is None:
+            speed = max(self._speed["X"], self._speed["Y"]) or _DEFAULT_SPEED
+        speed = max(int(speed), 1)  # firmware clamps to its own maximum
+
+        # Firmware ramps at ~1500 steps/s² by default; 2x margin + 2 s.
+        duration = max(abs(dx), abs(dy)) / min(speed, 2000) + speed / 1500
+        timeout = 2 * duration + 2.0
+
+        self.wait_idle(timeout)
+        self._send(f"MOVE {dx} {dy} {speed}")
+        if not wait:
+            return
+        if self._has_busy:
+            self.wait_idle(timeout)
         else:
-            self._send(f"MOVE {dx} {dy}")
+            time.sleep(duration)
 
     def _set_device_speed(self, speed_x: int, speed_y: int) -> None:
         """Send V command to set axis speeds (steps/s)."""
@@ -288,38 +374,38 @@ class StepperXYStageManager(PositionerManager):
         speed :
             Speed override in steps/s.  Uses per-axis default if None.
         is_blocking :
-            Passed through; serial commands are inherently synchronous.
+            If True, return only after the firmware reports the move done.
         """
         if is_absolute:
             # Convert absolute target to relative steps from current position
             if axis == "X":
                 delta_um = value - self._position["X"]
-                self._move_xy_steps(delta_um / self._stepsizeX, 0, speed=speed)
+                self._move_xy_steps(delta_um / self._stepsizeX, 0, speed=speed, wait=is_blocking)
                 self._position["X"] = value
             elif axis == "Y":
                 delta_um = value - self._position["Y"]
-                self._move_xy_steps(0, delta_um / self._stepsizeY, speed=speed)
+                self._move_xy_steps(0, delta_um / self._stepsizeY, speed=speed, wait=is_blocking)
                 self._position["Y"] = value
             elif axis == "XY":
                 dx_um = value[0] - self._position["X"]
                 dy_um = value[1] - self._position["Y"]
                 self._move_xy_steps(dx_um / self._stepsizeX,
                                     dy_um / self._stepsizeY,
-                                    speed=speed)
+                                    speed=speed, wait=is_blocking)
                 self._position["X"] = value[0]
                 self._position["Y"] = value[1]
         else:
             # Relative move in µm
             if axis == "X":
-                self._move_xy_steps(value / self._stepsizeX, 0, speed=speed)
+                self._move_xy_steps(value / self._stepsizeX, 0, speed=speed, wait=is_blocking)
                 self._position["X"] += value
             elif axis == "Y":
-                self._move_xy_steps(0, value / self._stepsizeY, speed=speed)
+                self._move_xy_steps(0, value / self._stepsizeY, speed=speed, wait=is_blocking)
                 self._position["Y"] += value
             elif axis == "XY":
                 self._move_xy_steps(value[0] / self._stepsizeX,
                                     value[1] / self._stepsizeY,
-                                    speed=speed)
+                                    speed=speed, wait=is_blocking)
                 self._position["X"] += value[0]
                 self._position["Y"] += value[1]
             else:
@@ -333,7 +419,8 @@ class StepperXYStageManager(PositionerManager):
     def _move_xy_steps(self,
                        dx_steps: float,
                        dy_steps: float,
-                       speed: Optional[float] = None) -> None:
+                       speed: Optional[float] = None,
+                       wait: bool = True) -> None:
         """
         Send a MOVE command with optional speed, applying X/Y swap and
         backlash compensation.
@@ -378,12 +465,13 @@ class StepperXYStageManager(PositionerManager):
             self._backlash_dir["Y"] = new_dir
 
         if extra_x != 0 or extra_y != 0:
-            # Move to the overshoot position …
-            self._send_move(dx_dev + extra_x, dy_dev + extra_y, speed)
+            # Move to the overshoot position (must finish, or the second
+            # MOVE replaces it in the firmware) …
+            self._send_move(dx_dev + extra_x, dy_dev + extra_y, speed, wait=True)
             # … then back to the exact logical target
-            self._send_move(-extra_x, -extra_y, speed)
+            self._send_move(-extra_x, -extra_y, speed, wait=wait)
         else:
-            self._send_move(dx_dev, dy_dev, speed)
+            self._send_move(dx_dev, dy_dev, speed, wait=wait)
 
     def moveForever(self, speed=(0, 0), is_stop: bool = False) -> None:
         """
@@ -559,8 +647,22 @@ class StepperXYStageManager(PositionerManager):
                 continue
         raise ValueError(f"Could not parse MICROSTEP reply: {reply!r}")
 
+    def get_position_steps(self) -> Tuple[int, int]:
+        """Firmware step counts (device axes, i.e. before swapXY)."""
+        reply = self._send("POS")
+        x, y = reply.split()
+        return int(x), int(y)
+
+    def set_power(self, x: int, y: int) -> None:
+        """Per-axis peak duty 0..32767 (0 = firmware default OBJECT3002)."""
+        self._send(f"POWER {int(x)} {int(y)}")
+
+    def get_power(self) -> Tuple[int, int]:
+        x, y = self._send("POWER").split()
+        return int(x), int(y)
+
     def set_microsteps(self, n: int) -> None:
-        """Set the microstep divisor (stored in flash on the device)."""
+        """Store the microstep divisor; only takes effect after a device reboot."""
         self._send(f"MICROSTEP {n}")
 
     def snake_scan(self,
@@ -598,4 +700,6 @@ class StepperXYStageManager(PositionerManager):
         """Return the device help text."""
         with self._lock:
             reply = self._serial.query("HELP")
+            # HELP is multi-line; drain the rest so later replies stay in sync
+            reply += self._serial.read(4096, timeout=0.3).decode(errors="replace")
         return reply

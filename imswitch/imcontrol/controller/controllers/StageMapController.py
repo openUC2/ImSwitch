@@ -49,6 +49,14 @@ class StageMapParams(BaseModel):
     # Channel handling
     activeChannel: str = ""             # empty = auto-detect from enabled illumination
 
+    # Prescan: how long after a frame was exposed it reaches us (exposure,
+    # readout, USB transfer, SDK callback, our poll). The stage keeps moving
+    # meanwhile, so every band would land ahead of where it was taken — by
+    # speed × lag, in the direction of travel — and serpentine lines would
+    # alternate. Negative = measure it at the start of every prescan by
+    # sweeping the first line both ways and correlating the two strips.
+    prescanLagMs: float = -1.0
+
     class Config:
         arbitrary_types_allowed = True
 
@@ -67,9 +75,150 @@ class StageMapStatus(BaseModel):
     positionY: float = 0.0
     detectorName: str = ""
     lastError: str = ""
+    prescanRunning: bool = False
+    prescanLagMs: float = 0.0           # lag compensation in use (set or calibrated)
 
     class Config:
         arbitrary_types_allowed = True
+
+
+def prescanLayout(spanUm: float, dxUm: float, pixelSizeUm: float, frameShape,
+                  subsample: int, maxStripBytes: int, itemsize: int = 2):
+    """How one prescan line is laid out: the sample slots and the strip they fill.
+
+    A slot is one camera exposure, ``dxUm`` apart along the sweep, and it fills
+    exactly the strip columns it covers, so the strip is contiguous whatever the
+    speed. The strip is built ``subsample`` times coarser than the camera —
+    this is a locator, and a 10 mm line at 0.12 µm/px would be 80 000 columns —
+    and the factor grows until the strip fits ``maxStripBytes``.
+
+    Returns (slots, stripW, stripH, subsample, dxUm) with ``dxUm`` clamped to
+    the frame width: a pitch wider than the field would leave gaps.
+    """
+    frameH, frameW = int(frameShape[0]), int(frameShape[1])
+    pixelSizeUm = max(float(pixelSizeUm), 1e-6)
+    fieldUm = max(1, frameW) * pixelSizeUm
+    dxUm = fieldUm if dxUm <= 0 else min(max(float(dxUm), pixelSizeUm), fieldUm)
+    slots = max(2, int(np.ceil(spanUm / dxUm)))
+    subsample = max(1, int(subsample))
+    while True:
+        scale = pixelSizeUm * subsample
+        stripW = max(2, int(np.ceil(spanUm / scale)))
+        stripH = max(1, len(range(0, frameH, subsample)))
+        if stripW * stripH * itemsize <= maxStripBytes or subsample >= 64:
+            return slots, stripW, stripH, subsample, dxUm
+        subsample += 1
+
+
+def estimateProfileShift(a: np.ndarray, b: np.ndarray, maxShiftPx: Optional[int] = None,
+                         minPeak: float = 0.2, minContrast: float = 0.01):
+    """How many columns strip ``a`` is shifted right of strip ``b`` (or None).
+
+    Both strips show the same line; only their placement along X differs.
+    The comparison is on the column-mean profiles, so it is insensitive to
+    the rolling-shutter skew inside each band, and it is a normalised FFT
+    cross-correlation so a 20 000-column strip costs milliseconds. Columns
+    left dark (never filled) in either strip are masked to the mean so the
+    strip end does not act as a feature that pins the shift to zero.
+
+    None means "don't trust it": a blank line (glass, no tissue) has no
+    contrast to correlate, and a weak peak is noise.
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    if a.ndim == 1:
+        a = a[None, :]
+    if b.ndim == 1:
+        b = b[None, :]
+    n = min(a.shape[1], b.shape[1])
+    if n < 8:
+        return None
+    a, b = a[:, :n], b[:, :n]
+    filled = (a.max(axis=0) > 0) & (b.max(axis=0) > 0)
+    if filled.sum() < n // 4:
+        return None
+    pa, pb = a.mean(axis=0), b.mean(axis=0)
+    level = max(float(pa[filled].mean()), float(pb[filled].mean()), 1e-9)
+    pa = np.where(filled, pa, pa[filled].mean()) - pa[filled].mean()
+    pb = np.where(filled, pb, pb[filled].mean()) - pb[filled].mean()
+    sa, sb = float(pa.std()), float(pb.std())
+    if sa < minContrast * level or sb < minContrast * level:
+        return None
+    size = 1
+    while size < 2 * n:
+        size *= 2
+    fa, fb = np.fft.rfft(pa, size), np.fft.rfft(pb, size)
+    # cc[k] = sum_x a[x + k] * b[x]: peaks at k = s when a[x] = b[x - s]
+    cc = np.fft.irfft(fa * np.conj(fb), size) / (n * sa * sb)
+    lags = np.arange(size)
+    lags[lags > size // 2] -= size
+    limit = n // 4 if maxShiftPx is None else max(1, int(maxShiftPx))
+    window = np.abs(lags) <= limit
+    k = int(np.argmax(np.where(window, cc, -np.inf)))
+    if cc[k] < minPeak:
+        return None
+    return int(lags[k])
+
+
+class _Sweep:
+    """What one drive along a prescan line produced, before it is placed.
+
+    ``samples`` are (grab time, centre band) pairs; ``t0``/``t1`` bracket
+    the move (command sent / reported done); ``span`` is the travel in µm
+    and ``scale`` the strip µm per pixel. Placement is a separate step so
+    the same sweep can be laid out again once the lag is known.
+    """
+
+    def __init__(self, samples, t0, t1, span, scale, forward):
+        self.samples = samples
+        self.t0 = t0
+        self.t1 = t1
+        self.span = span
+        self.scale = scale
+        self.forward = forward
+
+    @property
+    def speed(self) -> float:
+        """Mean speed actually achieved, µm/s — not what was asked for."""
+        return self.span / max(self.t1 - self.t0, 1e-6)
+
+
+class _NonBlockingMove:
+    """Run one blocking stage move on a thread so the caller can grab frames.
+
+    The stage API only offers a blocking move; every controller that needs to
+    acquire *during* a move has grown its own copy of this. This one is
+    deliberately local — importing another controller to borrow a helper drags
+    an entire unrelated module in with it.
+    """
+
+    def __init__(self, stage, value, axis, speed):
+        self._stage = stage
+        self._value = value
+        self._axis = axis
+        self._speed = speed
+        self.finished = False
+        self.error: Optional[str] = None
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name="StageMapPrescanMove")
+        self._thread.start()
+
+    def _run(self):
+        try:
+            self._stage.move(value=self._value, axis=self._axis, speed=self._speed,
+                             is_absolute=False, is_blocking=True)
+        except Exception as e:
+            # Never leave the polling loop spinning on a move that died.
+            self.error = str(e)
+        finally:
+            self.finished = True
+
+    def join(self, timeout=None):
+        if self._thread is not None:
+            self._thread.join(timeout)
 
 
 class StageMapController(ImConWidgetController):
@@ -88,6 +237,7 @@ class StageMapController(ImConWidgetController):
     """
 
     sigStageMapTileAdded = Signal(dict)
+    sigStageMapTilesRemoved = Signal(dict)
     sigStageMapStatus = Signal(dict)
 
     MAX_STITCH_PIXELS = 1.2e9  # safety cap for the stitched canvas (bytes ~ 2x for uint16)
@@ -107,6 +257,9 @@ class StageMapController(ImConWidgetController):
         # Session/tile state
         self._tiles: List[Dict] = []          # metadata for every captured tile
         self._tilesLock = threading.Lock()
+        # Ids only ever count up. The frontend keys tiles by id, so an id
+        # reused after tiles were removed would be dropped as a duplicate.
+        self._nextTileId = 0
         self._sessionPath: Optional[str] = None
         self._acqHandle = None
 
@@ -115,6 +268,8 @@ class StageMapController(ImConWidgetController):
         self._shouldStop = threading.Event()
         self._monitorThread: Optional[threading.Thread] = None
         self._snapRequested = threading.Event()
+        self._prescanThread: Optional[threading.Thread] = None
+        self._prescanLagS = 0.0               # camera lag in use (see StageMapParams.prescanLagMs)
         self._lastError = ""
 
         self._logger.info("StageMapController initialized")
@@ -244,6 +399,42 @@ class StageMapController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Could not write tile index: {e}")
 
+    def _trimTiles(self):
+        """Drop the oldest previews once the map gets large.
+
+        Each tile carries a base64 JPEG in RAM, and mapping runs for as long as
+        the operator leaves it on. The metadata is kept (tiles.json on disk has
+        everything); only the in-memory image of the oldest tiles is released.
+        Call with _tilesLock held.
+        """
+        withPreview = [t for t in self._tiles if t.get("preview")]
+        excess = len(withPreview) - self.MAX_TILE_PREVIEWS
+        for tile in withPreview[:max(0, excess)]:
+            tile["preview"] = None
+
+    def _allocTileId(self) -> int:
+        with self._tilesLock:
+            tileId = self._nextTileId
+            self._nextTileId += 1
+        return tileId
+
+    def _dropTiles(self, kind: str) -> List[int]:
+        """Remove every tile of one kind from the store and tell the frontend.
+
+        Used when a prescan starts: the previous overlay would otherwise stay
+        underneath the new one, and the two rarely agree pixel for pixel.
+        Tiles of other kinds (snapped while mapping) are left alone.
+        """
+        with self._tilesLock:
+            removed = [t["id"] for t in self._tiles if t.get("kind") == kind]
+            if removed:
+                self._tiles = [t for t in self._tiles if t.get("kind") != kind]
+        if removed:
+            self._writeTileIndex()
+            self.sigStageMapTilesRemoved.emit({"ids": removed, "kind": kind})
+            self._logger.info(f"Removed {len(removed)} {kind} tile(s)")
+        return removed
+
     def _makePreview(self, frame: np.ndarray) -> Optional[str]:
         """Downscale + JPEG-encode a frame, return base64 string."""
         try:
@@ -311,8 +502,7 @@ class StageMapController(ImConWidgetController):
         widthUm = widthPx * pixelSize
         heightUm = heightPx * pixelSize
 
-        with self._tilesLock:
-            tileId = len(self._tiles)
+        tileId = self._allocTileId()
 
         rawPath = ""
         if self.params.saveRawTiles and self._sessionPath and HAS_TIFFFILE:
@@ -346,12 +536,14 @@ class StageMapController(ImConWidgetController):
             "widthUm": float(widthUm),
             "heightUm": float(heightUm),
             "channel": channel,
+            "kind": "tile",
             "rawPath": rawPath,
             "timestamp": time.time(),
             "preview": preview,
         }
         with self._tilesLock:
             self._tiles.append(tile)
+            self._trimTiles()
         self._writeTileIndex()
 
         if preview is not None:
@@ -367,6 +559,380 @@ class StageMapController(ImConWidgetController):
             })
         self._emitStatus()
         return True
+
+    # ------------------------------------------------------------------ #
+    # Prescan
+    # ------------------------------------------------------------------ #
+
+    # Newest tiles whose preview image stays in RAM (see _trimTiles).
+    MAX_TILE_PREVIEWS = 600
+
+    # The strip is the only buffer a line holds; past this it is built coarser.
+    PRESCAN_MAX_STRIP_MB = 64
+    # Camera pixels per strip pixel when the caller does not say.
+    PRESCAN_SUBSAMPLE = 4
+    # Exposures kept per line, whatever the pitch asks for.
+    PRESCAN_MAX_FRAMES = 200
+
+
+    def _prescanLoop(self, minX, maxX, minY, maxY, dy, speedX, objectiveSlot,
+                     dx, subsample):
+        """One continuous X sweep per Y line, each pushed as one wide tile.
+
+        Lines alternate direction (serpentine): the stage is already at the far
+        end when a line finishes, so driving straight back across it halves the
+        travel. Each strip is emitted as soon as its line ends, so the map fills
+        in line by line rather than at the end.
+
+        Unless the operator pinned ``prescanLagMs``, the first line is driven
+        both ways first: the two strips differ only by the camera lag (see
+        StageMapParams), so their offset calibrates it for the whole prescan.
+        """
+        acqHandle = None
+        restore = self._enterPrescanOptics(objectiveSlot)
+        try:
+            try:
+                acqHandle = self._master.detectorsManager.startAcquisition()
+            except Exception as e:
+                self._logger.warning(f"Could not start acquisition: {e}")
+
+            lagS = None
+            if self.params.prescanLagMs is not None and self.params.prescanLagMs >= 0:
+                lagS = float(self.params.prescanLagMs) / 1000.0
+                self._prescanLagS = lagS
+
+            y = minY
+            forward = True
+            while y <= maxY + 1e-6 and not self._shouldStop.is_set():
+                if lagS is None:
+                    lagS, sweep = self._calibratePrescanLag(minX, maxX, y, speedX, dx, subsample)
+                    self._prescanLagS = lagS
+                    self._emitStatus()
+                    # Both calibration sweeps ended where they started, so the
+                    # next line is driven forward again.
+                else:
+                    startX, endX = (minX, maxX) if forward else (maxX, minX)
+                    sweep = self._sweepLine(startX, endX, y, speedX, dx, subsample)
+                    forward = not forward
+                if sweep is not None:
+                    self._addStrip(self._placeSweep(sweep, lagS), minX, maxX, y, sweep.scale)
+                y += dy
+        except Exception as e:
+            self._lastError = f"Prescan failed: {e}"
+            self._logger.error(self._lastError)
+        finally:
+            if acqHandle is not None:
+                try:
+                    self._master.detectorsManager.stopAcquisition(acqHandle)
+                except Exception:
+                    pass
+            self._restorePrescanOptics(restore)
+            self._prescanThread = None
+            self._emitStatus()
+            self._logger.info("Prescan finished")
+
+    def _calibratePrescanLag(self, minX, maxX, y, speedX, dx, subsample):
+        """Drive one line forward and back; the strips' offset is 2 × speed × lag.
+
+        Returns ``(lagS, forwardSweep)``. The forward sweep is handed back so
+        the caller can place it with the lag it just paid for, and the stage
+        ends at ``minX`` again. Falls back to the last known lag when the line
+        has nothing to correlate (blank glass) or a sweep failed.
+        """
+        fallback = self._prescanLagS
+        fwd = self._sweepLine(minX, maxX, y, speedX, dx, subsample)
+        if fwd is None or self._shouldStop.is_set():
+            return fallback, fwd
+        bwd = self._sweepLine(maxX, minX, y, speedX, dx, subsample)
+        if bwd is None:
+            return fallback, fwd
+        a = self._placeSweep(fwd, 0.0)
+        b = self._placeSweep(bwd, 0.0)
+        # The lag cannot plausibly exceed half a second; look no further.
+        maxShiftPx = int(np.ceil(0.5 * (fwd.speed + bwd.speed) / fwd.scale))
+        shiftPx = estimateProfileShift(a, b, maxShiftPx=maxShiftPx)
+        if shiftPx is None:
+            self._logger.warning(
+                f"Prescan lag calibration: line y={y:.0f} has no usable contrast, "
+                f"keeping {fallback * 1000:.0f} ms")
+            return fallback, fwd
+        # Forward lands +speed·lag along X, backward −speed·lag: the strips
+        # are (vF + vB)·lag apart.
+        lagS = shiftPx * fwd.scale / max(fwd.speed + bwd.speed, 1e-6)
+        lagS = float(min(max(lagS, -0.5), 0.5))
+        self._logger.info(
+            f"Prescan lag calibration: strips {shiftPx * fwd.scale:.0f} µm apart at "
+            f"{fwd.speed:.0f}/{bwd.speed:.0f} µm/s -> lag {lagS * 1000:.0f} ms")
+        return lagS, fwd
+
+    def _objectiveController(self):
+        try:
+            return self._master.getController("Objective")
+        except Exception:
+            return None
+
+    def _enterPrescanOptics(self, objectiveSlot: Optional[int]) -> Dict:
+        """Remember where we were, then move to the prescan objective.
+
+        Returns what _restorePrescanOptics needs to put everything back: the
+        prescan is a detour, and the operator should find the stage and the
+        turret exactly where they left them.
+        """
+        state: Dict = {"xyz": None, "slot": None}
+        try:
+            pos = self._stage.getPosition()
+            state["xyz"] = (float(pos.get("X", 0.0)), float(pos.get("Y", 0.0)),
+                            float(pos.get("Z", 0.0)))
+        except Exception as e:
+            self._logger.warning(f"Could not read stage position to restore later: {e}")
+
+        if objectiveSlot is None:
+            return state
+
+        objective = self._objectiveController()
+        if objective is None:
+            self._logger.warning("No objective controller — prescan runs on the current lens")
+            return state
+
+        try:
+            current, _ = objective.getCurrentObjective()
+            if current == objectiveSlot:
+                return state
+            self._logger.info(f"Prescan: switching objective {current} -> {objectiveSlot}")
+            # skipZ=False so the turret's own saved focus for that lens is
+            # applied — that is the refocus, and it is the only one available
+            # without a sample-dependent autofocus.
+            objective.moveToObjective(slot=objectiveSlot, skipZ=False)
+            self._waitForObjective(objective)
+            state["slot"] = current
+        except Exception as e:
+            self._logger.error(f"Could not switch objective for prescan: {e}")
+        return state
+
+    def _restorePrescanOptics(self, state: Dict):
+        objective = self._objectiveController()
+        if state.get("slot") is not None and objective is not None:
+            try:
+                self._logger.info(f"Prescan: restoring objective {state['slot']}")
+                objective.moveToObjective(slot=state["slot"], skipZ=False)
+                self._waitForObjective(objective)
+            except Exception as e:
+                self._logger.error(f"Could not restore objective: {e}")
+
+        xyz = state.get("xyz")
+        if xyz is not None:
+            try:
+                x, y, z = xyz
+                if "XY" in (getattr(self._stage, "combinedAxes", None) or []):
+                    self._stage.move(value=(x, y), axis="XY", is_absolute=True, is_blocking=True)
+                else:
+                    self._stage.move(value=x, axis="X", is_absolute=True, is_blocking=True)
+                    self._stage.move(value=y, axis="Y", is_absolute=True, is_blocking=True)
+                self._stage.move(value=z, axis="Z", is_absolute=True, is_blocking=True)
+            except Exception as e:
+                self._logger.error(f"Could not restore stage position: {e}")
+
+    def _waitForObjective(self, objective, timeout: float = 60.0):
+        """The turret move runs on its own thread; wait for it to settle."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not getattr(objective, "_isMovingObjective", False):
+                return True
+            time.sleep(0.1)
+        self._logger.warning("Objective move did not finish in time")
+        return False
+
+    def _centreBand(self, frame: np.ndarray, widthPx: int, subsample: int) -> np.ndarray:
+        """The centre ``widthPx`` camera columns of a frame, ``subsample`` times coarser.
+
+        The stage never stops, so only the middle of each frame corresponds to
+        the position we recorded. Copied so the detector can reuse its buffer.
+        """
+        if frame.ndim == 3:
+            frame = frame[:, :, 0]
+        width = frame.shape[1]
+        band = max(1, min(width, widthPx))
+        start = max(0, width // 2 - band // 2)
+        return np.array(frame[::subsample, start:start + band:subsample], copy=True)
+
+    # Frames are still delivered after the stage has stopped; keep grabbing
+    # this long so the end of the line is covered too.
+    PRESCAN_TAIL_S = 0.3
+
+    def _sweepLine(self, startX, endX, y, speedX, dx, subsample) -> Optional[_Sweep]:
+        """Drive X once; return the timestamped exposures taken on the way.
+
+        Two phases, deliberately separate:
+
+        1. While the stage moves, keep the centre band of a fresh frame every
+           ``dx`` worth of travel (by nominal time) — a short list, one entry
+           per tile pitch, never more than PRESCAN_MAX_FRAMES.
+        2. Later (``_placeSweep``) spread those bands across the strip by
+           where each was taken: ``x = span * (t - lag - t0) / (t1 - t0)``.
+
+        Placing by the measured sweep duration rather than by ``speedX`` is
+        what makes the strip land in the right place: the stage accelerates,
+        its speed units may not be ours, and it may be slower than asked, and
+        none of that matters once the ends of the line are pinned to the ends
+        of the strip. Everything is sized from the frames themselves, not
+        from ``detector.shape`` (whose axis order differs between cameras).
+        ``startX``/``endX`` are in travel order; ``_placeSweep`` un-mirrors
+        return lines. Returns None when the line yielded nothing usable.
+        """
+        # One axis at a time — a combined move drives the stage diagonally.
+        self._stage.move(value=startX, axis="X", speed=speedX, is_absolute=True, is_blocking=True)
+        self._stage.move(value=y, axis="Y", speed=speedX, is_absolute=True, is_blocking=True)
+
+        span = abs(endX - startX)
+        pixelSize = self._getPixelSizeUm()
+        probe = self._detector.getLatestFrame()
+        if probe is None or getattr(probe, "size", 0) == 0:
+            self._logger.warning(f"Prescan line y={y:.0f}: no frame from the detector")
+            return None
+        frameH, frameW = probe.shape[0], probe.shape[1]
+        # prescanLayout clamps the pitch to the field (so bands can meet) and
+        # coarsens the strip until it fits the memory budget.
+        wanted, _, _, subsample, dx = prescanLayout(
+            span, dx, pixelSize, (frameH, frameW), subsample,
+            self.PRESCAN_MAX_STRIP_MB * 1024 * 1024)
+        wanted = min(self.PRESCAN_MAX_FRAMES, wanted)
+        # Keep a band a little wider than the pitch, so placement can crop to
+        # the real spacing without ever leaving a gap.
+        bandPx = min(frameW, int(np.ceil(1.25 * dx / pixelSize)))
+        interval = (span / max(speedX, 1e-6)) / wanted  # nominal seconds per exposure
+
+        mover = _NonBlockingMove(self._stage, endX - startX, "X", speedX)
+        mover.start()
+        t0 = time.time()
+        t1 = None
+        deadline = t0 + (span / max(speedX, 1e-6)) * 3.0 + 10.0
+
+        samples = []  # (t, band)
+        lastFrameNumber = -1
+        lastKept = -1e9
+        while not self._shouldStop.is_set() and time.time() < deadline:
+            now = time.time()
+            if mover.finished:
+                if t1 is None:
+                    t1 = now
+                elif now - t1 > self.PRESCAN_TAIL_S:
+                    break
+            if now - lastKept < interval:
+                # Fixed 2 ms tick, never "the remainder": a remainder of a few
+                # microseconds is a busy-loop, not a sleep.
+                time.sleep(0.002)
+                continue
+            try:
+                frame, frameNumber = self._detector.getLatestFrame(returnFrameNumber=True)
+            except TypeError:
+                frame, frameNumber = self._detector.getLatestFrame(), lastFrameNumber + 1
+            if frame is None or getattr(frame, "size", 0) == 0 or frameNumber == lastFrameNumber:
+                time.sleep(0.002)
+                continue
+            lastFrameNumber = frameNumber
+            lastKept = now
+            samples.append((now, self._centreBand(frame, bandPx, subsample)))
+        mover.join(timeout=5.0)
+        if mover.error:
+            self._logger.error(f"Prescan line y={y:.0f}: move failed: {mover.error}")
+            return None
+        if not mover.finished:
+            self._logger.error(f"Prescan line y={y:.0f}: move did not finish in time")
+            return None
+        if t1 is None:
+            t1 = time.time()
+        if len(samples) < 2:
+            self._logger.warning(f"Prescan line y={y:.0f}: only {len(samples)} exposure(s)")
+            return None
+        if len(samples) < wanted * 0.8:
+            fps = len(samples) / max(t1 - t0, 1e-3)
+            self._logger.warning(
+                f"Prescan line y={y:.0f}: {len(samples)} exposures for {wanted} wanted — "
+                f"this camera keeps up to about {fps * dx:.0f} µm/s at this pitch")
+
+        return _Sweep(samples, t0, t1, span, pixelSize * subsample, endX >= startX)
+
+    def _placeSweep(self, sweep: _Sweep, lagS: float) -> np.ndarray:
+        """Lay a sweep out left-to-right in stage X, corrected for the camera lag.
+
+        A frame grabbed at ``t`` was exposed at ``t - lag``, when the stage
+        was ``speed × lag`` behind: shifting the move's time bracket by the
+        lag puts every band back where it was actually taken. The strip
+        reads minX→maxX whichever way the line was driven.
+        """
+        return self._spreadSamples(sweep.samples, sweep.t0 + lagS, sweep.t1 + lagS,
+                                   sweep.span, sweep.scale, forward=sweep.forward)
+
+    def _spreadSamples(self, samples, t0, t1, span, scale, forward=True):
+        """Lay timestamped bands across a strip by where each was exposed.
+
+        Sample i sits ``span * (t_i - t0) / (t1 - t0)`` along the travel,
+        clamped to the strip: frames from before the stage set off or after
+        it stopped show the line's end points. The strip is always in stage
+        order (column 0 = lowest X); a return line (``forward=False``) walks
+        it from the far end. Bands are never mirrored — the camera does not
+        know which way the stage is going, so its pixel order is the same on
+        every line, and flipping a whole return strip would flip each field
+        of view inside it.
+
+        Each band fills half the distance to its neighbours on either side,
+        so the strip is contiguous whatever the cadence; a band narrower than
+        that gap is centred and the remainder left dark rather than stretched.
+        """
+        stripW = max(2, int(np.ceil(span / scale)))
+        stripH = samples[0][1].shape[0]
+        strip = np.zeros((stripH, stripW), dtype=samples[0][1].dtype)
+        duration = max(t1 - t0, 1e-6)
+        placed = []
+        for t, band in samples:
+            along = min(stripW - 1, max(0, int(round((t - t0) / duration * (stripW - 1)))))
+            placed.append((along if forward else stripW - 1 - along, band))
+        placed.sort(key=lambda item: item[0])
+        centres = [c for c, _ in placed]
+
+        for i, (_, band) in enumerate(placed):
+            left = 0 if i == 0 else (centres[i - 1] + centres[i]) // 2
+            right = stripW if i == len(placed) - 1 else (centres[i] + centres[i + 1]) // 2
+            width = min(right - left, band.shape[1])
+            if width <= 0:
+                continue
+            # Centre the band on its position, clipped to its share of the strip.
+            x0 = max(left, min(right - width, centres[i] - width // 2))
+            bx0 = max(0, band.shape[1] // 2 - width // 2)
+            strip[:band.shape[0], x0:x0 + width] = band[:, bx0:bx0 + width]
+        return strip
+
+    def _addStrip(self, strip: np.ndarray, minX: float, maxX: float, y: float,
+                  pixelSize: float):
+        """Push one prescan line into the existing tile store as a wide tile.
+
+        ``pixelSize`` is the strip's own µm/px (coarser than the camera's).
+        """
+        preview = self._makePreview(strip)
+        if preview is None:
+            return
+        tileId = self._allocTileId()
+        tile = {
+            "id": tileId,
+            "x": float((minX + maxX) / 2.0),
+            "y": float(y),
+            "widthUm": float(maxX - minX),
+            "heightUm": float(strip.shape[0] * pixelSize),
+            "channel": self._getActiveChannel(),
+            "kind": "prescan",
+            "rawPath": "",
+            "timestamp": time.time(),
+            "preview": preview,
+        }
+        with self._tilesLock:
+            self._tiles.append(tile)
+            self._trimTiles()
+        self._writeTileIndex()
+        self.sigStageMapTileAdded.emit({
+            "id": tileId, "x": tile["x"], "y": tile["y"],
+            "widthUm": tile["widthUm"], "heightUm": tile["heightUm"],
+            "channel": tile["channel"], "image": preview, "format": "jpeg",
+        })
 
     # ------------------------------------------------------------------ #
     # Monitor loop
@@ -492,6 +1058,7 @@ class StageMapController(ImConWidgetController):
             channels = sorted({t["channel"] for t in self._tiles})
         return StageMapStatus(
             isRunning=self._isRunning,
+            prescanRunning=self._prescanThread is not None,
             sessionPath=self._sessionPath or "",
             tileCount=tileCount,
             channels=channels,
@@ -503,6 +1070,7 @@ class StageMapController(ImConWidgetController):
             positionY=pos[1],
             detectorName=self._detectorName,
             lastError=self._lastError,
+            prescanLagMs=float(self._prescanLagS * 1000.0),
         )
 
     @APIExport()
@@ -532,6 +1100,159 @@ class StageMapController(ImConWidgetController):
         self._monitorThread.start()
         self._emitStatus()
         self._logger.info("Stage map started")
+        return True
+
+    @APIExport(requestType="POST")
+    def startPrescan(self, minX: float, maxX: float, minY: float, maxY: float,
+                     dy: float = 500.0, speedX: float = 10000.0,
+                     objectiveSlot: Optional[int] = None,
+                     dx: float = 0.0, subsample: int = 0) -> Dict:
+        """Sweep an area fast and drop the result on the map as an overlay.
+
+        The stage runs continuously in X while the camera free-runs; frames are
+        re-spaced along X from elapsed time, downsampled, and pushed into the
+        SAME tile store the stage map uses, one strip per Y line. Coarse in Y
+        and motion-blurred in X on purpose: this is a locator for finding
+        tissue, not data.
+
+        Illumination, exposure and gain are used exactly as the operator left
+        them. Nothing here switches channels or auto-exposes, and nothing
+        should be added that does.
+
+        Coordinates are stage micrometres throughout, so a prescan taken with a
+        10x objective lines up with a 20x acquisition without rescaling.
+
+        Lines are driven in a serpentine, and each strip is emitted over the
+        socket the moment its line finishes, so the map fills in as it goes.
+
+        ``objectiveSlot`` switches the turret before the sweep (its own saved
+        focus comes with it) and everything — objective, X, Y and Z — is put
+        back afterwards. The caller is expected to have asked the operator
+        first: moving the turret is a physical change.
+
+        ``dx`` is the exposure pitch along the sweep in µm — the same tile
+        spacing the scan uses; 0 means one field width. ``subsample`` is
+        camera pixels per strip pixel (0 = the default); the strip grows
+        coarser on its own if it would exceed ``PRESCAN_MAX_STRIP_MB``.
+        """
+        if self._isRunning or self._prescanThread is not None:
+            return {"success": False, "error": "A scan is already running"}
+        if self._detector is None or self._stage is None:
+            return {"success": False, "error": "Detector or stage not available"}
+        if maxX <= minX or maxY < minY or dy <= 0 or speedX <= 0:
+            return {"success": False, "error": "Invalid area, dy or speed"}
+
+        if self._sessionPath is None:
+            self._createSession()
+        # A new prescan replaces the old overlay rather than layering on it.
+        self._dropTiles("prescan")
+        self._shouldStop.clear()
+        self._prescanThread = threading.Thread(
+            target=self._prescanLoop,
+            args=(float(minX), float(maxX), float(minY), float(maxY),
+                  float(dy), float(speedX),
+                  None if objectiveSlot is None else int(objectiveSlot),
+                  float(dx), int(subsample) or self.PRESCAN_SUBSAMPLE),
+            daemon=True,
+        )
+        self._prescanThread.start()
+        self._emitStatus()  # prescanRunning=True reaches the UI over the socket
+        nLines = int((maxY - minY) / dy) + 1
+        self._logger.info(
+            f"Prescan started: X {minX:.0f}->{maxX:.0f} um, {nLines} line(s) "
+            f"every {dy:.0f} um at {speedX:.0f} um/s"
+        )
+        return {"success": True, "lines": nLines}
+
+    @APIExport()
+    def getStageMapOverview(self, maxWidthPx: int = 2048) -> Dict:
+        """The whole map as one image plus the stage extent it covers.
+
+        For consumers outside the React app (napari, a notebook, a script):
+        everything is in stage micrometres, so an overview taken at 10x can be
+        used to plan an acquisition at 20x without rescaling anything.
+
+        Returns ``image`` (base64 JPEG), ``bounds`` (min/max X/Y in um) and
+        ``umPerPixel`` — position in um = bounds.minX + column * umPerPixel.
+        """
+        with self._tilesLock:
+            tiles = [t for t in self._tiles if t.get("preview")]
+        if not tiles:
+            return {"success": False, "error": "No tiles captured yet"}
+
+        minX = min(t["x"] - t["widthUm"] / 2 for t in tiles)
+        maxX = max(t["x"] + t["widthUm"] / 2 for t in tiles)
+        minY = min(t["y"] - t["heightUm"] / 2 for t in tiles)
+        maxY = max(t["y"] + t["heightUm"] / 2 for t in tiles)
+        spanX, spanY = maxX - minX, maxY - minY
+        if spanX <= 0 or spanY <= 0:
+            return {"success": False, "error": "Empty map extent"}
+
+        umPerPixel = max(spanX / max(1, int(maxWidthPx)), self._getPixelSizeUm())
+        width = max(1, int(round(spanX / umPerPixel)))
+        height = max(1, int(round(spanY / umPerPixel)))
+        canvas = np.zeros((height, width), dtype=np.uint8)
+
+        for tile in tiles:
+            img = self._decodePreview(tile["preview"])
+            if img is None:
+                continue
+            tw = max(1, int(round(tile["widthUm"] / umPerPixel)))
+            th = max(1, int(round(tile["heightUm"] / umPerPixel)))
+            img = self._resizeGray(img, tw, th)
+            x0 = int(round((tile["x"] - tile["widthUm"] / 2 - minX) / umPerPixel))
+            y0 = int(round((tile["y"] - tile["heightUm"] / 2 - minY) / umPerPixel))
+            x1, y1 = min(width, x0 + tw), min(height, y0 + th)
+            x0, y0 = max(0, x0), max(0, y0)
+            if x1 > x0 and y1 > y0:
+                canvas[y0:y1, x0:x1] = img[: y1 - y0, : x1 - x0]
+
+        encoded = self._makePreview(canvas)
+        if encoded is None:
+            return {"success": False, "error": "Could not encode overview"}
+        return {
+            "success": True,
+            "image": encoded,
+            "format": "jpeg",
+            "widthPx": width,
+            "heightPx": height,
+            "umPerPixel": float(umPerPixel),
+            "bounds": {"minX": float(minX), "maxX": float(maxX),
+                       "minY": float(minY), "maxY": float(maxY)},
+            "tileCount": len(tiles),
+        }
+
+    def _decodePreview(self, preview: str) -> Optional[np.ndarray]:
+        """base64 JPEG -> 2-D uint8 array."""
+        try:
+            raw = base64.b64decode(preview)
+            if HAS_CV2:
+                return cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_GRAYSCALE)
+            from PIL import Image
+            import io
+            return np.array(Image.open(io.BytesIO(raw)).convert("L"))
+        except Exception as e:
+            self._logger.debug(f"Could not decode tile preview: {e}")
+            return None
+
+    @staticmethod
+    def _resizeGray(img: np.ndarray, width: int, height: int) -> np.ndarray:
+        if img.shape[0] == height and img.shape[1] == width:
+            return img
+        if HAS_CV2:
+            return cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+        ys = (np.linspace(0, img.shape[0] - 1, height)).astype(int)
+        xs = (np.linspace(0, img.shape[1] - 1, width)).astype(int)
+        return img[np.ix_(ys, xs)]
+
+    @APIExport()
+    def stopPrescan(self) -> bool:
+        """Stop a running prescan; strips already produced are kept."""
+        self._shouldStop.set()
+        if self._prescanThread is not None and self._prescanThread.is_alive():
+            self._prescanThread.join(timeout=10.0)
+        self._prescanThread = None
+        self._emitStatus()  # prescanRunning=False, even if the join timed out
         return True
 
     @APIExport()
@@ -610,6 +1331,7 @@ class StageMapController(ImConWidgetController):
                     "widthUm": tile["widthUm"],
                     "heightUm": tile["heightUm"],
                     "channel": tile["channel"],
+                    "kind": tile.get("kind", "tile"),
                     "timestamp": tile["timestamp"],
                 }
                 if includePreviews:

@@ -51,7 +51,7 @@ class CameraToupcam:
     """
 
     def __init__(self, cameraNo=None, exposure_time=100, gain=0, frame_rate=-1,
-                 blacklevel=0, isRGB=False, binning=1, flipImage=(False, False),
+                 blacklevel=200, isRGB=False, binning=1, flipImage=(False, False),
                  heat=True, lowNoise=True, conversionGain="HCG",
                  blacklevelAutoAdjust=None):
         super().__init__()
@@ -88,6 +88,11 @@ class CameraToupcam:
         self.conversionGain = conversionGain
         self.blacklevelAutoAdjust = blacklevelAutoAdjust
         self.exposure_time = exposure_time  # ms (UI convention, like CameraHIK)
+        # Cooling request, cached so a reopened handle (USB replug, failed
+        # StartPullMode) gets the same TEC target back instead of the camera's
+        # power-on default -- which is how a -30 °C sensor quietly warms up.
+        self.targetTemperature = -30.0  # °C
+        self.fanSpeed = 1  # -1 = the camera's default speed
         self.gain = gain
         self.frame_rate = frame_rate
         self.cameraNo = cameraNo if cameraNo is not None else 0
@@ -136,8 +141,8 @@ class CameraToupcam:
                 self.setBinning(binning)
             self.set_frame_rate(frame_rate)
             # set temperature/fan/TEC state if supported, otherwise ignore
-            self.set_temperature(-10)  # °C
-            self.set_fan_speed(True)
+            self.set_temperature(self.targetTemperature)
+            self.set_fan_speed(self.fanSpeed)
             # Low-noise long-exposure configuration. Applied before the stream
             # starts because conversion gain and low-noise mode change the
             # sensor readout, which the SDK only picks up between streams.
@@ -356,6 +361,10 @@ class CameraToupcam:
                 self.setBinning(self.binning)
             self.set_frame_rate(self.frame_rate)
             self.setTriggerSource(self.trigger_source)
+            # Same for the cooler: a fresh handle does not remember the TEC
+            # target, and nothing else would notice that the sensor is warming.
+            self.set_temperature(self.targetTemperature)
+            self.set_fan_speed(self.fanSpeed)
             # A reopened handle comes up with the camera's own defaults, so the
             # low-noise configuration has to be pushed again or a long
             # acquisition silently continues at LCG / normal-noise mode.
@@ -477,6 +486,12 @@ class CameraToupcam:
         if self.is_streaming:
             return
         self.flushBuffer()
+        # The SDK numbers frames per stream, so a snap after a snap sees seq 1
+        # again. Reset our counter too, so a caller that reads getFrameNumber()
+        # before arming and waits for it to advance recognises the very first
+        # frame of the new stream as fresh instead of sitting out a second
+        # exposure (RecordingController._waitForFreshFrame).
+        self.frameNumber = -1
         if self.hcam is None:
             self.reconnectCamera()
         if self.hcam is None:
@@ -1062,23 +1077,63 @@ class CameraToupcam:
             return None
 
     def set_temperature(self, temperature_c):
-        """TEC target temperature in °C (TEC models only)."""
+        """TEC target temperature in °C (TEC models only); also switches the
+        cooler on. Logged at INFO because an unexpected warm-up is otherwise
+        impossible to trace back to whoever changed the target."""
         if not self._hasTEC:
             self.__logger.debug("Camera has no controllable TEC")
             return
         try:
+            temperature_c = float(temperature_c)
+        except (TypeError, ValueError):
+            self.__logger.warning(f"Ignoring invalid TEC target {temperature_c!r}")
+            return
+        try:
             self.hcam.put_Option(toupcam.TOUPCAM_OPTION_TEC, 1)
-            self.hcam.put_Temperature(int(temperature_c * 10))
+            self.hcam.put_Temperature(int(round(temperature_c * 10)))
+            self.targetTemperature = temperature_c
+            self.__logger.info(
+                f"TEC on, target {temperature_c:.1f} °C "
+                f"(sensor now {self.get_temperature()} °C)")
         except toupcam.HRESULTException as ex:
             self.__logger.error(f"Set temperature failed hr=0x{ex.hr & 0xffffffff:x}")
 
+    def get_target_temperature(self):
+        """TEC target in °C as the camera reports it, or None if unsupported."""
+        if not self._hasTEC:
+            return None
+        try:
+            return self.hcam.get_Option(toupcam.TOUPCAM_OPTION_TECTARGET) / 10.0
+        except Exception:
+            return None
+
+    def get_tec_enabled(self):
+        """True/False for the cooler state, or None if unsupported."""
+        if not self._hasTEC:
+            return None
+        try:
+            return bool(self.hcam.get_Option(toupcam.TOUPCAM_OPTION_TEC))
+        except Exception:
+            return None
+
     def set_fan_speed(self, speed):
+        """Fan speed: 0 = off, 1..max, -1 = the camera's default speed."""
         if not self._hasFan:
             return
         try:
             self.hcam.put_Option(toupcam.TOUPCAM_OPTION_FAN, int(speed))
+            self.fanSpeed = int(speed)
         except toupcam.HRESULTException as ex:
             self.__logger.error(f"Set fan speed failed hr=0x{ex.hr & 0xffffffff:x}")
+
+    def get_fan_speed(self):
+        """Current fan speed as the camera reports it, or None if unsupported."""
+        if not self._hasFan:
+            return None
+        try:
+            return int(self.hcam.get_Option(toupcam.TOUPCAM_OPTION_FAN))
+        except Exception:
+            return None
 
     # ---------------------------------------------------------------------
     # Trigger handling
@@ -1239,6 +1294,10 @@ class CameraToupcam:
             return self.trigger_source
         elif property_name == "temperature":
             return self.get_temperature()
+        elif property_name == "target_temperature":
+            return self.get_target_temperature()
+        elif property_name == "fan_speed":
+            return self.get_fan_speed()
         elif property_name == "binning":
             return self.binning
         elif property_name == "pixel_format":
@@ -1298,6 +1357,11 @@ class CameraToupcam:
             temp = self.get_temperature()
             if temp is not None:
                 params["temperature_c"] = temp
+            if self._hasTEC:
+                params["tec_on"] = self.get_tec_enabled()
+                params["tec_target_c"] = self.get_target_temperature()
+            if self._hasFan:
+                params["fan_speed"] = self.get_fan_speed()
         except Exception:
             pass
         # Low-noise configuration, read back from the device rather than from

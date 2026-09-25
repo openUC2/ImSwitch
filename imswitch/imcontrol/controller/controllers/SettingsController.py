@@ -986,6 +986,38 @@ class SettingsController(ImConWidgetController):
         self.allParams[detectorName].height.setValue(shape[1])
         self.adjustFrame(detector=detector)
 
+    def _coerceDetectorParamValue(self, detectorName: str, parameterName: str, value: Any) -> Any:
+        """Convert a query-string value to the type the detector declares.
+
+        ``value`` is typed ``Any``, so every value that arrives over the REST
+        API is a string. A camera setter then hands that string to ctypes and
+        raises TypeError before touching the hardware — the request returns
+        ``null`` and the setting silently never applies. Booleans need the
+        same care: ``bool("false")`` is True.
+        """
+        if not isinstance(value, str):
+            return value
+        try:
+            from imswitch.imcontrol.model.managers.detectors.DetectorManager import (
+                DetectorNumberParameter, DetectorBooleanParameter
+            )
+            param = self._master.detectorsManager[detectorName].parameters[parameterName]
+        except Exception:
+            return value
+
+        text = value.strip()
+        try:
+            # Guard on the stored value too: 'mode' is declared boolean but
+            # actually holds the detector name, and must stay a string.
+            if isinstance(param, DetectorBooleanParameter) and isinstance(param.value, bool):
+                return text.lower() in ('1', 'true', 'yes', 'on')
+            if isinstance(param, DetectorNumberParameter):
+                return float(text)
+        except ValueError:
+            self._logger.warning(
+                f"Value {value!r} for parameter '{parameterName}' is not a number; passing through")
+        return value
+
     @APIExport(runOnUIThread=True)
     def setDetectorParameter(self, detectorName: str=None, parameterName: str=None, value: Any=None) -> None:
         """ Sets the specified detector-specific parameter to the specified
@@ -996,6 +1028,8 @@ class SettingsController(ImConWidgetController):
             return
         if value is None:
             return
+        value = self._coerceDetectorParamValue(detectorName, parameterName, value)
+
         if (parameterName in ['Trigger source'] and
                 self.getCurrentParams().allDetectorsFrame.value()):
             # Special case for certain parameters that will follow the "update all detectors" option

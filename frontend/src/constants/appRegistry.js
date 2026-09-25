@@ -319,13 +319,14 @@ export const APP_REGISTRY = {
     id: "flowStop",
     name: "Flow Stop",
     description:
-      "Control flow stop mechanisms for microfluidics experiments. Manage fluid flow and timing.",
+      "Flow-cell imaging for plankton and particles: live preview, pump and focus control, EcoTaxa sample metadata, timed acquisition and gallery.",
     category: APP_CATEGORIES.APPS,
     icon: DeviceHubIcon,
     enabled: false,
     essential: false,
-    keywords: ["flow", "stop", "microfluidics", "fluid", "timing"],
+    keywords: ["flow", "stop", "microfluidics", "fluid", "plankton", "planktoscope", "ecotaxa"],
     pluginId: "FlowStop",
+    requiredControllers: ["FlowStopController"],
   },
 
   lepmon: {

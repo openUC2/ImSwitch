@@ -1,119 +1,134 @@
 import { createSlice } from "@reduxjs/toolkit";
 
+// Mirrors DEFAULT_METADATA in FlowStopController.py (EcoTaxa-style sample metadata).
+export const EMPTY_METADATA = {
+  sample_project: "",
+  sample_id: "",
+  sample_ship: "",
+  sample_operator: "",
+  sample_gear: "",
+  sample_mesh_size_um: 0,
+  sample_depth_min_m: 0,
+  sample_depth_max_m: 0,
+  sample_latitude: 0,
+  sample_longitude: 0,
+  sample_date: "",
+  sample_time: "",
+  sample_total_volume_ml: 0,
+  acq_instrument: "openUC2 FlowStop",
+  acq_celltype_ul: 0,
+  object_notes: "",
+};
+
 const initialState = {
   // UI state
   tabIndex: 0,
 
-  // Experiment parameters
-  timeStamp: "0",
-  experimentName: "Test",
-  experimentDescription: "Some description",
-  uniqueId: 1,
-
-  // Flow parameters
-  numImages: 10,
+  // Acquisition parameters (persisted server-side)
+  experimentName: "FlowStopExperiment",
+  experimentDescription: "",
+  uniqueId: "",
+  numImages: -1,
   volumePerImage: 1000,
   timeToStabilize: 0.5,
   pumpSpeed: 10000,
+  frameRate: 1,
+  fileFormat: "JPG",
+  isRecordVideo: false,
+  wasRunning: false, // resume the acquisition automatically after an ImSwitch restart
+
+  // Sample metadata (persisted server-side)
+  metadata: { ...EMPTY_METADATA },
+
+  // Manual controls (UI only)
+  focusStep: 100,
+  focusSpeed: 10000,
+  pumpStep: 1000,
+  pumpJogSpeed: 10000,
+  illuminationValue: 0,
+  illuminationOn: false,
+  autoExposure: true,
+  exposureTime: 100,
+
+  // Hardware description from the backend
+  hardware: null,
 
   // Status
   isRunning: false,
   currentImageCount: 0,
+  progress: -1,
+  etaSeconds: -1,
+  elapsedSeconds: 0,
+  relativePath: "",
+  lastError: "",
+
+  // Gallery
+  galleryFiles: [],
 };
 
 const flowStopSlice = createSlice({
   name: "flowStop",
   initialState,
   reducers: {
-    // UI actions
     setTabIndex: (state, action) => {
       state.tabIndex = action.payload;
     },
 
-    // Experiment parameter actions
-    setTimeStamp: (state, action) => {
-      state.timeStamp = action.payload;
-    },
-    setExperimentName: (state, action) => {
-      state.experimentName = action.payload;
-    },
-    setExperimentDescription: (state, action) => {
-      state.experimentDescription = action.payload;
-    },
-    setUniqueId: (state, action) => {
-      state.uniqueId = action.payload;
+    // Accepts a partial {key: value} patch for any top-level field.
+    setField: (state, action) => {
+      Object.assign(state, action.payload);
     },
 
-    // Flow parameter actions
-    setNumImages: (state, action) => {
-      state.numImages = action.payload;
+    setMetadataField: (state, action) => {
+      const { key, value } = action.payload;
+      state.metadata[key] = value;
     },
-    setVolumePerImage: (state, action) => {
-      state.volumePerImage = action.payload;
-    },
-    setTimeToStabilize: (state, action) => {
-      state.timeToStabilize = action.payload;
-    },
-    setPumpSpeed: (state, action) => {
-      state.pumpSpeed = action.payload;
+    setMetadata: (state, action) => {
+      state.metadata = { ...EMPTY_METADATA, ...action.payload };
     },
 
-    // Status actions
+    setHardware: (state, action) => {
+      state.hardware = action.payload;
+    },
+
     setIsRunning: (state, action) => {
       state.isRunning = action.payload;
     },
     setCurrentImageCount: (state, action) => {
       state.currentImageCount = action.payload;
     },
-
-    // Batch update actions
-    setExperimentInfo: (state, action) => {
-      const { name, description, uniqueId } = action.payload;
-      state.experimentName = name;
-      state.experimentDescription = description;
-      state.uniqueId = uniqueId;
-    },
-    setFlowParameters: (state, action) => {
-      const { numImages, volumePerImage, timeToStabilize, pumpSpeed } = action.payload;
-      state.numImages = numImages;
-      state.volumePerImage = volumePerImage;
-      state.timeToStabilize = timeToStabilize;
-      state.pumpSpeed = pumpSpeed;
+    setStatus: (state, action) => {
+      const s = action.payload || {};
+      state.isRunning = !!s.isRunning;
+      state.currentImageCount = s.imagesTaken ?? state.currentImageCount;
+      state.progress = s.progress ?? -1;
+      state.etaSeconds = s.etaSeconds ?? -1;
+      state.elapsedSeconds = s.elapsedSeconds ?? 0;
+      state.relativePath = s.relativePath ?? state.relativePath;
+      state.lastError = s.lastError ?? "";
     },
 
-    // Reset actions
-    resetExperiment: (state) => {
-      state.isRunning = false;
-      state.currentImageCount = 0;
-      state.timeStamp = "0";
+    setGalleryFiles: (state, action) => {
+      state.galleryFiles = action.payload;
     },
-    resetToDefaults: (state) => {
-      return { ...initialState };
-    },
+
+    resetToDefaults: () => ({ ...initialState }),
   },
 });
 
-// Export actions
 export const {
   setTabIndex,
-  setTimeStamp,
-  setExperimentName,
-  setExperimentDescription,
-  setUniqueId,
-  setNumImages,
-  setVolumePerImage,
-  setTimeToStabilize,
-  setPumpSpeed,
+  setField,
+  setMetadataField,
+  setMetadata,
+  setHardware,
   setIsRunning,
   setCurrentImageCount,
-  setExperimentInfo,
-  setFlowParameters,
-  resetExperiment,
+  setStatus,
+  setGalleryFiles,
   resetToDefaults,
 } = flowStopSlice.actions;
 
-// Export selector
 export const getFlowStopState = (state) => state.flowStop;
 
-// Export reducer
 export default flowStopSlice.reducer;

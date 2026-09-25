@@ -13,7 +13,6 @@ from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from abc import ABC, abstractmethod
 
-from imswitch.imcommon.model import dirtools
 # Import OME writers from the new io location
 from imswitch.imcontrol.model.io import (
     OMEWriterConfig,
@@ -21,6 +20,10 @@ from imswitch.imcontrol.model.io import (
     OMEROConnectionParams,
     is_omero_available,
 )
+from imswitch.imcontrol.model.io.ome_writers import write_plate_metadata_sidecar
+
+# DPC half-illumination sub-frames, in acquisition (= OME channel) order.
+DPC_SUB_DIRS = ("top", "bottom", "left", "right")
 
 
 class ExperimentModeBase(ABC):
@@ -133,6 +136,69 @@ class ExperimentModeBase(ABC):
             channel_names=channel_names,
         )
 
+    def tile_shape(self) -> Tuple[int, int]:
+        """(width, height) of one camera frame."""
+        shape = getattr(self.controller.mDetector, "_shape", (512, 512))
+        return (shape[-1], shape[-2])
+
+    @staticmethod
+    def channel_layout(intensities, sources, kinds) -> Tuple[int, Optional[List[str]]]:
+        """Writer channel axis: one slot per active channel, four for a DPC channel.
+
+        Kinds are looked up by source name so a misaligned kinds list cannot
+        put a DPC sub-frame into the wrong slot. (1, None) when nothing is
+        active, which lets OMEWriter default to "Channel_N".
+        """
+        sources = list(sources or [])
+        kind_by_name = dict(zip(sources, list(kinds or [])))
+        names: List[str] = []
+        for i, intensity in enumerate(intensities or []):
+            if intensity is None or intensity <= 0:
+                continue
+            name = sources[i] if i < len(sources) else f"Channel_{i}"
+            kind = kind_by_name.get(name, "default")
+            if kind == "dpc":
+                names += [f"DPC_{d}" for d in DPC_SUB_DIRS]
+            elif kind == "ring":
+                names.append("Ring")
+            else:
+                names.append(name)
+        return (len(names), names) if names else (1, None)
+
+    @staticmethod
+    def well_metadata(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Per-well labware metadata of one region, None when the region is not a well."""
+        if not (meta.get("wellRow") or meta.get("wellColumn") or meta.get("labwareLoadName")):
+            return None
+        return {k: meta.get(k) for k in ("wellRow", "wellColumn", "labwareLoadName", "conditionLabel")}
+
+    def write_plate_sidecar(self, snake_tiles, region_meta: Dict[str, Dict[str, Any]], dir_path: str) -> None:
+        """Best-effort OME-NGFF plate sidecar listing the wells this run touches."""
+        wells_used, condition_labels, labware_load_name = [], {}, None
+        for tiles in snake_tiles:
+            meta = region_meta.get(tiles[0]["region_id"], {}) if tiles else {}
+            row, col, load, cond = (meta.get(k) for k in ("wellRow", "wellColumn", "labwareLoadName", "conditionLabel"))
+            if load and labware_load_name is None:
+                labware_load_name = load
+            if row and col is not None:
+                wells_used.append((str(row), str(int(col))))
+                if cond:
+                    condition_labels[f"{row}{int(col)}"] = cond
+        if not labware_load_name or getattr(self.controller, "labware_manager", None) is None:
+            return
+        try:
+            lab = self.controller.labware_manager.get(labware_load_name)
+            if lab is None:
+                return
+            write_plate_metadata_sidecar(
+                output_dir=dir_path, plate_name=labware_load_name,
+                rows=list(lab.rows), columns=[str(c) for c in lab.columns], wells_used=wells_used,
+                extra={"imswitch_labware": {"loadName": labware_load_name,
+                                            "conditionLabels": condition_labels or None}},
+            )
+        except Exception as exc:  # the sidecar is best-effort
+            self._logger.warning(f"Failed to write plate metadata sidecar: {exc}")
+
     def prepare_omero_connection_params(self) -> Optional[OMEROConnectionParams]:
         """
         Prepare OMERO connection parameters from ExperimentManager config.
@@ -171,46 +237,41 @@ class ExperimentModeBase(ABC):
             upload_timeout=getattr(exp_manager, 'omeroUploadTimeout', 300),
         )
 
-    def prepare_illumination_parameters(self, illumination_intensities: List[float]) -> Dict[str, Optional[float]]:
-        """
-        Prepare illumination parameters in the format expected by hardware.
-        
-        Frontend sends pre-mapped intensities array where indices correspond to
-        channel_index values. This method simply formats them for hardware.
-        
-        Args:
-            illumination_intensities: List of illumination intensities pre-mapped by frontend
-            
-        Returns:
-            List with illumination0-N and led parameters
-        """ # TODO: This is still correct?!! 
+    def prepare_illumination_parameters(self, illumination_intensities: List[float],
+                                        illumination_sources: Optional[List[str]] = None) -> List[float]:
+        """Intensities per ESP32 laser channel (``illumination[0..4]`` of the stagescan).
 
-        intensity_list = [0]*5 # This maps to the 5 avaiable channels on the eps32 side 
-        
-        # Simple direct mapping - frontend already handles channel_index matching
-        for i, intensity in enumerate(illumination_intensities):
-            intensity_list[self.controller.availableIlluminations[i].channel_index] = intensity
-            
+        ``illumination_intensities[i]`` belongs to ``illumination_sources[i]``
+        (the channel plan the frontend selected). Each source is looked up by
+        name among the controller's laser managers and lands on that manager's
+        ``channel_index``; without a source list the i-th laser manager is
+        assumed, which is only right when the frontend sends every laser in
+        config order. Sources that are not a laser (LED-matrix synthetic
+        channels) or channels outside 0..4 are skipped with a warning instead
+        of shifting the others.
+        """
+        n_channels = 5  # the ESP32 stagescan exposes illumination[0..4]
+        intensity_list = [0] * n_channels
+        managers = list(getattr(self.controller, "availableIlluminations", []) or [])
+        by_name = {getattr(m, "name", None): m for m in managers}
+
+        for i, intensity in enumerate(illumination_intensities or []):
+            if intensity is None or intensity <= 0:
+                continue
+            source = illumination_sources[i] if illumination_sources and i < len(illumination_sources) else None
+            manager = by_name.get(source) if source is not None else (managers[i] if i < len(managers) else None)
+            if manager is None:
+                self._logger.warning(f"Performance mode: illumination '{source or i}' is not a laser channel; skipped")
+                continue
+            channel = getattr(manager, "channel_index", None)
+            if not isinstance(channel, int):
+                channel = managers.index(manager)
+            if not 0 <= channel < n_channels:
+                self._logger.warning(f"Performance mode: '{source or i}' has channel_index {channel}, "
+                                     f"outside the firmware's 0..{n_channels - 1}; skipped")
+                continue
+            intensity_list[channel] = intensity
         return intensity_list
-
-    def create_experiment_directory(self, exp_name: str) -> Tuple[str, str, str]:
-        """
-        Create experiment directory and generate file paths.
-        
-        Args:
-            exp_name: Experiment name
-            
-        Returns:
-            Tuple of (timeStamp, dirPath, mFileName)
-        """
-        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        drivePath = dirtools.UserFileDirs.getValidatedDataPath()
-        dirPath = os.path.join(drivePath, 'ExperimentController', timeStamp)
-        if not os.path.exists(dirPath):
-            os.makedirs(dirPath)
-        mFileName = f"{timeStamp}_{exp_name}"
-
-        return timeStamp, dirPath, mFileName
 
     def calculate_grid_parameters(self, tiles: List[Dict]) -> Tuple[Tuple[int, int], Tuple[float, float, float, float]]:
         """
@@ -273,29 +334,27 @@ class ExperimentModeBase(ABC):
             
         Returns:
             Path to the saved protocol JSON file
+
+        Raises:
+            Whatever json.dumps raises. Serializing before opening matters:
+            open("w") truncates, so serializing inside the with-block left a
+            0-byte protocol behind on any failure. The error is not swallowed —
+            a protocol we cannot write means the run is not reproducible.
         """
-        try:
-            # Create protocol filename
-            protocol_file = file_path + "_protocol.json"
-            
-            # Add timestamp and metadata
-            protocol_data["timestamp"] = datetime.now().isoformat()
-            protocol_data["mode"] = mode
-            protocol_data["imswitch_version"] = getattr(self.controller, 'version', 'unknown')
-            
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(protocol_file), exist_ok=True)
-            
-            # Save to JSON with pretty printing
-            with open(protocol_file, 'w') as f:
-                json.dump(protocol_data, f, indent=2, default=self._json_serializer)
-                
-            self._logger.info(f"Experiment protocol saved (one-time): {protocol_file}")
-            return protocol_file
-            
-        except Exception as e:
-            self._logger.error(f"Failed to save experiment protocol: {e}")
-            return None
+        protocol_file = file_path + "_protocol.json"
+
+        protocol_data["timestamp"] = datetime.now().isoformat()
+        protocol_data["mode"] = mode
+        protocol_data["imswitch_version"] = getattr(self.controller, 'version', 'unknown')
+
+        payload = json.dumps(protocol_data, indent=2, default=self._json_serializer)
+
+        os.makedirs(os.path.dirname(protocol_file), exist_ok=True)
+        with open(protocol_file, 'w') as f:
+            f.write(payload)
+
+        self._logger.info(f"Experiment protocol saved (one-time): {protocol_file}")
+        return protocol_file
     
     def _json_serializer(self, obj):
         """

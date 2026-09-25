@@ -18,11 +18,6 @@ import {
   Box,
   Button,
   Chip,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
   FormControl,
   FormControlLabel,
   InputLabel,
@@ -229,7 +224,6 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
   const [subSpacingY, setSubSpacingY] = useState(500); // µm
 
   // Pending labware change awaiting user confirmation
-  const [pendingLoadName, setPendingLoadName] = useState(null);
 
   const loadName = wellSelectorState.labwareLoadName;
   const selectedWellIds = useMemo(
@@ -300,35 +294,16 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
     return Object.keys(labwareDef.wells || {});
   }, [labwareDef]);
 
+  // Switching labware keeps the points: they are absolute stage micrometers,
+  // so the new plate does not invalidate them. Only the well selection and
+  // condition labels belonged to the old plate.
   const handleLabwareChange = (event) => {
     const newName = event.target.value;
     if (newName === loadName) return;
-    const hasPoints = (experimentState?.pointList?.length || 0) > 0;
-    const hasSelection = (selectedWellIds?.length || 0) > 0;
-    if (hasPoints || hasSelection) {
-      setPendingLoadName(newName);
-      return;
-    }
-    applyLabwareChange(newName);
-  };
-
-  const applyLabwareChange = (newName) => {
     dispatch(wellSelectorSlice.setLabwareLoadName(newName));
     dispatch(wellSelectorSlice.clearSelectedWellIds());
     dispatch(wellSelectorSlice.clearConditionLabels());
   };
-
-  const handleConfirmLabwareChange = () => {
-    const target = pendingLoadName;
-    setPendingLoadName(null);
-    if (target == null) return;
-    // Also clear the experiment's pointList — the previous wells are no
-    // longer meaningful in the new plate's coordinate system.
-    dispatch(experimentSlice.setPointList([]));
-    applyLabwareChange(target);
-  };
-
-  const handleCancelLabwareChange = () => setPendingLoadName(null);
 
   const handleToggleWell = (wellId) => {
     dispatch(wellSelectorSlice.toggleSelectedWellId(wellId));
@@ -665,28 +640,6 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
           )}
         </Stack>
       </AccordionDetails>
-      <Dialog
-        open={pendingLoadName != null}
-        onClose={handleCancelLabwareChange}
-      >
-        <DialogTitle>Switch labware?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Switching to <strong>{pendingLoadName}</strong> will clear the
-            current well selection
-            {(experimentState?.pointList?.length || 0) > 0 && (
-              <> and remove all {experimentState.pointList.length} point(s) from the experiment</>
-            )}
-            . This cannot be undone.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCancelLabwareChange}>Cancel</Button>
-          <Button onClick={handleConfirmLabwareChange} color="error" variant="contained">
-            Switch and clear
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Accordion>
   );
 };

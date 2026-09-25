@@ -783,7 +783,7 @@ class ESP32StageManager(PositionerManager):
                              ystart=0, ystep=1, ny=100,
                              zstart=0, zstep=0, nz=1,
                              tsettle=0.1, tExposure=50, illumination=None, led=None,
-                             speed=20000, acceleration=None):
+                             speed=20000, acceleration=None, tTrig=None):
         """
         Start a stage scanning operation with the given parameters.
         
@@ -802,6 +802,7 @@ class ESP32StageManager(PositionerManager):
         :param led: Optional LED intensity (0-255).
         :param speed: Motor speed for scanning.
         :param acceleration: Motor acceleration (None = default).
+        :param tTrig: Camera trigger pulse width (ms); None = firmware default.
         """
         if illumination is None:
             illumination = (0, 0, 0, 0)  # Default to no illumination
@@ -813,7 +814,7 @@ class ESP32StageManager(PositionerManager):
             zstart=zstart, zstep=zstep, nz=nz,
             tsettle=tsettle, tExposure=tExposure,
             illumination=illumination, led=led,
-            speed=speed, acceleration=acceleration
+            speed=speed, acceleration=acceleration, tTrig=tTrig,
         )
         return r
 

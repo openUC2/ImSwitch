@@ -1,11 +1,35 @@
 import os
+import json
 
 import numpy as np
 
 from imswitch.imcommon.framework import SignalInterface
 from imswitch.imcommon.model import initLogger
 from imswitch.imcommon.model import dirtools
-import json
+
+
+DEFAULT_CONFIG = {
+    "wasRunning": False,
+    "flowRate": 100,
+    "numberOfFrames": -1,
+    "experimentName": "FlowStopExperiment",
+    "experimentDescription": "",
+    "frameRate": 1,
+    "savePath": "./",
+    "fileFormat": "JPG",
+    "axisFlow": "X",
+    "axisFocus": "Z",
+    "delayTimeAfterRestart": 1,
+    "isRecordVideo": False,
+    "numImages": -1,
+    "uniqueId": "",
+    "volumePerImage": 1000,
+    "timeToStabilize": 1,
+    "pumpSpeed": 10000,
+    "pumpTimeout": 5.0,
+    "metadata": {},
+}
+
 
 class FlowStopManager(SignalInterface):
 
@@ -14,56 +38,29 @@ class FlowStopManager(SignalInterface):
         self.__logger = initLogger(self)
 
         self.flowStopConfigFilename = "config.json"
-        self.allParameterKeys = ["wasRunning", "flowRate", "dnumberOfFrames",
-                                 "experimentName","frameRate","savePath",
-                                 "fileFormat", "axisFocus",
-                                 "axisFlow", "delayTimeAfterRestart", "isRecordVideo", "numImages", "uniqueId",
-                                 "volumePerImage", "timeToStabilize", "pumpSpeed"]
-
-        # get default configs
         self.defaultConfigPath = os.path.join(dirtools.UserFileDirs.Root, "flowStopController")
-        if not os.path.exists(self.defaultConfigPath):
-            os.makedirs(self.defaultConfigPath)
+        os.makedirs(self.defaultConfigPath, exist_ok=True)
 
+        # Merge the stored config over the defaults: a config written by an older
+        # version is missing keys, and losing the user's settings over that is worse
+        # than carrying a default forward.
+        self.defaultConfig = dict(DEFAULT_CONFIG)
+        if not self.defaultConfig["uniqueId"]:
+            self.defaultConfig["uniqueId"] = str(np.random.randint(0, 1000000))
         try:
             with open(os.path.join(self.defaultConfigPath, self.flowStopConfigFilename)) as jf:
-                # check if all keys are present
-                self.defaultConfig = json.load(jf)
-                # check if all keys are present
-                missing_keys = [key for key in self.allParameterKeys if key not in self.defaultConfig]
-                if missing_keys:
-                    raise KeyError
-                else:
-                    pass
-
-        except Exception as e:
-            self.__logger.error(f"s {self.defaultConfigPath}: {e}")
-            self.defaultConfig = {}
-            self.defaultConfig["wasRunning"] = True
-            self.defaultConfig["flowRate"] = 100
-            self.defaultConfig["numberOfFrames"] = -1
-            self.defaultConfig["experimentName"] = "FlowStopExperiment"
-            self.defaultConfig["frameRate"] = 1
-            self.defaultConfig["savePath"] = "./"
-            self.defaultConfig["fileFormat"] = "JPG"
-            self.defaultConfig["axisFlow"] = "X"
-            self.defaultConfig["axisFocus"] = "Z"
-            self.defaultConfig["delayTimeAfterRestart"]=1
-            self.defaultConfig["isRecordVideo"]=True
-            self.defaultConfig["numImages"]=10
-            self.defaultConfig["uniqueId"] = np.random.randint(0, 1000000),
-            self.defaultConfig["volumePerImage"] = 1000
-            self.defaultConfig["timeToStabilize"] = 1
-            self.defaultConfig["pumpSpeed"] = 100
+                self.defaultConfig.update(json.load(jf))
+        except FileNotFoundError:
             self.writeConfig(self.defaultConfig)
+        except Exception as e:
+            self.__logger.error(f"Could not read {self.flowStopConfigFilename}, using defaults: {e}")
 
     def updateConfig(self, parameterName, value):
-        with open(os.path.join(self.defaultConfigPath, self.flowStopConfigFilename), "w") as outfile:
-            mDict = json.load(outfile)
-            mDict[parameterName] = value
-            json.dump(mDict, outfile, indent=4)
+        self.defaultConfig[parameterName] = value
+        self.writeConfig(self.defaultConfig)
 
     def writeConfig(self, data):
+        self.defaultConfig = data
         with open(os.path.join(self.defaultConfigPath, self.flowStopConfigFilename), "w") as outfile:
             json.dump(data, outfile, indent=4)
 

@@ -88,6 +88,14 @@ const stageMapSlice = createSlice({
       state.lastTileId = -1;
     },
 
+    // The backend dropped some tiles (a new prescan replaces the old overlay);
+    // ids keep counting up on the backend, so lastTileId stays as it is.
+    removeTiles: (state, action) => {
+      const ids = new Set(action.payload?.ids || action.payload || []);
+      if (ids.size === 0) return;
+      state.tiles = state.tiles.filter((t) => !ids.has(t.id));
+    },
+
     setChannelVisible: (state, action) => {
       const { channel, visible } = action.payload;
       ensureChannel(state, channel);
@@ -123,6 +131,7 @@ export const {
   addTile,
   setTiles,
   clearTiles,
+  removeTiles,
   setChannelVisible,
   setChannelColor,
   setIsMapping,

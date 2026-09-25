@@ -16,7 +16,6 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PauseIcon from "@mui/icons-material/Pause";
 import StopIcon from "@mui/icons-material/Stop";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
-import VisibilityIcon from "@mui/icons-material/Visibility";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 
 // Dimension components
@@ -50,7 +49,6 @@ import * as experimentStateSlice from "../../state/slices/ExperimentStateSlice";
 import * as wellSelectorSlice from "../../state/slices/WellSelectorSlice";
 import * as objectiveSlice from "../../state/slices/ObjectiveSlice";
 import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsSlice";
-import * as vizarrViewerSlice from "../../state/slices/VizarrViewerSlice";
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
 import * as positionSlice from "../../state/slices/PositionSlice";
@@ -192,10 +190,15 @@ const ExperimentDesigner = () => {
   ]);
 
   // Calculate progress
-  const progress =
-    cachedTotalSteps && cachedTotalSteps > 0
-      ? Math.floor((cachedStepId / cachedTotalSteps) * 100)
-      : 0;
+  // step_id of a "completed" event is the 0-based index of the step just
+  // done, so the last step reports total-1: count it as done (was stuck at 99%).
+  const hasProgress = cachedTotalSteps > 0;
+  const stepsDone = hasProgress
+    ? Math.min(cachedTotalSteps, (Number(cachedStepId) || 0) + 1)
+    : 0;
+  const progress = hasProgress
+    ? Math.floor((stepsDone / cachedTotalSteps) * 100)
+    : 0;
 
   // Dimension to component mapping
   const dimensionComponents = {
@@ -243,6 +246,12 @@ const ExperimentDesigner = () => {
 
     startRequestedRef.current = true;
     setStartPending(true);
+    // Every refusal below must hand the button back, or START stays greyed
+    // out until the designer remounts.
+    const releaseStart = () => {
+      startRequestedRef.current = false;
+      setStartPending(false);
+    };
     console.log("Experiment started");
     dispatch(
       experimentSlice.setIsSnakescan(wellSelectorState.areaSelectSnakescan),
@@ -299,6 +308,7 @@ const ExperimentDesigner = () => {
           type: "warning",
         }),
       );
+      releaseStart();
       return;
     }
     // No position/area selected: fall back to a single acquisition at the
@@ -322,6 +332,7 @@ const ExperimentDesigner = () => {
           type: "warning",
         }),
       );
+      releaseStart();
       return;
     }
 
@@ -535,32 +546,6 @@ const ExperimentDesigner = () => {
       });
   };
 
-  const handleOpenVizarr = () => {
-    const api = createAxiosInstance();
-    api
-      .get(`/ExperimentController/getLastScanAsOMEZARR`)
-      .then((res) => res.data)
-      .then((data) => {
-        const lastZarrPath = data || "";
-        if (lastZarrPath) {
-          dispatch(
-            vizarrViewerSlice.openViewer({
-              url: lastZarrPath,
-              fileName: lastZarrPath.split("/").pop() || "OME-Zarr",
-            }),
-          );
-          infoPopupRef.current?.showMessage(
-            "Opening OME-Zarr in integrated viewer",
-          );
-        } else {
-          infoPopupRef.current?.showMessage("No OME-Zarr data available");
-        }
-      })
-      .catch(() => {
-        infoPopupRef.current?.showMessage("Failed to open OME-Zarr");
-      });
-  };
-
   // Button visibility helpers
   // startPending covers the gap between the click and the backend reporting
   // RUNNING (the whole focus-map phase); see handleStart.
@@ -679,21 +664,24 @@ const ExperimentDesigner = () => {
           {experimentStatus.status}
         </Typography>
 
-        {/* Progress */}
-        {cachedTotalSteps && cachedTotalSteps > 0 && (
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 1,
-              flex: 1,
-              maxWidth: 300,
-            }}
-          >
+      </Box>
+
+      {/* Progress: its own full-width row so the step name and bar are readable */}
+      {hasProgress && (
+        <Box
+          sx={{
+            px: 1.5,
+            py: 1,
+            borderBottom: `1px solid ${theme.palette.divider}`,
+            backgroundColor: alpha(theme.palette.background.paper, 0.8),
+          }}
+        >
+          <Box sx={{ display: "flex", alignItems: "baseline", gap: 1, mb: 0.5 }}>
             <Typography
-              variant="caption"
+              variant="body2"
               sx={{
-                maxWidth: 100,
+                flex: 1,
+                minWidth: 0,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
@@ -702,28 +690,21 @@ const ExperimentDesigner = () => {
             >
               {cachedStepName}
             </Typography>
-            <Box sx={{ flex: 1 }}>
-              <LinearProgress variant="determinate" value={progress} />
-            </Box>
-            <Typography variant="caption">{progress}%</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+              {stepsDone} / {cachedTotalSteps} steps
+            </Typography>
+            <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 40, textAlign: "right" }}>
+              {progress}%
+            </Typography>
           </Box>
-        )}
-
-        {/* Spacer */}
-        <Box sx={{ flex: 1 }} />
-
-        {/* Viewer buttons */}
-        <Tooltip title="Open Vizarr viewer">
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={handleOpenVizarr}
-            startIcon={<VisibilityIcon />}
-          >
-            Open Vizarr
-          </Button>
-        </Tooltip>
-      </Box>
+          <LinearProgress
+            variant="determinate"
+            value={progress}
+            color={experimentStatus.status === Status.PAUSED ? "warning" : "primary"}
+            sx={{ height: 8, borderRadius: 4 }}
+          />
+        </Box>
+      )}
 
       {/* Dimension Bar */}
       <DimensionBar />

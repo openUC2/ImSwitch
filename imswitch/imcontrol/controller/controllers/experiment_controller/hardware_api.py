@@ -676,7 +676,11 @@ class HardwareMixin:
         self._i2c_read_seq = 0
         self._i2c_logged_seq = -1
         try:
-            if self._read_i2c_snapshot(min_interval_s=0.0) is not None:
+            reading = self._read_i2c_snapshot(min_interval_s=0.0)
+            # getLatestI2CSensorValues always returns a dict; only a reading
+            # with real values means a sensor is attached. Without one, the
+            # per-frame reads stay off (each would cost a serial timeout).
+            if reading and reading.get("ok"):
                 self._i2c_csv_path = os.path.join(dir_path, "i2c_sensor_log.csv")
                 self._logger.info(f"I2C sensor logging enabled → {self._i2c_csv_path}")
         except Exception:

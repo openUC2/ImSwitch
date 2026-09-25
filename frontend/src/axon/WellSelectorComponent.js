@@ -29,7 +29,7 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
-  Tooltip,
+  Tooltip as MuiTooltip,
 } from "@mui/material";
 import PlaceIcon from "@mui/icons-material/Place";
 import HighlightAltIcon from "@mui/icons-material/HighlightAlt";
@@ -46,6 +46,19 @@ import {
   apiStageMapStartPrescan,
   apiStageMapStopPrescan,
 } from "../backendapi/apiStageMapController";
+
+// The tool buttons wrap into several rows and some tips are long, so a tip
+// must not pop up while the pointer merely crosses a button, must close as soon
+// as it leaves (not hover-trap over the next row), and must stay narrow.
+const Tooltip = (props) => (
+  <MuiTooltip
+    enterDelay={700}
+    enterNextDelay={700}
+    disableInteractive
+    slotProps={{ tooltip: { sx: { maxWidth: 260 } } }}
+    {...props}
+  />
+);
 
 //##################################################################################
 const WellSelectorComponent = () => {

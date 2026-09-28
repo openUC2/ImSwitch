@@ -43,4 +43,7 @@ OBJECTIVE_SKIP_Z=1 ./run_objective_switch.sh   # turret only, no Z offset
 - The objective test skips unless the setup has two configured slots
   (`slotConfigured`), is `isActive` and has a motor. Counting `objectiveNames`
   is not enough: a setup without objectives still reports two defaults.
+- It always turns back to the starting slot: after a failure, Ctrl+C, SIGTERM
+  or a dropped ssh session. A running move is let finish first; a second
+  Ctrl+C during the way back is ignored.
 - `--curl` defaults to detector `RPiCam`; set `IMSWITCH_DETECTOR` on other rigs.

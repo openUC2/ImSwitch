@@ -16,10 +16,12 @@ The whole sequence runs once per session; both tests read the same measurement.
    focuses in a different plane and passes a different amount of light.
 7. LED off, dark baseline, LED on, bright frame
    -> test_light_is_visible_after_objective_switch.
-8. Teardown: LED off, back to the slot the rig started on.
+8. Teardown: LED off, back to the slot the rig started on - also after a
+   failure, Ctrl+C, SIGTERM or a dropped ssh session (SIGHUP).
 """
 
 import os
+import signal
 import time
 
 import pytest
@@ -49,8 +51,8 @@ SKIP_Z = os.environ.get("OBJECTIVE_SKIP_Z", "").lower() in ("1", "true", "yes")
 
 POLL = 0.1
 
-
-
+# Signals that abort the sequence; the teardown ignores them until it is done.
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 # The sequence moves hardware, so it runs once and both tests read the result.
 _MEASUREMENT = {}
@@ -169,6 +171,28 @@ def switch_objective(slot):
     time.sleep(SETTLE)
 
     return status
+
+
+def restore_objective(slot):
+    """Back to slot, first letting an interrupted move run out.
+
+    Moving while the turret still turns would be refused as busy.
+    """
+    deadline = time.time() + MOVE_TIMEOUT
+
+    while objective_status().get("isMovingObjective") and time.time() < deadline:
+        time.sleep(POLL)
+
+    if objective_status().get("currentObjective") != slot:
+        switch_objective(slot)
+
+
+def interrupt(signum, frame):
+    """Turn SIGTERM/SIGHUP into KeyboardInterrupt, so the teardown runs.
+
+    Their default action kills Python without running any finally.
+    """
+    raise KeyboardInterrupt(signal.Signals(signum).name)
 
 
 def exposure_ms(camera):
@@ -367,6 +391,10 @@ def run_sequence(camera, light, start_slot, target_slot,
         "target_slot": target_slot,
     }
 
+    original = {sig: signal.getsignal(sig) for sig in STOP_SIGNALS}
+    signal.signal(signal.SIGTERM, interrupt)
+    signal.signal(signal.SIGHUP, interrupt)
+
     try:
         set_light(light, True)
 
@@ -415,11 +443,19 @@ def run_sequence(camera, light, start_slot, target_slot,
         )
 
     finally:
-        set_light(light, False)
+        # A second Ctrl+C must not cut the way back short.
+        for sig in STOP_SIGNALS:
+            signal.signal(sig, signal.SIG_IGN)
 
-        # Leave the rig on the objective it started on, even after a failure.
-        if objective_status().get("currentObjective") != start_slot:
-            switch_objective(start_slot)
+        try:
+            try:
+                set_light(light, False)
+            finally:
+                # Leave the rig on the objective it started on, whatever happened.
+                restore_objective(start_slot)
+        finally:
+            for sig, handler in original.items():
+                signal.signal(sig, handler)
 
     return result
 

@@ -182,9 +182,9 @@ def snap(detector_name):
 def snap_observation():
     """One full-resolution JPEG frame from the observation camera.
 
-    snapNumpyToFastAPI only serves detectors with forAcquisition=true and
-    answers 500 for this one. snapOverviewImage reads the latest frame directly
-    and picks the camera itself; camera_name only names the folder on the Pi.
+    snapNumpyToFastAPI only snaps the current acquisition detector and answers
+    500 for any other. snapOverviewImage reads the latest frame directly and
+    picks the camera itself; camera_name only names the folder on the Pi.
     """
     response = requests.post(
         f"{BASE_URL}/api/ExperimentController/snapOverviewImage",

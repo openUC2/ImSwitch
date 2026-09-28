@@ -1,112 +1,67 @@
 # End-to-End Tests
 
-End-to-end tests for ImSwitch that run complete workflows through the full
-running system (backend + hardware/virtual devices), rather than isolated
-units or single API endpoints.
+Tests against a running ImSwitch on the real rig, over its HTTP API only.
+Sits alongside `../unit/` (no server) and `../api/` (headless server).
 
-Sits alongside:
-
-- `../unit/` – unit tests, no server required
-- `../api/` – integration tests against a running headless server
-
-## Layout
-
-One folder per hardware component:
-
-| Folder | Hardware | Status on this rig |
+| Folder | What | Hardware |
 |---|---|---|
-| [`camera/`](camera/) | whatever detector the setup provides, via `RecordingController` | works — real sensor data |
-| [`laser/`](laser/) | lasers/LEDs on the UC2 ESP32 | API path works; the 488 laser does not reach the sensor |
-| [`ledmatrix/`](ledmatrix/) | ESP32 LED matrix | works — ~52 pixel change at intensity 20 |
+| [`board/`](board/) | UC2 board connected, right master firmware | reads |
+| [`camera/`](camera/) | every detector delivers a frame; objective switch | reads · objective test **moves** |
+| [`firmware/`](firmware/) | firmware server and CAN node firmware | reads |
+| [`laser/`](laser/) | lasers/LEDs switch; LEDs reach the camera | **light** |
+| [`ledmatrix/`](ledmatrix/) | LED matrix reaches the camera | **light** |
+| [`motor/`](motor/) | axes move; camera sees it | **moves** |
+| [`ci/`](ci/) | swap an image in, run the suite, swap back | **moves, light** |
 
-Add a folder per component as hardware is added (`positioner/`, …).
-
-Light sources are tested at two levels. A switching test shows the request reached
-ImSwitch and came back without error; a *photon* test switches the light on and
-measures with the camera whether it arrived. Only the photon tests can fail
-because of the hardware itself — everything else reads back state that software
-set one call earlier.
-
-## Running everything
-
-`run_all.sh` ships this folder to the Pi and runs the suite inside the imswitch
-container — one SSH connection, one password prompt:
+## Run
 
 ```bash
-./run_all.sh                 # everything
-./run_all.sh camera          # only camera/
-./run_all.sh laser ledmatrix # several folders
+./run_all.sh                    # everything
+./run_all.sh camera             # one folder
+./run_all.sh laser ledmatrix    # several
 ```
 
-Every component folder also has its own script:
+`run_all.sh` ships this folder into the container on the Pi, **parks the stage**
+(`motor/move_to_transport.py`), starts the camera stream
+(`camera/start_live_view.py`) and runs pytest. Each folder also has its own
+runner, see its README.
 
-| Script | What it runs |
-|---|---|
-| `camera/run_camera_snap.sh` | the snap test; `--curl` for a quick check into `/tmp/snap.png` |
-| `laser/run_laser_test.sh` | both laser tests; `--measure` to print the brightness numbers without asserting |
-| `ledmatrix/run_ledmatrix_test.sh` | the LED matrix photon test; `--measure` to print the numbers without asserting |
-
-Override with `PI_HOST`, `IMSWITCH_CONTAINER`, `IMSWITCH_URL`.
-
-Every runner also forwards the test knobs of the folders it runs — the ones
-listed in each component README — but only when they are actually set, so an
-unset knob keeps the default the test itself defines:
+Runners take `PI_HOST` (default `pi@192.168.178.124`), `IMSWITCH_CONTAINER`
+(default `imswitch-server-1`) and forward every test knob you set — any
+variable starting with `PHOTON_`, `LEDMATRIX_`, `MOTION_CAMERA_`, `TRANSPORT_`,
+`OBJECTIVE_`, `FIRMWARE_`, `AUTO_EXPOSURE_`, plus `IMSWITCH_DETECTOR` and
+`UC2_LASER_VALUE`. Unset knobs keep the test's default.
 
 ```bash
 PHOTON_MIN_DELTA=3 LEDMATRIX_INTENSITY=40 ./run_all.sh ledmatrix
 ```
 
-Each script keeps that list in a `KNOBS` variable, and the names there have to
-match the `os.environ` lookups in the test files exactly: a name nothing reads
-is passed into the container and then silently ignored, so the knob looks
-supported while doing nothing.
+## Two URLs
 
-`colors.sh` in this folder is sourced by all four runners. It only decides
-whether pytest gets `--color=yes`: colour is off by default because neither
-`ssh` nor `docker exec` gives pytest a tty, and forcing it back on is wrong
-when the run is being redirected to a file.
+| From | `IMSWITCH_URL` |
+|---|---|
+| inside the container (where the runners put pytest) | `http://localhost:8001` |
+| your machine | `http://<pi>:8000/imswitch` (through caddy) |
 
-## The two URLs
-
-`IMSWITCH_URL` always means *ImSwitch as seen from wherever the request is
-made* — which is not the same address in both directions:
-
-| Requesting from | URL | Why |
-|---|---|---|
-| inside the container (where the runners put pytest) | `http://localhost:8001` | ImSwitch's own port, no prefix |
-| outside, e.g. your machine | `http://<pi>:8000/imswitch` | caddy publishes :8000 and routes `/imswitch` |
-
-`localhost:8000` works in neither: caddy is a separate container, so from inside
-`imswitch-server-1` there is nothing on :8000, and on your machine `localhost`
-is your machine.
-
-All tests therefore default to `http://localhost:8001`, and every runner
-passes that same value in explicitly. The one place that needs the outside URL
-is `camera/run_camera_snap.sh --curl`, which fires from your machine rather than
-from the container; it has its own `IMSWITCH_EXTERNAL_URL`, derived from
-`PI_HOST` so it follows whichever rig you point at.
-
-Straight pytest works too, if you have it and can reach ImSwitch — from your
-machine that means the outside URL:
+`localhost:8000` works in neither place. Straight pytest from your machine:
 
 ```bash
-IMSWITCH_URL=http://192.168.178.124:8000/imswitch \
-  python3 -m pytest imswitch/imcontrol/_test/e2e -v
+IMSWITCH_URL=http://<pi>:8000/imswitch python3 -m pytest imswitch/imcontrol/_test/e2e -v
 ```
 
-All tests **skip rather than fail** when their hardware or ImSwitch is absent, so
-this is safe to run anywhere. The exception is the photon tests
-(`laser/test_laser_photon.py`, `ledmatrix/`): once they do run, a missing
-brightness difference is a real failure — that is the point of them.
+## Rules
 
-Every test goes through the HTTP API, so nothing here competes with ImSwitch
-for `/dev/ttyUSB0` and the folders can run in any combination.
+- Missing hardware or an unreachable ImSwitch **skips**, never fails.
+- The photon tests are the exception: once they run, no light is a **failure**.
+- Everything goes through HTTP, so nothing competes with ImSwitch for the serial port.
+- Nothing waits or retries inside a test — that would hide real regressions.
 
-## Rig facts that apply everywhere
+## Worth knowing
 
-- ImSwitch is reachable at `http://192.168.178.124:8000/imswitch` from outside;
-  port 8001 is bound only *inside* the imswitch container. See
-  [The two URLs](#the-two-urls).
-- The ESP32 is a UC2_Feather V2.0 on `/dev/ttyUSB0` at 115200 baud.
-- Only one process may hold `/dev/ttyUSB0` — ImSwitch or a test, never both.
-- Nothing here sends `/motor_act`. No motor commands, by design.
+- After a container restart ImSwitch needs ~30 s to listen. The runners do not
+  wait for it; started earlier, everything skips.
+- `snapNumpyToFastAPI` answers 500 until a live view runs, and only ever snaps
+  the *current* detector. `start_live_view.py` handles the first; the
+  observation camera goes through `snapOverviewImage` instead.
+- `colors.sh` is sourced by the runners and only decides whether pytest gets
+  `--color=yes` (neither `ssh` nor `docker exec` gives it a tty).

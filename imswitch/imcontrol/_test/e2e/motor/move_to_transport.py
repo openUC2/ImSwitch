@@ -4,7 +4,7 @@ MOVES REAL HARDWARE. Named without the test_ prefix so pytest never collects
 it; test_motor_motion_camera.py imports move_to_transport() to park the stage
 before it starts. Run it through run_move_to_transport.sh, or directly:
 
-    IMSWITCH_URL=http://192.168.178.124:8000/imswitch python3 move_to_transport.py
+    IMSWITCH_URL=http://<pi>:8000/imswitch python3 move_to_transport.py
 
 The target is whatever the setup stores as transportPositionA/X/Y/Z (see
 ESP32StageManager.transportPositions). Setups without those keys fall back to

@@ -6,9 +6,9 @@
 #
 #   ./run_all.sh                 # everything
 #   ./run_all.sh camera          # only camera/
-#   ./run_all.sh laser photon    # several folders
+#   ./run_all.sh laser ledmatrix # several folders
 #
-# Override with PI_HOST / IMSWITCH_CONTAINER, plus any knob in KNOBS below.
+# Override with PI_HOST / IMSWITCH_CONTAINER, plus any test knob (see README.md).
 set -euo pipefail
 PI="${PI_HOST:-pi@192.168.178.124}"
 CONTAINER="${IMSWITCH_CONTAINER:-imswitch-server-1}"
@@ -19,15 +19,9 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 # Inside the container ImSwitch runs on :8001 without the caddy prefix.
 ENVS="-e IMSWITCH_URL=http://localhost:8001"
 
-# Test knobs, forwarded only when set so an unset one keeps the test default.
-# Names must match the os.environ lookups exactly: an unread name is handed to
-# docker and then silently ignored.
-KNOBS="IMSWITCH_DETECTOR UC2_LASER_VALUE PHOTON_MIN_DELTA
-       PHOTON_SETTLE_TOLERANCE LEDMATRIX_INTENSITY AUTO_EXPOSURE_RESET_MS
-       TRANSPORT_TIMEOUT TRANSPORT_SPEED"
-
-for knob in $KNOBS; do
-    [ -n "${!knob:-}" ] && ENVS="$ENVS -e $knob=${!knob}"
+# Forward every test knob that is set; an unset one keeps the test's default.
+for knob in $(compgen -v | grep -E '^(IMSWITCH_DETECTOR|UC2_LASER_VALUE|PHOTON_|AUTO_EXPOSURE_|LEDMATRIX_|MOTION_CAMERA_|TRANSPORT_|OBJECTIVE_|FIRMWARE_)'); do
+    [ -z "${!knob:-}" ] || ENVS="$ENVS -e $knob=${!knob}"
 done
 
 # Optional folder filter: ./run_all.sh camera laser

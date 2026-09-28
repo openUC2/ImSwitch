@@ -60,8 +60,8 @@ def is_observation_camera(detector):
 def _snap_observation():
     """One greyscale frame from the observation camera.
 
-    snapNumpyToFastAPI only serves detectors with forAcquisition=true and
-    answers 500 for this one, so the frame comes from the overview endpoint.
+    snapNumpyToFastAPI only snaps the current acquisition detector and
+    answers 500 for any other, so the frame comes from the overview endpoint.
     Scaled down like the other path, so both cameras are measured at a
     comparable pixel count and one threshold fits both.
     """

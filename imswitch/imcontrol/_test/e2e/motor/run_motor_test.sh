@@ -24,27 +24,12 @@ LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 . "$LOCAL_DIR/../colors.sh"
 
-# Test knobs, forwarded only when set so an unset one keeps the test default;
-# repeating the defaults here would mean two places to keep in sync.
-#
-# ENVS has to stay a SINGLE LINE: it is interpolated into the ssh command
-# below, where a newline would end the docker exec line without arguments.
-KNOBS="MOTION_CAMERA_DISTANCE_UM MOTION_CAMERA_MIN_PIXELS MOTION_CAMERA_SETTLE_MS
-       MOTION_CAMERA_ROI_PERCENT MOTION_CAMERA_SPEED MOTION_CAMERA_TOP_CROP_PERCENT
-       MOTION_CAMERA_Z_DIRECTION MOTION_CAMERA_Z_SCALE_MIN MOTION_CAMERA_Z_SCALE_MAX
-       MOTION_CAMERA_Z_SCALE_STEP MOTION_CAMERA_Z_MIN_SCALE_CHANGE
-       MOTION_CAMERA_Z_SCALE_NOISE_RATIO
-       TRANSPORT_TIMEOUT
-       TRANSPORT_SPEED"
-
 ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
 
-for knob in $KNOBS; do
-    value="${!knob:-}"
-
-    if [ -n "$value" ]; then
-        ENVS="$ENVS -e $knob=$value"
-    fi
+# ENVS must stay a SINGLE LINE: it is interpolated into the ssh command below.
+# Forward every test knob that is set; an unset one keeps the test's default.
+for knob in $(compgen -v | grep -E '^(MOTION_CAMERA_|TRANSPORT_|LEDMATRIX_)'); do
+    [ -z "${!knob:-}" ] || ENVS="$ENVS -e $knob=${!knob}"
 done
 
 # Optional pytest targets, defaulting to the whole folder. Each is single

@@ -4,8 +4,8 @@
 #   ./run_ledmatrix_test.sh              # pytest run
 #   ./run_ledmatrix_test.sh --measure    # print dark/bright/change, no assert
 #
-# Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL, plus any knob in
-# KNOBS below.
+# Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL, plus any test
+# knob (see README.md).
 set -euo pipefail
 
 # conftest.py and colors.sh live one level up, in the suite root.
@@ -27,14 +27,9 @@ fi
 
 ENVS="-e IMSWITCH_URL=${IMSWITCH_URL:-http://localhost:8001}"
 
-# Test knobs, forwarded only when set so an unset one keeps the test default.
-# Names must match the os.environ lookups exactly: an unread name is handed to
-# docker and then silently ignored.
-KNOBS="IMSWITCH_DETECTOR LEDMATRIX_INTENSITY PHOTON_MIN_DELTA
-       PHOTON_SETTLE_TOLERANCE AUTO_EXPOSURE_RESET_MS"
-
-for knob in $KNOBS; do
-    [ -n "${!knob:-}" ] && ENVS="$ENVS -e $knob=${!knob}"
+# Forward every test knob that is set; an unset one keeps the test's default.
+for knob in $(compgen -v | grep -E '^(IMSWITCH_DETECTOR|LEDMATRIX_|PHOTON_|AUTO_EXPOSURE_)'); do
+    [ -z "${!knob:-}" ] || ENVS="$ENVS -e $knob=${!knob}"
 done
 
 # Ship the shared conftest.py alongside the tests: pytest reads it from the

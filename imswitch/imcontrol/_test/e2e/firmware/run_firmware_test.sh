@@ -7,8 +7,8 @@
 # Read-only: this checks the firmware server and the CAN-id mapping, it never
 # flashes anything.
 #
-# Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL, plus any knob in
-# KNOBS below.
+# Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL, plus any test
+# knob (see README.md).
 set -euo pipefail
 
 # conftest.py and colors.sh live one level up, in the suite root.
@@ -21,13 +21,9 @@ CONTAINER="${IMSWITCH_CONTAINER:-imswitch-server-1}"
 
 ENVS="-e IMSWITCH_URL=${IMSWITCH_URL:-http://localhost:8001}"
 
-# Test knobs, forwarded only when set so an unset one keeps the test default.
-# Names must match the os.environ lookups exactly: an unread name is handed to
-# docker and then silently ignored.
-KNOBS="FIRMWARE_SCAN_TIMEOUT"
-
-for knob in $KNOBS; do
-    [ -n "${!knob:-}" ] && ENVS="$ENVS -e $knob=${!knob}"
+# Forward every test knob that is set; an unset one keeps the test's default.
+for knob in $(compgen -v | grep -E '^(FIRMWARE_)'); do
+    [ -z "${!knob:-}" ] || ENVS="$ENVS -e $knob=${!knob}"
 done
 
 # Ship the shared conftest.py alongside the test: pytest reads it from the same

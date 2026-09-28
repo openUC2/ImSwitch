@@ -9,8 +9,8 @@
 # offset and runs autofocus twice. Skips on any rig that has fewer than two
 # configured objectives or no objective motor.
 #
-# Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL, plus any knob in
-# KNOBS below.
+# Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL, plus any test
+# knob (see README.md).
 set -euo pipefail
 
 # conftest.py and colors.sh live one level up, in the suite root.
@@ -23,17 +23,9 @@ CONTAINER="${IMSWITCH_CONTAINER:-imswitch-server-1}"
 
 ENVS="-e IMSWITCH_URL=${IMSWITCH_URL:-http://localhost:8001}"
 
-# Test knobs, forwarded only when set so an unset one keeps the test default.
-# Names must match the os.environ lookups exactly: an unread name is handed to
-# docker and then silently ignored.
-KNOBS="IMSWITCH_DETECTOR UC2_LASER_VALUE
-       OBJECTIVE_SETTLE_MS OBJECTIVE_MOVE_TIMEOUT OBJECTIVE_AUTOFOCUS_TIMEOUT
-       OBJECTIVE_AUTOFOCUS_RANGE OBJECTIVE_AUTOFOCUS_STEP OBJECTIVE_SKIP_Z
-       AUTO_EXPOSURE_RESET_MS
-       PHOTON_MIN_DELTA PHOTON_NOISE_FACTOR PHOTON_NOISE_SAMPLES"
-
-for knob in $KNOBS; do
-    [ -n "${!knob:-}" ] && ENVS="$ENVS -e $knob=${!knob}"
+# Forward every test knob that is set; an unset one keeps the test's default.
+for knob in $(compgen -v | grep -E '^(IMSWITCH_DETECTOR|UC2_LASER_VALUE|OBJECTIVE_|PHOTON_|AUTO_EXPOSURE_)'); do
+    [ -z "${!knob:-}" ] || ENVS="$ENVS -e $knob=${!knob}"
 done
 
 # Ship the shared conftest.py alongside the test: pytest reads it from the same

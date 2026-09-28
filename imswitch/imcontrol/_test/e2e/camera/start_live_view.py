@@ -12,7 +12,7 @@ image restart the camera tests fail until something opens a stream.
 The observation camera is skipped: it is no acquisition detector and is read
 straight off the device through the overview endpoint (see conftest.py).
 
-    IMSWITCH_URL=http://192.168.178.53:8000/imswitch python3 start_live_view.py
+    IMSWITCH_URL=http://<pi>:8000/imswitch python3 start_live_view.py
 """
 
 import os

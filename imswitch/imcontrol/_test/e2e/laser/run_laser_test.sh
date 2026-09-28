@@ -14,7 +14,7 @@
 # question.
 #
 # Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL / PYTHON_BIN /
-# REMOTE_TEST_DIR, plus any knob in KNOBS below (defaults in README.md):
+# REMOTE_TEST_DIR, plus any test knob (see README.md):
 #
 #   PI_HOST=pi@192.168.1.20 ./run_laser_test.sh
 
@@ -46,14 +46,9 @@ fi
 
 ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
 
-# Test knobs, forwarded only when set so an unset one keeps the test default.
-# Names must match the os.environ lookups exactly: an unread name is handed to
-# docker and then silently ignored. test_laser_switching.py reads none of them.
-KNOBS="IMSWITCH_DETECTOR UC2_LASER_VALUE PHOTON_MIN_DELTA
-       AUTO_EXPOSURE_RESET_MS PHOTON_SETTLE_TOLERANCE"
-
-for knob in $KNOBS; do
-    [ -n "${!knob:-}" ] && ENVS="$ENVS -e $knob=${!knob}"
+# Forward every test knob that is set; an unset one keeps the test's default.
+for knob in $(compgen -v | grep -E '^(IMSWITCH_DETECTOR|UC2_LASER_VALUE|PHOTON_|AUTO_EXPOSURE_)'); do
+    [ -z "${!knob:-}" ] || ENVS="$ENVS -e $knob=${!knob}"
 done
 
 # Ship the folder plus the shared conftest.py from one level up into a clean

@@ -1,6 +1,7 @@
 import apiObjectiveControllerGetStatus from "../backendapi/apiObjectiveControllerGetStatus.js";
 
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
+import * as positionSlice from "../state/slices/PositionSlice.js";
 
 const fetchObjectiveControllerGetStatus = (dispatch) => {
   apiObjectiveControllerGetStatus()
@@ -30,6 +31,15 @@ const fetchObjectiveControllerGetStatus = (dispatch) => {
       if (config.slotConfigured) dispatch(objectiveSlice.setSlotConfigured(config.slotConfigured));
 
       if (config.moveSpeed != null) dispatch(objectiveSlice.setMoveSpeed(config.moveSpeed));
+      if (config.hasMotor != null) dispatch(objectiveSlice.setHasMotor(config.hasMotor));
+      // The socket only pushes positions while a motor moves; seed A/Z so the
+      // turret view is right before the first move.
+      if (config.motorPosition != null || config.zPosition != null) {
+        dispatch(positionSlice.setPosition({
+          a: config.motorPosition ?? undefined,
+          z: config.zPosition ?? undefined,
+        }));
+      }
 
       if (config.currentObjective != null) {
         dispatch(objectiveSlice.setCurrentObjective(config.currentObjective));

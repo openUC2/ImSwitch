@@ -655,7 +655,7 @@ export const APP_REGISTRY = {
     id: "shitScope",
     name: "ShitScope",
     description:
-      "Dedicated single-button paving scan application with fixed 50x30mm scan area, live view, stage homing, and overview canvas.",
+      "Dedicated tile scan for the ShitScope: live mosaic, tile registration and stitching at measured positions, placement-error report.",
     category: APP_CATEGORIES.APPS,
     icon: CropFreeIcon,
     enabled: false,
@@ -667,8 +667,10 @@ export const APP_REGISTRY = {
       "single",
       "dedicated",
       "customer",
+      "stitching",
     ],
     pluginId: "ShitScope",
+    requiredControllers: ["ShitScopeController"],
   },
 
   socketView: {

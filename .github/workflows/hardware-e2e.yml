@@ -1,9 +1,7 @@
 name: hardware-e2e
 
-# Manual only, on purpose: this actuates a real microscope (moves the stage,
-# switches lasers and the LED matrix on). No push/PR trigger until the swap
-# mechanism has proven itself over a number of manual runs.
 on:
+  # Manual trigger: choose any image and optional subset of tests.
   workflow_dispatch:
     inputs:
       image:
@@ -18,40 +16,57 @@ on:
         required: false
         default: ""
 
-# One rig, one run: a second dispatch while a run is in flight would fight the
-# first over the container. hil-run.sh also flocks on the Pi itself, so this
-# is a fast-fail at the GitHub level rather than the only guard.
+  # Automatic trigger: explicitly mark a commit for hardware testing.
+  push:
+    tags:
+      - "hardware-test-*"
+
+# One rig, one run.
 concurrency:
   group: hardware-e2e-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
   test-on-rig:
-    # This label identifies the physical rig, not just "some self-hosted
-    # runner" -- see imswitch/imcontrol/_test/e2e/ci/README.md for what's
-    # attached to it.
     runs-on: [self-hosted, uc2-rig]
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Determine image and tests
+        id: config
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            IMAGE="${{ inputs.image }}"
+            TESTS="${{ inputs.tests }}"
+          else
+            SHORT_SHA="${GITHUB_SHA::7}"
+            IMAGE="sha-${SHORT_SHA}"
+            TESTS=""
+          fi
+
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "tests=$TESTS" >> "$GITHUB_OUTPUT"
+
+          echo "Image to test: $IMAGE"
+          echo "Tests: ${TESTS:-all}"
 
       - name: Run the e2e suite against the image under test
         id: hil
         working-directory: imswitch/imcontrol/_test/e2e
         run: |
           ci/hil-run.sh \
-            --image "${{ inputs.image }}" \
+            --image "${{ steps.config.outputs.image }}" \
             --yes \
             --out ci/reports \
-            --tests "${{ inputs.tests }}"
+            --tests "${{ steps.config.outputs.tests }}"
 
-      # Runs even if the step above failed (a red suite or a rig problem) --
-      # a report or a log is exactly what's needed to tell those apart.
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hil-report-${{ inputs.image }}
+          name: hil-report-${{ steps.config.outputs.image }}
           path: imswitch/imcontrol/_test/e2e/ci/reports/
           if-no-files-found: warn
           retention-days: 30

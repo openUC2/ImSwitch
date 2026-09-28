@@ -54,6 +54,7 @@ def outdated():
 if os.environ.get("FIRMWARE_UPDATE", "on") == "off":
     sys.exit(print("firmware update skipped (FIRMWARE_UPDATE=off)"))
 
+print("firmware: checking the CAN nodes against the firmware server ...", flush=True)
 todo = outdated()
 if not todo:
     sys.exit(print("firmware: all reachable CAN nodes are current"))
@@ -64,4 +65,6 @@ for can_id, filename in todo.items():
     time.sleep(10)  # reboot before the next node or the re-scan
 
 still = outdated()
-sys.exit(f"firmware: still outdated after flashing: {sorted(still)}" if still else 0)
+if still:
+    sys.exit(f"firmware: still outdated after flashing: {sorted(still)}")
+print(f"firmware: CAN {sorted(todo)} updated and verified")

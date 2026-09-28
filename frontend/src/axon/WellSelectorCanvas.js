@@ -48,6 +48,11 @@ export const Shape = Object.freeze({
 });
 
 //##################################################################################
+// The polygon being drawn is canvas-local until CONVERT puts it in redux, and
+// the canvas unmounts whenever the user leaves the page. Keep the draft here
+// so leaving and coming back does not throw away a half-traced outline.
+const freehandDraft = { points: [], closed: false };
+
 const WellSelectorCanvas = forwardRef((props, ref) => {
   const canvasRef = useRef(null);
   const parentRef = useRef(null);
@@ -84,9 +89,13 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   const [dragPointIndex, setDragPointIndex] = useState(-1);
 
   //mode: freehand draw – polygon vertices in physical (µm) coordinates
-  const [freehandPoints, setFreehandPoints] = useState([]);
+  const [freehandPoints, setFreehandPoints] = useState(() => freehandDraft.points);
   const [isFreehandDrawing, setIsFreehandDrawing] = useState(false);
-  const [freehandClosed, setFreehandClosed] = useState(false);
+  const [freehandClosed, setFreehandClosed] = useState(() => freehandDraft.closed);
+  useEffect(() => {
+    freehandDraft.points = freehandPoints;
+    freehandDraft.closed = freehandClosed;
+  }, [freehandPoints, freehandClosed]);
   // Did the pointer actually move between press and release? Distinguishes a
   // click (append a vertex) from a drag (trace and close).
   const freehandDragRef = useRef(false);
@@ -255,10 +264,26 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   }, [positionState.x, positionState.y]);
 
   //##################################################################################
+  // renderCanvas repaints everything (wells, every tile, overlays, stage-map
+  // images). Mouse moves change state far faster than the screen refreshes, and
+  // repainting once per state change made drawing crawl. Coalesce to at most
+  // one repaint per animation frame, always with the latest closure.
+  const renderCanvasRef = useRef(null);
+  useEffect(() => {
+    renderCanvasRef.current = renderCanvas; // after render: renderCanvas is declared below
+  });
+  const renderFrameRef = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(renderFrameRef.current), []);
   useEffect(() => {
     // Draw canvas content when state changed
-    renderCanvas();
+    if (renderFrameRef.current) return;
+    renderFrameRef.current = requestAnimationFrame(() => {
+      renderFrameRef.current = 0;
+      if (canvasRef.current) renderCanvasRef.current();
+    });
   }, [
+    freehandPoints,
+    freehandClosed,
     scale,
     offset,
     wellSelectorState,
@@ -423,7 +448,6 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
   //##################################################################################
   const renderCanvas = () => {
-    console.log("renderCanvas");
 
     //------------ create canvas
 
@@ -1483,7 +1507,6 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
   //##################################################################################
   const handleMouseUp = (e) => {
-    console.log("handleMouseUp");
 
     //handle mode single select
     if (wellSelectorState.mode == Mode.SINGLE_SELECT) {

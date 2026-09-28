@@ -169,7 +169,8 @@ class FrameSavingMixin:
         # sensor controller is configured. Throttled hardware read + optional
         # sidecar-CSV logging (one row per fresh read). No-op otherwise.
         try:
-            i2c_reading = self._read_i2c_snapshot()
+            i2c_reading = (self._read_i2c_snapshot(min_interval_s=10.0)
+                           if getattr(self, "_i2c_csv_path", None) else None)
             if i2c_reading and i2c_reading.get("ok"):
                 for _k in ("temperature_c", "humidity_pct", "lux", "ch0_full", "ch1_ir"):
                     _v = i2c_reading.get(_k)

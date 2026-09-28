@@ -118,3 +118,26 @@ def test_home_first_then_scan_and_return(tmp_path):
     assert homed == ["homing"] and scan.status()["tile"] == 4
     assert [(r["x"], r["y"]) for r in scan.records] == [(300, 200), (400, 200), (300, 300), (400, 300)]
     assert stage.cmd == {"X": 300.0, "Y": 200.0}             # back to the pre-homing start
+
+
+class RGBCamera(FakeCamera):
+    def getLatestFrame(self, returnFrameNumber=False):
+        f, fid = super().getLatestFrame(True)
+        rgb = np.stack([f, f // 2, f // 3], -1).astype(np.uint16)
+        return (rgb, fid) if returnFrameNumber else rgb
+
+
+def test_colour_tiles_saved_and_full_res_export(tmp_path):
+    import tifffile
+    stage = FakeStage(error_um=0); cam = RGBCamera(stage)
+    plan = ss.plan_grid(0, 0, 3, 2, 300, 300, "raster", centered=False)
+    scan = ss.ShitScopeScan(cam, stage, str(tmp_path), UM_PX, plan, analysis_downsample=1, settle_s=0.01)
+    scan.start(); scan._thread.join(60)
+    assert scan.state == "done" and scan.result["summary"]["tiles_solved"] == 6
+    assert tifffile.imread(tmp_path / "tiles" / "tile_0000.tif").shape == (T, T, 3)
+    out = ss.export_full_res(str(tmp_path))
+    img = tifffile.imread(out["path"])
+    # 3 x 2 tiles, 300 µm = 150 px apart -> (150 + 240) x (300 + 240) px, colour
+    assert img.shape == (T + 150, T + 300, 3) and img.dtype == np.uint16
+    ref = tifffile.imread(tmp_path / "tiles" / "tile_0000.tif")
+    assert np.array_equal(img[:T, :T][:10, :10], ref[:10, :10])   # top-left tile pasted unscaled

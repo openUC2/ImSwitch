@@ -13,13 +13,16 @@ import {
   Divider,
   FormControlLabel,
   Checkbox,
+  MenuItem,
 } from "@mui/material";
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import {
   PlayArrow as PlayArrowIcon,
   Stop as StopIcon,
   Home as HomeIcon,
   FolderOpen as FolderOpenIcon,
   Refresh as RefreshIcon,
+  SaveAlt as SaveAltIcon,
 } from "@mui/icons-material";
 
 import * as positionSlice from "../state/slices/PositionSlice.js";
@@ -32,6 +35,7 @@ import {
   apiShitScopeGetPreview,
   apiShitScopeGetResult,
   apiShitScopeAnalyzeScan,
+  apiShitScopeExportFullRes,
 } from "../backendapi/apiShitScopeController.js";
 
 import ShitScopeStageMap from "../axon/ShitScopeStageMap.js";
@@ -44,6 +48,11 @@ const PRESET_AREA_Y = 7000;
 const BUSY_STATES = ["homing", "running", "analysing"];
 
 const fmt = (v, digits = 0) => (typeof v === "number" && isFinite(v) ? v.toFixed(digits) : "–");
+// Largest whole number of stage full steps that keeps `overlap` (mirrors shitscope_scan.suggested_step)
+const suggestStep = (fov, full, overlap) => {
+  const max = fov * (1 - overlap);
+  return full > 0 ? Math.max(full, Math.floor(max / full) * full) : max;
+};
 const fmtTime = (s) => (typeof s === "number" && isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}` : "–");
 
 /**
@@ -66,6 +75,11 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
   const [centered, setCentered] = useState(true);
   const [homeFirst, setHomeFirst] = useState(false);
   const [returnToStart, setReturnToStart] = useState(true);
+  const [pattern, setPattern] = useState(""); // "" = stage recommendation
+  const [overlapPct, setOverlapPct] = useState(0); // 0 = stage recommendation
+  const [speed, setSpeed] = useState(0); // steps/s, 0 = stage default
+  const [settleMs, setSettleMs] = useState(0);
+  const [isExporting, setIsExporting] = useState(false);
   const [scanPlan, setScanPlan] = useState(null); // tiles of the running/last scan (µm)
   const [status, setStatus] = useState({ state: "idle", tile: 0, total: 0 });
   const [preview, setPreview] = useState(null);
@@ -86,8 +100,10 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
   }, []);
   useEffect(loadInfo, [loadInfo]);
 
-  const effStepX = stepX > 0 ? stepX : info?.suggestedStepXUm || 0;
-  const effStepY = stepY > 0 ? stepY : info?.suggestedStepYUm || 0;
+  const effOverlap = overlapPct > 0 ? overlapPct / 100 : info?.minOverlap || 0.25;
+  const effStepX = stepX > 0 ? stepX : info ? suggestStep(info.fovXUm, info.fullStepUm?.X, effOverlap) : 0;
+  const effStepY = stepY > 0 ? stepY : info ? suggestStep(info.fovYUm, info.fullStepUm?.Y, effOverlap) : 0;
+  const effPattern = pattern || info?.pattern || "raster";
 
   // ── Polling: status every second; preview every 2 s while busy ─────────
   const lastStateRef = useRef(status.state);
@@ -123,6 +139,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
     try {
       const r = await apiShitScopeStartScan({
         nx: tilesX, ny: tilesY, stepXUm: stepX, stepYUm: stepY, centered, homeFirst, returnToStart,
+        pattern: effPattern, overlap: overlapPct / 100, speed, settleMs,
       });
       if (!r.success) throw new Error(r.error);
       setResult(null);
@@ -150,6 +167,19 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
       notify("Analysis failed: " + (err.message || "unknown error"));
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    try {
+      const r = await apiShitScopeExportFullRes();
+      if (!r.success) throw new Error(r.error);
+      notify(`Full-resolution mosaic saved: ${r.shape.join(" × ")} px, ${r.sizeMB} MB → ${r.path}`);
+    } catch (err) {
+      notify("Export failed: " + (err.message || "unknown error"));
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -196,7 +226,6 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
           <Chip size="small" variant="outlined" color="info"
                 label={`FOV: ${fmt(info.fovXUm / 1000, 2)} × ${fmt(info.fovYUm / 1000, 2)} mm`} />
           <Chip size="small" variant="outlined" color="info" label={`Pixel: ${fmt(info.umPerPx, 3)} µm`} />
-          <Chip size="small" variant="outlined" label={`Pattern: ${info.pattern}`} />
           {info.fullStepUm && (
             <Chip size="small" variant="outlined"
                   label={`Full step: ${fmt(info.fullStepUm.X)} / ${fmt(info.fullStepUm.Y)} µm`} />
@@ -212,7 +241,9 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
         {/* Left: overview (click to move) + live view */}
         <Box sx={{ flex: 3, display: "flex", gap: 1 }}>
           <Box sx={{ flex: 1, minHeight: 220 }}>
-            <Typography variant="caption" color="text.secondary">PCB stage – click the slide to move</Typography>
+            <Typography variant="caption" color="text.secondary">
+              PCB stage – click the slide to move · <b>right-click where the camera really is</b> to re-align the slide ("we are here")
+            </Typography>
             <ShitScopeStageMap tiles={busy && scanPlan ? scanPlan : plannedTiles}
                                doneTiles={busy ? status.tile : 0} disabled={busy}
                                fovUm={{ x: info?.fovXUm || 0, y: info?.fovYUm || 0 }} />
@@ -235,11 +266,32 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
             </Box>
             <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
               <TextField label="Step X (µm)" type="number" size="small" value={stepX || ""} disabled={busy}
-                         placeholder={fmt(info?.suggestedStepXUm)} helperText="empty = suggested"
+                         placeholder={fmt(effStepX)} helperText="empty = suggested"
                          onChange={(e) => setStepX(parseFloat(e.target.value) || 0)} />
               <TextField label="Step Y (µm)" type="number" size="small" value={stepY || ""} disabled={busy}
-                         placeholder={fmt(info?.suggestedStepYUm)} helperText="empty = suggested"
+                         placeholder={fmt(effStepY)} helperText="empty = suggested"
                          onChange={(e) => setStepY(parseFloat(e.target.value) || 0)} />
+            </Box>
+            <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
+              <TextField select label="Pattern" size="small" value={effPattern} disabled={busy} sx={{ minWidth: 110 }}
+                         helperText={info?.pattern === "raster" ? "raster: one approach dir." : " "}
+                         onChange={(e) => setPattern(e.target.value)}>
+                <MenuItem value="raster">Raster</MenuItem>
+                <MenuItem value="snake">Snake</MenuItem>
+              </TextField>
+              <TextField label="Overlap (%)" type="number" size="small" value={overlapPct || ""} disabled={busy}
+                         placeholder={fmt((info?.minOverlap || 0.25) * 100)} helperText="sets the steps"
+                         inputProps={{ min: 0, max: 90 }}
+                         onChange={(e) => setOverlapPct(Math.min(90, Math.max(0, parseFloat(e.target.value) || 0)))} />
+            </Box>
+            <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
+              <TextField label="Speed (steps/s)" type="number" size="small" value={speed || ""} disabled={busy}
+                         placeholder="default"
+                         helperText={info?.maxSpeedSteps ? `stage cap ${info.maxSpeedSteps}` : "firmware max 2000"}
+                         onChange={(e) => setSpeed(Math.max(0, parseFloat(e.target.value) || 0))} />
+              <TextField label="Extra settle (ms)" type="number" size="small" value={settleMs || ""} disabled={busy}
+                         placeholder="0" helperText={`+ stage ${fmt(info?.defaultSettleMs)} ms, then a fresh frame`}
+                         onChange={(e) => setSettleMs(Math.max(0, parseFloat(e.target.value) || 0))} />
             </Box>
             <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1 }}>
               <FormControlLabel
@@ -316,8 +368,12 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
                   startIcon={isAnalyzing ? <CircularProgress size={14} color="inherit" /> : <RefreshIcon />}>
             Re-analyse last scan
           </Button>
+          <Button size="small" variant="outlined" onClick={handleExport} disabled={busy || isExporting || !result}
+                  startIcon={isExporting ? <CircularProgress size={14} color="inherit" /> : <SaveAltIcon />}>
+            Export full resolution
+          </Button>
           <Typography variant="caption" color="text.secondary">
-            {busy ? "Tiles at commanded positions (live)" : result ? "Tiles at measured positions (registered)" : ""}
+            {busy ? "Tiles at commanded positions (live)" : result ? "Tiles at measured positions (registered) · scroll/pinch to zoom, double-click to reset" : ""}
           </Typography>
         </Box>
         {q && (
@@ -336,7 +392,15 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
           </Box>
         )}
         <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "flex-start" }}>
-          {preview && <img src={preview} alt="Mosaic" style={{ maxWidth: 700, width: "100%", imageRendering: "pixelated" }} />}
+          {preview && (
+            <Box sx={{ maxWidth: 700, width: "100%", border: 1, borderColor: "divider", cursor: "grab" }}>
+              <TransformWrapper minScale={1} maxScale={16} wheel={{ step: 0.15 }} doubleClick={{ mode: "reset" }}>
+                <TransformComponent wrapperStyle={{ width: "100%" }} contentStyle={{ width: "100%" }}>
+                  <img src={preview} alt="Mosaic" style={{ width: "100%", imageRendering: "pixelated" }} />
+                </TransformComponent>
+              </TransformWrapper>
+            </Box>
+          )}
           {result?.error_map && <img src={result.error_map} alt="Tile position error" style={{ maxWidth: 420, width: "100%" }} />}
           {!preview && <Typography variant="body2" color="text.secondary">No scan yet.</Typography>}
         </Box>

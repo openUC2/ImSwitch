@@ -71,6 +71,8 @@ class ShitScopeController(ImConWidgetController):
             "suggestedStepXUm": shitscope_scan.suggested_step(fov_x, full.get("X"), min_overlap),
             "suggestedStepYUm": shitscope_scan.suggested_step(fov_y, full.get("Y"), min_overlap),
             "stageHints": hints,
+            "maxSpeedSteps": hints.get("maxSpeedSteps"),
+            "defaultSettleMs": hints.get("settleMs", 0),
             "stageAvailable": self._stage() is not None,
             "status": self.getShitScopeStatus(),
         }
@@ -78,10 +80,15 @@ class ShitScopeController(ImConWidgetController):
     @APIExport()
     def startShitScopeScan(self, nx: int = 3, ny: int = 3, stepXUm: float = 0.0, stepYUm: float = 0.0,
                            pattern: str = "", centered: bool = True, returnToStart: bool = True,
-                           homeFirst: bool = False) -> Dict:
+                           homeFirst: bool = False, overlap: float = 0.0, speed: float = 0.0,
+                           settleMs: float = 0.0) -> Dict:
         """Start a tile scan around (centered=True) or from the current position.
         homeFirst: drive into the -X/-Y stop first (position -> 0), then scan the
         same grid; the grid only makes sense if the stage was homed before.
+        overlap: fraction (0..0.9) used for the suggested steps (0 = stage recommendation).
+        speed: stage speed in steps/s (0 = stage default; capped by maxSpeedSteps).
+        settleMs: extra wait after each move before the frame is taken (on top of
+        the stage's own settleMs and the wait for a frame exposed after the move).
         Steps of 0 use the suggested steps (whole stage full steps, min overlap);
         an empty pattern uses the stage's recommendation (raster for the PCB stage)."""
         if self._scan is not None and self._scan.state in ("homing", "running", "analysing"):
@@ -89,8 +96,10 @@ class ShitScopeController(ImConWidgetController):
         if self._stage() is None:
             return {"success": False, "error": "No stage available (check the stage's serial connection)"}
         info = self.getShitScopeInfo()
-        sx = float(stepXUm) if stepXUm > 0 else info["suggestedStepXUm"]
-        sy = float(stepYUm) if stepYUm > 0 else info["suggestedStepYUm"]
+        ov = min(max(float(overlap), 0.0), 0.9) or info["minOverlap"]
+        full = info["fullStepUm"] or {}
+        sx = float(stepXUm) if stepXUm > 0 else shitscope_scan.suggested_step(info["fovXUm"], full.get("X"), ov)
+        sy = float(stepYUm) if stepYUm > 0 else shitscope_scan.suggested_step(info["fovYUm"], full.get("Y"), ov)
         if sx <= 0 or sy <= 0:
             return {"success": False, "error": "No step size (field of view unknown); pass stepXUm/stepYUm"}
         nx, ny = max(1, int(nx)), max(1, int(ny))
@@ -100,17 +109,20 @@ class ShitScopeController(ImConWidgetController):
         out_dir = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "ShitScope",
                                time.strftime("%Y%m%d_%H%M%S"))
         det_mgr = self._master.detectorsManager
-        handle = det_mgr.startAcquisition()
+        # The live view starts the camera without a handle; taking one and
+        # releasing it afterwards would stop the camera and kill the stream.
+        handle = None if getattr(self._detector(), "_running", False) else det_mgr.startAcquisition()
         self._scan = shitscope_scan.ShitScopeScan(
             self._detector(), self._stage(), out_dir, info["umPerPx"], plan,
             return_to_start=bool(returnToStart), logger=self._logger.error,
-            on_done=lambda: det_mgr.stopAcquisition(handle),
+            on_done=lambda: handle is not None and det_mgr.stopAcquisition(handle),
+            speed=float(speed) or None, settle_s=float(settleMs) / 1000,
             home=self._stage().home if homeFirst and hasattr(self._stage(), "home") else None)
         self._last_dir = out_dir
         self._scan.start()
         self._logger.info(f"ShitScope scan {nx}x{ny}, step {sx:.0f}x{sy:.0f} µm -> {out_dir}")
         return {"success": True, "outDir": out_dir, "tiles": len(plan), "stepXUm": sx, "stepYUm": sy,
-                "plan": plan, "homeFirst": bool(homeFirst),
+                "plan": plan, "homeFirst": bool(homeFirst), "overlap": ov,
                 "pattern": pattern or info["pattern"]}
 
     @APIExport()
@@ -154,4 +166,17 @@ class ShitScopeController(ImConWidgetController):
             return {"success": True, **shitscope_scan.analyse_saved_scan(target)}
         except Exception as exc:
             self._logger.warning(f"ShitScope re-analysis failed: {exc}")
+            return {"success": False, "error": str(exc)}
+
+    @APIExport()
+    def exportShitScopeFullRes(self, scanDir: str = "") -> Dict:
+        """Stitch the raw tiles at full resolution (colour if the camera is colour)
+        at the registered positions -> stitched_full.tif in the scan folder."""
+        target = (scanDir or "").strip() or self._last_dir
+        if not target or not os.path.isfile(os.path.join(target, "scan_quality.json")):
+            return {"success": False, "error": f"No analysed scan in '{target}'"}
+        try:
+            return {"success": True, **shitscope_scan.export_full_res(target)}
+        except Exception as exc:
+            self._logger.warning(f"ShitScope full-res export failed: {exc}")
             return {"success": False, "error": str(exc)}

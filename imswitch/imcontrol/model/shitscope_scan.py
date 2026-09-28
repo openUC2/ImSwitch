@@ -66,7 +66,8 @@ def downsample(a: np.ndarray, f: int) -> np.ndarray:
         import cv2
         return cv2.resize(a[:h, :w], (w // f, h // f), interpolation=cv2.INTER_AREA)
     except ImportError:
-        return a[:h, :w].reshape(h // f, f, w // f, f).mean(axis=(1, 3))
+        a = a[:h, :w]
+        return a.reshape(h // f, f, w // f, f, *a.shape[2:]).mean(axis=(1, 3))
 
 
 def auto_downsample(shape) -> int:
@@ -82,7 +83,8 @@ class ShitScopeScan:
                  analysis_downsample: Optional[int] = None, stitch_downsample: int = 2,
                  logger: Optional[Callable[[str], None]] = None,
                  on_done: Optional[Callable[[], None]] = None,
-                 home: Optional[Callable[[], None]] = None):
+                 home: Optional[Callable[[], None]] = None,
+                 speed: Optional[float] = None, settle_s: float = 0.0):
         self.detector, self.stage = detector, stage
         self.out_dir, self.um_per_px, self.plan = out_dir, float(um_per_px), tiles
         self.frame_timeout_s, self.return_to_start = frame_timeout_s, return_to_start
@@ -92,6 +94,8 @@ class ShitScopeScan:
         self._log = logger or (lambda m: None)
         self._on_done = on_done   # e.g. release the camera acquisition handle
         self._home = home         # optional: re-home (-X/-Y stop) before the first tile
+        self.speed = speed        # stage speed (steps/s for the PCB stage); None = stage default
+        self.settle_s = max(0.0, float(settle_s))   # extra wait after each move, before the frame
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
@@ -153,11 +157,12 @@ class ShitScopeScan:
         return frame
 
     def _move(self, x: float, y: float):
+        kw = {"speed": self.speed} if self.speed else {}
         try:
-            self.stage.move(value=(x, y), axis="XY", is_absolute=True, is_blocking=True)
+            self.stage.move(value=(x, y), axis="XY", is_absolute=True, is_blocking=True, **kw)
         except (TypeError, ValueError):            # positioners without combined XY
-            self.stage.move(value=x, axis="X", is_absolute=True, is_blocking=True)
-            self.stage.move(value=y, axis="Y", is_absolute=True, is_blocking=True)
+            self.stage.move(value=x, axis="X", is_absolute=True, is_blocking=True, **kw)
+            self.stage.move(value=y, axis="Y", is_absolute=True, is_blocking=True, **kw)
 
     def _save_json(self, name: str, obj):
         with open(os.path.join(self.out_dir, name), "w") as fh:
@@ -184,9 +189,12 @@ class ShitScopeScan:
                     self.state = "stopped"
                     break
                 self._move(t["x"], t["y"])
-                frame = to_gray(self._fresh_frame())
+                if self.settle_s:
+                    time.sleep(self.settle_s)
+                raw = np.asarray(self._fresh_frame())       # saved as delivered (colour stays colour)
                 path = os.path.join("tiles", f"tile_{k:04d}.tif")
-                tifffile.imwrite(os.path.join(self.out_dir, path), np.asarray(frame))
+                tifffile.imwrite(os.path.join(self.out_dir, path), raw)
+                frame = to_gray(raw)                         # registration and preview work on gray
                 pos = self.stage.getPosition()
                 with self._lock:
                     if k == 0:   # analysis and preview scale from the first frame
@@ -225,32 +233,11 @@ class ShitScopeScan:
         public = {k: v for k, v in res.items() if not k.startswith("_")}
         public.update(images, outDir=self.out_dir)
         self._save_json("scan_quality.json", {k: v for k, v in public.items() if k not in ("error_map", "mosaic")})
-        self._stitch(res)
+        if res["solved"]:
+            stitch(self.out_dir, self.records, stitch_positions(public), res["_sign"],
+                   self.um_per_px, ds=self.stitch_ds)
         with self._lock:
             self.result, self._registered = public, res
-
-    def _stitch(self, res):
-        """Mosaic of all registered tiles at measured positions, averaged in
-        the overlaps, saved as stitched.tif (downsampled by stitch_ds)."""
-        import tifffile
-        inc = res["solved"]
-        if not inc:
-            return
-        f = self.stitch_ds / self.analysis_ds          # analysis px -> stitch px
-        pos = (res["_pos_px"][inc] * res["_sign"]) / f
-        pos -= pos.min(0)
-        tiles = [downsample(np.asarray(tifffile.imread(os.path.join(self.out_dir, self.records[k]["file"]))),
-                            self.stitch_ds) for k in inc]
-        H, W = tiles[0].shape
-        h, w = int(pos[:, 0].max()) + H + 1, int(pos[:, 1].max()) + W + 1
-        acc = np.zeros((h, w), np.float32); cnt = np.zeros((h, w), np.uint16)
-        for t, p in zip(tiles, pos):
-            y, x = np.round(p).astype(int)
-            acc[y:y + H, x:x + W] += t; cnt[y:y + H, x:x + W] += 1
-        out = np.where(cnt > 0, acc / np.maximum(cnt, 1), 0)
-        tifffile.imwrite(os.path.join(self.out_dir, "stitched.tif"), out.astype(np.uint16),
-                         metadata={"PhysicalSizeX": self.um_per_px * self.stitch_ds,
-                                   "PhysicalSizeY": self.um_per_px * self.stitch_ds})
 
     def preview_png(self) -> Optional[str]:
         """Mosaic as a PNG data URL: at measured positions once registered,
@@ -284,6 +271,51 @@ def _png_gray(img: np.ndarray) -> str:
         import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
         buf = io.BytesIO(); plt.imsave(buf, img, cmap="gray", format="png")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def stitch_positions(result: Dict) -> np.ndarray:
+    """(x, y) µm per tile: measured where registered; the others at their
+    commanded position shifted by the median error of the registered ones."""
+    cmd, meas = np.array(result["commanded_um"], float), np.array(result["measured_um"], float)
+    solved = np.zeros(len(cmd), bool); solved[result["solved"]] = True
+    if not solved.any():
+        return cmd
+    return np.where(solved[:, None], meas, cmd + np.median(meas[solved] - cmd[solved], axis=0))
+
+
+def stitch(out_dir: str, records: List[Dict], xy_um, sign, um_per_px: float, ds: int = 1,
+           name: str = "stitched.tif") -> Dict:
+    """Paste the saved raw tiles (colour stays colour) at `xy_um` into one image,
+    downsampled by `ds`; ds=1 is full resolution. `sign` (y, x) maps stage to
+    image direction (from the registration)."""
+    # ponytail: later tiles simply cover earlier ones in the overlap (no blending,
+    # no blur from averaging); add feathering if seams become a problem.
+    import tifffile
+    px = np.asarray(xy_um, float)[:, ::-1] / (um_per_px * ds) * np.asarray(sign, float)   # (y, x)
+    px = np.round(px - px.min(0)).astype(int)
+    read = lambda r: np.asarray(tifffile.imread(os.path.join(out_dir, r["file"])))
+    first = read(records[0])
+    tile = lambda a: a if ds == 1 else downsample(a, ds).astype(first.dtype)
+    H, W = tile(first).shape[:2]
+    out = np.zeros((px[:, 0].max() + H, px[:, 1].max() + W) + first.shape[2:], first.dtype)
+    for r, (y, x) in zip(records, px):
+        out[y:y + H, x:x + W] = tile(read(r))
+    path = os.path.join(out_dir, name)
+    size_um = um_per_px * ds
+    tifffile.imwrite(path, out, bigtiff=out.nbytes > 2 ** 31, photometric="rgb" if out.ndim == 3 else None,
+                     resolution=(1e4 / size_um, 1e4 / size_um), resolutionunit="CENTIMETER",
+                     metadata={"PhysicalSizeX": size_um, "PhysicalSizeY": size_um})
+    return {"path": path, "shape": list(out.shape), "umPerPx": size_um, "sizeMB": round(out.nbytes / 1e6, 1)}
+
+
+def export_full_res(out_dir: str) -> Dict:
+    """Full-resolution stitch of a saved, analysed scan -> stitched_full.tif."""
+    meta = json.load(open(os.path.join(out_dir, "scan.json")))
+    records = json.load(open(os.path.join(out_dir, "tiles.json")))
+    quality = json.load(open(os.path.join(out_dir, "scan_quality.json")))
+    s = quality["summary"]
+    return stitch(out_dir, records, stitch_positions(quality), (s["image_sign_y"], s["image_sign_x"]),
+                  meta["um_per_px"], ds=1, name="stitched_full.tif")
 
 
 def analyse_saved_scan(out_dir: str, analysis_downsample: Optional[int] = None) -> Dict:

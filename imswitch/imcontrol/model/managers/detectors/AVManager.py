@@ -34,6 +34,10 @@ class AVManager(DetectorManager):
       no cap], ``pixel_format`` [e.g. "Mono8"], ``exposure_mode``)
     """
 
+    # BaslerManager reuses this manager with its own camera class and setup key
+    _configKey = 'avcam'
+    _cameraType = 'AlliedVision'
+
     def __init__(self, detectorInfo, name, **_lowLevelManagers):
         self.__logger = initLogger(self, instanceName=name)
         self.detectorInfo = detectorInfo
@@ -58,7 +62,7 @@ class AVManager(DetectorManager):
         except (TypeError, ValueError):
             binning = 1
 
-        avcam = dict(props.get('avcam') or {})
+        avcam = dict(props.get(self._configKey) or {})
         # Frame rate and pixel format go to the CONSTRUCTOR: the camera has to
         # be brought up with them before the stream configuration is read back.
         try:
@@ -413,16 +417,20 @@ class AVManager(DetectorManager):
         """Get the available trigger types for the camera."""
         return self._camera.getTriggerTypes()
 
+    def _openCamera(self, cameraId, **kwargs):
+        from imswitch.imcontrol.model.interfaces.avcamera import CameraAV
+        return CameraAV(cameraId, **kwargs)
+
     def _getAVObj(self, cameraId, isRGB=None, binning=1, flipImage=(False, False),
                   frame_rate=-1, pixel_format=None):
         try:
-            from imswitch.imcontrol.model.interfaces.avcamera import CameraAV
-            self.__logger.debug(f'Trying to initialize Allied Vision camera {cameraId}')
-            camera = CameraAV(cameraId, isRGB=isRGB, binning=binning, flipImage=flipImage,
-                              frame_rate=frame_rate, pixel_format=pixel_format)
+            self.__logger.debug(f'Trying to initialize {self._cameraType} camera {cameraId}')
+            camera = self._openCamera(cameraId, isRGB=isRGB, binning=binning, flipImage=flipImage,
+                                      frame_rate=frame_rate, pixel_format=pixel_format)
         except Exception as e:
             self.__logger.error(e)
-            self.__logger.warning(f'Failed to initialize AV camera {cameraId}, loading TIS mocker')
+            self.__logger.warning(
+                f'Failed to initialize {self._cameraType} camera {cameraId}, loading TIS mocker')
             from imswitch.imcontrol.model.interfaces.tiscamera_mock import MockCameraTIS
             camera = MockCameraTIS(mocktype=self._mocktype, mockstackpath=self._mockstackpath,
                                    isRGB=bool(isRGB))
@@ -437,7 +445,7 @@ class AVManager(DetectorManager):
         """ Returns comprehensive Allied Vision camera status information. """
         status = super().getCameraStatus()
 
-        status['cameraType'] = 'AlliedVision'
+        status['cameraType'] = self._cameraType
         status['isMock'] = getattr(self._camera, 'model', '') == 'mock'
         status['isConnected'] = bool(getattr(self._camera, 'is_connected', not status['isMock']))
         status['isAcquiring'] = self._running

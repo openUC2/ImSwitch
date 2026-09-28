@@ -44,11 +44,9 @@ except ImportError:
         class VmbCameraError(Exception):
             pass
 
-if not (isVmbPy or isVimba):
-    print("Neither VmbPy nor legacy VimbaPython installed - Allied Vision cameras unavailable")
 
-
-_COLOR_FORMAT_PREFIXES = ('Bayer', 'Rgb', 'Bgr', 'Rgba', 'Bgra', 'Yuv', 'YCbCr')
+# lower case: VmbPy says "Rgb8", pypylon (CameraBasler) "RGB8"
+_COLOR_FORMAT_PREFIXES = ('bayer', 'rgb', 'bgr', 'yuv', 'ycbcr')
 # Preferred formats, most desirable first. Packed formats are avoided because
 # ``Frame.as_numpy_ndarray`` cannot map them; 8-bit Bayer is converted to Rgb8.
 _MONO_FORMAT_PREFERENCE = ('Mono12', 'Mono10', 'Mono8')
@@ -65,7 +63,7 @@ def _bitDepthOfFormat(name) -> int:
 
 
 def _isColorFormat(name) -> bool:
-    return str(name).startswith(_COLOR_FORMAT_PREFIXES)
+    return str(name).lower().startswith(_COLOR_FORMAT_PREFIXES)
 
 
 class CameraAV:
@@ -84,9 +82,6 @@ class CameraAV:
         """
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=True)
-
-        if not (isVmbPy or isVimba):
-            raise RuntimeError("Neither VmbPy nor legacy VimbaPython installed or found.")
 
         self.model = "AlliedVisionCamera"
         self.is_connected = False
@@ -137,7 +132,7 @@ class CameraAV:
             raise
         self.is_connected = True
         self.__logger.info(
-            f"CameraAV ready: model={self.model}, isRGB={self.isRGB}, "
+            f"{type(self).__name__} ready: model={self.model}, isRGB={self.isRGB}, "
             f"format={self._activePixelFormat} ({self.bitDepth} bit), "
             f"sensor={self.SensorWidth}x{self.SensorHeight}, binning={self.binning}")
 
@@ -164,6 +159,8 @@ class CameraAV:
     # Open / close
     # ------------------------------------------------------------------
     def _open_camera(self, camera_id):
+        if not (isVmbPy or isVimba):
+            raise RuntimeError("Neither VmbPy nor legacy VimbaPython installed or found.")
         if isVmbPy:
             self._vmb_system = VmbSystem.get_instance()
             self._vmb_system.__enter__()
@@ -242,8 +239,7 @@ class CameraAV:
     def _detect_rgb(self) -> bool:
         """A colour camera lists at least one Bayer/RGB/YUV pixel format."""
         try:
-            fmts = self._camera.get_pixel_formats()
-            return any(_isColorFormat(f) for f in fmts)
+            return any(_isColorFormat(f) for f in self._pixelFormats())
         except Exception as e:
             self.__logger.warning(f"Could not detect RGB capability: {e}")
             return False
@@ -312,9 +308,19 @@ class CameraAV:
     # ------------------------------------------------------------------
     # Pixel format
     # ------------------------------------------------------------------
+    def _pixelFormats(self):
+        """{name: SDK token} of the pixel formats the camera offers."""
+        return {str(f): f for f in self._camera.get_pixel_formats()}
+
+    def _setPixelFormat(self, token):
+        self._camera.set_pixel_format(token)
+
+    def _getPixelFormat(self):
+        return str(self._camera.get_pixel_format())
+
     def _negotiatePixelFormat(self, requested=None):
         try:
-            available = {str(f): f for f in self._camera.get_pixel_formats()}
+            available = self._pixelFormats()
         except Exception as e:
             self.__logger.warning(f"Could not list pixel formats: {e}")
             available = {}
@@ -332,7 +338,7 @@ class CameraAV:
             if fmt is None:
                 continue
             try:
-                self._camera.set_pixel_format(fmt)
+                self._setPixelFormat(fmt)
                 self._activePixelFormat = str(fmt)
                 self.__logger.info(f"Pixel format set to {self._activePixelFormat}")
                 break
@@ -340,7 +346,7 @@ class CameraAV:
                 self.__logger.info(f"Pixel format {name} rejected: {e}")
         else:
             try:
-                self._activePixelFormat = str(self._camera.get_pixel_format())
+                self._activePixelFormat = self._getPixelFormat()
             except Exception:
                 self._activePixelFormat = 'Mono8'
             self.__logger.warning(
@@ -397,7 +403,10 @@ class CameraAV:
                 else:
                     self.__logger.error(f"Cannot convert pixel format {name}: {e}")
                     return None
+        return self._finishFrame(arr)
 
+    def _finishFrame(self, arr):
+        """Squeeze (h, w, 1), apply the software ROI and flip; returns an owned copy."""
         if arr.ndim == 3 and arr.shape[2] == 1:
             arr = arr[:, :, 0]
 
@@ -426,13 +435,7 @@ class CameraAV:
                         ts = frame.get_timestamp()
                     except Exception:
                         ts = 0
-                    with self._frame_lock:
-                        self.frame_buffer.append(data)
-                        self.frameid_buffer.append(fid)
-                        self.frame = data
-                        self.frameNumber = fid
-                        self.timestamp = ts
-                    self._updateStreamStats(t_entry)
+                    self._pushFrame(data, fid, ts, t_entry)
             else:
                 self._streamStats["incomplete_frames"] += 1
         except Exception as e:
@@ -442,6 +445,15 @@ class CameraAV:
                 cam.queue_frame(frame)
             except Exception as e:
                 self.__logger.debug(f"queue_frame failed: {e}")
+
+    def _pushFrame(self, data, fid, ts, t_entry):
+        with self._frame_lock:
+            self.frame_buffer.append(data)
+            self.frameid_buffer.append(fid)
+            self.frame = data
+            self.frameNumber = fid
+            self.timestamp = ts
+        self._updateStreamStats(t_entry)
 
     def start_live(self):
         if self.is_streaming:

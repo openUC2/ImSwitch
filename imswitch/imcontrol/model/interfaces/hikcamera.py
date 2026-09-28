@@ -3,7 +3,6 @@ import time
 from imswitch.imcommon.model import initLogger
 from skimage.filters import gaussian, median
 from typing import List
-import sys
 from ctypes import *
 import collections
 
@@ -83,8 +82,37 @@ CALLBACK_SIG = CFUNCTYPE(
     c_void_p                        # pUser (void*)
 )
 # ----------------------------------------------------------------------------
+def _cameraCandidates(number, checksums, claimed, logger):
+    """Indices of the enumerated cameras to try, in order, for ``cameraListIndex``.
+
+    ``number`` <= 9 is a list index (out of range -> 0). Anything larger is a
+    serial checksum (sum of the serial number's bytes, logged at startup as
+    "Unique Serial Number of HIK Camera"). If no camera has that checksum --
+    the camera was swapped or the setup file is stale -- every camera that no
+    other detector of this process holds is a candidate.
+    """
+    if number <= 9:
+        if number >= len(checksums):
+            logger.warning(
+                f"Requested camera index {number} out of range (only {len(checksums)} "
+                f"cameras available). Falling back to camera index 0.")
+            return [0]
+        return [number]
+    matches = [i for i, c in enumerate(checksums) if c == number]
+    if matches:
+        return matches
+    logger.warning(
+        f"No camera with serial checksum {number}; falling back to the first free one. "
+        f"Set cameraListIndex to its checksum in the setup file to pin it.")
+    return [i for i, c in enumerate(checksums) if c not in claimed]
+
+
 class CameraHIK:
     """Minimal wrapper that grabs frames via SDK callback (no polling)."""
+
+    # Serial checksums of the cameras this process has open, so a detector
+    # whose configured checksum matches nothing does not take a sibling's camera.
+    _claimedChecksums = set()
 
     def __init__(self,cameraNo=None, exposure_time = None, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=1, flipImage=(False, False)):
         super().__init__()
@@ -240,65 +268,36 @@ class CameraHIK:
         if not infos:
             raise RuntimeError("No suitable Hik cameras found.")
 
-        # If camera number > 9, treat it as a unique identifier (serial number checksum)
-        if number > 9:
-            self.__logger.info(f"Camera number {number} > 9, treating as unique identifier (serial checksum)")
-            camera_index = None
-            serial_checksums = []
-            # Search for camera with matching serial number checksum
-            for i, info in enumerate(infos):
-                serial_checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
-                serial_checksums.append(serial_checksum)
-                self.__logger.info(f"Camera {i} serial checksum: {serial_checksum}")
-                if serial_checksum == number:
-                    camera_index = i
-                    self.__logger.info(f"Found camera with matching serial checksum {number} at index {i}")
-                    break
+        # A reconnect re-opens our own camera, which must not count as taken.
+        CameraHIK._claimedChecksums.discard(getattr(self, '_serial_checksum', None))
+        checksums = [int(np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)) for info in infos]
+        self.__logger.info(f"Serial checksums of the cameras found: {checksums}")
 
-            if camera_index is None:
-                # Fallback: use the first available camera if requested checksum not found
-                # This handles the case where camera order may have changed or camera was replaced
-                self.__logger.warning(
-                    f"No camera found with serial checksum {number}. "
-                    f"Falling back to first available camera (index 0)."
-                )
-                # Log available cameras for diagnostic purposes
-                # TODO: Fallback -> We need to open another camera, but there may be a conflict with another instance needing that camera, currently we don't have any way to catch this/read this from the config
-                # FIXME: For now: iterate through list and check if opened, if not, use that index
-                for i, info in enumerate(infos):
-                    tmpCamera = MvCamera()
-                    tmpCamera.MV_CC_CreateHandle(info)
-                    ret = tmpCamera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
-                    if ret == 0:
-                        serial_checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
-                        self.__logger.info(f"Camera {i} serial checksum is available and will be used: {serial_checksum}")
-                        camera_index = i                
-                        tmpCamera.MV_CC_CloseDevice()
-                        tmpCamera.MV_CC_DestroyHandle()
-                        del tmpCamera
-                        break
-            number = camera_index  # Use the found index for the rest of the function
+        # Try the chosen camera; if it cannot be opened, the next candidate.
+        # The old checksum-mismatch path test-opened every camera and then
+        # indexed infos[None] when none of those probes succeeded, which sent
+        # a perfectly connected camera to the mock.
+        candidates = _cameraCandidates(number, checksums, CameraHIK._claimedChecksums,
+                                       self.__logger)
+        for number in candidates:
+            camera = MvCamera()
+            ret = camera.MV_CC_CreateHandle(infos[number])
+            if ret == 0:
+                ret = camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
+            if ret == 0:
+                break
+            camera.MV_CC_DestroyHandle()
+            self.__logger.warning(
+                f"Opening camera {number} (serial checksum {checksums[number]}) failed 0x{ret:x}")
         else:
-            # Traditional index-based selection
-            if number >= len(infos):
-                self.__logger.warning(
-                    f"Requested camera index {number} out of range (only {len(infos)} cameras available). "
-                    f"Falling back to camera index 0."
-                )
-                number = 0
+            raise RuntimeError(
+                f"Could not open a Hik camera for cameraListIndex {self.cameraNo} "
+                f"(serial checksums found: {checksums})")
 
-        self.__logger.info(f"Opening camera {number} out of {len(infos)} available cameras")
-
-        # Track the serial checksum of the camera we're opening
-        self._serial_checksum = np.sum(infos[number].SpecialInfo.stUsb3VInfo.chSerialNumber)
-
-        self.camera = MvCamera()
-        ret = self.camera.MV_CC_CreateHandle(infos[number])
-        if ret != 0:
-            raise RuntimeError(f"CreateHandle failed 0x{ret:x}")
-        ret = self.camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
-        if ret != 0:
-            raise RuntimeError(f"OpenDevice failed 0x{ret:x}")
+        self.camera = camera
+        self._serial_checksum = checksums[number]
+        CameraHIK._claimedChecksums.add(self._serial_checksum)
+        self.__logger.info(f"Opened camera {number} out of {len(infos)} available cameras")
 
         # optimise packet size for GigE
         if infos[number].nTLayerType == MV_GIGE_DEVICE:
@@ -306,8 +305,8 @@ class CameraHIK:
             if psize > 0:
                 self.camera.MV_CC_SetIntValue("GevSCPSPacketSize", psize)
                 self.__logger.debug(f"Set packet size to {psize} for GigE camera")
-        # print unique ID: # TODO: We should make the cameraNo persistent based on this ID
-        self.__logger.info(f"Unique Serial Number of HIK Camera: {np.sum(infos[number].SpecialInfo.stUsb3VInfo.chSerialNumber)}")
+        # Put this number in the setup file as cameraListIndex to pin this camera
+        self.__logger.info(f"Unique Serial Number of HIK Camera: {self._serial_checksum}")
         # get available parameters
         self.mParameters = self.get_camera_parameters()
         self.__logger.info(f"Camera parameters: model={self.mParameters.get('model_name', 'Unknown')}, isRGB={self.mParameters.get('isRGB', False)}")
@@ -343,8 +342,8 @@ class CameraHIK:
                 self.__logger.debug("Set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
         ret = self.camera.MV_CC_SetEnumValue("TriggerMode", MV_TRIGGER_MODE_OFF)
         if ret != 0:
-            self.__logger.debug("Set trigger mode fail! ret[0x%x]" % ret)
-            sys.exit()
+            # Used to sys.exit() here, which took the whole server down.
+            self.__logger.warning(f"Set trigger mode to continuous failed ret[0x{ret:x}]")
 
         # setup sensor size
         mWidth = MVCC_INTVALUE()
@@ -784,6 +783,7 @@ class CameraHIK:
 
         self.camera.MV_CC_CloseDevice()
         self.camera.MV_CC_DestroyHandle()
+        CameraHIK._claimedChecksums.discard(getattr(self, '_serial_checksum', None))
 
     def set_exposure_time(self, exposure_time):
         self.exposure_time = exposure_time

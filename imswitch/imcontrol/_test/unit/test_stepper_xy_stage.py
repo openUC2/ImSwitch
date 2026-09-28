@@ -38,7 +38,7 @@ class FakeFirmware:
             return "1" if self._busy() else "0"
         if word == "MICROSTEP" and len(cmd.split()) == 1:
             return str(self.microsteps)
-        if word in ("STOP", "POWER", "PING", "V", "MICROSTEP"):
+        if word in ("STOP", "POWER", "PING", "V", "MICROSTEP", "ACCEL", "HOLD", "DITHER", "PHASE"):
             return "OK"
         return "ERR unknown cmd"
 
@@ -120,3 +120,61 @@ def test_watchdog_does_not_stop_a_running_move():
     time.sleep(1.2)
     assert fw.cmds("STOP"), "idle watchdog never fired"
     stage.finalize()
+
+
+def test_approach_direction_overshoots_only_against_it():
+    fw = FakeFirmware()
+    stage = make_stage(fw, approachDirectionX=1, approachDirectionY=1, approachOvershootSteps=8)
+    stage.move(10, "X")          # with the approach direction: one move
+    stage.move(-10, "X")         # against it: overshoot, then approach
+    stage.move((-5, 3), "XY")    # mixed: only X overshoots
+    moves = [m[1] for m in fw.cmds("MOVE")]
+    assert moves == ["MOVE 10 0 800", "MOVE -18 0 800", "MOVE 8 0 800", "MOVE -13 3 800", "MOVE 8 0 800"]
+    assert stage.getPosition()["X"] == -5 and stage.getPosition()["Y"] == 3
+
+
+def test_approach_follows_axis_swap():
+    fw = FakeFirmware()
+    stage = make_stage(fw, approachDirectionX=1, swapXY=True)   # logical X = device Y
+    stage.move(-4, "X")
+    assert [m[1] for m in fw.cmds("MOVE")] == ["MOVE 0 -12 800", "MOVE 0 8 800"]
+
+
+def test_speed_cap_and_settle():
+    fw = FakeFirmware()
+    stage = make_stage(fw, maxSpeedSteps=100, settleMs=100)
+    t0 = time.time()
+    stage.move(4, "X", speed=(20000, 20000))
+    assert fw.cmds("MOVE")[0][1] == "MOVE 4 0 100"
+    assert time.time() - t0 >= MOVE_S + 0.1
+
+
+def test_firmware_settings_sent_at_startup():
+    fw = FakeFirmware()
+    make_stage(fw, firmware={"ACCEL": 1500, "HOLD": 0, "DITHER": "1 16 50", "PHASE_Y": [0, -3, 5]})
+    sent = [c for _, c, _ in fw.log]
+    assert "ACCEL 1500" in sent and "HOLD 0" in sent and "DITHER 1 16 50" in sent
+    assert ["PHASE Y 0 0", "PHASE Y 1 -3", "PHASE Y 2 5"] == [c for c in sent if c.startswith("PHASE")]
+
+
+def test_scan_hints_full_step():
+    fw = FakeFirmware(microsteps=32)
+    stage = make_stage(fw, umPerElectricalCycleX=4157.0, umPerElectricalCycleY=3908.0, approachDirectionX=1)
+    h = stage.getScanHints()
+    assert abs(h["fullStepUm"]["X"] - 4157.0 / 4) < 1e-9 and abs(h["fullStepUm"]["Y"] - 977.0) < 1e-9
+    assert h["recommendedPattern"] == "raster"
+
+
+def test_home_drives_negative_and_zeroes_only_homed_axes():
+    fw = FakeFirmware()
+    stage = make_stage(fw, homeSpeedSteps=50, homeTimeS=0.05)
+    stage.move((40, 30), "XY")
+    stage.home()
+    assert fw.cmds("MOVE")[-1][1] == f"MOVE {-50 * 9999} {-50 * 9999} 50"
+    assert stage.getPosition()["X"] == stage.getPosition()["Y"] == 0.0
+    stage.move((40, 30), "XY")
+    stage.doHome("Y")                      # per-axis: X keeps its position
+    assert fw.cmds("MOVE")[-1][1] == f"MOVE 0 {-50 * 9999} 50"
+    assert (stage.getPosition()["X"], stage.getPosition()["Y"]) == (40, 0.0)
+    stage.doHome("Z")                      # no Z axis: no-op
+    assert fw.cmds("MOVE")[-1][1] == f"MOVE 0 {-50 * 9999} 50"

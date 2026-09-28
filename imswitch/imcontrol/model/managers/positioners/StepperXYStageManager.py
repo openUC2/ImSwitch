@@ -40,6 +40,19 @@ Configuration keys (managerProperties)
                        break the scale.
   powerX / powerY    – per-axis peak duty sent at startup via POWER (0..32767).
                        Use to equalise current for unequal trace resistance.
+  approachDirectionX / Y
+                     – +1 / -1: every move ends travelling in this direction.
+                       A move the other way goes past the target by
+                       approachOvershootSteps first. Removes the friction
+                       dead band on reversals (PCB stage: ~230 µm per
+                       reversal). 0 = off (default). Replaces backlashX/Y.
+  approachOvershootSteps – overshoot for the above (default 8 = one full step)
+  settleMs           – wait after a blocking move has finished (default 0)
+  maxSpeedSteps      – cap on the per-move speed in steps/s; ExperimentController
+                       asks for 20000 (default: no cap, firmware limit 2000)
+  firmware           – dict of firmware settings sent at startup, e.g.
+                       {"ACCEL": 1500, "HOLD": 0, "DITHER": "1 16 50"};
+                       "PHASE_X"/"PHASE_Y": list of per-µstep phase corrections
   initialSpeedX      – default speed in steps/s for X (default: 800)
   initialSpeedY      – default speed in steps/s for Y (default: 800)
   microsteps         – microstep divisor to write on startup (optional)
@@ -161,6 +174,14 @@ class StepperXYStageManager(PositionerManager):
         )
         # Firmware without BUSY/POS falls back to time-based waiting
         self._has_busy: bool = True
+        props = positionerInfo.managerProperties
+        self._approach = {"X": int(props.get("approachDirectionX", 0)),
+                          "Y": int(props.get("approachDirectionY", 0))}
+        self._approach_overshoot: int = int(props.get("approachOvershootSteps", 8))
+        self._settle_s: float = float(props.get("settleMs", 0)) / 1000
+        self._max_speed: Optional[int] = (int(props["maxSpeedSteps"])
+                                          if props.get("maxSpeedSteps") else None)
+        firmware_settings: dict = dict(props.get("firmware", {}) or {})
 
         # --- X/Y axis swap (for stages mounted 90° rotated) ---
         self._swapXY: bool = bool(positionerInfo.managerProperties.get("swapXY", False))
@@ -235,6 +256,20 @@ class StepperXYStageManager(PositionerManager):
                 self.set_power(int(power[0]), int(power[1]))
             except Exception as exc:
                 self.__logger.warning(f"{name}: could not set power: {exc}")
+
+        # Runtime firmware settings (not persisted in firmware, so re-sent here)
+        for key, value in firmware_settings.items():
+            try:
+                if key.upper().startswith("PHASE_"):
+                    axis = key.split("_", 1)[1].upper()
+                    for k, v in enumerate(value):
+                        self._send(f"PHASE {axis} {k} {int(v)}", log=False)
+                else:
+                    reply = self._send(f"{key.upper()} {value}")
+                    if not reply.startswith("OK"):
+                        self.__logger.warning(f"{name}: firmware setting {key}={value}: {reply!r}")
+            except Exception as exc:
+                self.__logger.warning(f"{name}: firmware setting {key} failed: {exc}")
 
 
     # ------------------------------------------------------------------
@@ -330,6 +365,8 @@ class StepperXYStageManager(PositionerManager):
         if speed is None:
             speed = max(self._speed["X"], self._speed["Y"]) or _DEFAULT_SPEED
         speed = max(int(speed), 1)  # firmware clamps to its own maximum
+        if self._max_speed:
+            speed = min(speed, self._max_speed)
 
         # Firmware ramps at ~1500 steps/s² by default; 2x margin + 2 s.
         duration = max(abs(dx), abs(dy)) / min(speed, 2000) + speed / 1500
@@ -343,6 +380,8 @@ class StepperXYStageManager(PositionerManager):
             self.wait_idle(timeout)
         else:
             time.sleep(duration)
+        if self._settle_s > 0:
+            time.sleep(self._settle_s)
 
     def _set_device_speed(self, speed_x: int, speed_y: int) -> None:
         """Send V command to set axis speeds (steps/s)."""
@@ -446,6 +485,24 @@ class StepperXYStageManager(PositionerManager):
         if dx_dev == 0 and dy_dev == 0:
             return
 
+        if any(self._approach.values()):
+            # Unidirectional approach: a move against the approach direction
+            # overshoots the target, then every axis finishes travelling in
+            # its approach direction (the friction dead band is taken up
+            # before the target, not at it).
+            dev_dir = ({"X": self._approach["Y"], "Y": self._approach["X"]} if self._swapXY
+                       else self._approach)
+            over = {}
+            for axis, d in (("X", dx_dev), ("Y", dy_dev)):
+                a = dev_dir[axis]
+                over[axis] = -a * self._approach_overshoot if (a and d and (d > 0) != (a > 0)) else 0
+            if over["X"] or over["Y"]:
+                self._send_move(dx_dev + over["X"], dy_dev + over["Y"], speed, wait=True)
+                self._send_move(-over["X"], -over["Y"], speed, wait=wait)
+            else:
+                self._send_move(dx_dev, dy_dev, speed, wait=wait)
+            return
+
         # Backlash compensation: when reversing direction, overshoot by the
         # configured backlash amount then return to the exact target so the
         # final approach is always from the same mechanical side.
@@ -545,19 +602,23 @@ class StepperXYStageManager(PositionerManager):
         return "OK" in reply
 
     def doHome(self, axis, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
-        """Home the stage by moving toward the home position until a stall is detected or a timeout occurs."""
+        """Home one axis (ExperimentController.homeAllAxes calls X, Y, Z in turn)."""
+        if axis not in ("X", "Y"):
+            return
         self.home(
             home_speed=homeSpeed,
             home_time_s=homeTimeout,
-            monitor_current=self._home_monitor_current
+            monitor_current=self._home_monitor_current,
+            axes=(axis,),
         )
 
     def home(self,
              home_speed: Optional[int] = None,
              home_time_s: Optional[float] = None,
-             monitor_current: Optional[bool] = None) -> None:
+             monitor_current: Optional[bool] = None,
+             axes=("X", "Y")) -> None:
         """
-        Move the stage toward its home position.
+        Move the stage toward its home position (-X / -Y end of travel).
 
         Because there are no limit switches the stage is driven in the
         negative X and Y direction for a fixed time and then stopped.
@@ -575,8 +636,10 @@ class StepperXYStageManager(PositionerManager):
             If True, poll the device for current draw during the move and
             stop early when a stall is detected (motor hits end-of-travel).
             Defaults to the ``homeMonitorCurrent`` config value.
+        axes :
+            Which logical axes to home; the others keep their position.
         """
-        speed = int(home_speed) if home_speed is not None else self._home_speed # TODO: Need to check that this is opposite from scanning 
+        speed = int(home_speed) if home_speed is not None else self._home_speed
         duration = float(home_time_s) if home_time_s is not None else self._home_time_s
         use_current = (
             monitor_current if monitor_current is not None
@@ -593,12 +656,15 @@ class StepperXYStageManager(PositionerManager):
         try:
             #self._set_device_speed(speed, speed)
             # Apply X/Y swap so the physical axes are correct
+            # Negative = against the scan direction (approachDirection +1), so
+            # the sled is pushed into its -X/-Y stop and the scan then only
+            # travels in +X/+Y from there.
             big = speed * 9999  # large enough step count to run the full time
-            dev_dx = -big
-            dev_dy = -big
+            dev_dx = -big if "X" in axes else 0
+            dev_dy = -big if "Y" in axes else 0
             if self._swapXY:
                 dev_dx, dev_dy = dev_dy, dev_dx
-            self._send(f"MOVE {-dev_dx} {dev_dy} {speed}")
+            self._send(f"MOVE {dev_dx} {dev_dy} {speed}")
 
             deadline = time.time() + duration
             stalled_x = False
@@ -631,10 +697,11 @@ class StepperXYStageManager(PositionerManager):
             self._forever_moving = False
 
         # Reset software position and backlash tracking
-        self._position["X"] = 0.0
-        self._position["Y"] = 0.0
-        self._backlash_dir = {"X": 0, "Y": 0}
-        self.__logger.info("Homing complete – position reset to (0, 0)")
+        for axis in axes:
+            self._position[axis] = 0.0
+            self._backlash_dir[axis] = 0
+        self.__logger.info(f"Homing complete – {'/'.join(axes)} reset to 0")
+        self._commChannel.sigUpdateMotorPosition.emit({self._name: dict(self._position)})
 
     def get_microsteps(self) -> int:
         """Query the current microstep divisor from the device."""
@@ -646,6 +713,30 @@ class StepperXYStageManager(PositionerManager):
             except ValueError:
                 continue
         raise ValueError(f"Could not parse MICROSTEP reply: {reply!r}")
+
+    def getScanHints(self) -> dict:
+        """What a tile scan should know about this stage (see PCB-stage bench E3/E6):
+        tile steps that are whole full steps (cycle / 4)
+        are the most repeatable, and one approach direction avoids the
+        reversal dead band."""
+        n = None
+        try:
+            n = self.get_microsteps()
+        except Exception:
+            pass
+        per_full = (n // 4) if n else None
+        return {
+            "stepsizeUm": {"X": self._stepsizeX, "Y": self._stepsizeY},
+            "microsteps": n,
+            "fullStepUm": ({"X": self._stepsizeX * per_full, "Y": self._stepsizeY * per_full}
+                           if per_full else None),
+            "approachDirection": dict(self._approach),
+            "approachOvershootSteps": self._approach_overshoot,
+            "settleMs": self._settle_s * 1000,
+            "maxSpeedSteps": self._max_speed,
+            "recommendedMinOverlap": 0.25,
+            "recommendedPattern": "raster" if any(self._approach.values()) else "snake",
+        }
 
     def get_position_steps(self) -> Tuple[int, int]:
         """Firmware step counts (device axes, i.e. before swapXY)."""

@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 560" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- CONFIG-MODEL.md §7 — boot: from files on disk to a live agent, with the
+       one place each class of error is allowed to surface. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1020" height="560" fill="#ffffff"/>
+
+  <text x="510" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">Boot: files → ResolvedSystem → agent</text>
+  <text x="510" y="54" text-anchor="middle" font-size="12.5" fill="#64748b">every stage either produces the next artifact or refuses; nothing is repaired silently</text>
+
+  <!-- stage boxes -->
+  <g>
+    <rect x="34" y="96" width="164" height="86" rx="9" fill="#f8fafc" stroke="#334155" stroke-width="1.6"/>
+    <text x="116" y="122" text-anchor="middle" font-size="13.5" font-weight="700" fill="#0f172a">1 · READ</text>
+    <text x="116" y="143" text-anchor="middle" font-size="11.5" fill="#334155">microscope.yml</text>
+    <text x="116" y="159" text-anchor="middle" font-size="11.5" fill="#334155">+ the 4 layers</text>
+    <text x="116" y="175" text-anchor="middle" font-size="11.5" fill="#64748b">hash each file</text>
+  </g>
+  <path d="M198 139 L232 139" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="234" y="96" width="164" height="86" rx="9" fill="#f8fafc" stroke="#334155" stroke-width="1.6"/>
+    <text x="316" y="122" text-anchor="middle" font-size="13.5" font-weight="700" fill="#0f172a">2 · PARSE</text>
+    <text x="316" y="143" text-anchor="middle" font-size="11.5" fill="#334155">pydantic, strict</text>
+    <text x="316" y="159" text-anchor="middle" font-size="11.5" fill="#334155">extra = forbid</text>
+    <text x="316" y="175" text-anchor="middle" font-size="11.5" fill="#64748b">units in field names</text>
+  </g>
+  <path d="M398 139 L432 139" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="434" y="96" width="164" height="86" rx="9" fill="#f8fafc" stroke="#334155" stroke-width="1.6"/>
+    <text x="516" y="122" text-anchor="middle" font-size="13.5" font-weight="700" fill="#0f172a">3 · LINK</text>
+    <text x="516" y="143" text-anchor="middle" font-size="11.5" fill="#334155">resolve every ref</text>
+    <text x="516" y="159" text-anchor="middle" font-size="11.5" fill="#334155">against the design</text>
+    <text x="516" y="175" text-anchor="middle" font-size="11.5" fill="#64748b">strings → objects</text>
+  </g>
+  <path d="M598 139 L632 139" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="634" y="96" width="164" height="86" rx="9" fill="#f8fafc" stroke="#334155" stroke-width="1.6"/>
+    <text x="716" y="122" text-anchor="middle" font-size="13.5" font-weight="700" fill="#0f172a">4 · CHECK</text>
+    <text x="716" y="143" text-anchor="middle" font-size="11.5" fill="#334155">the rule set (§8)</text>
+    <text x="716" y="159" text-anchor="middle" font-size="11.5" fill="#334155">E_… fail, W_… warn</text>
+    <text x="716" y="175" text-anchor="middle" font-size="11.5" fill="#64748b">codes are stable</text>
+  </g>
+  <path d="M798 139 L832 139" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="834" y="96" width="152" height="86" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.8"/>
+    <text x="910" y="122" text-anchor="middle" font-size="13.5" font-weight="700" fill="#1e3a8a">5 · RESOLVE</text>
+    <text x="910" y="143" text-anchor="middle" font-size="11.5" fill="#1e3a8a">ResolvedSystem</text>
+    <text x="910" y="159" text-anchor="middle" font-size="11.5" fill="#1e3a8a">frozen, hashable</text>
+    <text x="910" y="175" text-anchor="middle" font-size="11.5" fill="#3b82f6">= app_context</text>
+  </g>
+
+  <!-- failure lane -->
+  <path d="M316 182 L316 216" stroke="#dc2626" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+  <path d="M516 182 L516 216" stroke="#dc2626" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+  <path d="M716 182 L716 216" stroke="#dc2626" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+  <rect x="234" y="218" width="564" height="42" rx="8" fill="#fef2f2" stroke="#dc2626" stroke-width="1.4"/>
+  <text x="516" y="236" text-anchor="middle" font-size="12" font-weight="600" fill="#7f1d1d">refuse to boot — with the file, the line, the code and what would have happened</text>
+  <text x="516" y="252" text-anchor="middle" font-size="11.5" fill="#991b1b">an unresolvable reference is never downgraded to a default. That is the ImSwitch failure mode this model exists to remove.</text>
+
+  <!-- second row: agent construction -->
+  <path d="M910 182 L910 300 L836 300" stroke="#2563eb" stroke-width="1.6" fill="none" marker-end="url(#ab2)"/>
+  <defs>
+    <marker id="ab2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <g>
+    <rect x="616" y="278" width="220" height="92" rx="9" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.6"/>
+    <text x="726" y="303" text-anchor="middle" font-size="13.5" font-weight="700" fill="#14532d">6 · PROVIDE</text>
+    <text x="726" y="324" text-anchor="middle" font-size="11.5" fill="#166534">driver registry builds one manager</text>
+    <text x="726" y="340" text-anchor="middle" font-size="11.5" fill="#166534">per device entry — provide_managers</text>
+    <text x="726" y="356" text-anchor="middle" font-size="11.5" fill="#166534">stops being a hand-written list</text>
+  </g>
+  <path d="M616 324 L582 324" stroke="#16a34a" stroke-width="1.5" marker-end="url(#ag)"/>
+  <defs>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+
+  <g>
+    <rect x="360" y="278" width="220" height="92" rx="9" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.6"/>
+    <text x="470" y="303" text-anchor="middle" font-size="13.5" font-weight="700" fill="#14532d">7 · CAPABILITIES</text>
+    <text x="470" y="324" text-anchor="middle" font-size="11.5" fill="#166534">each satisfied capability publishes</text>
+    <text x="470" y="340" text-anchor="middle" font-size="11.5" fill="#166534">its states, actions and calibration</text>
+    <text x="470" y="356" text-anchor="middle" font-size="11.5" fill="#166534">kinds — config schema untouched</text>
+  </g>
+  <path d="M360 324 L326 324" stroke="#16a34a" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <g>
+    <rect x="104" y="278" width="220" height="92" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6"/>
+    <text x="214" y="303" text-anchor="middle" font-size="13.5" font-weight="700" fill="#7c2d12">8 · SNAPSHOT t₀</text>
+    <text x="214" y="324" text-anchor="middle" font-size="11.5" fill="#9a3412">first full SystemSnapshot written</text>
+    <text x="214" y="340" text-anchor="middle" font-size="11.5" fill="#9a3412">to runtime/snapshots.jsonl; every</text>
+    <text x="214" y="356" text-anchor="middle" font-size="11.5" fill="#9a3412">later change is a patch on top</text>
+  </g>
+
+  <!-- bottom: what /system serves -->
+  <path d="M214 370 L214 412" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+  <rect x="34" y="414" width="952" height="112" rx="10" fill="#f8fafc" stroke="#334155" stroke-width="1.6"/>
+  <text x="56" y="440" font-size="14" font-weight="700" fill="#0f172a">GET /system — the runtime system description</text>
+  <text x="56" y="464" font-size="12" fill="#334155">the ResolvedSystem (what was configured) · the capability list (what this build can do) · the JSON Schema of every published state</text>
+  <text x="56" y="482" font-size="12" fill="#334155">(what the UI can render) · the current snapshot id and revision (what is true right now) · the open validation warnings.</text>
+  <text x="56" y="506" font-size="12" font-style="italic" fill="#475569">Adding calibration — or anything else — means adding a capability. The endpoint's shape does not change, and neither does the config schema.</text>
+</svg>

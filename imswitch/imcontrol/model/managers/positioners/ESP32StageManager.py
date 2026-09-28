@@ -282,6 +282,21 @@ class ESP32StageManager(PositionerManager):
         except Exception as e:
             self.__logger.warning(f"Could not apply joystick direction settings: {e}")
 
+        # Load joystick-jog speed multiplier per axis from config, same
+        # pattern as the joystick-direction cache above.
+        self._speedMultiplier: dict = {}
+        for _ax in ("A", "X", "Y", "Z"):
+            self._speedMultiplier[_ax] = positionerInfo.managerProperties.get(f'speedMultiplier{_ax}', 1)
+        try:
+            for _ax in ("A", "X", "Y", "Z"):
+                if positionerInfo.managerProperties.get(f'speedMultiplier{_ax}') is None:
+                    continue
+                self._motor.set_speed_multiplier(
+                    axis=_ax, multiplier=self._speedMultiplier[_ax], timeout=1
+                )
+        except Exception as e:
+            self.__logger.warning(f"Could not apply speed multiplier settings: {e}")
+
         # Dummy move to get the motor to the right position
         for iAxis in positionerInfo.axes:
             self.move(value=-1, speed=1000, axis=iAxis, is_absolute=False, is_blocking=True, isEnable=True, timeout=0.2)
@@ -1320,7 +1335,7 @@ class ESP32StageManager(PositionerManager):
                 if 'acceleration' in motion:
                     self.acceleration[axis] = motion['acceleration']
                     result['updated'].append('acceleration')
-                
+
                 if 'backlash' in motion:
                     backlash = motion['backlash']
                     if axis == 'X': self.backlashX = backlash
@@ -1536,6 +1551,33 @@ class ESP32StageManager(PositionerManager):
         except Exception as e:
             result["error"] = str(e)
             self.__logger.error(f"setJoystickDirectionSettings failed for axis {axis}: {e}")
+        return result
+
+    def getSpeedMultiplierSettings(self) -> dict:
+        """Return the in-memory joystick-jog speed-multiplier cache.
+
+        Returns {"A": num, "X": num, "Y": num, "Z": num}.
+        Read from cache only — no device round-trip required.
+        """
+        return {ax: self._speedMultiplier.get(ax, 1) for ax in ("A", "X", "Y", "Z")}
+
+    def setSpeedMultiplierSettings(self, axis: str, multiplier) -> dict:
+        """Update the joystick-jog speed multiplier for one axis in-memory and on the device.
+
+        :param axis:       Axis name ("A", "X", "Y", or "Z").
+        :param multiplier: Speed multiplier to apply for that axis.
+        :return:           {success, axis, multiplier} or {success, error}.
+        """
+        axis = axis.upper()
+        result = {"axis": axis, "multiplier": multiplier, "success": False}
+        try:
+            self._motor.set_speed_multiplier(axis=axis, multiplier=multiplier, timeout=1)
+            self._speedMultiplier[axis] = multiplier
+            result["success"] = True
+            self.__logger.info(f"Speed multiplier set: axis={axis}, multiplier={multiplier}")
+        except Exception as e:
+            result["error"] = str(e)
+            self.__logger.error(f"setSpeedMultiplierSettings failed for axis {axis}: {e}")
         return result
 
     def setGlobalMotorSettings(self, settings: dict) -> dict:

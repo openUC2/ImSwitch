@@ -1,6 +1,13 @@
 /**
  * flimBinaryParser.js - Parser for the FLIM LABS flim-server binary WebSocket protocol.
  *
+ * SUPERSEDED / currently unused. The ImSwitch backend is now the single owner
+ * of the flim-server `/data` socket (it is a single-consumer stream), so the
+ * decoding happens in Python:
+ * imswitch/imcontrol/model/interfaces/flimlabsclient.py :: parse_flim_chunk.
+ * Kept as the reference implementation of the wire format; safe to delete once
+ * no browser-direct mode is wanted again.
+ *
  * Targets flim-imager 2.x. The server (ws://<host>:5249/data) concatenates up
  * to 100 messages into one binary WebSocket frame (no framing headers). Each
  * message starts with a 1-byte type tag followed by a type-specific

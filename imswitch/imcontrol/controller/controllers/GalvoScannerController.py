@@ -46,6 +46,85 @@ class GalvoScannerController(ImConWidgetController):
         self.__logger.info(f"GalvoScannerController initialized with devices: "
                           f"{self._master.galvoScannersManager.getAllDeviceNames()}")
 
+        self._bindGalvoToFlimDetectors()
+        self._autoStartScanners()
+
+    def _autoStartScanners(self):
+        """Start scanning at boot for scanners with autoStartScan enabled
+        (default). The FLIM rig wants the raster + trigger pattern running from
+        the start; disable with "autoStartScan": false in managerProperties.
+        """
+        for name in self._master.galvoScannersManager.getAllDeviceNames():
+            scanner = self._master.galvoScannersManager[name]
+            if not getattr(scanner, '_autoStartScan', False):
+                continue
+            try:
+                scanner.start_scan()
+                self.__logger.info(
+                    f"Auto-started galvo scan on '{name}' with default config")
+            except Exception as e:
+                self.__logger.warning(f"Auto-start of '{name}' failed: {e}")
+
+    def _bindGalvoToFlimDetectors(self):
+        """Late-bind galvo scanners into FLIM detectors.
+
+        Detectors are constructed before galvoScannersManager exists, so a
+        FLIMLabsDetectorManager cannot resolve its ``galvoScanner`` property at
+        construction time. Do it here, once both managers are up, so the FLIM
+        detector can start/stop the scan around its own acquisitions.
+        """
+        try:
+            detectors = self._master.detectorsManager
+            scanners = self._master.galvoScannersManager
+        except Exception:
+            return
+        for detName in detectors.getAllDeviceNames():
+            det = detectors[detName]
+            if not hasattr(det, 'setGalvoScanner'):
+                continue
+            scannerName = getattr(det, 'galvoScannerName', None)
+            names = scanners.getAllDeviceNames()
+            if scannerName is None and names:
+                scannerName = names[0]
+            if scannerName and scannerName in names:
+                det.setGalvoScanner(scanners[scannerName])
+                self.__logger.info(
+                    f"Bound galvo scanner '{scannerName}' to detector '{detName}'")
+            else:
+                self.__logger.warning(
+                    f"Detector '{detName}' requests galvo scanner '{scannerName}' "
+                    "which is not configured")
+
+
+    def _propagateGeometryToFlim(self, scannerName):
+        """Push the current scan geometry into every FLIM detector bound to
+        this scanner.
+
+        The FLIM card has no geometry of its own - frame/line/pixel boundaries
+        come from this scanner's trigger pattern. If nx/ny or the scanned DAC
+        range changes while the card is armed for the old shape, lines fall
+        outside the frame buffer and are dropped silently, so the live image
+        just stops updating. Pushing it through keeps the two in step without
+        re-arming the card (scouting applies it live).
+        """
+        results = {}
+        try:
+            detectors = self._master.detectorsManager
+        except Exception:
+            return results
+        for detName in detectors.getAllDeviceNames():
+            det = detectors[detName]
+            if not hasattr(det, 'applyGeometryLive'):
+                continue
+            if getattr(det, 'galvoScannerName', None) not in (None, scannerName):
+                continue
+            try:
+                results[detName] = det.applyGeometryLive()
+            except Exception as e:
+                self.__logger.warning(
+                    f"Could not propagate geometry to '{detName}': {e}")
+                results[detName] = {'error': str(e)}
+        return results
 
     # ========================
     # API Export Methods
@@ -223,10 +302,15 @@ class GalvoScannerController(ImConWidgetController):
             )
             
             self.__logger.info(f"Updated config for {scannerName}")
+            # The FLIM card derives its frame purely from this scan pattern, so
+            # a geometry change has to reach it too - otherwise every line
+            # lands out of range and the image silently goes blank.
+            flim = self._propagateGeometryToFlim(scannerName)
             return {
                 "status": "config_updated",
                 "scannerName": scannerName,
-                "config": scanner.get_config_dict()
+                "config": scanner.get_config_dict(),
+                "flimDetectors": flim,
             }
         except Exception as e:
             self.__logger.error(f"Error setting config for {scannerName}: {e}")
@@ -312,7 +396,10 @@ class GalvoScannerController(ImConWidgetController):
             )
             
             self.__logger.info(f"Started scan on {scannerName}")
-            result = {"status": "started", "scannerName": scannerName}
+            # start_scan() also commits any nx/ny/range overrides passed here,
+            # so the FLIM detectors need the same update as setGalvoScanConfig.
+            result = {"status": "started", "scannerName": scannerName,
+                      "flimDetectors": self._propagateGeometryToFlim(scannerName)}
             return result
         except Exception as e:
             self.__logger.error(f"Error starting scan on {scannerName}: {e}")
@@ -405,6 +492,44 @@ class GalvoScannerController(ImConWidgetController):
             self.__logger.error(f"Error setting park config for {scannerName}: {e}")
             return {"error": str(e)}
 
+    @APIExport()
+    def getFlimLabsConfig(self) -> Dict[str, Any]:
+        """
+        Return the persisted FLIM LABS bridge settings from the setup file.
+
+        Returns an empty dict when nothing has been saved yet.
+
+        Example:
+            GET /api/GalvoScannerController/getFlimLabsConfig
+        """
+        cfg = getattr(self._setupInfo, 'flimLabs', None)
+        return cfg if isinstance(cfg, dict) else {}
+
+    @APIExport(requestType="POST")
+    def setFlimLabsConfig(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Persist FLIM LABS bridge settings into the setup configuration file.
+
+        The dict is stored as-is under the top-level ``flimLabs`` key and
+        survives a restart. The frontend loads it on mount via
+        getFlimLabsConfig.
+
+        Example:
+            POST /api/GalvoScannerController/setFlimLabsConfig
+            body: {"host": "192.168.2.100", "frequencyMhz": 40, ...}
+            (FastAPI maps the single dict parameter to the raw JSON body)
+        """
+        try:
+            self._setupInfo.flimLabs = dict(config or {})
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            mOptions, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(mOptions, self._setupInfo)
+            self.__logger.info("FLIM LABS bridge settings saved to setup file")
+            return {"status": "saved", "config": self._setupInfo.flimLabs}
+        except Exception as e:
+            self.__logger.error(f"Failed to save FLIM LABS settings: {e}")
+            return {"error": str(e)}
+
     @APIExport(runOnUIThread=True)
     def parkGalvo(self, scannerName: Optional[str] = None,
                   timeout: int = 1) -> Dict[str, Any]:
@@ -423,7 +548,11 @@ class GalvoScannerController(ImConWidgetController):
             scanner = self._master.galvoScannersManager[scannerName]
             result = scanner.park(timeout=timeout)
             self.__logger.info(f"Parked {scannerName}")
-            return result
+            # The ESP32 answers with a LIST (e.g. [{'return': 1, 'qid': 51}]);
+            # returning it raw fails FastAPI's Dict[str, Any] response model
+            # with a 500 before the caller ever sees it.
+            return {"status": "parked", "scannerName": scannerName,
+                    "result": result}
         except Exception as e:
             self.__logger.error(f"Error parking {scannerName}: {e}")
             return {"error": str(e)}

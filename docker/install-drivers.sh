@@ -32,6 +32,28 @@ rm -f "MVS-3.0.1_${cpu}_20241128.deb"
 mkdir -p /opt/MVS/bin/fonts
 rm -rf /opt/MVS/doc
 
+# Install the Toupcam (ToupTek) camera driver
+cd /tmp
+case "$TARGETPLATFORM" in
+"linux/arm64")
+  # base image is glibc (Debian trixie-slim), not musl
+  toupcam_zip_path="linux/arm64/glibc/libtoupcam.so"
+  ;;
+"linux/amd64")
+  toupcam_zip_path="linux/x64/libtoupcam.so"
+  ;;
+*)
+  echo "Unknown target platform $TARGETPLATFORM!"
+  exit 1
+  ;;
+esac
+wget https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitch-master/toupcamsdk.20260808.zip
+unzip -q toupcamsdk.20260808.zip "$toupcam_zip_path" -d toupcamsdk
+cp "toupcamsdk/$toupcam_zip_path" /usr/local/lib/libtoupcam.so
+chmod 755 /usr/local/lib/libtoupcam.so
+ldconfig
+rm -rf toupcamsdk toupcamsdk.20260808.zip
+
 # Install the Daheng camera driver
 
 cd /tmp
@@ -80,9 +102,8 @@ if [ "$TARGETPLATFORM" = "linux/arm64" ]; then
   rm VimbaX_Setup-2025-1-Linux_ARM64.tar.gz
   cd /opt/VimbaX/cti
   ./Install_GenTL_Path.sh
-  # Install VmbPy using UV pip
-  uv pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl
-  export GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
+  # Note(ethanjli): VmbPy is installed by uv via the pyproject.toml file, so we don't do a
+  # `uv pip install` for it here!
 fi
 rm -rf /opt/VimbaX/doc
 

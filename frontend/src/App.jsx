@@ -75,6 +75,8 @@ import {
   setNotification,
 } from "./state/slices/NotificationSlice.js";
 import { getThemeState } from "./state/slices/ThemeSlice.js";
+import { enableApp } from "./state/slices/appManagerSlice.js";
+import { getDeepLinkApp } from "./utils/appDeepLink.js";
 import { SnackbarProvider, useSnackbar, enqueueSnackbar } from "notistack";
 import useBackendControllerCapabilities from "./hooks/useBackendControllerCapabilities";
 import apiPositionerControllerGetHomingStatus from "./backendapi/apiPositionerControllerGetHomingStatus";
@@ -232,6 +234,17 @@ function App() {
     selectedPlugin,
     setSelectedPlugin,
   });
+
+  // QR-code deep link: "?app=holo" opens that app and pins it into the drawer
+  // (the appManager slice is persisted, so it stays there after the link is
+  // gone). Runs once on mount — after that the user is in charge of navigation.
+  useEffect(() => {
+    const app = getDeepLinkApp();
+    if (!app) return;
+    dispatch(enableApp(app.id));
+    setSelectedPlugin(app.pluginId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

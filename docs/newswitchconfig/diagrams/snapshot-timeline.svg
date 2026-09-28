@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 560" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- CONFIG-MODEL.md §9 — "which state was the system in at time t", answered by
+       one full snapshot plus the JSON-Patch stream the agent already emits. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#ea580c"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1020" height="560" fill="#ffffff"/>
+
+  <text x="510" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">state_at(t) — one snapshot, then the patches that already exist</text>
+  <text x="510" y="54" text-anchor="middle" font-size="12.5" fill="#64748b">the agent publishes a JSON-Patch with a revision on every @state write; persisting that stream is the whole history mechanism</text>
+
+  <!-- timeline -->
+  <line x1="70" y1="196" x2="960" y2="196" stroke="#334155" stroke-width="2"/>
+  <path d="M950 196 L964 196" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <text x="960" y="222" text-anchor="end" font-size="12" fill="#64748b">t</text>
+
+  <!-- t0 full snapshot -->
+  <circle cx="110" cy="196" r="9" fill="#ea580c"/>
+  <rect x="34" y="82" width="176" height="86" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.7"/>
+  <text x="122" y="104" text-anchor="middle" font-size="13" font-weight="700" fill="#7c2d12">snapshot t₀</text>
+  <text x="122" y="124" text-anchor="middle" font-size="11.5" fill="#334155">full SystemSnapshot</text>
+  <text x="122" y="141" text-anchor="middle" font-size="11.5" fill="#334155">config hashes + every</text>
+  <text x="122" y="158" text-anchor="middle" font-size="11.5" fill="#334155">state value + rev 0</text>
+  <line x1="110" y1="168" x2="110" y2="187" stroke="#ea580c" stroke-width="1.5"/>
+
+  <!-- patches -->
+  <g font-size="11" fill="#334155">
+    <circle cx="246" cy="196" r="5.5" fill="#2563eb"/>
+    <line x1="246" y1="196" x2="246" y2="246" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="246" y="264" text-anchor="middle">rev 1</text>
+    <text x="246" y="280" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10">stage.z 0→120</text>
+
+    <circle cx="362" cy="196" r="5.5" fill="#2563eb"/>
+    <line x1="362" y1="196" x2="362" y2="246" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="362" y="264" text-anchor="middle">rev 2</text>
+    <text x="362" y="280" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10">laser488.on</text>
+
+    <circle cx="478" cy="196" r="7" fill="#9333ea"/>
+    <line x1="478" y1="196" x2="478" y2="246" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="478" y="264" text-anchor="middle" font-weight="700" fill="#581c87">rev 3</text>
+    <text x="478" y="280" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#581c87">turret 1→2</text>
+    <text x="478" y="296" text-anchor="middle" font-size="10" font-style="italic" fill="#7e22ce">path_hash changes</text>
+
+    <circle cx="594" cy="196" r="5.5" fill="#2563eb"/>
+    <line x1="594" y1="196" x2="594" y2="246" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="594" y="264" text-anchor="middle">rev 4</text>
+    <text x="594" y="280" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10">exposure 20→50</text>
+
+    <circle cx="742" cy="196" r="5.5" fill="#2563eb"/>
+    <line x1="742" y1="196" x2="742" y2="246" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="742" y="264" text-anchor="middle">rev 5</text>
+    <text x="742" y="280" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10">calibration added</text>
+
+    <circle cx="866" cy="196" r="5.5" fill="#2563eb"/>
+    <line x1="866" y1="196" x2="866" y2="246" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="866" y="264" text-anchor="middle">rev 6</text>
+    <text x="866" y="280" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10">stage.x 0→900</text>
+  </g>
+
+  <!-- checkpoint at variant change -->
+  <rect x="404" y="82" width="176" height="86" rx="9" fill="#faf5ff" stroke="#9333ea" stroke-width="1.7"/>
+  <text x="492" y="104" text-anchor="middle" font-size="13" font-weight="700" fill="#581c87">snapshot t₃</text>
+  <text x="492" y="124" text-anchor="middle" font-size="11.5" fill="#334155">a new full snapshot is</text>
+  <text x="492" y="141" text-anchor="middle" font-size="11.5" fill="#334155">forced whenever path_hash</text>
+  <text x="492" y="158" text-anchor="middle" font-size="11.5" fill="#334155">changes — the checkpoint rule</text>
+  <line x1="478" y1="168" x2="478" y2="187" stroke="#9333ea" stroke-width="1.5"/>
+
+  <!-- frames -->
+  <g>
+    <rect x="220" y="118" width="150" height="50" rx="7" fill="#eff6ff" stroke="#2563eb" stroke-width="1.3"/>
+    <text x="295" y="138" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e3a8a">frame 0001</text>
+    <text x="295" y="156" text-anchor="middle" font-size="10.5" font-family="ui-monospace, monospace" fill="#334155">{snap: t₀, rev: 2, x, y, t}</text>
+    <line x1="295" y1="168" x2="300" y2="187" stroke="#2563eb" stroke-width="1.2"/>
+
+    <rect x="620" y="118" width="150" height="50" rx="7" fill="#eff6ff" stroke="#2563eb" stroke-width="1.3"/>
+    <text x="695" y="138" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e3a8a">frame 0002</text>
+    <text x="695" y="156" text-anchor="middle" font-size="10.5" font-family="ui-monospace, monospace" fill="#334155">{snap: t₃, rev: 4, x, y, t}</text>
+    <line x1="695" y1="168" x2="660" y2="187" stroke="#2563eb" stroke-width="1.2"/>
+  </g>
+
+  <text x="510" y="330" text-anchor="middle" font-size="12.5" font-style="italic" fill="#475569">A frame stores ~5 numbers, not a copy of the instrument. The snapshot it names is written once per change, not once per frame.</text>
+
+  <!-- files -->
+  <rect x="34" y="356" width="300" height="112" rx="10" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+  <text x="54" y="380" font-size="13" font-weight="700" fill="#0f172a">runtime/snapshots.jsonl</text>
+  <text x="54" y="400" font-size="11.5" fill="#334155">append-only, one full SystemSnapshot</text>
+  <text x="54" y="417" font-size="11.5" fill="#334155">per line. Written at boot, at every</text>
+  <text x="54" y="434" font-size="11.5" fill="#334155">path_hash change, at every acquisition</text>
+  <text x="54" y="451" font-size="11.5" fill="#334155">start, and on a periodic checkpoint.</text>
+
+  <rect x="352" y="356" width="300" height="112" rx="10" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+  <text x="372" y="380" font-size="13" font-weight="700" fill="#0f172a">runtime/patches.jsonl</text>
+  <text x="372" y="400" font-size="11.5" fill="#334155">the agent's existing JSON-Patch stream,</text>
+  <text x="372" y="417" font-size="11.5" fill="#334155">persisted: {ts, state, rev, patch}.</text>
+  <text x="372" y="434" font-size="11.5" fill="#334155">Already produced for the browser —</text>
+  <text x="372" y="451" font-size="11.5" fill="#334155">this costs a writer, not a design.</text>
+
+  <rect x="670" y="356" width="316" height="112" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.6"/>
+  <text x="690" y="380" font-size="13" font-weight="700" fill="#14532d">state_at(t)</text>
+  <text x="690" y="400" font-size="11.5" fill="#334155">last snapshot with taken_at ≤ t, then</text>
+  <text x="690" y="417" font-size="11.5" fill="#334155">replay patches up to t. Deterministic,</text>
+  <text x="690" y="434" font-size="11.5" fill="#334155">exact, and it answers the question for</text>
+  <text x="690" y="451" font-size="11.5" fill="#334155">any past instant, not just saved frames.</text>
+
+  <path d="M334 412 L350 412" stroke="#475569" stroke-width="1.4" marker-end="url(#a)"/>
+  <path d="M652 412 L668 412" stroke="#475569" stroke-width="1.4" marker-end="url(#a)"/>
+
+  <text x="510" y="504" text-anchor="middle" font-size="12" fill="#334155">A dataset ships a <tspan font-family="ui-monospace, monospace" font-weight="700">snapshots.jsonl</tspan> trimmed to the snapshots its frames reference. It is self-contained: no server, no database, no live instrument needed to read it back.</text>
+  <text x="510" y="528" text-anchor="middle" font-size="12" font-style="italic" fill="#64748b">This is the layer Squid solves with one <tspan font-family="ui-monospace, monospace">acquisition_channels.yaml</tspan> per experiment — same idea, resolved to an instant instead of a run.</text>
+</svg>

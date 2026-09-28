@@ -466,6 +466,9 @@ export const APP_REGISTRY = {
       "phase",
       "inline",
       "reconstruction",
+      // Short aliases used by the printed QR-code deep links (?app=holo)
+      "holo",
+      "holobox",
     ],
     pluginId: "HoloController",
   },

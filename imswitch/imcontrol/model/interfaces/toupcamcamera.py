@@ -51,7 +51,9 @@ class CameraToupcam:
     """
 
     def __init__(self, cameraNo=None, exposure_time=100, gain=0, frame_rate=-1,
-                 blacklevel=0, isRGB=False, binning=1, flipImage=(False, False)):
+                 blacklevel=0, isRGB=False, binning=1, flipImage=(False, False),
+                 heat=True, lowNoise=True, conversionGain="HCG",
+                 blacklevelAutoAdjust=None):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -69,6 +71,22 @@ class CameraToupcam:
         self.downsamplepreview = 1
 
         self.blacklevel = blacklevel
+        # Low-noise / long-exposure configuration. Each is applied only if the
+        # camera advertises the corresponding capability flag; pass None to
+        # leave the camera's own default alone.
+        #   heat            -- window heater, keeps a cooled camera from
+        #                      fogging up during long exposures (True = max level)
+        #   lowNoise        -- slower readout, higher SNR
+        #   conversionGain  -- "LCG" / "HCG" / "HDR"; HCG gives the lower read
+        #                      noise (at reduced full-well), which is what you
+        #                      want for faint, long-exposure signal
+        # blacklevelAutoAdjust re-derives the offset from the optical-black
+        # pixels; it is switched off automatically whenever a manual black
+        # level is set (see set_blacklevel).
+        self.heat = heat
+        self.lowNoise = lowNoise
+        self.conversionGain = conversionGain
+        self.blacklevelAutoAdjust = blacklevelAutoAdjust
         self.exposure_time = exposure_time  # ms (UI convention, like CameraHIK)
         self.gain = gain
         self.frame_rate = frame_rate
@@ -120,6 +138,18 @@ class CameraToupcam:
             # set temperature/fan/TEC state if supported, otherwise ignore
             self.set_temperature(-10)  # °C
             self.set_fan_speed(True)
+            # Low-noise long-exposure configuration. Applied before the stream
+            # starts because conversion gain and low-noise mode change the
+            # sensor readout, which the SDK only picks up between streams.
+            if conversionGain is not None:
+                self.set_conversion_gain(conversionGain)
+            if lowNoise is not None:
+                self.set_low_noise(lowNoise)
+            if heat is not None:
+                self.set_heat(heat)
+            if blacklevelAutoAdjust is not None:
+                self.set_blacklevel_autoadjust(blacklevelAutoAdjust)
+            self._logLowNoiseState()
 
         except Exception as e:
             self.__logger.warning(f"Applying initial camera settings failed: {e}")
@@ -153,6 +183,12 @@ class CameraToupcam:
         self._hasSoftwareTrigger = bool(flag & toupcam.TOUPCAM_FLAG_TRIGGER_SOFTWARE)
         self._hasExternalTrigger = bool(flag & toupcam.TOUPCAM_FLAG_TRIGGER_EXTERNAL)
         self._isMonoSensor = bool(flag & toupcam.TOUPCAM_FLAG_MONO)
+        # Long-exposure / low-noise capabilities.
+        self._hasHeat = bool(flag & toupcam.TOUPCAM_FLAG_HEAT)
+        self._hasLowNoise = bool(flag & toupcam.TOUPCAM_FLAG_LOW_NOISE)
+        self._hasCGHDR = bool(flag & toupcam.TOUPCAM_FLAG_CGHDR)
+        # TOUPCAM_FLAG_CG = LCG/HCG, TOUPCAM_FLAG_CGHDR adds an HDR step.
+        self._hasCG = bool(flag & toupcam.TOUPCAM_FLAG_CG) or self._hasCGHDR
         highbitFlags = (toupcam.TOUPCAM_FLAG_RAW10 | toupcam.TOUPCAM_FLAG_RAW12
                         | toupcam.TOUPCAM_FLAG_RAW14 | toupcam.TOUPCAM_FLAG_RAW16)
         self._hasHighBitDepth = bool(flag & highbitFlags)
@@ -177,6 +213,15 @@ class CameraToupcam:
             self._maxBitDepth = int(self.hcam.MaxBitDepth())
         except Exception:
             self._maxBitDepth = 8
+        # Heater levels are model-specific; TOUPCAM_OPTION_HEAT_MAX reports the
+        # top of the range, and heat=True means "that level".
+        self._heatMax = 0
+        if self._hasHeat:
+            try:
+                self._heatMax = int(self.hcam.get_Option(toupcam.TOUPCAM_OPTION_HEAT_MAX))
+            except Exception:
+                self.__logger.debug("get HEAT_MAX failed, assuming on/off heater")
+                self._heatMax = 1
 
         # select the largest available resolution (full sensor)
         nRes = dev.model.preview
@@ -270,7 +315,9 @@ class CameraToupcam:
             f"Opened {self.deviceName}: {width}x{height}, "
             f"{'RGB24' if self.isRGB else f'RAW{self._bits}'}, "
             f"TEC={self._hasTEC}, fan={self._hasFan}, blacklevel={self._hasBlacklevel}, "
-            f"swTrigger={self._hasSoftwareTrigger}, extTrigger={self._hasExternalTrigger}"
+            f"swTrigger={self._hasSoftwareTrigger}, extTrigger={self._hasExternalTrigger}, "
+            f"heat={self._hasHeat}, lowNoise={self._hasLowNoise}, "
+            f"conversionGain={self._hasCG}{' (+HDR)' if self._hasCGHDR else ''}"
         )
         self.__logger.info(
             f"{self.deviceName} ranges: sensor bit depth={self._maxBitDepth} "
@@ -309,6 +356,17 @@ class CameraToupcam:
                 self.setBinning(self.binning)
             self.set_frame_rate(self.frame_rate)
             self.setTriggerSource(self.trigger_source)
+            # A reopened handle comes up with the camera's own defaults, so the
+            # low-noise configuration has to be pushed again or a long
+            # acquisition silently continues at LCG / normal-noise mode.
+            if self.conversionGain is not None:
+                self.set_conversion_gain(self.conversionGain)
+            if self.lowNoise is not None:
+                self.set_low_noise(self.lowNoise)
+            if self.heat is not None:
+                self.set_heat(self.heat)
+            if self.blacklevelAutoAdjust is not None:
+                self.set_blacklevel_autoadjust(self.blacklevelAutoAdjust)
         except Exception as e:
             self.__logger.warning(f"Re-applying settings after reconnect failed: {e}")
 
@@ -722,15 +780,237 @@ class CameraToupcam:
             self.__logger.error(f"Get native gain failed: {e}")
             return (None, None, None)
 
-    def set_blacklevel(self, blacklevel):
-        if not self._hasBlacklevel:
-            self.__logger.debug("Camera does not support black level")
-            return
+    def blacklevel_max(self) -> int:
+        """Largest black level accepted at the current output bit depth.
+
+        The SDK's range is per bit depth (31 at 8 bit, 31*64 at 14 bit,
+        31*256 at 16 bit, ...), because the value is expressed in ADU of the
+        data actually being delivered. Writing a larger number is not an error
+        -- the camera stores it and reads it back unchanged -- but the offset
+        in the image is clamped, which looks exactly like "the setting does
+        nothing".
+        """
+        bits = self._maxBitDepth if self._bits > 8 else 8
+        return {
+            8: toupcam.TOUPCAM_BLACKLEVEL8_MAX,
+            10: toupcam.TOUPCAM_BLACKLEVEL10_MAX,
+            11: toupcam.TOUPCAM_BLACKLEVEL11_MAX,
+            12: toupcam.TOUPCAM_BLACKLEVEL12_MAX,
+            14: toupcam.TOUPCAM_BLACKLEVEL14_MAX,
+            16: toupcam.TOUPCAM_BLACKLEVEL16_MAX,
+        }.get(int(bits), toupcam.TOUPCAM_BLACKLEVEL16_MAX)
+
+    def set_blacklevel_autoadjust(self, enable):
+        """Enable/disable the optical-black based automatic black level.
+
+        While this is on the camera keeps re-deriving the offset from its OB
+        pixels, so a manually written black level is overwritten behind your
+        back -- the read-back still returns what you wrote, but the pixel
+        values do not move. The SDK documents it as the knob to turn off
+        precisely for long exposures, where OB leakage skews the adjustment.
+        """
         try:
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BLACKLEVEL, int(blacklevel))
-            self.blacklevel = blacklevel
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BLACKLEVEL_AUTOADJUST,
+                                 1 if enable else 0)
+            self.blacklevelAutoAdjust = bool(enable)
+            return True
+        except toupcam.HRESULTException as ex:
+            # Not every model exposes it; that is not an error, it just means
+            # there is no auto-adjust to fight with.
+            self.__logger.debug(
+                f"Black level auto-adjust not settable hr=0x{ex.hr & 0xffffffff:x}")
+            return False
+
+    def get_blacklevel_autoadjust(self):
+        """Current auto-adjust state, or None if the model has no such option."""
+        try:
+            return bool(self.hcam.get_Option(
+                toupcam.TOUPCAM_OPTION_BLACKLEVEL_AUTOADJUST))
+        except Exception:
+            return None
+
+    def set_blacklevel(self, blacklevel):
+        """Set the black level (offset) in ADU of the current bit depth.
+
+        Clamps to the bit-depth-dependent maximum and turns the OB auto-adjust
+        off first -- both are silent failure modes: the value is accepted and
+        reads back unchanged while the image offset does not move.
+        """
+        if not self._hasBlacklevel:
+            self.__logger.warning(
+                "Camera does not advertise TOUPCAM_FLAG_BLACKLEVEL; "
+                "ignoring black level request")
+            return
+
+        requested = int(blacklevel)
+        maximum = self.blacklevel_max()
+        value = max(toupcam.TOUPCAM_BLACKLEVEL_MIN, min(requested, maximum))
+        if value != requested:
+            self.__logger.warning(
+                f"Black level {requested} is outside 0..{maximum} for "
+                f"{self._maxBitDepth if self._bits > 8 else 8}-bit output; "
+                f"using {value}. (The camera accepts and reads back the larger "
+                f"number, but the offset saturates at {maximum}.)"
+            )
+
+        # Manual black level and the OB auto-adjust are mutually exclusive in
+        # practice -- leave auto-adjust on and it just overwrites this.
+        if self.get_blacklevel_autoadjust():
+            if self.set_blacklevel_autoadjust(False):
+                self.__logger.info(
+                    "Disabled black level auto-adjust so the manual black "
+                    "level takes effect")
+
+        try:
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BLACKLEVEL, value)
+            self.blacklevel = value
         except toupcam.HRESULTException as ex:
             self.__logger.error(f"Set blacklevel failed hr=0x{ex.hr & 0xffffffff:x}")
+            return
+
+        # Read back: a mismatch here means the camera silently substituted a
+        # value, which is worth seeing in the log rather than guessing at from
+        # the image.
+        try:
+            actual = int(self.hcam.get_Option(toupcam.TOUPCAM_OPTION_BLACKLEVEL))
+            if actual != value:
+                self.__logger.warning(
+                    f"Black level written as {value} but reads back {actual}")
+            self.blacklevel = actual
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------------------
+    # Low-noise / long-exposure configuration
+    # ---------------------------------------------------------------------
+    def set_conversion_gain(self, mode):
+        """Select the sensor conversion gain: "LCG", "HCG" or "HDR"/"MCG".
+
+        HCG is the low-read-noise mode (smaller full well) and is what you
+        want for faint long-exposure signal; LCG keeps the full well for bright
+        scenes. Accepts the names or the raw SDK integers 0/1/2.
+        """
+        if not self._hasCG:
+            self.__logger.debug("Camera does not support conversion gain modes")
+            return
+        names = {"lcg": 0, "hcg": 1, "hdr": 2, "mcg": 2}
+        if isinstance(mode, str):
+            value = names.get(mode.strip().lower())
+            if value is None:
+                self.__logger.warning(f"Unknown conversion gain '{mode}'")
+                return
+        else:
+            value = int(mode)
+        if value == 2 and not self._hasCGHDR:
+            self.__logger.warning(
+                "Camera has no HDR/MCG conversion gain; keeping HCG")
+            value = 1
+
+        # Conversion gain switches the sensor's readout chain; do it while the
+        # stream is down so the SDK reconfigures cleanly.
+        wasStreaming = self.is_streaming
+        if wasStreaming:
+            self.suspend_live()
+        try:
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_CG, value)
+            self.conversionGain = {0: "LCG", 1: "HCG", 2: "HDR"}[value]
+            self.__logger.info(f"Conversion gain set to {self.conversionGain}")
+        except toupcam.HRESULTException as ex:
+            self.__logger.error(
+                f"Set conversion gain failed hr=0x{ex.hr & 0xffffffff:x}")
+        finally:
+            if wasStreaming:
+                self.start_live()
+
+    def get_conversion_gain(self):
+        """Current conversion gain as "LCG"/"HCG"/"HDR", or None."""
+        if not self._hasCG:
+            return None
+        try:
+            return {0: "LCG", 1: "HCG", 2: "HDR"}.get(
+                int(self.hcam.get_Option(toupcam.TOUPCAM_OPTION_CG)))
+        except Exception:
+            return None
+
+    def set_low_noise(self, enable):
+        """Enable the sensor's low-noise readout (higher SNR, lower fps)."""
+        if not self._hasLowNoise:
+            self.__logger.debug("Camera does not support low noise mode")
+            return
+        wasStreaming = self.is_streaming
+        if wasStreaming:
+            self.suspend_live()
+        try:
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_LOW_NOISE,
+                                 1 if enable else 0)
+            self.lowNoise = bool(enable)
+            self.__logger.info(f"Low noise mode {'on' if enable else 'off'}")
+        except toupcam.HRESULTException as ex:
+            self.__logger.error(
+                f"Set low noise mode failed hr=0x{ex.hr & 0xffffffff:x}")
+        finally:
+            if wasStreaming:
+                self.start_live()
+
+    def get_low_noise(self):
+        """Current low-noise state, or None if unsupported."""
+        if not self._hasLowNoise:
+            return None
+        try:
+            return bool(self.hcam.get_Option(toupcam.TOUPCAM_OPTION_LOW_NOISE))
+        except Exception:
+            return None
+
+    def set_heat(self, level):
+        """Window heater level, ``True`` meaning the camera's maximum.
+
+        The heater keeps the sensor window from fogging up on a cooled camera
+        -- without it, condensation during a long cooled acquisition shows up
+        as drifting blobs in the image. Levels are model-specific and clamped
+        to TOUPCAM_OPTION_HEAT_MAX.
+        """
+        if not self._hasHeat:
+            self.__logger.debug("Camera does not support the window heater")
+            return
+        if isinstance(level, bool):
+            value = self._heatMax if level else 0
+        else:
+            value = max(0, min(int(level), self._heatMax))
+        try:
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_HEAT, value)
+            self.heat = value
+            self.__logger.info(f"Window heater set to {value}/{self._heatMax}")
+        except toupcam.HRESULTException as ex:
+            self.__logger.error(f"Set heat failed hr=0x{ex.hr & 0xffffffff:x}")
+
+    def get_heat(self):
+        """Current heater level, or None if unsupported."""
+        if not self._hasHeat:
+            return None
+        try:
+            return int(self.hcam.get_Option(toupcam.TOUPCAM_OPTION_HEAT))
+        except Exception:
+            return None
+
+    def _logLowNoiseState(self):
+        """Log what the camera actually ended up with, capability by capability.
+
+        Worth one line at startup: every one of these is silently ignored when
+        the model does not support it, so the log is the only way to tell
+        "HCG is on" from "this camera has no HCG".
+        """
+        parts = []
+        parts.append(f"conversionGain={self.get_conversion_gain() or 'n/a'}")
+        lowNoise = self.get_low_noise()
+        parts.append(f"lowNoise={'n/a' if lowNoise is None else lowNoise}")
+        heat = self.get_heat()
+        parts.append(
+            "heat=n/a" if heat is None else f"heat={heat}/{self._heatMax}")
+        auto = self.get_blacklevel_autoadjust()
+        parts.append(f"blacklevelAutoAdjust={'n/a' if auto is None else auto}")
+        if self._hasBlacklevel:
+            parts.append(f"blacklevel={self.blacklevel}/{self.blacklevel_max()}")
+        self.__logger.info(f"{self.deviceName} low-noise config: {', '.join(parts)}")
 
     def set_frame_rate(self, frame_rate):
         """Limit fps via TOUPCAM_OPTION_FRAMERATE; <= 0 means unlimited."""
@@ -916,6 +1196,14 @@ class CameraToupcam:
             self.set_fan_speed(property_value)
         elif property_name == "binning":
             self.setBinning(property_value)
+        elif property_name in ("conversion_gain", "conversionGain"):
+            self.set_conversion_gain(property_value)
+        elif property_name in ("low_noise", "lowNoise"):
+            self.set_low_noise(property_value)
+        elif property_name == "heat":
+            self.set_heat(property_value)
+        elif property_name in ("blacklevel_autoadjust", "blacklevelAutoAdjust"):
+            self.set_blacklevel_autoadjust(property_value)
         else:
             self.__logger.warning(f"Property {property_name} does not exist")
             return False
@@ -957,6 +1245,16 @@ class CameraToupcam:
             if self.isRGB:
                 return "rgb24"
             return "mono16" if self._bits > 8 else "mono8"
+        elif property_name in ("conversion_gain", "conversionGain"):
+            return self.get_conversion_gain()
+        elif property_name in ("low_noise", "lowNoise"):
+            return self.get_low_noise()
+        elif property_name == "heat":
+            return self.get_heat()
+        elif property_name in ("blacklevel_autoadjust", "blacklevelAutoAdjust"):
+            return self.get_blacklevel_autoadjust()
+        elif property_name == "blacklevel_max":
+            return self.blacklevel_max() if self._hasBlacklevel else None
         else:
             self.__logger.warning(f"Property {property_name} does not exist")
             return None
@@ -1000,6 +1298,24 @@ class CameraToupcam:
             temp = self.get_temperature()
             if temp is not None:
                 params["temperature_c"] = temp
+        except Exception:
+            pass
+        # Low-noise configuration, read back from the device rather than from
+        # our cached request -- these are the values that explain a noise floor
+        # or a black level that will not move.
+        try:
+            params["supports_heat"] = self._hasHeat
+            params["supports_low_noise"] = self._hasLowNoise
+            params["supports_conversion_gain"] = self._hasCG
+            params["supports_blacklevel"] = self._hasBlacklevel
+            params["conversion_gain"] = self.get_conversion_gain()
+            params["low_noise"] = self.get_low_noise()
+            params["heat"] = self.get_heat()
+            params["heat_max"] = self._heatMax
+            params["blacklevel_autoadjust"] = self.get_blacklevel_autoadjust()
+            if self._hasBlacklevel:
+                params["blacklevel"] = self.getPropertyValue("blacklevel")
+                params["blacklevel_max"] = self.blacklevel_max()
         except Exception:
             pass
         return params

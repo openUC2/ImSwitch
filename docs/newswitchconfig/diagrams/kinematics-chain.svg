@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 660" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- OPTIKIT-INTEGRATION.md §5 — the DOF end to end: one name joins the mesh
+       subtree, the optical variable, the motor axis and the firmware object.
+       Optikit side = WP-192 (part2s); newswitch side = bindings.yml drives:. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#ea580c"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1020" height="660" fill="#ffffff"/>
+
+  <text x="510" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">One name, end to end: <tspan font-family="ui-monospace, monospace">objective.dz</tspan></text>
+  <text x="510" y="54" text-anchor="middle" font-size="12.5" fill="#64748b">the DOF name is the contract — mesh subtree, CAD parameter, axis-map entry, motor axis and viewer animation all resolve through it</text>
+
+  <!-- column labels -->
+  <text x="196" y="92" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1e3a8a">optikit (WP-192)</text>
+  <text x="510" y="92" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">the shared variable</text>
+  <text x="824" y="92" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">newswitch</text>
+
+  <!-- optikit column -->
+  <rect x="48" y="106" width="296" height="112" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="66" y="130" font-size="12.5" font-weight="700" fill="#0f172a">template · kinematics:</text>
+  <text x="66" y="152" font-size="10.5" font-family="ui-monospace, monospace" fill="#334155">- dof: dz</text>
+  <text x="66" y="168" font-size="10.5" font-family="ui-monospace, monospace" fill="#334155">  nodes: [SUB - 3 - CARRIAGE]</text>
+  <text x="66" y="184" font-size="10.5" font-family="ui-monospace, monospace" fill="#334155">  motion: translation, axis: +z</text>
+  <text x="66" y="206" font-size="10.5" font-style="italic" fill="#475569">authored in the part importer's "moving parts" step</text>
+
+  <rect x="48" y="238" width="296" height="96" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="66" y="262" font-size="12.5" font-weight="700" fill="#0f172a">component · dof:</text>
+  <text x="66" y="284" font-size="10.5" font-family="ui-monospace, monospace" fill="#334155">name: dz, range: [-7.5, 7.5]</text>
+  <text x="66" y="300" font-size="10.5" font-family="ui-monospace, monospace" fill="#334155">resolution: 0.05, unit: mm</text>
+  <text x="66" y="316" font-size="10.5" font-family="ui-monospace, monospace" fill="#334155">actuatable: true, actuation: firmware</text>
+
+  <rect x="48" y="354" width="296" height="88" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="66" y="378" font-size="12.5" font-weight="700" fill="#0f172a">module · electronics.axis-map</text>
+  <text x="66" y="400" font-size="10.5" font-family="ui-monospace, monospace" fill="#334155">- dof: dz</text>
+  <text x="66" y="416" font-size="10.5" font-family="ui-monospace, monospace" fill="#334155">  can-object: 0x6062</text>
+  <text x="66" y="434" font-size="10.5" font-style="italic" fill="#475569">existing WP-42 machinery, unchanged</text>
+
+  <!-- shared variable -->
+  <rect x="392" y="238" width="236" height="96" rx="12" fill="#f8fafc" stroke="#334155" stroke-width="2"/>
+  <text x="510" y="266" text-anchor="middle" font-size="13.5" font-weight="700" fill="#0f172a">dof_values</text>
+  <text x="510" y="288" text-anchor="middle" font-size="11" font-family="ui-monospace, monospace" fill="#334155">"objective.dz": 1.85</text>
+  <text x="510" y="310" text-anchor="middle" font-size="10.5" fill="#475569">optikit instantiation spelling,</text>
+  <text x="510" y="324" text-anchor="middle" font-size="10.5" fill="#475569">newswitch reactive state — same map</text>
+
+  <!-- newswitch column -->
+  <rect x="676" y="106" width="296" height="100" rx="9" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.6"/>
+  <text x="694" y="130" font-size="12.5" font-weight="700" fill="#0f172a">bindings.yml · drives:</text>
+  <text x="694" y="152" font-size="10.5" font-family="ui-monospace, monospace" fill="#334155">stage.xyz:  drives: {Z: objective.dz}</text>
+  <text x="694" y="172" font-size="10.5" fill="#334155">axis limits checked against the DOF range</text>
+  <text x="694" y="188" font-size="10.5" fill="#334155">(E_RANGE_MISMATCH) · steps vs resolution</text>
+
+  <rect x="676" y="238" width="296" height="96" rx="9" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.6"/>
+  <text x="694" y="262" font-size="12.5" font-weight="700" fill="#0f172a">actuation decides the surface</text>
+  <text x="694" y="284" font-size="10.5" fill="#334155"><tspan font-family="ui-monospace, monospace">firmware</tspan> → motor axis bound, slider + actions</text>
+  <text x="694" y="302" font-size="10.5" fill="#334155"><tspan font-family="ui-monospace, monospace">manual</tspan> → "set the knob to 1.85" prompt</text>
+  <text x="694" y="320" font-size="10.5" fill="#334155"><tspan font-family="ui-monospace, monospace">optimizer</tspan> → written back by /v1/optimize</text>
+
+  <rect x="676" y="366" width="296" height="96" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6"/>
+  <text x="694" y="390" font-size="12.5" font-weight="700" fill="#7c2d12">viewer re-pose (no server call)</text>
+  <text x="694" y="412" font-size="10.5" fill="#334155">patch arrives → look up dz in the kinematics</text>
+  <text x="694" y="428" font-size="10.5" fill="#334155">table → translate node "SUB - 3 - CARRIAGE"</text>
+  <text x="694" y="444" font-size="10.5" fill="#334155">by 1.85 mm along F3 +z, under the part pose</text>
+
+  <!-- arrows into/out of the shared variable -->
+  <path d="M344 286 L390 286" stroke="#475569" stroke-width="1.6" marker-end="url(#a)"/>
+  <path d="M628 286 L674 286" stroke="#475569" stroke-width="1.6" marker-end="url(#a)"/>
+  <path d="M392 262 C 372 220, 366 180, 346 166" stroke="#2563eb" stroke-width="1.4" fill="none" marker-end="url(#ab2)"/>
+  <defs><marker id="ab2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2563eb"/></marker></defs>
+  <path d="M446 334 C 420 380, 400 392, 346 394" stroke="#2563eb" stroke-width="1.4" fill="none" marker-end="url(#ab2)"/>
+  <path d="M574 334 C 610 380, 630 400, 674 408" stroke="#ea580c" stroke-width="1.4" fill="none" marker-end="url(#ao)"/>
+
+  <!-- the round trip strip -->
+  <rect x="48" y="492" width="924" height="150" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.4"/>
+  <text x="70" y="518" font-size="13" font-weight="700" fill="#0f172a">The loop, both directions</text>
+
+  <g font-size="11.5" fill="#334155">
+    <text x="70" y="544"><tspan font-weight="700" fill="#166534">command →</tspan>  UI slider (or autofocus routine) → <tspan font-family="ui-monospace, monospace">move</tspan> action → bus → axis Z steps → position event → <tspan font-family="ui-monospace, monospace">dof_values["objective.dz"]</tspan> patch</text>
+    <text x="70" y="568"><tspan font-weight="700" fill="#c2410c">consequence →</tspan>  patch fans out: viewer re-poses the carriage · <tspan font-family="ui-monospace, monospace">path_hash</tspan> recomputes (quantised) · calibration lookup re-keys · snapshot records it</text>
+    <text x="70" y="592"><tspan font-weight="700" fill="#1d4ed8">optimizer →</tspan>  /v1/optimize proposes new <tspan font-family="ui-monospace, monospace">dof_values</tspan> → for <tspan font-family="ui-monospace, monospace">firmware</tspan> DOFs newswitch executes them; for <tspan font-family="ui-monospace, monospace">manual</tspan> ones it prints the knob settings</text>
+    <text x="70" y="622" font-style="italic" fill="#64748b">The same map that optikit writes as instantiation.dof_values is what newswitch holds as live state — no translation layer, one spelling (R1 for motion).</text>
+  </g>
+</svg>

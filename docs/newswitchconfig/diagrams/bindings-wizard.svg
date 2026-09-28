@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 600" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- OPTIKIT-INTEGRATION.md §4 — where bindings.yml is authored: the optikit
+       frontend's configurator, driven by newswitch's versioned driver manifest. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1020" height="600" fill="#ffffff"/>
+
+  <text x="510" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">The bindings wizard — authored in optikit, validated by newswitch</text>
+  <text x="510" y="54" text-anchor="middle" font-size="12.5" fill="#64748b">the ImSwitch configurator's four-step skeleton, retargeted at the versioned driver manifest</text>
+
+  <!-- the two contract inputs -->
+  <rect x="34" y="86" width="452" height="86" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="54" y="110" font-size="13" font-weight="700" fill="#1e3a8a">input 1 — the open design (L1)</text>
+  <text x="54" y="132" font-size="11.5" fill="#334155">components by category · declared DOFs (+ actuation, WP-192)</text>
+  <text x="54" y="150" font-size="11.5" fill="#334155">variants per selector · already open in the editor</text>
+
+  <rect x="534" y="86" width="452" height="86" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.6"/>
+  <text x="554" y="110" font-size="13" font-weight="700" fill="#14532d">input 2 — the driver manifest (versioned contract)</text>
+  <text x="554" y="132" font-size="11" font-family="ui-monospace, monospace" fill="#334155">GET /system/drivers → {contract: v1, drivers: {key:</text>
+  <text x="554" y="148" font-size="11" font-family="ui-monospace, monospace" fill="#334155">  {semver, verbs, roles, params: &lt;JSON Schema&gt;}}}</text>
+  <text x="554" y="166" font-size="10.5" font-style="italic" fill="#166534">live from a running newswitch, or a vendored snapshot offline</text>
+
+  <!-- the four steps -->
+  <g>
+    <rect x="34" y="212" width="220" height="132" rx="9" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+    <text x="144" y="236" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">1 · what needs a driver</text>
+    <text x="50" y="260" font-size="11" fill="#334155">walk the design: detectors,</text>
+    <text x="50" y="276" font-size="11" fill="#334155">sources, firmware-actuated</text>
+    <text x="50" y="292" font-size="11" fill="#334155">DOFs, selector devices —</text>
+    <text x="50" y="308" font-size="11" fill="#334155">each becomes a row needing</text>
+    <text x="50" y="324" font-size="11" fill="#334155">mounts / drives / selects</text>
+  </g>
+  <path d="M254 278 L276 278" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="278" y="212" width="220" height="132" rx="9" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+    <text x="388" y="236" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">2 · pick drivers</text>
+    <text x="294" y="260" font-size="11" fill="#334155">per row, drivers from the</text>
+    <text x="294" y="276" font-size="11" fill="#334155">manifest filtered by verb +</text>
+    <text x="294" y="292" font-size="11" fill="#334155">role (a turret row offers</text>
+    <text x="294" y="308" font-size="11" fill="#334155">selects-capable drivers only);</text>
+    <text x="294" y="324" font-size="11" fill="#334155">transports created here</text>
+  </g>
+  <path d="M498 278 L520 278" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="522" y="212" width="220" height="132" rx="9" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+    <text x="632" y="236" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">3 · typed params</text>
+    <text x="538" y="260" font-size="11" fill="#334155">form generated from each</text>
+    <text x="538" y="276" font-size="11" fill="#334155">driver's JSON Schema — no</text>
+    <text x="538" y="292" font-size="11" fill="#334155">hand-written UI per driver;</text>
+    <text x="538" y="308" font-size="11" fill="#334155">axis ↔ DOF and slot ↔ variant</text>
+    <text x="538" y="324" font-size="11" fill="#334155">tables filled from input 1</text>
+  </g>
+  <path d="M742 278 L764 278" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="766" y="212" width="220" height="132" rx="9" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.8"/>
+    <text x="876" y="236" text-anchor="middle" font-size="13" font-weight="700" fill="#14532d">4 · validate + emit</text>
+    <text x="782" y="260" font-size="11" fill="#334155">POST the draft to newswitch</text>
+    <text x="782" y="276" font-size="11" font-family="ui-monospace, monospace" fill="#334155">/system/validate</text>
+    <text x="782" y="292" font-size="11" fill="#334155">→ render the E_*/W_* list;</text>
+    <text x="782" y="308" font-size="11" fill="#334155">clean → download bindings.yml</text>
+    <text x="782" y="324" font-size="11" fill="#334155">or push it to the instrument</text>
+  </g>
+
+  <path d="M144 172 L144 210" stroke="#2563eb" stroke-width="1.5" marker-end="url(#a)"/>
+  <path d="M760 172 L400 210" stroke="#16a34a" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <!-- contract rules -->
+  <rect x="34" y="384" width="952" height="118" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.4"/>
+  <text x="56" y="410" font-size="13" font-weight="700" fill="#0f172a">The contract between the two repos, versioned like everything else</text>
+  <g font-size="11.5" fill="#334155">
+    <text x="56" y="434">· The manifest carries <tspan font-family="ui-monospace, monospace">contract: v1</tspan> + a semver per driver; <tspan font-family="ui-monospace, monospace">bindings.yml</tspan> may pin ranges (<tspan font-family="ui-monospace, monospace">driver: uc2.stage@^1</tspan>) — the same ref discipline as optikit module refs.</text>
+    <text x="56" y="458">· The wizard never invents a parameter: what it can offer IS the manifest (optikit's wizard rule, applied to newswitch's surface). A stale snapshot fails loudly at step 4.</text>
+    <text x="56" y="482">· Authoring lives in optikit's frontend; <tspan font-weight="700">authority stays with the newswitch loader</tspan> — the wizard's validation is a preview of the same rule set, never a second implementation.</text>
+  </g>
+
+  <rect x="34" y="522" width="952" height="52" rx="10" fill="#fefce8" stroke="#ca8a04" stroke-width="1.4"/>
+  <text x="56" y="544" font-size="12" font-weight="700" fill="#713f12">Starting point in the code</text>
+  <text x="56" y="562" font-size="11.5" fill="#334155">optikit-v2 <tspan font-family="ui-monospace, monospace">frontend/src/components/ImSwitchConfigWizard.tsx</tspan> — steps "Module Analysis · Controller Selection · Configuration Preview · Export" map 1:1 onto the four steps above.</text>
+</svg>

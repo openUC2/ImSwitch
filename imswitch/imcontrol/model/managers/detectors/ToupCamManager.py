@@ -7,7 +7,8 @@ from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberPara
 _HARDWARE_READABLE_PARAMS = (
     'exposure', 'gain', 'blacklevel', 'exposure_mode', 'frame_rate',
     'frame_number', 'image_width', 'image_height', 'trigger_source',
-    'temperature', 'pixel_format',
+    'temperature', 'pixel_format', 'conversion_gain', 'low_noise', 'heat',
+    'blacklevel_autoadjust',
 )
 
 
@@ -23,6 +24,19 @@ class ToupCamManager(DetectorManager):
     - ``toupcam`` -- dictionary of Toupcam camera properties
     - ``supportedBinnings`` -- list of selectable binning factors (default
       ``[1, 2, 3, 4]``); Toupcam applies these as averaged digital binning
+    - ``conversionGain`` -- ``"HCG"`` (default), ``"LCG"`` or ``"HDR"``. HCG is
+      the low-read-noise mode wanted for faint long-exposure signal; LCG keeps
+      the larger full well.
+    - ``lowNoise`` -- enable the sensor's low-noise readout (default ``True``):
+      higher SNR at a lower frame rate.
+    - ``heat`` -- window heater against condensation on a cooled sensor
+      (default ``True`` = the camera's maximum level; an integer picks a level).
+    - ``blacklevelAutoAdjust`` -- optical-black based automatic offset. Left at
+      the camera default unless set here, and turned off automatically whenever
+      a manual ``blacklevel`` is written (it would otherwise overwrite it).
+
+    Each of the four is applied only when the camera advertises the matching
+    capability flag, and is re-applied after a USB reconnect.
     """
 
     def __init__(self, detectorInfo, name, **_lowLevelManagers):
@@ -58,7 +72,21 @@ class ToupCamManager(DetectorManager):
             binning = detectorInfo.managerProperties['binning']
         except:
             binning = 1
-        self._camera = self._getToupcamObj(cameraId, isRGB, binning, flipImage)
+
+        # Low-noise / long-exposure configuration. Defaults are the low-noise
+        # long-exposure setup (HCG + low noise + window heater); each is a
+        # no-op on cameras that do not advertise the capability. Set any of
+        # them to null in the setup file to leave the camera's own default.
+        props = detectorInfo.managerProperties
+        conversionGain = props.get('conversionGain', 'HCG')
+        lowNoise = props.get('lowNoise', True)
+        heat = props.get('heat', True)
+        blacklevelAutoAdjust = props.get('blacklevelAutoAdjust', None)
+
+        self._camera = self._getToupcamObj(
+            cameraId, isRGB, binning, flipImage,
+            heat=heat, lowNoise=lowNoise, conversionGain=conversionGain,
+            blacklevelAutoAdjust=blacklevelAutoAdjust)
 
         for propertyName, propertyValue in detectorInfo.managerProperties['toupcam'].items():
             self._camera.setPropertyValue(propertyName, propertyValue)
@@ -91,6 +119,14 @@ class ToupCamManager(DetectorManager):
             gain_min, gain_max = hw_gain[1], hw_gain[2]
         except Exception:
             initial_gain = 0
+        blacklevel_max = None
+        initial_blacklevel = 0
+        try:
+            if getattr(self._camera, '_hasBlacklevel', False):
+                blacklevel_max = self._camera.blacklevel_max()
+                initial_blacklevel = self._camera.getPropertyValue('blacklevel') or 0
+        except Exception:
+            pass
 
         # Prepare parameters
         parameters = {
@@ -99,8 +135,12 @@ class ToupCamManager(DetectorManager):
                                                 valueMax=exposure_max),
             'gain': DetectorNumberParameter(group='Misc', value=initial_gain, valueUnits='arb.u.',
                                             editable=True, valueMin=gain_min, valueMax=gain_max),
-            'blacklevel': DetectorNumberParameter(group='Misc', value=0, valueUnits='arb.u.',
-                                            editable=True),
+            # The black level range is bit-depth dependent (31 at 8 bit, up to
+            # 31*256 at 16 bit); publishing the real maximum stops the UI from
+            # offering values the camera silently clamps.
+            'blacklevel': DetectorNumberParameter(group='Misc', value=initial_blacklevel,
+                                            valueUnits='ADU', editable=True,
+                                            valueMin=0, valueMax=blacklevel_max),
             'image_width': DetectorNumberParameter(group='Misc', value=fullShape[0], valueUnits='arb.u.',
                         editable=False),
             'image_height': DetectorNumberParameter(group='Misc', value=fullShape[1], valueUnits='arb.u.',
@@ -134,6 +174,31 @@ class ToupCamManager(DetectorManager):
                 group='Image format',
                 value='mono16' if getattr(self._camera, '_bits', 8) > 8 else 'mono8',
                 options=['mono8', 'mono16'], editable=True)
+
+        # Low-noise / long-exposure controls, only where the sensor has them.
+        if getattr(self._camera, '_hasCG', False):
+            cgOptions = ['LCG', 'HCG']
+            if getattr(self._camera, '_hasCGHDR', False):
+                cgOptions.append('HDR')
+            parameters['conversion_gain'] = DetectorListParameter(
+                group='Low noise',
+                value=self._camera.get_conversion_gain() or 'HCG',
+                options=cgOptions, editable=True)
+        if getattr(self._camera, '_hasLowNoise', False):
+            parameters['low_noise'] = DetectorBooleanParameter(
+                group='Low noise',
+                value=bool(self._camera.get_low_noise()), editable=True)
+        if getattr(self._camera, '_hasHeat', False):
+            parameters['heat'] = DetectorNumberParameter(
+                group='Low noise', value=self._camera.get_heat() or 0,
+                valueUnits='level', editable=True,
+                valueMin=0, valueMax=getattr(self._camera, '_heatMax', 1))
+        if getattr(self._camera, '_hasBlacklevel', False) and \
+                self._camera.get_blacklevel_autoadjust() is not None:
+            parameters['blacklevel_autoadjust'] = DetectorBooleanParameter(
+                group='Low noise',
+                value=bool(self._camera.get_blacklevel_autoadjust()),
+                editable=True)
 
         # TEC-cooled models get temperature control parameters
         if getattr(self._camera, '_hasTEC', False):
@@ -228,6 +293,14 @@ class ToupCamManager(DetectorManager):
                 ranges['gain'] = {'min': gainMin, 'max': gainMax, 'units': 'arb.u.'}
         except Exception as e:
             self.__logger.debug(f"Could not read gain range: {e}")
+        try:
+            if getattr(self._camera, '_hasBlacklevel', False):
+                # Bit-depth dependent, so it changes with pixel_format.
+                ranges['blacklevel'] = {'min': 0,
+                                        'max': self._camera.blacklevel_max(),
+                                        'units': 'ADU'}
+        except Exception as e:
+            self.__logger.debug(f"Could not read black level range: {e}")
         return ranges
 
     def isLongExposure(self) -> bool:
@@ -261,6 +334,23 @@ class ToupCamManager(DetectorManager):
         # preview range has to follow it.
         if name == 'pixel_format' and 'previewMaxValue' in self.parameters:
             self.parameters['previewMaxValue'].value = self._getPreviewMaxValue()
+        # The black level is expressed in ADU of the delivered data, so its
+        # range changes with the container too (31 at 8 bit, up to 31*256 at
+        # 16 bit) -- and the value already on the camera now means a different
+        # offset than it did before the switch.
+        if name == 'pixel_format' and 'blacklevel' in self.parameters:
+            try:
+                newMax = self._camera.blacklevel_max()
+                self.parameters['blacklevel'].valueMax = newMax
+                current = self._camera.getPropertyValue('blacklevel')
+                if current is not None and current > newMax:
+                    self.__logger.warning(
+                        f'Black level {current} exceeds the {newMax} maximum of '
+                        f'the new pixel format; re-applying it clamped.')
+                    self._camera.set_blacklevel(newMax)
+                self.parameters['blacklevel'].value =                     self._camera.getPropertyValue('blacklevel')
+            except Exception as e:
+                self.__logger.debug(f'Could not update black level range: {e}')
 
         return value
 
@@ -421,11 +511,16 @@ class ToupCamManager(DetectorManager):
         """Get the available trigger types for the camera."""
         return self._camera.getTriggerTypes()
 
-    def _getToupcamObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False)):
+    def _getToupcamObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False),
+                       heat=True, lowNoise=True, conversionGain="HCG",
+                       blacklevelAutoAdjust=None):
         try:
             from imswitch.imcontrol.model.interfaces.toupcamcamera import CameraToupcam
             self.__logger.debug(f'Trying to initialize Toupcam camera {cameraId}')
-            camera = CameraToupcam(cameraNo=cameraId, isRGB=isRGB, binning=binning, flipImage=flipImage)
+            camera = CameraToupcam(cameraNo=cameraId, isRGB=isRGB, binning=binning,
+                                   flipImage=flipImage, heat=heat, lowNoise=lowNoise,
+                                   conversionGain=conversionGain,
+                                   blacklevelAutoAdjust=blacklevelAutoAdjust)
         except Exception as e:
             self.__logger.error(e)
             self.__logger.warning(f'Failed to initialize CameraToupcam {cameraId}, loading TIS mocker')

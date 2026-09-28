@@ -34,6 +34,7 @@ import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import { SNAP_PREVIEW_EVENT } from "../utils/snapPreview.js";
 import { apiRecordingControllerCancelSnap } from "../backendapi/apiRecordingControllerSnapJob";
+import { useT } from "../i18n";
 
 // Pulsing animation for LIVE indicator
 const pulse = keyframes`
@@ -68,6 +69,7 @@ const LiveViewControlWrapper = ({
   enableZoomPan = true,
 }) => {
   const dispatch = useDispatch();
+  const t = useT();
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
@@ -331,7 +333,7 @@ const LiveViewControlWrapper = ({
               color: "text.secondary",
             }}
           >
-            Stream nicht aktiv
+            {t("Stream not active")}
           </Typography>
           <CircularProgress
             size={24}

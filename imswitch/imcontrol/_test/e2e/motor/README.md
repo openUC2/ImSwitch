@@ -9,9 +9,9 @@ Every axis moves, and the observation camera sees it. **Moves the stage.**
 | `test_motor_motion_camera.py::test_axis_motion_direction` | X → right, Y → down in the image | fail only on the wrong direction; no clear shift skips |
 | `test_motor_motion_camera.py::test_z_motion_changes_scale` | Z changes the apparent image scale | skips while motion is visible; fails only if neither is |
 
-The camera tests first park the stage at the transport position
-(`move_to_transport.py`, also runnable alone) and light the sample with the LED
-matrix at full brightness.
+The camera tests first park the stage at the transport position with the
+turret on the first objective (`move_to_transport.py`, also runnable alone)
+and light the sample with the LED matrix at full brightness.
 
 ## Run
 

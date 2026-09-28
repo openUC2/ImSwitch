@@ -1,4 +1,4 @@
-"""Drive the stage to its stored transport position. Not a test.
+"""Drive the stage to its stored transport position, turret on slot 0. Not a test.
 
 MOVES REAL HARDWARE. Named without the test_ prefix so pytest never collects
 it; test_motor_motion_camera.py imports move_to_transport() to park the stage
@@ -13,6 +13,9 @@ endstops rather than the normal position.
 
 moveToTransportPosition switches the Z hard limits off before moving
 (override_endstop_z defaults to True and the API does not expose it).
+
+Afterwards the turret goes to the first objective (slot 0), turret only
+(skipZ), so the parked Z stays. Skipped on setups without an objective motor.
 """
 
 import os
@@ -33,10 +36,10 @@ SPEED = float(os.environ.get("TRANSPORT_SPEED", "20000"))
 POLL = 0.5
 
 
-def api(method, **params):
-    """Call one PositionerController endpoint and return its JSON."""
+def api(method, controller="PositionerController", **params):
+    """Call one ImSwitch endpoint and return its JSON."""
     response = requests.get(
-        f"{BASE_URL}/api/PositionerController/{method}",
+        f"{BASE_URL}/api/{controller}/{method}",
         params=params,
         timeout=TIMEOUT,
     )
@@ -66,9 +69,38 @@ def wait_until_stopped():
     return previous
 
 
+def move_to_first_objective():
+    """Turn the turret to slot 0 and wait; no-op without an objective motor."""
+    try:
+        status = api("getstatus", "ObjectiveController")
+    except AssertionError:
+        return  # no ObjectiveController in this setup
+
+    if not (status.get("isActive") and status.get("hasMotor")
+            and (status.get("slotConfigured") or [False])[0]):
+        return
+
+    started = api("moveToObjective", "ObjectiveController", slot=0, skipZ=True)
+    assert started.get("accepted"), f"objective slot 0 refused: {started}"
+
+    deadline = time.time() + TIMEOUT
+    while time.time() < deadline:
+        status = api("getstatus", "ObjectiveController")
+        if status.get("lastObjectiveMoveError"):
+            raise AssertionError(f"objective move failed: {status['lastObjectiveMoveError']}")
+        if (not status.get("isMovingObjective")
+                and status.get("lastCompletedObjectiveRequestId") == started["requestId"]):
+            return
+        time.sleep(POLL)
+
+    raise AssertionError(f"objective move did not finish in {TIMEOUT}s")
+
+
 def move_to_transport():
-    """Drive to the transport position and return where the stage stopped."""
+    """Drive to the transport position, turret on slot 0; return where it stopped."""
     api("moveToTransportPosition", speed=SPEED, isBlocking=True)
+    wait_until_stopped()
+    move_to_first_objective()
 
     return wait_until_stopped()
 

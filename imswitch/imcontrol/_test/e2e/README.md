@@ -23,7 +23,7 @@ Sits alongside `../unit/` (no server) and `../api/` (headless server).
 
 `run_all.sh` ships this folder into the container on the Pi, **flashes outdated
 CAN nodes** (`firmware/update_firmware.py`, `FIRMWARE_UPDATE=off` skips it),
-**parks the stage**
+**parks the stage** on objective slot 0
 (`motor/move_to_transport.py`), starts the camera stream
 (`camera/start_live_view.py`) and runs pytest. Each folder also has its own
 runner, see its README.

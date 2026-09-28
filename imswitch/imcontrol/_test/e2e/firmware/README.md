@@ -1,7 +1,7 @@
 # Firmware
 
-The firmware server, and whether the CAN nodes run what it offers. Reads only —
-nothing is flashed.
+The firmware server, and whether the CAN nodes run what it offers. The tests
+only read; `update_firmware.py` flashes.
 
 | Test | Checks |
 |---|---|
@@ -21,6 +21,13 @@ nothing is flashed.
 |---|---|---|
 | `FIRMWARE_SCAN_TIMEOUT` | `5` | seconds for the CAN scan |
 | `FIRMWARE_FETCH_TIMEOUT` | `60` | seconds to download one `.bin` |
+
+## Update
+
+`update_firmware.py` runs first in `run_all.sh`: same currency check as the last
+test, then `startCANStreamingOTA` for each outdated node, one by one, and a
+re-scan. Exit 1 if a node is still outdated; `run_all.sh` warns and runs the
+tests anyway. The USB master is not flashed. `FIRMWARE_UPDATE=off` skips it.
 
 ## Worth knowing
 

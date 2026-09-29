@@ -74,6 +74,35 @@ def auto_downsample(shape) -> int:
     return max(1, int(np.ceil(max(shape) / ANALYSIS_MAX_PX)))
 
 
+def fresh_frame(detector, timeout_s: float = 3.0):
+    """A frame exposed after the last move finished: flush, then wait for the
+    frame number to advance past the first one read (that one may overlap
+    the end of the move)."""
+    for name in ("flushBuffer", "flushBuffers"):
+        if hasattr(detector, name):
+            try:
+                getattr(detector, name)()
+            except Exception:
+                pass
+            break
+    t0, first, frame = time.time(), None, None
+    while time.time() - t0 < timeout_s:
+        try:
+            frame, fid = detector.getLatestFrame(returnFrameNumber=True)
+        except TypeError:                      # detector without frame numbers
+            time.sleep(0.1)
+            return detector.getLatestFrame()
+        if frame is not None and fid is not None:
+            if first is None:
+                first = fid
+            elif fid > first:
+                return frame
+        time.sleep(0.01)
+    if frame is None:
+        raise TimeoutError("camera delivered no frame")
+    return frame
+
+
 class ShitScopeScan:
     """One scan in a background thread. Poll `status()`; `preview_png()` and
     `result` become available as it goes."""
@@ -128,33 +157,7 @@ class ShitScopeScan:
 
     # ------------------------------------------------------------ helpers
     def _fresh_frame(self):
-        """A frame exposed after the move finished: flush, then wait for the
-        frame number to advance past the first one read (that one may overlap
-        the end of the move)."""
-        d = self.detector
-        for name in ("flushBuffer", "flushBuffers"):
-            if hasattr(d, name):
-                try:
-                    getattr(d, name)()
-                except Exception:
-                    pass
-                break
-        t0, first, frame = time.time(), None, None
-        while time.time() - t0 < self.frame_timeout_s:
-            try:
-                frame, fid = d.getLatestFrame(returnFrameNumber=True)
-            except TypeError:                      # detector without frame numbers
-                time.sleep(0.1)
-                return d.getLatestFrame()
-            if frame is not None and fid is not None:
-                if first is None:
-                    first = fid
-                elif fid > first:
-                    return frame
-            time.sleep(0.01)
-        if frame is None:
-            raise TimeoutError("camera delivered no frame")
-        return frame
+        return fresh_frame(self.detector, self.frame_timeout_s)
 
     def _move(self, x: float, y: float):
         kw = {"speed": self.speed} if self.speed else {}

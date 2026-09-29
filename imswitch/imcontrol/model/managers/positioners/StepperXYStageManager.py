@@ -752,6 +752,48 @@ class StepperXYStageManager(PositionerManager):
         x, y = self._send("POWER").split()
         return int(x), int(y)
 
+    # ---------------------------------------------------------------- calibration
+    def move_steps(self, dx: int, dy: int, speed: Optional[float] = None) -> None:
+        """Blocking raw move in logical µsteps: no approach overshoot, no
+        backlash compensation (for calibration, which measures exactly those)."""
+        dev = (int(dy), int(dx)) if self._swapXY else (int(dx), int(dy))
+        if dev != (0, 0):
+            self._send_move(dev[0], dev[1], speed, wait=True)
+        self._position["X"] += dx * self._stepsizeX
+        self._position["Y"] += dy * self._stepsizeY
+        self._commChannel.sigUpdateMotorPosition.emit({self._name: dict(self._position)})
+
+    def set_axis_power(self, x: int, y: int) -> None:
+        """Per-axis drive for the logical X/Y axes (follows swapXY)."""
+        self.set_power(*((y, x) if self._swapXY else (x, y)))
+
+    def get_axis_power(self) -> Tuple[int, int]:
+        dx, dy = self.get_power()
+        return (dy, dx) if self._swapXY else (dx, dy)
+
+    def apply_calibration(self, powerX: Optional[int] = None, powerY: Optional[int] = None,
+                          umPerStepX: Optional[float] = None, umPerStepY: Optional[float] = None,
+                          approachOvershootSteps: Optional[int] = None) -> dict:
+        """Apply calibrated values now; returns the managerProperties that
+        reproduce them at the next start (for saving to the setup file)."""
+        props = {}
+        px, py = self.get_axis_power()
+        if powerX or powerY:
+            px, py = int(powerX or px), int(powerY or py)
+            self.set_axis_power(px, py)
+            props.update(powerX=px, powerY=py)
+        n = None
+        for axis, ups in (("X", umPerStepX), ("Y", umPerStepY)):
+            if ups:
+                setattr(self, f"_stepsize{axis}", float(ups))
+                props[f"stepsize{axis}"] = round(float(ups), 4)
+                n = n or self.get_microsteps()
+                props[f"umPerElectricalCycle{axis}"] = round(float(ups) * n, 1)
+        if approachOvershootSteps:
+            self._approach_overshoot = int(approachOvershootSteps)
+            props["approachOvershootSteps"] = int(approachOvershootSteps)
+        return props
+
     def set_microsteps(self, n: int) -> None:
         """Store the microstep divisor; only takes effect after a device reboot."""
         self._send(f"MICROSTEP {n}")

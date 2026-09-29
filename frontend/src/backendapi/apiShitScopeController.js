@@ -19,3 +19,10 @@ export const apiShitScopeGetResult = () => get("getShitScopeResult");
 export const apiShitScopeAnalyzeScan = (scanDir = "") => get("analyzeShitScopeScan", { scanDir }, 300000);
 // Full-resolution (colour if the camera is colour) stitch of the last scan -> stitched_full.tif
 export const apiShitScopeExportFullRes = (scanDir = "") => get("exportShitScopeFullRes", { scanDir }, 600000);
+// In-situ stage calibration with the camera (~1 min, textured area): drive threshold,
+// µm/µstep, reversal loss, sled rotation. Nothing changes until apply.
+export const apiShitScopeStartCalibration = ({ maxPower = 30000, margin = 1.5 } = {}) =>
+  get("startShitScopeCalibration", { maxPower, margin });
+export const apiShitScopeStopCalibration = () => get("stopShitScopeCalibration");
+export const apiShitScopeGetCalibrationStatus = () => get("getShitScopeCalibrationStatus");
+export const apiShitScopeApplyCalibration = (persist = false) => get("applyShitScopeCalibration", { persist });

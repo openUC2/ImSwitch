@@ -178,3 +178,22 @@ def test_home_drives_negative_and_zeroes_only_homed_axes():
     assert (stage.getPosition()["X"], stage.getPosition()["Y"]) == (40, 0.0)
     stage.doHome("Z")                      # no Z axis: no-op
     assert fw.cmds("MOVE")[-1][1] == f"MOVE 0 {-50 * 9999} 50"
+
+
+def test_move_steps_is_raw_and_tracks_position():
+    fw = FakeFirmware(microsteps=32)
+    stage = make_stage(fw, approachDirectionX=1, umPerElectricalCycleX=3200.0, umPerElectricalCycleY=3200.0)
+    stage.move_steps(-4, 3)                        # against the approach direction: still one raw move
+    assert [m[1] for m in fw.cmds("MOVE")] == ["MOVE -4 3 800"]
+    assert stage.getPosition()["X"] == -400.0 and stage.getPosition()["Y"] == 300.0
+
+
+def test_apply_calibration_returns_properties():
+    fw = FakeFirmware(microsteps=32)
+    stage = make_stage(fw, swapXY=True)
+    stage.get_power = lambda: (24000, 18000)       # device order (swapped)
+    props = stage.apply_calibration(powerX=9000, powerY=15000, umPerStepX=125.0, approachOvershootSteps=5)
+    assert fw.cmds("POWER")[-1][1] == "POWER 15000 9000"         # swapped on the wire
+    assert props == {"powerX": 9000, "powerY": 15000, "stepsizeX": 125.0,
+                     "umPerElectricalCycleX": 4000.0, "approachOvershootSteps": 5}
+    assert stage._stepsizeX == 125.0 and stage._approach_overshoot == 5

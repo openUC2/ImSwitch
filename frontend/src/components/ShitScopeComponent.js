@@ -41,6 +41,7 @@ import {
 import ShitScopeStageMap from "../axon/ShitScopeStageMap.js";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
 import InfoPopup from "../axon/InfoPopup.js";
+import ShitScopeCalibrationPanel from "./ShitScopeCalibrationPanel.js";
 
 // Preset area for "Fill area" (µm)
 const PRESET_AREA_X = 15000;
@@ -410,6 +411,8 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
           </Typography>
         )}
       </Paper>
+
+      <ShitScopeCalibrationPanel disabled={busy} />
 
       <InfoPopup ref={infoPopupRef} />
     </Box>

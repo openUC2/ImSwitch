@@ -9,11 +9,12 @@ Results of each scan: <data>/ShitScope/<timestamp>/{tiles/, scan.json,
 tiles.json, scan_quality.json, stitched.tif}.
 """
 import os
+import threading
 import time
 from typing import Dict, Optional
 
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
-from imswitch.imcontrol.model import shitscope_scan
+from imswitch.imcontrol.model import shitscope_calibration, shitscope_scan
 from ..basecontrollers import ImConWidgetController
 
 
@@ -24,6 +25,7 @@ class ShitScopeController(ImConWidgetController):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
         self._scan: Optional[shitscope_scan.ShitScopeScan] = None
+        self._cal: Optional[shitscope_calibration.StageCalibration] = None
         self._last_dir: str = ""
 
     # ------------------------------------------------------------ hardware
@@ -91,6 +93,8 @@ class ShitScopeController(ImConWidgetController):
         the stage's own settleMs and the wait for a frame exposed after the move).
         Steps of 0 use the suggested steps (whole stage full steps, min overlap);
         an empty pattern uses the stage's recommendation (raster for the PCB stage)."""
+        if self._calibrating():
+            return {"success": False, "error": "A stage calibration is running"}
         if self._scan is not None and self._scan.state in ("homing", "running", "analysing"):
             return {"success": False, "error": "A scan is already running"}
         if self._stage() is None:
@@ -180,3 +184,81 @@ class ShitScopeController(ImConWidgetController):
         except Exception as exc:
             self._logger.warning(f"ShitScope full-res export failed: {exc}")
             return {"success": False, "error": str(exc)}
+
+    # ------------------------------------------------------------ calibration
+    def _calibrating(self) -> bool:
+        return self._cal is not None and self._cal.state == "running"
+
+    @APIExport()
+    def startShitScopeCalibration(self, maxPower: int = 30000, margin: float = 1.5,
+                                  probeSteps: int = 4) -> Dict:
+        """Measure, with the camera, what the stage needs right now (about a
+        minute, on a textured area of the sample): drive threshold per axis
+        (-> recommended drive = margin x threshold), µm per µstep, reversal
+        loss (-> approach overshoot) and whether the sled rotated. Nothing is
+        changed until applyShitScopeCalibration."""
+        stage = self._stage()
+        if stage is None or not hasattr(stage, "move_steps"):
+            return {"success": False, "error": "No calibratable stage (StepperXYStageManager) available"}
+        if self._calibrating() or (self._scan is not None and self._scan.state in ("homing", "running", "analysing")):
+            return {"success": False, "error": "A scan or calibration is already running"}
+        det, det_mgr = self._detector(), self._master.detectorsManager
+        handle = None if getattr(det, "_running", False) else det_mgr.startAcquisition()
+        try:
+            start_power = stage.get_axis_power()
+        except Exception:
+            start_power = (18000, 24000)
+        self._cal = shitscope_calibration.StageCalibration(
+            grab=lambda: shitscope_scan.fresh_frame(det), move_steps=stage.move_steps,
+            set_power=stage.set_axis_power, um_per_px=self._um_per_px(), start_power=start_power,
+            max_power=int(maxPower), margin=float(margin), probe_steps=int(probeSteps),
+            logger=self._logger.info)
+        cal = self._cal
+
+        def run():
+            try:
+                cal.run()
+            finally:
+                if handle is not None:
+                    det_mgr.stopAcquisition(handle)
+        cal.state = "running"
+        threading.Thread(target=run, daemon=True, name="ShitScopeCalibration").start()
+        return {"success": True, "startPower": list(start_power)}
+
+    @APIExport()
+    def stopShitScopeCalibration(self) -> Dict:
+        if self._cal is None:
+            return {"success": False, "error": "No calibration"}
+        self._cal.stop()
+        return {"success": True}
+
+    @APIExport()
+    def getShitScopeCalibrationStatus(self) -> Dict:
+        """state (idle/running/done/stopped/error), phase, progress 0..1, log, result."""
+        if self._cal is None:
+            return {"state": "idle"}
+        return self._cal.status()
+
+    @APIExport()
+    def applyShitScopeCalibration(self, persist: bool = False) -> Dict:
+        """Apply the recommended values of the last calibration to the stage
+        (drive per axis, µm per µstep, approach overshoot); persist=True also
+        writes them to the positioner in the setup file."""
+        if self._cal is None or not self._cal.result or not self._cal.result.get("recommended"):
+            return {"success": False, "error": "No calibration result to apply"}
+        stage = self._stage()
+        props = stage.apply_calibration(**self._cal.result["recommended"])
+        saved = False
+        if persist and props:
+            try:
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                name = self._master.positionersManager.getAllDeviceNames()[0]
+                self._setupInfo.positioners[name].managerProperties.update(props)
+                options, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                saved = True
+            except Exception as exc:
+                self._logger.warning(f"Could not save the stage calibration: {exc}")
+                return {"success": True, "applied": props, "saved": False, "error": str(exc)}
+        self._logger.info(f"Stage calibration applied{' and saved' if saved else ''}: {props}")
+        return {"success": True, "applied": props, "saved": saved}

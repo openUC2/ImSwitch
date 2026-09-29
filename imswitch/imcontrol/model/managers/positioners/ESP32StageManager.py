@@ -177,6 +177,8 @@ class ESP32StageManager(PositionerManager):
         self.homeYenabled = positionerInfo.managerProperties.get('homeYenabled', False)
         self.homeZenabled = positionerInfo.managerProperties.get('homeZenabled', False)
         self.homeAenabled = positionerInfo.managerProperties.get('homeAenabled', False)
+        # hard homing on Z: home, ram the mechanical stop to square dual Z motors, back off, re-home
+        self.homeHardZ = positionerInfo.managerProperties.get('homeHardZ', False)
 
         # homing steps without endstop
         self.homeStepsX = positionerInfo.managerProperties.get('homeStepsX', 0)
@@ -645,13 +647,13 @@ class ESP32StageManager(PositionerManager):
     def stopAll(self):
         self._motor.stop()
 
-    def doHome(self, axis, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
+    def doHome(self, axis, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None, hardHome=None):
         if axis == "X" and (self.homeXenabled or abs(self.homeStepsX)>0):
             self.home_x(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
         if axis == "Y" and (self.homeYenabled or abs(self.homeStepsY)>0):
             self.home_y(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
         if axis == "Z" and (self.homeZenabled or abs(self.homeStepsZ)>0):
-            self.home_z(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
+            self.home_z(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout, hardHome)
         if axis == "A" and (self.homeAenabled or abs(self.homeStepsA)>0):
             self.home_a(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
 
@@ -687,14 +689,17 @@ class ESP32StageManager(PositionerManager):
             return
         # self.setPosition(axis="Y", value=0)  # TODO: Not necessary as we get the position asynchronusly?
 
-    def home_z(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
+    def home_z(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None, hardHome=None):
         if abs(self.homeStepsZ)>0:
             self.move(value=self.homeStepsZ, speed=self.homeSpeedZ, axis="Z", is_absolute=False, is_blocking=True)
             self.move(value=-np.sign(self.homeStepsZ)*np.abs(self.homeEndposReleaseZ), speed=self.homeSpeedZ, axis="Z", is_absolute=False, is_blocking=True)
             self.setPosition(axis="Z", value=0)
             self.setPositionOnDevice(value=0, axis="Z")
         elif self.homeZenabled:
-            self._homeModule.home_z(speed=self.homeSpeedZ, direction=self.homeDirectionZ, endstoppolarity=self.homeEndstoppolarityZ, endposrelease=self.homeEndposReleaseZ, isBlocking=isBlocking, timeout=self.homeTimeoutZ)
+            hard = self.homeHardZ if hardHome is None else hardHome
+            # hardhome only passed when set, so older uc2rest versions keep working
+            self._homeModule.home_z(speed=self.homeSpeedZ, direction=self.homeDirectionZ, endstoppolarity=self.homeEndstoppolarityZ, endposrelease=self.homeEndposReleaseZ, isBlocking=isBlocking, timeout=self.homeTimeoutZ,
+                                    **({"hardhome": True} if hard else {}))
         else:
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return

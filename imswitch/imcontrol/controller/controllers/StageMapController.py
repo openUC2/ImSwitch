@@ -1121,6 +1121,14 @@ class StageMapController(ImConWidgetController):
             return None, "the camera cannot report trigger indices"
         if not stage.hasStrobeSweep():
             return None, "the firmware (or uc2rest) has no strobesweep module"
+        # The master may be new while the node driving this laser is not:
+        # switching the strobe off is harmless and answers "supported" only
+        # when that node's firmware can strobe.
+        reply = laser.setStrobe(False)
+        info = reply.get("strobe", {}) if isinstance(reply, dict) else {}
+        if not info.get("supported"):
+            why = reply.get("error") if isinstance(reply, dict) else None
+            return None, f"the strobe laser cannot strobe ({why or 'no answer from the firmware'})"
         return laser, ""
 
     def _enterStrobeCamera(self) -> Dict:

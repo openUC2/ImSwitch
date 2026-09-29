@@ -435,6 +435,34 @@ def test_strobe_mode_falls_back_to_the_free_running_prescan():
     assert camera.parameters["exposure"].value == 10.0
 
 
+
+def test_old_laser_node_behind_a_new_master_falls_back():
+    """New master firmware, old illumination-node firmware: the strobe-off probe
+    answers supported=0 (or nothing), so the free-running prescan runs."""
+    stage = virtual_stage()
+    camera = TriggeredCamera(stage, world(np.random.default_rng(0), 100))
+
+    class OldNodeLaser(StrobeLaser):
+        def setStrobe(self, enable, delayUs=0, widthUs=20):
+            self.calls.append((bool(enable), delayUs, widthUs))
+            return {"strobe": {"supported": 0}, "return": 0,
+                    "error": "laser node has no strobe support (firmware too old)"}
+
+    old = OldNodeLaser()
+    ctrl = controller(stage, camera, {"LED": old}, prescanStrobe=True)
+    laserFound, reason = ctrl._strobeSetup()
+    assert laserFound is None and "firmware too old" in reason
+    assert old.calls == [(False, 0, 20)]           # the probe only ever switches the strobe off
+    assert ctrl._enterStrobeMode() is None
+
+    class SilentLaser(StrobeLaser):
+        def setStrobe(self, enable, delayUs=0, widthUs=20):
+            return None                              # old uc2rest or no answer
+    ctrl = controller(stage, camera, {"LED": SilentLaser()}, prescanStrobe=True)
+    assert ctrl._strobeSetup()[0] is None
+    assert camera.parameters["trigger_source"].value == "Continous"
+
+
 def test_delay_calibration_in_simulation_stores_the_best_delay():
     stage = virtual_stage()
     camera = TriggeredCamera(stage, world(np.random.default_rng(0), 100), mode="rolling")

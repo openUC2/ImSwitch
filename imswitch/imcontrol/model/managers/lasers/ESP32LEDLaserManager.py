@@ -110,6 +110,31 @@ class ESP32LEDLaserManager(LaserManager):
                                 despecklePeriod = self.laser_despeckle_period,
                                 is_blocking=getReturn)
 
+    def setStrobe(self, enable, delayUs=0, widthUs=20):
+        """Flash this channel on every CANopen SYNC instead of lighting it via PWM.
+
+        ``delayUs`` is the time from SYNC reception to LED on and ``widthUs``
+        the flash length, both in µs (the firmware clamps the width to its
+        safety limit). While strobing, the firmware ignores normal intensity
+        writes for this channel; ``enable=False`` hands the pin back to PWM.
+
+        Returns the firmware response dict (``{"strobe": {"supported": ...}}``)
+        or None when the firmware did not answer (old firmware) or the
+        installed uc2rest has no ``Laser.set_strobe``.
+        """
+        setStrobe = getattr(self._laser, "set_strobe", None)
+        if setStrobe is None:
+            self.__logger.warning(
+                "uc2rest has no Laser.set_strobe; update UC2-REST for strobe support")
+            return None
+        try:
+            return setStrobe(self.channel_index, enable=bool(enable),
+                             delay_us=int(round(float(delayUs))),
+                             width_us=int(round(float(widthUs))))
+        except Exception as e:
+            self.__logger.error(f"setStrobe on channel {self.channel_index} failed: {e}")
+            return None
+
     def sendTrigger(self, triggerId):
         self._esp32.digital.sendTrigger(triggerId)
 

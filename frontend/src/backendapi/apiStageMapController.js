@@ -57,6 +57,20 @@ export const apiStageMapStartPrescan = async (area) => {
 
 export const apiStageMapStopPrescan = () => get("stopPrescan");
 
+// Strobed prescan: find the flash delay (µs after the camera trigger) at which
+// one flash lights every sensor row. The stage does not move; the LED flashes
+// and the camera is triggered for the duration. The backend stores the best
+// delay in params.strobeDelayUs and returns the whole table.
+export const apiStageMapCalibrateStrobeDelay = async (options = {}) => {
+  const axiosInstance = createAxiosInstance();
+  const response = await axiosInstance.post(
+    "/StageMapController/calibrateStageMapStrobeDelay",
+    null,
+    { params: options },
+  );
+  return response.data;
+};
+
 // The whole map as one image plus the stage extent it covers (µm). For
 // consumers outside this app.
 export const apiStageMapGetOverview = (maxWidthPx = 2048) =>

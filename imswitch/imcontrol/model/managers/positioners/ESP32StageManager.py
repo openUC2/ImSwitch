@@ -40,6 +40,10 @@ class ESP32StageManager(PositionerManager):
         # Grab motor object
         self._motor = self._rs232manager._esp32.motor
         self._homeModule = self._rs232manager._esp32.home
+        # Strobed sweep (see startStrobeSweep): axis of the running sweep and
+        # the frame-converting wrappers handed to uc2rest, keyed by callback.
+        self._strobeAxis = "X"
+        self._strobeCallbacks = {}
 
         # global offset (i.e. difference between stage zero and device zero)
         self.stageOffsetPositions = {}
@@ -1186,6 +1190,116 @@ class ESP32StageManager(PositionerManager):
     
     def reset_stagescan_complete(self):
         pass
+
+    # ------------------------------------------------------------------ #
+    # Strobed sweep: constant-velocity line with a camera trigger, an LED
+    # flash and a latched position on every CANopen SYNC (firmware module
+    # "strobesweep"). Coordinates here are the user frame, like move() and
+    # getPosition(); uc2rest works in the device frame (user + offset).
+    # ------------------------------------------------------------------ #
+
+    def hasStrobeSweep(self) -> bool:
+        """True when uc2rest and the firmware both support the strobed sweep.
+
+        Old uc2rest (no ``Motor.has_strobe_sweep``) and old firmware (no
+        "strobesweep" in /modules_get) both answer False; nothing raises.
+        """
+        probe = getattr(self._motor, "has_strobe_sweep", None)
+        if probe is None:
+            return False
+        try:
+            return bool(probe())
+        except Exception as e:
+            self.__logger.warning(f"Strobe sweep capability query failed: {e}")
+            return False
+
+    def startStrobeSweep(self, axis="X", target=0.0, speed=None, period_us=33333,
+                         trig_us=100, laser=-1, delay_us=None, width_us=None,
+                         latch=True, report=16, max_frames=0) -> bool:
+        """Drive ``axis`` to ``target`` (µm, user frame, absolute) at constant speed
+        while the firmware sends a SYNC every ``period_us``.
+
+        Each SYNC pulses the camera trigger (``trig_us`` wide), flashes logical
+        laser ``laser`` ``delay_us`` after it for ``width_us`` (both given and
+        ``laser >= 0``: the firmware enables the strobe for the sweep and
+        disables it afterwards; -1 = no flash) and latches the axis position.
+        ``speed`` has the same units as move(). ``max_frames > 0`` runs exactly
+        that many frames, even without motion. Returns immediately; progress
+        arrives through registerStrobeSweepCallback. Returns False when the
+        sweep was not sent (uc2rest too old, target outside the soft limits).
+        """
+        start = getattr(self._motor, "start_strobe_sweep", None)
+        if start is None:
+            self.__logger.warning("uc2rest has no Motor.start_strobe_sweep; update UC2-REST")
+            return False
+        axis = str(axis).upper()
+        # Same soft limits as move(); a blocked sweep is refused, never forced.
+        if getattr(self, f"limit{axis}enabled", False):
+            lo = getattr(self, f"min{axis}", -np.inf)
+            hi = getattr(self, f"max{axis}", np.inf)
+            if not (lo <= target <= hi):
+                self.__logger.warning(
+                    f"Strobe sweep blocked: {axis} target {target} outside [{lo}, {hi}]")
+                return False
+        if speed is None:
+            speed = self.speed.get(axis, 0)
+        self._strobeAxis = axis
+        deviceTarget = float(target) + float(self.stageOffsetPositions.get(axis, 0))
+        try:
+            start(axis=axis, target=deviceTarget, speed=speed, period_us=int(period_us),
+                  trig_us=int(trig_us), laser=int(laser),
+                  delay_us=None if delay_us is None else int(round(delay_us)),
+                  width_us=None if width_us is None else int(round(width_us)),
+                  latch=bool(latch), report=int(report), max_frames=int(max_frames),
+                  is_absolute=True)
+        except Exception as e:
+            self.__logger.error(f"start_strobe_sweep failed: {e}")
+            return False
+        return True
+
+    def stopStrobeSweep(self):
+        """Abort a running strobed sweep (motor stops, strobe off, done event follows)."""
+        stop = getattr(self._motor, "stop_strobe_sweep", None)
+        if stop is None:
+            return False
+        try:
+            stop()
+            return True
+        except Exception as e:
+            self.__logger.error(f"stop_strobe_sweep failed: {e}")
+            return False
+
+    def registerStrobeSweepCallback(self, cb) -> bool:
+        """Receive the sweep's report/done events; report ``x`` arrives in the user frame.
+
+        ``cb(event)`` runs on the serial thread (see uc2rest
+        Motor.register_strobesweep_callback for the event shapes).
+        """
+        register = getattr(self._motor, "register_strobesweep_callback", None)
+        if register is None:
+            return False
+
+        def toUserFrame(event, _cb=cb):
+            if isinstance(event, dict) and event.get("type") == "report" and "x" in event:
+                offset = float(self.stageOffsetPositions.get(self._strobeAxis, 0))
+                event = dict(event, x=[float(v) - offset for v in event["x"]])
+            _cb(event)
+
+        self._strobeCallbacks[cb] = toUserFrame
+        register(toUserFrame)
+        return True
+
+    def unregisterStrobeSweepCallback(self, cb) -> bool:
+        wrapper = self._strobeCallbacks.pop(cb, None)
+        unregister = getattr(self._motor, "unregister_strobesweep_callback", None)
+        if wrapper is None or unregister is None:
+            return False
+        try:
+            unregister(wrapper)
+            return True
+        except Exception as e:
+            self.__logger.debug(f"unregister_strobesweep_callback failed: {e}")
+            return False
 
     # ============================================================================
     # Motor Settings API - Unified configuration interface

@@ -40,6 +40,8 @@ const initialState = {
     lastError: "",
   },
   lastTileId: -1,
+  // Last strobe delay calibration: {success, bestDelayUs, table, error}
+  strobeCalibration: null,
 };
 
 const ensureChannel = (state, channelName) => {
@@ -124,6 +126,10 @@ const stageMapSlice = createSlice({
       // make channels reported by the backend selectable even before a tile arrived
       (action.payload?.channels || []).forEach((c) => ensureChannel(state, c));
     },
+
+    setStrobeCalibration: (state, action) => {
+      state.strobeCalibration = action.payload || null;
+    },
   },
 });
 
@@ -137,6 +143,7 @@ export const {
   setIsMapping,
   setShowOnWellplate,
   setStatus,
+  setStrobeCalibration,
 } = stageMapSlice.actions;
 
 export const getStageMapState = (state) => state.stageMapState;

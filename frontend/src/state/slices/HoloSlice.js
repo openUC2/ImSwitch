@@ -45,7 +45,6 @@ const initialHoloState = {
   // Frame data
   frameSize: [1920, 1080], // Default camera frame size [width, height]
   lastProcessTime: 0.0,
-  lastMjpegEmitTime: 0.0, // wall-clock of last server-side MJPEG push
   mjpegClientCount: 0,
   frameCount: 0,
   processedCount: 0,
@@ -131,9 +130,6 @@ const holoSlice = createSlice({
     },
     setIsRGB: (state, action) => {
       state.isRGB = action.payload;
-    },
-    setLastMjpegEmitTime: (state, action) => {
-      state.lastMjpegEmitTime = action.payload;
     },
     setMjpegClientCount: (state, action) => {
       state.mjpegClientCount = action.payload;
@@ -288,7 +284,6 @@ export const {
   setDzStep,
   setCameraName,
   setIsRGB,
-  setLastMjpegEmitTime,
   setMjpegClientCount,
   setRoiCenter,
   setRoiSize,

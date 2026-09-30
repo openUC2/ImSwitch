@@ -1,19 +1,10 @@
 import { createSlice } from "@reduxjs/toolkit";
 
 const initialState = {
-  // Wizard step navigation (0: Method selection, 1: WiFi/Config, 2: Server config, 3: Device scan, 4: Device selection, 5: Update progress, 6: Completion)
+  // Wizard steps (CAN streaming OTA): 0 server config, 1 device scan,
+  // 2 device selection, 3 update progress, 4 completion
   currentStep: 0,
   isWizardOpen: false,
-
-  // OTA method selection: "wifi" (ArduinoOTA over WiFi) or "can_streaming" (USB->CAN direct upload)
-  otaMethod: "wifi",
-
-  // WiFi credentials for OTA (only used for "wifi" method)
-  wifiSsid: "",
-  wifiPassword: "",
-  defaultWifiSsid: "",
-  defaultWifiPassword: "",
-  isLoadingWifiCredentials: false,
 
   // Firmware server configuration
   firmwareServerUrl: "",
@@ -57,7 +48,7 @@ const canOtaSlice = createSlice({
       state.isWizardOpen = action.payload;
     },
     nextStep: (state) => {
-      if (state.currentStep < 5) {
+      if (state.currentStep < 4) { // 4 = completion
         state.currentStep += 1;
       }
     },
@@ -68,7 +59,6 @@ const canOtaSlice = createSlice({
     },
     resetWizard: (state) => {
       state.currentStep = 0;
-      state.otaMethod = "wifi";
       state.selectedDeviceIds = [];
       state.updateProgress = {};
       state.updateResults = [];
@@ -78,33 +68,6 @@ const canOtaSlice = createSlice({
       state.error = null;
       state.successMessage = null;
       state.scanError = null;
-    },
-
-    // OTA method selection
-    setOtaMethod: (state, action) => {
-      state.otaMethod = action.payload; // "wifi" or "can_streaming"
-    },
-
-    // WiFi credentials
-    setWifiSsid: (state, action) => {
-      state.wifiSsid = action.payload;
-    },
-    setWifiPassword: (state, action) => {
-      state.wifiPassword = action.payload;
-    },
-    setDefaultWifiCredentials: (state, action) => {
-      state.defaultWifiSsid = action.payload.ssid;
-      state.defaultWifiPassword = action.payload.password;
-      // Only set current values if they're empty
-      if (!state.wifiSsid) {
-        state.wifiSsid = action.payload.ssid;
-      }
-      if (!state.wifiPassword) {
-        state.wifiPassword = action.payload.password;
-      }
-    },
-    setIsLoadingWifiCredentials: (state, action) => {
-      state.isLoadingWifiCredentials = action.payload;
     },
 
     // Firmware server
@@ -176,8 +139,7 @@ const canOtaSlice = createSlice({
       // Only update counters on first transition to a terminal state
       // to avoid double-counting from multiple streaming updates
       const isTerminal = (s) =>
-        s === "completed" || s === "success" || s === "failed" || s === "error" ||
-        s === "wifi_failed" || s === "ota_failed";
+        s === "completed" || s === "success" || s === "failed" || s === "error";
       if (isTerminal(status) && !isTerminal(previousStatus)) {
         if (status === "completed" || status === "success") {
           state.completedUpdateCount += 1;
@@ -230,11 +192,6 @@ export const {
   nextStep,
   previousStep,
   resetWizard,
-  setOtaMethod,
-  setWifiSsid,
-  setWifiPassword,
-  setDefaultWifiCredentials,
-  setIsLoadingWifiCredentials,
   setFirmwareServerUrl,
   setDefaultFirmwareServerUrl,
   setAvailableFirmware,

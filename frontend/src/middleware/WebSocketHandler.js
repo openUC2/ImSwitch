@@ -952,7 +952,8 @@ const WebSocketHandler = () => {
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigOTAStatusUpdate") {
-        // Handle CAN OTA status updates (both WiFi OTA and CAN streaming formats)
+        // CAN streaming OTA status (backend canbus.CanOta): status is a string;
+        // final states are "success" and "error".
         console.log("sigOTAStatusUpdate received:", dataJson);
         try {
           const otaStatus = dataJson.args?.p0;
@@ -960,35 +961,9 @@ const WebSocketHandler = () => {
           if (otaStatus && otaStatus.canId !== undefined) {
             const { canId, status, message, progress } = otaStatus;
 
-            // Determine status string and progress.
-            // CAN streaming sends status as a string ("uploading", "success", "error", "initializing")
-            // WiFi OTA sends status as a number (0=completed, 1=wifi_failed, 2=ota_failed)
-            let statusString;
-            let progressValue;
-
-            if (typeof status === "number") {
-              // Legacy WiFi OTA format
-              if (status === 0) {
-                statusString = "completed";
-                progressValue = 100;
-              } else if (status === 1) {
-                statusString = "wifi_failed";
-                progressValue = 0;
-              } else if (status === 2) {
-                statusString = "ota_failed";
-                progressValue = 50;
-              } else {
-                statusString = otaStatus.success ? "completed" : "failed";
-                progressValue = otaStatus.success ? 100 : 0;
-              }
-            } else {
-              // CAN streaming format – status is a descriptive string
-              statusString = status || "in_progress";
-              progressValue = progress ?? 0;
-            }
-
-            const displayMessage =
-              message || otaStatus.statusMsg || "Status update received";
+            const statusString = status || "in_progress";
+            const progressValue = progress ?? 0;
+            const displayMessage = message || "Status update received";
 
             // Update Redux state with OTA progress
             dispatch(
@@ -1002,14 +977,7 @@ const WebSocketHandler = () => {
             );
 
             // If update is completed or failed, check if all updates are done
-            const terminalStates = [
-              "completed",
-              "success",
-              "failed",
-              "error",
-              "wifi_failed",
-              "ota_failed",
-            ];
+            const terminalStates = ["completed", "success", "failed", "error"];
             if (terminalStates.includes(statusString)) {
               const state = store.getState();
               const canOtaState = state.canOtaState;

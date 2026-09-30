@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from "react";
+import React, { useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Dialog,
@@ -25,11 +25,7 @@ import {
   Divider,
   IconButton,
   Tooltip,
-  RadioGroup,
-  Radio,
   FormControlLabel,
-  FormControl,
-  FormLabel,
 } from "@mui/material";
 import {
   Refresh as RefreshIcon,
@@ -37,8 +33,6 @@ import {
   Error as ErrorIcon,
   Warning as WarningIcon,
   Info as InfoIcon,
-  Wifi as WifiIcon,
-  Cable as CableIcon,
   AddCircleOutline as AddCircleOutlineIcon,
   Edit as EditIcon,
   Memory as MemoryIcon,
@@ -48,24 +42,18 @@ import {
 import * as canOtaSlice from "../state/slices/canOtaSlice";
 
 // API functions
-import apiUC2ConfigControllerGetOTAWiFiCredentials from "../backendapi/apiUC2ConfigControllerGetOTAWiFiCredentials";
-import apiUC2ConfigControllerSetOTAWiFiCredentials from "../backendapi/apiUC2ConfigControllerSetOTAWiFiCredentials";
 import apiUC2ConfigControllerGetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerGetOTAFirmwareServer";
 import apiUC2ConfigControllerSetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerSetOTAFirmwareServer";
 import apiUC2ConfigControllerListAvailableFirmware from "../backendapi/apiUC2ConfigControllerListAvailableFirmware";
 import apiUC2ConfigControllerScanCanbus from "../backendapi/apiUC2ConfigControllerScanCanbus";
 import apiUC2ConfigControllerReassignCANId from "../backendapi/apiUC2ConfigControllerReassignCANId";
-import apiUC2ConfigControllerStartSingleDeviceOTA from "../backendapi/apiUC2ConfigControllerStartSingleDeviceOTA";
-import apiUC2ConfigControllerStartMultipleDeviceOTA from "../backendapi/apiUC2ConfigControllerStartMultipleDeviceOTA";
 import apiUC2ConfigControllerGetOTADeviceMapping from "../backendapi/apiUC2ConfigControllerGetOTADeviceMapping";
-import apiUC2ConfigControllerStartCANStreamingOTA from "../backendapi/apiUC2ConfigControllerStartCANStreamingOTA";
 import apiUC2ConfigControllerStartMultipleCANStreamingOTA from "../backendapi/apiUC2ConfigControllerStartMultipleCANStreamingOTA";
 import apiUC2ConfigControllerCancelCANStreamingOTA from "../backendapi/apiUC2ConfigControllerCancelCANStreamingOTA";
 import { FIRMWARE_STATUS, firmwareUpdateStatus } from "./firmwareStatus";
 
+// CAN streaming OTA only (the WiFi OTA path was removed).
 const steps = [
-  "OTA Method",
-  "WiFi Setup",
   "Firmware Server",
   "Scan Devices",
   "Select Devices",
@@ -104,12 +92,6 @@ const CanOtaWizard = ({ open, onClose }) => {
 
   const loadInitialData = async () => {
     try {
-      // Load WiFi credentials
-      dispatch(canOtaSlice.setIsLoadingWifiCredentials(true));
-      const wifiCreds = await apiUC2ConfigControllerGetOTAWiFiCredentials();
-      dispatch(canOtaSlice.setDefaultWifiCredentials(wifiCreds));
-      dispatch(canOtaSlice.setIsLoadingWifiCredentials(false));
-
       // Load firmware server
       dispatch(canOtaSlice.setIsLoadingFirmwareServer(true));
       const firmwareServer = await apiUC2ConfigControllerGetOTAFirmwareServer();
@@ -118,7 +100,6 @@ const CanOtaWizard = ({ open, onClose }) => {
     } catch (error) {
       console.error("Error loading initial data:", error);
       dispatch(canOtaSlice.setError("Failed to load initial configuration"));
-      dispatch(canOtaSlice.setIsLoadingWifiCredentials(false));
       dispatch(canOtaSlice.setIsLoadingFirmwareServer(false));
     }
   };
@@ -158,34 +139,9 @@ const CanOtaWizard = ({ open, onClose }) => {
 
   const handleNext = async () => {
     const currentStep = canOtaState.currentStep;
-    const isCAN = canOtaState.otaMethod === "can_streaming";
 
     // Step-specific validation and actions before proceeding
     if (currentStep === 0) {
-      // OTA Method Selection - no validation needed, just proceed
-      // For CAN streaming, we can skip WiFi setup (step 1)
-      if (isCAN) {
-        dispatch(canOtaSlice.clearMessages());
-        dispatch(canOtaSlice.setCurrentStep(2)); // Skip to Firmware Server
-        return;
-      }
-    } else if (currentStep === 1) {
-      // WiFi Setup - save credentials (only for WiFi OTA)
-      if (!canOtaState.wifiSsid || !canOtaState.wifiPassword) {
-        dispatch(canOtaSlice.setError("Please provide both WiFi SSID and password"));
-        return;
-      }
-      try {
-        await apiUC2ConfigControllerSetOTAWiFiCredentials(
-          canOtaState.wifiSsid,
-          canOtaState.wifiPassword
-        );
-        dispatch(canOtaSlice.setSuccessMessage("WiFi credentials saved"));
-      } catch (error) {
-        dispatch(canOtaSlice.setError("Failed to save WiFi credentials"));
-        return;
-      }
-    } else if (currentStep === 2) {
       // Firmware Server - save and validate
       if (!canOtaState.firmwareServerUrl) {
         dispatch(canOtaSlice.setError("Please provide a firmware server URL"));
@@ -212,9 +168,9 @@ const CanOtaWizard = ({ open, onClose }) => {
         dispatch(canOtaSlice.setIsLoadingFirmwareList(false));
         return;
       }
-    } else if (currentStep === 3) {
+    } else if (currentStep === 1) {
       // Moving from Scan Devices to Select Devices
-      console.log("[CanOtaWizard] Step 3->4 transition. Current state:", {
+      console.log("[CanOtaWizard] Scan -> selection. Current state:", {
         scannedDevices: canOtaState.scannedDevices,
         selectedDeviceIds: canOtaState.selectedDeviceIds,
       });
@@ -229,9 +185,9 @@ const CanOtaWizard = ({ open, onClose }) => {
           ...manualDeviceIds,
         ]));
       }
-    } else if (currentStep === 4) {
+    } else if (currentStep === 2) {
       // Device Selection - check if at least one device is selected
-      console.log("[CanOtaWizard] Step 4->5 validation. State:", {
+      console.log("[CanOtaWizard] Selection -> update validation. State:", {
         scannedDevices: canOtaState.scannedDevices,
         selectedDeviceIds: canOtaState.selectedDeviceIds,
       });
@@ -247,20 +203,10 @@ const CanOtaWizard = ({ open, onClose }) => {
   };
 
   const handleBack = () => {
-    const currentStep = canOtaState.currentStep;
-    const isCAN = canOtaState.otaMethod === "can_streaming";
-
     // Going back from the progress step: reset all update state so it can be restarted
-    if (currentStep === 5) {
+    if (canOtaState.currentStep === 3) {
       dispatch(canOtaSlice.clearUpdateProgress());
       dispatch(canOtaSlice.setIsUpdating(false));
-    }
-
-    // For CAN streaming, skip WiFi setup when going back from Firmware Server
-    if (isCAN && currentStep === 2) {
-      dispatch(canOtaSlice.clearMessages());
-      dispatch(canOtaSlice.setCurrentStep(0)); // Go back to method selection
-      return;
     }
 
     dispatch(canOtaSlice.clearMessages());
@@ -359,8 +305,6 @@ const CanOtaWizard = ({ open, onClose }) => {
   };
 
   const startOtaUpdate = async () => {
-    const isCAN = canOtaState.otaMethod === "can_streaming";
-    
     try {
       dispatch(canOtaSlice.setIsUpdating(true));
       dispatch(canOtaSlice.clearUpdateProgress());
@@ -371,57 +315,28 @@ const CanOtaWizard = ({ open, onClose }) => {
         dispatch(canOtaSlice.setUpdateProgress({
           canId: canId,
           status: "initiating",
-          message: isCAN 
-            ? "Starting CAN streaming OTA update..." 
-            : "Starting WiFi OTA update...",
+          message: "Starting CAN streaming OTA update...",
           progress: 0,
           timestamp: new Date().toISOString(),
         }));
       });
 
-      let result;
-      
-      if (isCAN) {
-        // CAN Streaming OTA - firmware is transferred over CAN bus
-        console.log("Starting CAN Streaming OTA for devices:", canOtaState.selectedDeviceIds);
-        // Resolves only after every device has finished; per-device
-        // progress and final states arrive meanwhile via sigOTAStatusUpdate,
-        // so do not overwrite them here.
-        result = await apiUC2ConfigControllerStartMultipleCANStreamingOTA(
-          canOtaState.selectedDeviceIds,
-          5 // 5 seconds delay between devices for reboot
-        );
-        console.log("CAN Streaming OTA finished:", result);
-        if (result?.status === "busy") {
-          // Refused before anything started (another upload or a USB flash
-          // holds the serial port).
-          dispatch(canOtaSlice.clearUpdateProgress());
-          dispatch(canOtaSlice.setIsUpdating(false));
-          dispatch(canOtaSlice.setError(result.message));
-        }
-      } else {
-        // WiFi OTA - devices download firmware from server
-        result = await apiUC2ConfigControllerStartMultipleDeviceOTA(
-          canOtaState.selectedDeviceIds,
-          canOtaState.wifiSsid,
-          canOtaState.wifiPassword,
-          300000, // 5 minutes timeout
-          2 // 2 seconds delay between devices
-        );
-        console.log("WiFi OTA update initiated:", result);
-        
-        // Update status to "initiated" for all devices
-        canOtaState.selectedDeviceIds.forEach(canId => {
-          dispatch(canOtaSlice.setUpdateProgress({
-            canId: canId,
-            status: "initiated",
-            message: "OTA command sent, waiting for device response...",
-            progress: 5,
-            timestamp: new Date().toISOString(),
-          }));
-        });
+      // Resolves only after every device has finished; per-device progress
+      // and final states arrive meanwhile via sigOTAStatusUpdate, so do not
+      // overwrite them here.
+      const result = await apiUC2ConfigControllerStartMultipleCANStreamingOTA(
+        canOtaState.selectedDeviceIds,
+        5 // 5 seconds delay between devices for reboot
+      );
+      console.log("CAN Streaming OTA finished:", result);
+      if (result?.status === "busy") {
+        // Refused before anything started (another upload or a USB flash
+        // holds the serial port).
+        dispatch(canOtaSlice.clearUpdateProgress());
+        dispatch(canOtaSlice.setIsUpdating(false));
+        dispatch(canOtaSlice.setError(result.message));
       }
-      
+
       // Note: Further progress updates will come via WebSocket (sigOTAStatusUpdate)
       // The backend uploads firmware in the background and sends status via socket
       
@@ -430,9 +345,8 @@ const CanOtaWizard = ({ open, onClose }) => {
       
       // Even if API call fails/times out, the backend might still be processing
       // So we show a warning instead of complete failure
-      const methodName = isCAN ? "CAN streaming" : "WiFi";
       dispatch(canOtaSlice.setError(
-        `${methodName} OTA update may be starting in background. Check progress below. ` +
+        "CAN streaming OTA update may be starting in background. Check progress below. " +
         "If no progress appears within 30 seconds, the update may have failed. Error: " + 
         error.message
       ));
@@ -443,9 +357,12 @@ const CanOtaWizard = ({ open, onClose }) => {
   };
 
   const getDeviceTypeString = (canId) => {
-    for (const [key, value] of Object.entries(deviceMapping)) {
-      if (value === canId) {
-        return key.toUpperCase();
+    for (const [group, entry] of Object.entries(deviceMapping.mapping || {})) {
+      if (entry === canId) return group.toUpperCase();
+      for (const [name, id] of Object.entries(typeof entry === "object" ? entry : {})) {
+        if (id === canId) {
+          return group === "motors" ? `MOTOR ${name}` : name.replace("_", " ").toUpperCase();
+        }
       }
     }
     return `Device ${canId}`;
@@ -473,137 +390,19 @@ const CanOtaWizard = ({ open, onClose }) => {
   const renderStepContent = (step) => {
     switch (step) {
       case 0:
-        return renderOtaMethodSelection();
-      case 1:
-        return renderWifiSetup();
-      case 2:
         return renderFirmwareServer();
-      case 3:
+      case 1:
         return renderDeviceScan();
-      case 4:
+      case 2:
         return renderDeviceSelection();
-      case 5:
+      case 3:
         return renderUpdateProgress();
-      case 6:
+      case 4:
         return renderCompletion();
       default:
         return null;
     }
   };
-
-  const renderOtaMethodSelection = () => (
-    <Box sx={{ mt: 2 }}>
-      <Typography variant="h6" gutterBottom>
-        Select OTA Update Method
-      </Typography>
-      <Typography variant="body2" color="text.secondary" gutterBottom>
-        Choose how firmware will be transferred to the CAN devices.
-      </Typography>
-
-      <FormControl component="fieldset" sx={{ mt: 3, width: "100%" }}>
-        <RadioGroup
-          value={canOtaState.otaMethod}
-          onChange={(e) => dispatch(canOtaSlice.setOtaMethod(e.target.value))}
-        >
-          <Paper 
-            sx={{ 
-              p: 2, 
-              mb: 2, 
-              border: canOtaState.otaMethod === "wifi" ? 2 : 1,
-              borderColor: canOtaState.otaMethod === "wifi" ? "primary.main" : "divider",
-              cursor: "pointer"
-            }}
-            onClick={() => dispatch(canOtaSlice.setOtaMethod("wifi"))}
-          >
-            <FormControlLabel
-              value="wifi"
-              control={<Radio />}
-              label={
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <WifiIcon color={canOtaState.otaMethod === "wifi" ? "primary" : "action"} />
-                  <Typography variant="subtitle1">WiFi OTA</Typography>
-                </Box>
-              }
-            />
-            <Typography variant="body2" color="text.secondary" sx={{ ml: 4 }}>
-              Devices download firmware directly from a server via WiFi.
-              Requires WiFi credentials and a firmware server URL.
-              Best for devices with stable WiFi connection.
-            </Typography>
-          </Paper>
-
-          <Paper 
-            sx={{ 
-              p: 2, 
-              border: canOtaState.otaMethod === "can_streaming" ? 2 : 1,
-              borderColor: canOtaState.otaMethod === "can_streaming" ? "primary.main" : "divider",
-              cursor: "pointer"
-            }}
-            onClick={() => dispatch(canOtaSlice.setOtaMethod("can_streaming"))}
-          >
-            <FormControlLabel
-              value="can_streaming"
-              control={<Radio />}
-              label={
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <CableIcon color={canOtaState.otaMethod === "can_streaming" ? "primary" : "action"} />
-                  <Typography variant="subtitle1">CAN Streaming OTA</Typography>
-                </Box>
-              }
-            />
-            <Typography variant="body2" color="text.secondary" sx={{ ml: 4 }}>
-              Firmware is streamed directly over the CAN bus from this computer.
-              No WiFi required on target devices. Slower but more reliable for
-              devices without WiFi access.
-            </Typography>
-          </Paper>
-        </RadioGroup>
-      </FormControl>
-
-      <Alert severity="info" sx={{ mt: 3 }}>
-        {canOtaState.otaMethod === "wifi" 
-          ? "WiFi OTA: Devices will connect to WiFi and download firmware from the server."
-          : "CAN Streaming: Firmware will be transferred chunk by chunk over the CAN bus."}
-      </Alert>
-    </Box>
-  );
-
-  const renderWifiSetup = () => (
-    <Box sx={{ mt: 2 }}>
-      <Typography variant="h6" gutterBottom>
-        WiFi Configuration for OTA Updates
-      </Typography>
-      <Typography variant="body2" color="text.secondary" gutterBottom>
-        These credentials will be used by CAN devices to connect to WiFi during the OTA update process.
-      </Typography>
-
-      {canOtaState.isLoadingWifiCredentials ? (
-        <Box sx={{ display: "flex", justifyContent: "center", my: 3 }}>
-          <CircularProgress />
-        </Box>
-      ) : (
-        <Box sx={{ mt: 3 }}>
-          <TextField
-            fullWidth
-            label="WiFi SSID"
-            value={canOtaState.wifiSsid}
-            onChange={(e) => dispatch(canOtaSlice.setWifiSsid(e.target.value))}
-            margin="normal"
-            helperText={`Default: ${canOtaState.defaultWifiSsid || "Not set"}`}
-          />
-          <TextField
-            fullWidth
-            label="WiFi Password"
-            type="password"
-            value={canOtaState.wifiPassword}
-            onChange={(e) => dispatch(canOtaSlice.setWifiPassword(e.target.value))}
-            margin="normal"
-            helperText="Password for the WiFi network"
-          />
-        </Box>
-      )}
-    </Box>
-  );
 
   const renderFirmwareServer = () => (
     <Box sx={{ mt: 2 }}>
@@ -611,7 +410,8 @@ const CanOtaWizard = ({ open, onClose }) => {
         Firmware Server Configuration
       </Typography>
       <Typography variant="body2" color="text.secondary" gutterBottom>
-        The server should serve firmware files at &lt;server_url&gt;/latest/ with files named like: id_10_*.bin, id_11_*.bin, etc.
+        The firmware server (the firmware-image-server container) lists the images and their
+        version.json. A custom id_&lt;CAN ID&gt;_*.bin overrides a node's standard image.
       </Typography>
 
       {canOtaState.isLoadingFirmwareServer ? (
@@ -1286,17 +1086,17 @@ const CanOtaWizard = ({ open, onClose }) => {
         {renderStepContent(canOtaState.currentStep)}
       </DialogContent>
       <DialogActions>
-        {canOtaState.currentStep !== 6 && (
+        {canOtaState.currentStep !== 4 && (
           <>
             <Button 
               onClick={handleClose}
-              color={canOtaState.currentStep === 5 && canOtaState.isUpdating ? "error" : "inherit"}
+              color={canOtaState.currentStep === 3 && canOtaState.isUpdating ? "error" : "inherit"}
             >
-              {canOtaState.currentStep === 5 && canOtaState.isUpdating ? "Cancel Update" : "Cancel"}
+              {canOtaState.currentStep === 3 && canOtaState.isUpdating ? "Cancel Update" : "Cancel"}
             </Button>
             <Box sx={{ flex: "1 1 auto" }} />
             {/* Back: always visible except on the final step and while an update is running */}
-            {canOtaState.currentStep !== 5 || !canOtaState.isUpdating ? (
+            {canOtaState.currentStep !== 3 || !canOtaState.isUpdating ? (
               <Button
                 onClick={handleBack}
                 disabled={canOtaState.currentStep === 0}
@@ -1306,7 +1106,7 @@ const CanOtaWizard = ({ open, onClose }) => {
             ) : null}
 
             {/* Next / Start OTA / Retry */}
-            {canOtaState.currentStep !== 5 ? (
+            {canOtaState.currentStep !== 3 ? (
               <Button
                 variant="contained"
                 onClick={handleNext}

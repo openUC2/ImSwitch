@@ -22,6 +22,8 @@ import {
   Tab,
   Tabs,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -91,6 +93,28 @@ const METADATA_FIELDS = [
   { key: "acq_instrument", label: "Instrument", type: "text" },
   { key: "acq_celltype_ul", label: "Flow cell volume (µl)", type: "number" },
 ];
+
+// One-tap motor speeds (steps/s) offered next to the free speed fields.
+const SPEED_PRESETS = [100, 1000, 10000, 80000];
+
+const formatSpeed = (v) => (v >= 1000 ? `${v / 1000}k` : String(v));
+
+// Preset buttons for a speed value; highlights the preset matching the current value.
+const SpeedPresets = ({ value, onSelect }) => (
+  <ToggleButtonGroup
+    exclusive
+    fullWidth
+    size="small"
+    value={SPEED_PRESETS.includes(Number(value)) ? Number(value) : null}
+    onChange={(e, v) => v !== null && onSelect(v)}
+  >
+    {SPEED_PRESETS.map((v) => (
+      <ToggleButton key={v} value={v}>
+        {formatSpeed(v)}
+      </ToggleButton>
+    ))}
+  </ToggleButtonGroup>
+);
 
 const formatDuration = (seconds) => {
   if (seconds === null || seconds === undefined || seconds < 0) return "--:--";
@@ -307,6 +331,9 @@ const FlowStopController = () => {
                 />
               </Grid>
               <Grid item xs={12}>
+                <SpeedPresets value={state.focusSpeed} onSelect={(v) => set({ focusSpeed: v })} />
+              </Grid>
+              <Grid item xs={12}>
                 <Tooltip title={t("Move focus up")}>
                   <IconButton
                     onClick={() => apiFlowStopMoveFocus(state.focusStep, state.focusSpeed)}
@@ -349,6 +376,12 @@ const FlowStopController = () => {
                   label={t("Speed")}
                   value={state.pumpJogSpeed}
                   onCommit={(v) => set({ pumpJogSpeed: v })}
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <SpeedPresets
+                  value={state.pumpJogSpeed}
+                  onSelect={(v) => set({ pumpJogSpeed: v })}
                 />
               </Grid>
               <Grid item xs={12}>
@@ -564,6 +597,9 @@ const FlowStopController = () => {
                   value={state.pumpSpeed}
                   onCommit={(v) => set({ pumpSpeed: v })}
                 />
+                <Box sx={{ mt: 1 }}>
+                  <SpeedPresets value={state.pumpSpeed} onSelect={(v) => set({ pumpSpeed: v })} />
+                </Box>
               </Grid>
               <Grid item xs={12} sm={6}>
                 <FreeNumberField
@@ -634,6 +670,16 @@ const FlowStopController = () => {
       </Grid>
 
       <Grid item xs={12} md={5}>
+        <Card sx={{ mb: 2 }}>
+          <CardContent>
+            <Typography variant="subtitle1" gutterBottom>
+              {t("Live view")}
+            </Typography>
+            <Box sx={{ minHeight: 280 }}>
+              <LiveViewControlWrapper enableStageMovement={false} />
+            </Box>
+          </CardContent>
+        </Card>
         <Card>
           <CardContent>
             <Typography variant="subtitle1" gutterBottom>

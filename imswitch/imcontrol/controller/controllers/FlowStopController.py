@@ -43,6 +43,33 @@ PARAM_KEYS = ("experimentName", "experimentDescription", "uniqueId", "numImages"
               "wasRunning")
 
 
+def to8bit(frame: np.ndarray, bitDepth: int = 0) -> np.ndarray:
+    """Scale a 10/12/14/16-bit (or float) frame linearly down to uint8 for JPEG/video.
+
+    cv2.imwrite/VideoWriter saturate anything above 255 instead of rescaling, which is
+    why 12-bit frames came out blown out. Integer frames are shifted by their sensor bit
+    depth (`bitDepth`, or inferred from the frame maximum) so brightness stays comparable
+    between frames; float frames are min/max-stretched.
+    """
+    if frame.dtype == np.uint8:
+        return frame
+    if np.issubdtype(frame.dtype, np.integer):
+        bitDepth = max(bitDepth, inferBitDepth(frame))
+        return (frame.astype(np.uint32) >> (bitDepth - 8)).clip(0, 255).astype(np.uint8)
+    lo, hi = float(np.min(frame)), float(np.max(frame))
+    scaled = (frame.astype(np.float32) - lo) * (255.0 / max(hi - lo, 1e-12))
+    return np.clip(scaled, 0, 255).astype(np.uint8)
+
+
+def inferBitDepth(frame: np.ndarray) -> int:
+    """Smallest of 8/10/12/14/16 bits that holds the frame maximum."""
+    peak = int(np.max(frame)) if frame.size else 0
+    for bits in (8, 10, 12, 14):
+        if peak < (1 << bits):
+            return bits
+    return 16
+
+
 class FlowStopController(LiveUpdatedController):
     """Flow-cell imaging: step the pump by a fixed volume, settle, snap, repeat.
 
@@ -76,6 +103,9 @@ class FlowStopController(LiveUpdatedController):
         self._endTime = 0.0
         self._relativePath = ""
         self._lastError = ""
+        # sensor bit depth seen so far; only grows, so a dark frame does not get
+        # scaled brighter than a bright one when converting to 8-bit JPEG
+        self._bitDepth = 8
 
         # select detector / illumination / stage; a missing device must not kill startup
         self.detectorFlowCam = self._firstDevice(self._master.detectorsManager)
@@ -376,6 +406,7 @@ class FlowStopController(LiveUpdatedController):
 
         if self.isRecordVideo:
             self.video_safe = VideoSafe(self.detectorFlowCam.getLatestFrame,
+                                        to8bit=self._frameTo8bit,
                                         output_folder=dirPath, frame_rate=5)
             self.video_safe.start()
         try:
@@ -448,11 +479,18 @@ class FlowStopController(LiveUpdatedController):
             tif.imwrite(fileName + ".tif", mFrame, append=False)
         elif fileFormat in ("JPG", "PNG"):
             ext = ".jpg" if fileFormat == "JPG" else ".png"
+            if fileFormat == "JPG":  # PNG keeps 16 bit, JPEG is 8 bit only
+                mFrame = self._frameTo8bit(mFrame)
             if not cv2.imwrite(fileName + ext, mFrame):
                 self._logger.warning(f"Frame could not be saved as {ext} "
                                      f"(shape: {getattr(mFrame, 'shape', None)})")
         else:
             self._logger.warning(f"Nothing saved, unknown file format {fileFormat}")
+
+    def _frameTo8bit(self, frame: np.ndarray) -> np.ndarray:
+        if np.issubdtype(frame.dtype, np.integer):
+            self._bitDepth = max(self._bitDepth, inferBitDepth(frame))
+        return to8bit(frame, self._bitDepth)
 
     def __del__(self):
         self.is_measure = False
@@ -462,9 +500,11 @@ class FlowStopController(LiveUpdatedController):
 
 
 class VideoSafe:
-    def __init__(self, frame_provider, output_folder, frame_rate=5, max_frames=1000):
+    def __init__(self, frame_provider, output_folder, frame_rate=5, max_frames=1000,
+                 to8bit=to8bit):
         """Continuously writes frames from `frame_provider` into rolling mp4 chunks."""
         self.frame_provider = frame_provider
+        self.to8bit = to8bit
         self.output_folder = output_folder
         self.frame_rate = frame_rate
         self.max_frames = max_frames
@@ -488,9 +528,8 @@ class VideoSafe:
             writer.release()
         return None
 
-    @staticmethod
-    def _toBGR(frame):
-        frame = cv2.convertScaleAbs(frame)
+    def _toBGR(self, frame):
+        frame = self.to8bit(frame)
         return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR) if frame.ndim == 2 else frame
 
     def _write_video(self):

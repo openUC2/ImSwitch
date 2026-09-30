@@ -500,3 +500,31 @@ def test_stopping_mid_line_switches_the_strobe_off_and_restores_the_camera():
     assert laser.calls and laser.calls[-1][0] is False
     assert camera.parameters["trigger_source"].value == "Continous"
     assert camera.parameters["exposure"].value == 10.0
+
+
+def test_start_prescan_strobe_flag_reports_whether_strobing_runs(monkeypatch):
+    """startPrescan(strobe=...) sets the param and answers up front whether the
+    strobed sweep will run; the prescan thread reuses that check."""
+    stage = virtual_stage()
+    camera = TriggeredCamera(stage, world(np.random.default_rng(0), 100))
+    laser = StrobeLaser()
+    ctrl = controller(stage, camera, {"LED": laser})
+    ctrl._createSession = lambda: setattr(ctrl, "_sessionPath", "/tmp/x")
+    ctrl._dropTiles = lambda kind: None
+    ctrl._emitStatus = lambda: None
+    started = []
+    monkeypatch.setattr(threading.Thread, "start", lambda self: started.append(self))
+
+    res = ctrl.startPrescan(0, 100, 0, 0, dy=10, speedX=100, strobe=True)
+    assert res["success"] and res["strobe"] is True and res["strobeReason"] == ""
+    assert ctrl.params.prescanStrobe is True and ctrl._strobePreflight[0] is laser
+
+    ctrl._prescanThread = None
+    stage.hasStrobeSweep = lambda: False
+    res = ctrl.startPrescan(0, 100, 0, 0, dy=10, speedX=100)       # keeps the setting
+    assert res["strobe"] is False and "strobesweep" in res["strobeReason"]
+
+    ctrl._prescanThread = None
+    res = ctrl.startPrescan(0, 100, 0, 0, dy=10, speedX=100, strobe=False)
+    assert "strobe" not in res and ctrl.params.prescanStrobe is False
+    assert len(started) == 3

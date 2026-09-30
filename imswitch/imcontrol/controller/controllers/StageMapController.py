@@ -463,6 +463,7 @@ class StageMapController(ImConWidgetController):
         self._prescanThread: Optional[threading.Thread] = None
         self._prescanLagS = 0.0               # camera lag in use (see StageMapParams.prescanLagMs)
         self._strobeCalibrating = False       # calibrateStageMapStrobeDelay is running
+        self._strobePreflight = None          # (laser, reason) checked by startPrescan
         self._lastError = ""
 
         self._logger.info("StageMapController initialized")
@@ -1201,7 +1202,8 @@ class StageMapController(ImConWidgetController):
         """
         if not self.params.prescanStrobe:
             return None
-        laser, reason = self._strobeSetup()
+        preflight, self._strobePreflight = getattr(self, "_strobePreflight", None), None
+        laser, reason = preflight if preflight is not None else self._strobeSetup()
         if laser is None:
             self._logger.warning(
                 f"Strobed prescan requested, but {reason}: running the free-running prescan")
@@ -1643,7 +1645,8 @@ class StageMapController(ImConWidgetController):
     def startPrescan(self, minX: float, maxX: float, minY: float, maxY: float,
                      dy: float = 500.0, speedX: float = 10000.0,
                      objectiveSlot: Optional[int] = None,
-                     dx: float = 0.0, subsample: int = 0) -> Dict:
+                     dx: float = 0.0, subsample: int = 0,
+                     strobe: Optional[bool] = None) -> Dict:
         """Sweep an area fast and drop the result on the map as an overlay.
 
         The stage runs continuously in X while the camera free-runs; frames are
@@ -1675,13 +1678,31 @@ class StageMapController(ImConWidgetController):
         spacing the scan uses; 0 means one field width. ``subsample`` is
         camera pixels per strip pixel (0 = the default); the strip grows
         coarser on its own if it would exceed ``PRESCAN_MAX_STRIP_MB``.
+
+        ``strobe`` sets ``params.prescanStrobe`` for this and later prescans
+        (None keeps the current setting). When strobing is on, the answer says
+        whether it will actually run (``strobe``) and, if not, why
+        (``strobeReason``); the prescan then runs free as before.
         """
         if self._isRunning or self._prescanThread is not None or self._strobeCalibrating:
             return {"success": False, "error": "A scan is already running"}
+        if strobe is not None:
+            self.params.prescanStrobe = bool(strobe)
         if self._detector is None or self._stage is None:
             return {"success": False, "error": "Detector or stage not available"}
         if maxX <= minX or maxY < minY or dy <= 0 or speedX <= 0:
             return {"success": False, "error": "Invalid area, dy or speed"}
+
+        strobeInfo = {}
+        self._strobePreflight = None
+        if self.params.prescanStrobe:
+            # Answer now whether the strobed sweep will run; the prescan thread
+            # reuses this check instead of repeating the serial queries.
+            laser, reason = self._strobeSetup()
+            self._strobePreflight = (laser, reason)
+            strobeInfo = {"strobe": laser is not None, "strobeReason": reason}
+            if laser is None:
+                self._logger.warning(f"Strobed prescan requested, but {reason}")
 
         if self._sessionPath is None:
             self._createSession()
@@ -1703,7 +1724,7 @@ class StageMapController(ImConWidgetController):
             f"Prescan started: X {minX:.0f}->{maxX:.0f} um, {nLines} line(s) "
             f"every {dy:.0f} um at {speedX:.0f} um/s"
         )
-        return {"success": True, "lines": nLines}
+        return {"success": True, "lines": nLines, **strobeInfo}
 
     @APIExport()
     def getStageMapOverview(self, maxWidthPx: int = 2048) -> Dict:

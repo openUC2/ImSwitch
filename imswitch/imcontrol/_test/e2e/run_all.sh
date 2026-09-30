@@ -8,7 +8,7 @@
 #
 #   ./run_all.sh                 # everything
 #   ./run_all.sh camera          # only camera/
-#   ./run_all.sh laser ledmatrix # several folders
+#   ./run_all.sh lightsource ledmatrix # several folders
 #
 # Override with PI_HOST / IMSWITCH_CONTAINER, plus any test knob (see README.md).
 set -euo pipefail
@@ -26,7 +26,7 @@ for knob in $(compgen -v | grep -E '^(IMSWITCH_DETECTOR|UC2_LASER_VALUE|PHOTON_|
     [ -z "${!knob:-}" ] || ENVS="$ENVS -e $knob=${!knob}"
 done
 
-# Optional folder filter: ./run_all.sh camera laser
+# Optional folder filter: ./run_all.sh camera lightsource
 TARGETS=""
 for arg in "$@"; do TARGETS="$TARGETS /tmp/e2e/$arg"; done
 [ -z "$TARGETS" ] && TARGETS="/tmp/e2e"

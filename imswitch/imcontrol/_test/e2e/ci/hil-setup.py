@@ -5,20 +5,20 @@ The rig side of hil-run.sh, which calls it; that script keeps the arguments,
 the lock and the suite itself. Runs ON the Pi, against the local Docker
 daemon, with nothing but the standard library -- the host has no requests.
 
-    hil-setup.py up --image sha-7d3adda      # check, swap, wait until ready
-    hil-setup.py down [--keep-image]         # put the pinned image back
+    hil-setup.py swap-in --image sha-7d3adda   # check, swap it in, wait until ready
+    hil-setup.py restore [--keep-image]        # put the original image back
 
-up leaves the rig on the image under test until down runs. hil-run.sh runs
-down on every exit path; by hand, you have to.
+swap-in leaves the rig on the test image until restore runs. hil-run.sh runs
+restore on every exit path; by hand, you have to.
 
 Why swap instead of installing: forklift owns the deployment, and the image it
 pins is the one the device is supposed to run. The swap is a temporary
-override that down removes again, so a finished run -- or a failed one, or an
-interrupted one -- leaves the same container the user had.
+override that restore removes again, so a finished run -- or a failed one, or
+an interrupted one -- leaves the same container the user had.
 
-up writes what down needs into a state file before it changes anything. A
-state file that is still there when up starts means an earlier run was never
-restored, and up refuses to swap on top of it.
+swap-in writes what restore needs into a state file before it changes
+anything. A state file that is still there when swap-in starts means an
+earlier run was never restored, and swap-in refuses to swap on top of it.
 
 Exit codes: 0 done, 2 the step could not be performed.
 """
@@ -62,7 +62,7 @@ DETECTOR_TIMEOUT = int(os.environ.get("HIL_DETECTOR_TIMEOUT", "300"))
 # sets an image, so it needs no path resolution of its own.
 OVERRIDE_FILE = os.environ.get("HIL_OVERRIDE_FILE", "/tmp/hil-override.compose.yml")
 
-# What down needs to know about the deployment up swapped.
+# What restore needs to know about the deployment swap-in changed.
 STATE_FILE = os.environ.get("HIL_STATE_FILE", "/tmp/hil-state.json")
 
 DEFAULT_REGISTRY = "ghcr.io/openuc2/imswitch"
@@ -73,8 +73,8 @@ EXIT_OK = 0
 EXIT_UNAVAILABLE = 2
 
 
-class Unavailable(Exception):
-    """The step cannot be performed; the message says why."""
+class StepFailed(Exception):
+    """swap-in or restore cannot go on; the message says why."""
 
 
 def log(message):
@@ -89,7 +89,7 @@ def warn(message):
 # HTTP and docker.
 # ---------------------------------------------------------------------------
 
-def request(path, method="GET", timeout=15, **params):
+def imswitch_request(path, method="GET", timeout=15, **params):
     """(status, body) of one ImSwitch call through caddy; status None if no answer."""
     url = f"{HOST_URL}/api/{path}"
     if params:
@@ -107,9 +107,9 @@ def request(path, method="GET", timeout=15, **params):
         return None, b""
 
 
-def get_json(path, timeout=15):
+def imswitch_json(path, timeout=15):
     """The JSON of a 200 answer, or None for anything else."""
-    status, body = request(path, timeout=timeout)
+    status, body = imswitch_request(path, timeout=timeout)
     if status != 200:
         return None
     try:
@@ -119,7 +119,7 @@ def get_json(path, timeout=15):
 
 
 def imswitch_version():
-    status, body = request("version", timeout=10)
+    status, body = imswitch_request("version", timeout=10)
     return body.decode(errors="replace").strip() if status == 200 else ""
 
 
@@ -133,7 +133,7 @@ def wait_for_imswitch():
     return False
 
 
-def run(*command):
+def run_logged(*command):
     """Run a command, indenting its output into our log; True if it succeeded."""
     process = subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
@@ -153,16 +153,18 @@ def inspect_container():
     return json.loads(result.stdout)[0]
 
 
-def running_image():
+def container_image():
+    """The image the container runs right now."""
     info = inspect_container()
     return info["Config"]["Image"] if info else ""
 
 
-def compose_command(state, *args, override=False):
+def compose_up_command(state, with_override=False):
+    """docker compose up for the deployment, with or without our override."""
     command = ["docker", "compose", *state["compose_args"]]
-    if override:
+    if with_override:
         command += ["-f", OVERRIDE_FILE]
-    return [*command, *args]
+    return [*command, "up", "-d", "--no-build"]
 
 
 # ---------------------------------------------------------------------------
@@ -171,31 +173,31 @@ def compose_command(state, *args, override=False):
 # ---------------------------------------------------------------------------
 
 def check_preconditions():
-    # hil-run.sh runs down after this refusal too, which restores that run;
-    # by hand, run down yourself.
+    # hil-run.sh runs restore after this refusal too, which restores that
+    # run; by hand, run restore yourself.
     if os.path.exists(STATE_FILE):
-        raise Unavailable(
+        raise StepFailed(
             f"{STATE_FILE} is left over from a run that was never restored "
             "-- not swapping on top of it"
         )
 
     if not shutil.which("docker"):
-        raise Unavailable("docker not found -- run this on the Pi")
+        raise StepFailed("docker not found -- run this on the Pi")
 
     if inspect_container() is None:
-        raise Unavailable(f"container {CONTAINER} not found -- is ImSwitch deployed?")
+        raise StepFailed(f"container {CONTAINER} not found -- is ImSwitch deployed?")
 
     free_gb = shutil.disk_usage("/").free // 2**30
     if free_gb < MIN_FREE_GB:
-        raise Unavailable(f"only {free_gb}G free on / , need {MIN_FREE_GB}G for the image")
+        raise StepFailed(f"only {free_gb}G free on / , need {MIN_FREE_GB}G for the image")
 
     if not imswitch_version():
-        raise Unavailable(f"ImSwitch does not answer at {HOST_URL} -- not swapping anything")
+        raise StepFailed(f"ImSwitch does not answer at {HOST_URL} -- not swapping anything")
 
-    status, body = request("UC2ConfigController/uc2_board_is_connected")
+    status, body = imswitch_request("UC2ConfigController/uc2_board_is_connected")
     if status != 200 or body.strip() != b"true":
         answer = body.decode(errors="replace").strip() or "none"
-        raise Unavailable(
+        raise StepFailed(
             f"UC2 board not connected (answer: {answer}) -- the tests would all skip"
         )
 
@@ -215,7 +217,7 @@ def read_deployment():
     config_files = labels.get("com.docker.compose.project.config_files", "")
 
     if not (project and os.path.isdir(pkg_dir) and config_files):
-        raise Unavailable(f"cannot read the compose setup off {CONTAINER}")
+        raise StepFailed(f"cannot read the compose setup off {CONTAINER}")
 
     # Rebuild the exact -f list the deployment uses, in order: the later files
     # carry the device rules and the caddy labels, and dropping one would start
@@ -236,7 +238,7 @@ def read_deployment():
             continue
 
         if not os.path.isfile(path):
-            raise Unavailable(f"compose file missing: {path}")
+            raise StepFailed(f"compose file missing: {path}")
         compose_args += ["-f", path]
 
     return {
@@ -251,36 +253,37 @@ def read_deployment():
 # Swap.
 # ---------------------------------------------------------------------------
 
-def swap(state):
-    image_ref = state["image_ref"]
+def start_test_image(state):
+    """Pull the test image and restart the container on it via the override."""
+    test_image = state["test_image"]
 
-    log(f"pulling {image_ref}")
-    if not run("docker", "pull", image_ref):
-        raise Unavailable("pull failed -- wrong tag, or not logged in to the registry")
+    log(f"pulling {test_image}")
+    if not run_logged("docker", "pull", test_image):
+        raise StepFailed("pull failed -- wrong tag, or not logged in to the registry")
 
     with open(OVERRIDE_FILE, "w") as override:
         override.write(
-            "# Written by hil-setup.py, removed again by its down step. If you find\n"
-            "# this file on a rig, a run was killed hard -- check which image is running.\n"
+            "# Written by hil-setup.py, removed again by its restore step. If you\n"
+            "# find this file on a rig, a run was killed hard -- check which image runs.\n"
             "services:\n"
             "  server:\n"
-            f"    image: {image_ref}\n"
+            f"    image: {test_image}\n"
         )
 
-    log("starting the container on the image under test")
-    if not run(*compose_command(state, "up", "-d", "--no-build", override=True)):
-        raise Unavailable("compose up failed")
+    log("starting the container on the test image")
+    if not run_logged(*compose_up_command(state, with_override=True)):
+        raise StepFailed("compose up failed")
 
     log(f"waiting for ImSwitch (up to {READY_TIMEOUT}s)")
     if not wait_for_imswitch():
-        raise Unavailable(f"ImSwitch did not answer within {READY_TIMEOUT}s")
+        raise StepFailed(f"ImSwitch did not answer within {READY_TIMEOUT}s")
 
-    now_running = running_image()
+    now_running = container_image()
     log(f"now running  {now_running}")
     log(f"reports      {imswitch_version()}")
 
-    if now_running != image_ref:
-        raise Unavailable(f"the container runs {now_running}, not the image under test")
+    if now_running != test_image:
+        raise StepFailed(f"the container runs {now_running}, not the test image")
 
 
 # ---------------------------------------------------------------------------
@@ -311,11 +314,11 @@ def start_live_view(detector):
     who started it. The stream is left running afterwards -- the suite starts
     its own where it needs one, and the camera is no worse off for it.
     """
-    code, body = request(
+    code, body = imswitch_request(
         "LiveViewController/startLiveView", method="POST", timeout=60, detectorName=detector
     )
     if code != 200:
-        raise Unavailable(
+        raise StepFailed(
             f"startLiveView for {detector} answered HTTP {code or 'nothing'} "
             "-- the camera cannot deliver frames"
         )
@@ -326,23 +329,23 @@ def start_live_view(detector):
         status = None
 
     if status not in ("success", "already_running"):
-        raise Unavailable(
+        raise StepFailed(
             f"startLiveView for {detector} reported {status or 'no status'} "
             "-- the camera would never deliver a frame"
         )
     log(f"detector    {detector} live view {status}")
 
 
-def snap_code(detector):
+def snap_status_code(detector):
     """HTTP status of one snap. Asking the wrong endpoint would wait out the
     full timeout on a camera that was ready all along."""
     if is_observation_camera(detector):
-        code, _ = request(
+        code, _ = imswitch_request(
             "ExperimentController/snapOverviewImage", method="POST", timeout=30,
             slot_id=1, camera_name="hil_ready_check",
         )
     else:
-        code, _ = request(
+        code, _ = imswitch_request(
             "RecordingController/snapNumpyToFastAPI", timeout=30,
             detectorName=detector, resizeFactor=0.1,
         )
@@ -354,7 +357,7 @@ def wait_for_detector(detector):
     code = None
 
     while time.monotonic() - started < DETECTOR_TIMEOUT:
-        code = snap_code(detector)
+        code = snap_status_code(detector)
 
         if code == 200:
             log(f"detector    {detector} ready after {time.monotonic() - started:.0f}s")
@@ -377,10 +380,10 @@ def wait_for_detectors():
     log(f"waiting for every detector to deliver a frame (up to {DETECTOR_TIMEOUT}s each)")
 
     # Read the detectors from the setup instead of naming them here: which
-    # cameras exist depends on the setup file the image under test loads.
-    detectors = get_json("SettingsController/getDetectorNames") or []
+    # cameras exist depends on the setup file the test image loads.
+    detectors = imswitch_json("SettingsController/getDetectorNames") or []
     if not detectors:
-        raise Unavailable("ImSwitch reports no detectors -- the camera tests would all skip")
+        raise StepFailed("ImSwitch reports no detectors -- the camera tests would all skip")
 
     # Every detector is waited out even after one fails, so the log shows how
     # long each of them really took and whether the timeout is set anywhere
@@ -396,44 +399,46 @@ def wait_for_detectors():
         if not wait_for_detector(detector):
             not_ready.append(detector)
 
-    # Unavailable, not a test failure: a camera that never woke up says nothing
+    # Exit 2, not a test failure: a camera that never woke up says nothing
     # about the image, and CI must not page anyone about a red test that never
     # ran.
     if not_ready:
-        raise Unavailable(
+        raise StepFailed(
             f"detector(s) not ready within {DETECTOR_TIMEOUT}s: {' '.join(not_ready)} "
             "-- not running the suite"
         )
 
 
 # ---------------------------------------------------------------------------
-# The two steps.
+# The two commands.
 # ---------------------------------------------------------------------------
 
-def up(image):
+def swap_in_test_image(image):
+    """swap-in: check the rig, put the test image in, wait until it is ready."""
     # A bare tag is the common case; a full ref stays untouched, so a fork's
     # own registry works without a flag.
-    image_ref = image if "/" in image else f"{DEFAULT_REGISTRY}:{image}"
+    test_image = image if "/" in image else f"{DEFAULT_REGISTRY}:{image}"
 
     check_preconditions()
     state = read_deployment()
-    state["image_ref"] = image_ref
+    state["test_image"] = test_image
 
     log(f"container   {CONTAINER} (project {state['project']})")
     log(f"package     {state['pkg_dir']}")
     log(f"running     {state['original_image']}")
-    log(f"testing     {image_ref}")
+    log(f"testing     {test_image}")
 
-    # Written before the first change, so down can undo whatever part of the
-    # swap happened, whenever it is interrupted.
+    # Written before the first change, so restore can undo whatever part of
+    # the swap happened, whenever it is interrupted.
     with open(STATE_FILE, "w") as file:
         json.dump(state, file)
 
-    swap(state)
+    start_test_image(state)
     wait_for_detectors()
 
 
-def down(keep_image):
+def restore_original_image(keep_image):
+    """restore: put the original image back; a no-op if nothing was swapped."""
     try:
         with open(STATE_FILE) as file:
             state = json.load(file)
@@ -442,20 +447,20 @@ def down(keep_image):
         return
 
     original_image = state["original_image"]
-    image_ref = state["image_ref"]
+    test_image = state["test_image"]
 
     log(f"restoring {original_image}")
 
     if os.path.exists(OVERRIDE_FILE):
         os.remove(OVERRIDE_FILE)
 
-    command = compose_command(state, "up", "-d", "--no-build")
-    if not run(*command):
-        # The state file stays, so down can simply be run again once the
+    command = compose_up_command(state)
+    if not run_logged(*command):
+        # The state file stays, so restore can simply be run again once the
         # cause is fixed.
-        warn(f"RESTORE FAILED -- the rig may still run {image_ref}")
+        warn(f"RESTORE FAILED -- the rig may still run {test_image}")
         warn(f"fix by hand: {shlex.join(command)}")
-        raise Unavailable(f"or retry:   {sys.argv[0]} down")
+        raise StepFailed(f"or retry:   {sys.argv[0]} restore")
 
     if wait_for_imswitch():
         log("restored, ImSwitch answers again")
@@ -464,37 +469,39 @@ def down(keep_image):
 
     # Only ever remove what this run pulled, and never the image the rig runs
     # on: the card holds the rollback image too, and that one must stay.
-    if not keep_image and image_ref != original_image:
+    if not keep_image and test_image != original_image:
         removed = subprocess.run(
-            ["docker", "rmi", image_ref], capture_output=True
+            ["docker", "rmi", test_image], capture_output=True
         ).returncode == 0
-        log(f"removed {image_ref}" if removed else f"kept {image_ref} (still in use)")
+        log(f"removed {test_image}" if removed else f"kept {test_image} (still in use)")
 
     os.remove(STATE_FILE)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Swap an ImSwitch image in and out.")
-    steps = parser.add_subparsers(dest="step", required=True)
+    commands = parser.add_subparsers(dest="command", required=True)
 
-    step_up = steps.add_parser("up", help="check the rig, swap the image in, wait until ready")
-    step_up.add_argument("--image", required=True, help="bare tag or full image ref")
+    swap_in = commands.add_parser(
+        "swap-in", help="check the rig, swap the test image in, wait until ready"
+    )
+    swap_in.add_argument("--image", required=True, help="bare tag or full image ref")
 
-    step_down = steps.add_parser("down", help="put the pinned image back")
-    step_down.add_argument("--keep-image", action="store_true", help="keep the pulled image")
+    restore = commands.add_parser("restore", help="put the original image back")
+    restore.add_argument("--keep-image", action="store_true", help="keep the pulled image")
 
     args = parser.parse_args()
 
     try:
-        if args.step == "up":
-            up(args.image)
+        if args.command == "swap-in":
+            swap_in_test_image(args.image)
         else:
-            down(args.keep_image)
-    except Unavailable as error:
+            restore_original_image(args.keep_image)
+    except StepFailed as error:
         warn(str(error))
         return EXIT_UNAVAILABLE
     except KeyboardInterrupt:
-        warn(f"{args.step} interrupted")
+        warn(f"{args.command} interrupted")
         return EXIT_UNAVAILABLE
 
     return EXIT_OK

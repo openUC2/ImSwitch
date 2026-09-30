@@ -8,7 +8,7 @@ Sits alongside `../unit/` (no server) and `../api/` (headless server).
 | [`board/`](board/) | UC2 board connected, right master firmware | reads |
 | [`camera/`](camera/) | every detector delivers a frame; objective switch | reads · objective test **moves** |
 | [`firmware/`](firmware/) | firmware server and CAN node firmware | reads · update script **flashes** |
-| [`laser/`](laser/) | lasers/LEDs switch; LEDs reach the camera | **light** |
+| [`lightsource/`](lightsource/) | lasers/LEDs switch; LEDs reach the camera | **light** |
 | [`ledmatrix/`](ledmatrix/) | LED matrix reaches the camera | **light** |
 | [`motor/`](motor/) | axes move; camera sees it | **moves** |
 | [`ci/`](ci/) | swap an image in, run the suite, swap back | **moves, light** |
@@ -18,7 +18,7 @@ Sits alongside `../unit/` (no server) and `../api/` (headless server).
 ```bash
 ./run_all.sh                    # everything
 ./run_all.sh camera             # one folder
-./run_all.sh laser ledmatrix    # several
+./run_all.sh lightsource ledmatrix    # several
 ```
 
 `run_all.sh` ships this folder into the container on the Pi, **flashes outdated

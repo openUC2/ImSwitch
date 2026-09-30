@@ -28,7 +28,7 @@ OBJECTIVE_SKIP_Z=1 ./run_objective_switch.sh   # turret only, no Z offset
 | `OBJECTIVE_MOVE_TIMEOUT` | `120` | seconds for a turret move |
 | `OBJECTIVE_AUTOFOCUS_TIMEOUT` / `_RANGE` / `_STEP` | `180` / `100` / `10` | autofocus |
 | `OBJECTIVE_SKIP_Z` | off | skip the per-slot Z offset |
-| `UC2_LASER_VALUE`, `AUTO_EXPOSURE_RESET_MS`, `PHOTON_*` | see [`../laser/`](../laser/) | light test |
+| `UC2_LASER_VALUE`, `AUTO_EXPOSURE_RESET_MS`, `PHOTON_*` | see [`../lightsource/`](../lightsource/) | light test |
 
 ## Worth knowing
 

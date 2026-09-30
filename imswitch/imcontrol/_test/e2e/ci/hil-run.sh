@@ -2,8 +2,8 @@
 #
 # hil-run.sh -- test one ImSwitch image on the real rig, then put the rig back.
 #
-#   hil-setup.py up  ->  ship the suite  ->  pytest
-#                                  ... always hil-setup.py down
+#   hil-setup.py swap-in  ->  ship the suite  ->  pytest
+#                                       ... always hil-setup.py restore
 #
 # Runs ON the Pi, not from your machine: it talks to the local Docker daemon.
 # From your machine use run_all.sh, which tests whatever image already runs.
@@ -46,7 +46,7 @@ IMAGE=""
 TESTS=""
 OUT_DIR="$DIR/reports"
 CONFIRMED=0
-DOWN_ARGS=""
+RESTORE_ARGS=""
 
 EXIT_OK=0
 EXIT_FAILED=1
@@ -62,7 +62,7 @@ while [ $# -gt 0 ]; do
         --tests)      TESTS="${2:-}"; shift 2 ;;
         --out)        OUT_DIR="${2:-}"; shift 2 ;;
         --yes)        CONFIRMED=1; shift ;;
-        --keep-image) DOWN_ARGS="--keep-image"; shift ;;
+        --keep-image) RESTORE_ARGS="--keep-image"; shift ;;
         -h|--help)    sed -n '2,29p' "$0"; exit "$EXIT_OK" ;;
         *)            die "unknown argument: $1" ;;
     esac
@@ -79,15 +79,15 @@ flock -n 9 || die "another hil-run holds $LOCK_FILE -- one run per rig"
 
 # ---------------------------------------------------------------------------
 # Swap in, and back out on every exit path. The restore is installed before
-# up starts, so an interrupted run still gives the microscope back on the
-# image it came with. down knows what up changed; if up changed nothing, down
-# does nothing.
+# swap-in starts, so an interrupted run still gives the microscope back on the
+# image it came with. restore knows what swap-in changed; if swap-in changed
+# nothing, restore does nothing.
 # ---------------------------------------------------------------------------
 
-trap 'python3 "$SETUP" down $DOWN_ARGS || exit "$EXIT_UNAVAILABLE"' EXIT
+trap 'python3 "$SETUP" restore $RESTORE_ARGS || exit "$EXIT_UNAVAILABLE"' EXIT
 trap 'exit "$EXIT_UNAVAILABLE"' INT TERM
 
-python3 "$SETUP" up --image "$IMAGE" || exit "$EXIT_UNAVAILABLE"
+python3 "$SETUP" swap-in --image "$IMAGE" || exit "$EXIT_UNAVAILABLE"
 
 
 # ---------------------------------------------------------------------------

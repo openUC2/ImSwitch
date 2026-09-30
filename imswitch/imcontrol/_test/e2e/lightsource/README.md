@@ -1,11 +1,11 @@
-# Laser
+# Light sources
 
 Lasers and LEDs switch through ImSwitch; the LEDs reach the camera.
 
 | Test | Checks | Proves |
 |---|---|---|
-| `test_laser_switching.py::test_laser_reports_active` | every light: on → read back active/value → off | the API path, not light |
-| `test_laser_photon.py::test_light_source_is_visible_to_camera` | every LED, per camera: lit frame vs dark | photons hit the sensor |
+| `test_lightsource_switching.py::test_lightsource_reports_active` | every light: on → read back active/value → off | the API path, not light |
+| `test_lightsource_photon.py::test_light_source_is_visible_to_camera` | every LED, per camera: lit frame vs dark | photons hit the sensor |
 
 Lights come from `AcceptanceTestController/getAvailableLightSources`. The photon
 test keeps only LEDs: the 488 laser on this rig never reaches the sensor. It
@@ -14,8 +14,8 @@ runs once for the acquisition camera and once for the observation camera.
 ## Run
 
 ```bash
-./run_laser_test.sh
-./run_laser_test.sh --measure   # print the numbers, PHOTON_MIN_DELTA=0
+./run_lightsource_test.sh
+./run_lightsource_test.sh --measure   # print the numbers, PHOTON_MIN_DELTA=0
 ```
 
 | Knob | Default | |

@@ -1,7 +1,7 @@
 # LED Matrix
 
 The LED matrix accepts commands and its light reaches the camera. Separate from
-[`../laser/`](../laser/) because `LEDMatrixController` is not in the light list.
+[`../lightsource/`](../lightsource/) because `LEDMatrixController` is not in the light list.
 
 | Test | Checks | Proves |
 |---|---|---|
@@ -18,7 +18,7 @@ The LED matrix accepts commands and its light reaches the camera. Separate from
 | Knob | Default | |
 |---|---|---|
 | `LEDMATRIX_INTENSITY` | `500` | per-channel value, white |
-| `PHOTON_*`, `AUTO_EXPOSURE_RESET_MS`, `IMSWITCH_DETECTOR` | see [`../laser/`](../laser/) | same criterion |
+| `PHOTON_*`, `AUTO_EXPOSURE_RESET_MS`, `IMSWITCH_DETECTOR` | see [`../lightsource/`](../lightsource/) | same criterion |
 
 ## Worth knowing
 

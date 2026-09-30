@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 
-# Run the laser tests on the remote Pi inside the ImSwitch container.
+# Run the light source tests (lasers and LEDs) on the remote Pi inside the
+# ImSwitch container.
 #
-# Ships the whole folder, so both files run: test_laser_switching.py drives the
-# API and reads state back, test_laser_photon.py measures with the camera
-# whether light arrived. Each makes one test case per reported laser/LED.
+# Ships the whole folder, so both files run: test_lightsource_switching.py
+# drives the API and reads state back, test_lightsource_photon.py measures
+# with the camera whether light arrived. Each makes one test case per reported
+# laser/LED.
 #
-#   ./run_laser_test.sh
-#   ./run_laser_test.sh --measure    # print brightness, drop the threshold
+#   ./run_lightsource_test.sh
+#   ./run_lightsource_test.sh --measure    # print brightness, drop the threshold
 #
 # --measure is for recalibrating after moving a light or the optics. A light
 # with no signal at all still fails: that is a result, not a calibration
@@ -16,7 +18,7 @@
 # Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL / PYTHON_BIN /
 # REMOTE_TEST_DIR, plus any test knob (see README.md):
 #
-#   PI_HOST=pi@192.168.1.20 ./run_laser_test.sh
+#   PI_HOST=pi@192.168.1.20 ./run_lightsource_test.sh
 
 set -euo pipefail
 
@@ -29,7 +31,7 @@ IMSWITCH_URL="${IMSWITCH_URL:-http://localhost:8001}"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
-REMOTE_TEST_DIR="${REMOTE_TEST_DIR:-/tmp/laser_tests}"
+REMOTE_TEST_DIR="${REMOTE_TEST_DIR:-/tmp/lightsource_tests}"
 
 # The whole directory is shipped, so adding a test file here is enough.
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -59,17 +61,17 @@ tar --no-xattrs --format=ustar -czf - -C "$LOCAL_DIR/.." conftest.py -C "$LOCAL_
 ssh "$PI" "
     set -e
 
-    cat > /tmp/laser_tests.tgz
+    cat > /tmp/lightsource_tests.tgz
 
     docker cp \
-        /tmp/laser_tests.tgz \
-        '$CONTAINER:/tmp/laser_tests.tgz' \
+        /tmp/lightsource_tests.tgz \
+        '$CONTAINER:/tmp/lightsource_tests.tgz' \
         >/dev/null
 
     docker exec '$CONTAINER' sh -c \
         'rm -rf \"$REMOTE_TEST_DIR\" &&
          mkdir -p \"$REMOTE_TEST_DIR\" &&
-         tar xzf /tmp/laser_tests.tgz -C \"$REMOTE_TEST_DIR\"'
+         tar xzf /tmp/lightsource_tests.tgz -C \"$REMOTE_TEST_DIR\"'
 
     docker exec \
         $ENVS \

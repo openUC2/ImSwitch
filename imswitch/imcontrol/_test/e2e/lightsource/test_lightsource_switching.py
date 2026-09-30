@@ -28,11 +28,11 @@ def call(method, **params):
     return response.json()
 
 
-def get_laser_params():
+def get_lightsource_params():
     """One pytest parameter per laser/LED of the active setup.
 
     Read at collection time. ImSwitch reads the setup at startup, so it must be
-    restarted before a changed laser list appears here.
+    restarted before a changed light source list appears here.
     """
     try:
         response = requests.get(
@@ -42,7 +42,7 @@ def get_laser_params():
         response.raise_for_status()
 
         data = response.json()
-        lasers = [
+        names = [
             source["name"]
             for source in data.get("light_sources", [])
         ]
@@ -58,104 +58,104 @@ def get_laser_params():
             )
         ]
 
-    if not lasers:
+    if not names:
         return [
             pytest.param(
                 None,
                 marks=pytest.mark.skip(
                     reason="active setup has no lasers/LEDs"
                 ),
-                id="no-lasers",
+                id="no-lightsources",
             )
         ]
 
-    # The laser name becomes the test ID, so it is visible in the output.
+    # The light source name becomes the test ID, so it is visible in the output.
     return [
         pytest.param(
-            laser_name,
-            id=str(laser_name),
+            name,
+            id=str(name),
         )
-        for laser_name in lasers
+        for name in names
     ]
 
 
 @pytest.fixture
-def safe_laser(request):
-    """Hand over one laser and force it back to 0/inactive afterwards.
+def safe_lightsource(request):
+    """Hand over one light source and force it back to 0/inactive afterwards.
 
     Teardown runs even when the test fails, so none is left emitting.
     """
-    laser_name = request.param
+    name = request.param
 
-    yield laser_name
+    yield name
 
-    if laser_name is not None:
+    if name is not None:
         try:
             call(
                 "setLaserValue",
-                laserName=laser_name,
+                laserName=name,
                 value=0,
             )
         finally:
             call(
                 "setLaserActive",
-                laserName=laser_name,
+                laserName=name,
                 active=False,
             )
 
 
 @pytest.mark.hardware
 @pytest.mark.parametrize(
-    "safe_laser",
-    get_laser_params(),
+    "safe_lightsource",
+    get_lightsource_params(),
     indirect=True,
 )
-def test_laser_reports_active(safe_laser):
-    """Enable one laser, read active and value back, disable it again.
+def test_lightsource_reports_active(safe_lightsource):
+    """Enable one light source, read active and value back, disable it again.
 
     This proves the API path and that ImSwitch updates its own state. It does
     not prove that light was emitted - the readbacks are ImSwitch-side, not an
-    optical measurement; test_laser_photon.py covers that.
+    optical measurement; test_lightsource_photon.py covers that.
     """
-    laser_name = safe_laser
+    name = safe_lightsource
 
     call(
         "setLaserValue",
-        laserName=laser_name,
+        laserName=name,
         value=1,
     )
 
     call(
         "setLaserActive",
-        laserName=laser_name,
+        laserName=name,
         active=True,
     )
 
     assert call(
         "getLaserActive",
-        laserName=laser_name,
-    ) is True, f"{laser_name}: did not become active"
+        laserName=name,
+    ) is True, f"{name}: did not become active"
 
     assert (
         call(
             "getLaserValue",
-            laserName=laser_name,
+            laserName=name,
         ) or 0
-    ) > 0, f"{laser_name}: laser value is not positive"
+    ) > 0, f"{name}: value is not positive"
 
     call(
         "setLaserActive",
-        laserName=laser_name,
+        laserName=name,
         active=False,
     )
 
     assert call(
         "getLaserActive",
-        laserName=laser_name,
-    ) is False, f"{laser_name}: did not become inactive"
+        laserName=name,
+    ) is False, f"{name}: did not become inactive"
 
     call(
         "setLaserValue",
-        laserName=laser_name,
+        laserName=name,
         value=0,
     )

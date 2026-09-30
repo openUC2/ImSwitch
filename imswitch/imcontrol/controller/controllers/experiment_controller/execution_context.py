@@ -151,6 +151,9 @@ class ExecutionContext:
             "region_meta": self.region_meta,
             "exposures": self.exposures,
             "z_positions": self.z_positions,
+            # Aligned with illumination_intensities: needed to map each
+            # intensity onto its laser's firmware channel_index by name.
+            "illumination_sources": self.illumination_sources,
         }
 
 

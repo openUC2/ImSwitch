@@ -1170,6 +1170,18 @@ const WebSocketHandler = () => {
           console.error("Error in sigStageMapTileAdded handler:", error);
         }
         //----------------------------------------------
+      } else if (dataJson.name === "sigStageMapTilesRemoved") {
+        // The backend discarded tiles, e.g. the previous prescan overlay when
+        // a new prescan starts: {ids: [...], kind: "prescan"}
+        try {
+          const removed = dataJson.args?.p0;
+          if (removed?.ids?.length) {
+            dispatch(stageMapSlice.removeTiles(removed));
+          }
+        } catch (error) {
+          console.error("Error in sigStageMapTilesRemoved handler:", error);
+        }
+        //----------------------------------------------
       } else if (dataJson.name === "sigStageMapStatus") {
         // Stage map runtime status (isRunning, tileCount, channels, FOV, ...)
         try {

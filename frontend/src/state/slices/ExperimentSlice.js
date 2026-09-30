@@ -480,6 +480,12 @@ const experimentSlice = createSlice({
         neighborPointList: Array.isArray(action.payload.neighborPointList)
           ? action.payload.neighborPointList
           : [],
+        // The drawn outline of a freehand region (stage µm). Kept so the
+        // region can be re-tiled when the objective (FOV) or overlap changes;
+        // ``neighborPointList`` is only the current tiling of it.
+        polygon: Array.isArray(action.payload.polygon)
+          ? action.payload.polygon.map((p) => ({ x: p.x, y: p.y }))
+          : undefined,
       };
 
       console.log("createPoint newPoint", newPoint);

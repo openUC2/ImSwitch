@@ -237,26 +237,40 @@ class ExperimentModeBase(ABC):
             upload_timeout=getattr(exp_manager, 'omeroUploadTimeout', 300),
         )
 
-    def prepare_illumination_parameters(self, illumination_intensities: List[float]) -> Dict[str, Optional[float]]:
-        """
-        Prepare illumination parameters in the format expected by hardware.
-        
-        Frontend sends pre-mapped intensities array where indices correspond to
-        channel_index values. This method simply formats them for hardware.
-        
-        Args:
-            illumination_intensities: List of illumination intensities pre-mapped by frontend
-            
-        Returns:
-            List with illumination0-N and led parameters
-        """ # TODO: This is still correct?!! 
+    def prepare_illumination_parameters(self, illumination_intensities: List[float],
+                                        illumination_sources: Optional[List[str]] = None) -> List[float]:
+        """Intensities per ESP32 laser channel (``illumination[0..4]`` of the stagescan).
 
-        intensity_list = [0]*5 # This maps to the 5 avaiable channels on the eps32 side 
-        
-        # Simple direct mapping - frontend already handles channel_index matching
-        for i, intensity in enumerate(illumination_intensities):
-            intensity_list[self.controller.availableIlluminations[i].channel_index] = intensity
-            
+        ``illumination_intensities[i]`` belongs to ``illumination_sources[i]``
+        (the channel plan the frontend selected). Each source is looked up by
+        name among the controller's laser managers and lands on that manager's
+        ``channel_index``; without a source list the i-th laser manager is
+        assumed, which is only right when the frontend sends every laser in
+        config order. Sources that are not a laser (LED-matrix synthetic
+        channels) or channels outside 0..4 are skipped with a warning instead
+        of shifting the others.
+        """
+        n_channels = 5  # the ESP32 stagescan exposes illumination[0..4]
+        intensity_list = [0] * n_channels
+        managers = list(getattr(self.controller, "availableIlluminations", []) or [])
+        by_name = {getattr(m, "name", None): m for m in managers}
+
+        for i, intensity in enumerate(illumination_intensities or []):
+            if intensity is None or intensity <= 0:
+                continue
+            source = illumination_sources[i] if illumination_sources and i < len(illumination_sources) else None
+            manager = by_name.get(source) if source is not None else (managers[i] if i < len(managers) else None)
+            if manager is None:
+                self._logger.warning(f"Performance mode: illumination '{source or i}' is not a laser channel; skipped")
+                continue
+            channel = getattr(manager, "channel_index", None)
+            if not isinstance(channel, int):
+                channel = managers.index(manager)
+            if not 0 <= channel < n_channels:
+                self._logger.warning(f"Performance mode: '{source or i}' has channel_index {channel}, "
+                                     f"outside the firmware's 0..{n_channels - 1}; skipped")
+                continue
+            intensity_list[channel] = intensity
         return intensity_list
 
     def calculate_grid_parameters(self, tiles: List[Dict]) -> Tuple[Tuple[int, int], Tuple[float, float, float, float]]:

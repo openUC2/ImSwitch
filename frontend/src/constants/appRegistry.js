@@ -319,13 +319,14 @@ export const APP_REGISTRY = {
     id: "flowStop",
     name: "Flow Stop",
     description:
-      "Control flow stop mechanisms for microfluidics experiments. Manage fluid flow and timing.",
+      "Flow-cell imaging for plankton and particles: live preview, pump and focus control, EcoTaxa sample metadata, timed acquisition and gallery.",
     category: APP_CATEGORIES.APPS,
     icon: DeviceHubIcon,
     enabled: false,
     essential: false,
-    keywords: ["flow", "stop", "microfluidics", "fluid", "timing"],
+    keywords: ["flow", "stop", "microfluidics", "fluid", "plankton", "planktoscope", "ecotaxa"],
     pluginId: "FlowStop",
+    requiredControllers: ["FlowStopController"],
   },
 
   lepmon: {
@@ -654,7 +655,7 @@ export const APP_REGISTRY = {
     id: "shitScope",
     name: "ShitScope",
     description:
-      "Dedicated single-button paving scan application with fixed 50x30mm scan area, live view, stage homing, and overview canvas.",
+      "Dedicated tile scan for the ShitScope: live mosaic, tile registration and stitching at measured positions, placement-error report.",
     category: APP_CATEGORIES.APPS,
     icon: CropFreeIcon,
     enabled: false,
@@ -666,8 +667,10 @@ export const APP_REGISTRY = {
       "single",
       "dedicated",
       "customer",
+      "stitching",
     ],
     pluginId: "ShitScope",
+    requiredControllers: ["ShitScopeController"],
   },
 
   socketView: {

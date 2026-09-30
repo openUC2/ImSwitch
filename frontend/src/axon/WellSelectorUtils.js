@@ -357,6 +357,51 @@ export function isPointInPolygon(point, polygon) {
 }
 
 //##################################################################################
+/**
+ * Tile a closed polygon (stage µm) with the current field of view.
+ *
+ * One tile centre per grid node of the polygon's bounding box, kept when it
+ * falls inside the polygon; the pitch is the FOV less the overlap. This is
+ * the single source of truth for freehand regions: the canvas previews with
+ * it, the plate-map re-tiles with it when the objective changes, and the
+ * coordinate calculator regenerates from it at START — so a region drawn
+ * on a 4x prescan and scanned at 20x lands on the 20x grid.
+ *
+ * @param {Array<{x:number, y:number}>} polygon vertices (>= 3)
+ * @param {number} fovX field width in µm
+ * @param {number} fovY field height in µm
+ * @param {number} overlap fraction 0..1
+ * @returns {Array<{x:number, y:number, iX:number, iY:number}>}
+ */
+export function generatePolygonScanPositions(polygon, fovX, fovY, overlap = 0) {
+  if (!polygon || polygon.length < 3) return [];
+  if (!(fovX > 0) || !(fovY > 0)) return [];
+  const stepX = fovX * (1 - (overlap || 0));
+  const stepY = fovY * (1 - (overlap || 0));
+  if (!(stepX > 0) || !(stepY > 0)) return [];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  polygon.forEach((p) => {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  });
+  const positions = [];
+  const nY = Math.floor((maxY - minY) / stepY + 1e-9);
+  const nX = Math.floor((maxX - minX) / stepX + 1e-9);
+  for (let iY = 0; iY <= nY; iY++) {
+    const y = minY + iY * stepY;
+    for (let iX = 0; iX <= nX; iX++) {
+      const x = minX + iX * stepX;
+      if (isPointInPolygon({ x, y }, polygon)) {
+        positions.push({ x, y, iX, iY });
+      }
+    }
+  }
+  return positions;
+}
+
+//##################################################################################
 export function isSquareInsideRect2(x, y, rasterSize, x1, y1, x2, y2) {
   // Normalize the rectangle to ensure x1, y1 is the top-left and x2, y2 is the bottom-right
   const rectX1 = Math.min(x1, x2);

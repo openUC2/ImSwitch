@@ -257,3 +257,81 @@ def build_scan_regions(mExperiment, current_position, log):
     }]))
     region_meta[region_id] = build_region_meta("Current Position", "free_scan")
     return regions, region_meta
+
+
+# ---------------------------------------------------------------------------
+# Hardware-triggered stage scan: the frame order the firmware produces.
+#
+# The ESP32 ``stagescan`` (uc2-ESP main/src/motor/StageScan.cpp, grid mode)
+# fires one camera trigger per light channel at every position, walking the
+# grid as
+#
+#     for iy in range(ny):                 # rows
+#         for ix in range(nx):             # columns, reversed on odd rows (snake)
+#             for iz in range(nz):         # Z planes
+#                 for channel in <lasers 0..4 with intensity > 0, then led>:
+#                     trigger
+#
+# and exactly one trigger per (ix, iy, iz) when no light channel is set. The
+# writer maps camera frame-id -> row of this table, so both sides MUST agree
+# on that order; the firmware side is pinned by uc2-ESP/test/native.
+# ---------------------------------------------------------------------------
+
+STAGE_SCAN_LASER_CHANNELS = 5      # illumination[0..4] on the ESP32 side
+STAGE_SCAN_LED_CHANNEL = "led"     # the LED array, fired after the lasers
+
+
+def stage_scan_channel_sequence(illumination, led) -> List[Dict[str, Any]]:
+    """Active light channels in firmware order: lasers 0..4 ascending, then LED.
+
+    Returns ``[{"name": "illumination2", "value": 50}, {"name": "led", "value": 255}]``
+    style entries; empty when nothing is switched on (the firmware then still
+    triggers once per position, see :func:`stage_scan_frame_table`).
+    """
+    lasers = list(illumination or [])[:STAGE_SCAN_LASER_CHANNELS]
+    seq = [{"name": f"illumination{i}", "value": v}
+           for i, v in enumerate(lasers) if v is not None and v > 0]
+    if led is not None and led > 0:
+        seq.append({"name": STAGE_SCAN_LED_CHANNEL, "value": led})
+    return seq
+
+
+def stage_scan_frame_table(nx: int, ny: int, nz: int,
+                           xstart: float, ystart: float, zstart: float,
+                           xstep: float, ystep: float, zstep: float,
+                           illumination=None, led=None,
+                           snake: bool = True) -> List[Dict[str, Any]]:
+    """One metadata row per camera frame, in the order the firmware fires them.
+
+    Row ``k`` describes camera frame-id ``k``. Each row carries the stage
+    position, the light channel and the indices the OME writer places the
+    frame by (``z_index``, ``channel_index``); ``runningNumber`` is 1-based
+    like the historical protocol files.
+    """
+    channels = stage_scan_channel_sequence(illumination, led)
+    if not channels:
+        channels = [{"name": "default", "value": -1}]
+    rows: List[Dict[str, Any]] = []
+    for iy in range(int(ny)):
+        for ix in range(int(nx)):
+            jx = (nx - 1 - ix) if (snake and iy % 2 == 1) else ix
+            x = xstart + jx * xstep
+            y = ystart + iy * ystep
+            for iz in range(int(nz)):
+                z = zstart + iz * zstep
+                for ci, ch in enumerate(channels):
+                    rows.append({
+                        "x": x, "y": y, "z": z,
+                        "ix": jx, "iy": iy, "z_index": iz,
+                        "channel_index": ci,
+                        "illuminationChannel": ch["name"],
+                        "illuminationValue": ch["value"],
+                        "time_index": 0,
+                        "runningNumber": len(rows) + 1,
+                    })
+    return rows
+
+
+def stage_scan_frame_count(nx: int, ny: int, nz: int, illumination=None, led=None) -> int:
+    """Frames a stage scan produces: positions x planes x max(active channels, 1)."""
+    return int(nx) * int(ny) * int(nz) * max(len(stage_scan_channel_sequence(illumination, led)), 1)

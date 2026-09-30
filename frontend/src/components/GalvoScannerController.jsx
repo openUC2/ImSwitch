@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Button,
@@ -30,6 +30,10 @@ import ScatterPlotIcon from '@mui/icons-material/ScatterPlot';
 import BiotechIcon from '@mui/icons-material/Biotech';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
+import CameraAltIcon from '@mui/icons-material/CameraAlt';
+import GpsFixedIcon from '@mui/icons-material/GpsFixed';
+import StraightenIcon from '@mui/icons-material/Straighten';
+import ClearIcon from '@mui/icons-material/Clear';
 import { useSelector, useDispatch } from 'react-redux';
 import { getConnectionSettingsState } from '../state/slices/ConnectionSettingsSlice';
 import {
@@ -44,6 +48,15 @@ import {
   setConfigParam,
   setXRange,
   setYRange,
+  setAxisWindow,
+  setScanArea,
+  setCameraCalibration,
+  setAffineTransform,
+  startCalibration,
+  getAffineTransformState,
+  getCalibrationState,
+  getCameraCalibration,
+  getScanPhysical,
   toggleBidirectional,
   setStatus,
   setRunning,
@@ -64,8 +77,12 @@ import {
   apiGetGalvoParkConfig,
   apiSetGalvoParkConfig,
   apiParkGalvo,
+  apiGetAffineTransform,
+  apiGetGalvoCameraCalibration,
+  apiSnapGalvoCameraBackground,
 } from '../backendapi/apiGalvoScannerController';
 import GalvoArbitraryPointsTab from './GalvoArbitraryPointsTab';
+import GalvoScanPreview from './GalvoScanPreview';
 import FlimLabsPanel from './FlimLabsPanel';
 import { apiFlimGetStatus } from '../backendapi/apiFlimLabs';
 
@@ -98,6 +115,10 @@ const PARAM_TOOLTIPS = {
   enable_trigger: 'Emit the pixel/line trigger output during the scan. 0 = off, 1 = on.',
   apply_x_lut:
     'Apply a per-column X lookup table to linearize the mirror. 0 = off, 1 = on (requires an uploaded LUT).',
+  x_width: 'Width of the X scan window in DAC counts. Changing it keeps the centre; the window slides to stay inside 0–4095.',
+  y_width: 'Height of the Y scan window in DAC counts. Changing it keeps the centre; the window slides to stay inside 0–4095.',
+  x_center: 'Centre of the X scan window. Drag the Position slider (or the blue rectangle in the preview) to move the whole window.',
+  y_center: 'Centre of the Y scan window. Drag the Position slider (or the blue rectangle in the preview) to move the whole window.',
   park_x: 'X position (DAC counts, 0–4095) the beam moves to when a scan stops.',
   park_y: 'Y position (DAC counts, 0–4095) the beam moves to when a scan stops.',
   overscan_samples:
@@ -106,6 +127,13 @@ const PARAM_TOOLTIPS = {
     'Gate the laser (galvo laser pin) HIGH only during the imaging window — off during pre-blanking, overscan, fly-back and settle. Prevents fly-back photons from smearing the image (e.g. into a FLIM acquisition).',
   hw_pixel_clock:
     'Generate the pixel clock with the ESP32-S3 RMT peripheral: exactly nx hardware-timed, equidistant pulses per line, decoupled from the DAC/SPI software loop. Falls back to software pulses on unsupported chips.',
+};
+
+const fmtUm = (um, digits) => {
+  if (um == null || !isFinite(um)) return '–';
+  if (um >= 1000) return `${(um / 1000).toFixed(2)} mm`;
+  if (um >= 10) return `${um.toFixed(digits ?? 0)} µm`;
+  return `${um.toFixed(digits ?? 2)} µm`;
 };
 
 /**
@@ -159,6 +187,19 @@ const GalvoScannerController = () => {
   const status = useSelector(getGalvoStatus);
   const scanInfo = useSelector(getScanInfo);
   const activeTab = useSelector(getActiveTab);
+  const affine = useSelector(getAffineTransformState);
+  const calibration = useSelector(getCalibrationState);
+  const cameraCal = useSelector(getCameraCalibration);
+  const physical = useSelector(getScanPhysical);
+
+  // Camera snapshot drawn behind the scan preview (component-local: it is a
+  // base64 PNG and only this panel needs it; tabs are conditional renders of
+  // this same component, so it survives tab switches).
+  const [background, setBackground] = useState(null);
+  const [bgOpacity, setBgOpacity] = useState(0.7);
+  const [snapping, setSnapping] = useState(false);
+  // Set when the wizard was launched from here, so we come back afterwards
+  const [returnAfterWizard, setReturnAfterWizard] = useState(false);
 
   // If the stored tab points at the (absent) FLIM tab, fall back to Raster
   useEffect(() => {
@@ -244,6 +285,77 @@ const GalvoScannerController = () => {
       dispatch(setError(`Failed to park: ${err.message}`));
     }
   }, [hostIP, hostPort, selectedScanner, dispatch]);
+
+  // The camera->galvo affine is shared with the Arbitrary Points tab; load it
+  // here too so the raster preview can place the camera frame without the
+  // user having visited that tab first.
+  const fetchAffine = useCallback(async () => {
+    if (!selectedScanner) return;
+    try {
+      const data = await apiGetAffineTransform(hostIP, hostPort, selectedScanner);
+      if (data.affine_transform) dispatch(setAffineTransform(data.affine_transform));
+    } catch (err) {
+      console.error('Failed to fetch affine transform:', err);
+    }
+  }, [hostIP, hostPort, selectedScanner, dispatch]);
+
+  const fetchCameraCalibration = useCallback(async (detectorName = null) => {
+    if (!selectedScanner) return;
+    try {
+      const data = await apiGetGalvoCameraCalibration(hostIP, hostPort, selectedScanner, detectorName);
+      if (!data.error) {
+        dispatch(setCameraCalibration({
+          calibrated: !!data.calibrated,
+          detectorName: data.detectorName ?? null,
+          cameraDetectors: data.cameraDetectors || [],
+          frameWidth: data.frameWidth ?? null,
+          frameHeight: data.frameHeight ?? null,
+          pixelSizeUmX: data.pixelSizeUmX ?? null,
+          pixelSizeUmY: data.pixelSizeUmY ?? null,
+          umPerDacX: data.umPerDacX ?? null,
+          umPerDacY: data.umPerDacY ?? null,
+          rotationDeg: data.rotationDeg ?? null,
+          hint: data.hint ?? null,
+          flim: data.flim || {},
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to fetch camera calibration:', err);
+    }
+  }, [hostIP, hostPort, selectedScanner, dispatch]);
+
+  const snapBackground = useCallback(async () => {
+    setSnapping(true);
+    try {
+      const data = await apiSnapGalvoCameraBackground(
+        hostIP, hostPort, selectedScanner || null, cameraCal.detectorName || null, 1024
+      );
+      if (data.error) {
+        dispatch(setError(`Snap failed: ${data.error}`));
+      } else {
+        setBackground(data);
+      }
+    } catch (err) {
+      dispatch(setError(`Snap failed: ${err.message}`));
+    } finally {
+      setSnapping(false);
+    }
+  }, [hostIP, hostPort, selectedScanner, cameraCal.detectorName, dispatch]);
+
+  // Hand over to the 3-point wizard on the Arbitrary Points tab (it needs the
+  // live camera view to click the laser spot).
+  const goToCalibrationWizard = useCallback(() => {
+    setReturnAfterWizard(true);
+    dispatch(setActiveTab(1));
+    dispatch(startCalibration());
+  }, [dispatch]);
+
+  useEffect(() => {
+    if (!returnAfterWizard || calibration.active) return;
+    // Wizard finished (completed) or was cancelled: either way it is over.
+    setReturnAfterWizard(false);
+    if (calibration.completed) dispatch(setActiveTab(0));
+  }, [returnAfterWizard, calibration.active, calibration.completed, dispatch]);
 
   const fetchStatus = useCallback(async () => {
     if (!selectedScanner) return;
@@ -333,8 +445,17 @@ const GalvoScannerController = () => {
       fetchConfig();
       fetchStatus();
       fetchParkConfig();
+      fetchAffine();
+      fetchCameraCalibration();
     }
-  }, [selectedScanner, fetchConfig, fetchStatus, fetchParkConfig]);
+  }, [selectedScanner, fetchConfig, fetchStatus, fetchParkConfig, fetchAffine, fetchCameraCalibration]);
+
+  // The wizard (Arbitrary Points tab) writes a new affine on completion; the
+  // µm/DAC summary depends on it, so refresh whenever the transform changes.
+  useEffect(() => {
+    if (selectedScanner) fetchCameraCalibration();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [affine, calibration.completed]);
 
   useEffect(() => {
     if (autoRefresh) {
@@ -366,216 +487,23 @@ const GalvoScannerController = () => {
     dispatch(applyPreset(preset));
   };
 
-  // ========================
-  // Enhanced Scan Pattern Visualization
-  // Shows full 4096x4096 DAC range with scan area highlighted
-  // ========================
+  const handleWindowField = (axis, key) => (event) => {
+    const value = Number(event.target.value);
+    if (!Number.isFinite(value)) return;
+    dispatch(setAxisWindow({ axis, [key]: value }));
+  };
 
-  const ScanPatternPreview = useMemo(() => {
-    const canvasSize = 280;
-    const dacMax = 4096;
-    const padding = 25;
-    const innerSize = canvasSize - 2 * padding;
-    
-    // Map DAC values (0-4095) to canvas coordinates
-    const mapToCanvas = (dacVal) => padding + (dacVal / dacMax) * innerSize;
-    
-    // Scan area bounds on canvas
-    const scanLeft = mapToCanvas(config.x_min);
-    const scanRight = mapToCanvas(config.x_max);
-    const scanTop = mapToCanvas(config.y_min);
-    const scanBottom = mapToCanvas(config.y_max);
-    const scanWidth = scanRight - scanLeft;
-    const scanHeight = scanBottom - scanTop;
+  const handleAreaChange = useCallback((area) => {
+    dispatch(setScanArea(area));
+  }, [dispatch]);
 
-    // Generate scan points for visualization (first 64 points max)
-    const maxPreviewPoints = 64;
-    const previewNx = Math.min(config.nx, maxPreviewPoints);
-    const previewNy = Math.min(config.ny, maxPreviewPoints);
-    
-    const stepX = scanWidth / Math.max(previewNx - 1, 1);
-    const stepY = scanHeight / Math.max(previewNy - 1, 1);
+  const xWidth = config.x_max - config.x_min;
+  const yWidth = config.y_max - config.y_min;
+  const xCenter = Math.round((config.x_min + config.x_max) / 2);
+  const yCenter = Math.round((config.y_min + config.y_max) / 2);
+  const umPerDacX = physical?.umPerDacX;
+  const umPerDacY = physical?.umPerDacY;
 
-    // Generate scan path
-    const pathPoints = [];
-    for (let y = 0; y < previewNy; y++) {
-      const yPos = scanTop + y * stepY;
-      const isReverse = config.bidirectional && y % 2 === 1;
-      
-      for (let x = 0; x < previewNx; x++) {
-        const xIdx = isReverse ? (previewNx - 1 - x) : x;
-        const xPos = scanLeft + xIdx * stepX;
-        pathPoints.push({ x: xPos, y: yPos });
-      }
-    }
-
-    // Grid lines for full DAC range
-    const gridLines = [];
-    for (let i = 0; i <= 4; i++) {
-      const pos = padding + (i / 4) * innerSize;
-      const dacVal = (i / 4) * dacMax;
-      gridLines.push({ pos, dacVal: Math.round(dacVal) });
-    }
-
-    return (
-      <svg 
-        width={canvasSize} 
-        height={canvasSize} 
-        style={{ 
-          border: '1px solid #444', 
-          borderRadius: 4, 
-          backgroundColor: '#0a0a15' 
-        }}
-      >
-        {/* Background - Full 4096x4096 DAC range */}
-        <rect
-          x={padding}
-          y={padding}
-          width={innerSize}
-          height={innerSize}
-          fill="#12121f"
-          stroke="#333"
-          strokeWidth={1}
-        />
-
-        {/* Grid lines */}
-        {gridLines.map((line, i) => (
-          <React.Fragment key={i}>
-            {/* Vertical grid line */}
-            <line
-              x1={line.pos}
-              y1={padding}
-              x2={line.pos}
-              y2={canvasSize - padding}
-              stroke="#2a2a4a"
-              strokeWidth={0.5}
-            />
-            {/* Horizontal grid line */}
-            <line
-              x1={padding}
-              y1={line.pos}
-              x2={canvasSize - padding}
-              y2={line.pos}
-              stroke="#2a2a4a"
-              strokeWidth={0.5}
-            />
-            {/* X axis labels */}
-            {i < gridLines.length && (
-              <text
-                x={line.pos}
-                y={canvasSize - 5}
-                fontSize={8}
-                fill="#666"
-                textAnchor="middle"
-              >
-                {line.dacVal}
-              </text>
-            )}
-            {/* Y axis labels */}
-            {i < gridLines.length && (
-              <text
-                x={5}
-                y={line.pos + 3}
-                fontSize={8}
-                fill="#666"
-                textAnchor="start"
-              >
-                {line.dacVal}
-              </text>
-            )}
-          </React.Fragment>
-        ))}
-
-        {/* Scan area highlight (the actual scan region) */}
-        <rect
-          x={scanLeft}
-          y={scanTop}
-          width={scanWidth}
-          height={scanHeight}
-          fill="rgba(0, 150, 255, 0.15)"
-          stroke="#0096ff"
-          strokeWidth={2}
-          strokeDasharray="4,2"
-        />
-
-        {/* Scan path lines */}
-        {pathPoints.length > 1 && (
-          <polyline
-            points={pathPoints.map(p => `${p.x},${p.y}`).join(' ')}
-            fill="none"
-            stroke={config.bidirectional ? '#ff9900' : '#00ff88'}
-            strokeWidth={1}
-            opacity={0.8}
-          />
-        )}
-
-        {/* Sample points */}
-        {pathPoints.slice(0, 200).map((point, i) => (
-          <circle
-            key={i}
-            cx={point.x}
-            cy={point.y}
-            r={Math.max(1, 3 - pathPoints.length / 50)}
-            fill={i === 0 ? '#ff0000' : '#00aaff'}
-          />
-        ))}
-
-        {/* Start point marker */}
-        {pathPoints.length > 0 && (
-          <circle
-            cx={pathPoints[0].x}
-            cy={pathPoints[0].y}
-            r={5}
-            fill="none"
-            stroke="#ff0000"
-            strokeWidth={2}
-          />
-        )}
-
-        {/* Scan direction arrows for bidirectional */}
-        {config.bidirectional && previewNy >= 2 && (
-          <>
-            {/* Forward arrow (line 0) */}
-            <polygon
-              points={`${scanRight - 8},${scanTop - 2} ${scanRight},${scanTop + 4} ${scanRight - 8},${scanTop + 10}`}
-              fill="#00ff88"
-            />
-            {/* Reverse arrow (line 1) */}
-            <polygon
-              points={`${scanLeft + 8},${scanTop + stepY - 2} ${scanLeft},${scanTop + stepY + 4} ${scanLeft + 8},${scanTop + stepY + 10}`}
-              fill="#ff9900"
-            />
-          </>
-        )}
-
-        {/* Labels */}
-        <text x={canvasSize / 2} y={12} fontSize={10} fill="#888" textAnchor="middle" fontWeight="bold">
-          DAC Range: 0-4095
-        </text>
-        
-        {/* Scan mode indicator */}
-        <rect
-          x={canvasSize - 85}
-          y={2}
-          width={80}
-          height={16}
-          rx={3}
-          fill={config.bidirectional ? '#ff9900' : '#00ff88'}
-          opacity={0.3}
-        />
-        <text 
-          x={canvasSize - 45} 
-          y={13} 
-          fontSize={9} 
-          fill={config.bidirectional ? '#ff9900' : '#00ff88'} 
-          textAnchor="middle"
-          fontWeight="bold"
-        >
-          {config.bidirectional ? 'BIDI' : 'UNI'}
-        </text>
-      </svg>
-    );
-  }, [config]);
 
   // ========================
   // Render
@@ -676,77 +604,102 @@ const GalvoScannerController = () => {
 
           {/* Position Range */}
           <Paper sx={{ p: 2, mb: 2 }}>
-            <Typography variant="subtitle1" gutterBottom>
-              X Position Range (DAC: 0-4095)
-            </Typography>
-            <Slider
-              value={[config.x_min, config.x_max]}
-              onChange={handleXRangeChange}
-              valueLabelDisplay="auto"
-              min={0}
-              max={4095}
-              sx={{ mb: 1 }}
-            />
-            <Grid container spacing={2}>
-              <Grid item xs={6}>
-                <TextField
-                  label="X Min"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={config.x_min}
-                  onChange={handleConfigChange('x_min')}
-                  inputProps={{ min: 0, max: 4095 }}
+            {[
+              { axis: 'x', label: 'X', min: config.x_min, max: config.x_max, width: xWidth, center: xCenter, umPerDac: umPerDacX, onRange: handleXRangeChange },
+              { axis: 'y', label: 'Y', min: config.y_min, max: config.y_max, width: yWidth, center: yCenter, umPerDac: umPerDacY, onRange: handleYRangeChange },
+            ].map((ax) => (
+              <Box key={ax.axis} sx={{ mb: ax.axis === 'x' ? 2 : 0 }}>
+                <Typography variant="subtitle1" gutterBottom>
+                  {ax.label} Position Range (DAC: 0-4095)
+                  {ax.umPerDac ? (
+                    <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                      1 count ≈ {fmtUm(ax.umPerDac, 3)}
+                    </Typography>
+                  ) : null}
+                </Typography>
+                {/* Min/max thumbs */}
+                <Slider
+                  value={[ax.min, ax.max]}
+                  onChange={ax.onRange}
+                  valueLabelDisplay="auto"
+                  min={0}
+                  max={4095}
+                  sx={{ mb: 0 }}
+                  data-testid={`galvo-${ax.axis}-range-slider`}
                 />
-              </Grid>
-              <Grid item xs={6}>
-                <TextField
-                  label="X Max"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={config.x_max}
-                  onChange={handleConfigChange('x_max')}
-                  inputProps={{ min: 0, max: 4095 }}
-                />
-              </Grid>
-            </Grid>
-
-            <Typography variant="subtitle1" gutterBottom sx={{ mt: 2 }}>
-              Y Position Range (DAC: 0-4095)
-            </Typography>
-            <Slider
-              value={[config.y_min, config.y_max]}
-              onChange={handleYRangeChange}
-              valueLabelDisplay="auto"
-              min={0}
-              max={4095}
-              sx={{ mb: 1 }}
-            />
-            <Grid container spacing={2}>
-              <Grid item xs={6}>
-                <TextField
-                  label="Y Min"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={config.y_min}
-                  onChange={handleConfigChange('y_min')}
-                  inputProps={{ min: 0, max: 4095 }}
-                />
-              </Grid>
-              <Grid item xs={6}>
-                <TextField
-                  label="Y Max"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={config.y_max}
-                  onChange={handleConfigChange('y_max')}
-                  inputProps={{ min: 0, max: 4095 }}
-                />
-              </Grid>
-            </Grid>
+                {/* Whole-window position: single thumb limited so the window stays in range */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ minWidth: 56 }}>
+                    Position
+                  </Typography>
+                  <Slider
+                    size="small"
+                    value={ax.center}
+                    onChange={(e, v) => dispatch(setAxisWindow({ axis: ax.axis, center: Number(v) }))}
+                    valueLabelDisplay="auto"
+                    min={Math.ceil(ax.width / 2)}
+                    max={Math.max(Math.ceil(ax.width / 2), 4095 - Math.floor(ax.width / 2))}
+                    disabled={ax.width >= 4095}
+                    data-testid={`galvo-${ax.axis}-center-slider`}
+                  />
+                </Box>
+                <Grid container spacing={1} sx={{ mt: 0.5 }}>
+                  <Grid item xs={6} sm={3}>
+                    <TextField
+                      label={`${ax.label} Min`}
+                      type="number"
+                      size="small"
+                      fullWidth
+                      value={ax.min}
+                      onChange={handleConfigChange(`${ax.axis}_min`)}
+                      inputProps={{ min: 0, max: 4095 }}
+                    />
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <TextField
+                      label={`${ax.label} Max`}
+                      type="number"
+                      size="small"
+                      fullWidth
+                      value={ax.max}
+                      onChange={handleConfigChange(`${ax.axis}_max`)}
+                      inputProps={{ min: 0, max: 4095 }}
+                    />
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <TextField
+                      label={ax.axis === 'x' ? 'Width' : 'Height'}
+                      type="number"
+                      size="small"
+                      fullWidth
+                      value={ax.width}
+                      onChange={handleWindowField(ax.axis, 'width')}
+                      inputProps={{ min: 1, max: 4095, 'data-testid': `galvo-${ax.axis}-width` }}
+                      InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS[`${ax.axis}_width`]} /> }}
+                      helperText={ax.umPerDac ? `≈ ${fmtUm(ax.width * ax.umPerDac)}` : undefined}
+                    />
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <TextField
+                      label="Center"
+                      type="number"
+                      size="small"
+                      fullWidth
+                      value={ax.center}
+                      onChange={handleWindowField(ax.axis, 'center')}
+                      inputProps={{ min: 0, max: 4095, 'data-testid': `galvo-${ax.axis}-center` }}
+                      InputProps={{ endAdornment: <InfoTip text={PARAM_TOOLTIPS[`${ax.axis}_center`]} /> }}
+                    />
+                  </Grid>
+                </Grid>
+              </Box>
+            ))}
+            {physical && (
+              <Typography variant="body2" sx={{ mt: 1.5, p: 1, backgroundColor: 'rgba(0,150,255,0.1)', borderRadius: 1 }}>
+                Scan field: {fmtUm(physical.fovUmX)} × {fmtUm(physical.fovUmY)} —
+                pixel {fmtUm(physical.pixelUmX, 3)} × {fmtUm(physical.pixelUmY, 3)} at {config.nx}×{config.ny}
+              </Typography>
+            )}
           </Paper>
 
           {/* Timing Parameters */}
@@ -1021,19 +974,161 @@ const GalvoScannerController = () => {
         <Grid item xs={12} md={6}>
           {/* Scan Pattern Preview */}
           <Paper sx={{ p: 2, mb: 2 }}>
-            <Typography variant="subtitle1" gutterBottom>
-              Scan Pattern Preview
-            </Typography>
-            <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-              {ScanPatternPreview}
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mb: 1 }}>
+              <Typography variant="subtitle1">
+                Scan Pattern Preview
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Tooltip title={cameraCal.detectorName
+                  ? `Grab one frame from "${cameraCal.detectorName}" and show it behind the scan area`
+                  : 'No 2D camera configured'}>
+                  <span>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<CameraAltIcon />}
+                      onClick={snapBackground}
+                      disabled={snapping || !cameraCal.detectorName}
+                      data-testid="galvo-snap-background"
+                    >
+                      {snapping ? 'Snapping…' : 'Snap camera'}
+                    </Button>
+                  </span>
+                </Tooltip>
+                {background && (
+                  <Tooltip title="Remove the camera background">
+                    <IconButton size="small" onClick={() => setBackground(null)} data-testid="galvo-clear-background">
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </Box>
             </Box>
+            <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+              <GalvoScanPreview
+                config={config}
+                affine={affine}
+                background={background}
+                backgroundOpacity={bgOpacity}
+                physical={physical}
+                onAreaChange={handleAreaChange}
+                size={320}
+              />
+            </Box>
+            {background && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, px: 1 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                  Camera opacity
+                </Typography>
+                <Slider
+                  size="small"
+                  value={bgOpacity}
+                  onChange={(e, v) => setBgOpacity(Number(v))}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  sx={{ maxWidth: 160 }}
+                />
+                <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
+                  {background.detectorName} {background.frameWidth}×{background.frameHeight}px
+                </Typography>
+              </Box>
+            )}
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, textAlign: 'center' }}>
-              Full DAC range (4096×4096) • Scan area highlighted in blue
+              Drag the blue rectangle to move the scan, pull its corners to resize
+              {background && !cameraCal.calibrated && (
+                <>
+                  <br />
+                  ⚠️ Uncalibrated: camera frame is assumed to span the full DAC range
+                </>
+              )}
               <br />
               {config.bidirectional 
                 ? '🟠 Bidirectional: alternating scan direction' 
                 : '🟢 Unidirectional: same direction each line'}
             </Typography>
+          </Paper>
+
+          {/* Scanner <-> camera calibration (physical units) */}
+          <Paper sx={{ p: 2, mb: 2 }} data-testid="galvo-calibration-panel">
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <StraightenIcon sx={{ fontSize: 20 }} />
+              <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                Scanner ↔ Camera Calibration
+              </Typography>
+              <Chip
+                size="small"
+                label={cameraCal.calibrated ? 'Calibrated' : 'Not calibrated'}
+                color={cameraCal.calibrated ? 'success' : 'warning'}
+                variant={cameraCal.calibrated ? 'filled' : 'outlined'}
+              />
+              <Tooltip title="Re-read the calibration from the backend">
+                <IconButton size="small" onClick={() => fetchCameraCalibration()}>
+                  <RefreshIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+            {cameraCal.cameraDetectors.length > 1 && (
+              <FormControl size="small" fullWidth sx={{ mb: 1 }}>
+                <InputLabel>Camera</InputLabel>
+                <Select
+                  value={cameraCal.detectorName || ''}
+                  label="Camera"
+                  onChange={(e) => fetchCameraCalibration(e.target.value)}
+                >
+                  {cameraCal.cameraDetectors.map((name) => (
+                    <MenuItem key={name} value={name}>{name}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+            {cameraCal.calibrated && physical ? (
+              <>
+                <Typography variant="body2">
+                  1 DAC count ≈ {fmtUm(physical.umPerDacX, 4)} (X) / {fmtUm(physical.umPerDacY, 4)} (Y)
+                  {cameraCal.rotationDeg != null && Math.abs(cameraCal.rotationDeg) > 0.5 && (
+                    <> · scanner X rotated {cameraCal.rotationDeg.toFixed(1)}° vs. camera</>
+                  )}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Full DAC range ≈ {fmtUm(physical.fullScaleUmX)} × {fmtUm(physical.fullScaleUmY)} ·
+                  camera pixel {fmtUm(cameraCal.pixelSizeUmX, 3)}
+                  {cameraCal.detectorName ? ` (${cameraCal.detectorName})` : ''}
+                </Typography>
+                {cameraCal.pixelSizeUmX === 1 && cameraCal.pixelSizeUmY === 1 && (
+                  <Alert severity="warning" sx={{ mt: 1 }} variant="outlined">
+                    The camera reports a pixel size of exactly 1 µm — the default. The µm values above are
+                    only as good as the camera's pixel-size calibration.
+                  </Alert>
+                )}
+                {Object.keys(cameraCal.flim || {}).length > 0 && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                    FLIM detector{Object.keys(cameraCal.flim).length > 1 ? 's' : ''} {Object.keys(cameraCal.flim).join(', ')} use
+                    this calibration for pixel size / field of view
+                    {Object.values(cameraCal.flim).some((f) => f?.source && f.source !== 'affine') ? ' (setup-file values)' : ''}.
+                  </Typography>
+                )}
+              </>
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                {cameraCal.hint || 'Without a calibration the scan range is only known in DAC counts. '}
+                {cameraCal.detectorName
+                  ? ' The 3-point wizard moves the beam to three positions and asks you to click the laser spot in the camera view; the result relates DAC counts to camera pixels and, via the camera pixel size, to micrometres.'
+                  : ''}
+              </Typography>
+            )}
+            <Button
+              variant={cameraCal.calibrated ? 'outlined' : 'contained'}
+              color="secondary"
+              size="small"
+              startIcon={<GpsFixedIcon />}
+              onClick={goToCalibrationWizard}
+              sx={{ mt: 1.5 }}
+              fullWidth
+              data-testid="galvo-open-wizard"
+            >
+              {cameraCal.calibrated ? 'Re-run calibration wizard' : 'Calibrate scanner to camera (3-point wizard)'}
+            </Button>
           </Paper>
 
           {/* Scanner Status */}

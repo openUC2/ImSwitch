@@ -259,7 +259,7 @@ class PositionerController(ImConWidgetController):
         self.setSharedAttr(positionerName, axis, _speedAttr, newSpeed)
 
     @APIExport(runOnUIThread=True)
-    def homeAxis(self, positionerName:str=None, axis:str="X", isBlocking:bool=False, homeDirection:int=None, homeSpeed:float=None, homeEndstoppolarity:int=None, homeEndposRelease:float=None, homeTimeout:int=None):
+    def homeAxis(self, positionerName:str=None, axis:str="X", isBlocking:bool=False, homeDirection:int=None, homeSpeed:float=None, homeEndstoppolarity:int=None, homeEndposRelease:float=None, homeTimeout:int=None, hardHome:bool=None):
         self.__logger.debug(f"Homing axis {axis}")
         if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
@@ -269,7 +269,9 @@ class PositionerController(ImConWidgetController):
                                                                homeSpeed=homeSpeed, 
                                                                homeEndstoppolarity=homeEndstoppolarity, 
                                                                homeEndposRelease=homeEndposRelease, 
-                                                               homeTimeout=homeTimeout)
+                                                               homeTimeout=homeTimeout,
+                                                               # only forwarded when set: other managers' doHome lack the kwarg
+                                                               **({} if hardHome is None else {"hardHome": hardHome}))
         self._hasHomedSinceStartup = True
         self._homingRecommendationDismissed = False
         #self.updatePosition(positionerName, axis)

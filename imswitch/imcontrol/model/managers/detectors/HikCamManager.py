@@ -292,6 +292,62 @@ class HikCamManager(DetectorManager):
         except:
             return None
 
+    def getChunkWithTriggerIndex(self):
+        """Drain the frame buffer as (frames, frame_ids, trigger_indices).
+
+        The trigger index is the camera's own count of trigger pulses, so a
+        caller that knows how many pulses it sent can pair frames with them
+        even when some frames were lost. Returns None when the camera (e.g.
+        the mock fallback) cannot report it.
+        """
+        getter = getattr(self._camera, "getLastChunkWithTriggerIndex", None)
+        if getter is None:
+            return None
+        try:
+            return getter()
+        except Exception as e:
+            self.__logger.error(f"getChunkWithTriggerIndex failed: {e}")
+            return None
+
+    def _cameraBool(self, method, *args):
+        """Call an optional CameraHIK setter; False when missing or failing."""
+        fn = getattr(self._camera, method, None)
+        if fn is None:
+            self.__logger.warning(f"{method} not supported by {self._camera.model}")
+            return False
+        try:
+            return bool(fn(*args))
+        except Exception as e:
+            self.__logger.error(f"{method}{args} failed: {e}")
+            return False
+
+    def getTriggerActivation(self):
+        """Current trigger edge/level entry name, or None when unknown."""
+        fn = getattr(self._camera, "getTriggerActivation", None)
+        if fn is None:
+            return None
+        try:
+            return fn()
+        except Exception as e:
+            self.__logger.debug(f"getTriggerActivation failed: {e}")
+            return None
+
+    def setTriggerActivation(self, edge="RisingEdge"):
+        """Trigger edge/level (GenICam TriggerActivation entry); True on success."""
+        return self._cameraBool("setTriggerActivation", edge)
+
+    def setTriggerDelayUs(self, us):
+        """Delay from trigger edge to exposure start in µs; True on success."""
+        return self._cameraBool("setTriggerDelayUs", us)
+
+    def setShutterMode(self, mode):
+        """Sensor shutter mode (e.g. "Rolling", "GlobalReset"); False if unsupported."""
+        return self._cameraBool("setShutterMode", mode)
+
+    def setTriggerIndexEmbedding(self, enable=True):
+        """Have the camera report its trigger counter per frame; False if unsupported."""
+        return self._cameraBool("setTriggerIndexEmbedding", enable)
+
     def flushBuffers(self):
         self._camera.flushBuffer()
 

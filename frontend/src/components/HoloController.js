@@ -83,10 +83,6 @@ import apiLiveViewControllerGetStreamParameters from "../backendapi/apiLiveViewC
 import FreeNumberField from "./FreeNumberField";
 import { useT } from "../i18n";
 
-// How long without a server-side MJPEG emit before we declare the processed
-// stream "stalled" and surface a warning + restart button to the user.
-const PROCESSED_STREAM_STALL_MS = 5000;
-
 // One control for "what colour am I illuminating with": picking an entry sets
 // both the RGB channel that gets extracted and the wavelength the propagator
 // uses. Nominal LED peaks — override the exact value in Developer Options if a
@@ -150,10 +146,9 @@ const HoloController = () => {
   const [autoOncePending, setAutoOncePending] = useState(false);
   const [awbOncePending, setAwbOncePending] = useState(false);
 
-  // Stream stall detection: bump when we mount the <img> to force a new
-  // browser connection on user-initiated restarts.
+  // Bumped to remount the processed-stream <img> (new browser connection) on
+  // user-initiated restarts.
   const [streamNonce, setStreamNonce] = useState(0);
-  const [streamStalled, setStreamStalled] = useState(false);
 
   // Tabs: 0 = Live, 1 = Background, 2 = Refine (HQ)
   const [activeTab, setActiveTab] = useState(0);
@@ -262,10 +257,6 @@ const HoloController = () => {
       dispatch(holoSlice.setLastProcessTime(state.last_process_time || 0.0));
       dispatch(holoSlice.setFrameCount(state.frame_count || 0));
       dispatch(holoSlice.setProcessedCount(state.processed_count || 0));
-      if (state.last_mjpeg_emit_time !== undefined)
-        dispatch(
-          holoSlice.setLastMjpegEmitTime(state.last_mjpeg_emit_time || 0.0)
-        );
       if (state.mjpeg_client_count !== undefined)
         dispatch(
           holoSlice.setMjpegClientCount(state.mjpeg_client_count || 0)
@@ -441,23 +432,6 @@ const HoloController = () => {
     return () => clearInterval(detectorInterval);
   }, [holoState.cameraName, loadDetectorParameters]);
 
-  // Stall detection: server tracks last_mjpeg_emit_time. If processing is on
-  // but no emit has happened for PROCESSED_STREAM_STALL_MS, surface a warning.
-  useEffect(() => {
-    if (!holoState.isProcessing) {
-      setStreamStalled(false);
-      return;
-    }
-    const now = Date.now() / 1000;
-    const last = holoState.lastMjpegEmitTime || 0;
-    if (last === 0) {
-      // No frame yet — give it one polling cycle before flagging
-      setStreamStalled(false);
-      return;
-    }
-    setStreamStalled(now - last > PROCESSED_STREAM_STALL_MS / 1000);
-  }, [holoState.lastMjpegEmitTime, holoState.isProcessing]);
-
   // ---------------- Processing control ----------------
 
   const handleStartProcessing = useCallback(async () => {
@@ -515,7 +489,6 @@ const HoloController = () => {
       console.warn("restart_stream backend call failed, reloading <img> anyway:", err);
     }
     setStreamNonce((n) => n + 1);
-    setStreamStalled(false);
     await loadState();
   }, [loadState]);
 
@@ -639,7 +612,13 @@ const HoloController = () => {
       try {
         const clamped = Math.max(1e-6, newMax); // ≥1 µm
         dispatch(holoSlice.setDzMax(clamped));
-        await apiInLineHoloControllerSetParams({ dz_max: clamped });
+        const params = { dz_max: clamped };
+        // Keep at least 10 slider steps across the range.
+        if (holoState.dzStep > clamped / 10) {
+          params.dz_step = clamped / 10;
+          dispatch(holoSlice.setDzStep(params.dz_step));
+        }
+        await apiInLineHoloControllerSetParams(params);
         // If current dz is now above the new max, clamp it backend-side too
         if (holoState.dz > clamped) {
           dispatch(holoSlice.setDz(clamped));
@@ -649,7 +628,7 @@ const HoloController = () => {
         console.error("Failed to set dz_max:", err);
       }
     },
-    [dispatch, holoState.dz]
+    [dispatch, holoState.dz, holoState.dzStep]
   );
 
   // Toggle between raw (dz=0) and the slider dz in the processed view
@@ -1375,25 +1354,6 @@ const HoloController = () => {
                   </IconButton>
                 </Tooltip>
               </Stack>
-              {streamStalled && (
-                <Alert
-                  severity="warning"
-                  sx={{ mt: 1, mb: 1 }}
-                  action={
-                    <Button
-                      color="inherit"
-                      size="small"
-                      onClick={handleRestartProcessedStream}
-                    >
-                      {t("Restart")}
-                    </Button>
-                  }
-                >
-                  {t("Processed stream stalled — no frames for more than {seconds} s.", {
-                    seconds: Math.round(PROCESSED_STREAM_STALL_MS / 1000),
-                  })}
-                </Alert>
-              )}
               {showZeroDzHint && (
                 <Alert severity="info" sx={{ mt: 1, mb: 1 }}>
                   {t(
@@ -1487,8 +1447,9 @@ const HoloController = () => {
               onCommit={commitDzStep}
               unitFactor={1e-6}
               fixedDecimals={2}
-              tooltip={t("Slider step size in micrometers.")}
+              tooltip={t("Slider step size in micrometers, at most a tenth of Max dz.")}
               min={1e-9}
+              max={holoState.dzMax / 10}
               size="small"
             />
           </Grid>

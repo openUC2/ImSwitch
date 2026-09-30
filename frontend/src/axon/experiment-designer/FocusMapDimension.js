@@ -865,6 +865,267 @@ const FocusMapDimension = () => {
             </Alert>
           )}
 
+          {/* ── Points mode: the points the operator places ───────────── */}
+          {isPointsMode && (<>
+          <Accordion
+            // Open while empty: in Points mode this holds the only way to add points.
+            expanded={showManualPoints || (manualPoints || []).length === 0}
+            onChange={() => setShowManualPoints(!showManualPoints)}
+            variant="outlined"
+            sx={{ mb: 2 }}
+          >
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+              <Typography variant="body2">
+                Manual Focus Points
+                {(manualPoints || []).length > 0 && (
+                  <Chip
+                    label={`${manualPoints.length} point(s)`}
+                    size="small"
+                    sx={{ ml: 1 }}
+                  />
+                )}
+              </Typography>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: "block" }}>
+                Pick where the focus is measured. "Place on Map" and then click on the
+                plate map (any drawing mode, also with a freehand region; Shift+click works
+                too): XY comes from the click, Z is measured by autofocus in "Measure Z &amp; Fit".
+                "Add Current Position" takes the stage XYZ as it is.
+              </Typography>
+
+              {/* Manual points table */}
+              {(manualPoints || []).length > 0 && (
+                <TableContainer component={Paper} variant="outlined" sx={{ mb: 1 }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>#</TableCell>
+                        <TableCell>X (µm)</TableCell>
+                        <TableCell>Y (µm)</TableCell>
+                        <TableCell>Z (µm)</TableCell>
+                        <TableCell align="right"></TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {manualPoints.map((pt, idx) => (
+                        <TableRow
+                          key={idx}
+                          hover
+                          selected={
+                            highlightedPoint?.source === "manual" &&
+                            highlightedPoint?.index === idx
+                          }
+                          onMouseEnter={() => highlightPoint("manual", null, idx)}
+                          onMouseLeave={clearHighlight}
+                        >
+                          <TableCell>{idx + 1}</TableCell>
+                          <TableCell>
+                            <TextField
+                              type="number"
+                              size="small"
+                              value={pt.x}
+                              onChange={(e) => {
+                                const newPts = [...manualPoints];
+                                newPts[idx] = { ...pt, x: parseFloat(e.target.value) || 0 };
+                                // Dispatch individual update
+                                dispatch(focusMapSlice.clearManualPoints());
+                                newPts.forEach((p) => dispatch(focusMapSlice.addManualPoint(p)));
+                              }}
+                              variant="standard"
+                              sx={{ width: 80 }}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <TextField
+                              type="number"
+                              size="small"
+                              value={pt.y}
+                              onChange={(e) => {
+                                const newPts = [...manualPoints];
+                                newPts[idx] = { ...pt, y: parseFloat(e.target.value) || 0 };
+                                dispatch(focusMapSlice.clearManualPoints());
+                                newPts.forEach((p) => dispatch(focusMapSlice.addManualPoint(p)));
+                              }}
+                              variant="standard"
+                              sx={{ width: 80 }}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <TextField
+                              type="number"
+                              size="small"
+                              value={pt.z ?? ""}
+                              placeholder="auto"
+                              onChange={(e) =>
+                                dispatch(
+                                  focusMapSlice.updateManualPointZ({
+                                    index: idx,
+                                    z: e.target.value === "" ? null : parseFloat(e.target.value),
+                                  })
+                                )
+                              }
+                              variant="standard"
+                              sx={{ width: 80 }}
+                            />
+                          </TableCell>
+                          <TableCell align="right">
+                            <Tooltip title="Go to this position">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  disabled={goToInProgress === `manual-${idx}`}
+                                  onClick={() => handleGoToManualPoint(pt, idx)}
+                                >
+                                  <MyLocationIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Tooltip title="Use current stage Z">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  onClick={() =>
+                                    dispatch(
+                                      focusMapSlice.updateManualPointZ({
+                                        index: idx,
+                                        z: positionState?.z ?? 0,
+                                      })
+                                    )
+                                  }
+                                >
+                                  <HeightIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Tooltip title="Autofocus here (measure Z)">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  disabled={goToInProgress === `manual-${idx}`}
+                                  onClick={() => handleAutofocusManualPoint(pt, idx)}
+                                >
+                                  <CenterFocusStrongIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <IconButton
+                              size="small"
+                              onClick={() => dispatch(focusMapSlice.removeManualPoint(idx))}
+                            >
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+
+              {manualPlacementActive && (
+                <Alert severity="info" sx={{ mb: 1 }}>
+                  Click on the wellplate / sample map to drop focus points. Only
+                  XY is recorded — Z is measured by autofocus when you press
+                  "Measure Z &amp; Fit". Click "Stop Placing" when done.
+                </Alert>
+              )}
+
+              <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                <Button
+                  size="small"
+                  variant={manualPlacementActive ? "contained" : "outlined"}
+                  color={manualPlacementActive ? "secondary" : "primary"}
+                  startIcon={<MyLocationIcon />}
+                  onClick={() =>
+                    dispatch(
+                      focusMapSlice.setManualPlacementActive(
+                        !manualPlacementActive,
+                      ),
+                    )
+                  }
+                >
+                  {manualPlacementActive ? "Stop Placing" : "Place on Map"}
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<AddCircleOutlineIcon />}
+                  onClick={handleAddManualPoint}
+                >
+                  Add Current Position
+                </Button>
+                {(manualPoints || []).length >= 3 && (
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="secondary"
+                    startIcon={
+                      ui.isComputing ? (
+                        <CircularProgress size={16} color="inherit" />
+                      ) : (
+                        <CenterFocusStrongIcon />
+                      )
+                    }
+                    disabled={ui.isComputing}
+                    title="Drive to each point, autofocus to measure Z, then fit and enable the manual map"
+                    onClick={handleMeasureAndFitManual}
+                  >
+                    Measure Z &amp; Fit
+                  </Button>
+                )}
+                {(manualPoints || []).length >= 3 &&
+                  !(manualPoints || []).some((p) => p.z == null) && (
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<PlayArrowIcon />}
+                    disabled={ui.isComputing}
+                    title="Fit using the Z values already in the table (no autofocus)"
+                    onClick={async () => {
+                      dispatch(focusMapSlice.setFocusMapComputing({ isComputing: true, groupId: "manual" }));
+                      dispatch(focusMapSlice.clearFocusMapError());
+                      try {
+                        const result = await apiExperimentControllerComputeFocusMapFromPoints({
+                          points: manualPoints,
+                          group_id: "manual",
+                          group_name: "Manual Points",
+                          method: config.method,
+                          smoothing_factor: config.smoothing_factor,
+                          z_offset: config.z_offset,
+                          clamp_enabled: config.clamp_enabled,
+                          z_min: config.z_min,
+                          z_max: config.z_max,
+                        });
+                        dispatch(focusMapSlice.updateFocusMapGroupResult({ groupId: "manual", result }));
+                        // Auto-enable "use manual map" so the fitted plane is actually used
+                        dispatch(focusMapSlice.setFocusMapUseManualMap(true));
+                      } catch (err) {
+                        dispatch(focusMapSlice.setFocusMapError(err.message || "Failed to fit from manual points"));
+                      } finally {
+                        dispatch(focusMapSlice.setFocusMapComputing({ isComputing: false }));
+                      }
+                    }}
+                  >
+                    Fit from Points
+                  </Button>
+                )}
+                {(manualPoints || []).length > 0 && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="warning"
+                    startIcon={<DeleteIcon />}
+                    onClick={() => dispatch(focusMapSlice.clearManualPoints())}
+                  >
+                    Clear Points
+                  </Button>
+                )}
+              </Box>
+            </AccordionDetails>
+          </Accordion>
+          </>)}
+
           {/* ── Grid configuration ───────────────────────────────────── */}
           {!isPointsMode && (
           <>
@@ -1271,266 +1532,6 @@ const FocusMapDimension = () => {
               </Box>
             </AccordionDetails>
           </Accordion>
-
-          {/* ── Points mode: the points the operator places ───────────── */}
-          {isPointsMode && (<>
-          <Accordion
-            expanded={showManualPoints}
-            onChange={() => setShowManualPoints(!showManualPoints)}
-            variant="outlined"
-            sx={{ mb: 2 }}
-          >
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography variant="body2">
-                Manual Focus Points
-                {(manualPoints || []).length > 0 && (
-                  <Chip
-                    label={`${manualPoints.length} point(s)`}
-                    size="small"
-                    sx={{ ml: 1 }}
-                  />
-                )}
-              </Typography>
-            </AccordionSummary>
-            <AccordionDetails>
-              <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: "block" }}>
-                Manually define XYZ reference points for focus map fitting.
-                Move the stage to the desired position, focus, and click "Add Current Position",
-                or enter coordinates manually. You can also click on the wellplate viewer to add
-                points (XY from click, Z from current stage position).
-              </Typography>
-
-              {/* Manual points table */}
-              {(manualPoints || []).length > 0 && (
-                <TableContainer component={Paper} variant="outlined" sx={{ mb: 1 }}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>#</TableCell>
-                        <TableCell>X (µm)</TableCell>
-                        <TableCell>Y (µm)</TableCell>
-                        <TableCell>Z (µm)</TableCell>
-                        <TableCell align="right"></TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {manualPoints.map((pt, idx) => (
-                        <TableRow
-                          key={idx}
-                          hover
-                          selected={
-                            highlightedPoint?.source === "manual" &&
-                            highlightedPoint?.index === idx
-                          }
-                          onMouseEnter={() => highlightPoint("manual", null, idx)}
-                          onMouseLeave={clearHighlight}
-                        >
-                          <TableCell>{idx + 1}</TableCell>
-                          <TableCell>
-                            <TextField
-                              type="number"
-                              size="small"
-                              value={pt.x}
-                              onChange={(e) => {
-                                const newPts = [...manualPoints];
-                                newPts[idx] = { ...pt, x: parseFloat(e.target.value) || 0 };
-                                // Dispatch individual update
-                                dispatch(focusMapSlice.clearManualPoints());
-                                newPts.forEach((p) => dispatch(focusMapSlice.addManualPoint(p)));
-                              }}
-                              variant="standard"
-                              sx={{ width: 80 }}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <TextField
-                              type="number"
-                              size="small"
-                              value={pt.y}
-                              onChange={(e) => {
-                                const newPts = [...manualPoints];
-                                newPts[idx] = { ...pt, y: parseFloat(e.target.value) || 0 };
-                                dispatch(focusMapSlice.clearManualPoints());
-                                newPts.forEach((p) => dispatch(focusMapSlice.addManualPoint(p)));
-                              }}
-                              variant="standard"
-                              sx={{ width: 80 }}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <TextField
-                              type="number"
-                              size="small"
-                              value={pt.z ?? ""}
-                              placeholder="auto"
-                              onChange={(e) =>
-                                dispatch(
-                                  focusMapSlice.updateManualPointZ({
-                                    index: idx,
-                                    z: e.target.value === "" ? null : parseFloat(e.target.value),
-                                  })
-                                )
-                              }
-                              variant="standard"
-                              sx={{ width: 80 }}
-                            />
-                          </TableCell>
-                          <TableCell align="right">
-                            <Tooltip title="Go to this position">
-                              <span>
-                                <IconButton
-                                  size="small"
-                                  disabled={goToInProgress === `manual-${idx}`}
-                                  onClick={() => handleGoToManualPoint(pt, idx)}
-                                >
-                                  <MyLocationIcon fontSize="small" />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                            <Tooltip title="Use current stage Z">
-                              <span>
-                                <IconButton
-                                  size="small"
-                                  onClick={() =>
-                                    dispatch(
-                                      focusMapSlice.updateManualPointZ({
-                                        index: idx,
-                                        z: positionState?.z ?? 0,
-                                      })
-                                    )
-                                  }
-                                >
-                                  <HeightIcon fontSize="small" />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                            <Tooltip title="Autofocus here (measure Z)">
-                              <span>
-                                <IconButton
-                                  size="small"
-                                  disabled={goToInProgress === `manual-${idx}`}
-                                  onClick={() => handleAutofocusManualPoint(pt, idx)}
-                                >
-                                  <CenterFocusStrongIcon fontSize="small" />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                            <IconButton
-                              size="small"
-                              onClick={() => dispatch(focusMapSlice.removeManualPoint(idx))}
-                            >
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              )}
-
-              {manualPlacementActive && (
-                <Alert severity="info" sx={{ mb: 1 }}>
-                  Click on the wellplate / sample map to drop focus points. Only
-                  XY is recorded — Z is measured by autofocus when you press
-                  "Measure Z &amp; Fit". Click "Stop Placing" when done.
-                </Alert>
-              )}
-
-              <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
-                <Button
-                  size="small"
-                  variant={manualPlacementActive ? "contained" : "outlined"}
-                  color={manualPlacementActive ? "secondary" : "primary"}
-                  startIcon={<MyLocationIcon />}
-                  onClick={() =>
-                    dispatch(
-                      focusMapSlice.setManualPlacementActive(
-                        !manualPlacementActive,
-                      ),
-                    )
-                  }
-                >
-                  {manualPlacementActive ? "Stop Placing" : "Place on Map"}
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<AddCircleOutlineIcon />}
-                  onClick={handleAddManualPoint}
-                >
-                  Add Current Position
-                </Button>
-                {(manualPoints || []).length >= 3 && (
-                  <Button
-                    size="small"
-                    variant="contained"
-                    color="secondary"
-                    startIcon={
-                      ui.isComputing ? (
-                        <CircularProgress size={16} color="inherit" />
-                      ) : (
-                        <CenterFocusStrongIcon />
-                      )
-                    }
-                    disabled={ui.isComputing}
-                    title="Drive to each point, autofocus to measure Z, then fit and enable the manual map"
-                    onClick={handleMeasureAndFitManual}
-                  >
-                    Measure Z &amp; Fit
-                  </Button>
-                )}
-                {(manualPoints || []).length >= 3 &&
-                  !(manualPoints || []).some((p) => p.z == null) && (
-                  <Button
-                    size="small"
-                    variant="contained"
-                    startIcon={<PlayArrowIcon />}
-                    disabled={ui.isComputing}
-                    title="Fit using the Z values already in the table (no autofocus)"
-                    onClick={async () => {
-                      dispatch(focusMapSlice.setFocusMapComputing({ isComputing: true, groupId: "manual" }));
-                      dispatch(focusMapSlice.clearFocusMapError());
-                      try {
-                        const result = await apiExperimentControllerComputeFocusMapFromPoints({
-                          points: manualPoints,
-                          group_id: "manual",
-                          group_name: "Manual Points",
-                          method: config.method,
-                          smoothing_factor: config.smoothing_factor,
-                          z_offset: config.z_offset,
-                          clamp_enabled: config.clamp_enabled,
-                          z_min: config.z_min,
-                          z_max: config.z_max,
-                        });
-                        dispatch(focusMapSlice.updateFocusMapGroupResult({ groupId: "manual", result }));
-                        // Auto-enable "use manual map" so the fitted plane is actually used
-                        dispatch(focusMapSlice.setFocusMapUseManualMap(true));
-                      } catch (err) {
-                        dispatch(focusMapSlice.setFocusMapError(err.message || "Failed to fit from manual points"));
-                      } finally {
-                        dispatch(focusMapSlice.setFocusMapComputing({ isComputing: false }));
-                      }
-                    }}
-                  >
-                    Fit from Points
-                  </Button>
-                )}
-                {(manualPoints || []).length > 0 && (
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    color="warning"
-                    startIcon={<DeleteIcon />}
-                    onClick={() => dispatch(focusMapSlice.clearManualPoints())}
-                  >
-                    Clear Points
-                  </Button>
-                )}
-              </Box>
-            </AccordionDetails>
-          </Accordion>
-          </>)}
 
           {/* ── Action Buttons ────────────────────────────────────────── */}
           <Box sx={{ display: "flex", gap: 1, mb: 2, flexWrap: "wrap" }}>

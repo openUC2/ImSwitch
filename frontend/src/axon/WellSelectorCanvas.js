@@ -48,6 +48,11 @@ export const Shape = Object.freeze({
 });
 
 //##################################################################################
+// The polygon being drawn is canvas-local until CONVERT puts it in redux, and
+// the canvas unmounts whenever the user leaves the page. Keep the draft here
+// so leaving and coming back does not throw away a half-traced outline.
+const freehandDraft = { points: [], closed: false };
+
 const WellSelectorCanvas = forwardRef((props, ref) => {
   const canvasRef = useRef(null);
   const parentRef = useRef(null);
@@ -84,9 +89,13 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   const [dragPointIndex, setDragPointIndex] = useState(-1);
 
   //mode: freehand draw – polygon vertices in physical (µm) coordinates
-  const [freehandPoints, setFreehandPoints] = useState([]);
+  const [freehandPoints, setFreehandPoints] = useState(() => freehandDraft.points);
   const [isFreehandDrawing, setIsFreehandDrawing] = useState(false);
-  const [freehandClosed, setFreehandClosed] = useState(false);
+  const [freehandClosed, setFreehandClosed] = useState(() => freehandDraft.closed);
+  useEffect(() => {
+    freehandDraft.points = freehandPoints;
+    freehandDraft.closed = freehandClosed;
+  }, [freehandPoints, freehandClosed]);
   // Did the pointer actually move between press and release? Distinguishes a
   // click (append a vertex) from a drag (trace and close).
   const freehandDragRef = useRef(false);
@@ -198,34 +207,15 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
      * the current objective FOV (with optional overlap).
      * Returns an array of {x, y} in physical (µm) coordinates.
      */
-    generateFreehandScanPositions: (overlap = 0) => {
-      const polygon = freehandPoints;
-      if (!polygon || polygon.length < 3) return [];
-      const fovX = objectiveState?.fovX || 0;
-      const fovY = objectiveState?.fovY || 0;
-      if (fovX <= 0 || fovY <= 0) return [];
-      const stepX = fovX * (1 - overlap);
-      const stepY = fovY * (1 - overlap);
-      let minX = Infinity,
-        minY = Infinity,
-        maxX = -Infinity,
-        maxY = -Infinity;
-      polygon.forEach((p) => {
-        if (p.x < minX) minX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y > maxY) maxY = p.y;
-      });
-      const positions = [];
-      for (let y = minY; y <= maxY; y += stepY) {
-        for (let x = minX; x <= maxX; x += stepX) {
-          if (wsUtils.isPointInPolygon({ x, y }, polygon)) {
-            positions.push({ x, y });
-          }
-        }
-      }
-      return positions;
-    },
+    generateFreehandScanPositions: (overlap = 0) =>
+      wsUtils.generatePolygonScanPositions(
+        freehandPoints,
+        objectiveState?.fovX || 0,
+        objectiveState?.fovY || 0,
+        overlap,
+      ),
+    /** The closed freehand polygon as drawn, in physical (µm) coordinates. */
+    getFreehandPolygon: () => freehandPoints.map((p) => ({ x: p.x, y: p.y })),
   }));
 
   //##################################################################################
@@ -274,10 +264,26 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   }, [positionState.x, positionState.y]);
 
   //##################################################################################
+  // renderCanvas repaints everything (wells, every tile, overlays, stage-map
+  // images). Mouse moves change state far faster than the screen refreshes, and
+  // repainting once per state change made drawing crawl. Coalesce to at most
+  // one repaint per animation frame, always with the latest closure.
+  const renderCanvasRef = useRef(null);
+  useEffect(() => {
+    renderCanvasRef.current = renderCanvas; // after render: renderCanvas is declared below
+  });
+  const renderFrameRef = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(renderFrameRef.current), []);
   useEffect(() => {
     // Draw canvas content when state changed
-    renderCanvas();
+    if (renderFrameRef.current) return;
+    renderFrameRef.current = requestAnimationFrame(() => {
+      renderFrameRef.current = 0;
+      if (canvasRef.current) renderCanvasRef.current();
+    });
   }, [
+    freehandPoints,
+    freehandClosed,
     scale,
     offset,
     wellSelectorState,
@@ -442,7 +448,6 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
   //##################################################################################
   const renderCanvas = () => {
-    console.log("renderCanvas");
 
     //------------ create canvas
 
@@ -1502,7 +1507,6 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
   //##################################################################################
   const handleMouseUp = (e) => {
-    console.log("handleMouseUp");
 
     //handle mode single select
     if (wellSelectorState.mode == Mode.SINGLE_SELECT) {

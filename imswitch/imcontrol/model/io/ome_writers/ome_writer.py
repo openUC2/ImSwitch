@@ -135,6 +135,12 @@ def _sanitize_region_tag(region_id: Optional[str]) -> str:
     return "".join(c for c in (region_id or "") if c.isalnum())[:24]
 
 
+def _sanitize_channel_name(channel) -> str:
+    """Channel name as the tile filename pattern accepts it: ``[A-Za-z0-9_]``."""
+    cleaned = "".join(c if (c.isascii() and c.isalnum()) else "_" for c in str(channel or ""))
+    return cleaned.strip("_") or "unknown"
+
+
 def tiff_compression_kwargs(compression="zlib", level=1, predictor=True) -> Dict[str, Any]:
     """Compression kwargs for a tifffile write, degrading on older tifffile.
 
@@ -855,9 +861,16 @@ class OMEWriter:
         y_microns = int(metadata.get("y", 0) * 1000)
         z_microns = int(metadata.get("z", 0) * 1000)
 
-        channel = metadata.get("illuminationChannel", "unknown")
+        # The name goes into a filename that downstream stitchers (the napari
+        # openUC2 processor, ashlar) parse with ``_c<idx>_<[A-Za-z0-9_]+>_i``:
+        # a space or hyphen ("LED Matrix", "Laser-488") would make every tile
+        # of that channel unparseable, so reduce it to what the pattern takes.
+        channel = _sanitize_channel_name(metadata.get("illuminationChannel", "unknown"))
         laser_power = int(metadata.get("illuminationValue", 0))
-        iterator = metadata.get("runningNumber", 0)
+        # ``_i`` is the tile's index within its scan region — the same
+        # ``iterator`` the protocol JSON lists — so stitchers can look tiles
+        # up in it. Older callers only sent the workflow step id.
+        iterator = metadata.get("iterator", metadata.get("runningNumber", 0))
 
         timepoint_dir = self.file_paths.get_timepoint_dir(t_idx)
         current_time = time.strftime("%Y%m%d_%H%M%S")

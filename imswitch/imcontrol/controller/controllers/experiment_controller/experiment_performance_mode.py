@@ -13,6 +13,7 @@ from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
 
 from .experiment_mode_base import ExperimentModeBase
+from .scan_plan import stage_scan_frame_table, stage_scan_frame_count, stage_scan_channel_sequence
 from imswitch.imcontrol.model.io import OMEWriter, OMEFileStorePaths
 from imswitch.imcommon.model import dirtools
 
@@ -361,11 +362,16 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         nx = int((xEnd - xStart) // xStep) + 1 if xStep != 0 else 1
         ny = int((yEnd - yStart) // yStep) + 1 if yStep != 0 else 1
 
-        # Prepare illumination parameters
-        illumination_list = self.prepare_illumination_parameters(illumination_intensities)
+        # Firmware laser channels 0..4, mapped by source name -> channel_index
+        illumination_list = self.prepare_illumination_parameters(
+            illumination_intensities, experiment_params.get("illumination_sources"))
 
-        # Handle LED parameter if present
-        led_value = 0 * self._extract_led_value(experiment_params) # TODO: We have to rework the LED MAtrix interface as it's also not working properly on the microcontorller it seems
+        # The firmware's ``led`` drives the LED *array*. In ImSwitch that is the
+        # LED-matrix, which only appears as synthetic ring/DPC channels, and those
+        # force normal mode (scan_plan.resolve_channels). A laser manager merely
+        # named "LED" is already a laser channel above, so ``led`` stays off here
+        # or the same light would be fired twice per position.
+        led_value = 0
 
         # Extract Z-stack parameters
         z_params = self._extract_z_stack_parameters(experiment_params)
@@ -470,31 +476,25 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         self.controller._switch_off_all_illumination()
 
         # Get illumination list from scan params
-        illumination_list = scan_params.get('illumination', [])
+        illumination_list = list(scan_params.get('illumination', []))
         led_value = scan_params['led']
-        
-        # Build illumination dict for metadata (backward compatibility)
-        illum_dict = {}
-        for i, val in enumerate(illumination_list[:5]):
-            illum_dict[f"illumination{i}"] = val
-        illum_dict["led"] = led_value
 
-        # Count active illumination channels (including LED)
-        nIlluminations = sum(val is not None and val > 0 for val in illumination_list) + (1 if led_value and led_value > 0 else 0)
-        nScan = max(nIlluminations, 1)
-        
+        # Channels in the order the firmware fires them; the writer's channel
+        # axis is exactly this list (at least one so the loop runs once).
+        nIlluminations = max(len(stage_scan_channel_sequence(illumination_list, led_value)), 1)
+
         nx, ny, nz = scan_params['nx'], scan_params['ny'], scan_params['nz']
         xstart, ystart = scan_params['xstart'], scan_params['ystart']
         xstep, ystep, zstep = scan_params['xstep'], scan_params['ystep'], scan_params['zstep']
         zstart = scan_params.get('zstart', 0)
-        
-        total_frames = nx * ny * nz * nScan
+
+        total_frames = stage_scan_frame_count(nx, ny, nz, illumination_list, led_value)
         self._logger.info(f"Stage-scan: {nx}×{ny}×{nz} ({total_frames} frames)")
 
-        # Build metadata list for writer thread
+        # One row per camera frame-id, in firmware order (scan_plan pins it).
         metadata_list = self._build_scan_metadata(
-            nx, ny, nz, xstart, ystart, zstart,
-            xstep, ystep, zstep, illum_dict, nIlluminations
+            nx, ny, nz, xstart, ystart, zstart, xstep, ystep, zstep,
+            illumination_list, led_value,
         )
 
         # Reset frame tracking
@@ -531,9 +531,9 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             )
             self.controller._writer_thread_ome.start()
             
-            # Prepare illumination tuple - pad to 5 channels
-            illumination_padded = (illumination_list + [0] * 5)[:5] # TODO: we need to keep the sequence proposed by the esp32 firmware here!  adding zeros will shift the channel information
-            illumination_tuple = tuple(illumination_padded) if nIlluminations > 0 else (0, 0, 0, 0, 0)
+            # illumination_list is already indexed by firmware channel (0..4);
+            # trailing zeros only fill unused channels and never shift a value.
+            illumination_tuple = tuple((illumination_list + [0] * 5)[:5])
             
             # Reset stagescan completion flag and register callback
             self._register_stagescan_callback()
@@ -547,8 +547,9 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 tExposure=t_exposure,
                 illumination=illumination_tuple,
                 led=led_value,
+                tTrig=scan_params.get('tTrig'),
             )
-            
+
             # Wait for stagescan completion with timeout
             scan_completed = self._wait_for_scan_completion(total_frames, t_period)
             
@@ -568,56 +569,15 @@ class ExperimentPerformanceMode(ExperimentModeBase):
     def _build_scan_metadata(self, nx: int, ny: int, nz: int,
                             xstart: float, ystart: float, zstart: float,
                             xstep: float, ystep: float, zstep: float,
-                            illum_dict: Dict[str, Any], nIlluminations: int) -> List[Dict]:
+                            illumination: List[float], led: float) -> List[Dict]:
+        """One metadata row per camera frame, in the firmware's trigger order.
+
+        Delegates to :func:`scan_plan.stage_scan_frame_table`, the single
+        definition of that order shared with the fast-stage-scan API (and
+        mirrored by the uc2-ESP native test), so frame-id -> row can't drift.
         """
-        Build metadata list for each scan position.
-        
-        This corresponds to the metadataList in the UC2-ESP firmware.
-        
-        Args:
-            nx, ny, nz: Number of steps in each direction
-            xstart, ystart, zstart: Starting positions
-            xstep, ystep, zstep: Step sizes
-            illum_dict: Dictionary of illumination channels and values
-            nIlluminations: Number of active illumination channels
-            
-        Returns:
-            List of metadata dictionaries for each frame
-        """
-        metadata_list = []
-        running_number = 0
-        
-        for iy in range(ny):
-            for ix in range(nx):
-                for iz in range(nz):
-                    z = zstart + iz * zstep
-                    x = xstart + ix * xstep
-                    y = ystart + iy * ystep
-                    
-                    # Snake pattern: reverse X on odd Y rows
-                    if iy % 2 == 1:
-                        x = xstart + (nx - 1 - ix) * xstep
-                    
-                    if nIlluminations == 0:
-                        running_number += 1
-                        metadata_list.append({
-                            "x": x, "y": y, "z": z,
-                            "illuminationChannel": "default",
-                            "illuminationValue": -1,
-                            "runningNumber": running_number
-                        })
-                    else:
-                        for channel, value in illum_dict.items():
-                            if value is not None and value > 0:
-                                running_number += 1
-                                metadata_list.append({
-                                    "x": x, "y": y, "z": z,
-                                    "illuminationChannel": channel,
-                                    "illuminationValue": value,
-                                    "runningNumber": running_number
-                                })
-        
-        return metadata_list
+        return stage_scan_frame_table(nx, ny, nz, xstart, ystart, zstart,
+                                      xstep, ystep, zstep, illumination, led, snake=True)
 
     def _register_stagescan_callback(self) -> None:
         """Register callback for stagescan completion signal from firmware."""
@@ -649,13 +609,25 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         """
         Callback function for stagescan completion signal from firmware.
         
-        Expected JSON: {"stagescan": {}, "qid": 0, "success": 1}
-        
+        Expected JSON: {"stagescan": true, "frames": N, "moveTimeouts": k,
+                        "aborted": 0|1, "qid": 0, "success": 1}
+        (older firmware sends only stagescan/qid/success).
+
         Args:
             data: Dictionary with completion information
         """
         self._logger.info(f"Stagescan completion signal received: {data}")
-        time.sleep(0.5)  # Small delay to ensure all processing is done # TODO: 
+        fired = data.get("frames")
+        if fired is not None and self._expected_frames and int(fired) != int(self._expected_frames):
+            # The writer pairs frame-id k with row k of the frame table; a
+            # different trigger count means the two sides disagree on the order.
+            self._logger.error(
+                f"Firmware fired {fired} triggers but the frame table has {self._expected_frames} rows; "
+                "frames after the first mismatch carry the wrong metadata")
+        if data.get("aborted") or data.get("moveTimeouts"):
+            self._logger.warning(
+                f"Stagescan ended with aborted={data.get('aborted')} moveTimeouts={data.get('moveTimeouts')}")
+        time.sleep(0.5)  # let the last frame reach the writer before we finish
         self._stagescan_complete_event.set()
 
     def _wait_for_scan_completion(self, expected_frames: int, timeout: float) -> bool:
@@ -782,8 +754,14 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             trigger_info: Dictionary with trigger information
         """
         self._last_frame_time = time.time()
+        # Newer firmware numbers the triggers ({"cam":1,"frame":n}); a gap
+        # means a notification was lost, so the frame count is unreliable.
+        frame = trigger_info.get("frame") if isinstance(trigger_info, dict) else None
+        if frame is not None and int(frame) != self._frame_count:
+            self._logger.warning(f"Camera trigger notification {frame} arrived, expected {self._frame_count}")
+            self._frame_count = int(frame)
         self._frame_count += 1
-        
+
         if self._use_software_trigger:
             # Trigger software capture
             try:
@@ -1012,7 +990,8 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 "illumination_sources": illumination_sources,
                 "illumination_intensities": illumination_intensities,
                 "exposures": exposures,
-                "total_frames": scan_params['nx'] * scan_params['ny'] * scan_params['nz'] * max(sum(1 for i in scan_params['illumination'] if i > 0), 1)
+                "total_frames": stage_scan_frame_count(scan_params['nx'], scan_params['ny'], scan_params['nz'],
+                                                       scan_params['illumination'], scan_params['led']),
             }
             
             # Create protocol file path from controller's mFilePath

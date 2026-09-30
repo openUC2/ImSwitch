@@ -50,6 +50,7 @@ frame the sensor can deliver.
 | --- | --- | --- |
 | `ToupCamManager` | `[1, 2, 3, 4]` | Averaged digital binning (`TOUPCAM_OPTION_BINNING`, `0x80\|n`); frame size read back via `get_Size()` |
 | `HikCamManager` | `[1, 2, 4]` | `BinningX`/`BinningY` nodes; `WidthMax`/`HeightMax` re-read after the change |
+| `AVManager`, `BaslerManager` | `[1, 2, 4, 8]` within the camera's range | `BinningHorizontal`/`BinningVertical` nodes (shared `CameraAV` logic; `CameraBasler` only swaps in pypylon); `WidthMax`/`HeightMax` re-read after the change |
 | `TucsenCamManager` | `[1, 2]` | `TUIDC_RESOLUTION`: RESOLUTION (full) vs SENSITIVE (2×2 combined) — nothing above 2 exists |
 | `GXPIPYManager` (Daheng) | `[1]` | `BinningHorizontal`/`BinningVertical` are **not honoured by every model**, so extra factors must be opted into per setup |
 | `OpenCVCamManager` | `[1]` | The OpenCV/V4L backend has no binning control |

@@ -1,5 +1,6 @@
 from imswitch.imcommon.model import initLogger
 from .PositionerManager import PositionerManager
+import threading
 import time
 
 class VirtualStageManager(PositionerManager):
@@ -20,6 +21,15 @@ class VirtualStageManager(PositionerManager):
             "Z": positionerInfo.stageOffsets.get('stageOffsetPositionZ', 0),
             "A": positionerInfo.stageOffsets.get('stageOffsetPositionA', 0),
         }
+        # Simulated strobed sweep (see startStrobeSweep).
+        self._strobeCallbacks = []
+        self._strobeThread = None
+        self._strobeStop = threading.Event()
+        # The simulated camera trigger line: callables(n, x) run at every
+        # simulated SYNC, so a simulated camera can expose one frame per pulse.
+        self.strobeTriggerListeners = []
+        # Arguments of the last startStrobeSweep call, for simulated cameras.
+        self.strobeSweepRequest = {}
         try:
             self.VirtualMicroscope = lowLevelManagers["rs232sManager"]["VirtualMicroscope"]
         except:
@@ -183,8 +193,110 @@ class VirtualStageManager(PositionerManager):
             [self.setPosition(axis=axis, value=0) for axis in ["X","Y","Z"]]
 
 
+    # ------------------------------------------------------------------ #
+    # Simulated strobed sweep: same API as ESP32StageManager, user frame.
+    # ------------------------------------------------------------------ #
+
+    def hasStrobeSweep(self) -> bool:
+        """The simulation always supports it, so the strobed path runs without hardware."""
+        return True
+
+    def startStrobeSweep(self, axis="X", target=0.0, speed=None, period_us=33333,
+                         trig_us=100, laser=-1, delay_us=None, width_us=None,
+                         latch=True, report=16, max_frames=0) -> bool:
+        """Move ``axis`` linearly to ``target`` (µm, user frame) at ``speed`` µm/s,
+        emitting one simulated SYNC every ``period_us``.
+
+        Every SYNC calls ``strobeTriggerListeners(n, x)`` and latches ``x``;
+        latched positions go to the callbacks in "report" batches of
+        ``report``, then a "done" event. ``max_frames > 0`` emits exactly that
+        many frames (moving towards the target meanwhile, if not there yet).
+        """
+        if self._strobeThread is not None and self._strobeThread.is_alive():
+            self.__logger.warning("Simulated strobe sweep already running")
+            return False
+        axis = str(axis).upper()
+        self.strobeSweepRequest = dict(
+            axis=axis, target=float(target), speed=speed, period_us=period_us,
+            trig_us=trig_us, laser=laser, delay_us=delay_us, width_us=width_us,
+            latch=latch, report=report, max_frames=max_frames)
+        self._strobeStop.clear()
+        self._strobeThread = threading.Thread(
+            target=self._runStrobeSweep, daemon=True, name="VirtualStrobeSweep",
+            args=(axis, float(target), float(speed or 1000.0), max(1.0, float(period_us)),
+                  bool(laser is not None and laser >= 0 and delay_us is not None
+                       and width_us is not None),
+                  max(1, int(report)), max(0, int(max_frames))))
+        self._strobeThread.start()
+        return True
+
+    def _runStrobeSweep(self, axis, target, speed, periodUs, strobe, report, maxFrames):
+        start = float(self.getPosition().get(axis, 0.0))
+        distance = target - start
+        direction = 1.0 if distance >= 0 else -1.0
+        period = periodUs / 1e6
+        stepSize = float(getattr(self, f"stepsize{axis}", 1) or 1)
+        batch = []
+        n = 0
+        t0 = time.monotonic()
+        while not self._strobeStop.is_set():
+            n += 1
+            travelled = min(abs(distance), speed * (n - 1) * period)
+            x = start + direction * travelled
+            self.move(value=x, axis=axis, is_absolute=True)
+            for listener in list(self.strobeTriggerListeners):
+                try:
+                    listener(n, x)
+                except Exception as e:
+                    self.__logger.debug(f"Strobe trigger listener failed: {e}")
+            batch.append((n, x))
+            if len(batch) >= report:
+                self._emitStrobe(self._strobeReport(batch, stepSize))
+                batch = []
+            reached = travelled >= abs(distance)
+            if (maxFrames > 0 and n >= maxFrames) or (maxFrames == 0 and reached):
+                break
+            time.sleep(max(0.0, t0 + n * period - time.monotonic()))
+        if batch:
+            self._emitStrobe(self._strobeReport(batch, stepSize))
+        aborted = self._strobeStop.is_set()
+        self._emitStrobe({
+            "type": "done", "frames": n, "camera": n, "flashes": n if strobe else 0,
+            "positions": n, "latch": 1, "strobe": int(strobe), "aborted": int(aborted),
+            "success": int(not aborted), "qid": 0})
+
+    @staticmethod
+    def _strobeReport(batch, stepSize):
+        return {"type": "report", "n": [b[0] for b in batch], "x": [b[1] for b in batch],
+                "x_steps": [int(round(b[1] * stepSize)) for b in batch]}
+
+    def _emitStrobe(self, event):
+        for cb in list(self._strobeCallbacks):
+            try:
+                cb(event)
+            except Exception as e:
+                self.__logger.error(f"Strobe sweep callback failed: {e}")
+
+    def stopStrobeSweep(self):
+        self._strobeStop.set()
+        if self._strobeThread is not None:
+            self._strobeThread.join(timeout=2.0)
+        return True
+
+    def registerStrobeSweepCallback(self, cb) -> bool:
+        self._strobeCallbacks.append(cb)
+        return True
+
+    def unregisterStrobeSweepCallback(self, cb) -> bool:
+        try:
+            self._strobeCallbacks.remove(cb)
+            return True
+        except ValueError:
+            return False
+
     def start_stage_scanning(self, xstart=0, xstep=1, nx=100,
-                             ystart=0, ystep=1, zstart=0, zstep=1, nz=100, ny=100, tsettle=0.1, tExposure=50, illumination=None, led=None):
+                             ystart=0, ystep=1, zstart=0, zstep=1, nz=100, ny=100, tsettle=0.1, tExposure=50, illumination=None, led=None,
+                             speed=None, acceleration=None, tTrig=None, **kwargs):
         """
         Start a stage scanning operation with the given parameters.
         Virtual implementation that simulates the scanning process.

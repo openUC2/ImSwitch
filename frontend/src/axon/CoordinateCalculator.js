@@ -139,10 +139,24 @@ function processScanPoint(point, pointIndex, experimentState, objectiveState, we
   // Calculate positions based on point shape and mode
   let rawPositions = [];
 
+  // A freehand region that still has its outline is re-tiled here from the
+  // CURRENT field of view, so a region picked on a low-magnification prescan
+  // is scanned on the pitch of whatever objective is in place at START.
+  // Its ``neighborPointList`` is only a cached tiling and may be stale.
+  if (Array.isArray(point.polygon) && point.polygon.length >= 3 &&
+      objectiveState.fovX > 0 && objectiveState.fovY > 0) {
+    const regionOverlap = wellSelectorState?.areaSelectOverlap || 0;
+    rawPositions = wsUtils.generatePolygonScanPositions(
+      point.polygon, objectiveState.fovX, objectiveState.fovY, regionOverlap
+    ).map((p) => ({ x: p.x, y: p.y, z: point.z ?? 0, iX: p.iX, iY: p.iY }));
+  }
+
   // Region-style points (e.g. a freehand polygon) carry all their interior
   // scan positions in `neighborPointList`, so the whole region is ONE scan
   // area/group. These take priority over the shape-based generation below.
-  if (Array.isArray(point.neighborPointList) && point.neighborPointList.length > 0) {
+  if (rawPositions.length > 0) {
+    // already tiled from the polygon above
+  } else if (Array.isArray(point.neighborPointList) && point.neighborPointList.length > 0) {
     rawPositions = point.neighborPointList.map((n) => ({
       x: n.x,
       y: n.y,

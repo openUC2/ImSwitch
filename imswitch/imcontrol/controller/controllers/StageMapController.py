@@ -49,6 +49,27 @@ class StageMapParams(BaseModel):
     # Channel handling
     activeChannel: str = ""             # empty = auto-detect from enabled illumination
 
+    # Prescan: how long after a frame was exposed it reaches us (exposure,
+    # readout, USB transfer, SDK callback, our poll). The stage keeps moving
+    # meanwhile, so every band would land ahead of where it was taken — by
+    # speed × lag, in the direction of travel — and serpentine lines would
+    # alternate. Negative = measure it at the start of every prescan by
+    # sweeping the first line both ways and correlating the two strips.
+    prescanLagMs: float = -1.0
+
+    # Strobed prescan (opt-in). The firmware triggers the camera, flashes the
+    # strobe laser a fixed delay later and latches the stage position on the
+    # same CANopen SYNC, so every frame is sharp and placed where it was taken.
+    # Off, or on without the hardware for it, the prescan runs free as above.
+    prescanStrobe: bool = False
+    strobeLaser: str = ""               # laser manager to flash; empty = first with setStrobe
+    strobeWidthUs: float = 20.0         # flash length
+    strobeDelayUs: float = -1.0         # SYNC -> flash; negative = auto (see strobeAutoDelayUs)
+    strobeWindowMs: float = 30.0        # camera exposure during strobed sweeps: the window
+                                        # that must contain the flash for every sensor row
+    strobeTrigUs: float = 100.0         # camera trigger pulse width
+    strobeReport: int = 16              # latched positions per report message
+
     class Config:
         arbitrary_types_allowed = True
 
@@ -68,6 +89,7 @@ class StageMapStatus(BaseModel):
     detectorName: str = ""
     lastError: str = ""
     prescanRunning: bool = False
+    prescanLagMs: float = 0.0           # lag compensation in use (set or calibrated)
 
     class Config:
         arbitrary_types_allowed = True
@@ -99,6 +121,258 @@ def prescanLayout(spanUm: float, dxUm: float, pixelSizeUm: float, frameShape,
         if stripW * stripH * itemsize <= maxStripBytes or subsample >= 64:
             return slots, stripW, stripH, subsample, dxUm
         subsample += 1
+
+
+def estimateProfileShift(a: np.ndarray, b: np.ndarray, maxShiftPx: Optional[int] = None,
+                         minPeak: float = 0.2, minContrast: float = 0.01):
+    """How many columns strip ``a`` is shifted right of strip ``b`` (or None).
+
+    Both strips show the same line; only their placement along X differs.
+    The comparison is on the column-mean profiles, so it is insensitive to
+    the rolling-shutter skew inside each band, and it is a normalised FFT
+    cross-correlation so a 20 000-column strip costs milliseconds. Columns
+    left dark (never filled) in either strip are masked to the mean so the
+    strip end does not act as a feature that pins the shift to zero.
+
+    None means "don't trust it": a blank line (glass, no tissue) has no
+    contrast to correlate, and a weak peak is noise.
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    if a.ndim == 1:
+        a = a[None, :]
+    if b.ndim == 1:
+        b = b[None, :]
+    n = min(a.shape[1], b.shape[1])
+    if n < 8:
+        return None
+    a, b = a[:, :n], b[:, :n]
+    filled = (a.max(axis=0) > 0) & (b.max(axis=0) > 0)
+    if filled.sum() < n // 4:
+        return None
+    pa, pb = a.mean(axis=0), b.mean(axis=0)
+    level = max(float(pa[filled].mean()), float(pb[filled].mean()), 1e-9)
+    pa = np.where(filled, pa, pa[filled].mean()) - pa[filled].mean()
+    pb = np.where(filled, pb, pb[filled].mean()) - pb[filled].mean()
+    sa, sb = float(pa.std()), float(pb.std())
+    if sa < minContrast * level or sb < minContrast * level:
+        return None
+    size = 1
+    while size < 2 * n:
+        size *= 2
+    fa, fb = np.fft.rfft(pa, size), np.fft.rfft(pb, size)
+    # cc[k] = sum_x a[x + k] * b[x]: peaks at k = s when a[x] = b[x - s]
+    cc = np.fft.irfft(fa * np.conj(fb), size) / (n * sa * sb)
+    lags = np.arange(size)
+    lags[lags > size // 2] -= size
+    limit = n // 4 if maxShiftPx is None else max(1, int(maxShiftPx))
+    window = np.abs(lags) <= limit
+    k = int(np.argmax(np.where(window, cc, -np.inf)))
+    if cc[k] < minPeak:
+        return None
+    return int(lags[k])
+
+
+def spreadBands(samples, t0, t1, span, scale, forward=True):
+    """Lay keyed bands across a strip by where each was exposed.
+
+    Sample i sits ``span * (k_i - t0) / (t1 - t0)`` along the travel, where
+    k_i is its key: the grab time for a free-running sweep, or the stage
+    position itself for a strobed one (then ``t0``/``t1`` are the line's low
+    and high X and ``forward`` is True). Keys outside ``[t0, t1]`` are clamped
+    to the strip: frames from before the stage set off or after it stopped
+    show the line's end points. The strip is always in stage order (column 0 =
+    lowest X); a return line (``forward=False``) walks it from the far end.
+    Bands are never mirrored — the camera does not know which way the stage
+    is going, so its pixel order is the same on every line, and flipping a
+    whole return strip would flip each field of view inside it.
+
+    Each band fills half the distance to its neighbours on either side, so
+    the strip is contiguous whatever the cadence; a band narrower than that
+    gap is centred and the remainder left dark rather than stretched.
+    """
+    stripW = max(2, int(np.ceil(span / scale)))
+    stripH = samples[0][1].shape[0]
+    strip = np.zeros((stripH, stripW), dtype=samples[0][1].dtype)
+    duration = max(t1 - t0, 1e-6)
+    placed = []
+    for t, band in samples:
+        along = min(stripW - 1, max(0, int(round((t - t0) / duration * (stripW - 1)))))
+        placed.append((along if forward else stripW - 1 - along, band))
+    placed.sort(key=lambda item: item[0])
+    centres = [c for c, _ in placed]
+
+    for i, (_, band) in enumerate(placed):
+        left = 0 if i == 0 else (centres[i - 1] + centres[i]) // 2
+        right = stripW if i == len(placed) - 1 else (centres[i] + centres[i + 1]) // 2
+        width = min(right - left, band.shape[1])
+        if width <= 0:
+            continue
+        # Centre the band on its position, clipped to its share of the strip.
+        x0 = max(left, min(right - width, centres[i] - width // 2))
+        bx0 = max(0, band.shape[1] // 2 - width // 2)
+        strip[:band.shape[0], x0:x0 + width] = band[:, bx0:bx0 + width]
+    return strip
+
+
+# --------------------------------------------------------------------------- #
+# Strobed prescan: pure helpers (unit-tested in test_stagemap_strobe.py)
+# --------------------------------------------------------------------------- #
+
+def strobeAutoDelayUs(windowUs: float, widthUs: float, delayUs: float = -1.0,
+                      marginUs: float = 1000.0) -> float:
+    """The flash delay after the camera trigger, in µs.
+
+    A non-negative ``delayUs`` is used as given. Otherwise the flash goes near
+    the end of the exposure window, ``marginUs`` before it closes: with a
+    rolling shutter the last row opens a full readout after the first, so the
+    end of the window is where every row is open at once.
+    """
+    if delayUs is not None and delayUs >= 0:
+        return float(delayUs)
+    return max(0.0, float(windowUs) - float(widthUs) - float(marginUs))
+
+
+def strobeFrameKeys(triggerIndices, frameIds):
+    """Per-frame counter to pair frames with trigger pulses, and which one it is.
+
+    The camera's trigger index counts pulses, lost frames included, so it is
+    the right key. Some models leave it at 0; then the camera frame number
+    (counts frames the camera produced) is next best, and arrival order the
+    last resort. Returns ``(keys, "trigger" | "frame" | "arrival")``.
+    """
+    trig = np.asarray(triggerIndices, dtype=np.int64).ravel()
+    ids = np.asarray(frameIds, dtype=np.int64).ravel()
+    if trig.size <= 1 or np.all(np.diff(trig) > 0):
+        return trig, "trigger"
+    if ids.size == trig.size and np.all(np.diff(ids) > 0):
+        return ids, "frame"
+    return np.arange(trig.size, dtype=np.int64), "arrival"
+
+
+def strobeVelocity(reportN, reportX, periodUs: float) -> np.ndarray:
+    """Signed axis velocity (µm/s) at each latched position.
+
+    The slope of the latched X over the frame number, divided by the frame
+    period; ``reportN`` must be increasing and unique, and may have gaps. It
+    follows acceleration at the ends of a line. Fewer than two positions give
+    zero: one point has no slope.
+    """
+    n = np.asarray(reportN, dtype=np.float64).ravel()
+    x = np.asarray(reportX, dtype=np.float64).ravel()
+    if n.size < 2 or periodUs <= 0:
+        return np.zeros_like(x)
+    return np.gradient(x, n) / (float(periodUs) * 1e-6)
+
+
+def pairStrobeFrames(frameKeys, reportN, reportX, periodUs: float, delayUs: float):
+    """Pair each frame of a strobed sweep with where the stage was at its flash.
+
+    Frame keys (see strobeFrameKeys) are taken relative to the lowest one:
+    frame key k0 + k belongs to SYNC n = k + 1. Missing frames just leave
+    their SYNC unused. Missing reports (a lost CAN frame) are bridged by
+    interpolating the latched positions; frames outside the reported range
+    are dropped rather than extrapolated. The latched X is where the stage
+    was at the SYNC; the flash comes ``delayUs`` later, when it is ``v·D``
+    further, with v taken from the latched positions themselves.
+
+    Returns ``[(frameIndex, n, x)]`` with frameIndex into ``frameKeys``.
+    """
+    keys = np.asarray(frameKeys, dtype=np.int64).ravel()
+    n = np.asarray(reportN, dtype=np.float64).ravel()
+    x = np.asarray(reportX, dtype=np.float64).ravel()
+    if keys.size == 0 or n.size == 0 or n.size != x.size:
+        return []
+    order = np.argsort(n, kind="stable")
+    n, first = np.unique(n[order], return_index=True)
+    x = x[order][first]
+    xTrue = x + strobeVelocity(n, x, periodUs) * (float(delayUs) * 1e-6)
+    pairs = []
+    seen = set()
+    for i, frameN in enumerate(keys - keys.min() + 1):
+        frameN = int(frameN)
+        if frameN in seen or frameN < n[0] or frameN > n[-1]:
+            continue
+        seen.add(frameN)
+        pairs.append((i, frameN, float(np.interp(frameN, n, xTrue))))
+    return pairs
+
+
+def strobeRowScore(frame) -> Dict[str, float]:
+    """How well one flash lit every row of a rolling-shutter frame.
+
+    A flash that misses some rows' exposure leaves those rows dark. The
+    score is the mean brightness times the row uniformity (1st over 99th
+    percentile of the row means), so it wants the frame bright AND even:
+    a dark frame is even but dim, a half-lit one bright but uneven.
+    """
+    img = np.asarray(frame, dtype=np.float64)
+    if img.ndim == 3:
+        img = img.mean(axis=2)
+    if img.size == 0:
+        return {"score": 0.0, "mean": 0.0, "uniformity": 0.0}
+    rows = img.mean(axis=1)
+    lo, hi = np.percentile(rows, (1, 99))
+    uniformity = float(np.clip(lo / hi, 0.0, 1.0)) if hi > 0 else 0.0
+    mean = float(rows.mean())
+    return {"score": mean * uniformity, "mean": mean, "uniformity": uniformity}
+
+
+def strobeSweepResult(events):
+    """Latched positions and the done event from one sweep's callback events.
+
+    Returns ``(reportN, reportX, doneEvent)``; ``doneEvent`` is None while
+    the sweep has not finished. Report entries are concatenated in arrival
+    order; a report with mismatched ``n``/``x`` lengths is cut to the shorter.
+    """
+    reportN, reportX, doneEvent = [], [], None
+    for event in events:
+        if event.get("type") == "report":
+            pairs = list(zip(event.get("n", []), event.get("x", [])))
+            reportN += [int(n) for n, _ in pairs]
+            reportX += [float(x) for _, x in pairs]
+        elif event.get("type") == "done":
+            doneEvent = event
+    return reportN, reportX, doneEvent
+
+
+def pickStrobeDelay(delays, scores, tolerance: float = 0.95) -> Optional[float]:
+    """The middle of the delays that score within ``tolerance`` of the best.
+
+    Every delay that puts the flash where all rows are open scores about the
+    same; the middle of that plateau leaves the most margin for jitter on
+    either side. None when nothing lit the frame.
+    """
+    d = np.asarray(delays, dtype=np.float64).ravel()
+    s = np.asarray(scores, dtype=np.float64).ravel()
+    ok = np.isfinite(s)
+    if not ok.any() or s[ok].max() <= 0:
+        return None
+    good = np.sort(d[ok & (s >= tolerance * s[ok].max())])
+    return float(good[len(good) // 2])
+
+
+class _Sweep:
+    """What one drive along a prescan line produced, before it is placed.
+
+    ``samples`` are (grab time, centre band) pairs; ``t0``/``t1`` bracket
+    the move (command sent / reported done); ``span`` is the travel in µm
+    and ``scale`` the strip µm per pixel. Placement is a separate step so
+    the same sweep can be laid out again once the lag is known.
+    """
+
+    def __init__(self, samples, t0, t1, span, scale, forward):
+        self.samples = samples
+        self.t0 = t0
+        self.t1 = t1
+        self.span = span
+        self.scale = scale
+        self.forward = forward
+
+    @property
+    def speed(self) -> float:
+        """Mean speed actually achieved, µm/s — not what was asked for."""
+        return self.span / max(self.t1 - self.t0, 1e-6)
 
 
 class _NonBlockingMove:
@@ -155,6 +429,7 @@ class StageMapController(ImConWidgetController):
     """
 
     sigStageMapTileAdded = Signal(dict)
+    sigStageMapTilesRemoved = Signal(dict)
     sigStageMapStatus = Signal(dict)
 
     MAX_STITCH_PIXELS = 1.2e9  # safety cap for the stitched canvas (bytes ~ 2x for uint16)
@@ -174,6 +449,9 @@ class StageMapController(ImConWidgetController):
         # Session/tile state
         self._tiles: List[Dict] = []          # metadata for every captured tile
         self._tilesLock = threading.Lock()
+        # Ids only ever count up. The frontend keys tiles by id, so an id
+        # reused after tiles were removed would be dropped as a duplicate.
+        self._nextTileId = 0
         self._sessionPath: Optional[str] = None
         self._acqHandle = None
 
@@ -183,6 +461,8 @@ class StageMapController(ImConWidgetController):
         self._monitorThread: Optional[threading.Thread] = None
         self._snapRequested = threading.Event()
         self._prescanThread: Optional[threading.Thread] = None
+        self._prescanLagS = 0.0               # camera lag in use (see StageMapParams.prescanLagMs)
+        self._strobeCalibrating = False       # calibrateStageMapStrobeDelay is running
         self._lastError = ""
 
         self._logger.info("StageMapController initialized")
@@ -325,6 +605,29 @@ class StageMapController(ImConWidgetController):
         for tile in withPreview[:max(0, excess)]:
             tile["preview"] = None
 
+    def _allocTileId(self) -> int:
+        with self._tilesLock:
+            tileId = self._nextTileId
+            self._nextTileId += 1
+        return tileId
+
+    def _dropTiles(self, kind: str) -> List[int]:
+        """Remove every tile of one kind from the store and tell the frontend.
+
+        Used when a prescan starts: the previous overlay would otherwise stay
+        underneath the new one, and the two rarely agree pixel for pixel.
+        Tiles of other kinds (snapped while mapping) are left alone.
+        """
+        with self._tilesLock:
+            removed = [t["id"] for t in self._tiles if t.get("kind") == kind]
+            if removed:
+                self._tiles = [t for t in self._tiles if t.get("kind") != kind]
+        if removed:
+            self._writeTileIndex()
+            self.sigStageMapTilesRemoved.emit({"ids": removed, "kind": kind})
+            self._logger.info(f"Removed {len(removed)} {kind} tile(s)")
+        return removed
+
     def _makePreview(self, frame: np.ndarray) -> Optional[str]:
         """Downscale + JPEG-encode a frame, return base64 string."""
         try:
@@ -392,8 +695,7 @@ class StageMapController(ImConWidgetController):
         widthUm = widthPx * pixelSize
         heightUm = heightPx * pixelSize
 
-        with self._tilesLock:
-            tileId = len(self._tiles)
+        tileId = self._allocTileId()
 
         rawPath = ""
         if self.params.saveRawTiles and self._sessionPath and HAS_TIFFFILE:
@@ -427,6 +729,7 @@ class StageMapController(ImConWidgetController):
             "widthUm": float(widthUm),
             "heightUm": float(heightUm),
             "channel": channel,
+            "kind": "tile",
             "rawPath": rawPath,
             "timestamp": time.time(),
             "preview": preview,
@@ -473,6 +776,15 @@ class StageMapController(ImConWidgetController):
         end when a line finishes, so driving straight back across it halves the
         travel. Each strip is emitted as soon as its line ends, so the map fills
         in line by line rather than at the end.
+
+        Unless the operator pinned ``prescanLagMs``, the first line is driven
+        both ways first: the two strips differ only by the camera lag (see
+        StageMapParams), so their offset calibrates it for the whole prescan.
+
+        With ``prescanStrobe`` on and hardware that can do it, every line is a
+        firmware-timed strobed sweep instead (``_sweepLineStrobed``): frames
+        carry the position latched at their trigger, so there is no lag to
+        calibrate. Without that hardware the free-running path runs unchanged.
         """
         acqHandle = None
         restore = self._enterPrescanOptics(objectiveSlot)
@@ -481,20 +793,37 @@ class StageMapController(ImConWidgetController):
                 acqHandle = self._master.detectorsManager.startAcquisition()
             except Exception as e:
                 self._logger.warning(f"Could not start acquisition: {e}")
+            # Strobe off (the default) runs none of the strobe code at all;
+            # _restorePrescanOptics switches it off again with everything else.
+            strobe = restore["strobe"] = (self._enterStrobeMode()
+                                          if getattr(self.params, "prescanStrobe", False)
+                                          else None)
+
+            lagS = None
+            if self.params.prescanLagMs is not None and self.params.prescanLagMs >= 0:
+                lagS = float(self.params.prescanLagMs) / 1000.0
+                self._prescanLagS = lagS
 
             y = minY
             forward = True
             while y <= maxY + 1e-6 and not self._shouldStop.is_set():
-                startX, endX = (minX, maxX) if forward else (maxX, minX)
-                result = self._prescanLine(startX, endX, y, speedX, dx, subsample)
-                if result is not None:
-                    strip, stripPixelSize = result
-                    if not forward:
-                        # Store every strip left-to-right whichever way it was
-                        # driven, so the map does not mirror alternate lines.
-                        strip = strip[:, ::-1]
-                    self._addStrip(strip, minX, maxX, y, stripPixelSize)
-                forward = not forward
+                if strobe is not None:
+                    self._prescanStrobedLine(minX, maxX, y, forward, speedX, dx, subsample, strobe)
+                    forward = not forward
+                    y += dy
+                    continue
+                if lagS is None:
+                    lagS, sweep = self._calibratePrescanLag(minX, maxX, y, speedX, dx, subsample)
+                    self._prescanLagS = lagS
+                    self._emitStatus()
+                    # Both calibration sweeps ended where they started, so the
+                    # next line is driven forward again.
+                else:
+                    startX, endX = (minX, maxX) if forward else (maxX, minX)
+                    sweep = self._sweepLine(startX, endX, y, speedX, dx, subsample)
+                    forward = not forward
+                if sweep is not None:
+                    self._addStrip(self._placeSweep(sweep, lagS), minX, maxX, y, sweep.scale)
                 y += dy
         except Exception as e:
             self._lastError = f"Prescan failed: {e}"
@@ -509,6 +838,40 @@ class StageMapController(ImConWidgetController):
             self._prescanThread = None
             self._emitStatus()
             self._logger.info("Prescan finished")
+
+    def _calibratePrescanLag(self, minX, maxX, y, speedX, dx, subsample):
+        """Drive one line forward and back; the strips' offset is 2 × speed × lag.
+
+        Returns ``(lagS, forwardSweep)``. The forward sweep is handed back so
+        the caller can place it with the lag it just paid for, and the stage
+        ends at ``minX`` again. Falls back to the last known lag when the line
+        has nothing to correlate (blank glass) or a sweep failed.
+        """
+        fallback = self._prescanLagS
+        fwd = self._sweepLine(minX, maxX, y, speedX, dx, subsample)
+        if fwd is None or self._shouldStop.is_set():
+            return fallback, fwd
+        bwd = self._sweepLine(maxX, minX, y, speedX, dx, subsample)
+        if bwd is None:
+            return fallback, fwd
+        a = self._placeSweep(fwd, 0.0)
+        b = self._placeSweep(bwd, 0.0)
+        # The lag cannot plausibly exceed half a second; look no further.
+        maxShiftPx = int(np.ceil(0.5 * (fwd.speed + bwd.speed) / fwd.scale))
+        shiftPx = estimateProfileShift(a, b, maxShiftPx=maxShiftPx)
+        if shiftPx is None:
+            self._logger.warning(
+                f"Prescan lag calibration: line y={y:.0f} has no usable contrast, "
+                f"keeping {fallback * 1000:.0f} ms")
+            return fallback, fwd
+        # Forward lands +speed·lag along X, backward −speed·lag: the strips
+        # are (vF + vB)·lag apart.
+        lagS = shiftPx * fwd.scale / max(fwd.speed + bwd.speed, 1e-6)
+        lagS = float(min(max(lagS, -0.5), 0.5))
+        self._logger.info(
+            f"Prescan lag calibration: strips {shiftPx * fwd.scale:.0f} µm apart at "
+            f"{fwd.speed:.0f}/{bwd.speed:.0f} µm/s -> lag {lagS * 1000:.0f} ms")
+        return lagS, fwd
 
     def _objectiveController(self):
         try:
@@ -555,6 +918,8 @@ class StageMapController(ImConWidgetController):
         return state
 
     def _restorePrescanOptics(self, state: Dict):
+        if state.get("strobe") is not None:
+            self._exitStrobeMode(state["strobe"])
         objective = self._objectiveController()
         if state.get("slot") is not None and objective is not None:
             try:
@@ -600,16 +965,20 @@ class StageMapController(ImConWidgetController):
         start = max(0, width // 2 - band // 2)
         return np.array(frame[::subsample, start:start + band:subsample], copy=True)
 
-    def _prescanLine(self, startX, endX, y, speedX, dx, subsample):
-        """Drive X once; return the strip of the exposures taken on the way.
+    # Frames are still delivered after the stage has stopped; keep grabbing
+    # this long so the end of the line is covered too.
+    PRESCAN_TAIL_S = 0.3
+
+    def _sweepLine(self, startX, endX, y, speedX, dx, subsample) -> Optional[_Sweep]:
+        """Drive X once; return the timestamped exposures taken on the way.
 
         Two phases, deliberately separate:
 
         1. While the stage moves, keep the centre band of a fresh frame every
            ``dx`` worth of travel (by nominal time) — a short list, one entry
            per tile pitch, never more than PRESCAN_MAX_FRAMES.
-        2. Once the move has FINISHED, spread those bands across the strip by
-           where each was taken: ``x = span * (t - t0) / (t1 - t0)``.
+        2. Later (``_placeSweep``) spread those bands across the strip by
+           where each was taken: ``x = span * (t - lag - t0) / (t1 - t0)``.
 
         Placing by the measured sweep duration rather than by ``speedX`` is
         what makes the strip land in the right place: the stage accelerates,
@@ -617,8 +986,8 @@ class StageMapController(ImConWidgetController):
         none of that matters once the ends of the line are pinned to the ends
         of the strip. Everything is sized from the frames themselves, not
         from ``detector.shape`` (whose axis order differs between cameras).
-        ``startX``/``endX`` are in travel order; the caller un-mirrors return
-        lines. Returns ``(strip, um_per_strip_px)`` or None.
+        ``startX``/``endX`` are in travel order; ``_placeSweep`` un-mirrors
+        return lines. Returns None when the line yielded nothing usable.
         """
         # One axis at a time — a combined move drives the stage diagonally.
         self._stage.move(value=startX, axis="X", speed=speedX, is_absolute=True, is_blocking=True)
@@ -645,13 +1014,19 @@ class StageMapController(ImConWidgetController):
         mover = _NonBlockingMove(self._stage, endX - startX, "X", speedX)
         mover.start()
         t0 = time.time()
+        t1 = None
         deadline = t0 + (span / max(speedX, 1e-6)) * 3.0 + 10.0
 
         samples = []  # (t, band)
         lastFrameNumber = -1
         lastKept = -1e9
-        while not mover.finished and not self._shouldStop.is_set() and time.time() < deadline:
+        while not self._shouldStop.is_set() and time.time() < deadline:
             now = time.time()
+            if mover.finished:
+                if t1 is None:
+                    t1 = now
+                elif now - t1 > self.PRESCAN_TAIL_S:
+                    break
             if now - lastKept < interval:
                 # Fixed 2 ms tick, never "the remainder": a remainder of a few
                 # microseconds is a busy-loop, not a sleep.
@@ -667,12 +1042,6 @@ class StageMapController(ImConWidgetController):
             lastFrameNumber = frameNumber
             lastKept = now
             samples.append((now, self._centreBand(frame, bandPx, subsample)))
-        t1 = time.time()
-        if 0: # debug
-            import tifffile as tif
-            for sample in samples: 
-                tif.imwrite(f"test.tif", sample[1], append=True)
-                print(sample[1])
         mover.join(timeout=5.0)
         if mover.error:
             self._logger.error(f"Prescan line y={y:.0f}: move failed: {mover.error}")
@@ -680,6 +1049,8 @@ class StageMapController(ImConWidgetController):
         if not mover.finished:
             self._logger.error(f"Prescan line y={y:.0f}: move did not finish in time")
             return None
+        if t1 is None:
+            t1 = time.time()
         if len(samples) < 2:
             self._logger.warning(f"Prescan line y={y:.0f}: only {len(samples)} exposure(s)")
             return None
@@ -689,34 +1060,384 @@ class StageMapController(ImConWidgetController):
                 f"Prescan line y={y:.0f}: {len(samples)} exposures for {wanted} wanted — "
                 f"this camera keeps up to about {fps * dx:.0f} µm/s at this pitch")
 
-        scale = pixelSize * subsample
-        return self._spreadSamples(samples, t0, t1, span, scale), scale
+        return _Sweep(samples, t0, t1, span, pixelSize * subsample, endX >= startX)
 
-    def _spreadSamples(self, samples, t0, t1, span, scale):
-        """Lay timestamped bands across a strip by where each was exposed.
+    def _placeSweep(self, sweep: _Sweep, lagS: float) -> np.ndarray:
+        """Lay a sweep out left-to-right in stage X, corrected for the camera lag.
 
-        Column of sample i is ``span * (t_i - t0) / (t1 - t0) / scale``. Each
-        band fills half the distance to its neighbours on either side, so the
-        strip is contiguous whatever the cadence; a band narrower than that
-        gap is centred and the remainder left dark rather than stretched.
+        A frame grabbed at ``t`` was exposed at ``t - lag``, when the stage
+        was ``speed × lag`` behind: shifting the move's time bracket by the
+        lag puts every band back where it was actually taken. The strip
+        reads minX→maxX whichever way the line was driven.
         """
-        stripW = max(2, int(np.ceil(span / scale)))
-        stripH = samples[0][1].shape[0]
-        strip = np.zeros((stripH, stripW), dtype=samples[0][1].dtype)
-        duration = max(t1 - t0, 1e-6)
-        centres = [int(round((t - t0) / duration * (stripW - 1))) for t, _ in samples]
+        return self._spreadSamples(sweep.samples, sweep.t0 + lagS, sweep.t1 + lagS,
+                                   sweep.span, sweep.scale, forward=sweep.forward)
 
-        for i, (_, band) in enumerate(samples):
-            left = 0 if i == 0 else (centres[i - 1] + centres[i]) // 2
-            right = stripW if i == len(samples) - 1 else (centres[i] + centres[i + 1]) // 2
-            width = min(right - left, band.shape[1])
-            if width <= 0:
-                continue
-            # Centre the band on its position, clipped to its share of the strip.
-            x0 = max(left, min(right - width, centres[i] - width // 2))
-            bx0 = max(0, band.shape[1] // 2 - width // 2)
-            strip[:band.shape[0], x0:x0 + width] = band[:, bx0:bx0 + width]
-        return strip
+    def _spreadSamples(self, samples, t0, t1, span, scale, forward=True):
+        """Lay timestamped bands across a strip by where each was exposed (see spreadBands)."""
+        return spreadBands(samples, t0, t1, span, scale, forward=forward)
+
+    # ------------------------------------------------------------------ #
+    # Strobed prescan (opt-in via StageMapParams.prescanStrobe)
+    # ------------------------------------------------------------------ #
+
+    # The next trigger may come this long after the exposure window closes.
+    STROBE_PERIOD_MARGIN_US = 1000.0
+    # Delay steps one calibration may try.
+    STROBE_CAL_MAX_DELAYS = 200
+
+    def _findStrobeLaser(self):
+        """``params.strobeLaser`` if it can strobe, else the first laser that can."""
+        wanted = (self.params.strobeLaser or "").strip()
+        try:
+            for name in self._master.lasersManager.getAllDeviceNames():
+                laser = self._master.lasersManager[name]
+                if (not wanted or name == wanted) and hasattr(laser, "setStrobe"):
+                    return laser
+        except Exception as e:
+            self._logger.debug(f"Could not list lasers: {e}")
+        return None
+
+    def _strobeSetup(self):
+        """The laser to flash if a strobed sweep can run here, else why not.
+
+        Returns ``(laserManager, "")`` or ``(None, reason)``. Cheap checks
+        first; the firmware query goes over serial.
+        """
+        detector, stage = self._detector, self._stage
+        if detector is None or not hasattr(detector, "getChunkWithTriggerIndex"):
+            return None, "the camera cannot report trigger indices"
+        if stage is None or not hasattr(stage, "hasStrobeSweep"):
+            return None, "the stage manager has no strobed sweep"
+        laser = self._findStrobeLaser()
+        if laser is None:
+            wanted = (self.params.strobeLaser or "").strip()
+            return None, (f"laser '{wanted}' cannot strobe" if wanted
+                          else "no laser manager can strobe")
+        channel = getattr(laser, "channel_index", None)
+        if not isinstance(channel, int) or channel < 0:
+            return None, "the strobe laser has no firmware channel index"
+        if detector.getChunkWithTriggerIndex() is None:  # e.g. the mock camera
+            return None, "the camera cannot report trigger indices"
+        if not stage.hasStrobeSweep():
+            return None, "the firmware (or uc2rest) has no strobesweep module"
+        # The master may be new while the node driving this laser is not:
+        # switching the strobe off is harmless and answers "supported" only
+        # when that node's firmware can strobe.
+        reply = laser.setStrobe(False)
+        info = reply.get("strobe", {}) if isinstance(reply, dict) else {}
+        if not info.get("supported"):
+            why = reply.get("error") if isinstance(reply, dict) else None
+            return None, f"the strobe laser cannot strobe ({why or 'no answer from the firmware'})"
+        return laser, ""
+
+    def _enterStrobeCamera(self) -> Dict:
+        """External trigger, exposure = strobe window; returns what restores it."""
+        det = self._detector
+        state: Dict = {"exposure": None, "trigger": None, "embedding": False, "activation": None}
+        try:
+            state["exposure"] = det.getParameter("exposure")
+        except Exception:
+            try:
+                state["exposure"] = det.parameters["exposure"].value
+            except Exception:
+                pass
+        try:
+            state["trigger"] = det.parameters["trigger_source"].value
+        except Exception:
+            pass
+        try:
+            try:
+                det.setParameter("exposure", float(self.params.strobeWindowMs))
+            except Exception as e:
+                self._logger.warning(f"Could not set the strobe window as exposure: {e}")
+            if hasattr(det, "setTriggerIndexEmbedding"):
+                state["embedding"] = bool(det.setTriggerIndexEmbedding(True))
+            if hasattr(det, "getTriggerActivation"):
+                state["activation"] = det.getTriggerActivation()
+            det.setTriggerSource("External trigger")
+            # The firmware's camera pulse is active-high (CAMERA_TRIGGER_INVERTED
+            # aside); restored afterwards so normal triggering is unchanged.
+            if hasattr(det, "setTriggerActivation"):
+                det.setTriggerActivation("RisingEdge")
+        except Exception:
+            # Half-configured is the worst state: put back what was changed.
+            self._exitStrobeCamera(state)
+            raise
+        return state
+
+    def _exitStrobeCamera(self, state: Optional[Dict]):
+        """Undo _enterStrobeCamera; every step on its own, so one failure cannot
+        leave the camera waiting for triggers that never come."""
+        if not state:
+            return
+        det = self._detector
+        if state.get("embedding"):
+            try:
+                det.setTriggerIndexEmbedding(False)
+            except Exception as e:
+                self._logger.warning(f"Could not switch trigger index embedding off: {e}")
+        if state.get("activation") and hasattr(det, "setTriggerActivation"):
+            try:
+                det.setTriggerActivation(state["activation"])
+            except Exception as e:
+                self._logger.warning(f"Could not restore the trigger activation: {e}")
+        try:
+            det.setTriggerSource(state.get("trigger") or "Continuous")
+        except Exception as e:
+            self._logger.error(f"Could not restore the camera trigger mode: {e}")
+        if state.get("exposure") is not None:
+            try:
+                det.setParameter("exposure", state["exposure"])
+            except Exception as e:
+                self._logger.error(f"Could not restore the camera exposure: {e}")
+
+    def _enterStrobeMode(self) -> Optional[Dict]:
+        """Prepare a strobed prescan, or None to run the free-running one.
+
+        None when the operator did not ask for it, or asked but this
+        instrument cannot do it (logged with the reason) — then nothing here
+        has touched the camera.
+        """
+        if not self.params.prescanStrobe:
+            return None
+        laser, reason = self._strobeSetup()
+        if laser is None:
+            self._logger.warning(
+                f"Strobed prescan requested, but {reason}: running the free-running prescan")
+            return None
+        # Still free-running: one frame tells the size the layout needs.
+        probe = self._detector.getLatestFrame()
+        if probe is None or getattr(probe, "size", 0) == 0:
+            self._logger.warning("Strobed prescan: no frame from the detector; "
+                                 "running the free-running prescan")
+            return None
+        windowUs = max(0.0, float(self.params.strobeWindowMs)) * 1000.0
+        widthUs = max(0.0, float(self.params.strobeWidthUs))
+        delayUs = strobeAutoDelayUs(windowUs, widthUs, self.params.strobeDelayUs)
+        if delayUs + widthUs > windowUs:
+            self._logger.warning(
+                f"Strobe delay {delayUs:.0f} us + width {widthUs:.0f} us ends after the "
+                f"{windowUs / 1000:.1f} ms window: part of every frame stays dark")
+        try:
+            lit = [name for name in self._master.lasersManager.getAllDeviceNames()
+                   if self._master.lasersManager[name] is not laser
+                   and getattr(self._master.lasersManager[name], "enabled", False)]
+            if lit:
+                self._logger.warning(
+                    f"Strobed prescan: {', '.join(map(str, lit))} stay on and expose the "
+                    f"whole {windowUs / 1000:.1f} ms window; strobed frames are clean "
+                    f"only in the dark")
+        except Exception:
+            pass
+        state = {"laser": laser, "channel": int(laser.channel_index),
+                 "frameShape": (int(probe.shape[0]), int(probe.shape[1])),
+                 "windowUs": windowUs, "widthUs": widthUs, "delayUs": delayUs,
+                 "warned": set()}
+        try:
+            state["camera"] = self._enterStrobeCamera()
+        except Exception as e:
+            self._logger.warning(f"Strobed prescan: could not set up camera triggering ({e}); "
+                                 f"running the free-running prescan")
+            return None
+        self._logger.info(
+            f"Strobed prescan: {widthUs:.0f} us flash on laser channel {state['channel']} "
+            f"{delayUs:.0f} us after each trigger, {windowUs / 1000:.1f} ms window")
+        return state
+
+    def _exitStrobeMode(self, strobe: Optional[Dict]):
+        """LED strobe off and camera back as it was; safe to call with None."""
+        if not strobe:
+            return
+        try:
+            strobe["laser"].setStrobe(False)
+        except Exception as e:
+            self._logger.error(f"Could not switch the strobe off: {e}")
+        self._exitStrobeCamera(strobe.get("camera"))
+
+    def _flushDetector(self):
+        try:
+            if hasattr(self._detector, "flushBuffers"):
+                self._detector.flushBuffers()
+            elif hasattr(self._detector, "flushBuffer"):
+                self._detector.flushBuffer()
+        except Exception:
+            pass
+
+    def _warnOnce(self, strobe: Dict, key: str, message: str):
+        if key not in strobe.setdefault("warned", set()):
+            strobe["warned"].add(key)
+            self._logger.warning(message)
+
+    def _runStrobeSweep(self, target, speed, periodUs, strobe, delayUs, maxFrames,
+                        onChunk, timeoutS):
+        """Run one firmware strobed sweep, handing frames to ``onChunk`` as they come.
+
+        ``onChunk(frames, frameIds, triggerIndices)`` gets each drained batch
+        (see _collectStrobeFrames). Returns ``(reportN, reportX, doneEvent)``,
+        or None when the sweep could not start, was stopped or never finished
+        — then it is stopped and the strobe switched off here.
+        """
+        stage = self._stage
+        events: List[Dict] = []
+        lock = threading.Lock()
+        done = threading.Event()
+
+        def onEvent(event):
+            if isinstance(event, dict):
+                with lock:
+                    events.append(event)
+                    if event.get("type") == "done":
+                        done.set()
+
+        started = False
+        stage.registerStrobeSweepCallback(onEvent)
+        try:
+            self._flushDetector()
+            started = stage.startStrobeSweep(
+                axis="X", target=float(target), speed=speed,
+                period_us=int(round(periodUs)), trig_us=int(round(self.params.strobeTrigUs)),
+                laser=int(strobe["channel"]), delay_us=float(delayUs),
+                width_us=float(strobe["widthUs"]), latch=True,
+                report=max(1, int(self.params.strobeReport)), max_frames=int(maxFrames))
+            failure = (self._collectStrobeFrames(events, lock, done, onChunk, timeoutS)
+                       if started else "the stage refused the strobed sweep")
+        finally:
+            if not done.is_set():
+                self._abortStrobeSweep(strobe, started, done)
+            stage.unregisterStrobeSweepCallback(onEvent)
+
+        if failure is not None:
+            if failure != "stopped":
+                self._logger.error(f"Strobed sweep to X={target:.0f}: {failure}")
+            return None
+        with lock:
+            reportN, reportX, doneEvent = strobeSweepResult(events)
+        if doneEvent.get("aborted") or not doneEvent.get("success", 1):
+            self._logger.warning(
+                f"Strobed sweep to X={target:.0f} ended early: "
+                f"{doneEvent.get('error', 'aborted by the firmware')}")
+        if doneEvent.get("strobe") == 0:
+            self._warnOnce(strobe, "nostrobe", "The firmware ran the sweep without "
+                                               "flashing; frames show ambient light only")
+        return reportN, reportX, doneEvent
+
+    def _collectStrobeFrames(self, events, lock, done, onChunk, timeoutS) -> Optional[str]:
+        """Drain the camera while a strobed sweep runs; None when complete, else why not.
+
+        The camera buffer holds only a few frames, so it is drained every few
+        ms. Complete means the done event arrived and every camera pulse it
+        counts produced a frame — or PRESCAN_TAIL_S passed since done, for
+        frames that never come.
+        """
+        nFrames, tDone = 0, None
+        deadline = time.time() + timeoutS
+        while True:
+            chunk = self._detector.getChunkWithTriggerIndex()
+            if chunk is not None and len(chunk[0]):
+                onChunk(*chunk)
+                nFrames += len(chunk[0])
+            now = time.time()
+            if self._shouldStop.is_set():
+                return "stopped"
+            if done.is_set():
+                tDone = tDone or now
+                with lock:
+                    doneEvent = strobeSweepResult(events)[2]
+                expected = int(doneEvent.get("camera", doneEvent.get("frames", 0)) or 0)
+                if nFrames >= expected or now - tDone > self.PRESCAN_TAIL_S:
+                    return None
+            elif now > deadline:
+                return f"no completion within {timeoutS:.0f} s"
+            time.sleep(0.005)
+
+    def _abortStrobeSweep(self, strobe, started, done):
+        """Stop an unfinished sweep and make sure the LED is not left strobing."""
+        if started:
+            self._stage.stopStrobeSweep()
+            done.wait(1.0)
+        try:
+            strobe["laser"].setStrobe(False)
+        except Exception as e:
+            self._logger.error(f"Could not switch the strobe off: {e}")
+
+    def _prescanStrobedLine(self, minX, maxX, y, forward, speedX, dx, subsample, strobe):
+        """Drive one serpentine line strobed and push its strip onto the map."""
+        startX, endX = (minX, maxX) if forward else (maxX, minX)
+        placed = self._sweepLineStrobed(startX, endX, y, speedX, dx, subsample, strobe)
+        if placed is not None:
+            self._addStrip(placed[0], minX, maxX, y, placed[1])
+
+    def _sweepLineStrobed(self, startX, endX, y, speedX, dx, subsample,
+                          strobe: Dict) -> Optional[tuple]:
+        """One prescan line with a flash per frame; ``(strip, µm per strip px)`` or None.
+
+        Same layout as _sweepLine (prescanLayout; the nominal exposure
+        interval becomes the firmware frame period), but the firmware
+        triggers the camera and latches X at every trigger, so each frame is
+        placed by where it was taken — not by when it arrived. The strip
+        reads minX -> maxX whichever way the line was driven.
+        """
+        # One axis at a time — a combined move drives the stage diagonally.
+        self._stage.move(value=startX, axis="X", speed=speedX, is_absolute=True, is_blocking=True)
+        self._stage.move(value=y, axis="Y", speed=speedX, is_absolute=True, is_blocking=True)
+
+        span = abs(endX - startX)
+        pixelSize = self._getPixelSizeUm()
+        frameH, frameW = strobe["frameShape"]
+        wanted, _, _, subsample, dx = prescanLayout(
+            span, dx, pixelSize, (frameH, frameW), subsample,
+            self.PRESCAN_MAX_STRIP_MB * 1024 * 1024)
+        wanted = min(self.PRESCAN_MAX_FRAMES, wanted)
+        bandPx = min(frameW, int(np.ceil(1.25 * dx / pixelSize)))
+        intervalUs = (span / max(speedX, 1e-6)) / wanted * 1e6  # nominal µs per exposure
+        periodUs = max(intervalUs, strobe["windowUs"] + self.STROBE_PERIOD_MARGIN_US)
+        if periodUs > intervalUs * 1.01:
+            pitch = speedX * periodUs * 1e-6
+            self._warnOnce(
+                strobe, "period",
+                f"Strobed prescan: the {strobe['windowUs'] / 1000:.1f} ms window allows a frame "
+                f"every {periodUs / 1000:.1f} ms, {pitch:.0f} um apart at this speed; "
+                f"beyond the {dx:.0f} um pitch the strip has gaps (lower the speed or the window)")
+
+        bands, frameIds, triggers = [], [], []
+
+        def onChunk(frames, ids, trigs):
+            for frame, fid, trig in zip(frames, ids, trigs):
+                bands.append(self._centreBand(frame, bandPx, subsample))
+                frameIds.append(int(fid))
+                triggers.append(int(trig))
+
+        result = self._runStrobeSweep(
+            endX, speedX, periodUs, strobe, strobe["delayUs"], 0, onChunk,
+            timeoutS=(span / max(speedX, 1e-6)) * 3.0 + 10.0)
+        if result is None:
+            return None
+        reportN, reportX, done = result
+        if len(bands) < 2 or len(reportN) < 2:
+            self._logger.warning(
+                f"Strobed line y={y:.0f}: {len(bands)} frame(s), {len(reportN)} position(s)")
+            return None
+        keys, source = strobeFrameKeys(triggers, frameIds)
+        if source != "trigger":
+            self._warnOnce(strobe, "keys",
+                           f"Camera reports no trigger index; pairing frames by {source} order")
+        pulses = int(done.get("camera", 0) or 0)
+        if pulses and int(keys.max() - keys.min()) + 1 > pulses:
+            self._logger.warning(
+                f"Strobed line y={y:.0f}: frames span {int(keys.max() - keys.min()) + 1} "
+                f"triggers but only {pulses} were sent; placement may be off by a frame")
+        pairs = pairStrobeFrames(keys, reportN, reportX, periodUs, strobe["delayUs"])
+        if len(pairs) < 2:
+            self._logger.warning(f"Strobed line y={y:.0f}: frames and positions do not pair")
+            return None
+        if len(pairs) < len(reportN):
+            self._logger.info(
+                f"Strobed line y={y:.0f}: {len(pairs)} of {len(reportN)} frames placed")
+        scale = pixelSize * subsample
+        strip = spreadBands([(x, bands[i]) for i, _, x in pairs],
+                            min(startX, endX), max(startX, endX), span, scale, forward=True)
+        return strip, scale
 
     def _addStrip(self, strip: np.ndarray, minX: float, maxX: float, y: float,
                   pixelSize: float):
@@ -727,8 +1448,7 @@ class StageMapController(ImConWidgetController):
         preview = self._makePreview(strip)
         if preview is None:
             return
-        with self._tilesLock:
-            tileId = len(self._tiles)
+        tileId = self._allocTileId()
         tile = {
             "id": tileId,
             "x": float((minX + maxX) / 2.0),
@@ -736,6 +1456,7 @@ class StageMapController(ImConWidgetController):
             "widthUm": float(maxX - minX),
             "heightUm": float(strip.shape[0] * pixelSize),
             "channel": self._getActiveChannel(),
+            "kind": "prescan",
             "rawPath": "",
             "timestamp": time.time(),
             "preview": preview,
@@ -886,6 +1607,7 @@ class StageMapController(ImConWidgetController):
             positionY=pos[1],
             detectorName=self._detectorName,
             lastError=self._lastError,
+            prescanLagMs=float(self._prescanLagS * 1000.0),
         )
 
     @APIExport()
@@ -932,7 +1654,11 @@ class StageMapController(ImConWidgetController):
 
         Illumination, exposure and gain are used exactly as the operator left
         them. Nothing here switches channels or auto-exposes, and nothing
-        should be added that does.
+        should be added that does. The one opt-in exception is
+        ``params.prescanStrobe``: on hardware that supports it the camera is
+        externally triggered with ``strobeWindowMs`` as exposure and the
+        strobe laser flashes once per frame; trigger mode, exposure and the
+        strobe are restored when the prescan ends, errors or is stopped.
 
         Coordinates are stage micrometres throughout, so a prescan taken with a
         10x objective lines up with a 20x acquisition without rescaling.
@@ -950,7 +1676,7 @@ class StageMapController(ImConWidgetController):
         camera pixels per strip pixel (0 = the default); the strip grows
         coarser on its own if it would exceed ``PRESCAN_MAX_STRIP_MB``.
         """
-        if self._isRunning or self._prescanThread is not None:
+        if self._isRunning or self._prescanThread is not None or self._strobeCalibrating:
             return {"success": False, "error": "A scan is already running"}
         if self._detector is None or self._stage is None:
             return {"success": False, "error": "Detector or stage not available"}
@@ -959,6 +1685,8 @@ class StageMapController(ImConWidgetController):
 
         if self._sessionPath is None:
             self._createSession()
+        # A new prescan replaces the old overlay rather than layering on it.
+        self._dropTiles("prescan")
         self._shouldStop.clear()
         self._prescanThread = threading.Thread(
             target=self._prescanLoop,
@@ -1068,6 +1796,108 @@ class StageMapController(ImConWidgetController):
         self._emitStatus()  # prescanRunning=False, even if the join timed out
         return True
 
+    @APIExport(requestType="POST")
+    def calibrateStageMapStrobeDelay(self, delayMinUs: float = 0.0, delayMaxUs: float = -1.0,
+                                     delayStepUs: float = 1000.0,
+                                     framesPerDelay: int = 4) -> Dict:
+        """Find the flash delay at which one flash lights every row of the frame.
+
+        The stage does not move: for each delay from ``delayMinUs`` to
+        ``delayMaxUs`` (µs after the camera trigger; negative = window minus
+        flash width) in ``delayStepUs`` steps, the firmware runs
+        ``framesPerDelay`` strobed frames at the current X, with the camera
+        externally triggered and exposing ``strobeWindowMs``. Each delay is
+        scored by strobeRowScore (bright AND even across rows — a flash that
+        misses some rows' exposure leaves them dark); the middle of the
+        best-scoring plateau is stored in ``params.strobeDelayUs``.
+
+        Side effects: flashes the strobe laser (``strobeLaser``) at its
+        current settings; camera trigger mode and exposure are restored
+        afterwards. Refused while mapping or a prescan runs.
+
+        Returns ``{success, bestDelayUs, windowUs, widthUs, table}`` with one
+        ``{delayUs, frames, score, mean, uniformity}`` row per delay.
+        """
+        laser, delays, error = self._strobeCalibrationPlan(delayMinUs, delayMaxUs, delayStepUs)
+        pos = None if error else self._getStagePositionXY()
+        if pos is None:
+            return {"success": False, "error": error or "Could not read the stage position"}
+        windowUs = max(0.0, float(self.params.strobeWindowMs)) * 1000.0
+        widthUs = max(0.0, float(self.params.strobeWidthUs))
+        strobe = {"laser": laser, "channel": int(laser.channel_index), "widthUs": widthUs,
+                  "warned": set()}
+        self._strobeCalibrating = True
+        self._shouldStop.clear()
+        acqHandle = camera = None
+        try:
+            try:
+                acqHandle = self._master.detectorsManager.startAcquisition()
+            except Exception as e:
+                self._logger.warning(f"Could not start acquisition: {e}")
+            try:
+                camera = self._enterStrobeCamera()
+            except Exception as e:
+                return {"success": False, "error": f"Could not set up camera triggering: {e}"}
+            # Twice the shortest period: nothing here is time-critical, and a
+            # camera that cannot keep up would only return fewer frames.
+            table = self._scoreStrobeDelays(delays, pos[0], strobe, max(1, int(framesPerDelay)),
+                                            2.0 * (windowUs + self.STROBE_PERIOD_MARGIN_US))
+        finally:
+            self._exitStrobeMode({"laser": laser, "camera": camera})
+            if acqHandle is not None:
+                try:
+                    self._master.detectorsManager.stopAcquisition(acqHandle)
+                except Exception:
+                    pass
+            self._strobeCalibrating = False
+
+        result = {"table": table, "windowUs": windowUs, "widthUs": widthUs}
+        best = pickStrobeDelay([r["delayUs"] for r in table], [r["score"] for r in table])
+        if best is None:
+            return dict(result, success=False,
+                        error="No delay lit the frame: check the strobe laser and the window")
+        self.params.strobeDelayUs = best
+        self._logger.info(f"Strobe delay calibrated: {best:.0f} us ({len(table)} delays tried)")
+        self._emitStatus()
+        return dict(result, success=True, bestDelayUs=best)
+
+    def _strobeCalibrationPlan(self, delayMinUs, delayMaxUs, delayStepUs):
+        """``(laser, delays, "")`` for a delay calibration, or ``(None, None, why not)``."""
+        if self._isRunning or self._prescanThread is not None or self._strobeCalibrating:
+            return None, None, "Stop mapping and the prescan first"
+        if self._detector is None or self._stage is None:
+            return None, None, "Detector or stage not available"
+        laser, reason = self._strobeSetup()
+        if laser is None:
+            return None, None, f"Strobe not available: {reason}"
+        windowUs = max(0.0, float(self.params.strobeWindowMs)) * 1000.0
+        hi = windowUs - float(self.params.strobeWidthUs) if delayMaxUs < 0 else float(delayMaxUs)
+        delays = np.arange(max(0.0, float(delayMinUs)), hi + 1e-6, max(1.0, float(delayStepUs)))
+        if delays.size == 0:
+            return None, None, "Empty delay range"
+        if delays.size > self.STROBE_CAL_MAX_DELAYS:
+            return None, None, (f"{delays.size} delays; use a larger step "
+                                f"(max {self.STROBE_CAL_MAX_DELAYS})")
+        return laser, delays, ""
+
+    def _scoreStrobeDelays(self, delays, x, strobe, nFrames, periodUs) -> List[Dict]:
+        """One motionless burst of ``nFrames`` per delay, each scored by strobeRowScore."""
+        table = []
+        for delay in delays:
+            frames = []
+            result = self._runStrobeSweep(
+                x, 1000.0, periodUs, strobe, float(delay), nFrames,
+                lambda f, ids, trigs: frames.extend(f),
+                timeoutS=nFrames * periodUs * 1e-6 * 3.0 + 5.0)
+            if result is None and self._shouldStop.is_set():
+                break
+            scores = [strobeRowScore(f) for f in frames]
+            row = {"delayUs": float(delay), "frames": len(frames)}
+            for key in ("score", "mean", "uniformity"):
+                row[key] = float(np.median([sc[key] for sc in scores])) if scores else 0.0
+            table.append(row)
+        return table
+
     @APIExport()
     def stopStageMap(self) -> bool:
         """Stop mapping (the collected map is kept)."""
@@ -1144,6 +1974,7 @@ class StageMapController(ImConWidgetController):
                     "widthUm": tile["widthUm"],
                     "heightUm": tile["heightUm"],
                     "channel": tile["channel"],
+                    "kind": tile.get("kind", "tile"),
                     "timestamp": tile["timestamp"],
                 }
                 if includePreviews:

@@ -150,6 +150,8 @@ class UC2CANOpenStageManager(PositionerManager):
         self.homeYenabled = positionerInfo.managerProperties.get('homeYenabled', False)
         self.homeZenabled = positionerInfo.managerProperties.get('homeZenabled', False)
         self.homeAenabled = positionerInfo.managerProperties.get('homeAenabled', False)
+        # hard homing on Z: home, ram the mechanical stop to square dual Z motors, back off, re-home
+        self.homeHardZ = positionerInfo.managerProperties.get('homeHardZ', False)
 
         # homing steps without endstop
         self.homeStepsX = positionerInfo.managerProperties.get('homeStepsX', 0)
@@ -625,8 +627,9 @@ class UC2CANOpenStageManager(PositionerManager):
     # ------------------------------------------------------------------
     # Homing
     # ------------------------------------------------------------------
-    def _homeAxisDevice(self, axis, isBlocking=False):
-        """ Trigger an endstop homing run on one axis-node via SDO. """
+    def _homeAxisDevice(self, axis, isBlocking=False, hardHome=False):
+        """ Trigger an endstop homing run on one axis-node via SDO.
+        hardHome: HOMING_COMMAND=2 -> home, ram the mechanical stop, back off, re-home. """
         node = self._node(axis)
         if node is None or OD is None:
             self.__logger.error(f"Cannot home axis {axis}: no node/OD.")
@@ -642,23 +645,24 @@ class UC2CANOpenStageManager(PositionerManager):
             self._rs232manager.sdo_write(node, OD.HOMING_ENDSTOP_POLARITY, 1, int(polarity), "u8")
             self._rs232manager.sdo_write(node, OD.HOMING_ENDSTOP_RELEASE, 1, int(release), "i32")
             self._rs232manager.sdo_write(node, OD.HOMING_TIMEOUT, 1, int(timeout_ms), "u32")
-            self._rs232manager.sdo_write(node, OD.HOMING_COMMAND, 1, 1, "u8")
+            self._rs232manager.sdo_write(node, OD.HOMING_COMMAND, 1, 2 if hardHome else 1, "u8")
         except Exception as e:
             self.__logger.error(f"home {axis} failed: {e}")
             return
         if isBlocking:
             # Homing timeout is in ms; give wait_for_idle a little headroom.
-            self._waitNode(node, (timeout_ms / 1000.0) + 5.0)
+            # Hard homing runs two cycles; the slave restarts its timer for the second.
+            self._waitNode(node, (timeout_ms / 1000.0) * (2 if hardHome else 1) + 5.0)
         self.setPosition(axis=axis, value=0)
 
     def doHome(self, axis, isBlocking=False, homeDirection=None, homeSpeed=None,
-               homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
+               homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None, hardHome=None):
         if axis == "X" and (self.homeXenabled or abs(self.homeStepsX) > 0):
             self.home_x(isBlocking)
         if axis == "Y" and (self.homeYenabled or abs(self.homeStepsY) > 0):
             self.home_y(isBlocking)
         if axis == "Z" and (self.homeZenabled or abs(self.homeStepsZ) > 0):
-            self.home_z(isBlocking)
+            self.home_z(isBlocking, hardHome=hardHome)
         if axis == "A" and (self.homeAenabled or abs(self.homeStepsA) > 0):
             self.home_a(isBlocking)
 
@@ -692,7 +696,7 @@ class UC2CANOpenStageManager(PositionerManager):
         else:
             self.__logger.info("No homing parameters set for Y axis or not enabled in settings.")
 
-    def home_z(self, isBlocking=False, *args, **kwargs):
+    def home_z(self, isBlocking=False, *args, hardHome=None, **kwargs):
         if abs(self.homeStepsZ) > 0:
             self.move(value=self.homeStepsZ, speed=self.homeSpeedZ, axis="Z", is_absolute=False, is_blocking=True)
             self.move(value=-np.sign(self.homeStepsZ) * np.abs(self.homeEndposReleaseZ),
@@ -700,7 +704,7 @@ class UC2CANOpenStageManager(PositionerManager):
             self.setPosition(axis="Z", value=0)
             self.setPositionOnDevice(value=0, axis="Z")
         elif self.homeZenabled:
-            self._homeAxisDevice("Z", isBlocking)
+            self._homeAxisDevice("Z", isBlocking, self.homeHardZ if hardHome is None else hardHome)
         else:
             self.__logger.info("No homing parameters set for Z axis or not enabled in settings.")
         self._zPositionPriorHoming = 0

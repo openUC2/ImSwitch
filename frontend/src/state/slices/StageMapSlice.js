@@ -40,6 +40,8 @@ const initialState = {
     lastError: "",
   },
   lastTileId: -1,
+  // Last strobe delay calibration: {success, bestDelayUs, table, error}
+  strobeCalibration: null,
 };
 
 const ensureChannel = (state, channelName) => {
@@ -88,6 +90,14 @@ const stageMapSlice = createSlice({
       state.lastTileId = -1;
     },
 
+    // The backend dropped some tiles (a new prescan replaces the old overlay);
+    // ids keep counting up on the backend, so lastTileId stays as it is.
+    removeTiles: (state, action) => {
+      const ids = new Set(action.payload?.ids || action.payload || []);
+      if (ids.size === 0) return;
+      state.tiles = state.tiles.filter((t) => !ids.has(t.id));
+    },
+
     setChannelVisible: (state, action) => {
       const { channel, visible } = action.payload;
       ensureChannel(state, channel);
@@ -116,6 +126,10 @@ const stageMapSlice = createSlice({
       // make channels reported by the backend selectable even before a tile arrived
       (action.payload?.channels || []).forEach((c) => ensureChannel(state, c));
     },
+
+    setStrobeCalibration: (state, action) => {
+      state.strobeCalibration = action.payload || null;
+    },
   },
 });
 
@@ -123,11 +137,13 @@ export const {
   addTile,
   setTiles,
   clearTiles,
+  removeTiles,
   setChannelVisible,
   setChannelColor,
   setIsMapping,
   setShowOnWellplate,
   setStatus,
+  setStrobeCalibration,
 } = stageMapSlice.actions;
 
 export const getStageMapState = (state) => state.stageMapState;

@@ -1,295 +1,766 @@
-import React, { useEffect } from "react";
+// src/components/FlowStopController.js
+// FlowStop: PlanktoScope/FairScope-style flow-cell imaging app.
+// Preview & manual control -> sample metadata -> acquisition -> gallery.
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
-  Paper,
-  Tabs,
-  Tab,
+  Alert,
   Box,
-  Typography,
-  TextField,
   Button,
-  Slider,
+  Card,
+  CardContent,
+  Chip,
+  Divider,
+  FormControlLabel,
   Grid,
+  IconButton,
+  LinearProgress,
+  MenuItem,
+  Paper,
+  Slider,
+  Switch,
+  Tab,
+  Tabs,
+  TextField,
+  Tooltip,
+  Typography,
 } from "@mui/material";
-import { green, red } from "@mui/material/colors";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import CancelIcon from "@mui/icons-material/Cancel";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import FastForwardIcon from "@mui/icons-material/FastForward";
+import FastRewindIcon from "@mui/icons-material/FastRewind";
+import StopIcon from "@mui/icons-material/Stop";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import MyLocationIcon from "@mui/icons-material/MyLocation";
+import RefreshIcon from "@mui/icons-material/Refresh";
+
+import LiveViewControlWrapper from "../axon/LiveViewControlWrapper";
+import FreeNumberField from "./FreeNumberField";
 import { useWebSocket } from "../context/WebSocketContext";
+import { useT } from "../i18n";
 import * as flowStopSlice from "../state/slices/FlowStopSlice.js";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
+import {
+  apiFlowStopGetHardware,
+  apiFlowStopGetStatus,
+  apiFlowStopGetParameters,
+  apiFlowStopSetParameters,
+  apiFlowStopGetMetadata,
+  apiFlowStopSetMetadata,
+  apiFlowStopStart,
+  apiFlowStopStop,
+  apiFlowStopMovePump,
+  apiFlowStopStopPump,
+  apiFlowStopMoveFocus,
+  apiFlowStopStopFocus,
+  apiFlowStopSetIllumination,
+  apiFlowStopSetAutoExposure,
+  apiFlowStopSetExposureTime,
+  apiFlowStopListFiles,
+} from "../backendapi/apiFlowStopController";
 
-const TabPanel = (props) => {
-  const { children, value, index, ...other } = props;
+const PARAM_KEYS = [
+  "experimentName",
+  "experimentDescription",
+  "uniqueId",
+  "numImages",
+  "volumePerImage",
+  "timeToStabilize",
+  "pumpSpeed",
+  "frameRate",
+  "fileFormat",
+  "isRecordVideo",
+  "wasRunning",
+];
 
-  return (
-    <div
-      role="tabpanel"
-      hidden={value !== index}
-      id={`simple-tabpanel-${index}`}
-      aria-labelledby={`simple-tab-${index}`}
-      {...other}
-    >
-      {value === index && <Box p={3}>{children}</Box>}
-    </div>
-  );
+// EcoTaxa-style sample fields, in the order PlanktoScope presents them.
+const METADATA_FIELDS = [
+  { key: "sample_project", label: "Project", type: "text" },
+  { key: "sample_id", label: "Sample ID", type: "text" },
+  { key: "sample_ship", label: "Ship / Platform", type: "text" },
+  { key: "sample_operator", label: "Operator", type: "text" },
+  { key: "sample_date", label: "Sampling date", type: "date" },
+  { key: "sample_time", label: "Sampling time", type: "time" },
+  { key: "sample_latitude", label: "Latitude (°N)", type: "number" },
+  { key: "sample_longitude", label: "Longitude (°E)", type: "number" },
+  { key: "sample_depth_min_m", label: "Depth min (m)", type: "number" },
+  { key: "sample_depth_max_m", label: "Depth max (m)", type: "number" },
+  { key: "sample_gear", label: "Sampling gear / net", type: "text" },
+  { key: "sample_mesh_size_um", label: "Net mesh size (µm)", type: "number" },
+  { key: "sample_total_volume_ml", label: "Sampled volume (ml)", type: "number" },
+  { key: "acq_instrument", label: "Instrument", type: "text" },
+  { key: "acq_celltype_ul", label: "Flow cell volume (µl)", type: "number" },
+];
+
+const formatDuration = (seconds) => {
+  if (seconds === null || seconds === undefined || seconds < 0) return "--:--";
+  const s = Math.round(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 };
 
+const TabPanel = ({ children, value, index }) =>
+  value === index ? <Box sx={{ p: 2 }}>{children}</Box> : null;
+
 const FlowStopController = () => {
-  // Get connection settings from Redux
+  const dispatch = useDispatch();
+  const t = useT();
+  const socket = useWebSocket();
   const connectionSettings = useSelector(getConnectionSettingsState);
   const hostIP = connectionSettings.ip;
   const hostPort = connectionSettings.apiPort;
-  // Redux dispatcher
-  const dispatch = useDispatch();
+  const fileManagerBase = `${hostIP}:${hostPort}/imswitch/api/FileManager`;
 
-  // Access global Redux state
-  const flowStopState = useSelector(flowStopSlice.getFlowStopState);
+  const state = useSelector(flowStopSlice.getFlowStopState);
+  const {
+    tabIndex,
+    metadata,
+    hardware,
+    isRunning,
+    currentImageCount,
+    progress,
+    etaSeconds,
+    elapsedSeconds,
+    relativePath,
+    lastError,
+    galleryFiles,
+  } = state;
 
-  // Use Redux state instead of local useState
-  const tabIndex = flowStopState.tabIndex;
-  const timeStamp = flowStopState.timeStamp;
-  const experimentName = flowStopState.experimentName;
-  const experimentDescription = flowStopState.experimentDescription;
-  const uniqueId = flowStopState.uniqueId;
-  const numImages = flowStopState.numImages;
-  const volumePerImage = flowStopState.volumePerImage;
-  const timeToStabilize = flowStopState.timeToStabilize;
-  const pumpSpeed = flowStopState.pumpSpeed;
-  const isRunning = flowStopState.isRunning;
-  const currentImageCount = flowStopState.currentImageCount;
-  const socket = useWebSocket();
+  const [notice, setNotice] = useState(null);
+  const illuRange = hardware?.illumination || {};
 
+  const set = useCallback((patch) => dispatch(flowStopSlice.setField(patch)), [dispatch]);
+
+  // ---------------------------------------------------------------- bootstrap
   useEffect(() => {
-    const fetchStatus = async () => {
-      try {
-        const response = await fetch(
-          `${hostIP}:${hostPort}/imswitch/api/FlowStopController/getStatus`
-        );
-        const data = await response.json();
-        dispatch(flowStopSlice.setIsRunning(data[0]));
-        dispatch(flowStopSlice.setCurrentImageCount(data[1]));
-      } catch (error) {
-        //console.error('Error fetching status:', error);
-      }
-    };
+    apiFlowStopGetHardware()
+      .then((hw) => dispatch(flowStopSlice.setHardware(hw)))
+      .catch(() => {});
+    apiFlowStopGetParameters()
+      .then((p) => {
+        const patch = {};
+        PARAM_KEYS.forEach((k) => {
+          if (p[k] !== undefined && p[k] !== null) patch[k] = p[k];
+        });
+        dispatch(flowStopSlice.setField(patch));
+      })
+      .catch(() => {});
+    apiFlowStopGetMetadata()
+      .then((m) => dispatch(flowStopSlice.setMetadata(m)))
+      .catch(() => {});
+  }, [dispatch, hostIP, hostPort]);
 
-    const fetchExperimentParameters = async () => {
-      try {
-        const response = await fetch(
-          `${hostIP}:${hostPort}/imswitch/api/FlowStopController/getExperimentParameters`
-        );
-        const data = await response.json();
-        dispatch(flowStopSlice.setTimeStamp(data.timeStamp));
-        dispatch(flowStopSlice.setExperimentName(data.experimentName));
-        dispatch(
-          flowStopSlice.setExperimentDescription("Add some description here")
-        );
-        dispatch(flowStopSlice.setUniqueId(parseFloat(data.uniqueId, 1)));
-        dispatch(flowStopSlice.setNumImages(parseFloat(data.numImages, -1)));
-        dispatch(
-          flowStopSlice.setVolumePerImage(parseFloat(data.volumePerImage, 1000))
-        );
-        dispatch(
-          flowStopSlice.setTimeToStabilize(parseFloat(data.timeToStabilize, 1))
-        );
-        dispatch(flowStopSlice.setPumpSpeed(parseFloat(data.pumpSpeed, 1000)));
-      } catch (error) {
-        console.error("Error fetching experiment parameters:", error);
-      }
-    };
-
-    fetchStatus();
-    fetchExperimentParameters();
-  }, [hostIP, hostPort]);
-
-  // connect to the web
+  // Poll status: fast while running, slowly while idle.
   useEffect(() => {
-    if (!socket) return;
+    let cancelled = false;
+    const tick = () =>
+      apiFlowStopGetStatus()
+        .then((s) => {
+          if (!cancelled) dispatch(flowStopSlice.setStatus(s));
+        })
+        .catch(() => {});
+    tick();
+    const handle = setInterval(tick, isRunning ? 1000 : 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [dispatch, isRunning, hostIP, hostPort]);
 
-    socket.on("signal", (data) => {
-      const jdata = JSON.parse(data);
-      if (jdata.name === "sigImagesTaken") {
+  // Live counter updates between polls.
+  useEffect(() => {
+    if (!socket) return undefined;
+    const handleSignal = (data) => {
+      let jdata;
+      try {
+        jdata = typeof data === "string" ? JSON.parse(data) : data;
+      } catch {
+        return;
+      }
+      if (jdata?.name === "sigImagesTaken") {
         dispatch(flowStopSlice.setCurrentImageCount(jdata.args.p0));
-      }
-      if (jdata.name === "sigIsRunning") {
+      } else if (jdata?.name === "sigIsRunning") {
         dispatch(flowStopSlice.setIsRunning(jdata.args.p0));
       }
-    });
-    // Clean up the chart on component unmount
-    return () => {
-      if (socket) {
-        socket.onmessage = null;
-      }
     };
-  }, [socket]);
+    socket.on("signal", handleSignal);
+    return () => socket.off("signal", handleSignal);
+  }, [socket, dispatch]);
 
-  const startExperiment = () => {
-    // https://localhost/imswitch/api/FlowStopController/startFlowStopExperimentFastAPI?timeStamp=asdf&experimentName=adf&experimentDescription=asdf&uniqueId=asdf&numImages=19&volumePerImage=199&timeToStabilize=1&delayToStart=1&frameRate=1&filePath=.%2F&fileFormat=TIF&isRecordVideo=true&pumpSpeed=10000
-    // Build URL from Redux connection settings
-    const url = `${hostIP}:${hostPort}/imswitch/api/FlowStopController/startFlowStopExperimentFastAPI?timeStamp=${timeStamp}&experimentName=${experimentName}&experimentDescription=${experimentDescription}&uniqueId=${uniqueId}&numImages=${numImages}&volumePerImage=${volumePerImage}&timeToStabilize=${timeToStabilize}&isRecordVideo=true&pumpSpeed=${pumpSpeed}`;
-    fetch(url, { method: "GET" })
-      .then((response) => response.json())
-      .then((data) => {
-        console.log(data);
-        dispatch(flowStopSlice.setIsRunning(true));
-      })
-      .catch((error) => console.error("Error:", error));
+  // ------------------------------------------------------------------ actions
+  const saveParameters = useCallback(() => {
+    const params = {};
+    PARAM_KEYS.forEach((k) => {
+      params[k] = state[k];
+    });
+    return apiFlowStopSetParameters(params);
+  }, [state]);
+
+  const saveMetadata = useCallback(
+    () =>
+      apiFlowStopSetMetadata(metadata)
+        .then(() => setNotice({ severity: "success", text: t("Sample metadata saved.") }))
+        .catch((e) => setNotice({ severity: "error", text: String(e) })),
+    [metadata, t]
+  );
+
+  const startExperiment = async () => {
+    try {
+      await apiFlowStopSetMetadata(metadata);
+      await saveParameters();
+      await apiFlowStopStart({});
+      dispatch(flowStopSlice.setIsRunning(true));
+      setNotice(null);
+    } catch (e) {
+      setNotice({ severity: "error", text: String(e) });
+    }
   };
 
-  const stopExperiment = () => {
-    const url = `${hostIP}:${hostPort}/imswitch/api/FlowStopController/stopFlowStopExperiment`;
+  const stopExperiment = () =>
+    apiFlowStopStop()
+      .then((s) => dispatch(flowStopSlice.setStatus(s)))
+      .catch((e) => setNotice({ severity: "error", text: String(e) }));
 
-    fetch(url, { method: "GET" })
-      .then((response) => response.json())
-      .then((data) => {
-        console.log(data);
-        dispatch(flowStopSlice.setIsRunning(false));
-      })
-      .catch((error) => console.error("Error:", error));
+  const useBrowserGPS = () => {
+    if (!navigator.geolocation) {
+      setNotice({ severity: "warning", text: t("This browser has no geolocation.") });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        dispatch(
+          flowStopSlice.setMetadataField({
+            key: "sample_latitude",
+            value: Number(pos.coords.latitude.toFixed(6)),
+          })
+        );
+        dispatch(
+          flowStopSlice.setMetadataField({
+            key: "sample_longitude",
+            value: Number(pos.coords.longitude.toFixed(6)),
+          })
+        );
+      },
+      (err) => setNotice({ severity: "warning", text: String(err.message) })
+    );
   };
 
-  const handleTabChange = (event, newValue) => {
-    dispatch(flowStopSlice.setTabIndex(newValue));
-  };
+  // ------------------------------------------------------------------ gallery
+  const galleryPathRef = useRef("");
+  const refreshGallery = useCallback(() => {
+    const path = (relativePath || "").replace(/\\/g, "/");
+    if (!path) return;
+    galleryPathRef.current = path;
+    apiFlowStopListFiles(path)
+      .then((items) =>
+        dispatch(
+          flowStopSlice.setGalleryFiles(
+            (items || []).filter((i) => !i.isDirectory && i.isImage).slice(0, 60)
+          )
+        )
+      )
+      .catch(() => {});
+  }, [relativePath, dispatch]);
 
-  return (
-    <Paper>
-      <Tabs
-        value={tabIndex}
-        onChange={handleTabChange}
-        aria-label="acquisition settings tabs"
-      >
-        <Tab label="Automatic Settings" />
-        <Tab label="Manual Acquisition Settings" />
-      </Tabs>
+  useEffect(() => {
+    if (tabIndex === 3) refreshGallery();
+  }, [tabIndex, refreshGallery]);
 
-      <TabPanel value={tabIndex} index={1}>
-        <Typography>Focus</Typography>
-        <Slider defaultValue={30} />
-        <Typography>Pump Speed</Typography>
-        <Slider defaultValue={30} />
-        <Button variant="contained">Snap</Button>
-        <TextField label="Exposure Time" defaultValue="0.1" />
-        <TextField label="Gain" defaultValue="0" />
-      </TabPanel>
-
-      <TabPanel value={tabIndex} index={0}>
-        <Grid container spacing={2}>
-          <Grid item xs={12}>
-            <TextField
-              style={{ marginBottom: "20px" }}
-              label="Time Stamp Name"
-              value={timeStamp}
-              onChange={(e) =>
-                dispatch(flowStopSlice.setTimeStamp(e.target.value))
-              }
-              fullWidth
-            />
-          </Grid>
-          <Grid item xs={12}>
-            <TextField
-              style={{ marginBottom: "20px" }}
-              label="Experiment Name"
-              value={experimentName}
-              onChange={(e) =>
-                dispatch(flowStopSlice.setExperimentName(e.target.value))
-              }
-              fullWidth
-            />
-          </Grid>
-          <Grid item xs={12}>
-            <TextField
-              style={{ marginBottom: "20px" }}
-              label="Experiment Description"
-              value={experimentDescription}
-              onChange={(e) =>
-                dispatch(flowStopSlice.setExperimentDescription(e.target.value))
-              }
-              fullWidth
-            />
-          </Grid>
-          <Grid item xs={12}>
-            <TextField
-              style={{ marginBottom: "20px" }}
-              label="Volume Per Image"
-              value={volumePerImage}
-              onChange={(e) =>
-                dispatch(flowStopSlice.setVolumePerImage(e.target.value))
-              }
-              fullWidth
-            />
-          </Grid>
-          <Grid item xs={12}>
-            <TextField
-              style={{ marginBottom: "20px" }}
-              label="Time to stabilize"
-              value={timeToStabilize}
-              onChange={(e) =>
-                dispatch(flowStopSlice.setTimeToStabilize(e.target.value))
-              }
-              fullWidth
-            />
-          </Grid>
-          <Grid item xs={12}>
-            <TextField
-              style={{ marginBottom: "20px" }}
-              label="Pump Speed"
-              value={pumpSpeed}
-              onChange={(e) =>
-                dispatch(flowStopSlice.setPumpSpeed(e.target.value))
-              }
-              fullWidth
-            />
-          </Grid>
-          <Grid item xs={12}>
-            <TextField
-              style={{ marginBottom: "20px" }}
-              label="Number of Images"
-              value={numImages}
-              onChange={(e) =>
-                dispatch(flowStopSlice.setNumImages(e.target.value))
-              }
-              fullWidth
-            />
-          </Grid>
-          <Grid item xs={12}>
-            <div>
-              <Button
-                style={{ marginBottom: "20px", marginRight: "10px" }}
-                variant="contained"
-                onClick={startExperiment}
-                disabled={isRunning}
-              >
-                Start
-              </Button>
-              <Button
-                style={{ marginBottom: "20px" }}
-                variant="contained"
-                onClick={stopExperiment}
-                disabled={!isRunning}
-              >
-                Stop
-              </Button>
-            </div>
-          </Grid>
-          <Grid item xs={6}>
-            <Box display="flex" alignItems="center">
-              <Typography variant="h6">Status: </Typography>
-              {isRunning ? (
-                <CheckCircleIcon
-                  style={{ color: green[500], marginLeft: "10px" }}
-                />
-              ) : (
-                <CancelIcon style={{ color: red[500], marginLeft: "10px" }} />
-              )}
-            </Box>
-          </Grid>
-          <Grid item xs={6}>
-            <Typography variant="h6">
-              Images Taken: {currentImageCount}
+  // ---------------------------------------------------------------- rendering
+  const renderPreviewTab = () => (
+    <Grid container spacing={2}>
+      <Grid item xs={12} md={7}>
+        <Card sx={{ height: "100%" }}>
+          <CardContent>
+            <Typography variant="subtitle1" gutterBottom>
+              {t("Live view")}
             </Typography>
+            <Box sx={{ minHeight: 320 }}>
+              <LiveViewControlWrapper enableStageMovement={false} />
+            </Box>
+          </CardContent>
+        </Card>
+      </Grid>
+
+      <Grid item xs={12} md={5}>
+        <Card sx={{ mb: 2 }}>
+          <CardContent>
+            <Typography variant="subtitle1" gutterBottom>
+              {t("Focus")} ({hardware?.focusAxis || "Z"})
+            </Typography>
+            <Grid container spacing={1} alignItems="center">
+              <Grid item xs={6}>
+                <FreeNumberField
+                  label={t("Step (motor steps)")}
+                  value={state.focusStep}
+                  onCommit={(v) => set({ focusStep: v })}
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <FreeNumberField
+                  label={t("Speed")}
+                  value={state.focusSpeed}
+                  onCommit={(v) => set({ focusSpeed: v })}
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <Tooltip title={t("Move focus up")}>
+                  <IconButton
+                    onClick={() => apiFlowStopMoveFocus(state.focusStep, state.focusSpeed)}
+                  >
+                    <ArrowUpwardIcon />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title={t("Move focus down")}>
+                  <IconButton
+                    onClick={() => apiFlowStopMoveFocus(-state.focusStep, state.focusSpeed)}
+                  >
+                    <ArrowDownwardIcon />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title={t("Stop focus")}>
+                  <IconButton color="error" onClick={() => apiFlowStopStopFocus()}>
+                    <StopIcon />
+                  </IconButton>
+                </Tooltip>
+              </Grid>
+            </Grid>
+          </CardContent>
+        </Card>
+
+        <Card sx={{ mb: 2 }}>
+          <CardContent>
+            <Typography variant="subtitle1" gutterBottom>
+              {t("Pump")} ({hardware?.pumpAxis || "X"})
+            </Typography>
+            <Grid container spacing={1} alignItems="center">
+              <Grid item xs={6}>
+                <FreeNumberField
+                  label={t("Step (motor steps)")}
+                  value={state.pumpStep}
+                  onCommit={(v) => set({ pumpStep: v })}
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <FreeNumberField
+                  label={t("Speed")}
+                  value={state.pumpJogSpeed}
+                  onCommit={(v) => set({ pumpJogSpeed: v })}
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <Tooltip title={t("Pump backward")}>
+                  <IconButton
+                    onClick={() => apiFlowStopMovePump(-state.pumpStep, state.pumpJogSpeed)}
+                  >
+                    <FastRewindIcon />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title={t("Pump forward")}>
+                  <IconButton
+                    onClick={() => apiFlowStopMovePump(state.pumpStep, state.pumpJogSpeed)}
+                  >
+                    <FastForwardIcon />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title={t("Stop pump")}>
+                  <IconButton color="error" onClick={() => apiFlowStopStopPump()}>
+                    <StopIcon />
+                  </IconButton>
+                </Tooltip>
+              </Grid>
+            </Grid>
+          </CardContent>
+        </Card>
+
+        <Card sx={{ mb: 2 }}>
+          <CardContent>
+            <Typography variant="subtitle1" gutterBottom>
+              {t("Illumination")} {illuRange.name ? `(${illuRange.name})` : ""}
+            </Typography>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={state.illuminationOn}
+                  onChange={(e) => {
+                    set({ illuminationOn: e.target.checked });
+                    apiFlowStopSetIllumination(state.illuminationValue, e.target.checked);
+                  }}
+                />
+              }
+              label={state.illuminationOn ? t("On") : t("Off")}
+            />
+            <Slider
+              value={state.illuminationValue}
+              min={illuRange.min ?? 0}
+              max={illuRange.max ?? 1023}
+              step={illuRange.step || 1}
+              valueLabelDisplay="auto"
+              onChange={(e, v) => set({ illuminationValue: v })}
+              onChangeCommitted={(e, v) => apiFlowStopSetIllumination(v, state.illuminationOn)}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent>
+            <Typography variant="subtitle1" gutterBottom>
+              {t("Camera")}
+            </Typography>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={state.autoExposure}
+                  onChange={(e) => {
+                    set({ autoExposure: e.target.checked });
+                    apiFlowStopSetAutoExposure(e.target.checked ? "auto" : "manual");
+                  }}
+                />
+              }
+              label={t("Auto exposure")}
+            />
+            {!state.autoExposure && (
+              <FreeNumberField
+                label={t("Exposure time (ms)")}
+                value={state.exposureTime}
+                onCommit={(v) => {
+                  set({ exposureTime: v });
+                  apiFlowStopSetExposureTime(v);
+                }}
+              />
+            )}
+          </CardContent>
+        </Card>
+      </Grid>
+    </Grid>
+  );
+
+  const renderSampleTab = () => (
+    <Card>
+      <CardContent>
+        <Typography variant="subtitle1" gutterBottom>
+          {t("Sample metadata")}
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          {t("Written as metadata.json next to the acquired frames (EcoTaxa field names).")}
+        </Typography>
+        <Grid container spacing={2} sx={{ mt: 0 }}>
+          {METADATA_FIELDS.map((f) => (
+            <Grid item xs={12} sm={6} md={4} key={f.key}>
+              <TextField
+                fullWidth
+                label={t(f.label)}
+                type={f.type}
+                value={metadata[f.key] ?? ""}
+                InputLabelProps={
+                  f.type === "date" || f.type === "time" ? { shrink: true } : undefined
+                }
+                onChange={(e) =>
+                  dispatch(
+                    flowStopSlice.setMetadataField({
+                      key: f.key,
+                      value:
+                        f.type === "number"
+                          ? parseFloat(e.target.value) || 0
+                          : e.target.value,
+                    })
+                  )
+                }
+              />
+            </Grid>
+          ))}
+          <Grid item xs={12}>
+            <TextField
+              fullWidth
+              multiline
+              minRows={2}
+              label={t("Notes")}
+              value={metadata.object_notes ?? ""}
+              onChange={(e) =>
+                dispatch(
+                  flowStopSlice.setMetadataField({
+                    key: "object_notes",
+                    value: e.target.value,
+                  })
+                )
+              }
+            />
+          </Grid>
+          <Grid item xs={12}>
+            <Button startIcon={<MyLocationIcon />} onClick={useBrowserGPS} sx={{ mr: 1 }}>
+              {t("Use browser GPS")}
+            </Button>
+            <Button variant="contained" onClick={saveMetadata}>
+              {t("Save metadata")}
+            </Button>
           </Grid>
         </Grid>
+      </CardContent>
+    </Card>
+  );
+
+  const renderAcquisitionTab = () => (
+    <Grid container spacing={2}>
+      <Grid item xs={12} md={7}>
+        <Card>
+          <CardContent>
+            <Typography variant="subtitle1" gutterBottom>
+              {t("Acquisition")}
+            </Typography>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label={t("Experiment name")}
+                  value={state.experimentName}
+                  onChange={(e) => set({ experimentName: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label={t("Acquisition ID")}
+                  value={state.uniqueId}
+                  helperText={t("Empty = generated")}
+                  onChange={(e) => set({ uniqueId: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label={t("Description")}
+                  value={state.experimentDescription}
+                  onChange={(e) => set({ experimentDescription: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FreeNumberField
+                  label={t("Volume per image (motor steps)")}
+                  value={state.volumePerImage}
+                  onCommit={(v) => set({ volumePerImage: v })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FreeNumberField
+                  label={t("Number of images")}
+                  value={state.numImages}
+                  helperText={t("-1 = until stopped")}
+                  onCommit={(v) => set({ numImages: v })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FreeNumberField
+                  label={t("Stabilization time (s)")}
+                  value={state.timeToStabilize}
+                  onCommit={(v) => set({ timeToStabilize: v })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FreeNumberField
+                  label={t("Pump speed")}
+                  value={state.pumpSpeed}
+                  onCommit={(v) => set({ pumpSpeed: v })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FreeNumberField
+                  label={t("Max frame rate (Hz)")}
+                  value={state.frameRate}
+                  onCommit={(v) => set({ frameRate: v })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  select
+                  fullWidth
+                  label={t("File format")}
+                  value={state.fileFormat}
+                  onChange={(e) => set({ fileFormat: e.target.value })}
+                >
+                  {["JPG", "PNG", "TIF"].map((f) => (
+                    <MenuItem key={f} value={f}>
+                      {f}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              </Grid>
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={state.isRecordVideo}
+                      onChange={(e) => set({ isRecordVideo: e.target.checked })}
+                    />
+                  }
+                  label={t("Also record video")}
+                />
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={!!state.wasRunning}
+                      onChange={(e) => set({ wasRunning: e.target.checked })}
+                    />
+                  }
+                  label={t("Resume automatically after a restart")}
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <Button
+                  variant="contained"
+                  color="success"
+                  startIcon={<PlayArrowIcon />}
+                  onClick={startExperiment}
+                  disabled={isRunning}
+                  sx={{ mr: 1 }}
+                >
+                  {t("Start")}
+                </Button>
+                <Button
+                  variant="contained"
+                  color="error"
+                  startIcon={<StopIcon />}
+                  onClick={stopExperiment}
+                  disabled={!isRunning}
+                >
+                  {t("Stop")}
+                </Button>
+              </Grid>
+            </Grid>
+          </CardContent>
+        </Card>
+      </Grid>
+
+      <Grid item xs={12} md={5}>
+        <Card>
+          <CardContent>
+            <Typography variant="subtitle1" gutterBottom>
+              {t("Progress")}
+            </Typography>
+            <LinearProgress
+              variant={progress >= 0 ? "determinate" : isRunning ? "indeterminate" : "determinate"}
+              value={progress >= 0 ? progress * 100 : 0}
+              sx={{ height: 10, borderRadius: 5, mb: 2 }}
+            />
+            <Typography variant="body2">
+              {t("Images")}: {currentImageCount}
+              {state.numImages > 0 ? ` / ${state.numImages}` : ""}
+            </Typography>
+            <Typography variant="body2">
+              {t("Elapsed")}: {formatDuration(elapsedSeconds)}
+            </Typography>
+            <Typography variant="body2">
+              {t("Remaining")}: {formatDuration(etaSeconds)}
+            </Typography>
+            <Divider sx={{ my: 1 }} />
+            <Typography variant="caption" color="text.secondary">
+              {relativePath || t("No acquisition yet")}
+            </Typography>
+            {lastError ? (
+              <Alert severity="error" sx={{ mt: 2 }}>
+                {lastError}
+              </Alert>
+            ) : null}
+          </CardContent>
+        </Card>
+      </Grid>
+    </Grid>
+  );
+
+  const renderGalleryTab = () => (
+    <Card>
+      <CardContent>
+        <Box sx={{ display: "flex", alignItems: "center", mb: 1 }}>
+          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+            {t("Gallery")} — {relativePath || t("No acquisition yet")}
+          </Typography>
+          <IconButton onClick={refreshGallery}>
+            <RefreshIcon />
+          </IconButton>
+        </Box>
+        {galleryFiles.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            {t("No images found for the last acquisition.")}
+          </Typography>
+        ) : (
+          <Grid container spacing={1}>
+            {galleryFiles.map((f) => (
+              <Grid item xs={6} sm={4} md={3} lg={2} key={f.path}>
+                <Box
+                  component="a"
+                  href={`${fileManagerBase}${f.filePreviewPath}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  sx={{ display: "block", textDecoration: "none" }}
+                >
+                  <Box
+                    component="img"
+                    alt={f.name}
+                    src={`${fileManagerBase}${f.thumbnailPath || f.filePreviewPath}`}
+                    sx={{ width: "100%", borderRadius: 1, display: "block" }}
+                  />
+                  <Typography variant="caption" noWrap display="block">
+                    {f.name}
+                  </Typography>
+                </Box>
+              </Grid>
+            ))}
+          </Grid>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  return (
+    <Paper sx={{ p: 1 }}>
+      <Box sx={{ display: "flex", alignItems: "center", px: 2, pt: 1, gap: 1 }}>
+        <Typography variant="h6" sx={{ flexGrow: 1 }}>
+          {t("Flow Stop")}
+        </Typography>
+        <Chip
+          size="small"
+          color={isRunning ? "success" : "default"}
+          label={isRunning ? t("Running") : t("Idle")}
+        />
+        <Chip size="small" variant="outlined" label={`${currentImageCount} ${t("images")}`} />
+        {isRunning && (
+          <Button size="small" color="error" startIcon={<StopIcon />} onClick={stopExperiment}>
+            {t("Stop")}
+          </Button>
+        )}
+      </Box>
+
+      {notice ? (
+        <Alert severity={notice.severity} onClose={() => setNotice(null)} sx={{ mx: 2, mt: 1 }}>
+          {notice.text}
+        </Alert>
+      ) : null}
+
+      <Tabs
+        value={tabIndex}
+        onChange={(e, v) => dispatch(flowStopSlice.setTabIndex(v))}
+        variant="scrollable"
+        scrollButtons="auto"
+      >
+        <Tab label={t("Preview & Control")} />
+        <Tab label={t("Sample")} />
+        <Tab label={t("Acquisition")} />
+        <Tab label={t("Gallery")} />
+      </Tabs>
+
+      <TabPanel value={tabIndex} index={0}>
+        {renderPreviewTab()}
+      </TabPanel>
+      <TabPanel value={tabIndex} index={1}>
+        {renderSampleTab()}
+      </TabPanel>
+      <TabPanel value={tabIndex} index={2}>
+        {renderAcquisitionTab()}
+      </TabPanel>
+      <TabPanel value={tabIndex} index={3}>
+        {renderGalleryTab()}
       </TabPanel>
     </Paper>
   );

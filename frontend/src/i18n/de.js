@@ -78,9 +78,6 @@ const de = {
   "Raw (dz=0)": "Roh (dz=0)",
   "Re-open the MJPEG stream (use if the processed view freezes).":
     "Öffnet den MJPEG-Stream neu (falls die verarbeitete Ansicht einfriert).",
-  Restart: "Neu starten",
-  "Processed stream stalled — no frames for more than {seconds} s.":
-    "Verarbeiteter Stream steht — seit über {seconds} s keine Bilder.",
   "dz = 0: showing the extracted {channel} channel of the ROI (no propagation).":
     "dz = 0: zeigt den extrahierten Kanal {channel} des ROI (keine Propagation).",
 
@@ -92,8 +89,8 @@ const de = {
   "Upper bound of the slider in millimeters.":
     "Obere Grenze des Reglers in Millimetern.",
   "Step (µm)": "Schrittweite (µm)",
-  "Slider step size in micrometers.":
-    "Schrittweite des Reglers in Mikrometern.",
+  "Slider step size in micrometers, at most a tenth of Max dz.":
+    "Schrittweite des Reglers in Mikrometern, höchstens ein Zehntel von Max dz.",
 
   // --- detector panel ---
   "Illumination colour": "Beleuchtungsfarbe",

@@ -128,6 +128,7 @@ class FrameSavingMixin:
             "y": kwargs.get("posY", 0),
             "z": kwargs.get("posZ", 0),
             "runningNumber": kwargs.get("runningNumber", 0),
+            "iterator": kwargs.get("iterator", kwargs.get("runningNumber", 0)),
             "illuminationChannel": kwargs.get("illuminationChannel", "unknown"),
             "illuminationValue": kwargs.get("illuminationValue", 0),
             "tile_index": kwargs.get("tile_index", 0),
@@ -168,7 +169,8 @@ class FrameSavingMixin:
         # sensor controller is configured. Throttled hardware read + optional
         # sidecar-CSV logging (one row per fresh read). No-op otherwise.
         try:
-            i2c_reading = self._read_i2c_snapshot()
+            i2c_reading = (self._read_i2c_snapshot(min_interval_s=10.0)
+                           if getattr(self, "_i2c_csv_path", None) else None)
             if i2c_reading and i2c_reading.get("ok"):
                 for _k in ("temperature_c", "humidity_pct", "lux", "ch0_full", "ch1_ir"):
                     _v = i2c_reading.get(_k)

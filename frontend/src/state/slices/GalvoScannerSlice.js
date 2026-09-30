@@ -82,6 +82,24 @@ const initialState = {
     completed: false,
   },
 
+  // Camera <-> scanner calibration summary from the backend
+  // (getGalvoCameraCalibration): µm per DAC count derived from the affine
+  // transform + camera pixel size. umPerDacX/Y are null while uncalibrated.
+  cameraCalibration: {
+    calibrated: false,
+    detectorName: null,
+    cameraDetectors: [],
+    frameWidth: null,
+    frameHeight: null,
+    pixelSizeUmX: null,
+    pixelSizeUmY: null,
+    umPerDacX: null,
+    umPerDacY: null,
+    rotationDeg: null,
+    hint: null,
+    flim: {},
+  },
+
   // Active tab index (0 = Raster, 1 = Arbitrary Points)
   activeTab: 0,
 
@@ -90,6 +108,20 @@ const initialState = {
   error: null,
   statusMessage: '',
   autoRefresh: false,
+};
+
+const DAC_MAX = 4095;
+const clampDac = (v) => Math.max(0, Math.min(DAC_MAX, Math.round(Number(v) || 0)));
+
+/**
+ * Place a window of `width` counts centred on `center`, shifted (not
+ * shrunk) so it stays inside 0..4095. Returns [min, max].
+ */
+const windowFromCenterWidth = (center, width) => {
+  const w = Math.max(1, Math.min(DAC_MAX, Math.round(Number(width) || 0)));
+  let lo = Math.round(Number(center) - w / 2);
+  lo = Math.max(0, Math.min(DAC_MAX - w, lo));
+  return [lo, lo + w];
 };
 
 const galvoScannerSlice = createSlice({
@@ -149,6 +181,63 @@ const galvoScannerSlice = createSlice({
       state.config.y_max = y_max;
     },
     
+    /**
+     * Edit one axis' scan window by centre and/or width instead of min/max.
+     * Payload: { axis: 'x' | 'y', center?: number, width?: number }.
+     * Omitted values are taken from the current window, so changing the width
+     * keeps the centre (and vice versa); the window slides to stay in range.
+     */
+    setAxisWindow: (state, action) => {
+      const { axis, center, width } = action.payload;
+      const loKey = axis === 'y' ? 'y_min' : 'x_min';
+      const hiKey = axis === 'y' ? 'y_max' : 'x_max';
+      const curLo = state.config[loKey];
+      const curHi = state.config[hiKey];
+      const c = center !== undefined ? center : (curLo + curHi) / 2;
+      const w = width !== undefined ? width : curHi - curLo;
+      const [lo, hi] = windowFromCenterWidth(c, w);
+      state.config[loKey] = lo;
+      state.config[hiKey] = hi;
+    },
+
+    /**
+     * Set the whole scan rectangle at once (drag/resize in the preview).
+     * Values are clamped to 0..4095 and ordered so min < max.
+     */
+    setScanArea: (state, action) => {
+      const next = { ...state.config, ...action.payload };
+      let xMin = clampDac(next.x_min), xMax = clampDac(next.x_max);
+      let yMin = clampDac(next.y_min), yMax = clampDac(next.y_max);
+      if (xMin > xMax) [xMin, xMax] = [xMax, xMin];
+      if (yMin > yMax) [yMin, yMax] = [yMax, yMin];
+      if (xMax === xMin) xMax = Math.min(DAC_MAX, xMin + 1);
+      if (yMax === yMin) yMax = Math.min(DAC_MAX, yMin + 1);
+      state.config.x_min = xMin; state.config.x_max = xMax;
+      state.config.y_min = yMin; state.config.y_max = yMax;
+    },
+
+    /**
+     * Shift the scan rectangle by (dx, dy) counts, keeping its size; it stops
+     * at the DAC limits instead of shrinking.
+     */
+    moveScanArea: (state, action) => {
+      const { dx = 0, dy = 0 } = action.payload;
+      const shift = (lo, hi, d) => {
+        const w = hi - lo;
+        const nlo = Math.max(0, Math.min(DAC_MAX - w, Math.round(lo + d)));
+        return [nlo, nlo + w];
+      };
+      [state.config.x_min, state.config.x_max] = shift(state.config.x_min, state.config.x_max, dx);
+      [state.config.y_min, state.config.y_max] = shift(state.config.y_min, state.config.y_max, dy);
+    },
+
+    /**
+     * Store the camera<->scanner calibration summary from the backend
+     */
+    setCameraCalibration: (state, action) => {
+      state.cameraCalibration = { ...state.cameraCalibration, ...action.payload };
+    },
+
     /**
      * Set resolution (nx and ny)
      */
@@ -495,6 +584,10 @@ export const {
   setConfigParam,
   setXRange,
   setYRange,
+  setAxisWindow,
+  setScanArea,
+  moveScanArea,
+  setCameraCalibration,
   setResolution,
   toggleBidirectional,
   setStatus,
@@ -582,6 +675,21 @@ const defaultCalibration = {
   completed: false,
 };
 
+const defaultCameraCalibration = {
+  calibrated: false,
+  detectorName: null,
+  cameraDetectors: [],
+  frameWidth: null,
+  frameHeight: null,
+  pixelSizeUmX: null,
+  pixelSizeUmY: null,
+  umPerDacX: null,
+  umPerDacY: null,
+  rotationDeg: null,
+  hint: null,
+  flim: {},
+};
+
 const defaultState = {
   scannerNames: [],
   selectedScanner: '',
@@ -590,6 +698,7 @@ const defaultState = {
   arbitraryPoints: defaultArbitraryPoints,
   affineTransform: defaultAffineTransform,
   calibration: defaultCalibration,
+  cameraCalibration: defaultCameraCalibration,
   activeTab: 0,
   loading: false,
   error: null,
@@ -611,6 +720,32 @@ export const getArbitraryPointsState = (state) => state.galvoScannerState?.arbit
 export const getArbitraryPointsList = (state) => state.galvoScannerState?.arbitraryPoints?.points || [];
 export const getAffineTransformState = (state) => state.galvoScannerState?.affineTransform || defaultAffineTransform;
 export const getCalibrationState = (state) => state.galvoScannerState?.calibration || defaultCalibration;
+export const getCameraCalibration = (state) => state.galvoScannerState?.cameraCalibration || defaultCameraCalibration;
+
+/**
+ * Physical size of the current scan window, if the scanner is calibrated to
+ * the camera. Computed client-side from µm/DAC so it follows the sliders live.
+ * Returns null while uncalibrated.
+ */
+export const getScanPhysical = (state) => {
+  const config = state.galvoScannerState?.config || defaultConfig;
+  const cal = state.galvoScannerState?.cameraCalibration || defaultCameraCalibration;
+  if (!cal.calibrated || !cal.umPerDacX || !cal.umPerDacY) return null;
+  const spanX = Math.abs(config.x_max - config.x_min);
+  const spanY = Math.abs(config.y_max - config.y_min);
+  const fovUmX = spanX * cal.umPerDacX;
+  const fovUmY = spanY * cal.umPerDacY;
+  return {
+    umPerDacX: cal.umPerDacX,
+    umPerDacY: cal.umPerDacY,
+    fovUmX,
+    fovUmY,
+    pixelUmX: fovUmX / Math.max(1, config.nx),
+    pixelUmY: fovUmY / Math.max(1, config.ny),
+    fullScaleUmX: 4096 * cal.umPerDacX,
+    fullScaleUmY: 4096 * cal.umPerDacY,
+  };
+};
 
 // Computed selectors
 export const getScanInfo = (state) => {

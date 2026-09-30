@@ -61,6 +61,7 @@ import apiUC2ConfigControllerGetOTADeviceMapping from "../backendapi/apiUC2Confi
 import apiUC2ConfigControllerStartCANStreamingOTA from "../backendapi/apiUC2ConfigControllerStartCANStreamingOTA";
 import apiUC2ConfigControllerStartMultipleCANStreamingOTA from "../backendapi/apiUC2ConfigControllerStartMultipleCANStreamingOTA";
 import apiUC2ConfigControllerCancelCANStreamingOTA from "../backendapi/apiUC2ConfigControllerCancelCANStreamingOTA";
+import { FIRMWARE_STATUS, firmwareUpdateStatus } from "./firmwareStatus";
 
 const steps = [
   "OTA Method",
@@ -383,22 +384,21 @@ const CanOtaWizard = ({ open, onClose }) => {
       if (isCAN) {
         // CAN Streaming OTA - firmware is transferred over CAN bus
         console.log("Starting CAN Streaming OTA for devices:", canOtaState.selectedDeviceIds);
+        // Resolves only after every device has finished; per-device
+        // progress and final states arrive meanwhile via sigOTAStatusUpdate,
+        // so do not overwrite them here.
         result = await apiUC2ConfigControllerStartMultipleCANStreamingOTA(
           canOtaState.selectedDeviceIds,
           5 // 5 seconds delay between devices for reboot
         );
-        console.log("CAN Streaming OTA initiated:", result);
-        
-        // Update status to "initiated" for all devices
-        canOtaState.selectedDeviceIds.forEach(canId => {
-          dispatch(canOtaSlice.setUpdateProgress({
-            canId: canId,
-            status: "initiated",
-            message: "CAN streaming started, transferring firmware chunks...",
-            progress: 5,
-            timestamp: new Date().toISOString(),
-          }));
-        });
+        console.log("CAN Streaming OTA finished:", result);
+        if (result?.status === "busy") {
+          // Refused before anything started (another upload or a USB flash
+          // holds the serial port).
+          dispatch(canOtaSlice.clearUpdateProgress());
+          dispatch(canOtaSlice.setIsUpdating(false));
+          dispatch(canOtaSlice.setError(result.message));
+        }
       } else {
         // WiFi OTA - devices download firmware from server
         result = await apiUC2ConfigControllerStartMultipleDeviceOTA(
@@ -459,6 +459,9 @@ const CanOtaWizard = ({ open, onClose }) => {
       case "failed":
       case "error":
         return "error";
+      case "attempt_failed": // one attempt failed, the backend retries
+      case "retrying":
+        return "warning";
       case "initiated":
       case "in_progress":
         return "primary";
@@ -661,7 +664,7 @@ const CanOtaWizard = ({ open, onClose }) => {
                   <ListItem key={canId}>
                     <ListItemText
                       primary={`CAN ID ${canId}: ${firmware.filename}`}
-                      secondary={`${(firmware.size / 1024).toFixed(2)} KB`}
+                      secondary={`${(firmware.size / 1024).toFixed(2)} KB${firmware.version ? ` · ${firmware.version}` : ""}`}
                     />
                   </ListItem>
                 ))}
@@ -820,9 +823,9 @@ const CanOtaWizard = ({ open, onClose }) => {
                             MAC: {device.mac}
                           </Typography>
                         )}
-                        {device.build && (
+                        {(device.fwVersion || device.build) && (
                           <Typography component="span" variant="caption" color="text.secondary" sx={{ display: "block" }}>
-                            Build: {device.build}{device.fwVersion ? ` · ${device.fwVersion}` : ""}
+                            Firmware: {device.fwVersion || "unknown"}{device.build ? ` (built ${device.build})` : ""}
                           </Typography>
                         )}
                       </Box>
@@ -907,9 +910,28 @@ const CanOtaWizard = ({ open, onClose }) => {
           variant="outlined"
           size="small"
           onClick={() => dispatch(canOtaSlice.deselectAllDevices())}
+          sx={{ mr: 1 }}
         >
           Deselect All
         </Button>
+        <Tooltip title="Select the devices whose installed firmware differs from the version on the firmware server">
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() =>
+              dispatch(canOtaSlice.setSelectedDeviceIds(
+                canOtaState.scannedDevices
+                  .filter((d) => {
+                    const fw = canOtaState.availableFirmware[d.canId];
+                    return fw && firmwareUpdateStatus(d.fwVersion, fw.version) === "update_available";
+                  })
+                  .map((d) => d.canId)
+              ))
+            }
+          >
+            Select Outdated
+          </Button>
+        </Tooltip>
       </Box>
 
       {canOtaState.scannedDevices.length > 0 ? (
@@ -940,11 +962,25 @@ const CanOtaWizard = ({ open, onClose }) => {
                           )}
                         </Box>
                       }
+                      secondaryTypographyProps={{ component: "div" }}
                       secondary={
                         hasFirmware ? (
-                          <Typography variant="body2" color="text.secondary">
-                            {canOtaState.availableFirmware[device.canId].filename}
-                          </Typography>
+                          <>
+                            <Typography variant="body2" color="text.secondary">
+                              {hasFirmware.filename}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontFamily: "monospace" }}>
+                              installed {device.fwVersion || "unknown"} → server {hasFirmware.version || "unknown"}
+                            </Typography>
+                            {(() => {
+                              const status = FIRMWARE_STATUS[firmwareUpdateStatus(device.fwVersion, hasFirmware.version)];
+                              return (
+                                <Typography variant="caption" sx={{ display: "block", color: status.color }}>
+                                  {status.label}
+                                </Typography>
+                              );
+                            })()}
+                          </>
                         ) : (
                           <Typography variant="body2" color="warning.main">
                             No matching firmware file found on server

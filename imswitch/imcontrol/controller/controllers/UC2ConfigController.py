@@ -4,6 +4,7 @@ import datetime
 from imswitch.imcommon.model import APIExport, initLogger, dirtools, ostools
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
+from .uc2config.firmware_update import FirmwareUpdateMixin
 import tifffile as tif
 import tempfile
 import requests
@@ -32,7 +33,7 @@ CAN_ADDRESS_MAP = {
     "led": 30,
 }
 
-class UC2ConfigController(ImConWidgetController):
+class UC2ConfigController(FirmwareUpdateMixin, ImConWidgetController):
     """Linked to UC2ConfigWidget."""
 
     sigUC2SerialReadMessage = Signal(str)
@@ -44,21 +45,30 @@ class UC2ConfigController(ImConWidgetController):
     sigBusStatusUpdate = Signal(object)  # Emits CAN-bus power / emergency-stop status changes
     sigCollisionStatusUpdate = Signal(object)  # Emits collision-detector events/state (GPIO slave)
     sigPtzEvent = Signal(object)  # Emits PTZ keyboard key events + the action they triggered
+    sigFirmwareUpdatesAvailable = Signal(object)  # checkFirmwareUpdates result of the check after connect
 
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
+        self._logger = self.__logger  # for the mixins (and the serial-callback error path below)
 
         # OTA update tracking
         self._ota_status = {}  # Dictionary to track OTA status by CAN ID
         self._ota_lock = threading.Lock()
-        self._firmware_server_url = "http://host.docker.internal/firmware"  # Firmware server URL (must end with /)
+        # Firmware server (images + version.json); setup JSON uc2Config.firmwareServerUrl
+        # overrides the Docker default, so the check after connect works outside Docker too.
+        self._firmware_server_url = (
+            getattr(getattr(self._setupInfo, "uc2Config", None), "firmwareServerUrl", None)
+            or "http://host.docker.internal/firmware")
         self._firmware_cache_dir = Path(tempfile.gettempdir()) / "uc2_ota_firmware_cache"
         self._firmware_cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Prevent concurrent flashing attempts
         self._usb_flash_lock = threading.Lock()
+        # One CAN streaming OTA at a time: two workers on one serial port steal
+        # each other's ACKs and inject /ota_start into the other's binary stream.
+        self._can_ota_lock = threading.Lock()
         # Reference to a running esptool subprocess so cancel can reach it.
         self._usb_flash_proc = None
         # Cooperative cancel flag honoured by _run_esptool's read loop.
@@ -118,6 +128,10 @@ class UC2ConfigController(ImConWidgetController):
                 self._master.UC2ConfigManager.ESP32.serial.setReadCallback(self.processSerialReadMessage)
             except Exception as e:
                 self._logger.error(f"Could not register serial callbacks: {e}")
+
+        # Version check, orchestrated update, optional check after connect
+        # (uc2config/firmware_update.py).
+        self._init_firmware_update()
 
 
 
@@ -857,9 +871,11 @@ class UC2ConfigController(ImConWidgetController):
         """
         Identity of the USB-connected ESP32 master firmware.
 
-        :return: {name, version, date, author, pindef, isMaster, connected,
-                  serialport}. The build date and pindef are the most useful
-                  fields for telling boards/firmwares apart.
+        :return: {name, version, fwVersion, date, author, pindef, isMaster,
+                  connected, serialport}. ``fwVersion`` is the release the
+                  firmware was built from (same string as version.json on the
+                  firmware server; empty on firmware/uc2rest predating it),
+                  ``version`` the fixed API generation ("V2.0").
         """
         try:
             return self._master.UC2ConfigManager.getFirmwareInfo()
@@ -1431,6 +1447,8 @@ class UC2ConfigController(ImConWidgetController):
                     shutil.copyfileobj(r.raw, f)
 
             self.__logger.info(f"Downloaded firmware to {local_path}")
+            if not self._verify_firmware_download(local_path, firmware_filename):
+                return None
             return local_path
 
         except Exception as e:
@@ -1721,8 +1739,10 @@ class UC2ConfigController(ImConWidgetController):
 
         :param can_ids: Optional list of integer CAN IDs to include. When None,
                         all known CAN IDs are returned.
-        :return: {status, firmware_server, firmware_count,
-                  firmware: {can_id: {filename, url, can_id, size, mod_time}}}
+        :return: {status, firmware_server, server_version, firmware_count,
+                  firmware: {can_id: {filename, url, can_id, size, mod_time,
+                  version, sha256}}}. ``version``/``sha256`` come from the
+                  server's version.json and are None on servers without one.
         """
         # Reuse the working flat-list fetcher to avoid code duplication
         flat = self.listAllFirmwareFiles()
@@ -1747,11 +1767,14 @@ class UC2ConfigController(ImConWidgetController):
                     "can_id": can_id,
                     "size": f.get("size", 0),
                     "mod_time": f.get("mod_time", ""),
+                    "version": f.get("version"),
+                    "sha256": f.get("sha256"),
                 }
 
         return {
             "status": "success",
             "firmware_server": self._firmware_server_url,
+            "server_version": flat.get("server_version"),
             "firmware_count": len(firmware_by_id),
             "firmware": firmware_by_id,
         }
@@ -1781,6 +1804,8 @@ class UC2ConfigController(ImConWidgetController):
             if not isinstance(data, list):
                 raise ValueError("Invalid response format from firmware server")
 
+            manifest = self._fetch_firmware_manifest()
+            manifest_files = manifest.get("files", {})
             firmware_files = []
             for item in data:
                 if isinstance(item, dict) and item.get("name", "").endswith(".bin"):
@@ -1789,11 +1814,15 @@ class UC2ConfigController(ImConWidgetController):
                         "size": item.get("size", 0),
                         "mod_time": item.get("mod_time", ""),
                         "url": f"{self._firmware_server_url}/{item['name']}",
+                        "version": self._firmware_file_version(manifest, item["name"]),
+                        "sha256": manifest_files.get(item["name"], {}).get("sha256"),
                     })
 
             return {
                 "status": "success",
                 "firmware_server": self._firmware_server_url,
+                "server_version": manifest.get("version"),
+                "server_commit_time": manifest.get("commit_time"),
                 "files": firmware_files,
             }
         except requests.exceptions.RequestException as e:
@@ -2003,8 +2032,41 @@ class UC2ConfigController(ImConWidgetController):
     
     ''' CAN OTA Streaming Methods (USB-based, no WiFi required) '''
     
+    def _acquire_can_ota_lock(self):
+        """Take the CAN OTA lock without waiting. Returns a busy response to
+        hand back to the caller, or None when the lock is now held."""
+        if self._usb_flash_lock.locked():
+            return {"status": "busy",
+                    "message": "A USB flash is using the serial port — wait for it to finish."}
+        if not self._can_ota_lock.acquire(blocking=False):
+            return {"status": "busy",
+                    "message": "A CAN streaming OTA upload is already running — wait for it "
+                               "to finish or cancel it."}
+        return None
+
     @APIExport(runOnUIThread=False)
-    def startCANStreamingOTA(self, can_id: int, firmware_url: str = None, baud: int = 921600):
+    def startCANStreamingOTA(self, can_id: int, firmware_url: str = None, baud: int = None):
+        """
+        Start CAN-based OTA streaming upload for one device. Blocks until done.
+
+        Refused with status "busy" while another CAN streaming upload or a USB
+        flash is running. See _can_streaming_ota for the workflow.
+
+        :param can_id: CAN ID of the target device (e.g., 11=Motor X, 20=Laser)
+        :param firmware_url: unused; the image comes from the firmware server
+        :param baud: streaming baud; default is the current serial link's baud,
+                     which is the master's UART rate (the master never switches)
+        """
+        busy = self._acquire_can_ota_lock()
+        if busy:
+            return busy
+        try:
+            return self._can_streaming_ota(can_id, baud)
+        finally:
+            self._can_ota_lock.release()
+
+    def _can_streaming_ota(self, can_id: int, baud: int = None, filename: str = None,
+                           expected_version: str = None):
         """
         Start CAN-based OTA streaming upload (USB-based, no WiFi required).
         
@@ -2019,10 +2081,23 @@ class UC2ConfigController(ImConWidgetController):
         5. Device reboots automatically
         
         :param can_id: CAN ID of the target device (e.g., 11=Motor X, 20=Laser)
-        :param firmware_url: Optional URL to download firmware (uses firmware server if not provided)
-        :return: Status updates via sigOTAStatusUpdate signal
+        :param baud: streaming baud (None = the current serial link's baud)
+        :param filename: image on the firmware server (default: chosen from the
+                         CAN-id table / id_<N>_*.bin, as before)
+        :param expected_version: version the node must report afterwards
+                         (default: the image's version from version.json)
+        :return: Status updates via sigOTAStatusUpdate signal. Final states are
+                 "success" and "error"; "attempt_failed", "retrying" and
+                 "verifying" are intermediate. "success" means the node came
+                 back reporting the new version (unless the server has no
+                 version.json, then only the transfer is confirmed).
         """
         try:
+            if baud is None:
+                # Resolved here (not in uc2rest) so older uc2rest versions,
+                # whose baud default was a fixed 921600, get an int too.
+                link = self._master.UC2ConfigManager.ESP32.serial
+                baud = getattr(link, "baudrate", None) or 921600
             # Initialize status
             self._ota_status[can_id] = {
                 "status": "initializing",
@@ -2038,10 +2113,14 @@ class UC2ConfigController(ImConWidgetController):
                 "method": "can_streaming"
             })
             
-            # Download firmware # TODO: The firmware ID/link should be the same as in the wifi-mode 
-            firmware_path = self._download_firmware_for_device(can_id)
+            # Download (sha256-checked against version.json when listed there)
+            firmware_path = (self._download_firmware_by_name(filename) if filename
+                             else self._download_firmware_for_device(can_id))
             if not firmware_path:
-                raise Exception("Failed to download or locate firmware")
+                raise Exception("Failed to download or verify firmware")
+            if expected_version is None:
+                expected_version = self._firmware_file_version(
+                    self._fetch_firmware_manifest(), firmware_path.name)
             
             self._ota_status[can_id]["status"] = "uploading"
             self._ota_status[can_id]["message"] = "Uploading firmware via CAN streaming..."
@@ -2069,22 +2148,26 @@ class UC2ConfigController(ImConWidgetController):
                     "speed": speed_kbps
                 })
             
-            # Status callback – also forward to frontend via signal
+            # Status callback – also forward to frontend via signal. A failure
+            # reported here ends one attempt, not the update: the retry loop
+            # below decides, and only its final "error" is terminal for the UI.
             def status_callback(message, success):
                 if not success:
                     self.__logger.warning(f"CAN OTA status: {message}")
                 self.__logger.info(f"CAN OTA: {message}")
                 self.sigOTAStatusUpdate.emit({
                     "canId": can_id,
-                    "status": "uploading" if success else "error",
+                    "status": "uploading" if success else "attempt_failed",
                     "progress": self._ota_status.get(can_id, {}).get("progress", 0),
                     "message": message,
                     "method": "can_streaming"
                 })
             
             # Start streaming upload (blocking) — retry up to 3 times on failure.
-            # The master occasionally returns size_write_failed on the first attempt
-            # after rebooting from a previous OTA, but succeeds on the next try.
+            # The usual first-attempt failure (size_write_failed: the master's
+            # 250 ms SDO timeout vs the slave's full-image erase) is fixed in the
+            # firmware; retries remain a safety net for transient faults and for
+            # masters that still run the old firmware.
             MAX_RETRIES = 3
             success = False
             last_error = "CAN streaming upload failed"
@@ -2111,7 +2194,13 @@ class UC2ConfigController(ImConWidgetController):
                         f"waiting 5 s before retry..."
                     )
                     self.__logger.warning(f"CAN OTA: {retry_msg}")
-                    status_callback(retry_msg, False)
+                    self.sigOTAStatusUpdate.emit({
+                        "canId": can_id,
+                        "status": "retrying",
+                        "progress": self._ota_status.get(can_id, {}).get("progress", 0),
+                        "message": retry_msg,
+                        "method": "can_streaming"
+                    })
                     import time as _time
                     _time.sleep(5)
                     # Re-emit uploading state so the UI shows the retry
@@ -2127,24 +2216,37 @@ class UC2ConfigController(ImConWidgetController):
                 else:
                     last_error = f"CAN streaming upload failed after {MAX_RETRIES} attempts"
             
-            if success:
-                self._ota_status[can_id]["status"] = "success"
-                self._ota_status[can_id]["progress"] = 100
-                self._ota_status[can_id]["message"] = "Firmware uploaded successfully - device rebooting"
+            if not success:
+                raise Exception(last_error)
+
+            # The transfer's success only says the slave accepted and committed
+            # the image; count the update as done once the rebooted node
+            # reports the new version on the bus.
+            if expected_version:
                 self.sigOTAStatusUpdate.emit({
-                    "canId": can_id,
-                    "status": "success",
-                    "progress": 100,
-                    "message": "Firmware uploaded successfully - device rebooting",
+                    "canId": can_id, "status": "verifying", "progress": 98,
+                    "message": f"Waiting for node {can_id} to report {expected_version}...",
                     "method": "can_streaming"
                 })
-                return {
-                    "status": "success",
-                    "can_id": can_id,
-                    "message": "CAN streaming OTA completed successfully"
-                }
+                verified, seen = self._wait_for_node_version(can_id, expected_version)
+                if not verified:
+                    raise Exception(f"Flashed, but node {can_id} reports {seen!r} "
+                                    f"instead of {expected_version!r}")
+                message = f"Updated and verified: node {can_id} runs {expected_version}"
             else:
-                raise Exception(last_error)
+                message = ("Firmware uploaded - device rebooting (not verified: the "
+                           "firmware server has no version.json)")
+            self._ota_status[can_id]["status"] = "success"
+            self._ota_status[can_id]["progress"] = 100
+            self._ota_status[can_id]["message"] = message
+            self.sigOTAStatusUpdate.emit({
+                "canId": can_id,
+                "status": "success",
+                "progress": 100,
+                "message": message,
+                "method": "can_streaming"
+            })
+            return {"status": "success", "can_id": can_id, "message": message}
                 
         except Exception as e:
             self.__logger.error(f"CAN streaming OTA failed for device {can_id}: {e}")
@@ -2193,24 +2295,32 @@ class UC2ConfigController(ImConWidgetController):
         
         :param can_ids: List of CAN IDs (e.g., [11, 12, 13, 20, 30])
         :param delay_between: Delay in seconds between devices (for reboot time)
-        :return: Status message with results for each device
+        :return: Status message with results for each device, returned once all
+                 devices are done; {"status": "busy", ...} (nothing started)
+                 while another CAN streaming upload or a USB flash is running
         """
         if not isinstance(can_ids, list):
             return {"status": "error", "message": "can_ids must be a list"}
-        
+        busy = self._acquire_can_ota_lock()
+        if busy:
+            return busy
+
         results = []
-        for can_id in can_ids:
-            result = self.startCANStreamingOTA(can_id=can_id)
-            results.append({
-                "can_id": can_id,
-                "result": result
-            })
-            
-            # Wait for device to reboot before starting next one
-            if delay_between > 0 and can_id != can_ids[-1]:  # Don't delay after last device
-                import time
-                self.__logger.info(f"Waiting {delay_between}s for device {can_id} to reboot...")
-                time.sleep(delay_between)
+        try:
+            for can_id in can_ids:
+                result = self._can_streaming_ota(can_id=can_id)
+                results.append({
+                    "can_id": can_id,
+                    "result": result
+                })
+
+                # Wait for device to reboot before starting next one
+                if delay_between > 0 and can_id != can_ids[-1]:  # Don't delay after last device
+                    import time
+                    self.__logger.info(f"Waiting {delay_between}s for device {can_id} to reboot...")
+                    time.sleep(delay_between)
+        finally:
+            self._can_ota_lock.release()
         
         return {
             "status": "success",
@@ -2442,6 +2552,8 @@ class UC2ConfigController(ImConWidgetController):
                 r.raise_for_status()
                 with open(local_path, "wb") as f:
                     shutil.copyfileobj(r.raw, f)
+            if not self._verify_firmware_download(local_path, firmware_filename):
+                return None
             return local_path
         except Exception as e:
             self.__logger.error(f"Failed to download {url}: {e}")
@@ -2667,6 +2779,10 @@ class UC2ConfigController(ImConWidgetController):
           erase_flash: if True, erase the entire flash before writing firmware.
           skip_disconnect: if True, skip disconnecting ImSwitch serial before flashing (useful for XIAO).
         """
+        if self._can_ota_lock.locked():
+            return {"status": "busy",
+                    "message": "A CAN streaming OTA upload is using the serial port — "
+                               "wait for it to finish or cancel it."}
         # If another flash is already running, cancel it before starting a
         # new one. Otherwise we'd just block forever holding the lock.
         if not self._usb_flash_lock.acquire(blocking=False):

@@ -57,6 +57,7 @@ import MobileApp from "./mobile/MobileApp";
 import { useMobileRoute } from "./mobile/mobileRoutes";
 import AppManagerPage from "./components/AppManagerPage.jsx";
 import OnboardingTour from "./components/OnboardingTour.jsx";
+import FirmwareUpdatePrompt from "./components/FirmwareUpdatePrompt";
 
 //axon
 import AxonTabComponent from "./axon/AxonTabComponent.js";
@@ -600,6 +601,7 @@ function App() {
           <ReduxNotificationBridge />
           <WebSocketHandler />
           <OnboardingTour selectedPlugin={selectedPlugin} />
+          <FirmwareUpdatePrompt />
           <CssBaseline />
 
           <Dialog

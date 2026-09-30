@@ -101,8 +101,14 @@ Always discover, never assume ([§3.3](#33-discovery)).
 ### Starting the server
 
 ```bash
-python main.py --headless --http-port 8001
+python -m imswitch --http-port 8001
 ```
+
+Use `python -m imswitch`, **not** `python main.py`. `main.py` calls `main(ssl=0)`, and `main()` parses
+the command line only when it gets no arguments, so `python main.py --config-file X ...` silently
+ignores every flag. It then starts the user's default setup from
+`~/ImSwitchConfig/config/imcontrol_options.json` against real hardware. There is no `--headless` flag;
+the server is always headless.
 
 Flags (`imswitch/__main__.py`):
 
@@ -119,8 +125,12 @@ Flags (`imswitch/__main__.py`):
 Hardware-free session for agents:
 
 ```bash
-python main.py --headless --no-ssl --http-port 8001 --config-file ~/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json
+python -m imswitch --no-ssl --http-port 8001 --config-file ~/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json
 ```
+
+Add `--config-folder` / `--data-folder` pointing at a scratch directory to keep a test session out of
+the user's config. Startup writes `config/imcontrol_options.json`, `modules.json` and overview
+registration files into the config folder.
 
 ---
 
@@ -509,6 +519,10 @@ Safe to read:
   `listPtzActions()`
 - `getDataPath()`, `isImSwitchRunning()`, `getOTAStatus`, `getOTADeviceMapping`,
   `listAvailableFirmware`, `listAllFirmwareFiles`, `getUSBFlashStatus`
+- `checkFirmwareUpdates(timeout, probe_range)` — installed vs server firmware version per
+  board (reads `<server>/version.json`; runs a CAN scan on a master). See
+  `docs/FIRMWARE_VERSIONING.md`.
+- `getFirmwareUpdateStatus`, `getFirmwareUpdatePrompt`, `getFirmwareCheckOnConnect`
 
 Confirm before calling:
 
@@ -528,7 +542,9 @@ Confirm before calling:
   `startSingleDeviceOTA(can_id, ssid, password, timeout)`, `startMultipleDeviceOTA`,
   `startCANStreamingOTA(can_id, firmware_url, baud)`, `startMultipleCANStreamingOTA`,
   `cancelCANStreamingOTA`, `setOTAWiFiCredentials`, `setOTAFirmwareServer`,
-  `clearOTAFirmwareCache`
+  `clearOTAFirmwareCache`, `startFirmwareUpdate(can_ids, include_master)` (flashes every
+  listed board, master last over USB), `cancelFirmwareUpdate`, `setFirmwareCheckOnConnect`
+  (writes the setup JSON)
 
 Setup files (defined directly on the server, not via `@APIExport`):
 `returnAvailableSetups`, `getCurrentSetupFilename`, `readSetupFile(setupFileName)`,

@@ -62,6 +62,7 @@ import backendCapabilitiesReducer from "./slices/BackendCapabilitiesSlice";
 import stageMapReducer from "./slices/StageMapSlice";
 import onboardingReducer from "./slices/OnboardingSlice";
 import homingReducer from "./slices/HomingSlice";
+import firmwareUpdateReducer from "./slices/FirmwareUpdateSlice";
 import i2cReducer from "./slices/I2CSensorSlice";
 
 //#####################################################################################
@@ -154,6 +155,7 @@ const rootReducer = combineReducers({
   objectiveState: objectiveReducer,
   position: positionReducer,
   homing: homingReducer, // runtime-only frame-homing progress (not persisted)
+  firmwareUpdate: firmwareUpdateReducer, // runtime-only firmware-check prompt (not persisted)
   LEDMatrixState: LEDMatrixReducer,
   experimentWorkflowState: experimentStateReducer,
   liveViewState: persistReducer(liveViewPersistConfig, liveViewReducer), // Nested persist

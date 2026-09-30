@@ -172,7 +172,13 @@ class SLMInfo:
 
 @dataclass(frozen=False)
 class UC2ConfigInfo:
-    pass
+    checkFirmwareOnConnect: bool = False
+    """ Compare the boards' firmware with the firmware server once after
+    startup and offer an update (never flashes on its own). """
+
+    firmwareServerUrl: Optional[str] = None
+    """ Firmware server (serves the images + version.json). None = the
+    Docker default http://host.docker.internal/firmware. """
 
 
 @dataclass(frozen=False)

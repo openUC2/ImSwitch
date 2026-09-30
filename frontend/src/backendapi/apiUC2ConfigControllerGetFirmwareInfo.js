@@ -1,6 +1,7 @@
 // Read the firmware identity of the USB-connected ESP32 master:
-// { name, version, date, author, pindef, isMaster, connected, serialport }.
-// The build date and pindef are the most useful fields for telling boards apart.
+// { name, version, fwVersion, date, author, pindef, isMaster, connected, serialport }.
+// fwVersion is the release the firmware was built from (matches version.json on
+// the firmware server); version is the fixed API generation ("V2.0").
 import createAxiosInstance from "./createAxiosInstance";
 
 const apiUC2ConfigControllerGetFirmwareInfo = async () => {

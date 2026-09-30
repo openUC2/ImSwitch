@@ -867,8 +867,11 @@ const UC2ConfigurationController = () => {
               {firmwareInfo.name && (
                 <Chip size="small" label={`Name: ${firmwareInfo.name}`} />
               )}
+              {firmwareInfo.fwVersion && (
+                <Chip size="small" label={`Firmware: ${firmwareInfo.fwVersion}`} />
+              )}
               {firmwareInfo.version && (
-                <Chip size="small" label={`Version: ${firmwareInfo.version}`} />
+                <Chip size="small" label={`API: ${firmwareInfo.version}`} />
               )}
               {firmwareInfo.date && (
                 <Chip size="small" label={`Build: ${firmwareInfo.date}`} />

@@ -219,6 +219,7 @@
 ### UC2-Specific Features
 - **UC2 configuration manager**
 - **ESP32 firmware integration**
+- **Firmware version check** (installed vs. firmware-server version per board, see `FIRMWARE_VERSIONING.md`)
 - **LED matrix patterns**
 - **Modular microscope support**
 - **UC2-REST device control**

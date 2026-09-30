@@ -8,6 +8,7 @@ import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as tileStreamSlice from "../state/slices/TileStreamSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
 import * as homingSlice from "../state/slices/HomingSlice.js";
+import * as firmwareUpdateSlice from "../state/slices/FirmwareUpdateSlice.js";
 import * as notificationSlice from "../state/slices/NotificationSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
@@ -894,6 +895,11 @@ const WebSocketHandler = () => {
         } catch (error) {
           console.error("Error in sigDiskFull handler:", error);
         }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigFirmwareUpdatesAvailable") {
+        // Opt-in check after startup found outdated boards: FirmwareUpdatePrompt asks the user.
+        const info = dataJson.args?.p0;
+        if (info) dispatch(firmwareUpdateSlice.setFirmwarePrompt(info));
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateLaserPower") {
         // Handle laser power/enabled state updates from backend

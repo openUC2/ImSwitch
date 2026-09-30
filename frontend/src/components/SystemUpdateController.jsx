@@ -59,6 +59,7 @@ import {
 } from "@mui/icons-material";
 
 import CanOtaWizard from "./CanOtaWizard";
+import FirmwareVersionsPanel from "./FirmwareVersionsPanel";
 import UsbFlashWizard from "./UsbFlashWizard";
 
 // Redux state management
@@ -861,6 +862,8 @@ const SystemUpdateController = () => {
             Update firmware on connected devices (motors, lasers, LEDs) via CAN
             or via Over-The-Air WIFI (OTA) updates
           </Typography>
+
+          <FirmwareVersionsPanel disabled={!uc2Connected} />
 
           <Button
             variant="contained"

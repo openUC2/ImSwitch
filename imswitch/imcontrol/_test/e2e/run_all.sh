@@ -12,7 +12,7 @@
 #
 # Override with PI_HOST / IMSWITCH_CONTAINER, plus any test knob (see README.md).
 set -euo pipefail
-PI="${PI_HOST:-pi@192.168.178.124}"
+PI="${PI_HOST:-pi@192.168.178.53}"
 CONTAINER="${IMSWITCH_CONTAINER:-imswitch-server-1}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 

@@ -71,6 +71,21 @@ export const apiStageMapCalibrateStrobeDelay = async (options = {}) => {
   return response.data;
 };
 
+// Strobed prescan: full calibration with the stage still: flash delay, flash
+// width (to params.strobeTargetLevel of full scale) and a frame check at the
+// prescan's frame rate that lengthens the period until no trigger is skipped.
+// The backend stores and persists the result; the answer carries plain-language
+// hints ("Every trigger gave one frame lit by one flash, ...").
+export const apiStageMapCalibrateStrobe = async (options = {}) => {
+  const axiosInstance = createAxiosInstance();
+  const response = await axiosInstance.post(
+    "/StageMapController/calibrateStageMapStrobe",
+    null,
+    { params: options },
+  );
+  return response.data;
+};
+
 // The whole map as one image plus the stage extent it covers (µm). For
 // consumers outside this app.
 export const apiStageMapGetOverview = (maxWidthPx = 2048) =>

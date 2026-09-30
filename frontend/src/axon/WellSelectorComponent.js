@@ -19,6 +19,7 @@ import { apiStageMapGetTiles } from "../backendapi/apiStageMapController.js";
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 import LabwareSelectionPanel from "../components/LabwareSelectionPanel.jsx";
+import StrobeSettingsButton from "../components/StrobeSettingsButton.jsx";
 
 import {
   Button,
@@ -29,6 +30,8 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
+  Checkbox,
+  FormControlLabel,
   Tooltip as MuiTooltip,
 } from "@mui/material";
 import PlaceIcon from "@mui/icons-material/Place";
@@ -43,6 +46,8 @@ import BlurLinearIcon from "@mui/icons-material/BlurLinear";
 import LayersClearIcon from "@mui/icons-material/LayersClear";
 import {
   apiStageMapClear,
+  apiStageMapGetParams,
+  apiStageMapSetParams,
   apiStageMapStartPrescan,
   apiStageMapStopPrescan,
 } from "../backendapi/apiStageMapController";
@@ -97,6 +102,15 @@ const WellSelectorComponent = () => {
   useEffect(() => {
     if (stageMapState?.status?.prescanRunning !== undefined) setPrescanPending(false);
   }, [stageMapState?.status?.prescanRunning]);
+
+  // Strobed prescan: one firmware-timed LED flash per frame. Same setting as
+  // "Strobed sweep" in the stage map settings; read once so both agree.
+  const [prescanStrobe, setPrescanStrobe] = useState(false);
+  useEffect(() => {
+    apiStageMapGetParams()
+      .then((p) => setPrescanStrobe(Boolean(p?.prescanStrobe)))
+      .catch(() => {});
+  }, []);
 
   // Toggle the Overview camera overlay (stitched overview image) on the plate
   // map; lazily fetch the overlay data the first time it is switched on.
@@ -467,11 +481,18 @@ const WellSelectorComponent = () => {
       dx: prescanDx,
       dy: prescanDy,
       speedX: prescanSpeed,
+      strobe: prescanStrobe,
       ...(objectiveSlot === undefined ? {} : { objectiveSlot }),
     })
       .then((res) => {
         if (res?.success) {
-          infoPopupRef.current?.showMessage(`Prescan running — ${res.lines} line(s)`);
+          let mode = "";
+          if (prescanStrobe) {
+            mode = res.strobe
+              ? ", strobed"
+              : `, not strobed: ${res.strobeReason || "strobe unavailable"}`;
+          }
+          infoPopupRef.current?.showMessage(`Prescan running — ${res.lines} line(s)${mode}`);
         } else {
           setPrescanPending(false);
           infoPopupRef.current?.showMessage(res?.error || "Prescan failed to start");
@@ -782,6 +803,31 @@ const WellSelectorComponent = () => {
               {prescanRunning ? "Stop prescan" : "Prescan"}
             </Button>
           </Tooltip>
+          <Tooltip
+            title="Strobed prescan: the firmware triggers the camera and flashes the LED once per frame, so frames are sharp and placed where they were taken. Needs strobe-capable firmware; otherwise the prescan runs as usual and says why."
+            arrow
+          >
+            <FormControlLabel
+              sx={{ ml: 0, mr: 0.5 }}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={prescanStrobe}
+                  disabled={prescanRunning}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setPrescanStrobe(on);
+                    // Saved right away so it survives a restart, not only on the next start.
+                    apiStageMapGetParams()
+                      .then((p) => apiStageMapSetParams({ ...p, prescanStrobe: on }))
+                      .catch(() => {});
+                  }}
+                />
+              }
+              label={<Typography variant="body2">Strobe</Typography>}
+            />
+          </Tooltip>
+          {prescanStrobe && <StrobeSettingsButton disabled={prescanRunning} />}
           {(stageMapState?.tiles?.length || 0) > 0 && (
             <Tooltip title="Discard the overlay so the next prescan starts on a clean map." arrow>
               <Button

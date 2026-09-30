@@ -63,7 +63,28 @@ images. It is written by `tools/write_fw_manifest.py` in the `build-server-ctr-i
 Only images built by that run are listed. A `.bin` copied into the server by hand has no entry, so it
 has no known version and its download is not verified.
 
-## ImSwitch (`UC2ConfigController`, logic in `controllers/uc2config/firmware_update.py`)
+## ImSwitch
+
+The logic lives in **`imswitch/imcontrol/model/canbus`**, a package without ImSwitch imports. It needs
+a uc2rest client and a few callbacks, so it can be split out as a package of its own:
+
+| Module | Contents |
+|---|---|
+| `network.CanNetwork` | Builds all of the parts below from `client`, `firmware_url`, `cache_dir`, `link`, `UpdateHooks`, and two status callbacks |
+| `firmware_server.FirmwareServer` | Listing, `version.json`, sha256-verified downloads (a cached copy whose sha256 matches is reused), which image a board gets |
+| `bus.CanBus` | Scan, node-id reassignment, restarts, waiting for a node to report a version |
+| `ota.CanOta` | CAN streaming OTA with retries and post-flash verification |
+| `usb.UsbFlasher` | esptool flashing, serial bring-up of fresh boards (CAN address, state probe, test action) |
+| `updater.FirmwareUpdater` | `check()` / `start()` / `cancel()` of the prompted update |
+| `images` | The CAN-ID role table, `update_status()` |
+| `guard.SerialPortGuard` | One writer on the master's serial port: a CAN stream or a USB flash |
+
+`UC2ConfigController` exposes it through `controllers/uc2config/can_network_api.py`. Every route stays
+`/UC2ConfigController/<name>`. That file adds what only ImSwitch knows: the serial link, busy checks,
+lasers off, the homing prompt, and the setup-JSON options.
+
+WiFi OTA was removed on 2026-09-30, along with its endpoints, wizard step and docs. In that mode a
+node joined WiFi and pulled its image over ArduinoOTA. Restore it from git history if ever needed.
 
 | Endpoint | What it does |
 |---|---|
@@ -191,10 +212,8 @@ now happens during the transfer instead (~+35 ms per 4 KB chunk).
 
 ## Still open
 
-- Downloads are re-fetched per update instead of cached by sha256.
 - Serial status lines carry no session id, so a stale `rx_timeout` line could fail the next attempt.
   ACK lines are two separate UART writes.
 - Check on hardware whether the bus-power FET (GPIO4) drops the slaves while the master is in reset
   (uc2rest still resets it after a host-side timeout or cancel).
 - Only lasers are switched off before an update; LED matrices are not.
-- The WiFi OTA path (`startSingleDeviceOTA`) is unchanged and has no download check or verification.

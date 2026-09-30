@@ -151,6 +151,8 @@ imswitch/
       detectors/               cameras (Hik, Toupcam, Basler, PiCam, Virtual, MMCore, …)
       positioners/             stages (ESP32Stage, UC2CANOpen, MMCore, Virtual, …)
       lasers/ LEDs/ LEDMatrixs/ rotators/ galvoscanners/ rs232/
+    model/canbus/              UC2 CAN network + firmware (no ImSwitch imports; endpoints in
+                               controllers/uc2config/can_network_api.py)
     model/SetupInfo.py         setup-JSON schema (dataclasses)
     model/io/recording_service.py   SaveFormat / RecMode enums, writers
     _test/                     unit + api tests
@@ -538,10 +540,9 @@ Confirm before calling:
 - Lifecycle: `espRestart`, `restartCANDevice`, `stopImSwitch`, `restartImSwitch`,
   `moveToSampleMountingPosition`
 - **Firmware — highest risk:** `flashMasterFirmwareUSB(port, match, baud, firmware_filename)`,
-  `cancelUSBFlash`, `sendCanAddress`, `reassignCANId(new_id, mac, target)`,
-  `startSingleDeviceOTA(can_id, ssid, password, timeout)`, `startMultipleDeviceOTA`,
-  `startCANStreamingOTA(can_id, firmware_url, baud)`, `startMultipleCANStreamingOTA`,
-  `cancelCANStreamingOTA`, `setOTAWiFiCredentials`, `setOTAFirmwareServer`,
+  `cancelUSBFlash`, `sendCanAddress`, `testDeviceAction` (moves a freshly flashed motor),
+  `reassignCANId(new_id, mac, target)`, `startCANStreamingOTA(can_id, firmware_url, baud)`,
+  `startMultipleCANStreamingOTA`, `cancelCANStreamingOTA`, `setOTAFirmwareServer`,
   `clearOTAFirmwareCache`, `startFirmwareUpdate(can_ids, include_master)` (flashes every
   listed board, master last over USB), `cancelFirmwareUpdate`, `setFirmwareCheckOnConnect`
   (writes the setup JSON)
@@ -551,8 +552,10 @@ Setup files (defined directly on the server, not via `@APIExport`):
 `writeNewSetupFile(...)` (POST), `setSetupFileName(setupFileName, restartSoftware)`,
 `getDiskUsage`, `is_connected`.
 
-Firmware/OTA background: `docs/CAN_OTA_UPDATE_GUIDE.md`, `docs/OTA_API_QUICKREF.md`,
-`docs/CAN_OTA_FIRMWARE_SERVER.md`.
+The CAN-network and firmware endpoints are thin wrappers
+(`controllers/uc2config/can_network_api.py`) around `imswitch/imcontrol/model/canbus`, which has no
+ImSwitch imports: bus scan, node ids, CAN streaming OTA, esptool flashing, the verified update. Firmware
+background: `docs/FIRMWARE_VERSIONING.md`. WiFi OTA (the device downloads over WiFi) was removed.
 
 ### 4.12 Specialised imaging modes
 

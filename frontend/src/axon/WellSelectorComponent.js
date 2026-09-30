@@ -19,6 +19,7 @@ import { apiStageMapGetTiles } from "../backendapi/apiStageMapController.js";
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 import LabwareSelectionPanel from "../components/LabwareSelectionPanel.jsx";
+import StrobeSettingsButton from "../components/StrobeSettingsButton.jsx";
 
 import {
   Button,
@@ -46,6 +47,7 @@ import LayersClearIcon from "@mui/icons-material/LayersClear";
 import {
   apiStageMapClear,
   apiStageMapGetParams,
+  apiStageMapSetParams,
   apiStageMapStartPrescan,
   apiStageMapStopPrescan,
 } from "../backendapi/apiStageMapController";
@@ -812,12 +814,20 @@ const WellSelectorComponent = () => {
                   size="small"
                   checked={prescanStrobe}
                   disabled={prescanRunning}
-                  onChange={(e) => setPrescanStrobe(e.target.checked)}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setPrescanStrobe(on);
+                    // Saved right away so it survives a restart, not only on the next start.
+                    apiStageMapGetParams()
+                      .then((p) => apiStageMapSetParams({ ...p, prescanStrobe: on }))
+                      .catch(() => {});
+                  }}
                 />
               }
               label={<Typography variant="body2">Strobe</Typography>}
             />
           </Tooltip>
+          {prescanStrobe && <StrobeSettingsButton disabled={prescanRunning} />}
           {(stageMapState?.tiles?.length || 0) > 0 && (
             <Tooltip title="Discard the overlay so the next prescan starts on a clean map." arrow>
               <Button

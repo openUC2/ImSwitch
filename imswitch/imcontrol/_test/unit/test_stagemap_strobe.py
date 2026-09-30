@@ -16,7 +16,8 @@ import pytest
 from imswitch.imcontrol.controller.controllers.StageMapController import (
     StageMapController, StageMapParams, estimateProfileShift, pairStrobeFrames,
     pickStrobeDelay, strobeAutoDelayUs, strobeFrameKeys, strobeRowScore, strobeSweepResult,
-    strobeVelocity)
+    strobeVelocity, applyStrobeSettings, strobeSettings, strobeFullScale, strobeLitRange,
+    strobeWidthForLevel, strobeFrameCheck, strobeCheckHints, STROBE_PERSISTED_FIELDS)
 from imswitch.imcontrol.model.managers.lasers.ESP32LEDLaserManager import ESP32LEDLaserManager
 from imswitch.imcontrol.model.managers.positioners.ESP32StageManager import ESP32StageManager
 from imswitch.imcontrol.model.managers.positioners.VirtualStageManager import VirtualStageManager
@@ -267,8 +268,11 @@ class TriggeredCamera:
     """
 
     def __init__(self, stage, world, shape=(32, 64), trig0=1000, dropN=(), mode="scene",
-                 lineUs=30.0):
+                 lineUs=30.0, perUs=None, minPeriodUs=0.0):
         self.stage, self.world, self.mode, self.lineUs = stage, world, mode, lineUs
+        # perUs: counts per µs of flash (None = fixed 1100); minPeriodUs: the
+        # camera ignores triggers that come sooner after its last frame.
+        self.perUs, self.minPeriodUs, self._lastN = perUs, minPeriodUs, None
         self.H, self.W = shape
         self.trig0, self.dropN = trig0, set(dropN)
         self.parameters = {"exposure": SimpleNamespace(value=10.0),
@@ -318,13 +322,20 @@ class TriggeredCamera:
             r = np.arange(self.H)[:, None]
             opens = r * self.lineUs
             lit = (delay >= opens) & (delay + req["width_us"] <= opens + windowUs)
-            frame = np.where(lit, 1100, 100) * np.ones((self.H, self.W))
+            level = 1100 if self.perUs is None else min(100 + self.perUs * req["width_us"], 4095)
+            frame = np.where(lit, level, 100) * np.ones((self.H, self.W))
         else:
             if n == 1:
                 self._start = x
             dist = req["target"] - self._start
             t = (n - 1) * req["period_us"] * 1e-6 + delay * 1e-6
             frame = self.render(self._start + np.sign(dist) * min(abs(dist), req["speed"] * t))
+        if n == 1:
+            self._lastN = None
+        if self.minPeriodUs and self._lastN is not None and \
+                (n - self._lastN) * req["period_us"] < self.minPeriodUs:
+            return                      # still reading out: the trigger is ignored
+        self._lastN = n
         self.frameNum += 1
         if n in self.dropN:
             return                      # lost between camera and host
@@ -528,3 +539,131 @@ def test_start_prescan_strobe_flag_reports_whether_strobing_runs(monkeypatch):
     res = ctrl.startPrescan(0, 100, 0, 0, dy=10, speedX=100, strobe=False)
     assert "strobe" not in res and ctrl.params.prescanStrobe is False
     assert len(started) == 3
+
+
+
+# --------------------------------------------------------------------------- #
+# Strobe settings persistence and the full calibration
+# --------------------------------------------------------------------------- #
+
+def test_strobe_settings_roundtrip_and_bad_input():
+    p = StageMapParams(prescanStrobe=True, strobeWidthUs=35, strobeDelayUs=21000,
+                       strobeWindowMs=25, strobeMinPeriodMs=31.5)
+    data = strobeSettings(p)
+    assert set(data) == set(STROBE_PERSISTED_FIELDS)
+    back = applyStrobeSettings(StageMapParams(), data)
+    assert (back.prescanStrobe, back.strobeWidthUs, back.strobeDelayUs,
+            back.strobeWindowMs, back.strobeMinPeriodMs) == (True, 35, 21000, 25, 31.5)
+    # unknown keys ignored, a bad value leaves only that field at its default
+    junk = applyStrobeSettings(StageMapParams(), {"strobeWidthUs": "wide", "strobeDelayUs": 900,
+                                                  "minMoveFraction": 0.9, "nope": 1})
+    assert junk.strobeWidthUs == 20.0 and junk.strobeDelayUs == 900
+    assert junk.minMoveFraction == StageMapParams().minMoveFraction   # not a strobe field
+    assert applyStrobeSettings(StageMapParams(), ["not", "a", "dict"]) == StageMapParams()
+
+
+def test_settings_file_written_by_set_params_and_read_back(tmp_path):
+    stage = virtual_stage()
+    camera = TriggeredCamera(stage, world(np.random.default_rng(0), 100))
+    ctrl = controller(stage, camera, {})
+    ctrl._emitStatus = lambda: None
+    ctrl._strobeSettingsFile = str(tmp_path / "config" / "stagemap_strobe.json")
+    ctrl.setStageMapParams(StageMapParams(prescanStrobe=True, strobeWidthUs=42, strobeWindowMs=12))
+    fresh = controller(stage, camera, {})
+    fresh._strobeSettingsFile = ctrl._strobeSettingsFile
+    fresh._loadStrobeSettings()
+    assert fresh.params.prescanStrobe is True
+    assert (fresh.params.strobeWidthUs, fresh.params.strobeWindowMs) == (42, 12)
+    # a broken file is reported and ignored
+    (tmp_path / "config" / "stagemap_strobe.json").write_text("{not json")
+    broken = controller(stage, camera, {})
+    broken._strobeSettingsFile = ctrl._strobeSettingsFile
+    broken._loadStrobeSettings()
+    assert broken.params == StageMapParams()
+
+
+def test_full_scale_lit_range_and_width_rule():
+    assert strobeFullScale(np.array([[3, 200]], np.uint8)) == 255
+    assert strobeFullScale(np.array([[3, 4000]], np.uint16)) == 4095
+    assert strobeFullScale(np.array([[3, 9000]], np.uint16)) == 16383
+    assert strobeFullScale(np.array([[3, 60000]], np.uint16)) == 65535
+    assert strobeLitRange([0, 1, 2, 3, 4], [0, 0.97, 1.0, 0.96, 0.2]) == (1.0, 3.0)
+    assert strobeLitRange([0, 1], [0, 0]) is None
+    # linear in width above the dark level: 20 us gives 100 counts over 100 dark
+    assert strobeWidthForLevel(20, 200, 100, 4095, 0.6) == pytest.approx(200.0)      # capped x10
+    assert strobeWidthForLevel(200, 1100, 100, 4095, 0.6) == pytest.approx(471.4, rel=1e-3)
+    assert strobeWidthForLevel(900, 3000, 100, 4095, 0.9) == 1000.0                  # firmware limit
+    assert strobeWidthForLevel(20, 100, 100, 4095, 0.6) == 20.0                      # no signal: keep
+
+
+def test_frame_check_classifies_every_way_a_frame_can_miss_its_flash():
+    ok = strobeFrameCheck([1100] * 5, [1.0] * 5, [11, 12, 13, 14, 15], 5, 1100, 100, 1.0)
+    assert ok["ok"] and ok["missing"] == 0
+    # a trigger gap (camera index 13 missing) counts even if pulses match frames
+    gap = strobeFrameCheck([1100] * 4, [1.0] * 4, [11, 12, 14, 15], 4, 1100, 100, 1.0)
+    assert gap["missing"] == 1 and not gap["ok"]
+    mixed = strobeFrameCheck([1100, 150, 2300, 1100], [1.0, 1.0, 1.0, 0.5], [1, 2, 3, 4], 6,
+                             1100, 100, 1.0)
+    assert (mixed["dark"], mixed["double"], mixed["uneven"], mixed["missing"]) == (1, 1, 1, 2)
+    hints = strobeCheckHints(dict(mixed, periodUs=31000), (20000, 21000), 30000, 0.5)
+    text = " ".join(hints)
+    assert "skipped 2 of 6" in text and "stayed dark" in text and "two flashes" in text
+    assert "1.0 ms of timing margin" in text
+    good = strobeCheckHints(dict(ok, periodUs=31000), (10000, 25000), 30000, 0.6)
+    assert good == ["Every trigger gave one frame lit by one flash, at one frame per 31.0 ms."]
+    tight = strobeCheckHints(dict(ok, periodUs=31000), (10000, 11000), 30000, 0.6)
+    assert tight[0].startswith("Every trigger") and "timing margin" in tight[1]
+
+
+def test_full_calibration_in_simulation_sets_delay_width_and_frame_rate(tmp_path):
+    """Rolling shutter (31 rows x 30 us readout), 3 ms window, dim flash, and a
+    camera that needs 6 ms between frames: the calibration finds a delay where
+    all rows are lit, raises the width to 60 % of full scale, and lengthens
+    the frame period until no trigger is skipped. Everything is persisted."""
+    stage = virtual_stage()
+    camera = TriggeredCamera(stage, world(np.random.default_rng(0), 100), mode="rolling",
+                             perUs=5.0, minPeriodUs=6000.0)
+    laser = StrobeLaser()
+    ctrl = controller(stage, camera, {"LED": laser}, strobeWindowMs=3.0, strobeWidthUs=20)
+    ctrl._emitStatus = lambda: None
+    ctrl._strobeSettingsFile = str(tmp_path / "stagemap_strobe.json")
+    result = ctrl.calibrateStageMapStrobe(adjustWidth=True, delayStepUs=250,
+                                          framesPerDelay=2, testFrames=8)
+    assert result["success"] and result["matched"], result
+    lo, hi = result["litRangeUs"]
+    assert 930 <= lo <= result["bestDelayUs"] <= hi
+    assert result["widthFromUs"] == 20
+    assert 400 <= result["widthUs"] <= 520                  # ~60 % of 4095 at 5 counts/us
+    assert result["level"] == pytest.approx(0.6, abs=0.06)
+    periods = [c["periodUs"] for c in result["checks"]]
+    assert periods[0] == pytest.approx(4000) and result["checks"][0]["missing"] > 0
+    assert result["check"]["missing"] == 0 and result["periodUs"] >= 6000
+    assert ctrl.params.strobeMinPeriodMs == pytest.approx(result["periodUs"] / 1000)
+    assert ctrl.params.strobeDelayUs == result["bestDelayUs"]
+    assert ctrl.params.strobeWidthUs == result["widthUs"]
+    assert "one frame lit by one flash" in result["hints"][0]
+    # the wider flash shrank the all-rows range; the delay was re-centred inside it
+    lo, hi = result["litRangeUs"]
+    assert lo <= result["bestDelayUs"] <= hi and hi - lo >= 500
+    assert any("timing margin" in h for h in result["hints"][1:]) or hi - lo >= 2000
+    # persisted, and the camera is back as it was
+    saved = __import__("json").loads((tmp_path / "stagemap_strobe.json").read_text())
+    assert saved["strobeWidthUs"] == result["widthUs"]
+    assert saved["strobeMinPeriodMs"] == pytest.approx(result["periodUs"] / 1000)
+    assert camera.parameters["trigger_source"].value == "Continous"
+    assert camera.parameters["exposure"].value == 10.0
+    assert laser.calls[-1][0] is False
+    # the prescan now uses the calibrated minimum period
+    assert ctrl._strobeMinPeriodUs(3000) == pytest.approx(result["periodUs"])
+
+
+def test_full_calibration_reports_when_nothing_lights():
+    stage = virtual_stage()
+    camera = TriggeredCamera(stage, world(np.random.default_rng(0), 100), mode="rolling",
+                             lineUs=200.0)                # readout 6.2 ms > 3 ms window
+    ctrl = controller(stage, camera, {"LED": StrobeLaser()}, strobeWindowMs=3.0)
+    ctrl._emitStatus = lambda: None
+    result = ctrl.calibrateStageMapStrobe(delayStepUs=500, framesPerDelay=1, testFrames=4)
+    assert result["success"] is False and result["matched"] is False
+    assert "every row" in result["error"] and "Lengthen the window" in result["error"]
+    assert ctrl.params.strobeDelayUs == -1.0               # nothing stored

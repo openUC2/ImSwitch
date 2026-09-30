@@ -47,7 +47,7 @@ import React, {
 import { useDispatch, useSelector } from "react-redux";
 
 import {
-  apiStageMapCalibrateStrobeDelay,
+  apiStageMapCalibrateStrobe,
   apiStageMapClear,
   apiStageMapGetParams,
   apiStageMapGetStatus,
@@ -659,16 +659,21 @@ const StageMapController = () => {
     [params, notify],
   );
 
-  // Steps the flash delay with the stage still; the backend keeps the delay
-  // at which one flash lights every sensor row and stores it in the params.
+  // Full strobe calibration with the stage still: delay, flash width and a
+  // frame check at the prescan's frame rate. The backend stores and persists
+  // the result, so the params are reloaded afterwards.
   const handleCalibrateStrobe = useCallback(async () => {
     setCalibratingStrobe(true);
     try {
-      const result = await apiStageMapCalibrateStrobeDelay();
+      const result = await apiStageMapCalibrateStrobe();
       dispatch(stageMapSlice.setStrobeCalibration(result));
       if (result?.success) {
-        setParams((p) => (p ? { ...p, strobeDelayUs: result.bestDelayUs } : p));
-        notify(`Strobe delay calibrated: ${Math.round(result.bestDelayUs)} µs`, "success");
+        apiStageMapGetParams().then(setParams).catch(() => {});
+        notify(
+          (result.hints && result.hints[0]) ||
+            `Strobe calibrated: delay ${Math.round(result.bestDelayUs)} µs`,
+          result.matched ? "success" : "warning",
+        );
       } else {
         notify(`Strobe calibration failed: ${result?.error || "unknown"}`, "error");
       }
@@ -1004,7 +1009,7 @@ const StageMapController = () => {
                   })
                 }
               />
-              <Tooltip title="Stage stays still. Flashes the strobe LED at a range of delays and keeps the one that lights every sensor row.">
+              <Tooltip title="Stage stays still. Finds the flash delay that lights every sensor row, sets the flash width, and checks that each trigger gives one evenly lit frame. Results are saved.">
                 <span>
                   <Button
                     variant="outlined"
@@ -1014,7 +1019,7 @@ const StageMapController = () => {
                     disabled={calibratingStrobe}
                     startIcon={calibratingStrobe ? <CircularProgress size={16} /> : null}
                   >
-                    Calibrate delay
+                    Calibrate strobe
                   </Button>
                 </span>
               </Tooltip>
@@ -1024,8 +1029,11 @@ const StageMapController = () => {
                   color={strobeCalibration.success ? "text.secondary" : "error"}
                 >
                   {strobeCalibration.success
-                    ? `Best delay ${Math.round(strobeCalibration.bestDelayUs)} µs · ` +
-                      `${strobeCalibration.table?.length ?? 0} delays tried`
+                    ? `Delay ${Math.round(strobeCalibration.bestDelayUs)} µs` +
+                      (strobeCalibration.widthUs !== undefined
+                        ? ` · width ${Math.round(strobeCalibration.widthUs)} µs`
+                        : "") +
+                      (strobeCalibration.hints?.length ? ` · ${strobeCalibration.hints[0]}` : "")
                     : strobeCalibration.error || "Calibration failed"}
                 </Typography>
               )}

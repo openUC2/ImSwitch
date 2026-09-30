@@ -67,6 +67,23 @@ Assumes 15 ms full-frame readout and a 20 µs flash. A smaller ROI height shorte
 readout proportionally. With plain rolling shutter the sensor integrates stray light for
 the whole window, so the enclosure must be nearly dark.
 
+## Using it
+
+- **Switch:** the Strobe checkbox next to Prescan in the well selector, or "Strobed
+  sweep" in the stage map settings. Both set `prescanStrobe`; `startPrescan?strobe=true`
+  does the same. The start message says whether strobing runs, or why not.
+- **Timing panel:** the tune button next to the checkbox holds flash width, flash
+  delay (empty = end of the window), exposure window, shortest frame period, trigger
+  pulse and target brightness. Values save on blur and persist in
+  `config/stagemap_strobe.json`.
+- **Calibrate:** with the stage still, `calibrateStageMapStrobe` (1) sweeps the delay
+  and keeps the middle of the range where one flash lights every row, (2) scales the
+  flash width to the target brightness, keeping half the timing margin, and (3) fires
+  frames at the prescan's shortest period and checks one evenly lit frame per trigger.
+  It lengthens the period while the camera skips triggers and stores the first period
+  that works. The answer lists what it found, e.g. "Every trigger gave one frame lit by
+  one flash, at one frame per 31.0 ms."
+
 ## Targets
 
 | Metric | Target |

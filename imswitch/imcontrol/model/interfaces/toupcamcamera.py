@@ -1,7 +1,10 @@
 import collections
+import csv
+import datetime
+import os
 import threading
 import time
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -32,6 +35,16 @@ LONG_EXPOSURE_THRESHOLD_MS = 2000.0
 UI_GAIN_MIN = 0
 UI_GAIN_MAX = 23
 
+# Sensor temperature logging (readSaveTemperature): one CSV row per interval
+# while the camera is armed, appended to this file in the per-day recordings
+# folder (the same folder the snaps go to).
+TEMPERATURE_LOG_INTERVAL_S = 5.0
+TEMPERATURE_LOG_FILENAME = "toupcam_temperature_log.csv"
+TEMPERATURE_LOG_COLUMNS = (
+    "timestamp", "unix_time_s", "camera", "sensor_temperature_c",
+    "tec_target_c", "tec_on", "fan_speed", "heat", "exposure_ms", "streaming",
+)
+
 
 class CameraToupcam:
     """ToupTek (Toupcam) camera wrapper that grabs frames via the SDK's
@@ -53,7 +66,7 @@ class CameraToupcam:
     def __init__(self, cameraNo=None, exposure_time=100, gain=0, frame_rate=-1,
                  blacklevel=200, isRGB=False, binning=1, flipImage=(False, False),
                  heat=True, lowNoise=True, conversionGain="HCG",
-                 blacklevelAutoAdjust=None):
+                 blacklevelAutoAdjust=None, readSaveTemperature=True):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -93,6 +106,14 @@ class CameraToupcam:
         # power-on default -- which is how a -30 °C sensor quietly warms up.
         self.targetTemperature = -30.0  # °C
         self.fanSpeed = 1  # -1 = the camera's default speed
+        # readSaveTemperature: poll the sensor temperature every
+        # TEMPERATURE_LOG_INTERVAL_S while the camera is armed and append it to
+        # a CSV in the day's recordings folder -- the record that tells whether
+        # a long exposure was actually taken at the requested TEC target.
+        self.readSaveTemperature = bool(readSaveTemperature)
+        self._tempLogThread: Optional[threading.Thread] = None
+        self._tempLogStop = threading.Event()
+        self._tempLogErrorLogged = False
         self.gain = gain
         self.frame_rate = frame_rate
         self.cameraNo = cameraNo if cameraNo is not None else 0
@@ -334,6 +355,7 @@ class CameraToupcam:
         self.is_connected = True
 
     def reconnectCamera(self):
+        self._stopTemperatureLog()
         if self.hcam is not None:
             try:
                 self.hcam.Close()
@@ -508,10 +530,12 @@ class CameraToupcam:
                 raise RuntimeError("StartPullMode failed and reconnect did not recover")
             self.hcam.StartPullModeWithCallback(self._eventCallback, self)
         self.is_streaming = True
+        self._startTemperatureLog()
 
     def stop_live(self):
         if not self.is_streaming:
             return
+        self._stopTemperatureLog()
         try:
             self.hcam.Stop()
         except Exception as e:
@@ -527,6 +551,7 @@ class CameraToupcam:
     def close(self):
         if self.is_streaming:
             self.stop_live()
+        self._stopTemperatureLog()
         if self.hcam is not None:
             try:
                 if self._hasFan:
@@ -1134,6 +1159,95 @@ class CameraToupcam:
             return int(self.hcam.get_Option(toupcam.TOUPCAM_OPTION_FAN))
         except Exception:
             return None
+
+    # ---------------------------------------------------------------------
+    # Temperature logging (readSaveTemperature)
+    # ---------------------------------------------------------------------
+    def _temperatureLogPath(self) -> str:
+        """CSV path in today's recordings folder (created on demand).
+
+        Resolved per sample rather than once at start so a log that runs past
+        midnight continues in the new day's folder, next to that day's snaps.
+        """
+        from imswitch.imcommon.model import dirtools
+        day = datetime.date.today().strftime("%Y-%m-%d")
+        folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(),
+                              "recordings", day)
+        os.makedirs(folder, exist_ok=True)
+        return os.path.join(folder, TEMPERATURE_LOG_FILENAME)
+
+    def _writeTemperatureSample(self) -> bool:
+        """Append one row to the CSV. Returns False if nothing was written."""
+        temperature = self.get_temperature()
+        if temperature is None:
+            # Handle gone (reconnecting) or read failed -- no point in a row
+            # of blanks.
+            return False
+        target = self.get_target_temperature()
+        tecOn = self.get_tec_enabled()
+        fan = self.get_fan_speed()
+        heat = self.get_heat()
+        now = datetime.datetime.now()
+        row = (
+            now.isoformat(timespec="seconds"),
+            f"{now.timestamp():.1f}",
+            getattr(self, "deviceName", self.model),
+            f"{temperature:.1f}",
+            "" if target is None else f"{target:.1f}",
+            "" if tecOn is None else int(tecOn),
+            "" if fan is None else fan,
+            "" if heat is None else heat,
+            f"{float(self.exposure_time):.3f}",
+            int(self.is_streaming),
+        )
+        try:
+            path = self._temperatureLogPath()
+            writeHeader = not os.path.exists(path) or os.path.getsize(path) == 0
+            with open(path, "a", newline="") as f:
+                writer = csv.writer(f)
+                if writeHeader:
+                    writer.writerow(TEMPERATURE_LOG_COLUMNS)
+                writer.writerow(row)
+            self._tempLogErrorLogged = False
+            return True
+        except Exception as e:
+            # Once per failure streak: a full disk or a vanished folder would
+            # otherwise repeat every 5 s for the whole acquisition.
+            if not self._tempLogErrorLogged:
+                self.__logger.error(f"Temperature log write failed: {e}")
+                self._tempLogErrorLogged = True
+            return False
+
+    def _temperatureLogLoop(self):
+        while True:
+            self._writeTemperatureSample()
+            if self._tempLogStop.wait(TEMPERATURE_LOG_INTERVAL_S):
+                return
+
+    def _startTemperatureLog(self):
+        """Start the polling thread if readSaveTemperature is set (no-op on
+        models without a temperature sensor, or if it is already running)."""
+        if not self.readSaveTemperature or not self._hasGetTemperature:
+            return
+        if self._tempLogThread is not None and self._tempLogThread.is_alive():
+            return
+        self._tempLogStop.clear()
+        self._tempLogThread = threading.Thread(
+            target=self._temperatureLogLoop, name="ToupcamTemperatureLog",
+            daemon=True)
+        self._tempLogThread.start()
+        self.__logger.info(
+            f"Logging sensor temperature every {TEMPERATURE_LOG_INTERVAL_S:.0f} s "
+            f"to {self._temperatureLogPath()}")
+
+    def _stopTemperatureLog(self):
+        thread = self._tempLogThread
+        if thread is None:
+            return
+        self._tempLogStop.set()
+        if thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        self._tempLogThread = None
 
     # ---------------------------------------------------------------------
     # Trigger handling

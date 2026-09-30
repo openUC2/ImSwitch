@@ -58,11 +58,13 @@ back to `musl` (Alpine) automatically.
          "isRGB": false,
          "binning": 1,
          "supportedBinnings": [1, 2, 3, 4],
+         "readSaveTemperature": true,
          "toupcam": {
            "exposure": 100,
            "gain": 100,
            "blacklevel": 0,
-           "frame_rate": -1
+           "frame_rate": -1,
+           "target_temperature": -30
          }
        },
        "forAcquisition": true
@@ -83,7 +85,13 @@ back to `musl` (Alpine) automatically.
 - **Trigger**: `Continous` (free run), `Internal trigger` (software trigger,
   used by `snapSync`/deterministic grabs), `External trigger` (hardware input).
 - **TEC models** additionally expose `temperature` (read-only),
-  `target_temperature` and `fan_speed` parameters.
+  `target_temperature` and `fan_speed` parameters. The target is re-applied
+  after a reconnect, so the sensor stays at the requested temperature.
+- **Temperature log** (`"readSaveTemperature": true`): while the camera is
+  armed (live view or a snap in progress) the sensor temperature, TEC target
+  and state, fan, heater and exposure are appended every 5 s to
+  `recordings/<YYYY-MM-DD>/toupcam_temperature_log.csv` in the data folder —
+  the same folder the day's snaps go to. Off by default.
 - **Reconnect**: on `TOUPCAM_EVENT_DISCONNECTED` (USB drop) a background
   thread reopens the camera, re-applies the cached settings and resumes
   streaming.

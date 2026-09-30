@@ -10,6 +10,10 @@ methods touch.
 
 from __future__ import annotations
 
+import csv
+import threading
+import time
+
 import pytest
 
 
@@ -89,6 +93,12 @@ def _make_camera(hcam=None, *, bits=16, maxBitDepth=14, heat=True,
     cam._hasFan = False
     cam.targetTemperature = -10.0
     cam.fanSpeed = -1
+    cam.readSaveTemperature = False
+    cam._tempLogThread = None
+    cam._tempLogStop = threading.Event()
+    cam._tempLogErrorLogged = False
+    cam.exposure_time = 100
+    cam.model = "CameraToupcam"
     cam._heatMax = 5
     cam.blacklevel = 0
     cam.heat = None
@@ -323,3 +333,73 @@ class TestCooling:
 
         assert hcam.options[toupcam.TOUPCAM_OPTION_TECTARGET] == -300
         assert cam.targetTemperature == -30.0
+
+
+class TestTemperatureLog:
+    """readSaveTemperature: CSV rows in the day's recordings folder while armed."""
+
+    def _cooled_logging_camera(self, tmp_path, monkeypatch):
+        from imswitch.imcommon.model import dirtools
+        from imswitch.imcontrol.model.interfaces import toupcamcamera
+
+        monkeypatch.setattr(dirtools.UserFileDirs, "getValidatedDataPath",
+                            classmethod(lambda cls: str(tmp_path)))
+        monkeypatch.setattr(toupcamcamera, "TEMPERATURE_LOG_INTERVAL_S", 0.05)
+        cam = _make_cooled_camera()
+        cam.readSaveTemperature = True
+        # start_live/stop_live of the real driver touch the SDK handle; the
+        # logger is driven directly here, the way those two call it.
+        return cam
+
+    def _log_file(self, tmp_path):
+        from imswitch.imcontrol.model.interfaces.toupcamcamera import (
+            TEMPERATURE_LOG_FILENAME)
+        day = time.strftime("%Y-%m-%d")
+        return tmp_path / "recordings" / day / TEMPERATURE_LOG_FILENAME
+
+    def test_rows_are_appended_while_running_and_stop_on_stop(self, tmp_path, monkeypatch):
+        cam = self._cooled_logging_camera(tmp_path, monkeypatch)
+        cam.set_temperature(-30)
+        cam.is_streaming = True
+
+        cam._startTemperatureLog()
+        time.sleep(0.3)
+        cam._stopTemperatureLog()
+        assert cam._tempLogThread is None
+
+        path = self._log_file(tmp_path)
+        rows = list(csv.reader(path.open()))
+        header, body = rows[0], rows[1:]
+        assert header[0] == "timestamp"
+        assert len(body) >= 3
+        nBefore = len(body)
+        time.sleep(0.2)
+        assert len(list(csv.reader(path.open()))) - 1 == nBefore  # stopped
+
+        sample = dict(zip(header, body[-1]))
+        assert sample["sensor_temperature_c"] == "21.5"
+        assert sample["tec_target_c"] == "-30.0"
+        assert sample["tec_on"] == "1"
+        assert sample["streaming"] == "1"
+
+    def test_second_session_appends_to_the_same_file(self, tmp_path, monkeypatch):
+        cam = self._cooled_logging_camera(tmp_path, monkeypatch)
+        for _ in range(2):
+            cam._startTemperatureLog()
+            time.sleep(0.12)
+            cam._stopTemperatureLog()
+        rows = list(csv.reader(self._log_file(tmp_path).open()))
+        assert rows.count(rows[0]) == 1  # one header only
+        assert len(rows) >= 5
+
+    def test_disabled_flag_or_no_sensor_starts_nothing(self, tmp_path, monkeypatch):
+        cam = self._cooled_logging_camera(tmp_path, monkeypatch)
+        cam.readSaveTemperature = False
+        cam._startTemperatureLog()
+        assert cam._tempLogThread is None
+
+        cam.readSaveTemperature = True
+        cam._hasGetTemperature = False
+        cam._startTemperatureLog()
+        assert cam._tempLogThread is None
+        assert not self._log_file(tmp_path).exists()

@@ -82,11 +82,15 @@ class ToupCamManager(DetectorManager):
         lowNoise = props.get('lowNoise', True)
         heat = props.get('heat', True)
         blacklevelAutoAdjust = props.get('blacklevelAutoAdjust', None)
+        # Append the sensor temperature to a CSV in the day's recordings folder
+        # every few seconds while the camera is armed (TEC models).
+        readSaveTemperature = bool(props.get('readSaveTemperature', False))
 
         self._camera = self._getToupcamObj(
             cameraId, isRGB, binning, flipImage,
             heat=heat, lowNoise=lowNoise, conversionGain=conversionGain,
-            blacklevelAutoAdjust=blacklevelAutoAdjust)
+            blacklevelAutoAdjust=blacklevelAutoAdjust,
+            readSaveTemperature=readSaveTemperature)
 
         for propertyName, propertyValue in detectorInfo.managerProperties['toupcam'].items():
             self._camera.setPropertyValue(propertyName, propertyValue)
@@ -521,14 +525,15 @@ class ToupCamManager(DetectorManager):
 
     def _getToupcamObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False),
                        heat=True, lowNoise=True, conversionGain="HCG",
-                       blacklevelAutoAdjust=None):
+                       blacklevelAutoAdjust=None, readSaveTemperature=False):
         try:
             from imswitch.imcontrol.model.interfaces.toupcamcamera import CameraToupcam
             self.__logger.debug(f'Trying to initialize Toupcam camera {cameraId}')
             camera = CameraToupcam(cameraNo=cameraId, isRGB=isRGB, binning=binning,
                                    flipImage=flipImage, heat=heat, lowNoise=lowNoise,
                                    conversionGain=conversionGain,
-                                   blacklevelAutoAdjust=blacklevelAutoAdjust)
+                                   blacklevelAutoAdjust=blacklevelAutoAdjust,
+                                   readSaveTemperature=readSaveTemperature)
         except Exception as e:
             self.__logger.error(e)
             self.__logger.warning(f'Failed to initialize CameraToupcam {cameraId}, loading TIS mocker')

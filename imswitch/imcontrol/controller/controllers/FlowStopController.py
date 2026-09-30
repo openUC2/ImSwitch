@@ -81,6 +81,10 @@ class FlowStopController(LiveUpdatedController):
     sigImagesTaken = Signal(int)
     sigIsRunning = Signal(bool)
 
+    # sensor bit depth seen so far; only grows, so a dark frame does not get scaled
+    # brighter than a bright one when converting to 8-bit JPEG
+    _bitDepth = 8
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self, tryInheritParent=False)
@@ -103,8 +107,6 @@ class FlowStopController(LiveUpdatedController):
         self._endTime = 0.0
         self._relativePath = ""
         self._lastError = ""
-        # sensor bit depth seen so far; only grows, so a dark frame does not get
-        # scaled brighter than a bright one when converting to 8-bit JPEG
         self._bitDepth = 8
 
         # select detector / illumination / stage; a missing device must not kill startup

@@ -53,10 +53,14 @@ keeps running on the swapped image.
    **starts the live view** of every acquisition camera, then waits until each
    detector delivers a frame (observation camera via `snapOverviewImage`; a
    `400` there means none is bound and is not waited on).
-6. **Ships** the suite into the container and runs pytest with `--junitxml`
-   (`hil-run.sh`).
-7. **Restores** on every exit path, Ctrl+C and SIGTERM included, and removes
-   the pulled image unless `--keep-image` (`restore`).
+6. **Ships** the suite into the container (`hil-run.sh`).
+7. **Syncs the firmware**: every board to the firmware server's version, the
+   master first (`firmware/sync_firmware.py --yes`, driven by the image under
+   test). A failed sync only warns; `FIRMWARE_UPDATE=off` skips it.
+8. **Runs** pytest with `--junitxml` (`hil-run.sh`).
+9. **Restores** on every exit path, Ctrl+C and SIGTERM included, and removes
+   the pulled image unless `--keep-image` (`restore`). The synced firmware
+   stays: it is the firmware server's, which the swap does not touch.
 
 By hand, for debugging on a swapped rig — nothing puts it back until `restore`:
 
@@ -78,6 +82,7 @@ By hand, for debugging on a swapped rig — nothing puts it back until `restore`
 | `HIL_LOCK_FILE` | `/tmp/hil-run.lock` | the lock |
 | `HIL_OVERRIDE_FILE` | `/tmp/hil-override.compose.yml` | the override |
 | `HIL_STATE_FILE` | `/tmp/hil-state.json` | what `restore` needs to undo `swap-in` |
+| `FIRMWARE_UPDATE` | `on` | `off` skips the firmware sync |
 
 Test knobs (`PHOTON_*`, …) are read from the environment as usual.
 

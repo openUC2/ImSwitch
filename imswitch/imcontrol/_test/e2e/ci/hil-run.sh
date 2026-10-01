@@ -2,7 +2,7 @@
 #
 # hil-run.sh -- test one ImSwitch image on the real rig, then put the rig back.
 #
-#   hil-setup.py swap-in  ->  ship the suite  ->  pytest
+#   hil-setup.py swap-in  ->  ship the suite  ->  firmware sync  ->  pytest
 #                                       ... always hil-setup.py restore
 #
 # Runs ON the Pi, not from your machine: it talks to the local Docker daemon.
@@ -100,6 +100,25 @@ tar --format=ustar -czf - -C "$SUITE_DIR" --exclude=__pycache__ --exclude=ci . |
     docker exec -i "$CONTAINER" sh -c \
         'rm -rf /tmp/e2e && mkdir -p /tmp/e2e && tar xzf - -C /tmp/e2e' ||
     die "could not ship the suite"
+
+
+# ---------------------------------------------------------------------------
+# Firmware sync: every board to the firmware server's version before the
+# tests, as run_all.sh does (firmware/sync_firmware.py, the master first).
+# FIRMWARE_UPDATE=off skips it. A failed sync only warns: the firmware tests
+# report the boards themselves, and an image without ImSwitch's update
+# endpoints cannot sync at all.
+# ---------------------------------------------------------------------------
+
+if [ "${FIRMWARE_UPDATE:-on}" = off ]; then
+    log "firmware sync skipped (FIRMWARE_UPDATE=off)"
+else
+    log "syncing the firmware"
+    docker exec -e "IMSWITCH_URL=$CONTAINER_URL" "$CONTAINER" \
+        python3 -u /tmp/e2e/firmware/sync_firmware.py --yes 2>&1 |
+        sed 's/^/[hil-run]   /' ||
+        warn "firmware sync failed, running the tests anyway"
+fi
 
 TARGETS=""
 for folder in $TESTS; do TARGETS="$TARGETS /tmp/e2e/$folder"; done

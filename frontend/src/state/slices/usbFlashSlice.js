@@ -27,6 +27,12 @@ const initialState = {
   firmwareSearchQuery: "", // search/filter text for firmware list
   showMergedFirmware: false, // merged binaries are hidden by default; user must opt-in
 
+  // Board identification (getRecommendedFirmware): what the board's firmware
+  // reports over serial, and the server image that fits it
+  detectPort: "", // "" = the board ImSwitch is connected to
+  isDetectingBoard: false,
+  boardDetection: null, // { source, port, chip, identity, recommended } | { status: "error", message }
+
   // Flash options
   baudRate: 921600,
   reconnectAfter: true,
@@ -91,6 +97,8 @@ const usbFlashSlice = createSlice({
       state.firmwareSearchQuery = "";
       state.showMergedFirmware = false;
       state.firmwareFiles = [];
+      state.boardDetection = null;
+      state.isDetectingBoard = false;
       state.isFlashing = false;
       state.eraseFlash = false;
       state.chipType = "auto";
@@ -134,6 +142,15 @@ const usbFlashSlice = createSlice({
     },
     setIsLoadingFirmware: (state, action) => {
       state.isLoadingFirmware = action.payload;
+    },
+    setDetectPort: (state, action) => {
+      state.detectPort = action.payload;
+    },
+    setIsDetectingBoard: (state, action) => {
+      state.isDetectingBoard = action.payload;
+    },
+    setBoardDetection: (state, action) => {
+      state.boardDetection = action.payload;
     },
 
     // Flash options
@@ -224,6 +241,9 @@ export const {
   setIsLoadingFirmware,
   setFirmwareSearchQuery,
   setShowMergedFirmware,
+  setDetectPort,
+  setIsDetectingBoard,
+  setBoardDetection,
   setBaudRate,
   setReconnectAfter,
   setEraseFlash,

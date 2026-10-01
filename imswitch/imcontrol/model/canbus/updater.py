@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .images import legacy_image, update_status
+from .images import choose_image, legacy_image, update_status
 
 
 @dataclass
@@ -75,16 +75,8 @@ class FirmwareUpdater:
 
         devices = []
         if usb.get("connected") or master:
-            image = usb.get("fwImage") or master.get("fwImage")
-            source = "reported"
-            if not image:  # built before the image was reported: named after the pindef (= env)
-                candidates = ([f"esp32_{pindef}_release.bin", f"esp32_{pindef}.bin"]
-                              if pindef else [])
-                if legacy_image(master.get("canId")):
-                    candidates.append(legacy_image(master.get("canId")))
-                image = next((c for c in candidates if c in on_server),
-                             candidates[0] if candidates else None)
-                source = "mapping"
+            image, source = choose_image(usb.get("fwImage") or master.get("fwImage"), pindef,
+                                         master.get("canId"), on_server)
             devices.append(entry(usb.get("fwVersion") or master.get("fwVersion"), image, source,
                                  canId=master.get("canId"), deviceTypeStr=pindef or "usb",
                                  connection="usb", build=usb.get("date") or master.get("build"),

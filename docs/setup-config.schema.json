@@ -1493,28 +1493,43 @@
         },
         "appName": {
           "type": "string",
-          "description": "Application name for Arkitekt registration.",
+          "description": "App identifier this microscope registers as (lower-cased, spaces become dashes). The server tells microscopes apart by their device id.",
           "default": "imswitch"
-        },
-        "redeemToken": {
-          "type": "string",
-          "description": "Redeem token for Arkitekt authentication.",
-          "default": ""
         },
         "url": {
           "type": "string",
-          "description": "Arkitekt server URL.",
-          "default": "http://go.arkitekt.io"
+          "description": "Arkitekt server to bind to, e.g. http://nas.local for a local deployment. Set from the Arkitekt panel when binding.",
+          "default": "https://go.arkitekt.live"
+        },
+        "redeemToken": {
+          "type": "string",
+          "description": "Provisioning token for an unattended login (no browser approval). A credential: keep it out of shared setup files.",
+          "default": ""
+        },
+        "autoConnect": {
+          "type": "boolean",
+          "description": "Reconnect at startup when this microscope was bound before (stored login or redeem token). Never starts a browser login by itself.",
+          "default": true
+        },
+        "allowInsecureTransport": {
+          "type": "boolean",
+          "description": "Allow the login over plain http to a server that is not localhost (a NAS without TLS). Anyone on the network path can read the session.",
+          "default": false
+        },
+        "useMikro": {
+          "type": "boolean",
+          "description": "Offer the image actions (acquire frame, tile scan), which store images in the server's mikro service.",
+          "default": true
         },
         "syncInAsync": {
           "type": "boolean",
-          "description": "Enable sync-in-async mode for Koil.",
+          "description": "Unused since the move from arkitekt_next to arkitekt; kept so older setup files load.",
           "default": true
         },
         "deconvolveActionHash": {
           "type": "string",
-          "description": "Hash of the deconvolution action in Arkitekt.",
-          "default": "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"
+          "description": "Unused since the move from arkitekt_next to arkitekt; kept so older setup files load.",
+          "default": ""
         }
       }
     },

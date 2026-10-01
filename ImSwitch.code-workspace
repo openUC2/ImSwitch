@@ -11,6 +11,9 @@
 		},
 		{
 			"path": "../../UC2-REST-CANOPEN"
+		},
+		{
+			"path": "../../../../../../Downloads/arkitekt"
 		}
 	],
 	"settings": {

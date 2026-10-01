@@ -17,7 +17,8 @@ from types import SimpleNamespace
 import pytest
 
 from imswitch.imcontrol.model.canbus import (CanNetwork, FirmwareServer, UpdateHooks,
-                                             device_mapping, update_status)
+                                             device_mapping, parse_state_reply,
+                                             recommend_image, update_status)
 from imswitch.imcontrol.model.canbus import bus as bus_module
 from imswitch.imcontrol.model.canbus import firmware_server as server_module
 
@@ -172,6 +173,95 @@ def test_device_mapping_comes_from_the_one_can_table():
     mapping = device_mapping()
     assert mapping["master"] == 1
     assert mapping["motors"]["Y"] == 12 and mapping["laser"]["laser_0"] == 20
+
+
+@pytest.mark.parametrize("identity, on_server, filename, source", [
+    # a board that reports its image gets exactly that image
+    ({"fwImage": MOTOR_Y, "pindef": "UC2_canopen_slave_motor", "canId": 11},
+     {MOTOR_Y, "esp32_UC2_canopen_slave_motor_release_motX.bin"}, MOTOR_Y, "reported"),
+    # old motor firmware: the CAN id picks the axis, the shared pindef cannot
+    ({"pindef": "UC2_canopen_slave_motor", "canId": 12},
+     {MOTOR_Y, "esp32_UC2_canopen_slave_motor_release.bin"}, MOTOR_Y, "can_id"),
+    # several boards act as master: the pindef outranks the CAN-HAT master image
+    ({"pindef": "UC2_4", "canId": 1}, {MASTER, "esp32_UC2_4.bin"}, "esp32_UC2_4.bin", "pindef"),
+    ({"pindef": "UC2_canopen_master", "canId": 1}, {MASTER}, MASTER, "pindef"),
+    # pindef and env differ for some XIAO builds
+    ({"pindef": "UC2_esp32s3_xiao"}, {"esp32_seeed_xiao_esp32s3.bin"},
+     "esp32_seeed_xiao_esp32s3.bin", "pindef"),
+    # the reported image is missing on this server: fall back, say so
+    ({"fwImage": "esp32_UC2_3_custom.bin", "pindef": "UC2_3"}, {"esp32_UC2_3.bin"},
+     "esp32_UC2_3.bin", "pindef"),
+    ({"pindef": "UC2_3"}, {MASTER}, None, None),
+    ({}, {MASTER}, None, None),
+])
+def test_recommend_image(identity, on_server, filename, source):
+    recommended = recommend_image(identity, on_server)
+    assert recommended["filename"] == filename and recommended["source"] == source
+    assert recommended["reason"]
+
+
+def test_recommend_image_offers_the_merged_twin_and_lists_candidates():
+    recommended = recommend_image({"fwImage": "esp32_UC2_3.bin", "pindef": "UC2_3"},
+                                  {"esp32_UC2_3.bin", "esp32_UC2_3_merged.bin"})
+    assert recommended["merged"] == "esp32_UC2_3_merged.bin"
+    assert [c["filename"] for c in recommended["candidates"]] == [
+        "esp32_UC2_3.bin", "esp32_UC2_3_release.bin"]  # deduplicated, best reason kept
+    assert recommended["candidates"][0]["source"] == "reported"
+
+
+def test_server_recommend_attaches_the_listing_entry(server, tmp_path):
+    result = FirmwareServer(URL, tmp_path).recommend({"pindef": "UC2_canopen_master",
+                                                      "isMaster": True, "canId": 1})
+    assert result["status"] == "success" and result["server_version"] == NEW
+    assert result["recommended"]["filename"] == MASTER
+    assert result["recommended"]["file"]["sha256"] == hashlib.sha256(IMAGE).hexdigest()
+    server.down = True
+    assert FirmwareServer(URL, tmp_path).recommend({"pindef": "x"})["status"] == "error"
+
+
+STATE_REPLY = (
+    "ets Jun  8 2016 00:22:57\nrst:0x1 (POWERON_RESET)\n"
+    '{"task": "/state_get"}\n++\n'
+    '{"state":{"identifier_name":"UC2_Feather","identifier_id":"V2.0",'
+    '"identifier_date":"Sep 30 2026 12:59:29","identifier_version":"' + NEW + '",'
+    '"identifier_image":"' + MOTOR_Y + '","identifier_author":"BD",'
+    '"pindef":"UC2_canopen_slave_motor","CAN_SLAVE":12,"CAN_SLAVE_DEFAULT":12},"qid":0}\n--\n')
+
+
+def test_parse_state_reply_skips_boot_noise_and_other_json():
+    identity = parse_state_reply(STATE_REPLY)
+    assert identity["fwImage"] == MOTOR_Y and identity["fwVersion"] == NEW
+    assert identity["pindef"] == "UC2_canopen_slave_motor" and identity["canId"] == 12
+    assert identity["isMaster"] is False
+    assert parse_state_reply("rst:0x10 invalid header: 0xffffffff {broken") == {}
+    old = parse_state_reply('{"state":{"identifier_name":"UC2_Feather","pindef":"UC2_3"}}')
+    assert old["fwImage"] == "" and old["canId"] is None
+
+
+def test_identify_reads_the_state_of_a_board_on_its_own_port(tmp_path, monkeypatch):
+    from imswitch.imcontrol.model.canbus import usb as usb_module
+
+    class FakeSerial:
+        def __init__(self, port, baud, timeout):
+            self.port = port
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(usb_module.serial, "Serial", FakeSerial)
+    monkeypatch.setattr(usb_module, "_read_reply", lambda *a, **k: "")
+    monkeypatch.setattr(usb_module, "_exchange", lambda ser, cmd, timeout: STATE_REPLY)
+    net, _, _ = network(tmp_path)
+    monkeypatch.setattr(net.usb, "detect_chip", lambda port: "esp32s3")
+    found = net.usb.identify("/dev/ttyACM0")
+    assert found["status"] == "success" and found["chip"] == "esp32s3"
+    assert found["identity"]["canId"] == 12
+    net.guard.usb.acquire()  # a flash owns the serial port: do not open another
+    assert net.usb.identify("/dev/ttyACM0")["status"] == "busy"
+    net.guard.usb.release()
 
 
 # ── firmware server ─────────────────────────────────────────────────────────

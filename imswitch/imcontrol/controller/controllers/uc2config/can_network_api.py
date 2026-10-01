@@ -245,6 +245,40 @@ class CanNetworkApiMixin:
         """/state_get on a board's own serial port: is the firmware running?"""
         return self._can_network.usb.probe_state(port, baud=baud, timeout=timeout)
 
+    @APIExport(runOnUIThread=False)
+    def getRecommendedFirmware(self, port: str = "", baud: int = 115200, timeout: float = 2.0):
+        """Which image on the firmware server fits a board, from what its
+        firmware reports over serial (/state_get: fwImage, pindef, CAN id).
+
+        port: empty, or ImSwitch's own port = the board ImSwitch is connected
+        to, read over the open link. Any other port is opened and probed,
+        which may reset that board; refused ({"status": "busy"}) while a
+        flash or CAN OTA runs. Read-only otherwise: nothing is flashed.
+        Returns {status, source: "imswitch"|"port", port, chip, identity:
+        {fwImage, fwVersion, pindef, isMaster, canId, ...}, firmware_server,
+        server_version, recommended: {filename, merged, source, reason,
+        candidates: [{filename, source, on_server}], file}}; recommended.filename
+        is None when no candidate is on the server."""
+        usb = self._can_network.usb
+        own_port = usb.link.current_port()
+        if not port or port == own_port:
+            identity = self.getFirmwareInfo() or {}
+            if identity.get("status") == "error" or not identity.get("connected"):
+                return {"status": "error", "source": "imswitch", "port": own_port,
+                        "message": "ImSwitch is not connected to a board. Pick the board's "
+                                   "serial port to probe it directly."}
+            if identity.get("isMaster") and not identity.get("canId"):
+                identity = {**identity, "canId": 1}
+            found = {"status": "success", "source": "imswitch", "port": own_port,
+                     "chip": usb.detect_chip(own_port) if own_port else None,
+                     "identity": identity}
+        else:
+            found = usb.identify(port, baud=baud, timeout=timeout)
+            if found.get("status") != "success":
+                return {**found, "source": "port"}
+            found["source"] = "port"
+        return {**found, **self._can_network.server.recommend(found["identity"])}
+
     @APIExport(runOnUIThread=False, requestType="POST")
     def testDeviceAction(self, port: str = "", device_type: str = "motor", baud: int = 115200,
                          timeout: float = 2.0, stepperid: int = 1, speed: int = 2000,

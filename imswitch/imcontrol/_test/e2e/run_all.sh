@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Run the whole e2e suite on the Pi, inside the imswitch container.
 #
-# FLASHES FIRMWARE: every reachable CAN node that is not current gets the
-# server's firmware first (FIRMWARE_UPDATE=off skips it).
+# FLASHES FIRMWARE: every board that answers is synced to the firmware server's
+# version first, the master before the CAN nodes (FIRMWARE_UPDATE=off skips it).
 # MOVES THE STAGE: parks it at the transport position once before the tests,
 # so every run starts from the same place. Runs for a folder filter too.
 #
@@ -51,15 +51,20 @@ tar --no-xattrs --format=ustar -czf - -C "$DIR" . | ssh "${SSH_OPTS[@]}" "$PI" "
 SSH_TTY_FLAG="" DOCKER_TTY_FLAG=""
 if [ -t 0 ]; then SSH_TTY_FLAG="-t" DOCKER_TTY_FLAG="-it"; fi
 
-# Update firmware, park the stage and start the camera before pytest. None is
+SYNC="docker exec $ENVS $CONTAINER python3 -u /tmp/e2e/firmware/sync_firmware.py --yes ||
+        echo 'run_all: firmware sync failed, running the tests anyway' >&2"
+if [ "${FIRMWARE_UPDATE:-on}" = off ]; then
+    SYNC="echo 'run_all: firmware sync skipped (FIRMWARE_UPDATE=off)'"
+fi
+
+# Sync firmware, park the stage and start the camera before pytest. None is
 # allowed to cost us the run: a setup without a positioner cannot park, and a camera that
 # refuses to stream is something the tests themselves report better.
 #
 # The live view is what makes the camera deliver frames at all -- the snap
 # endpoint only reads a buffer that an acquisition loop fills.
 ssh $SSH_TTY_FLAG "${SSH_OPTS[@]}" "$PI" "
-    docker exec $ENVS $CONTAINER python3 /tmp/e2e/firmware/update_firmware.py ||
-        echo 'run_all: firmware update failed, running the tests anyway' >&2
+    $SYNC
 
     docker exec $ENVS $CONTAINER python3 /tmp/e2e/motor/move_to_transport.py ||
         echo 'run_all: transport move failed, running the tests anyway' >&2

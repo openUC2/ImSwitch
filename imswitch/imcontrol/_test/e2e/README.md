@@ -7,7 +7,7 @@ Sits alongside `../unit/` (no server) and `../api/` (headless server).
 |---|---|---|
 | [`board/`](board/) | UC2 board connected, right master firmware | reads |
 | [`camera/`](camera/) | every detector delivers a frame; objective switch | reads · objective test **moves** |
-| [`firmware/`](firmware/) | firmware server and CAN node firmware | reads · update script **flashes** |
+| [`firmware/`](firmware/) | firmware server; every board runs its version | reads · sync **flashes** |
 | [`lightsource/`](lightsource/) | lasers/LEDs switch; LEDs reach the camera | **light** |
 | [`ledmatrix/`](ledmatrix/) | LED matrix reaches the camera | **light** |
 | [`motor/`](motor/) | axes move; camera sees it | **moves** |
@@ -21,8 +21,9 @@ Sits alongside `../unit/` (no server) and `../api/` (headless server).
 ./run_all.sh lightsource ledmatrix    # several
 ```
 
-`run_all.sh` ships this folder into the container on the Pi, **flashes outdated
-CAN nodes** (`firmware/update_firmware.py`, `FIRMWARE_UPDATE=off` skips it),
+`run_all.sh` ships this folder into the container on the Pi, **syncs every
+board to the firmware server's version** (`firmware/sync_firmware.py`, master
+first; `FIRMWARE_UPDATE=off` skips it),
 **parks the stage** on objective slot 0
 (`motor/move_to_transport.py`), starts the camera stream
 (`camera/start_live_view.py`) and runs pytest. Each folder also has its own

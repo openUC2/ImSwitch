@@ -8,6 +8,7 @@ trigger index) belongs to SYNC n = k + 1 and was taken at ``x_n + v·D``.
 
 import logging
 import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -89,6 +90,48 @@ def test_frame_keys_fall_back_when_the_camera_reports_no_trigger_index():
     assert source == "frame" and list(keys) == [41, 42, 44]
     keys, source = strobeFrameKeys([0, 0, 0], [5, 5, 5])
     assert source == "arrival" and list(keys) == [0, 1, 2]
+
+
+def test_frame_keys_from_arrival_times_show_skipped_triggers_as_gaps():
+    """No trigger index, but arrival times: a camera that took triggers 1, 3, 4
+    and 6 of a 31 ms cadence delivers frames 62, 93 and 155 ms apart. The
+    frame number would say 1, 2, 3, 4 and pull everything after the first
+    gap back by a pulse; the timing says where the gaps are."""
+    t0 = 1000.0
+    arrivals = [t0, t0 + 0.0625, t0 + 0.0928, t0 + 0.1553]       # ±1.5 ms of USB jitter
+    keys, source = strobeFrameKeys([0, 0, 0, 0], [1, 2, 3, 4], arrivals, 31000.0)
+    assert source == "timing" and list(keys) == [0, 2, 3, 5]
+    # two frames inside one period cannot be told apart: back to frame numbers
+    keys, source = strobeFrameKeys([0, 0, 0], [1, 2, 3], [t0, t0 + 0.005, t0 + 0.062], 31000.0)
+    assert source == "frame"
+    # no period, or a time missing, and the timing is not used either
+    assert strobeFrameKeys([0, 0], [1, 2], arrivals[:2], 0.0)[1] == "frame"
+    assert strobeFrameKeys([0, 0], [1, 2], [t0, float("nan")], 31000.0)[1] == "frame"
+    # a real trigger index still wins
+    assert strobeFrameKeys([3, 4, 6], [1, 2, 3], arrivals[:3], 31000.0)[1] == "trigger"
+
+
+def test_min_period_follows_the_camera_frame_rate_and_the_sweeps_findings():
+    """A HIK camera exposing 30 ms reports 15.9 fps (30 ms exposure + 33 ms
+    readout): triggers must not come faster than that, whatever the window
+    rule says, or every second one is skipped."""
+    ctrl = StageMapController.__new__(StageMapController)
+    ctrl._logger = logging.getLogger("test")
+    ctrl.params = StageMapParams(strobeMinPeriodMs=0.0)
+    ctrl._detector = SimpleNamespace(getResultingFrameRate=lambda: 15.942)
+    assert ctrl._strobeMinPeriodUs(30000) == pytest.approx(1e6 / 15.942 + 1000, rel=1e-6)
+    # a sweep that saw the camera skip triggers doubles it for the next lines
+    assert ctrl._strobeMinPeriodUs(30000, {"periodScale": 2.0}) == pytest.approx(
+        2 * (1e6 / 15.942 + 1000), rel=1e-6)
+    # no report (other cameras, the mock): the old rule
+    ctrl._detector = SimpleNamespace(getResultingFrameRate=lambda: None)
+    assert ctrl._strobeMinPeriodUs(30000) == 31000
+    ctrl._detector = SimpleNamespace()
+    assert ctrl._strobeMinPeriodUs(30000) == 31000
+    # the window to try next: readout + flash + 5 ms of all-rows range, else x1.5
+    assert ctrl._longerStrobeWindowUs(30000, 200, 32700) == pytest.approx(37900)
+    assert ctrl._longerStrobeWindowUs(30000, 200, 0.0) == pytest.approx(45000)
+    assert ctrl._longerStrobeWindowUs(200000, 200, 0.0) is None
 
 
 def test_sweep_events_are_merged_in_arrival_order():
@@ -268,11 +311,16 @@ class TriggeredCamera:
     """
 
     def __init__(self, stage, world, shape=(32, 64), trig0=1000, dropN=(), mode="scene",
-                 lineUs=30.0, perUs=None, minPeriodUs=0.0):
+                 lineUs=30.0, perUs=None, minPeriodUs=0.0, readoutUs=None, withArrivals=False):
         self.stage, self.world, self.mode, self.lineUs = stage, world, mode, lineUs
         # perUs: counts per µs of flash (None = fixed 1100); minPeriodUs: the
         # camera ignores triggers that come sooner after its last frame.
         self.perUs, self.minPeriodUs, self._lastN = perUs, minPeriodUs, None
+        # readoutUs: when set, the camera reports a frame rate of
+        # 1 / (exposure + readout) like a HIK camera does; trig0=None models a
+        # camera whose trigger index stays 0; withArrivals adds the host
+        # arrival time of every frame to the chunk, as the HIK driver does.
+        self.readoutUs, self.withArrivals = readoutUs, withArrivals
         self.H, self.W = shape
         self.trig0, self.dropN = trig0, set(dropN)
         self.parameters = {"exposure": SimpleNamespace(value=10.0),
@@ -304,13 +352,20 @@ class TriggeredCamera:
         with self._lock:
             self._buffer = []
 
+    def getResultingFrameRate(self):
+        if self.readoutUs is None:
+            return None
+        return 1e6 / (self.parameters["exposure"].value * 1000.0 + self.readoutUs)
+
     def getChunkWithTriggerIndex(self):
         with self._lock:
             items, self._buffer = self._buffer, []
         if not items:
-            return np.zeros((0,)), np.zeros((0,), int), np.zeros((0,), int)
-        frames, ids, trigs = zip(*items)
-        return np.array(frames), np.array(ids), np.array(trigs)
+            empty = (np.zeros((0,)), np.zeros((0,), int), np.zeros((0,), int))
+            return empty + (np.zeros((0,)),) if self.withArrivals else empty
+        frames, ids, trigs, times = zip(*items)
+        chunk = (np.array(frames), np.array(ids), np.array(trigs))
+        return chunk + (np.array(times),) if self.withArrivals else chunk
 
     def onTrigger(self, n, x):
         if self.parameters["trigger_source"].value != "External trigger":
@@ -339,8 +394,9 @@ class TriggeredCamera:
         self.frameNum += 1
         if n in self.dropN:
             return                      # lost between camera and host
+        trig = 0 if self.trig0 is None else self.trig0 + n
         with self._lock:
-            self._buffer.append((frame, self.frameNum, self.trig0 + n))
+            self._buffer.append((frame, self.frameNum, trig, time.time()))
 
 
 class Lasers(dict):
@@ -417,6 +473,73 @@ def test_strobed_prescan_fills_the_strip_where_the_frames_were_taken():
     assert camera.parameters["exposure"].value == 10.0
     assert laser.calls[-1][0] is False
     assert len(ctrl._tiles) == 2 and ctrl._tiles[0]["kind"] == "prescan"
+
+
+def _strips_of(ctrl):
+    strips = []
+    realAdd = ctrl._addStrip
+    ctrl._addStrip = lambda strip, *a: (strips.append((strip, a)), realAdd(strip, *a))
+    return strips
+
+
+def _truth(w, span, strip):
+    cols = np.round(np.linspace(0, span, strip.shape[1])).astype(int) + MARGIN
+    return np.tile(w[cols], (strip.shape[0], 1))
+
+
+def test_strobed_sweep_paces_itself_by_the_cameras_frame_rate():
+    """The camera reports 1/(2 ms + 30 ms) fps at the window: the firmware is
+    asked for one frame per 33 ms, and the stage slows from the requested
+    20 mm/s to one field per frame, so the strip has no gaps."""
+    span, dx = 2000.0, 64.0                       # dx = the 64 px field at 1 µm/px
+    stage = virtual_stage()
+    w = world(np.random.default_rng(6), int(span))
+    camera = TriggeredCamera(stage, w, readoutUs=30000.0)
+    ctrl = controller(stage, camera, {"LED": StrobeLaser()}, prescanStrobe=True,
+                      strobeWindowMs=2.0, strobeDelayUs=100.0)
+    strips = _strips_of(ctrl)
+    ctrl._prescanLoop(0.0, span, 0.0, 100.0, 100.0, 20000.0, None, 0.0, 4)
+
+    req = stage.strobeSweepRequest
+    assert req["period_us"] == pytest.approx(33000)
+    assert req["speed"] == pytest.approx(dx / 0.033, rel=1e-3)
+    assert len(strips) == 2
+    for strip, _ in strips:
+        assert (strip.max(axis=0) > 0).mean() > 0.9
+        assert abs(estimateProfileShift(strip, _truth(w, span, strip), maxShiftPx=40)) <= 1
+
+
+def test_skipped_triggers_without_trigger_index_leave_gaps_not_a_shift():
+    """The failure seen on the FRAME setup: the camera reports no trigger
+    index and takes only every second trigger. Pairing by frame number
+    packed the frames into the first half of each line (black second half,
+    lines misaligned). Arrival times keep each frame where it was taken, and
+    the following lines run at twice the period so nothing is skipped."""
+    span, dx, window = 2000.0, 64.0, 15.0        # 16 ms period: real-time sleeps are reliable
+    stage = virtual_stage()
+    w = world(np.random.default_rng(7), int(span))
+    camera = TriggeredCamera(stage, w, trig0=None, withArrivals=True,
+                             minPeriodUs=1.5 * (window + 1.0) * 1000.0)
+    ctrl = controller(stage, camera, {"LED": StrobeLaser()}, prescanStrobe=True,
+                      strobeWindowMs=window, strobeDelayUs=100.0)
+    strips = _strips_of(ctrl)
+    requests = []
+    realStart = stage.startStrobeSweep
+    stage.startStrobeSweep = lambda **kw: (requests.append(kw), realStart(**kw))[1]
+    ctrl._prescanLoop(0.0, span, 0.0, 100.0, 100.0, 20000.0, None, 0.0, 4)
+
+    assert len(strips) == 2 and len(requests) == 2
+    first, second = strips[0][0], strips[1][0]
+    filled = first.max(axis=0) > 0
+    half = filled.size // 2
+    # every other field: about 60 % covered, and the same in both halves
+    assert 0.4 < filled[:half].mean() < 0.8 and 0.4 < filled[half:].mean() < 0.8
+    assert abs(estimateProfileShift(first, _truth(w, span, first), maxShiftPx=40)) <= 1
+    # line two: twice the period, half the speed, every trigger taken, no gaps
+    assert requests[1]["period_us"] == pytest.approx(2 * requests[0]["period_us"])
+    assert requests[1]["speed"] == pytest.approx(requests[0]["speed"] / 2, rel=1e-3)
+    assert (second.max(axis=0) > 0).mean() > 0.9
+    assert abs(estimateProfileShift(second, _truth(w, span, second), maxShiftPx=40)) <= 1
 
 
 def test_strobe_mode_falls_back_to_the_free_running_prescan():
@@ -657,13 +780,56 @@ def test_full_calibration_in_simulation_sets_delay_width_and_frame_rate(tmp_path
     assert ctrl._strobeMinPeriodUs(3000) == pytest.approx(result["periodUs"])
 
 
-def test_full_calibration_reports_when_nothing_lights():
+def test_full_calibration_lengthens_a_window_shorter_than_the_readout(tmp_path):
+    """Readout 6.2 ms (31 rows x 200 us), 3 ms window: no delay can light every
+    row — the FRAME failure ("No delay lit every row at once"). The camera
+    reports no frame rate, so the window grows by half until it does, and
+    the longer window is stored; the live exposure is put back afterwards."""
     stage = virtual_stage()
     camera = TriggeredCamera(stage, world(np.random.default_rng(0), 100), mode="rolling",
-                             lineUs=200.0)                # readout 6.2 ms > 3 ms window
+                             lineUs=200.0)
+    ctrl = controller(stage, camera, {"LED": StrobeLaser()}, strobeWindowMs=3.0)
+    ctrl._emitStatus = lambda: None
+    ctrl._strobeSettingsFile = str(tmp_path / "stagemap_strobe.json")
+    result = ctrl.calibrateStageMapStrobe(delayStepUs=500, framesPerDelay=1, testFrames=4)
+    assert result["success"] and result["matched"], result
+    assert result["windowTries"] == [3000.0, 4500.0, 6750.0]
+    assert result["windowUs"] == 6750.0 and result["windowFromUs"] == 3000.0
+    assert 6200 <= result["bestDelayUs"] <= 6750 - 20
+    assert 5500 <= result["readoutUs"] <= 6800
+    assert ctrl.params.strobeWindowMs == pytest.approx(6.75)
+    assert any("lengthened from 3.0 to 6.8 ms" in h for h in result["hints"])
+    saved = __import__("json").loads((tmp_path / "stagemap_strobe.json").read_text())
+    assert saved["strobeWindowMs"] == pytest.approx(6.75)
+    assert camera.parameters["exposure"].value == 10.0
+
+
+def test_full_calibration_takes_the_readout_from_the_cameras_frame_rate():
+    """Same sensor, but the camera reports its frame rate: one try is enough,
+    and the window lands at readout + flash + 5 ms of all-rows range."""
+    stage = virtual_stage()
+    camera = TriggeredCamera(stage, world(np.random.default_rng(0), 100), mode="rolling",
+                             lineUs=200.0, readoutUs=6200.0)
+    ctrl = controller(stage, camera, {"LED": StrobeLaser()}, strobeWindowMs=3.0,
+                      strobeWidthUs=20)
+    ctrl._emitStatus = lambda: None
+    result = ctrl.calibrateStageMapStrobe(delayStepUs=500, framesPerDelay=1, testFrames=4)
+    assert result["success"], result
+    assert result["windowTries"] == [3000.0, pytest.approx(11220.0)]
+    assert 5500 <= result["readoutUs"] <= 6800
+    # and the frame check ran at the camera's pace: window + readout + margin
+    assert result["periodUs"] >= 11220 + 6200 + 1000 - 1
+
+
+def test_full_calibration_reports_when_no_window_lights_every_row():
+    stage = virtual_stage()
+    camera = TriggeredCamera(stage, world(np.random.default_rng(0), 100), mode="rolling",
+                             lineUs=10000.0)              # readout 310 ms > the 200 ms cap
     ctrl = controller(stage, camera, {"LED": StrobeLaser()}, strobeWindowMs=3.0)
     ctrl._emitStatus = lambda: None
     result = ctrl.calibrateStageMapStrobe(delayStepUs=500, framesPerDelay=1, testFrames=4)
     assert result["success"] is False and result["matched"] is False
-    assert "every row" in result["error"] and "Lengthen the window" in result["error"]
+    assert "every row" in result["error"]
+    assert len(result["windowTries"]) == StageMapController.STROBE_CAL_WINDOW_TRIES
     assert ctrl.params.strobeDelayUs == -1.0               # nothing stored
+    assert ctrl.params.strobeWindowMs == 3.0

@@ -2,7 +2,7 @@ import numpy as np
 import time
 from imswitch.imcommon.model import initLogger
 from skimage.filters import gaussian, median
-from typing import List
+from typing import List, Optional
 from ctypes import *
 import collections
 import threading
@@ -139,6 +139,13 @@ class CameraHIK:
         # deques above (same maxlen, appended/cleared together under
         # _bufferLock) so frame k always pairs with trigger k.
         self.triggerindex_buffer = collections.deque(maxlen=self.NBuffer)
+        # Host arrival time (time.time() at the SDK callback) of every buffered
+        # frame, same lock-step. In trigger mode the camera produces a frame
+        # only for a trigger it accepted, so the spacing of arrivals, in
+        # trigger periods, says how many pulses lie between two frames — the
+        # fallback for pairing frames with pulses when nTriggerIndex is not
+        # reported (this model leaves it at 0).
+        self.arrival_buffer = collections.deque(maxlen=self.NBuffer)
         self._bufferLock = threading.Lock()
         # Live-stream latency instrumentation (see getStreamDiagnostics()).
         self._streamStats = self._newStreamStats()
@@ -414,7 +421,8 @@ class CameraHIK:
     # ---------------------------------------------------------------------
     # C callback factory ---------------------------------------------------
     # ---------------------------------------------------------------------
-    def _on_frame(self, frame: np.ndarray, fid: int, ts: int, trigger_index: int = -1):
+    def _on_frame(self, frame: np.ndarray, fid: int, ts: int, trigger_index: int = -1,
+                  arrival: Optional[float] = None):
         # CRITICAL: `frame` is a zero-copy NumPy view over the SDK's capture
         # buffer (see `_wrap_cb`), which the SDK overwrites in place for every
         # subsequent frame. Storing the view directly makes every entry in the
@@ -428,6 +436,7 @@ class CameraHIK:
             self.frame_buffer.append(frame)
             self.frameid_buffer.append(fid)
             self.triggerindex_buffer.append(trigger_index)
+            self.arrival_buffer.append(time.time() if arrival is None else float(arrival))
         self.frameNumber = fid
         self.timestamp   = ts
         if self.DEBUG:
@@ -598,7 +607,7 @@ class CameraHIK:
                 self.__logger.debug(f"Frame {fid} received with pixel format 0x{pix:x}, shape {frame.shape}")
 
             # pass to user callback
-            user_cb(frame, fid, ts, trigger_index=trig)
+            user_cb(frame, fid, ts, trigger_index=trig, arrival=t_entry)
 
             # Latency instrumentation: cheap dict updates only (runs on the SDK
             # delivery thread). nHostTimeStamp is the host-driver receive time
@@ -1019,6 +1028,7 @@ class CameraHIK:
             self.frameid_buffer.clear()
             self.frame_buffer.clear()
             self.triggerindex_buffer.clear()
+            self.arrival_buffer.clear()
         self.lastFrameFromBuffer = None
         self.lastFrameId = -1
 
@@ -1032,11 +1042,14 @@ class CameraHIK:
         return np.array(frames), np.array(ids)
 
     def getLastChunkWithTriggerIndex(self):
-        """Return *and clear* the ring-buffer as (frames, frame_ids, trigger_indices).
+        """Return *and clear* the ring-buffer as (frames, frame_ids, trigger_indices, arrivals).
 
         Like getLastChunk, but with the camera's ``nTriggerIndex`` of every
         frame, so a caller that counts the trigger pulses it sent can tell
-        which pulse produced which frame even when frames were lost.
+        which pulse produced which frame even when frames were lost — and the
+        host arrival time (seconds, time.time()) of each frame, which tells
+        the same thing from the spacing of frames when the camera reports no
+        trigger index.
 
         The three buffers are read and cleared in one step under the buffer
         lock, so they stay paired even while the SDK delivers frames. Unlike
@@ -1048,13 +1061,36 @@ class CameraHIK:
             frames = list(self.frame_buffer)
             ids = list(self.frameid_buffer)
             trigs = list(self.triggerindex_buffer)
+            arrivals = list(self.arrival_buffer)
             self.frame_buffer.clear()
             self.frameid_buffer.clear()
             self.triggerindex_buffer.clear()
+            self.arrival_buffer.clear()
         # Same fallback bookkeeping as getLastChunk (via flushBuffer).
         self.lastFrameFromBuffer = frames[-1] if frames else None
         self.lastFrameId = -1
-        return np.array(frames), np.array(ids), np.array(trigs, dtype=np.int64)
+        return (np.array(frames), np.array(ids), np.array(trigs, dtype=np.int64),
+                np.array(arrivals, dtype=np.float64))
+
+    def getResultingFrameRate(self):
+        """Frames per second the camera says it can deliver right now, or None.
+
+        ResultingFrameRate folds in the exposure and the sensor readout (a
+        rolling shutter cannot start an exposure before the last row of the
+        previous one is read out) and the frame-rate cap, so 1 / this is the
+        shortest trigger period the camera honours at the current exposure;
+        a trigger that comes sooner is ignored.
+        """
+        if self.camera is None:
+            return None
+        try:
+            stFps = MVCC_FLOATVALUE()
+            for node in ("ResultingFrameRate", "AcquisitionResultingFrameRate"):
+                if self.camera.MV_CC_GetFloatValue(node, stFps) == 0 and stFps.fCurValue > 0:
+                    return float(stFps.fCurValue)
+        except Exception as e:
+            self.__logger.debug(f"ResultingFrameRate read failed: {e}")
+        return None
 
     def setROI(self, hpos=None, vpos=None, hsize=None, vsize=None):
         """Set sensor ROI; arguments left as None are unchanged.

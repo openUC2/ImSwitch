@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# hil-run.sh -- test one ImSwitch image on the real rig, then put the rig back.
+# hil-run.sh -- test an ImSwitch image, or a whole os-rpi pallet, on the real
+# rig, then put the rig back.
 #
 #   hil-setup.py swap-in  ->  ship the suite  ->  firmware sync  ->  pytest
 #                                       ... always hil-setup.py restore
@@ -16,6 +17,10 @@
 #   ci/hil-run.sh --image sha-7d3adda --yes
 #   ci/hil-run.sh --image ghcr.io/openuc2/imswitch:sha-7d3adda --yes \
 #                 --tests "board firmware" --out reports
+#   ci/hil-run.sh --pallet github.com/openUC2/os-rpi@<commit> --yes
+#
+# --image swaps only that ImSwitch image in; --pallet applies every Docker
+# deployment of that os-rpi commit (ImSwitch, the firmware server, ...).
 #
 # MOVES THE STAGE AND SWITCHES LIGHT ON: --yes is mandatory, so no scheduler
 # and no stray call can actuate the rig by accident.
@@ -43,6 +48,7 @@ SUITE_DIR="$(cd "$DIR/.." && pwd)"
 SETUP="$DIR/hil-setup.py"
 
 IMAGE=""
+PALLET=""
 TESTS=""
 OUT_DIR="$DIR/reports"
 CONFIRMED=0
@@ -59,16 +65,24 @@ die()  { warn "$*"; exit "$EXIT_UNAVAILABLE"; }
 while [ $# -gt 0 ]; do
     case "$1" in
         --image)      IMAGE="${2:-}"; shift 2 ;;
+        --pallet)     PALLET="${2:-}"; shift 2 ;;
         --tests)      TESTS="${2:-}"; shift 2 ;;
         --out)        OUT_DIR="${2:-}"; shift 2 ;;
         --yes)        CONFIRMED=1; shift ;;
         --keep-image) RESTORE_ARGS="--keep-image"; shift ;;
-        -h|--help)    sed -n '2,29p' "$0"; exit "$EXIT_OK" ;;
+        -h|--help)    sed -n '2,34p' "$0"; exit "$EXIT_OK" ;;
         *)            die "unknown argument: $1" ;;
     esac
 done
 
-[ -n "$IMAGE" ] || die "usage: $0 --image <tag or ref> --yes [--tests \"motor camera\"]"
+# Exactly one of the two: what is under test, and how hil-setup.py swaps it.
+if [ -n "$IMAGE" ] && [ -z "$PALLET" ]; then
+    SWAP_ARGS=(--image "$IMAGE"); UNDER_TEST="$IMAGE"
+elif [ -n "$PALLET" ] && [ -z "$IMAGE" ]; then
+    SWAP_ARGS=(--pallet "$PALLET"); UNDER_TEST="$PALLET"
+else
+    die "usage: $0 --image <tag or ref> | --pallet <path@version> --yes [--tests \"motor camera\"]"
+fi
 [ "$CONFIRMED" = "1" ] || die "refusing to actuate the rig without --yes"
 
 command -v python3 >/dev/null || die "python3 not found -- run this on the Pi"
@@ -80,14 +94,14 @@ flock -n 9 || die "another hil-run holds $LOCK_FILE -- one run per rig"
 # ---------------------------------------------------------------------------
 # Swap in, and back out on every exit path. The restore is installed before
 # swap-in starts, so an interrupted run still gives the microscope back on the
-# image it came with. restore knows what swap-in changed; if swap-in changed
-# nothing, restore does nothing.
+# image or pallet it came with. restore knows what swap-in changed; if swap-in
+# changed nothing, restore does nothing.
 # ---------------------------------------------------------------------------
 
 trap 'python3 "$SETUP" restore $RESTORE_ARGS || exit "$EXIT_UNAVAILABLE"' EXIT
 trap 'exit "$EXIT_UNAVAILABLE"' INT TERM
 
-python3 "$SETUP" swap-in --image "$IMAGE" || exit "$EXIT_UNAVAILABLE"
+python3 "$SETUP" swap-in "${SWAP_ARGS[@]}" || exit "$EXIT_UNAVAILABLE"
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +139,8 @@ for folder in $TESTS; do TARGETS="$TARGETS /tmp/e2e/$folder"; done
 [ -z "$TARGETS" ] && TARGETS="/tmp/e2e"
 
 mkdir -p "$OUT_DIR"
-REPORT="$OUT_DIR/junit-${IMAGE##*:}-$(date +%Y-%m-%d_%H-%M-%S).xml"
+# Named after the tag of an image, or the commit of a pallet.
+REPORT="$OUT_DIR/junit-${UNDER_TEST##*[:@]}-$(date +%Y-%m-%d_%H-%M-%S).xml"
 
 log "running pytest on:${TARGETS}"
 
@@ -143,9 +158,9 @@ docker cp "$CONTAINER:/tmp/e2e-report.xml" "$REPORT" >/dev/null 2>&1 &&
     warn "no report written -- pytest died before it could write one"
 
 if [ "$STATUS" -eq 0 ]; then
-    log "PASS  $IMAGE"
+    log "PASS  $UNDER_TEST"
     exit "$EXIT_OK"
 fi
 
-warn "FAIL  $IMAGE (pytest exit $STATUS)"
+warn "FAIL  $UNDER_TEST (pytest exit $STATUS)"
 exit "$EXIT_FAILED"

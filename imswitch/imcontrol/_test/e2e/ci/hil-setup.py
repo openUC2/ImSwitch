@@ -1,20 +1,32 @@
 #!/usr/bin/env python3
-"""Swap one ImSwitch image into the rig's deployment, and swap it back again.
+"""Swap an ImSwitch image, or a whole os-rpi pallet, into the rig, and back again.
 
 The rig side of hil-run.sh, which calls it; that script keeps the arguments,
 the lock and the suite itself. Runs ON the Pi, against the local Docker
-daemon, with nothing but the standard library -- the host has no requests.
+daemon and forklift, with nothing but the standard library -- the host has no
+requests.
 
-    hil-setup.py swap-in --image sha-7d3adda   # check, swap it in, wait until ready
-    hil-setup.py restore [--keep-image]        # put the original image back
+    hil-setup.py swap-in --image sha-7d3adda      # only this ImSwitch image
+    hil-setup.py swap-in --pallet github.com/openUC2/os-rpi@<commit>
+                                                  # every deployment of that pallet
+    hil-setup.py restore [--keep-image]           # put the rig back
 
-swap-in leaves the rig on the test image until restore runs. hil-run.sh runs
-restore on every exit path; by hand, you have to.
+swap-in checks the rig, swaps, and waits until ImSwitch and its detectors are
+ready. It leaves the rig swapped until restore runs. hil-run.sh runs restore
+on every exit path; by hand, you have to.
 
-Why swap instead of installing: forklift owns the deployment, and the image it
-pins is the one the device is supposed to run. The swap is a temporary
-override that restore removes again, so a finished run -- or a failed one, or
-an interrupted one -- leaves the same container the user had.
+--image: forklift owns the deployment, and the image it pins is the one the
+device is supposed to run. The swap is a temporary compose override that
+restore removes again, so a finished run -- or a failed one, or an
+interrupted one -- leaves the same container the user had.
+
+--pallet: tests the Docker stack of an os-rpi commit as a whole (ImSwitch, the
+firmware server, caddy, ...). forklift switches the local pallet to that
+commit and applies it; restore applies the stage that ran before and puts the
+local pallet and its upgrade query back. A pallet with uncommitted or unpushed
+changes is refused: switching would throw them away. OS files under /etc and
+/usr only change at the next boot, so the pallet's Docker deployments are
+what gets tested.
 
 swap-in writes what restore needs into a state file before it changes
 anything. A state file that is still there when swap-in starts means an
@@ -25,6 +37,7 @@ Exit codes: 0 done, 2 the step could not be performed.
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -64,6 +77,11 @@ OVERRIDE_FILE = os.environ.get("HIL_OVERRIDE_FILE", "/tmp/hil-override.compose.y
 
 # What restore needs to know about the deployment swap-in changed.
 STATE_FILE = os.environ.get("HIL_STATE_FILE", "/tmp/hil-state.json")
+
+# The forklift workspace of the user the runner runs as. Its local pallet is
+# what --pallet replaces and restore puts back.
+FORKLIFT_WORKSPACE = os.environ.get("FORKLIFT_WORKSPACE", os.path.expanduser("~"))
+PALLET_DIR = os.path.join(FORKLIFT_WORKSPACE, ".local", "share", "forklift", "pallet")
 
 DEFAULT_REGISTRY = "ghcr.io/openuc2/imswitch"
 
@@ -157,6 +175,31 @@ def container_image():
     """The image the container runs right now."""
     info = inspect_container()
     return info["Config"]["Image"] if info else ""
+
+
+def forklift(*args, sudo=False):
+    """Run forklift, its output indented into our log; True if it succeeded.
+
+    stage apply changes the host and runs with sudo, as forklift asks for it.
+    -E keeps HOME, so it still works on this user's workspace.
+    """
+    command = ["forklift", *args]
+    return run_logged(*(["sudo", "-E", *command] if sudo else command))
+
+
+def forklift_output(*args):
+    """The output of a forklift query; StepFailed if it fails."""
+    result = subprocess.run(["forklift", *args], capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise StepFailed(f"forklift {' '.join(args)} failed: {detail}")
+    return result.stdout.strip()
+
+
+def pallet_git(*args):
+    """stdout of git in the local pallet, empty if git fails."""
+    result = subprocess.run(["git", "-C", PALLET_DIR, *args], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def compose_up_command(state, with_override=False):
@@ -287,6 +330,120 @@ def start_test_image(state):
 
 
 # ---------------------------------------------------------------------------
+# Pallet swap. forklift keeps every applied stage in its stage store, so going
+# back means applying the stage that ran before -- nothing has to be rebuilt.
+# ---------------------------------------------------------------------------
+
+def applied_stage():
+    """Index of the stage forklift applied last ("current" in its history)."""
+    for line in forklift_output("stage", "show-hist").splitlines():
+        # e.g. "39 (current, next): github.com/openUC2/os-rpi@v26.0.1-..."
+        match = re.match(r"(\d+) \(([^)]*)\)", line.strip())
+        if match and "current" in (name.strip() for name in match.group(2).split(",")):
+            return int(match.group(1))
+    raise StepFailed("forklift reports no applied stage to come back to")
+
+
+def pallet_source():
+    """github.com/<owner>/<repo> the local pallet was cloned from, off its origin."""
+    url = pallet_git("remote", "get-url", "origin")
+    path = re.sub(r"^[a-z+]+://", "", url)
+    path = re.sub(r"^git@([^:]+):", r"\1/", path)
+    path = re.sub(r"\.git$", "", path)
+    if not path:
+        raise StepFailed(f"cannot tell where the local pallet in {PALLET_DIR} comes from")
+    return path
+
+
+def read_pallet():
+    """What restore needs to put forklift back, after checking it can.
+
+    Refuses a stage that is staged but not applied (restore could not tell
+    which one to come back to), and a local pallet with changes that are not
+    on a remote: switching replaces the local pallet, so they would be lost.
+    """
+    current = applied_stage()
+    pending = int(forklift_output("stage", "show-next-index"))
+    if pending != current:
+        raise StepFailed(
+            f"forklift stage {pending} is staged but not applied (applied is {current}) "
+            "-- apply or unset it first"
+        )
+
+    if pallet_git("status", "--porcelain"):
+        raise StepFailed(
+            f"the local pallet in {PALLET_DIR} has uncommitted changes "
+            "-- a pallet swap would throw them away; commit and push them first"
+        )
+
+    commit = pallet_git("rev-parse", "HEAD")
+    if not commit or not pallet_git("branch", "-r", "--contains", "HEAD"):
+        raise StepFailed(
+            f"the local pallet's commit {commit[:12] or '?'} is on no remote branch "
+            "-- push it first, restore clones it back from there"
+        )
+
+    return {
+        "original_stage": current,
+        "original_pallet": f"{pallet_source()}@{commit}",
+        "upgrade_query": forklift_output("plt", "show-upgrade-query"),
+    }
+
+
+def pull_missing_images(state):
+    """Pull the images of the local pallet the rig does not have yet.
+
+    Not forklift's own image caching (switched off in swap-in): that also
+    pulls every image of the stage it would fall back to, again, and a private
+    one it cannot pull (flim-imager) stops it. An image that is on the card
+    already is left alone. Each pull goes into the state file before it
+    starts, so restore removes exactly what the swap added.
+    """
+    for image in forklift_output("plt", "ls-img").splitlines():
+        image = image.strip()
+        if not image:
+            continue
+        on_card = subprocess.run(
+            ["docker", "image", "inspect", image], capture_output=True
+        ).returncode == 0
+        if on_card:
+            continue
+        state.setdefault("pulled_images", []).append(image)
+        save_state(state)
+        log(f"pulling {image}")
+        if not run_logged("docker", "pull", image):
+            raise StepFailed(f"pull of {image} failed -- not published, or no access to it")
+
+
+def start_test_pallet(state):
+    """Switch the local pallet to the test pallet and apply it."""
+    log(f"switching the local pallet to {state['test_pallet']}")
+    # --set-upgrade-query=false: the rig keeps updating from where it did.
+    # --cache-img=false: see pull_missing_images.
+    if not forklift(
+        "plt", "switch", "--force", "--set-upgrade-query=false", "--cache-img=false",
+        state["test_pallet"],
+    ):
+        raise StepFailed("forklift could not switch to the test pallet")
+
+    state["test_stage"] = int(forklift_output("stage", "show-next-index"))
+    save_state(state)
+
+    pull_missing_images(state)
+
+    log(f"applying the test pallet (stage {state['test_stage']})")
+    if not forklift("stage", "apply", sudo=True):
+        raise StepFailed("forklift could not apply the test pallet")
+
+    log(f"waiting for ImSwitch (up to {READY_TIMEOUT}s)")
+    if not wait_for_imswitch():
+        raise StepFailed(f"ImSwitch did not answer within {READY_TIMEOUT}s")
+
+    log(f"now running  {container_image()}")
+    log(f"reports      {imswitch_version()}")
+
+
+# ---------------------------------------------------------------------------
 # Detector readiness. An answering API is not a ready microscope: the camera
 # tests snap a frame, and a camera still starting up answers 500. Waiting here
 # rather than in the tests keeps the tests honest -- a retry loop inside them
@@ -413,14 +570,22 @@ def wait_for_detectors():
 # The two commands.
 # ---------------------------------------------------------------------------
 
+def save_state(state):
+    # Written before the first change, and again as the swap learns more, so
+    # restore can undo whatever part of it happened, whenever it is interrupted.
+    with open(STATE_FILE, "w") as file:
+        json.dump(state, file)
+
+
 def swap_in_test_image(image):
-    """swap-in: check the rig, put the test image in, wait until it is ready."""
+    """swap-in --image: check the rig, put the test image in, wait until ready."""
     # A bare tag is the common case; a full ref stays untouched, so a fork's
     # own registry works without a flag.
     test_image = image if "/" in image else f"{DEFAULT_REGISTRY}:{image}"
 
     check_preconditions()
     state = read_deployment()
+    state["mode"] = "image"
     state["test_image"] = test_image
 
     log(f"container   {CONTAINER} (project {state['project']})")
@@ -428,17 +593,28 @@ def swap_in_test_image(image):
     log(f"running     {state['original_image']}")
     log(f"testing     {test_image}")
 
-    # Written before the first change, so restore can undo whatever part of
-    # the swap happened, whenever it is interrupted.
-    with open(STATE_FILE, "w") as file:
-        json.dump(state, file)
-
+    save_state(state)
     start_test_image(state)
     wait_for_detectors()
 
 
-def restore_original_image(keep_image):
-    """restore: put the original image back; a no-op if nothing was swapped."""
+def swap_in_test_pallet(pallet):
+    """swap-in --pallet: check the rig, apply the test pallet, wait until ready."""
+    check_preconditions()
+    state = {"mode": "pallet", "test_pallet": pallet, **read_pallet()}
+
+    log(f"applied     stage {state['original_stage']}")
+    log(f"pallet      {state['original_pallet']}")
+    log(f"updates     {state['upgrade_query']}")
+    log(f"testing     {pallet}")
+
+    save_state(state)
+    start_test_pallet(state)
+    wait_for_detectors()
+
+
+def restore(keep_image):
+    """restore: put the rig back; a no-op if nothing was swapped."""
     try:
         with open(STATE_FILE) as file:
             state = json.load(file)
@@ -446,6 +622,68 @@ def restore_original_image(keep_image):
         log("nothing was swapped, nothing to restore")
         return
 
+    # A state file without a mode is from before --pallet existed.
+    if state.get("mode", "image") == "pallet":
+        restore_original_pallet(state, keep_image)
+    else:
+        restore_original_image(state, keep_image)
+
+    os.remove(STATE_FILE)
+
+
+def remove_images(images):
+    """docker rmi each image; one still in use by a container stays."""
+    for image in images:
+        removed = subprocess.run(["docker", "rmi", image], capture_output=True).returncode == 0
+        log(f"removed {image}" if removed else f"kept {image} (still in use)")
+
+
+def restore_original_pallet(state, keep_image):
+    """Apply the stage that ran before, put the local pallet back, and remove
+    the images the swap pulled (unless keep_image).
+
+    The rig first: that is what someone sitting at the microscope notices. The
+    test stage stays in forklift's stage store, as forklift's rollback; nothing
+    applies it again unless asked to (forklift stage prune-bun clears it).
+    Only images the swap pulled are removed: none of them was on the card
+    before, so the stage the rig runs again does not need them.
+    """
+    stage = str(state["original_stage"])
+    log(f"restoring forklift stage {stage}")
+
+    # --cache-img=false: everything of that stage is still on the card.
+    if not (
+        forklift("stage", "set-next", "--cache-img=false", stage)
+        and forklift("stage", "apply", sudo=True)
+    ):
+        # The state file stays, so restore can simply be run again.
+        warn(f"RESTORE FAILED -- the rig may still run the test pallet {state['test_pallet']}")
+        warn(f"fix by hand: forklift stage set-next --cache-img=false {stage}"
+             " && sudo -E forklift stage apply")
+        raise StepFailed(f"or retry:   {sys.argv[0]} restore")
+
+    log(f"putting the local pallet back to {state['original_pallet']}")
+    if not (
+        forklift("plt", "clone", "--force", "--set-upgrade-query=false", state["original_pallet"])
+        and forklift("plt", "set-upgrade-query", state["upgrade_query"])
+    ):
+        warn("the rig runs its stage again, but the local pallet is not back")
+        warn(f"fix by hand: forklift plt clone --force --set-upgrade-query=false "
+             f"{state['original_pallet']} && forklift plt set-upgrade-query "
+             f"{state['upgrade_query']}")
+        raise StepFailed(f"or retry:   {sys.argv[0]} restore")
+
+    if wait_for_imswitch():
+        log("restored, ImSwitch answers again")
+    else:
+        warn("restored the stage, but ImSwitch does not answer yet")
+
+    if not keep_image:
+        remove_images(state.get("pulled_images", []))
+
+
+def restore_original_image(state, keep_image):
+    """Remove the override and start the original image again."""
     original_image = state["original_image"]
     test_image = state["test_image"]
 
@@ -470,33 +708,36 @@ def restore_original_image(keep_image):
     # Only ever remove what this run pulled, and never the image the rig runs
     # on: the card holds the rollback image too, and that one must stay.
     if not keep_image and test_image != original_image:
-        removed = subprocess.run(
-            ["docker", "rmi", test_image], capture_output=True
-        ).returncode == 0
-        log(f"removed {test_image}" if removed else f"kept {test_image} (still in use)")
-
-    os.remove(STATE_FILE)
+        remove_images([test_image])
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Swap an ImSwitch image in and out.")
+    parser = argparse.ArgumentParser(
+        description="Swap an ImSwitch image or an os-rpi pallet in and out."
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
     swap_in = commands.add_parser(
-        "swap-in", help="check the rig, swap the test image in, wait until ready"
+        "swap-in", help="check the rig, swap the image or pallet in, wait until ready"
     )
-    swap_in.add_argument("--image", required=True, help="bare tag or full image ref")
+    what = swap_in.add_mutually_exclusive_group(required=True)
+    what.add_argument("--image", help="bare tag or full image ref")
+    what.add_argument("--pallet", help="pallet path@version, e.g. github.com/openUC2/os-rpi@<sha>")
 
-    restore = commands.add_parser("restore", help="put the original image back")
-    restore.add_argument("--keep-image", action="store_true", help="keep the pulled image")
+    restore_parser = commands.add_parser("restore", help="put the rig back")
+    restore_parser.add_argument(
+        "--keep-image", action="store_true", help="keep the images the swap pulled"
+    )
 
     args = parser.parse_args()
 
     try:
-        if args.command == "swap-in":
-            swap_in_test_image(args.image)
+        if args.command == "restore":
+            restore(args.keep_image)
+        elif args.pallet:
+            swap_in_test_pallet(args.pallet)
         else:
-            restore_original_image(args.keep_image)
+            swap_in_test_image(args.image)
     except StepFailed as error:
         warn(str(error))
         return EXIT_UNAVAILABLE

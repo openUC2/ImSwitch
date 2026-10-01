@@ -35,9 +35,9 @@ const FIELDS = [
   { key: "strobeDelayUs", label: "Flash delay", unit: "µs", min: 0, auto: -1,
     help: "From camera trigger to flash. Empty: near the end of the window." },
   { key: "strobeWindowMs", label: "Exposure window", unit: "ms", min: 0.1, max: 1000,
-    help: "Camera exposure during strobed sweeps. Must cover the sensor readout plus the flash." },
+    help: "Camera exposure during strobed sweeps. Must be longer than the sensor readout plus the flash, or no delay lights every row; calibration lengthens it when needed." },
   { key: "strobeMinPeriodMs", label: "Shortest frame period", unit: "ms", min: 0, auto: 0,
-    help: "Set by calibration when the camera cannot take a trigger every window + 1 ms. Empty: window + 1 ms." },
+    help: "Set by calibration when the camera skips triggers. Empty: the camera's own frame period at this window (exposure + readout), or window + 1 ms. The prescan slows down to one field per frame." },
   { key: "strobeTrigUs", label: "Trigger pulse", unit: "µs", min: 1, max: 10000,
     help: "Width of the camera trigger pulse." },
   { key: "strobeTargetLevel", label: "Target brightness", unit: "%", min: 5, max: 95, scale: 100,
@@ -80,6 +80,14 @@ function CalibrationSummary({ result }) {
           brightness {Math.round((result.level || 0) * 100)} %
         </Typography>
       )}
+      {result.windowFromUs !== undefined &&
+        result.windowUs !== undefined &&
+        Math.abs(result.windowUs - result.windowFromUs) > 1 && (
+          <Typography variant="caption">
+            Exposure window {ms(result.windowFromUs)} → {ms(result.windowUs)}
+            {result.readoutUs ? ` (sensor readout ≈ ${ms(result.readoutUs)})` : ""}
+          </Typography>
+        )}
       {hints.map((h, i) => (
         <Typography
           key={h}

@@ -8,6 +8,7 @@ getChunkWithTriggerIndex. No native library, no camera.
 
 import ctypes
 import logging
+import time
 
 import numpy as np
 import pytest
@@ -90,32 +91,36 @@ def manager(camera):
 
 def test_trigger_index_reaches_getChunkWithTriggerIndex_in_order(cam):
     mgr = manager(cam)
+    before = time.time()
     push(cam, 10, frame_num=1, trigger_index=501)
     push(cam, 20, frame_num=2, trigger_index=503)   # pulse 502 produced no frame
-    frames, ids, trigs = mgr.getChunkWithTriggerIndex()
+    frames, ids, trigs, arrivals = mgr.getChunkWithTriggerIndex()
     assert list(trigs) == [501, 503]
     assert list(ids) == [1, 2]
     assert [int(f[0, 0]) for f in frames] == [10, 20]
+    # every frame carries the host time it arrived at, in order
+    assert len(arrivals) == 2 and before <= arrivals[0] <= arrivals[1] <= time.time()
     # drained: the next call only sees what arrived since
     push(cam, 30, frame_num=3, trigger_index=504)
-    frames, ids, trigs = mgr.getChunkWithTriggerIndex()
-    assert list(trigs) == [504] and int(frames[0][0, 0]) == 30
+    frames, ids, trigs, arrivals = mgr.getChunkWithTriggerIndex()
+    assert list(trigs) == [504] and int(frames[0][0, 0]) == 30 and len(arrivals) == 1
 
 
 def test_buffers_stay_in_lock_step_when_the_ring_overflows(cam):
     for k in range(cam.NBuffer + 4):
         push(cam, k, frame_num=k, trigger_index=100 + k)
-    frames, ids, trigs = cam.getLastChunkWithTriggerIndex()
-    assert len(frames) == len(ids) == len(trigs) == cam.NBuffer
+    frames, ids, trigs, arrivals = cam.getLastChunkWithTriggerIndex()
+    assert len(frames) == len(ids) == len(trigs) == len(arrivals) == cam.NBuffer
     for f, i, t in zip(frames, ids, trigs):
         assert int(f[0, 0]) == i and t == 100 + i
+    assert list(arrivals) == sorted(arrivals)
 
 
 def test_flush_clears_the_trigger_indices_too(cam):
     push(cam, 1, frame_num=1, trigger_index=7)
     cam.flushBuffer()
-    frames, ids, trigs = cam.getLastChunkWithTriggerIndex()
-    assert len(frames) == len(ids) == len(trigs) == 0
+    frames, ids, trigs, arrivals = cam.getLastChunkWithTriggerIndex()
+    assert len(frames) == len(ids) == len(trigs) == len(arrivals) == 0
 
 
 def test_getChunk_and_getLastChunk_are_unchanged(cam):

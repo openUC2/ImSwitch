@@ -351,6 +351,21 @@ class HikCamManager(DetectorManager):
     def flushBuffers(self):
         self._camera.flushBuffer()
 
+    def getResultingFrameRate(self):
+        """Frames per second the camera can deliver at its current exposure, or None.
+
+        1 / this is the shortest trigger period the camera honours (exposure
+        plus sensor readout); used to pace strobed sweeps.
+        """
+        fn = getattr(self._camera, "getResultingFrameRate", None)
+        if fn is None:
+            return None
+        try:
+            return fn()
+        except Exception as e:
+            self.__logger.debug(f"getResultingFrameRate failed: {e}")
+            return None
+
     def startAcquisition(self):
         if self._camera.model == "mock":
             self.__logger.debug('We could attempt to reconnect the camera')

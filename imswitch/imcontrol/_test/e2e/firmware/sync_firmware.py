@@ -55,9 +55,32 @@ def label(device):
     return f"CAN {device.get('canId')} ({device.get('deviceTypeStr')}, {device['connection']})"
 
 
+def scan_came_back_empty(result):
+    """A CAN master always appears in its own scan with canId 1. Without it the
+    scan answered nothing, and no node was looked at."""
+    usb = next((device for device in result["devices"] if device["connection"] == "usb"), None)
+    return (
+        usb is not None
+        and "can" in (usb.get("deviceTypeStr") or "").lower()
+        and usb.get("canId") is None
+    )
+
+
 def check():
-    """checkFirmwareUpdates; a server without version.json gives nothing to sync to."""
-    result = api("checkFirmwareUpdates", timeout=5)
+    """checkFirmwareUpdates; a server without version.json gives nothing to sync to.
+
+    The CAN scan behind it sometimes comes back empty, which would read as
+    "in sync" with no node compared. So it is asked again before giving up.
+    """
+    for _ in range(3):
+        result = api("checkFirmwareUpdates", timeout=5)
+        if not scan_came_back_empty(result):
+            break
+        print("sync: the CAN scan came back empty, scanning again", flush=True)
+        time.sleep(3)
+    else:
+        die("sync: the CAN scan came back empty three times, nothing compared")
+
     if not result.get("server_version"):
         die(f"sync: {result.get('firmware_server')} publishes no version.json, nothing to sync to")
     return result

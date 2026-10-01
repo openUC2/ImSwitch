@@ -1,15 +1,18 @@
-"""Check the firmware server and whether the boards run the newest firmware.
+"""Check the firmware server and whether every board runs its version.
 
-Read-only: nothing here flashes anything. The OTA endpoints that would are
-deliberately not touched.
+Read-only: nothing here flashes anything. sync_firmware.py does that, and
+run_firmware_test.sh and run_all.sh run it before these tests.
+
+The version checks use ImSwitch's own comparison (checkFirmwareUpdates): the
+version in the firmware server's version.json against what each board reports.
+An ImSwitch without that endpoint skips them.
 
 - test_master_firmware_is_reported: the USB-connected master identifies itself
 - test_firmware_server_is_configured: an OTA firmware server URL is set
 - test_firmware_server_lists_binaries: that server answers with .bin files
-- test_reachable_bus_devices_have_firmware: every CAN node the master can
-  actually talk to has a firmware file mapped to its id
-- test_boards_run_newest_firmware: the master and every reachable node run
-  the version the server offers
+- test_answering_boards_have_firmware: every board that answers has an image
+  on the server
+- test_boards_run_server_version: and runs the server's version
 """
 
 import os
@@ -23,12 +26,16 @@ BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 # Scanning the bus takes a few seconds on the firmware side.
 SCAN_TIMEOUT = int(os.environ.get("FIRMWARE_SCAN_TIMEOUT", "5"))
 
+# update_status values that differ from the server's version.
+OUT_OF_SYNC = ("update_available", "device_newer")
+
 
 def api(method, **params):
-    """Call one UC2ConfigController endpoint, skipping when ImSwitch is down.
+    """Call one UC2ConfigController endpoint, skipping when ImSwitch cannot answer.
 
     A refused connection says nothing about the firmware, and the suite is
-    meant to be runnable without a rig.
+    meant to be runnable without a rig. A 404 means this ImSwitch has no such
+    endpoint (or no UC2ConfigController at all), which is just as absent.
     """
     try:
         response = requests.get(
@@ -38,6 +45,9 @@ def api(method, **params):
         )
     except requests.RequestException as exc:
         pytest.skip(f"ImSwitch not reachable at {BASE_URL}: {exc}")
+
+    if response.status_code == 404:
+        pytest.skip(f"this ImSwitch has no {method}")
 
     assert response.status_code == 200, (
         f"{method} -> {response.status_code}: {response.text}"
@@ -60,66 +70,40 @@ def firmware_files():
     return listing
 
 
-def fetch_manifest(server_url):
-    """The firmware server's version.json, or None when it publishes none.
+def label(device):
+    return f"CAN {device.get('canId')} ({device.get('deviceTypeStr')}, {device['connection']})"
 
-    The firmware build writes it next to the images (youseetoo/uc2-esp32,
-    tools/write_fw_manifest.py). Its "version" is the exact string every image
-    of that build reports as fwVersion (CANopen OD 0x2500), so it is the newest
-    version the server can hand out. Servers built before versioned firmware
-    have no version.json. Raises requests.RequestException when unreachable.
+
+@pytest.fixture(scope="module")
+def firmware_check():
+    """checkFirmwareUpdates, once for both tests: it scans the CAN bus.
+
+    A CAN master always appears in its own scan with canId 1. Without it the
+    scan answered nothing, and both tests would pass with no node compared.
     """
-    response = requests.get(f"{server_url.rstrip('/')}/version.json", timeout=30)
+    check = api("checkFirmwareUpdates", timeout=SCAN_TIMEOUT)
+    usb = next(
+        (device for device in check.get("devices") or [] if device["connection"] == "usb"),
+        None,
+    )
 
-    if response.status_code == 404:
-        return None
+    if usb and "can" in (usb.get("deviceTypeStr") or "").lower() and usb.get("canId") is None:
+        pytest.fail("the CAN scan came back empty: no node listed, the master without canId")
 
-    response.raise_for_status()
-    return response.json()
-
-
-def boards(scan):
-    """The master and every CAN node that answered the scan."""
-    nodes = [
-        device for device in scan.get("scan") or []
-        if device.get("statusStr") != "unreachable"
-    ]
-    return ([scan["master"]] if scan.get("master") else []) + nodes
+    return check
 
 
-def outdated(scan, newest):
-    """The boards that report a fwVersion other than the newest one.
-
-    A board that reports no fwVersion cannot be compared, which is not the
-    same as outdated, so it is left out here.
-    """
-    return [
-        board for board in boards(scan)
-        if board.get("fwVersion") and board["fwVersion"] != newest
+def answering(check):
+    """The master and every CAN node that answered, skipping when none did."""
+    devices = [
+        device for device in check.get("devices") or []
+        if device["update_status"] != "unreachable"
     ]
 
+    if not devices:
+        pytest.skip("no board answered")
 
-def label(board):
-    """'CAN 10 (motor)'; the master's scan entry carries no device type."""
-    return f"CAN {board['canId']} ({board.get('deviceTypeStr', 'master')})"
-
-
-def newest_firmware():
-    """The server's version.json, skipping when the server cannot name a version."""
-    url = api("getOTAFirmwareServer").get("firmware_server_url")
-
-    if not url:
-        pytest.skip("no OTA firmware server configured")
-
-    try:
-        manifest = fetch_manifest(url)
-    except requests.RequestException as exc:
-        pytest.skip(f"firmware server not reachable from this host: {exc}")
-
-    if not (manifest or {}).get("version"):
-        pytest.skip(f"{url} publishes no version.json: firmware built before versioning")
-
-    return manifest
+    return devices
 
 
 @pytest.mark.hardware
@@ -172,99 +156,68 @@ def test_firmware_server_lists_binaries():
 
 
 @pytest.mark.hardware
-def test_reachable_bus_devices_have_firmware():
-    """Every CAN node the master can talk to must have a firmware mapped.
+def test_answering_boards_have_firmware(firmware_check):
+    """Every board that answers must have an image on the firmware server.
 
-    The mapping in UC2ConfigController._get_can_id_firmware_mapping is a fixed
-    table, so a node whose id is missing from it cannot be updated through the
-    CAN OTA wizard even when its binary sits on the server.
+    Without one, neither the sync nor ImSwitch's update can flash it. The image
+    is the one the board names itself (image_source "reported"), or for
+    firmware too old to name one, ImSwitch's CAN-id table ("mapping").
 
-    Only nodes that answered the scan are required: an unreachable one may be
-    powered down or unrouted, which says nothing about the mapping. Those are
-    printed instead, because they are worth a look.
+    Unreachable nodes are printed, not asserted: they may be powered down.
     """
-    scan = api("scan_canbus", timeout=SCAN_TIMEOUT)
-    devices = scan.get("scan") or []
-
-    if not devices:
-        pytest.skip("no devices on the CAN bus")
-
-    # listAvailableFirmware keys its result by CAN id, but JSON object keys are
-    # strings, so they have to be converted before comparing with the scan.
-    mapped = {
-        int(can_id) for can_id in (api("listAvailableFirmware").get("firmware") or {})
-    }
-
-    reachable = [
-        device for device in devices
-        if device.get("statusStr") != "unreachable"
-    ]
-
-    if not reachable:
-        pytest.skip(f"no reachable CAN node: {scan.get('detected_ids')}")
-
-    missing = [
-        device["canId"] for device in reachable
-        if device["canId"] not in mapped
-    ]
-
-    unreachable_unmapped = [
-        device["canId"] for device in devices
-        if device.get("statusStr") == "unreachable"
-        and device["canId"] not in mapped
-    ]
-
-    print(
-        f"\nbus: {scan.get('detected_ids')}, "
-        f"reachable: {[d['canId'] for d in reachable]}, "
-        f"firmware mapped for: {sorted(mapped)}"
-    )
-
-    if unreachable_unmapped:
+    print()
+    for device in firmware_check.get("devices") or []:
         print(
-            f"unreachable and unmapped (not asserted): {unreachable_unmapped}"
+            f"{label(device)}: {device.get('filename') or 'no image'} "
+            f"[{device.get('image_source')}, {device['update_status']}]"
         )
 
+    missing = [
+        device for device in answering(firmware_check)
+        if device["update_status"] == "no_firmware" or not device.get("filename")
+    ]
+
     assert not missing, (
-        f"CAN nodes {missing} answer on the bus but have no firmware mapped; "
-        f"add them to _get_can_id_firmware_mapping in UC2ConfigController"
+        f"CAN {[device.get('canId') for device in missing]} answer but have no image on "
+        f"{firmware_check.get('firmware_server')} | "
+        + " | ".join(label(device) for device in missing)
     )
 
 
 @pytest.mark.hardware
-def test_boards_run_newest_firmware():
-    """The master and every reachable CAN node must run the newest firmware.
+def test_boards_run_server_version(firmware_check):
+    """The master and every CAN node that answers must run the server's version.
 
-    Newest is what the firmware server offers: the "version" in its
-    version.json, the same string a board built from those images reports as
-    fwVersion. So this is an exact string comparison, no dates involved.
-
-    Boards that answer but report no fwVersion are printed, not counted.
+    ImSwitch compares the exact strings: "version" in the server's version.json
+    and what each board reports (CANopen OD 0x2500 / identifier_version). A
+    newer developer build ("device_newer") counts as out of sync too: the sync
+    flashes it back to the server's version.
     """
-    manifest = newest_firmware()
-    newest = manifest["version"]
-    scan = api("scan_canbus", timeout=SCAN_TIMEOUT)
-    answering = boards(scan)
+    server = firmware_check.get("server_version")
 
-    if not answering:
-        pytest.skip(f"no board answered the scan: {scan.get('detected_ids')}")
+    if not server:
+        pytest.skip(
+            f"{firmware_check.get('firmware_server')} names no version: "
+            + ("no version.json" if firmware_check.get("server_reachable") else "unreachable")
+        )
 
-    print(f"\nserver offers {newest} (commit {manifest.get('commit') or '?'})")
+    devices = answering(firmware_check)
 
-    for board in answering:
-        print(f"{label(board)}: {board.get('fwVersion') or 'reports no fwVersion'}")
+    print(f"\nserver offers {server}")
+    for device in devices:
+        print(
+            f"{label(device)}: {device.get('installed_version') or 'reports no version'} "
+            f"[{device['update_status']}]"
+        )
 
-    compared = [board for board in answering if board.get("fwVersion")]
-
-    if not compared:
-        pytest.skip("no answering board reports a fwVersion")
-
-    stale = outdated(scan, newest)
+    stale = [device for device in devices if device["update_status"] in OUT_OF_SYNC]
 
     # Everything on one line, ids first: the runners pass --tb=line, which
     # shows nothing but the first line of the message.
     assert not stale, (
-        f"CAN {[board['canId'] for board in stale]} outdated ({len(stale)} of "
-        f"{len(compared)} boards do not run {newest}) | "
-        + " | ".join(f"{label(board)}: {board['fwVersion']}" for board in stale)
+        f"CAN {[device.get('canId') for device in stale]} out of sync ({len(stale)} of "
+        f"{len(devices)} boards do not run {server}) | "
+        + " | ".join(
+            f"{label(device)}: {device.get('installed_version')}" for device in stale
+        )
     )

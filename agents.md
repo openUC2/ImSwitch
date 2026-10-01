@@ -528,6 +528,7 @@ Safe to read:
   identity. Empty port = ImSwitch's own board over the open link; another port is opened and
   may reset that board.
 - `getFirmwareUpdateStatus`, `getFirmwareUpdatePrompt`, `getFirmwareCheckOnConnect`
+- `getPalletUpgradeStatus()` — systemd state + terminal output of the OS pallet upgrade
 
 Confirm before calling:
 
@@ -542,6 +543,9 @@ Confirm before calling:
   `resetTriggerTable`, `getDigitalIn`, `actDigitalIn`
 - Lifecycle: `espRestart`, `restartCANDevice`, `stopImSwitch`, `restartImSwitch`,
   `moveToSampleMountingPosition`
+- **OS upgrade (experimental, openUC2 OS only):** `startPalletUpgrade()` starts the host unit
+  `imswitch-pallet-upgrade.service` over the mounted D-Bus socket, which runs
+  `forklift plt upgrade --force && forklift stage apply` and recreates the ImSwitch container
 - **Firmware — highest risk:** `flashMasterFirmwareUSB(port, match, baud, firmware_filename)`,
   `cancelUSBFlash`, `sendCanAddress`, `testDeviceAction` (moves a freshly flashed motor),
   `reassignCANId(new_id, mac, target)`, `startCANStreamingOTA(can_id, firmware_url, baud)`,

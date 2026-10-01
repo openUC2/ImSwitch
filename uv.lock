@@ -1890,6 +1890,7 @@ dependencies = [
     { name = "h5py" },
     { name = "imswitchclient" },
     { name = "ipympl" },
+    { name = "jeepney", marker = "sys_platform == 'linux'" },
     { name = "jsonschema" },
     { name = "jupyter" },
     { name = "jupyterlab" },
@@ -1975,6 +1976,7 @@ requires-dist = [
     { name = "imjoy-rpc", marker = "extra == 'imjoy'", specifier = "==0.5.59" },
     { name = "imswitchclient", specifier = ">=0.1.7" },
     { name = "ipympl", specifier = ">=0.9.2" },
+    { name = "jeepney", marker = "sys_platform == 'linux'", specifier = ">=0.9" },
     { name = "jsonschema", specifier = ">=4.0" },
     { name = "jupyter" },
     { name = "jupyterlab", specifier = "==4.2.5" },
@@ -2015,7 +2017,7 @@ requires-dist = [
     { name = "smbus", marker = "extra == 'lepmon'" },
     { name = "smbus2", marker = "extra == 'lepmon'" },
     { name = "tifffile", specifier = ">=2020.11.26" },
-    { name = "uc2-rest", specifier = "==0.2.0.39" },
+    { name = "uc2-rest", specifier = "==0.2.0.41" },
     { name = "uc2canopen", specifier = ">=0.1.4" },
     { name = "unitelabs-cdk" },
     { name = "unitelabs-sila" },
@@ -2175,6 +2177,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/72/3a/79a912fbd4d8dd6fbb02bf69afd3bb72cf0c729bb3063c6f4498603db17a/jedi-0.19.2.tar.gz", hash = "sha256:4770dc3de41bde3966b02eb84fbcf557fb33cce26ad23da12c742fb50ecb11f0", size = 1231287, upload-time = "2024-11-11T01:41:42.873Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c0/5a/9cac0c82afec3d09ccd97c8b6502d48f165f9124db81b4bcb90b4af974ee/jedi-0.19.2-py2.py3-none-any.whl", hash = "sha256:a8ef22bde8490f57fe5c7681a3c83cb58874daf72b4784de3cce5b6ef6edb5b9", size = 1572278, upload-time = "2024-11-11T01:41:40.175Z" },
+]
+
+[[package]]
+name = "jeepney"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/6f/357efd7602486741aa73ffc0617fb310a29b588ed0fd69c2399acbb85b0c/jeepney-0.9.0.tar.gz", hash = "sha256:cf0e9e845622b81e4a28df94c40345400256ec608d0e55bb8a3feaa9163f5732", size = 106758, upload-time = "2025-02-27T18:51:01.684Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/a3/e137168c9c44d18eff0376253da9f1e9234d0239e0ee230d2fee6cea8e55/jeepney-0.9.0-py3-none-any.whl", hash = "sha256:97e5714520c16fc0a45695e5365a2e11b81ea79bba796e26f9f1d178cb182683", size = 49010, upload-time = "2025-02-27T18:51:00.104Z" },
 ]
 
 [[package]]
@@ -5453,16 +5464,16 @@ wheels = [
 
 [[package]]
 name = "uc2-rest"
-version = "0.2.0.39"
+version = "0.2.0.41"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "pyserial" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/45/0f/85c64484c6039932327347103794a9f85584a721659ac4c15becd96d96a3/uc2_rest-0.2.0.39.tar.gz", hash = "sha256:96bc29f26e7b6e8f448dae7ac7af0ae6f1bd9151994dbb13b37bbd739c170129", size = 73744, upload-time = "2026-07-08T14:21:13.438Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/c7/38ff7f7331d306523a28626445ff7fb6af899179394e760aea77120ac6a6/uc2_rest-0.2.0.41.tar.gz", hash = "sha256:038d41f2afc4953889953f2c6b07910a0afc9ab0fe5747ac6d46bdfa730f86c9", size = 90188, upload-time = "2026-09-30T14:21:13.511Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/82/71/3867405fe298bbdeab10a2be688029e1245924f0851367d638137c51b607/uc2_rest-0.2.0.39-py3-none-any.whl", hash = "sha256:f6953b96c0dbe5095ae7034a47f86869e8706555d4d3d7a2079106c67db478f0", size = 87737, upload-time = "2026-07-08T14:21:12.453Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/2f/aba6217e65c50c8dc931ebe3e33be862ad3acc53d465ec4c0211de2f4042/uc2_rest-0.2.0.41-py3-none-any.whl", hash = "sha256:22a0762ebc9a83619feb8d44d44e6867943ff2f9ffc5bcf5bd689eb20fcdbff7", size = 100742, upload-time = "2026-09-30T14:21:12.075Z" },
 ]
 
 [[package]]

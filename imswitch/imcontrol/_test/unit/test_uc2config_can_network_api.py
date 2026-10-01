@@ -141,3 +141,26 @@ def test_startup_timer_only_when_enabled(monkeypatch):
     c = object.__new__(UC2ConfigController)
     c._setupInfo = SimpleNamespace(uc2Config=UC2ConfigInfo(checkFirmwareOnConnect=True))
     assert c._check_firmware_on_connect()
+
+
+def test_check_on_connect_setting_is_saved_from_a_null_uc2config(monkeypatch):
+    import imswitch.imcontrol.model.configfiletools as configfiletools
+    saved = []
+    monkeypatch.setattr(configfiletools, "loadOptions", lambda: ("options", False))
+    monkeypatch.setattr(configfiletools, "saveSetupInfo",
+                        lambda options, setup: saved.append(setup.uc2Config.checkFirmwareOnConnect))
+    c = make_controller()
+    c._setupInfo.uc2Config = None  # setup JSONs ship "uc2Config": null
+    assert c.setFirmwareCheckOnConnect(True) == {"enabled": True}
+    assert saved == [True] and isinstance(c._setupInfo.uc2Config, UC2ConfigInfo)
+    assert c.getFirmwareCheckOnConnect() == {"enabled": True}
+
+
+def test_check_on_connect_save_failure_is_reported(monkeypatch):
+    import imswitch.imcontrol.model.configfiletools as configfiletools
+
+    def fail(*args):
+        raise OSError("read-only file system")
+    monkeypatch.setattr(configfiletools, "loadOptions", fail)
+    result = make_controller().setFirmwareCheckOnConnect(True)
+    assert result["status"] == "error" and "read-only" in result["message"]

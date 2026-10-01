@@ -47,7 +47,6 @@ import {
   CheckCircle,
   Refresh,
   Build,
-  AutoFixHigh as WizardIcon,
   Usb as UsbIcon,
   Bluetooth as BluetoothIcon,
   LightbulbOutlined as LedIcon,
@@ -58,9 +57,8 @@ import {
   HelpOutline as HelpOutlineIcon,
 } from "@mui/icons-material";
 
-import CanOtaWizard from "./CanOtaWizard";
 import FirmwareVersionsPanel from "./FirmwareVersionsPanel";
-import UsbFlashWizard from "./UsbFlashWizard";
+import FirmwareUpdateDialog from "./FirmwareUpdateDialog";
 
 // Redux state management
 import * as uc2Slice from "../state/slices/UC2Slice.js";
@@ -332,8 +330,7 @@ const SystemUpdateController = () => {
   };
 
   // Wizard state
-  const [showCanOtaWizard, setShowCanOtaWizard] = React.useState(false);
-  const [showUsbFlashWizard, setShowUsbFlashWizard] = React.useState(false);
+  const [showFirmwareUpdate, setShowFirmwareUpdate] = React.useState(false);
 
   // Mock firmware flash (future API integration)
   const handleFirmwareFlash = async () => {
@@ -850,79 +847,30 @@ const SystemUpdateController = () => {
         </CardContent>
       </Card>
 
-      {/* CAN OTA Update Card */}
+      {/* Firmware: versions of all boards + one "Update firmware" (CAN bus or USB cable) */}
       <Card sx={{ mt: 3 }}>
         <CardContent>
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
             <Build color="primary" />
-            <Typography variant="h6">Device Firmware Update</Typography>
+            <Typography variant="h6">Firmware</Typography>
           </Box>
-
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Update firmware on connected devices (motors, lasers, LEDs) via CAN
-            or via Over-The-Air WIFI (OTA) updates
-          </Typography>
 
           <FirmwareVersionsPanel disabled={!uc2Connected} />
 
           <Button
             variant="contained"
-            color="secondary"
-            onClick={() => setShowCanOtaWizard(true)}
-            startIcon={<WizardIcon />}
+            onClick={() => setShowFirmwareUpdate(true)}
+            startIcon={<Build />}
             size="large"
             fullWidth
-            disabled={!uc2Connected}
           >
-            Launch CAN OTA Wizard
+            Update firmware…
           </Button>
-
           {!uc2Connected && (
-            <Alert severity="warning" sx={{ mt: 2 }}>
-              UC2 device must be connected to use CAN OTA updates
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* USB Master Flash Card */}
-      <Card sx={{ mt: 3 }}>
-        <CardContent>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
-            <UsbIcon color="primary" />
-            <Typography variant="h6">Master CAN HAT Firmware (USB)</Typography>
-            <Chip
-              label="esptool"
-              color="info"
-              size="small"
-              variant="outlined"
-            />
-          </Box>
-
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Flash firmware to the master CAN HAT controller via USB connection.
-            This device coordinates all CAN slave devices and cannot be updated
-            via WiFi OTA.
-          </Typography>
-
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={() => setShowUsbFlashWizard(true)}
-            startIcon={<UsbIcon />}
-            size="large"
-            fullWidth
-          >
-            Launch USB Flash Wizard
-          </Button>
-
-          <Alert severity="info" sx={{ mt: 2 }}>
-            <Typography variant="body2">
-              <strong>Note:</strong> The ESP32 will be disconnected temporarily
-              during flashing. Make sure the device is connected via USB before
-              starting.
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              No board connected: only updating over a USB cable is available.
             </Typography>
-          </Alert>
+          )}
         </CardContent>
       </Card>
 
@@ -967,17 +915,13 @@ const SystemUpdateController = () => {
         </DialogActions>
       </Dialog>
 
-      {/* CAN OTA Wizard */}
-      <CanOtaWizard
-        open={showCanOtaWizard}
-        onClose={() => setShowCanOtaWizard(false)}
-      />
-
-      {/* USB Flash Wizard */}
-      <UsbFlashWizard
-        open={showUsbFlashWizard}
-        onClose={() => setShowUsbFlashWizard(false)}
-      />
+      {showFirmwareUpdate && (
+        <FirmwareUpdateDialog
+          open
+          canAvailable={uc2Connected}
+          onClose={() => setShowFirmwareUpdate(false)}
+        />
+      )}
     </Box>
   );
 };

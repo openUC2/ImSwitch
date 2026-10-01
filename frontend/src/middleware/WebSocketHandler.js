@@ -964,8 +964,6 @@ const WebSocketHandler = () => {
             const statusString = status || "in_progress";
             const progressValue = progress ?? 0;
             const displayMessage = message || "Status update received";
-
-            // Update Redux state with OTA progress
             dispatch(
               canOtaSlice.setUpdateProgress({
                 canId: canId,
@@ -975,22 +973,6 @@ const WebSocketHandler = () => {
                 timestamp: new Date().toISOString(),
               }),
             );
-
-            // If update is completed or failed, check if all updates are done
-            const terminalStates = ["completed", "success", "failed", "error"];
-            if (terminalStates.includes(statusString)) {
-              const state = store.getState();
-              const canOtaState = state.canOtaState;
-              const totalDevices = canOtaState.selectedDeviceIds.length;
-              const completedCount = canOtaState.completedUpdateCount;
-              const failedCount = canOtaState.failedUpdateCount;
-
-              // If all devices are done, stop updating state
-              if (completedCount + failedCount >= totalDevices) {
-                dispatch(canOtaSlice.setIsUpdating(false));
-              }
-            }
-
             console.log(
               `OTA update for device ${canId}: ${statusString} (${progressValue}%) - ${displayMessage}`,
             );

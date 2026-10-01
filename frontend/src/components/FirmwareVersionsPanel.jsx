@@ -40,6 +40,7 @@ const FirmwareVersionsPanel = ({ disabled }) => {
     try {
       const r = await apiUC2ConfigControllerSetFirmwareCheckOnConnect(enabled);
       setCheckOnStart(Boolean(r?.enabled));
+      if (r?.status === "error") setError(r.message);
     } catch (e) {
       setError(`Could not save the setting: ${e.message}`);
     }
@@ -102,6 +103,7 @@ const FirmwareVersionsPanel = ({ disabled }) => {
         <FirmwareUpdateDialog
           open
           initialCheck={result}
+          initialMethod="can"
           onClose={() => {
             setUpdateOpen(false);
             check(); // show what the boards run now

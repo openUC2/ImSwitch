@@ -13,6 +13,9 @@ from pathlib import Path
 
 from imswitch.imcommon.model import APIExport
 from imswitch.imcontrol.model.canbus import CanNetwork, UpdateHooks, device_mapping
+# The module, not the package attribute: imswitch.imcontrol.model re-exports the
+# SetupInfo *class* under the module's name.
+from imswitch.imcontrol.model.SetupInfo import UC2ConfigInfo
 
 DEFAULT_FIRMWARE_URL = "http://host.docker.internal/firmware"
 # Seconds after startup before the opt-in firmware check: lets the serial
@@ -273,10 +276,12 @@ class CanNetworkApiMixin:
 
         Refused ({"status": "refused", "reasons"}) while an experiment,
         recording, workflow or timelapse runs, a stage or the objective moves,
-        another OTA/USB flash runs, or without version.json. Otherwise:
-        lasers off → each CAN node (download + sha256 check, OTA, re-scan until
-        it reports the new version) → the USB master last (esptool, reconnect,
-        re-read). Stops at the first failure; updated motors need homing.
+        another OTA/USB flash runs, or the firmware server is unreachable.
+        Otherwise: lasers off → each CAN node (download + sha256 check, OTA,
+        re-scan until it reports the new version) → the USB master last
+        (esptool, reconnect, re-read). Stops at the first failure; updated
+        motors need homing. A server without version.json can still be used:
+        boards must then be listed explicitly and are not verified.
 
         :param can_ids: nodes to update (body: JSON array; default: every
                         node whose status is update_available)
@@ -403,12 +408,17 @@ class CanNetworkApiMixin:
     @APIExport(runOnUIThread=False)
     def setFirmwareCheckOnConnect(self, enabled: bool = True) -> dict:
         """Enable/disable the check after startup; saved in the setup JSON as
-        uc2Config.checkFirmwareOnConnect, effective on the next start."""
-        from imswitch.imcontrol.model import SetupInfo as setup_info_module
-        from imswitch.imcontrol.model import configfiletools
-        if self._setupInfo.uc2Config is None:
-            self._setupInfo.uc2Config = setup_info_module.UC2ConfigInfo()
-        self._setupInfo.uc2Config.checkFirmwareOnConnect = bool(enabled)
-        options, _ = configfiletools.loadOptions()
-        configfiletools.saveSetupInfo(options, self._setupInfo)
+        uc2Config.checkFirmwareOnConnect, effective on the next start. Returns
+        {"enabled"} or {"status": "error", "message", "enabled": <unchanged>}."""
+        import imswitch.imcontrol.model.configfiletools as configfiletools
+        try:
+            if self._setupInfo.uc2Config is None:
+                self._setupInfo.uc2Config = UC2ConfigInfo()
+            self._setupInfo.uc2Config.checkFirmwareOnConnect = bool(enabled)
+            options, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(options, self._setupInfo)
+        except Exception as e:
+            self._logger.error(f"Could not save checkFirmwareOnConnect: {e}", exc_info=True)
+            return {"status": "error", "message": f"Could not save the setting: {e}",
+                    "enabled": self._check_firmware_on_connect()}
         return {"enabled": bool(enabled)}

@@ -91,7 +91,9 @@ const FirmwareUpdatePrompt = () => {
         </DialogActions>
       </Dialog>
       {/* Re-checks on open: the startup result may be hours old. */}
-      {reviewOpen && <FirmwareUpdateDialog open onClose={() => setReviewOpen(false)} />}
+      {reviewOpen && (
+        <FirmwareUpdateDialog open initialMethod="can" onClose={() => setReviewOpen(false)} />
+      )}
     </>
   );
 };

@@ -104,7 +104,7 @@ node joined WiFi and pulled its image over ArduinoOTA. Restore it from git histo
 | `up_to_date` | installed == server |
 | `update_available` | differs (includes firmware too old to report a version) |
 | `device_newer` | both carry `-t<timestamp>` and the board's is later, e.g. a developer build; not preselected |
-| `unknown` | the server has no `version.json` |
+| `unknown` | the image is on the server, but there is no `version.json` to compare with |
 | `no_firmware` | no image for this board on the server |
 | `unreachable` | the node did not answer the scan |
 
@@ -116,7 +116,7 @@ node joined WiFi and pulled its image over ArduinoOTA. Restore it from git histo
    - an experiment, recording, workflow or timelapse runs;
    - a stage is moving or frame-homing (`/motor_get isbusy`), or the objective turret moves;
    - another CAN OTA or USB flash runs;
-   - the server has no `version.json`, so the result could not be verified;
+   - the firmware server is not reachable;
    - a requested node is off the bus or has no image.
 
    It updates what you pass: by default every node whose status is `update_available`. Explicitly
@@ -156,21 +156,34 @@ check and post-flash verification.
 
 ## Frontend
 
-- **System Update → Device Firmware Update** (`FirmwareVersionsPanel.jsx`): *Check firmware versions*
-  shows a table of installed vs. available per board. When boards are outdated, *Update outdated
-  boards…* appears. The panel also has the *Check for firmware updates when ImSwitch starts* checkbox.
-- **`FirmwareUpdateDialog.jsx`**:
-  - Outdated boards are preselected. `device_newer` and up-to-date boards can be selected by hand.
-    Unreachable boards cannot.
-  - The backend's refusal reasons are shown verbatim.
-  - Progress comes from `getFirmwareUpdateStatus`, with the live transfer bar from
-    `sigOTAStatusUpdate` / `sigUSBFlashStatusUpdate`.
-  - Reopening it during an update shows the running update.
-- **`FirmwareUpdatePrompt.jsx`** (mounted in `App.jsx`): pulls `getFirmwareUpdatePrompt` on connect
-  and listens for `sigFirmwareUpdatesAvailable`. It offers *Review…* (opens the dialog, re-checks),
-  *Not now*, or *Skip this version* (stored per browser in `localStorage`).
-- **CAN OTA wizard**: shows versions in the file list, the scan list, and installed → server in the
-  selection step. It has *Select Outdated*.
+One **Update firmware** dialog (`FirmwareUpdateDialog.jsx`) first asks for the method:
+
+- **Over the CAN bus.** Every board on the bus is updated through the master ImSwitch is connected
+  to, and the master itself last over its USB link. It needs a connected master.
+  - It shows the version table and preselects outdated boards. It also offers the firmware-server
+    setting, *Change ID* per node (by MAC) and a deep scan for boards without a CAN route.
+  - It drives `startFirmwareUpdate` and follows `getFirmwareUpdateStatus`, with the live transfer
+    bar from `sigOTAStatusUpdate` / `sigUSBFlashStatusUpdate`.
+  - The state lives in the backend, so reopening the dialog during an update shows it again.
+- **Over a USB cable.** One board on its own port: flash any image, assign a CAN address, test it
+  (`UsbFlashWizard.jsx`, rendered inside the dialog). This works without a connected master, for
+  recovery.
+
+Entry points:
+- **System Update → Firmware**: *Update firmware…*, which starts at the method choice.
+- `FirmwareVersionsPanel.jsx`: *Update outdated boards…*, which opens the CAN path with its check.
+  The panel also has the *check when ImSwitch starts* option.
+- `FirmwareUpdatePrompt.jsx` (App level): *Review…*, which opens the CAN path.
+
+The former CAN OTA wizard is gone. It tracked "update running" in the browser (`isUpdating`), and
+closing it did not reset that flag. After a close and reopen, the progress step showed "Waiting to
+start…" with no Start button, and nothing was sent until a page reload.
+
+A server without `version.json` (older firmware-image-server images) still works:
+- Its file listing shows which images exist.
+- Boards show as *Server has no version info*; nothing is preselected, so pick boards by hand.
+- Results are reported as flashed but not verified.
+- An unreachable server refuses the update.
 
 ## CAN OTA reliability (why an upload needed about 3 attempts)
 

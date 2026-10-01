@@ -39,8 +39,11 @@ class FakeServer:
             n: {"size": len(b), "sha256": hashlib.sha256(b).hexdigest()}
             for n, b in self.files.items()}} if manifest else None
         self.downloads = []
+        self.down = False
 
     def get(self, url, headers=None, timeout=None, stream=False):
+        if self.down:
+            raise server_module.requests.exceptions.ConnectionError("server down")
         path = url[len(URL):].strip("/")
         if path == "":
             body = [{"name": n, "size": len(b), "mod_time": "t"} for n, b in self.files.items()]
@@ -276,10 +279,27 @@ def test_update_refusals(server, tmp_path):
     assert "CAN node 20 is not on the bus." in net.updater.start(can_ids=[12, 20])["reasons"]
     net.updater.hooks.blockers = lambda: ["An experiment is running."]
     assert net.updater.start()["reasons"] == ["An experiment is running."]
-    server.manifest = None
+    server.down = True
     net.updater.hooks.blockers = list
-    assert "version.json" in net.updater.start()["reasons"][0]
+    assert "not reachable" in net.updater.start(can_ids=[12])["reasons"][0]
     assert not net.guard.can.locked()
+
+
+def test_without_version_json_boards_are_chosen_by_hand_and_not_verified(server, tmp_path,
+                                                                        monkeypatch):
+    server.manifest = None  # an older firmware server: only the file listing
+    net, _, _ = network(tmp_path, scan_result(node(12, "motor"), node(13, "motor")))
+    devices = {d["canId"]: d for d in net.updater.check()["devices"]}
+    assert devices[12]["update_status"] == "unknown"      # image there, no version to compare
+    assert devices[13]["update_status"] == "no_firmware"  # motZ is not on the server
+    assert net.updater.start()["reasons"] == ["Nothing to update."]  # nothing preselected
+    monkeypatch.setattr(net.ota, "upload", lambda can_id, filename, expected_version, cancel: (
+        {"status": "success", "message": f"expected {expected_version}"}))
+    monkeypatch.setattr(net.usb, "run", lambda **kw: {"status": "success"})
+    _, state = run(net, can_ids=[12], include_master=True)
+    assert state["state"] == "success"
+    assert state["steps"][0]["message"] == "expected None"  # the OTA cannot verify
+    assert "not verified" in state["steps"][1]["message"]
 
 
 def run(net, **kwargs):

@@ -1,10 +1,6 @@
 import React, { useEffect } from "react";  
 import { useDispatch, useSelector } from "react-redux";
 import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   Button,
   Stepper,
   Step,
@@ -43,7 +39,6 @@ import {
   Memory as MemoryIcon,
   CloudDownload as DownloadIcon,
   Settings as SettingsIcon,
-  DeleteForever as EraseIcon,
   Router as CanIcon,
   Search as SearchIcon,
   FlashOn as FlashOnIcon,
@@ -1512,48 +1507,32 @@ const UsbFlashWizard = ({ open, onClose }) => {
     return "Next";
   };
 
+  // Rendered inside FirmwareUpdateDialog ("Update firmware" → over a USB
+  // cable), which provides the dialog frame and title.
   return (
-    <Dialog
-      open={open}
-      onClose={handleClose}
-      maxWidth="md"
-      fullWidth
-      disableEscapeKeyDown={usbFlashState.isFlashing}
-    >
-      <DialogTitle>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <UsbIcon color="primary" />
-          <Typography variant="h6">USB Firmware Flash Wizard</Typography>
-        </Box>
-      </DialogTitle>
+    <Box>
+      <Stepper activeStep={usbFlashState.currentStep} sx={{ mb: 3 }}>
+        {steps.map((label) => (
+          <Step key={label}>
+            <StepLabel>{label}</StepLabel>
+          </Step>
+        ))}
+      </Stepper>
 
-      <DialogContent>
-        {/* Stepper */}
-        <Stepper activeStep={usbFlashState.currentStep} sx={{ mb: 3 }}>
-          {steps.map((label) => (
-            <Step key={label}>
-              <StepLabel>{label}</StepLabel>
-            </Step>
-          ))}
-        </Stepper>
+      {usbFlashState.error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => dispatch(usbFlashSlice.clearMessages())}>
+          {usbFlashState.error}
+        </Alert>
+      )}
+      {usbFlashState.successMessage && (
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => dispatch(usbFlashSlice.clearMessages())}>
+          {usbFlashState.successMessage}
+        </Alert>
+      )}
 
-        {/* Error/Success messages */}
-        {usbFlashState.error && (
-          <Alert severity="error" sx={{ mb: 2 }} onClose={() => dispatch(usbFlashSlice.clearMessages())}>
-            {usbFlashState.error}
-          </Alert>
-        )}
-        {usbFlashState.successMessage && (
-          <Alert severity="success" sx={{ mb: 2 }} onClose={() => dispatch(usbFlashSlice.clearMessages())}>
-            {usbFlashState.successMessage}
-          </Alert>
-        )}
+      {renderStepContent(usbFlashState.currentStep)}
 
-        {/* Step Content */}
-        {renderStepContent(usbFlashState.currentStep)}
-      </DialogContent>
-
-      <DialogActions>
+      <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, mt: 3 }}>
         <Button onClick={handleClose} disabled={usbFlashState.isFlashing}>
           {usbFlashState.currentStep === 5 ? "Close" : "Cancel"}
         </Button>
@@ -1571,8 +1550,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
             {getNextLabel()}
           </Button>
         )}
-      </DialogActions>
-    </Dialog>
+      </Box>
+    </Box>
   );
 };
 

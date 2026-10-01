@@ -46,15 +46,20 @@ class FirmwareUpdater:
         image it reports it was built as (image_source "reported"); older
         firmware falls back to the pindef (USB) or its CAN id ("mapping").
         update_status: up_to_date | update_available | device_newer | unknown
-        (no version.json) | no_firmware (no image on the server) | unreachable."""
+        (image on the server, but no version.json to compare with) |
+        no_firmware (no image on the server) | unreachable.
+        server_reachable is False when the server answered neither with
+        version.json nor with a file listing."""
         manifest = self.server.manifest()
-        manifest_files = manifest.get("files", {})
+        # Which images exist: version.json lists them; without it the file
+        # listing still does (older firmware servers).
+        on_server = set(manifest.get("files", {})) or self._listed_images()
 
         def entry(installed, filename, source, reachable=True, **fields):
             available = self.server.file_version(manifest, filename)
             if not reachable:
                 status = "unreachable"
-            elif manifest_files and filename not in manifest_files:
+            elif on_server and filename not in on_server:
                 status = "no_firmware"
             else:
                 status = update_status(installed, available)
@@ -77,7 +82,7 @@ class FirmwareUpdater:
                               if pindef else [])
                 if legacy_image(master.get("canId")):
                     candidates.append(legacy_image(master.get("canId")))
-                image = next((c for c in candidates if c in manifest_files),
+                image = next((c for c in candidates if c in on_server),
                              candidates[0] if candidates else None)
                 source = "mapping"
             devices.append(entry(usb.get("fwVersion") or master.get("fwVersion"), image, source,
@@ -92,10 +97,18 @@ class FirmwareUpdater:
                                  canId=node.get("canId"), deviceTypeStr=node.get("deviceTypeStr"),
                                  connection="can", build=node.get("build"), mac=node.get("mac")))
         return {"status": "success", "firmware_server": self.server.url,
+                "server_reachable": bool(on_server),
                 "server_version": manifest.get("version"),
                 "server_commit_time": manifest.get("commit_time"),
                 "updates_available": sum(d["update_status"] == "update_available" for d in devices),
                 "devices": devices}
+
+    def _listed_images(self) -> set:
+        try:
+            return set(self.server.image_names())
+        except Exception as e:
+            self._log.warning(f"Firmware server {self.server.url} not reachable: {e}")
+            return set()
 
     # ── update ──────────────────────────────────────────────────────────────
 
@@ -105,16 +118,18 @@ class FirmwareUpdater:
     def start(self, can_ids=None, include_master=False) -> dict:
         """{"status": "started", "steps"} or {"status": "refused", "reasons"}.
         *can_ids* default: every node whose status is update_available;
-        explicitly listed nodes are updated whatever their status."""
+        explicitly listed nodes are updated whatever their status. Without
+        version.json on the server nothing is update_available, so boards must
+        be listed explicitly and are reported as flashed but not verified."""
         if self.state.get("state") == "running":
             return {"status": "refused", "reasons": ["A firmware update is already running."]}
         reasons = self.blockers()
         if reasons:
             return {"status": "refused", "reasons": reasons}
         check = self.check()
-        if not check.get("server_version"):
+        if not check.get("server_reachable"):
             return {"status": "refused", "reasons": [
-                "The firmware server has no version.json, so the result could not be verified."]}
+                f"The firmware server {self.server.url} is not reachable."]}
         steps, problems = self._plan(check, can_ids, include_master)
         if problems or not steps:
             return {"status": "refused", "reasons": problems or ["Nothing to update."]}
@@ -150,13 +165,13 @@ class FirmwareUpdater:
             d = by_id.get(cid)
             if d is None or d["update_status"] == "unreachable":
                 problems.append(f"CAN node {cid} is not on the bus.")
-            elif not d["available_version"]:
+            elif d["update_status"] == "no_firmware" or not d["filename"]:
                 problems.append(f"No image for CAN node {cid} ({d['filename']}) on the server.")
             else:
                 steps.append(_step(d))
         if include_master:
             usb = next((d for d in check["devices"] if d["connection"] == "usb"), None)
-            if usb is None or not usb["available_version"]:
+            if usb is None or usb["update_status"] == "no_firmware" or not usb["filename"]:
                 problems.append("No image for the USB master on the server.")
             else:
                 steps.append(_step(usb))
@@ -221,6 +236,8 @@ class FirmwareUpdater:
         if result.get("status") != "success":
             detail = f"{result.get('message')} {result.get('details') or ''}".strip()
             return False, f"USB flash: {detail}"
+        if not step["to_version"]:
+            return True, "Flashed (not verified: the firmware server has no version.json)"
         time.sleep(2)
         installed = (self.hooks.usb_info() or {}).get("fwVersion") or (
             (self.bus.scan(timeout=5).get("master") or {}).get("fwVersion"))

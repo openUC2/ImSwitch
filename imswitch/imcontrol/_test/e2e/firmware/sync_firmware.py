@@ -141,4 +141,4 @@ if __name__ == "__main__":
     try:
         main()
     except requests.RequestException as exc:
-        die(f"sync: ImSwitch not reachable at {BASE_URL}: {exc}")
+        die(f"sync: ImSwitch request failed ({BASE_URL}): {exc}")

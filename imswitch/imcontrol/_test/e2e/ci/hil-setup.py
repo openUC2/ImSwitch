@@ -151,13 +151,20 @@ def wait_for_imswitch():
     return False
 
 
+# Progress ticks that only bloat the log: git's "Counting objects:  37%
+# (2050/5538)" (its final ", done." line stays) and docker pull's per-layer
+# lines ("39a7c1488732: Pull complete").
+PROGRESS_LINE = re.compile(r"^[^:]+:\s+\d+% \(\d+/\d+\)$|^[0-9a-f]{12}: ")
+
+
 def run_logged(*command):
     """Run a command, indenting its output into our log; True if it succeeded."""
     process = subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
     for line in process.stdout:
-        print(f"[hil-setup]   {line.rstrip()}", flush=True)
+        if not PROGRESS_LINE.match(line.strip()):
+            print(f"[hil-setup]   {line.rstrip()}", flush=True)
     return process.wait() == 0
 
 
@@ -177,19 +184,24 @@ def container_image():
     return info["Config"]["Image"] if info else ""
 
 
+# forklift clones pallets with git, which speaks the host's language: the
+# runner inherits LANG=de_DE.UTF-8 on the rig. LC_ALL=C keeps the log English.
+FORKLIFT = ["env", "LC_ALL=C", "forklift"]
+
+
 def forklift(*args, sudo=False):
     """Run forklift, its output indented into our log; True if it succeeded.
 
     stage apply changes the host and runs with sudo, as forklift asks for it.
     -E keeps HOME, so it still works on this user's workspace.
     """
-    command = ["forklift", *args]
+    command = [*FORKLIFT, *args]
     return run_logged(*(["sudo", "-E", *command] if sudo else command))
 
 
 def forklift_output(*args):
     """The output of a forklift query; StepFailed if it fails."""
-    result = subprocess.run(["forklift", *args], capture_output=True, text=True)
+    result = subprocess.run([*FORKLIFT, *args], capture_output=True, text=True)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
         raise StepFailed(f"forklift {' '.join(args)} failed: {detail}")

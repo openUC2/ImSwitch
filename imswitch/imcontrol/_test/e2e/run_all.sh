@@ -51,7 +51,7 @@ tar --no-xattrs --format=ustar -czf - -C "$DIR" . | ssh "${SSH_OPTS[@]}" "$PI" "
 SSH_TTY_FLAG="" DOCKER_TTY_FLAG=""
 if [ -t 0 ]; then SSH_TTY_FLAG="-t" DOCKER_TTY_FLAG="-it"; fi
 
-SYNC="docker exec $ENVS $CONTAINER python3 -u /tmp/e2e/firmware/sync_firmware.py --yes ||
+SYNC="docker exec $ENVS $CONTAINER python3 -u /tmp/e2e/ci/sync_firmware.py --yes ||
         echo 'run_all: firmware sync failed, running the tests anyway' >&2"
 if [ "${FIRMWARE_UPDATE:-on}" = off ]; then
     SYNC="echo 'run_all: firmware sync skipped (FIRMWARE_UPDATE=off)'"

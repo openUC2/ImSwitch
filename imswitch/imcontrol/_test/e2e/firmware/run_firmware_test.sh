@@ -4,7 +4,7 @@
 #
 #   ./run_firmware_test.sh
 #
-# FLASHES FIRMWARE: sync_firmware.py --yes first brings every board that
+# FLASHES FIRMWARE: ci/sync_firmware.py --yes first brings every board that
 # answers to the firmware server's version, the master before the CAN nodes
 # (FIRMWARE_UPDATE=off skips it). A failed sync is reported and the tests run
 # anyway; they only read.
@@ -37,10 +37,11 @@ if [ "${FIRMWARE_UPDATE:-on}" = off ]; then
 fi
 
 # Ship the shared conftest.py alongside the test: pytest reads it from the same
-# directory, so everything lands in one temporary folder. ustar carries no pax
-# headers, so GNU tar on the Pi does not warn about macOS SCHILY.fflags.
+# directory, so everything lands in one temporary folder, the sync from ci/
+# included. ustar carries no pax headers, so GNU tar on the Pi does not warn
+# about macOS SCHILY.fflags.
 tar --no-xattrs --format=ustar -czf - -C "$DIR/.." conftest.py \
-    -C "$DIR" test_firmware_server.py sync_firmware.py |
+    -C "$DIR" test_firmware_server.py -C "$DIR/../ci" sync_firmware.py |
 ssh "$PI" "cat > /tmp/firmware_tests.tgz \
     && docker cp /tmp/firmware_tests.tgz $CONTAINER:/tmp/ >/dev/null \
     && docker exec $CONTAINER sh -c 'rm -rf /tmp/firmware_tests \

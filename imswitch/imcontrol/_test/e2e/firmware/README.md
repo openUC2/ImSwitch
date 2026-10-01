@@ -1,7 +1,7 @@
 # Firmware
 
 The firmware server, and whether every board runs its version. The tests only
-read; `sync_firmware.py` flashes.
+read; `../ci/sync_firmware.py` flashes (see `../ci/README.md`).
 
 | Test | Checks |
 |---|---|
@@ -14,29 +14,15 @@ read; `sync_firmware.py` flashes.
 ## Run
 
 ```bash
-./run_firmware_test.sh          # sync, then the tests
-./run_firmware_sync.sh          # sync only: prints what it would flash
-./run_firmware_sync.sh --yes    # sync only: flashes
+./run_firmware_test.sh              # sync, then the tests
+../ci/run_firmware_sync.sh          # sync only: prints what it would flash
+../ci/run_firmware_sync.sh --yes    # sync only: flashes
 ```
 
 | Knob | Default | |
 |---|---|---|
 | `FIRMWARE_SCAN_TIMEOUT` | `5` | seconds for the CAN scan |
-| `FIRMWARE_UPDATE` | `on` | `off` skips the sync in `run_firmware_test.sh` and `run_all.sh` |
-
-## Sync
-
-`sync_firmware.py` brings every board that answers to the server's version,
-also back from a newer developer build. It drives ImSwitch's own update
-(`checkFirmwareUpdates`, `startFirmwareUpdate`, `getFirmwareUpdateStatus`):
-sha256-checked downloads, lasers off, and a board counts as done only when it
-reports the new version. The master goes first, in a run of its own: a master
-built before versioned firmware reads at most 39 characters of a node's
-version, so no node would verify behind it.
-
-`run_firmware_test.sh` and `run_all.sh` run it with `--yes` before the tests. A
-failed sync is reported and the tests run anyway. Exit codes: `0` in sync, `1`
-a board is not, `2` could not run.
+| `FIRMWARE_UPDATE` | `on` | `off` skips the sync in `run_firmware_test.sh`, `run_all.sh` and `hil-run.sh` |
 
 ## Worth knowing
 

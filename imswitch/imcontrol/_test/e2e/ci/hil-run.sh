@@ -118,18 +118,21 @@ tar --format=ustar -czf - -C "$SUITE_DIR" --exclude=__pycache__ --exclude=ci . |
 
 # ---------------------------------------------------------------------------
 # Firmware sync: every board to the firmware server's version before the
-# tests, as run_all.sh does (firmware/sync_firmware.py, the master first).
+# tests, as run_all.sh does (ci/sync_firmware.py, the master first).
 # FIRMWARE_UPDATE=off skips it. A failed sync only warns: the firmware tests
 # report the boards themselves, and an image without ImSwitch's update
 # endpoints cannot sync at all.
+#
+# ci/ is not shipped with the suite, so the script goes in on stdin. It runs
+# in the container all the same: it needs requests, which the Pi host lacks.
 # ---------------------------------------------------------------------------
 
 if [ "${FIRMWARE_UPDATE:-on}" = off ]; then
     log "firmware sync skipped (FIRMWARE_UPDATE=off)"
 else
     log "syncing the firmware"
-    docker exec -e "IMSWITCH_URL=$CONTAINER_URL" "$CONTAINER" \
-        python3 -u /tmp/e2e/firmware/sync_firmware.py --yes 2>&1 |
+    docker exec -i -e "IMSWITCH_URL=$CONTAINER_URL" "$CONTAINER" \
+        python3 -u - --yes < "$DIR/sync_firmware.py" 2>&1 |
         sed 's/^/[hil-run]   /' ||
         warn "firmware sync failed, running the tests anyway"
 fi

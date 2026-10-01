@@ -1,6 +1,6 @@
 """Check the firmware server and whether every board runs its version.
 
-Read-only: nothing here flashes anything. sync_firmware.py does that, and
+Read-only: nothing here flashes anything. ci/sync_firmware.py does that, and
 run_firmware_test.sh and run_all.sh run it before these tests.
 
 The version checks use ImSwitch's own comparison (checkFirmwareUpdates): the

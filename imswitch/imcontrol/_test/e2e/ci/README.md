@@ -10,13 +10,16 @@ whatever already runs.
   firmware server, caddy, …) with forklift. OS files under `/etc` and `/usr`
   only change at the next boot, so they are not part of the test.
 
-Two files, one job:
+The files:
 
 - `hil-setup.py` — the rig side, standard library only (the Pi host has no
   `requests`): `swap-in` checks the rig, swaps the image or pallet in and waits
   until every detector delivers a frame; `restore` puts the rig back.
 - `hil-run.sh` — the rest: arguments, the lock, `swap-in`, shipping the suite,
-  pytest, and `restore` on every exit path.
+  the firmware sync, pytest, and `restore` on every exit path.
+- `sync_firmware.py` — the firmware sync before the tests (see
+  [Firmware sync](#firmware-sync)). Runs inside the ImSwitch container.
+- `run_firmware_sync.sh` — that sync alone, from your machine.
 
 ## Run
 
@@ -71,7 +74,7 @@ keeps running on the swapped image.
    `400` there means none is bound and is not waited on).
 6. **Ships** the suite into the container (`hil-run.sh`).
 7. **Syncs the firmware**: every board to the firmware server's version, the
-   master first (`firmware/sync_firmware.py --yes`, driven by the image under
+   master first (`sync_firmware.py --yes`, driven by the image under
    test). A failed sync only warns; `FIRMWARE_UPDATE=off` skips it.
 8. **Runs** pytest with `--junitxml` (`hil-run.sh`).
 9. **Restores** on every exit path, Ctrl+C and SIGTERM included (`restore`).
@@ -108,6 +111,27 @@ By hand, for debugging on a swapped rig — nothing puts it back until `restore`
 | `FORKLIFT_WORKSPACE` | `$HOME` | the forklift workspace `--pallet` swaps the local pallet of |
 
 Test knobs (`PHOTON_*`, …) are read from the environment as usual.
+
+## Firmware sync
+
+`sync_firmware.py` brings every board that answers to the firmware server's
+version, also back from a newer developer build. It drives ImSwitch's own
+update (`checkFirmwareUpdates`, `startFirmwareUpdate`,
+`getFirmwareUpdateStatus`): sha256-checked downloads, lasers off, and a board
+counts as done only when it reports the new version. The master goes first, in
+a run of its own: a master built before versioned firmware reads at most 39
+characters of a node's version, so no node would verify behind it.
+
+It is setup, not a test: what the boards run is checked by
+`../firmware/test_firmware_server.py`. `hil-run.sh`, `../run_all.sh` and
+`../firmware/run_firmware_test.sh` run it with `--yes` before the tests; a
+failed sync is reported and the tests run anyway. Exit codes: `0` in sync, `1`
+a board is not, `2` could not run.
+
+```bash
+./run_firmware_sync.sh          # prints what it would flash
+./run_firmware_sync.sh --yes    # flashes
+```
 
 ## Worth knowing
 

@@ -22,7 +22,7 @@ Sits alongside `../unit/` (no server) and `../api/` (headless server).
 ```
 
 `run_all.sh` ships this folder into the container on the Pi, **syncs every
-board to the firmware server's version** (`firmware/sync_firmware.py`, master
+board to the firmware server's version** (`ci/sync_firmware.py`, master
 first; `FIRMWARE_UPDATE=off` skips it),
 **parks the stage** on objective slot 0
 (`motor/move_to_transport.py`), starts the camera stream

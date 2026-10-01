@@ -1,0 +1,795 @@
+{
+    "detectors": {
+        "WidefieldCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "HikCamManager",
+            "managerProperties": {
+                "isRGB": 0,
+                "cameraListIndex_old": 1,
+                "cameraListIndex_": 596,
+                "cameraListIndex": 507,
+                "hikcam": {
+                    "exposure": 0,
+                    "gain": 0,
+                    "blacklevel": 100,
+                    "image_width": 1000,
+                    "image_height": 1000
+                }
+            },
+            "forAcquisition": true,
+            "forFocusLock": false,
+            "defaultStreamSettings": {}
+        },
+        "ObservationCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "OpenCVCamManager",
+            "managerProperties": {
+                "cameraListIndex": 0,
+                "cameraListIndexWIN": 0,
+                "isRGB": true,
+                "cameraEffPixelsize": 12.2,
+                "opencvcam": {
+                    "exposure": 0,
+                    "gain": 0,
+                    "blacklevel": 100,
+                    "image_width": 1000,
+                    "image_height": 1000,
+                    "pixel_format": "Mono12"
+                }
+            },
+            "forAcquisition": false,
+            "forFocusLock": false,
+            "defaultStreamSettings": {}
+        }
+    },
+    "lasers": {
+        "LED": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDLaserManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "channel_index": 4
+            },
+            "valueRangeMin": 0,
+            "valueRangeMax": 1023,
+            "wavelength": 1024,
+            "freqRangeMin": 0,
+            "freqRangeMax": 0,
+            "freqRangeInit": 0,
+            "valueRangeStep": 1.0
+        }
+    },
+    "LEDs": {},
+    "LEDMatrixs": {
+        "ESP32 LEDMatrix": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDMatrixManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "Nx": 4,
+                "Ny": 4,
+                "wavelength": 488,
+                "valueRangeMin": 0,
+                "valueRangeMax": 32768
+            }
+        }
+    },
+    "positioners": {
+        "ESP32Stage": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32StageManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "isEnable": true,
+                "enableauto": false,
+                "stepsizeXDocu": "200*16 per revolution at 1 pitch",
+                "stepsizeX": -0.3125,
+                "stepsizeY": -0.3125,
+                "stepsizeA": 0.3125,
+                "stepsizeZ": 0.3125,
+                "homeSpeedX": 20000,
+                "homeSpeedY": 20000,
+                "homeSpeedZ": 10000,
+                "homeSpeedA": 20000,
+                "isDualaxis": false,
+                "backlashXOld": 15,
+                "backlashYOld": 40,
+                "backlashX": 0,
+                "backlashY": 0,
+                "homeEndstoppolarityA": 1,
+                "homeEndstoppolarityX": 1,
+                "homeEndstoppolarityY": 1,
+                "homeEndstoppolarityZ": 1,
+                "homeDirectionA": -1,
+                "homeDirectionX": 1,
+                "homeDirectionY": 1,
+                "homeDirectionZ": -1,
+                "homeXenabled": 1,
+                "homeYenabled": 1,
+                "homeZenabled": 1,
+                "homeAenabled": 1,
+                "homeOnStartX": 0,
+                "homeOnStartY": 0,
+                "homeOnStartZ": 0,
+                "homeOnStartA": 0,
+                "safePositionZHoming": -5000,
+                "initialSpeedX": 10000,
+                "initialSpeedY": 10000,
+                "initialSpeedZ": 10000,
+                "initialSpeedA": 10000,
+                "frameHomeOnStart": 0,
+                "maxSpeedX": 10000,
+                "maxSpeedY": 10000,
+                "maxSpeedZ": 10000,
+                "maxSpeedA": 10000,
+                "backlashZ": 0,
+                "backlashA": 0,
+                "homeEndposReleaseX": 0,
+                "homeTimeoutX": 20000,
+                "homeEndposReleaseY": 0,
+                "homeTimeoutY": 20000,
+                "homeEndposReleaseZ": -10000,
+                "homeTimeoutZ": 20000,
+                "homeEndposReleaseA": 0,
+                "homeTimeoutA": 20000
+            },
+            "axes": [
+                "X",
+                "Y",
+                "Z",
+                "A"
+            ],
+            "isPositiveDirection": true,
+            "forPositioning": true,
+            "forScanning": true,
+            "resetOnClose": true,
+            "stageOffsets": {
+                "stageOffsetPositionX": 580.5120992601733,
+                "stageOffsetPositionY": 375.35950986436364,
+                "stageOffsetPositionZ": 0.0,
+                "stageOffsetPositionA": 0.0
+            }
+        }
+    },
+    "galvoScanners": {},
+    "rs232devices": {
+        "ESP32": {
+            "managerName": "ESP32Manager",
+            "managerProperties": {
+                "host_": "192.168.43.129",
+                "serialport": "/dev/ttyUSB0",
+                "baudrate": 921600,
+                "debug": true
+            }
+        }
+    },
+    "slm": null,
+    "sim": null,
+    "dpc": null,
+    "objective": {
+        "pixelsizes": [
+            1.0,
+            0.32
+        ],
+        "NAs": [
+            0.1,
+            0.75
+        ],
+        "magnifications": [
+            4,
+            20
+        ],
+        "objectiveNames": [
+            "No Name",
+            "20x Nikon"
+        ],
+        "objectivePositions": [
+            0.0,
+            29000.0
+        ],
+        "homeDirection": 1,
+        "homePolarity": 0,
+        "homeSpeed": 20000,
+        "homeAcceleration": 200000,
+        "moveSpeed": 20000,
+        "calibrateOnStart": false,
+        "active": true
+    },
+    "nidaq": {
+        "timerCounterChannel": null,
+        "startTrigger": false
+    },
+    "roiscan": null,
+    "lightsheet": null,
+    "webrtc": null,
+    "hypha": null,
+    "mockxx": null,
+    "jetsonnano": null,
+    "Stresstest": null,
+    "HistoScan": null,
+    "Workflow": null,
+    "FlowStop": null,
+    "Lepmon": null,
+    "PixelCalibration": {
+        "affineCalibrations": {
+            "WidefieldCamera::1": {
+                "affine_matrix": [
+                    [
+                        0.13387522627384418,
+                        0.0008295700597045442,
+                        0.0
+                    ],
+                    [
+                        -0.0008289487694974866,
+                        -0.1327312095527231,
+                        0.0
+                    ]
+                ],
+                "metrics": {
+                    "scale_x_um_per_pixel": 0.13431062286760184,
+                    "scale_y_um_per_pixel": -0.13229581295968934,
+                    "rotation_deg": 152.29867654726792,
+                    "rmse_um": 1.004866405353079e-14,
+                    "quality": "manual",
+                    "method": "manual_four_point",
+                    "condition_number": 1.0152295818199963,
+                    "determinant": -0.017768733041391625,
+                    "point_a1": [
+                        498.3001113106458,
+                        289.94008853691633
+                    ],
+                    "point_a2": [
+                        685.0483859956366,
+                        288.77378595421885
+                    ],
+                    "point_b1": [
+                        685.0483859956366,
+                        196.6358819211176
+                    ],
+                    "point_b2": [
+                        686.2155627124179,
+                        8.27801481547394
+                    ],
+                    "movement_distance_x_um": 100,
+                    "movement_distance_y_um": 100,
+                    "pixel_shift_x": [
+                        746.9930987399634,
+                        -4.665210330789932
+                    ],
+                    "pixel_shift_y": [
+                        4.668706867124911,
+                        -753.4314684225747
+                    ]
+                },
+                "timestamp": "2026-06-15T10:17:42",
+                "detector_name": "WidefieldCamera",
+                "objective_id": "1"
+            },
+            "WidefieldCamera::0": {
+                "affine_matrix": [
+                    [
+                        0.4700520833333334,
+                        -0.011841844595023656,
+                        0.0
+                    ],
+                    [
+                        0.0,
+                        0.473673783800938,
+                        0.0
+                    ]
+                ],
+                "metrics": {
+                    "scale_x_um_per_pixel": 0.47809172743811545,
+                    "scale_y_um_per_pixel": 0.46570843233181447,
+                    "rotation_deg": 126.85661060327128,
+                    "rmse_um": 3.7160884038857855e-17,
+                    "quality": "manual",
+                    "method": "manual_four_point",
+                    "condition_number": 1.02659023166984,
+                    "determinant": 0.22265134889601387,
+                    "point_a1": [
+                        463.612188365651,
+                        128.8205074064449
+                    ],
+                    "point_a2": [
+                        506.1606648199446,
+                        128.8205074064449
+                    ],
+                    "point_b1": [
+                        504.03324099722994,
+                        151.17393775987526
+                    ],
+                    "point_b2": [
+                        505.0969529085873,
+                        193.39708939708942
+                    ],
+                    "movement_distance_x_um": 100,
+                    "movement_distance_y_um": 100,
+                    "pixel_shift_x": [
+                        212.7423822714681,
+                        0
+                    ],
+                    "pixel_shift_y": [
+                        5.318559556786795,
+                        211.1157581860708
+                    ]
+                },
+                "timestamp": "2026-06-13T00:43:37",
+                "detector_name": "WidefieldCamera",
+                "objective_id": "0"
+            },
+            "WidefieldCamera::default": {
+                "affine_matrix": [
+                    [
+                        0.6194146546443334,
+                        -0.0017187232999587379,
+                        8.053127106076316
+                    ],
+                    [
+                        0.0001248599458330409,
+                        0.5934397914878403,
+                        -0.25270815991324486
+                    ]
+                ],
+                "metrics": {
+                    "rmse_um": 3.0527217723873754,
+                    "max_error_um": 3.488030868057972,
+                    "mean_error_um": 3.0218266348323835,
+                    "n_inliers": 6,
+                    "n_outliers": 1,
+                    "rotation_deg": 178.28786216560442,
+                    "scale_x_um_per_pixel": 0.6194397828156673,
+                    "scale_y_um_per_pixel": 0.5934160644727754,
+                    "condition_number": 1.0438540846817363,
+                    "mean_correlation": 0.0,
+                    "min_correlation": 0.0
+                },
+                "timestamp": "2026-06-09T15:55:42",
+                "detector_name": "WidefieldCamera",
+                "objective_id": "default"
+            }
+        },
+        "defaultAffineMatrix": [
+            [
+                1.0,
+                0.0,
+                0.0
+            ],
+            [
+                0.0,
+                1.0,
+                0.0
+            ]
+        ]
+    },
+    "experiment": {
+        "omeroServerUrl": "localhost",
+        "omeroUsername": "",
+        "omeroPassword": "",
+        "omeroPort": 4064,
+        "omeroGroupId": -1,
+        "omeroProjectId": -1,
+        "omeroDatasetId": -1,
+        "omeroEnabled": false,
+        "omeroConnectionTimeout": 30,
+        "omeroUploadTimeout": 300,
+        "overviewCameraName": "ObservationCamera"
+    },
+    "uc2Config": null,
+    "ism": null,
+    "focusLock": null,
+    "arkitekt": {
+        "enabled": true,
+        "appName": "FRAME Fork Approval",
+        "redeemToken": "3537b7ed-f341-4c09-86ce-c993764e1766",
+        "url": "go.arkitekt.live",
+        "syncInAsync": true,
+        "deconvolveActionHash": "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"
+    },
+    "sila2": null,
+    "fovLock": null,
+    "autofocus": null,
+    "scan": null,
+    "etSTED": null,
+    "rotators": null,
+    "microscopeStand": null,
+    "storage": null,
+    "instrument": null,
+    "overviewRegistration": {
+        "ObservationCamera__Heidstar 4x Histosample": {
+            "cameraName": "ObservationCamera",
+            "layoutName": "Heidstar 4x Histosample",
+            "createdAt": "2026-05-12T11:33:24.134628",
+            "slots": {
+                "1": {
+                    "slotId": "1",
+                    "slotName": "Slide1",
+                    "stagePosition": {
+                        "x": -1643.8469165813713,
+                        "y": 18680.005437563974,
+                        "z": 7772.8125
+                    },
+                    "cornersPx": [
+                        {
+                            "x": 266.88932392895015,
+                            "y": 36.36551484986945
+                        },
+                        {
+                            "x": 433.2358739534869,
+                            "y": 30.3498490535248
+                        },
+                        {
+                            "x": 395.15654322497846,
+                            "y": 355.19580205613573
+                        },
+                        {
+                            "x": 295.94986580070656,
+                            "y": 358.2036349543081
+                        }
+                    ],
+                    "slotStageCorners": [
+                        {
+                            "x": 4900.0,
+                            "y": 3600.0
+                        },
+                        {
+                            "x": 31900.0,
+                            "y": 3600.0
+                        },
+                        {
+                            "x": 31900.0,
+                            "y": 77600.0
+                        },
+                        {
+                            "x": 4900.0,
+                            "y": 77600.0
+                        }
+                    ],
+                    "warpMatrix": [
+                        [
+                            154.02037195236272,
+                            -19.738805484436025,
+                            -35733.90398634493
+                        ],
+                        [
+                            4.605888915374215,
+                            125.65048982885942,
+                            -2378.8460102969475
+                        ],
+                        [
+                            -2.5750291332973597e-05,
+                            -0.0011877673367824383,
+                            1.0
+                        ]
+                    ],
+                    "inverseHomography": [
+                        [
+                            0.006434964350505089,
+                            0.003257817338487242,
+                            237.69624403443797
+                        ],
+                        [
+                            -0.0002380993859001602,
+                            0.008021124548376677,
+                            10.572799535036753
+                        ],
+                        [
+                            -1.1710446673736204e-07,
+                            9.611119488401265e-06,
+                            1.0186787734787057
+                        ]
+                    ],
+                    "imageWidth": 640,
+                    "imageHeight": 480,
+                    "reprojectionError": 0.0023733712056310217,
+                    "overlayImageRef": "overlay_slot1.png",
+                    "overlayImageJpegRef": "overlay_slot1.jpg",
+                    "snapshotId": "slot1_20260512_113305",
+                    "snapshotTimestamp": "20260512_113305",
+                    "updatedAt": "2026-05-12T11:33:12.343104"
+                },
+                "2": {
+                    "slotId": "2",
+                    "slotName": "Slide2",
+                    "stagePosition": {
+                        "x": -1643.8469165813713,
+                        "y": 18680.005437563974,
+                        "z": 7772.8125
+                    },
+                    "cornersPx": [
+                        {
+                            "x": 462.2964158252433,
+                            "y": 29.34723808746736
+                        },
+                        {
+                            "x": 630.6471411512805,
+                            "y": 32.355070985639685
+                        },
+                        {
+                            "x": 522.4216748702565,
+                            "y": 356.19841302219317
+                        },
+                        {
+                            "x": 413.19412093848246,
+                            "y": 356.19841302219317
+                        }
+                    ],
+                    "slotStageCorners": [
+                        {
+                            "x": 34900.0,
+                            "y": 3600.0
+                        },
+                        {
+                            "x": 61900.0,
+                            "y": 3600.0
+                        },
+                        {
+                            "x": 61900.0,
+                            "y": 77600.0
+                        },
+                        {
+                            "x": 34900.0,
+                            "y": 77600.0
+                        }
+                    ],
+                    "warpMatrix": [
+                        [
+                            150.00753734288344,
+                            -13.628393352331981,
+                            -35655.61410498705
+                        ],
+                        [
+                            -2.6027805812247338,
+                            135.1727855429736,
+                            670.4788758803728
+                        ],
+                        [
+                            -3.354098687145269e-05,
+                            -0.0010412499569172967,
+                            1.0
+                        ]
+                    ],
+                    "inverseHomography": [
+                        [
+                            0.006763715128188887,
+                            0.002526596599595024,
+                            239.4703868788663
+                        ],
+                        [
+                            0.00012844809041603463,
+                            0.007407908513199223,
+                            -0.3869506281578426
+                        ],
+                        [
+                            3.6060824892863446e-07,
+                            7.798228963592439e-06,
+                            1.0076291607775072
+                        ]
+                    ],
+                    "imageWidth": 640,
+                    "imageHeight": 480,
+                    "reprojectionError": 0.0034602964064931255,
+                    "overlayImageRef": "overlay_slot2.png",
+                    "overlayImageJpegRef": "overlay_slot2.jpg",
+                    "snapshotId": "slot2_20260512_113318",
+                    "snapshotTimestamp": "20260512_113318",
+                    "updatedAt": "2026-05-12T11:33:24.131565"
+                },
+                "3": {
+                    "slotId": "3",
+                    "slotName": "Slide3",
+                    "stagePosition": {
+                        "x": 80356.2213740458,
+                        "y": 18680.076335877864,
+                        "z": 7773.4375
+                    },
+                    "cornersPx": [
+                        {
+                            "x": 197.74527602718487,
+                            "y": 54.41251223890339
+                        },
+                        {
+                            "x": 378.1210531622247,
+                            "y": 50.402068374673625
+                        },
+                        {
+                            "x": 358.0793001472203,
+                            "y": 349.1801362597911
+                        },
+                        {
+                            "x": 245.8454832631955,
+                            "y": 349.1801362597911
+                        }
+                    ],
+                    "slotStageCorners": [
+                        {
+                            "x": 64900.0,
+                            "y": 3600.0
+                        },
+                        {
+                            "x": 91900.0,
+                            "y": 3600.0
+                        },
+                        {
+                            "x": 91900.0,
+                            "y": 77600.0
+                        },
+                        {
+                            "x": 64900.0,
+                            "y": 77600.0
+                        }
+                    ],
+                    "warpMatrix": [
+                        [
+                            145.38729606659166,
+                            -101.9467396308515,
+                            37982.44501725299
+                        ],
+                        [
+                            3.426232021042641,
+                            142.58605196996555,
+                            -5042.062183527183
+                        ],
+                        [
+                            4.4152474497972225e-05,
+                            -0.0012124809559877889,
+                            0.9999999999999999
+                        ]
+                    ],
+                    "inverseHomography": [
+                        [
+                            0.00688682937056949,
+                            0.0028205703838874428,
+                            -247.35712664228305
+                        ],
+                        [
+                            -0.0001841322669297662,
+                            0.0072520624085075855,
+                            43.559143327077166
+                        ],
+                        [
+                            -5.273274251911571e-07,
+                            8.66845240000606e-06,
+                            1.0637360609691888
+                        ]
+                    ],
+                    "imageWidth": 640,
+                    "imageHeight": 480,
+                    "reprojectionError": 0.002874567378136392,
+                    "overlayImageRef": "overlay_slot3.png",
+                    "overlayImageJpegRef": "overlay_slot3.jpg",
+                    "snapshotId": "slot3_20260512_111333",
+                    "snapshotTimestamp": "20260512_111333",
+                    "updatedAt": "2026-05-12T11:13:33.546884"
+                },
+                "4": {
+                    "slotId": "4",
+                    "slotName": "Slide4",
+                    "stagePosition": {
+                        "x": 103356.2213740458,
+                        "y": 18680.076335877864,
+                        "z": 7773.4375
+                    },
+                    "cornersPx": [
+                        {
+                            "x": 245.8454832631955,
+                            "y": 54.41251223890339
+                        },
+                        {
+                            "x": 419.2066468429838,
+                            "y": 46.39162451044386
+                        },
+                        {
+                            "x": 380.12522846372514,
+                            "y": 348.17752529373365
+                        },
+                        {
+                            "x": 269.8955868812008,
+                            "y": 348.17752529373365
+                        }
+                    ],
+                    "slotStageCorners": [
+                        {
+                            "x": 94900.0,
+                            "y": 3600.0
+                        },
+                        {
+                            "x": 121900.0,
+                            "y": 3600.0
+                        },
+                        {
+                            "x": 121900.0,
+                            "y": 77600.0
+                        },
+                        {
+                            "x": 94900.0,
+                            "y": 77600.0
+                        }
+                    ],
+                    "warpMatrix": [
+                        [
+                            162.0290151281951,
+                            -124.9214760147036,
+                            57993.09749243543
+                        ],
+                        [
+                            7.4707612027875605,
+                            149.7159005703096,
+                            -6529.88207709147
+                        ],
+                        [
+                            9.627269591221062e-05,
+                            -0.0011844507075759471,
+                            1.0
+                        ]
+                    ],
+                    "inverseHomography": [
+                        [
+                            0.006263559897593982,
+                            0.0024806699732217805,
+                            -347.0447573935568
+                        ],
+                        [
+                            -0.0003573079280426492,
+                            0.006901656223914506,
+                            65.78839478458357
+                        ],
+                        [
+                            -1.026223425541594e-06,
+                            7.935850811870944e-06,
+                            1.1113340451493625
+                        ]
+                    ],
+                    "imageWidth": 640,
+                    "imageHeight": 480,
+                    "reprojectionError": 0.0026694819019557076,
+                    "overlayImageRef": "overlay_slot4.png",
+                    "overlayImageJpegRef": "overlay_slot4.jpg",
+                    "snapshotId": "slot4_20260512_111535",
+                    "snapshotTimestamp": "20260512_111535",
+                    "updatedAt": "2026-05-12T11:15:35.088100"
+                }
+            }
+        }
+    },
+    "pulseStreamer": {
+        "ipAddress": null
+    },
+    "rois": {},
+    "ledPresets": {},
+    "defaultLEDPresetForScan": null,
+    "laserPresets": {},
+    "defaultLaserPresetForScan": null,
+    "availableWidgets": [
+        "Settings",
+        "View",
+        "Recording",
+        "Image",
+        "Laser",
+        "Positioner",
+        "Autofocus",
+        "UC2Config",
+        "PixelCalibration",
+        "Objective",
+        "Experiment",
+        "LEDMatrix",
+        "Composite",
+        "LiveView",
+        "Demo",
+        "Arkitekt",
+        "StageCenterCalibration"
+    ],
+    "stageOffsets": {},
+    "Flatfield": null,
+    "pyroServerInfo": {
+        "name": "ImSwitchServer",
+        "host": "0.0.0.0",
+        "port": 54333,
+        "active": false
+    }
+}

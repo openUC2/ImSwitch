@@ -21,6 +21,7 @@ import {
   Tune as TuneIcon,
   NetworkCheck as NetworkCheckIcon,
   DeviceHub as DeviceHubIcon,
+  Hub as HubIcon,
   Speed as SpeedIcon,
   Thermostat as ThermostatIcon,
   Insights as InsightsIcon,
@@ -208,6 +209,20 @@ export const APP_REGISTRY = {
       "processing",
     ],
     pluginId: "STORMArkitekt",
+  },
+
+  arkitekt: {
+    id: "arkitekt",
+    name: "Arkitekt",
+    description:
+      "Bind this microscope to an Arkitekt server (cloud or a local one, e.g. on a NAS) so notebooks, apps and workflows can drive it. Shows the login, what is offered, remote calls and the images sent.",
+    category: APP_CATEGORIES.SYSTEM,
+    icon: HubIcon,
+    enabled: false,
+    essential: false,
+    keywords: ["arkitekt", "remote", "workflow", "server", "nas", "mikro", "login", "bind"],
+    pluginId: "Arkitekt",
+    requiredControllers: ["ArkitektController"],
   },
 
   stageMap: {

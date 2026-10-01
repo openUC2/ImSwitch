@@ -60,6 +60,7 @@ import goniometerReducer from "./slices/GoniometerSlice";
 import detectorParametersReducer from "./slices/DetectorParametersSlice";
 import backendCapabilitiesReducer from "./slices/BackendCapabilitiesSlice";
 import stageMapReducer from "./slices/StageMapSlice";
+import arkitektReducer from "./slices/ArkitektSlice";
 import onboardingReducer from "./slices/OnboardingSlice";
 import homingReducer from "./slices/HomingSlice";
 import firmwareUpdateReducer from "./slices/FirmwareUpdateSlice";
@@ -202,6 +203,7 @@ const rootReducer = combineReducers({
   detectorParametersState: detectorParametersReducer,
   backendCapabilities: backendCapabilitiesReducer,
   stageMapState: stageMapReducer, // runtime-only stage map tiles (not persisted)
+  arkitektState: arkitektReducer, // runtime-only Arkitekt connection + remote-call log
   onboardingState: onboardingReducer,
   i2cState: i2cReducer,
 });

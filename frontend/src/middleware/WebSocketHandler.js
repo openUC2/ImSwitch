@@ -27,6 +27,7 @@ import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 import * as storageSlice from "../state/slices/StorageSlice.js";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
 import * as stageMapSlice from "../state/slices/StageMapSlice.js";
+import * as arkitektSlice from "../state/slices/ArkitektSlice.js";
 import { fetchAvailableControllers } from "../state/slices/BackendCapabilitiesSlice";
 
 import { io } from "socket.io-client";
@@ -1147,6 +1148,40 @@ const WebSocketHandler = () => {
           }
         } catch (error) {
           console.error("Error in sigStageMapStatus handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigArkitektStatus") {
+        // ArkitektManager connection state; during a login it carries the
+        // device code (userCode) and the approval link (approveUrl)
+        try {
+          const arkitektStatus = dataJson.args?.p0;
+          if (arkitektStatus) {
+            dispatch(arkitektSlice.setStatus(arkitektStatus));
+          }
+        } catch (error) {
+          console.error("Error in sigArkitektStatus handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigArkitektActivity") {
+        // One remote call from Arkitekt, as it starts, streams and ends
+        try {
+          const entry = dataJson.args?.p0;
+          if (entry?.id != null) {
+            dispatch(arkitektSlice.upsertActivity(entry));
+          }
+        } catch (error) {
+          console.error("Error in sigArkitektActivity handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigArkitektUpload") {
+        // An image the microscope stored in Arkitekt (with a JPEG thumbnail)
+        try {
+          const upload = dataJson.args?.p0;
+          if (upload?.id != null) {
+            dispatch(arkitektSlice.addUpload(upload));
+          }
+        } catch (error) {
+          console.error("Error in sigArkitektUpload handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateOMEZarrStore") {

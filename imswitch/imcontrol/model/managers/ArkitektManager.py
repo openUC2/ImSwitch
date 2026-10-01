@@ -1,335 +1,365 @@
-"""
-ArkitektManager for ImSwitch integration with Arkitekt services.
+"""ArkitektManager: binds this microscope to an Arkitekt server.
 
-This manager handles the connection to Arkitekt services and provides
-methods for image processing and deconvolution using remote services.
-Configuration is loaded from setupInfo similar to FocusLockController.
-"""
+It owns the connection only. What the microscope offers is declared by
+ArkitektController, which hands in an app factory. Binding uses the device-code
+login. bind() starts it on a background thread, and the code and its approval
+link appear in status(). Someone approves it in a browser, then the agent
+starts providing. unbind() stops the agent and forgets the stored login on this
+machine.
 
-from typing import Optional, Dict, Any
-from contextvars import copy_context, Context
-from imswitch.imcommon.model import initLogger
-from imswitch.imcommon.model import dirtools
+The connection runs in its own thread, on its own asyncio loop. Sync actions
+still reach it through koil (rekuest runs them via koil.run_threaded), and a
+pending login or a running agent can be cancelled from any thread.
+
+The arkitekt package (pip install "arkitekt[rekuest,mikro]") is imported
+lazily. Without it, ImSwitch starts normally and status() names what is
+missing.
+"""
+import asyncio
+import datetime
+import hashlib
+import importlib.util
 import os
-# Import this to make sure that mikro_next is available when ArkitektManager is used
+import re
+import threading
+from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse
+
+from imswitch.imcommon.model import initLogger
+from imswitch.imcontrol.model.SetupInfo import ArkitektInfo
+
+REQUIRED_PACKAGES = ("arkitekt", "rekuest")
+DEFAULT_URL = "https://go.arkitekt.live"
+# fakts refuses to send credentials over plain http to anything but localhost
+# unless this is set (a NAS without TLS).
+INSECURE_TRANSPORT_ENV = "FAKTS_ALLOW_INSECURE_TRANSPORT"
+# Retry an automatic reconnect (stored login, no prompt) after this long, e.g.
+# when the server on the NAS is not up yet at boot.
+RECONNECT_DELAY_S = 30.0
+# arkitekt.constants: the platformdirs identity fakts caches sessions under
+ARKITEKT_DIRS = ("arkitekt", "arkitekt.live")
+
+UNAVAILABLE = "unavailable"        # the arkitekt package is not installed
+DISABLED = "disabled"              # "enabled": false in the setup
+UNBOUND = "unbound"                # not connected
+CONNECTING = "connecting"          # discovery, stored login, registering the agent
+AWAITING_LOGIN = "awaiting_login"  # device code shown, waiting for approval in a browser
+CONNECTED = "connected"            # the agent provides the microscope's actions
+ERROR = "error"
+
+AppFactory = Callable[[str, str], Any]
+"""(identifier, version) -> arkitekt.App"""
 
 
-easy = None  # Placeholder if arkitekt_next is not available
-Koil = None
-Image = None
+def _now() -> str:
+    return datetime.datetime.now().isoformat(timespec="seconds")
 
 
-def ensure_context_in_thread(context: Context):
-    """Ensure context variables are available in the current thread."""
-    for ctx, value in context.items():
-        ctx.set(value)
+def _slug(name: str) -> str:
+    """An app identifier from the configured name ("FRAME Fork" -> "frame-fork")."""
+    return re.sub(r"[^a-z0-9._-]+", "-", (name or "").strip().lower()).strip("-") or "imswitch"
 
 
-ARKITEKT_CONTEXT: Context | None = None
+def _is_insecure(url: str) -> bool:
+    """Plain http to a host that is not this machine: fakts needs an opt-in."""
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    return parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1", "::1")
 
 
-def ensure_global_context():
-    """Ensure a global context is available."""
-    global ARKITEKT_CONTEXT
-    if ARKITEKT_CONTEXT is None:
-        ARKITEKT_CONTEXT = copy_context()
-    return ARKITEKT_CONTEXT
+class StoredLoginInvalid(RuntimeError):
+    """An automatic reconnect hit the device-code login: the stored session
+    expired or was revoked. Asking again unattended would only pile up codes."""
 
 
-def get_global_context():
-    """Get the global context."""
-    return ARKITEKT_CONTEXT
+def cache_file(identifier: str, version: str, url: str) -> str:
+    """Where fakts keeps an app's session (a rotating refresh token): one file
+    per app identifier, version and server, as arkitekt.app.fakts._cache_path
+    names it. Written out so that status() need not import arkitekt."""
+    from platformdirs import user_state_dir
+    key = hashlib.sha256(url.encode()).hexdigest()[:6]
+    return os.path.join(user_state_dir(*ARKITEKT_DIRS), "cache",
+                        f"{identifier}-{version}-{key}_fakts_cache.json")
 
 
-def set_global_context_locally():
-    """Set the global context."""
-    global ARKITEKT_CONTEXT
-    if ARKITEKT_CONTEXT is None:
-        raise RuntimeError("Global context not initialized")
-    ensure_context_in_thread(ARKITEKT_CONTEXT)
-
+def _friendly_error(e: BaseException, url: str) -> str:
+    """One sentence for the panel; the full exception goes to the log."""
+    kind = type(e).__name__
+    text = str(e) or kind
+    if kind == "InsecureTransportError":
+        return (f"{url} is plain http. Enable 'Allow insecure (http) login' for a server "
+                f"without TLS, or use https.")
+    if kind in ("DeviceCodeExpiredError", "DeviceCodeTimeoutError"):
+        return "The login code expired before it was approved. Bind again for a new code."
+    if isinstance(e, StoredLoginInvalid):
+        return text
+    if kind == "UserDeniedError":
+        return "The login was declined in the browser."
+    if "discover" in text.lower() or kind in ("ClientConnectorError", "DiscoveryError"):
+        return f"Could not reach an Arkitekt server at {url}: {text}"
+    return f"{kind}: {text}"
 
 
 class ArkitektManager:
-    """Manager for Arkitekt integration in ImSwitch."""
+    """The connection of this microscope to an Arkitekt server."""
 
-    def __init__(self, setupInfo):
-        """
-        Initialize the ArkitektManager.
-
-        Args:
-            setupInfo: Setup information containing Arkitekt configuration
-            masterController: Reference to the master controller
-        """
+    def __init__(self, setupInfo: Optional[ArkitektInfo]):
         self.__logger = initLogger(self)
-        try: # TODO: TAKES Loong
-            # Import here to avoid issues if arkitekt_next is not installed
-            from arkitekt_next import easy
-            from koil import Koil    
-            from mikro_next.api.schema import Image
-        except ImportError:
-            self.__logger.warning(
-                "arkitekt_next or koil not available - Arkitekt features disabled"
-            )
-            self._config = {"enabled": False}
+        self.info = setupInfo if setupInfo is not None else ArkitektInfo()
+        self._missing = [p for p in REQUIRED_PACKAGES if importlib.util.find_spec(p) is None]
+        self._factory: Optional[AppFactory] = None
+        self._version = "0.0.1"
+        self._listeners: List[Callable[[dict], None]] = []
+        self._lock = threading.RLock()
+        self._thread: Optional[threading.Thread] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._task: Optional[asyncio.Task] = None
+        self._stop_requested = False
+        self._forget = False
+        self._automatic = False
+        self._retry: Optional[threading.Timer] = None
+        self._services: List[str] = []
+        self._session: Dict[str, Any] = {}
+        initial = UNAVAILABLE if self._missing else DISABLED if not self.info.enabled else UNBOUND
+        self._set(state=initial, message=self._missing_message())
+        if self._missing:
+            self.__logger.warning(self._missing_message())
+
+    # ── for the controller ──────────────────────────────────────────────────
+
+    def set_app_factory(self, factory: AppFactory, version: str) -> None:
+        """What to provide: factory(identifier, version) -> arkitekt.App.
+        *version* is the action interface's version. The stored login is kept
+        per identifier, version and server, so it must not follow ImSwitch's
+        release number."""
+        self._factory, self._version = factory, version
+
+    def add_listener(self, callback: Callable[[dict], None]) -> None:
+        """Called with status() on every change, from any thread."""
+        self._listeners.append(callback)
+
+    def is_available(self) -> bool:
+        return not self._missing
+
+    @property
+    def identifier(self) -> str:
+        return _slug(self.info.appName)
+
+    @property
+    def url(self) -> str:
+        """The server a bind goes to: the setup's url, $FAKTS_URL, the public one."""
+        return (self.info.url or os.getenv("FAKTS_URL") or DEFAULT_URL).strip()
+
+    def status(self) -> dict:
+        with self._lock:
+            session = dict(self._session)
+        url = self.url
+        return {**session,
+                "available": not self._missing, "missingPackages": list(self._missing),
+                "enabled": bool(self.info.enabled), "url": url,
+                "appName": self.identifier, "appVersion": self._version,
+                "autoConnect": bool(self.info.autoConnect),
+                "allowInsecureTransport": bool(self.info.allowInsecureTransport),
+                "useMikro": bool(self.info.useMikro),
+                "hasRedeemToken": bool(self.info.redeemToken),
+                "hasStoredLogin": self.has_stored_login(),
+                "insecureUrl": _is_insecure(url),
+                "services": list(self._services)}
+
+    def has_stored_login(self) -> bool:
+        path = self._cache_file()
+        return bool(path) and os.path.exists(path)
+
+    # ── binding ─────────────────────────────────────────────────────────────
+
+    def bind(self, url: Optional[str] = None, redeem_token: Optional[str] = None,
+             automatic: bool = False) -> dict:
+        """Connect in the background: discovery, login, then provide.
+
+        Without a stored login or redeem token this is the device-code login:
+        status() turns to "awaiting_login" with userCode and approveUrl for
+        someone to approve in a browser. Returns status() at once. *automatic*
+        (startup) retries a failed connect every RECONNECT_DELAY_S instead of
+        stopping at the error."""
+        refusal = self._refusal()
+        if refusal:
+            return {**self.status(), "status": "error", "message": refusal}
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return {**self.status(), "status": "error",
+                        "message": "Already connecting or connected. Cancel or unbind first."}
+            if url:
+                self.info.url = url.strip()
+            self._cancel_retry()
+            self._stop_requested = self._forget = False
+            self._automatic = automatic
+            if self.info.allowInsecureTransport and _is_insecure(self.url):
+                os.environ[INSECURE_TRANSPORT_ENV] = "1"
+            self._session = {}
+            self._set(state=CONNECTING, message=f"Connecting to {self.url}…",
+                      connectingSince=_now())
+            self._thread = threading.Thread(
+                target=self._run, args=(self.url, redeem_token or self.info.redeemToken or None,
+                                        automatic),
+                name="ArkitektConnection", daemon=True)
+            self._thread.start()
+        return {**self.status(), "status": "started"}
+
+    def auto_connect(self) -> None:
+        """At startup: reconnect when this microscope was bound before.
+        Never starts a browser login by itself."""
+        if self._refusal() or not self.info.autoConnect:
             return
+        if self.has_stored_login() or self.info.redeemToken:
+            self.__logger.info(f"Reconnecting to Arkitekt at {self.url} (stored login)")
+            self.bind(automatic=True)
 
-        self._setupInfo = setupInfo
+    def cancel(self) -> dict:
+        """Stop a pending login or disconnect. The stored login is kept."""
+        self._stop(forget=False)
+        return {**self.status(), "status": "success"}
 
-        # Initialize Arkitekt-related attributes
-        self.__arkitekt = None
-        self.context = None
-
-        # Check if Arkitekt configuration exists
-        if self._setupInfo is None:
-            self.__logger.info(
-                "No Arkitekt configuration found in setupInfo - Arkitekt features disabled"
-            )
-            return
-
-        # Load configuration from setupInfo (similar to FocusLockController pattern)
-        self._load_config_from_setupinfo()
-
-        # Initialize Arkitekt if enabled
-        if self._config.get("enabled", True):
-            self._initialize_arkitekt()
-        else:
-            self.__logger.info("Arkitekt integration disabled in configuration")
-
-    def _load_config_from_setupinfo(self) -> None:
-        """Load Arkitekt configuration from setupInfo (similar to FocusLockController pattern)."""
-        try:
-            arkitekt_info = self._setupInfo
-
-            # Load parameters using getattr with defaults (like FocusLockController does)
-            enabled = getattr(arkitekt_info, "enabled", True)
-            app_name = getattr(arkitekt_info, "appName", "imswitch")
-            redeem_token = getattr(arkitekt_info, "redeemToken", None)
-            url = getattr(arkitekt_info, "url", "https://go.arkitekt.live")
-            sync_in_async = getattr(arkitekt_info, "syncInAsync", True)
-            deconvolve_action_hash = getattr(
-                arkitekt_info,
-                "deconvolveActionHash",
-                "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f",
-            )
-            # QUESTION: How can I retreive this hash? Is there a way to get a readable list of available services?
-            self._config = {
-                "enabled": enabled,
-                "app_name": app_name,
-                "redeem_token": redeem_token,
-                "url": url,
-                "sync_in_async": sync_in_async,
-                "deconvolve_action_hash": deconvolve_action_hash,
-            }
-
-            self.__logger.info(
-                f"Loaded Arkitekt config from setupInfo: enabled={enabled}, app_name={app_name}, redeem_token={redeem_token}, url={url}, sync_in_async={sync_in_async}, deconvolve_action_hash={deconvolve_action_hash}"
-            )
-
-        except Exception as e:
-            self.__logger.error(
-                f"Failed to load Arkitekt configuration from setupInfo: {e}"
-            )
-            self._config = {"enabled": False}
-
-    async def _store_device_code_hook(self, device_code: str) -> None:
-        """Store the device code for user authentication."""
-        self.__logger.info(f"Received Arkitekt device code: {device_code}")
-        # Here you could implement logic to display the device code to the user
-        # or store it in a file for later retrieval. For now, we just log it.
-        
-    def _initialize_arkitekt(self) -> None:
-        """Initialize Arkitekt connection if enabled."""
-        if not self._config.get("enabled", True):
-            self.__logger.info("Arkitekt integration is disabled in configuration")
-            return
-
-        try:
-            if self._config.get("redeem_token", None) == "":
-                redeem_token = None
-            else:
-                redeem_token = self._config.get("redeem_token", None)
-            # Create Arkitekt client with configuration
-            self.__arkitekt = easy(
-                identifier=self._config.get("app_name", "imswitch"),
-                redeem_token=redeem_token,
-                url=self._config.get("url", "go.arkitekt.live")
-                #device_code_hook=self._store_device_code_hook,
-            )
-            self.__logger.info(
-                "Starting Arkitekt on url: "
-                + self._config.get("url", "go.arkitekt.live")
-            )
-            # Set up Koil for async context handling
-            self.__arkitekt.__koil = Koil(
-                sync_in_async=self._config.get("sync_in_async", True)
-            )
-
-            # Enter the arkitekt client context (spawn background thread)
-            self.__arkitekt.enter()
-
-            # Copy context variables for thread handling
-            self.context = copy_context()
-            ensure_global_context()
-
-            self.__logger.info("Arkitekt integration initialized successfully")
-
-        except ImportError:
-            self.__logger.warning(
-                "arkitekt_next not available - Arkitekt features disabled"
-            )
-            self._config["enabled"] = False
-        except Exception as e:
-            self.__logger.error(f"Failed to initialize Arkitekt: {e}")
-            self._config["enabled"] = False
-
-    def get_arkitekt_app(self) -> Optional[Any]:
-        """Get the Arkitekt application instance."""
-        return self.__arkitekt
-
-    def is_enabled(self) -> bool:
-        """Check if Arkitekt integration is enabled and available."""
-        return self._config.get("enabled", False) and self.__arkitekt is not None
-
-    def get_config(self) -> Dict[str, Any]:
-        """Get current configuration."""
-        return self._config.copy() if self._config else {}
-
-    def update_config(self, new_config: Dict[str, Any]) -> None:
-        """
-        Update configuration and reinitialize if necessary.
-
-        Args:
-            new_config: Dictionary with new configuration values
-        """
-        if self._config is None:
-            self._config = {}
-
-        # Update configuration
-        self._config.update(new_config)
-
-        # Save updated configuration
-        config_dir = dirtools.UserFileDirs.Config
-        arkitekt_config_path = os.path.join(config_dir, "arkitekt_config.json")
-        self._save_config(arkitekt_config_path)
-
-        # Reinitialize if enabled status changed or important settings changed
-        if new_config.get("enabled") or any(
-            key in new_config
-            for key in ["app_name", "redeem_token", "url", "sync_in_async"]
-        ):
-            self._initialize_arkitekt()
-
-        self.__logger.info("Arkitekt configuration updated")
-
-    def upload_and_deconvolve_image(self, image) -> Optional[Any]:
-        """
-        Upload an image to Arkitekt and perform deconvolution.
-
-        Args:
-            image: Input image as numpy array
-
-        Returns:
-            Deconvolved image as numpy array, or None if operation fails
-        """
-        if not self.is_enabled():
-            self.__logger.warning("Arkitekt not available for image deconvolution")
-            return None
-
-        try:
-            # Import here to avoid issues if libraries are not available
-            from arkitekt_next import find
-            from mikro_next.api.schema import from_array_like
-
-            # Ensure context is available in this thread
-            ensure_context_in_thread(self.context)
-
-            # Find the deconvolution action
-            action = find(
-                hash=self._config.get(
-                    "deconvolve_action_hash",
-                    "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f",
-                )
-            )
-
-            # Convert numpy array to mikro image
-            mikro_image = from_array_like(image, name="ImSwitch_Image")
-
-            # Call the deconvolution action (blocks until result is available)
-            result = action(image=mikro_image)
-
-            # Download and return the processed image data
-            deconvolved_image = result.data.compute()
-
-            self.__logger.info("Image deconvolution completed successfully")
-            return deconvolved_image
-
-        except Exception as e:
-            self.__logger.error(f"Failed to perform image deconvolution: {e}")
-            return None
-
-    def find_action(self, action_hash: str) -> Optional[Any]:
-        """
-        Find an Arkitekt action by its hash.
-
-        Args:
-            action_hash: Hash identifier of the action
-
-        Returns:
-            Action object or None if not found
-        """
-        if not self.is_enabled():
-            self.__logger.warning("Arkitekt not available for action lookup")
-            return None
-
-        try:
-            from arkitekt_next import find
-
-            ensure_context_in_thread(self.context)
-            action = find(hash=action_hash)
-
-            self.__logger.debug(f"Found action with hash: {action_hash}")
-            return action
-
-        except Exception as e:
-            self.__logger.error(f"Failed to find action {action_hash}: {e}")
-            return None
-
-    def execute_action(self, action_hash: str, **kwargs) -> Optional[Any]:
-        """
-        Execute an Arkitekt action with given parameters.
-
-        Args:
-            action_hash: Hash identifier of the action
-            **kwargs: Parameters to pass to the action
-
-        Returns:
-            Action result or None if execution fails
-        """
-        action = self.find_action(action_hash)
-        if action is None:
-            return None
-
-        try:
-            result = action(**kwargs)
-            self.__logger.info(f"Action {action_hash} executed successfully")
-            return result
-
-        except Exception as e:
-            self.__logger.error(f"Failed to execute action {action_hash}: {e}")
-            return None
+    def unbind(self) -> dict:
+        """Disconnect and forget the stored login on this machine, so the next
+        bind asks for approval again. fakts has no revocation endpoint: the
+        app's client stays registered on the server until removed there."""
+        self._stop(forget=True)
+        removed = self._delete_stored_login()
+        state = self._session.get("state") if self._refusal() else UNBOUND
+        self._set(state=state, message="Unbound. The stored login on this microscope was "
+                                       "removed." if removed else "Unbound.")
+        return {**self.status(), "status": "success"}
 
     def shutdown(self) -> None:
-        """Shutdown Arkitekt connection gracefully."""
-        if self.__arkitekt is not None:
-            try:
-                self.__arkitekt.exit()
-                self.__logger.info("Arkitekt connection closed")
-            except Exception as e:
-                self.__logger.error(f"Error during Arkitekt shutdown: {e}")
-            finally:
-                self.__arkitekt = None
+        self._stop(forget=False, timeout=5.0)
 
-    def __del__(self):
-        """Cleanup when object is destroyed."""
-        self.shutdown()
+    # ── internals ───────────────────────────────────────────────────────────
+
+    def _refusal(self) -> Optional[str]:
+        if self._missing:
+            return self._missing_message()
+        if not self.info.enabled:
+            return "Arkitekt is disabled in the setup file (arkitekt.enabled = false)."
+        if self._factory is None:
+            return "The Arkitekt controller is not loaded."
+        return None
+
+    def _missing_message(self) -> Optional[str]:
+        if not self._missing:
+            return None
+        return (f"Python package(s) {', '.join(self._missing)} not installed. Install with: "
+                f"pip install \"arkitekt[rekuest,mikro]\"")
+
+    def _stop(self, forget: bool, timeout: float = 10.0) -> None:
+        with self._lock:
+            self._cancel_retry()
+            thread, loop, task = self._thread, self._loop, self._task
+            self._stop_requested, self._forget = True, forget
+        if thread is None or not thread.is_alive():
+            if self._session.get("state") in (ERROR, CONNECTING, AWAITING_LOGIN):
+                self._set(state=UNBOUND, message=None)
+            return
+        if loop is not None and task is not None:
+            loop.call_soon_threadsafe(task.cancel)
+        thread.join(timeout)
+        if thread.is_alive():
+            self.__logger.warning("Arkitekt connection did not stop in time; left as daemon")
+
+    def _cancel_retry(self) -> None:
+        if self._retry is not None:
+            self._retry.cancel()
+            self._retry = None
+
+    def _run(self, url: str, redeem_token: Optional[str], automatic: bool) -> None:
+        try:
+            asyncio.run(self._amain(url, redeem_token))
+        except asyncio.CancelledError:
+            pass
+        except BaseException as e:  # noqa: BLE001 - surfaced in the panel
+            self.__logger.error(f"Arkitekt connection to {url} failed: {e!r}")
+            self._set(state=ERROR, message=_friendly_error(e, url), userCode=None,
+                      approveUrl=None)
+            retry = not isinstance(e, StoredLoginInvalid) and type(e).__name__ not in (
+                "InsecureTransportError", "UserDeniedError")
+            if automatic and retry and not self._stop_requested:
+                with self._lock:
+                    self._retry = threading.Timer(RECONNECT_DELAY_S, self.bind,
+                                                  kwargs={"automatic": True})
+                    self._retry.daemon = True
+                    self._retry.start()
+                self._set(message=f"{self._session.get('message')} Retrying in "
+                                  f"{RECONNECT_DELAY_S:.0f} s.")
+            return
+        finally:
+            with self._lock:
+                self._loop = self._task = None
+        if self._stop_requested:
+            self._set(state=UNBOUND, message="Disconnected.", boundSince=None,
+                      userCode=None, approveUrl=None)
+
+    async def _amain(self, url: str, redeem_token: Optional[str]) -> None:
+        from arkitekt import connect
+
+        with self._lock:
+            self._loop, self._task = asyncio.get_running_loop(), asyncio.current_task()
+        app = self._factory(self.identifier, self._version)
+        self._services = list(app.services)
+        runtime = connect(app, provide=True, url=url, redeem_token=redeem_token,
+                          headless=True, device_code_hook=self._on_device_code, force=True)
+        async with runtime:  # discovery, login, service clients, agent registration
+            manifest = runtime.snapshot.manifest if runtime.snapshot else None
+            self._set(state=CONNECTED, message=None, userCode=None, approveUrl=None,
+                      boundSince=_now(), deviceId=getattr(manifest, "device_id", None))
+            self.__logger.info(f"Arkitekt: providing '{self.identifier}' at {url}")
+            try:
+                await runtime.arun()
+            finally:
+                if self._forget and runtime.fakts is not None:
+                    try:
+                        await runtime.fakts.alogout()
+                    except Exception as e:  # noqa: BLE001 - the file is removed anyway
+                        self.__logger.warning(f"Arkitekt logout failed: {e}")
+        # arun() only returns when the agent stopped on its own
+        if not self._stop_requested:
+            self._set(state=ERROR, message="The Arkitekt agent stopped.", boundSince=None)
+
+    async def _on_device_code(self, endpoint: Any, code: str) -> None:
+        """fakts' device-code hook: show the code instead of opening a browser
+        on the microscope's own computer."""
+        if self._automatic:
+            raise StoredLoginInvalid(
+                "The stored login is no longer valid (expired or revoked on the server). "
+                "Bind again to approve this microscope.")
+        configure = getattr(endpoint, "configure", None)
+        approve = configure.replace("{code}", code) if configure else endpoint.base_url
+        if urlparse(approve or "").scheme not in ("http", "https"):
+            approve = None  # the panel renders it as a link: never javascript: and the like
+        self.__logger.info(f"Arkitekt login: approve code {code} at {approve}")
+        self._set(state=AWAITING_LOGIN, userCode=code, approveUrl=approve,
+                  serverName=getattr(endpoint, "name", None), loginStartedAt=_now(),
+                  message="Approve this microscope in a browser to finish binding.")
+
+    def _cache_file(self) -> Optional[str]:
+        if self._missing:
+            return None
+        return cache_file(self.identifier, self._version, self.url)
+
+    def _delete_stored_login(self) -> bool:
+        path = self._cache_file()
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+                return True
+            except OSError as e:
+                self.__logger.error(f"Could not remove the stored Arkitekt login {path}: {e}")
+        return False
+
+    def _set(self, **changes: Any) -> None:
+        with self._lock:
+            self._session.update(changes)
+            self._session["updatedAt"] = _now()
+        status = self.status()
+        for callback in list(self._listeners):
+            try:
+                callback(status)
+            except Exception as e:  # noqa: BLE001 - a listener must not break the connection
+                self.__logger.warning(f"Arkitekt status listener failed: {e}")

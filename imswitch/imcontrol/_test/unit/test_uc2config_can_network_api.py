@@ -9,6 +9,8 @@ import logging
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from imswitch.imcontrol.controller.controllers.UC2ConfigController import UC2ConfigController
 from imswitch.imcontrol.model.SetupInfo import UC2ConfigInfo
 
@@ -164,3 +166,31 @@ def test_check_on_connect_save_failure_is_reported(monkeypatch):
     monkeypatch.setattr(configfiletools, "loadOptions", fail)
     result = make_controller().setFirmwareCheckOnConnect(True)
     assert result["status"] == "error" and "read-only" in result["message"]
+
+
+def test_recommended_firmware_for_the_connected_board_and_another_port(monkeypatch):
+    c = make_controller()
+    usb, server = c._can_network.usb, c._can_network.server
+    monkeypatch.setattr(usb, "detect_chip", lambda port: "esp32")
+    seen = []
+    monkeypatch.setattr(server, "recommend", lambda identity: seen.append(identity) or {
+        "status": "success", "recommended": {"filename": "x.bin"}})
+    monkeypatch.setattr(usb, "identify", lambda port, **kw: pytest.fail("own port re-opened"))
+
+    own = c.getRecommendedFirmware()            # ImSwitch's board: read over the open link
+    assert own["source"] == "imswitch" and own["port"] == "/dev/ttyUSB0"
+    assert own["recommended"]["filename"] == "x.bin"
+    assert seen[-1]["canId"] == 1               # a master without a reported id is node 1
+    assert c.getRecommendedFirmware(port="/dev/ttyUSB0")["source"] == "imswitch"
+
+    monkeypatch.setattr(usb, "identify", lambda port, **kw: {
+        "status": "success", "port": port, "chip": "esp32s3",
+        "identity": {"pindef": "UC2_canopen_slave_motor", "canId": 12}})
+    other = c.getRecommendedFirmware(port="/dev/ttyACM0")
+    assert other["source"] == "port" and other["chip"] == "esp32s3"
+    assert seen[-1]["canId"] == 12
+
+    monkeypatch.setattr(usb, "identify", lambda port, **kw: {"status": "busy", "message": "m"})
+    assert c.getRecommendedFirmware(port="/dev/ttyACM0")["status"] == "busy"
+    c.getFirmwareInfo = lambda: {"connected": False}
+    assert c.getRecommendedFirmware()["status"] == "error"

@@ -55,6 +55,36 @@ def _read_reply(ser, timeout: float, quiet: float = 0.0) -> str:
     return reply
 
 
+def parse_state_reply(text: str) -> dict:
+    """The identity in a /state_get reply, flat like uc2rest's
+    get_firmware_info(): {name, version, fwVersion, fwImage, date, author,
+    pindef, isMaster, canId, gitCommit}. {} when the reply holds no state
+    (boot noise, the ++/-- frame and other JSON lines are skipped)."""
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start != -1:
+        try:
+            obj, end = decoder.raw_decode(text, start)
+        except ValueError:
+            start = text.find("{", start + 1)
+            continue
+        state = obj.get("state") if isinstance(obj, dict) else None
+        if isinstance(state, dict):
+            pindef = str(state.get("pindef") or "")
+            can_id = state.get("CAN_SLAVE")
+            return {"name": state.get("identifier_name", ""),
+                    "version": state.get("identifier_id", ""),
+                    "fwVersion": state.get("identifier_version", ""),
+                    "fwImage": state.get("identifier_image", ""),
+                    "date": state.get("identifier_date", ""),
+                    "author": state.get("identifier_author", ""),
+                    "pindef": pindef, "isMaster": "master" in pindef.lower(),
+                    "canId": can_id if isinstance(can_id, int) and can_id > 0 else None,
+                    "gitCommit": state.get("git_commit", "")}
+        start = text.find("{", end)
+    return {}
+
+
 def _exchange(ser, command: dict, timeout: float, settle=0.5) -> str:
     """Send one JSON command line and return the reply."""
     ser.reset_input_buffer()
@@ -443,6 +473,31 @@ class UsbFlasher:
         except Exception as e:
             self._log.error(f"Failed to probe device state: {e}")
             return {"status": "error", "message": str(e)}
+
+    def identify(self, port, baud=115200, timeout=2.0) -> dict:
+        """Which firmware a board on its own *port* runs: /state_get, parsed
+        (parse_state_reply), plus the chip guessed from the USB VID:PID.
+        Refused while a flash or CAN OTA owns a serial port. Opening the port
+        may reset the board (DTR/RTS), so the boot log is waited out first."""
+        if not port:
+            return {"status": "error", "message": "No serial port specified"}
+        busy = self.guard.busy_reasons()
+        if busy:
+            return {"status": "busy", "message": busy[0]}
+        try:
+            with serial.Serial(port, baud, timeout=timeout) as ser:
+                _read_reply(ser, 2, quiet=1.0)  # boot output after the reset, if any
+                reply = _exchange(ser, {"task": "/state_get"}, timeout)
+        except Exception as e:
+            self._log.error(f"Failed to identify the board on {port}: {e}")
+            return {"status": "error", "message": str(e)}
+        identity = parse_state_reply(reply)
+        if not identity:
+            return {"status": "error", "port": port, "state_response": reply.strip()[:500],
+                    "message": f"No firmware state from {port} at {baud} baud (no UC2 "
+                               f"firmware, another baud rate, or a boot loop)."}
+        return {"status": "success", "port": port, "chip": self.detect_chip(port),
+                "identity": identity}
 
     def test_action(self, port, device_type="motor", baud=115200, timeout=2.0, stepperid=1,
                     speed=2000, position=1000, isabs=0, r=25, g=25, b=25, led_action="fill",

@@ -16,12 +16,12 @@ ImSwitch exposes it as UC2ConfigController endpoints
 from .bus import CanBus
 from .firmware_server import FirmwareServer
 from .guard import SerialPortGuard
-from .images import CAN_NODES, device_mapping, legacy_image, update_status
+from .images import CAN_NODES, device_mapping, legacy_image, recommend_image, update_status
 from .network import CanNetwork
 from .ota import CanOta
 from .updater import FirmwareUpdater, UpdateHooks
-from .usb import UsbFlasher
+from .usb import UsbFlasher, parse_state_reply
 
 __all__ = ["CanNetwork", "CanBus", "CanOta", "FirmwareServer", "FirmwareUpdater", "UpdateHooks",
            "UsbFlasher", "SerialPortGuard", "CAN_NODES", "device_mapping", "legacy_image",
-           "update_status"]
+           "recommend_image", "parse_state_reply", "update_status"]

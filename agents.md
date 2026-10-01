@@ -524,6 +524,9 @@ Safe to read:
 - `checkFirmwareUpdates(timeout, probe_range)` — installed vs server firmware version per
   board (reads `<server>/version.json`; runs a CAN scan on a master). See
   `docs/FIRMWARE_VERSIONING.md`.
+- `getRecommendedFirmware(port)` — the server image that fits a board, from its `/state_get`
+  identity. Empty port = ImSwitch's own board over the open link; another port is opened and
+  may reset that board.
 - `getFirmwareUpdateStatus`, `getFirmwareUpdatePrompt`, `getFirmwareCheckOnConnect`
 
 Confirm before calling:
@@ -578,6 +581,12 @@ Present only when the setup enables them. Discover with `getAvailableControllers
 | `MMCoreController` | Micro-Manager device layer |
 | `WellPlateController` (`moveToXY(wellID)`), `SquidStageScanController`, `StageScanAcquisitionController` | Plate/stage scanning |
 | `HyphaController`, `ArkitektController`, `SiLa2Controller`, `WebRTCController` | External integrations |
+
+`ArkitektController` (`docs/ARKITEKT.md`): `getArkitektStatus`, `bindArkitekt(url)` (device-code
+login, returns at once), `cancelArkitekt`, `unbindArkitekt` (forgets the stored login),
+`setArkitektSettings`, `getArkitektUploads`. Binding is network-only, but once connected the server
+can call the declared actions, which move the stage and switch illumination. **Ask first** before
+binding a real instrument.
 | `StresstestController`, `DebugController`, `DemoController`, `AcceptanceTestController` | Diagnostics and self-test |
 
 ---

@@ -1,879 +1,879 @@
-from ..basecontrollers import ImConWidgetController
-from imswitch.imcommon.model import dirtools, initLogger, APIExport
-import xarray as xr
-from mikro_next.api.schema import (
-    Image,
-    from_array_like,
-    create_stage,
-    PartialAffineTransformationViewInput,
-)
-from arkitekt_next import model
-from typing import Generator
-import os
+"""Arkitekt: offer this microscope as an app on an Arkitekt server.
+
+An Arkitekt server (https://arkitekt.live, or a local deployment, e.g. on a
+NAS) lets notebooks, other apps and workflows call the actions declared in
+build_app(). It stores acquired images in its mikro data service and shows
+the microscope's live state.
+
+ArkitektManager owns the connection (device-code login, unbind). This
+controller declares what is offered and serves the HTTP endpoints of the
+Arkitekt panel: status, bind, cancel, unbind, settings, activity and uploads.
+
+Units: stage positions and distances in µm, in the ImSwitch user frame (what
+PositionerController reports). Exposure is in ms. Actions that move hardware
+or acquire are refused while an experiment, a recording or a workflow runs,
+and they hold the "microscope" lock, so remote calls run one at a time.
+"""
+import asyncio
+import base64
+import collections
 import datetime
-import tifffile as tif
+import enum
+import functools
+import inspect
+import itertools
+import re
+import threading
 import time
+from typing import Annotated, Any, Dict, Generator, List, Optional
+
 import numpy as np
 
+from imswitch.imcommon.framework import Signal
+from imswitch.imcommon.model import APIExport, initLogger
+from imswitch.imcontrol.model import configfiletools
+from ..basecontrollers import ImConWidgetController
 
-@model
-class Position:
-    x: int
-    y: int
-    z: int
+# The action interface's version. The server registers the app under it, and
+# the stored login is kept per version: bump it only when actions change
+# incompatibly, never with ImSwitch's release number.
+ARKITEKT_APP_VERSION = "2.0.0"
+MAX_ACTIVITY = 50
+MAX_UPLOADS = 12
+THUMBNAIL_PX = 192
+STATE_PUBLISH_PERIOD_S = 1.0
+BUSY_STATES = ("running", "paused", "stopping")
+HOMEABLE_AXES = ("X", "Y")  # Z homing drives the objective towards its endstop: not remote
 
-# =========================
-# Controller
-# =========================
+
+def _choices(name: str, values: List[str]) -> enum.Enum:
+    """An Enum the Arkitekt UI shows as a dropdown of this setup's devices.
+    Member names are identifiers, values the ImSwitch device names."""
+    members, used = {}, set()
+    for value in values:
+        key = re.sub(r"\W+", "_", str(value)).strip("_").upper() or "DEVICE"
+        key = f"_{key}" if key[0].isdigit() else key
+        while key in used:
+            key += "_"
+        used.add(key)
+        members[key] = value
+    return enum.Enum(name, members)
+
+
+def _plain(value: Any) -> Any:
+    """A call argument as the activity log shows it (no clients, no arrays)."""
+    if isinstance(value, enum.Enum):
+        return value.value
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return None
+
+
+def _now() -> str:
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+
 class ArkitektController(ImConWidgetController):
-    """
-    Controller for the Arkitekt widget.
-    """
+    """Declares the microscope's Arkitekt actions and serves the Arkitekt panel."""
+
+    sigArkitektStatus = Signal(dict)
+    sigArkitektActivity = Signal(dict)
+    sigArkitektUpload = Signal(dict)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
-        self._logger.debug("Initializing")
-
-        allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
-        if len(allDetectorNames) == 0:
+        self._manager = getattr(self._master, "arkitektManager", None)
+        self._activity = collections.deque(maxlen=MAX_ACTIVITY)
+        self._uploads = collections.deque(maxlen=MAX_UPLOADS)
+        self._activity_lock = threading.Lock()
+        self._activity_ids = itertools.count(1)
+        self._offered: List[dict] = []
+        self._actions: Dict[str, Any] = {}  # name -> declared function, for local calls
+        self._useTriggeredGrab = False
+        detectors = self._master.detectorsManager.getAllDeviceNames()
+        self.mDetector = self._master.detectorsManager[detectors[0]] if detectors else None
+        if self._manager is None:
+            self._logger.warning("ArkitektManager unavailable; Arkitekt panel only.")
             return
-        self.mDetector = self._master.detectorsManager[
-            self._master.detectorsManager.getAllDeviceNames()[0]
-        ]
+        if getattr(self._setupInfo, "arkitekt", None) is None:
+            self._setupInfo.arkitekt = self._manager.info  # what the panel changes gets saved
+        self._manager.set_app_factory(self.build_app, ARKITEKT_APP_VERSION)
+        self._manager.add_listener(self.sigArkitektStatus.emit)
+        self._manager.auto_connect()
 
-        if not getattr(self._master, "arkitektManager", None):
-            self._logger.warning("ArkitektManager unavailable; controller disabled.")
-            return
-        if not self._master.arkitektManager.is_enabled():
-            self._logger.warning("Arkitekt not enabled; controller disabled.")
-            return
+    def closeEvent(self):
+        if self._manager is not None:
+            self._manager.shutdown()
 
-        self.arkitekt_app = self._master.arkitektManager.get_arkitekt_app()
-        if self.arkitekt_app is None:
-            self._logger.warning("Arkitekt app unavailable; controller disabled.")
-            return
-        self.arkitekt_app.register(self.moveToSampleLoadingPosition)
-        self.arkitekt_app.register(self.runTileScan)
-        self.arkitekt_app.register(self.goToPosition)
-        self.arkitekt_app.register(self.acquireFrame)
-        self.arkitekt_app.register(self.getStagePosition)
-        self.arkitekt_app.register(self.homeStageAxis)
-        self.arkitekt_app.register(self.setLaserState)
-        self.arkitekt_app.register(self.moveStage)
-        
-        self.arkitekt_app.run_detached()
+    # ── HTTP: the Arkitekt panel ────────────────────────────────────────────
 
-    # ────────────────────────────────────────────────────────────────────────
-    # Deterministic frame-acquisition helpers (same pattern as ExperimentController)
-    # ────────────────────────────────────────────────────────────────────────
+    @APIExport(runOnUIThread=False)
+    def getArkitektStatus(self) -> dict:
+        """Connection and what is offered.
 
-    def _getExposureTimeSec(self) -> float:
-        """Return current detector exposure time in seconds (best effort)."""
+        state: unavailable (package missing) | disabled | unbound | connecting |
+        awaiting_login (show userCode and approveUrl) | connected | error.
+        Also url, appName, deviceId, boundSince, hasStoredLogin, message,
+        the settings (autoConnect, allowInsecureTransport, useMikro), offered
+        actions [{name, title, description, moves, images}], the latest
+        remote calls (activity) and, when connected, publishedState (the
+        live MicroscopeState). Live updates: sigArkitektStatus."""
+        if self._manager is None:
+            return {"state": "unavailable", "available": False,
+                    "message": "Arkitekt is not configured (no ArkitektManager)."}
+        with self._activity_lock:
+            activity = [dict(entry) for entry in self._activity]
+        status = self._manager.status()
+        if status.get("state") == "connected":
+            status["publishedState"] = self._state_snapshot()  # what Arkitekt shows live
+        return {**status, "actions": self._offered or self._planned_actions(),
+                "activity": activity[::-1], "uploadCount": len(self._uploads)}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def bindArkitekt(self, url: str = "", redeemToken: str = "") -> dict:
+        """Bind this microscope to the Arkitekt server at *url* (empty = the
+        configured one; saved to the setup file). Returns at once.
+
+        Without a stored login, the state becomes awaiting_login with a userCode
+        and an approveUrl: open the link, sign in and approve, and the state
+        becomes connected. A redeemToken logs in without a browser (it is not
+        saved). Network only: nothing on the microscope moves."""
+        if self._manager is None:
+            return {"status": "error", "message": "Arkitekt is not configured."}
+        url = (url or "").strip()
+        if url and url != self._manager.info.url:
+            self._manager.info.url = url
+            self._save_settings()
+        return self._manager.bind(url=url or None, redeem_token=redeemToken or None)
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def cancelArkitekt(self) -> dict:
+        """Stop a pending login, or disconnect. The stored login is kept, so
+        the next bind (or the next start, with autoConnect) needs no approval."""
+        if self._manager is None:
+            return {"status": "error", "message": "Arkitekt is not configured."}
+        return self._manager.cancel()
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def unbindArkitekt(self) -> dict:
+        """Disconnect and forget the stored login on this microscope; the next
+        bind needs a new approval. The server keeps the app's registration
+        (there is no revocation endpoint): remove it in the Arkitekt web UI to
+        revoke it there too."""
+        if self._manager is None:
+            return {"status": "error", "message": "Arkitekt is not configured."}
+        return self._manager.unbind()
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setArkitektSettings(self, url: Optional[str] = None, appName: Optional[str] = None,
+                            autoConnect: Optional[bool] = None,
+                            allowInsecureTransport: Optional[bool] = None,
+                            useMikro: Optional[bool] = None) -> dict:
+        """Change the Arkitekt settings and save them to the setup file. They
+        apply at the next bind. A different url or appName is a different
+        login (each has its own stored session)."""
+        if self._manager is None:
+            return {"status": "error", "message": "Arkitekt is not configured."}
+        info = self._manager.info
+        for key, value in (("url", url), ("appName", appName), ("autoConnect", autoConnect),
+                           ("allowInsecureTransport", allowInsecureTransport),
+                           ("useMikro", useMikro)):
+            if value is not None:
+                setattr(info, key, value.strip() if isinstance(value, str) else bool(value))
+        saved = self._save_settings()
+        status = self._manager.status()
+        self.sigArkitektStatus.emit(status)
+        return {**status, "status": "success" if saved else "warning",
+                "message": None if saved else "Applied, but the setup file could not be saved."}
+
+    @APIExport(runOnUIThread=False)
+    def getArkitektUploads(self) -> List[dict]:
+        """The latest images sent to Arkitekt, newest first: [{id, name,
+        datasetId, shape, dtype, positionUm: {x, y, z}, pixelSizeUm, time,
+        thumbnail (JPEG data URL)}]. Live: sigArkitektUpload."""
+        return list(self._uploads)[::-1]
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def clearArkitektActivity(self) -> dict:
+        """Forget the activity log and the upload previews (nothing on the server)."""
+        with self._activity_lock:
+            self._activity.clear()
+        self._uploads.clear()
+        return {"status": "success"}
+
+    def _save_settings(self) -> bool:
         try:
-            exp_ms = self.mDetector.getParameter("exposure")
-            if exp_ms is not None and float(exp_ms) > 0:
-                return float(exp_ms) / 1000.0
-        except Exception:
-            pass
+            configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
+            return True
+        except Exception as e:
+            self._logger.error(f"Could not save the Arkitekt settings: {e}")
+            return False
+
+    # ── what Arkitekt may call ──────────────────────────────────────────────
+
+    def build_app(self, identifier: str, version: str):
+        """Declare the microscope as an arkitekt App (on the manager's thread).
+
+        Dropdowns list this setup's devices: positioners, axes and
+        illumination sources. Image actions are offered only with mikro
+        (setup arkitekt.useMikro), because they store their images there."""
+        from arkitekt import App
+
+        mikro_types = self._mikro_types() if self._manager.info.useMikro else None
+        app = App(identifier, version,
+                  description="openUC2 ImSwitch microscope: stage, illumination, camera",
+                  services=[mikro_types["service"]] if mikro_types else [])
+        offered: List[dict] = []
+        offer = self._offerer(app, offered)
+        lasers = list(self._master.lasersManager.getAllDeviceNames())
+        illumination = _choices("Illumination", lasers) if lasers else None
+        StagePosition = self._declare_state(app)
+        if self._master.positionersManager.getAllDeviceNames():
+            self._declare_stage_actions(offer, StagePosition)
+        if illumination is not None:
+            self._declare_illumination_action(offer, illumination)
+        if self.mDetector is not None:
+            self._declare_camera_action(offer)
+            if mikro_types:
+                self._declare_image_actions(offer, mikro_types, illumination)
+        self._offered = offered
+        return app
+
+    def _offerer(self, app, offered: List[dict]):
+        """@app.action, plus the activity log and the panel's action list."""
+        def offer(moves=False, images=False, **options):
+            def declare(fn):
+                doc = inspect.getdoc(fn) or fn.__name__
+                title, _, description = doc.partition("\n")
+                offered.append({"name": fn.__name__, "title": title.strip(),
+                                "description": description.strip(), "moves": moves,
+                                "images": images})
+                action = app.action(**options)(self._tracked(fn))
+                self._actions[fn.__name__] = action
+                return action
+            return declare
+        return offer
+
+    def _declare_state(self, app):
+        """StagePosition (a returned model) and the live MicroscopeState."""
+
+        # The server only accepts identifiers of the form @package/key; the
+        # default would be the bare snake_case class name.
+        @app.model(identifier="@imswitch/stage_position")
+        class StagePosition:
+            """Stage position in µm (ImSwitch user frame)."""
+            x: float
+            y: float
+            z: float
+            a: float
+
+        @app.state
+        class MicroscopeState:
+            """What the microscope is doing, published live."""
+            x_um: float = 0.0
+            y_um: float = 0.0
+            z_um: float = 0.0
+            illumination_on: str = ""
+            exposure_ms: float = 0.0
+            running_action: str = ""
+
+        @app.startup
+        def publish_initial_state() -> MicroscopeState:
+            return MicroscopeState(**self._state_snapshot())
+
+        @app.background
+        async def publish_state(state: MicroscopeState) -> None:
+            while True:
+                for key, value in self._state_snapshot().items():
+                    if getattr(state, key) != value:
+                        setattr(state, key, value)
+                await asyncio.sleep(STATE_PUBLISH_PERIOD_S)
+
+        return StagePosition
+
+    def _declare_stage_actions(self, offer, StagePosition):
+        from arkitekt import Description, Effects, Task
+
+        positioners = list(self._master.positionersManager.getAllDeviceNames())
+        Positioner = _choices("Positioner", positioners)
+        axes = list(getattr(self._master.positionersManager[positioners[0]], "axes", "XYZ"))
+        Axis = _choices("Axis", axes)
+        HomeAxis = _choices("HomeAxis", [a for a in axes if a in HOMEABLE_AXES] or ["X"])
+        OptionalPositioner = Annotated[Optional[Positioner],
+                                       Description("Default: the first positioner")]
+
+        @offer(effects=Effects.NONE)
+        def get_stage_position(positioner: OptionalPositioner = None) -> StagePosition:
+            """Get Stage Position
+            Where the stage is, in µm (ImSwitch user frame), read from the device."""
+            return StagePosition(**self._position(positioner, fresh=True))
+
+        @offer(moves=True, effects=Effects.IRREVERSIBLE, locks=["microscope"])
+        def move_stage(
+            axis: Axis,
+            distance_um: Annotated[float, Description(
+                "µm to move by; the target position when is_absolute")],
+            is_absolute: Annotated[bool, Description(
+                "Move to distance_um instead of by it")] = False,
+            speed: Annotated[Optional[float], Description(
+                "Default: the axis' configured speed")] = None,
+            positioner: OptionalPositioner = None,
+            *,
+            task: Task,
+        ) -> StagePosition:
+            """Move Stage
+            Moves one axis and waits until it arrives. Relative unless
+            is_absolute. Z moves the focus: mind the objective."""
+            self._refuse_if_busy()
+            task.progress(10, f"Moving {axis.value} {'to' if is_absolute else 'by'} "
+                              f"{distance_um} µm")
+            self._positioner_controller().movePositioner(
+                positionerName=self._name(positioner), axis=axis.value, dist=distance_um,
+                isAbsolute=is_absolute, isBlocking=True, speed=speed)
+            return StagePosition(**self._position(positioner))
+
+        @offer(moves=True, effects=Effects.IRREVERSIBLE, locks=["microscope"])
+        def go_to_xy(
+            x_um: Annotated[float, Description("Target X, µm")],
+            y_um: Annotated[float, Description("Target Y, µm")],
+            speed: Annotated[Optional[float], Description(
+                "Default: the axes' configured speed")] = None,
+            settle_s: Annotated[float, Description("Wait after arriving")] = 0.2,
+            positioner: OptionalPositioner = None,
+        ) -> StagePosition:
+            """Go To XY
+            Moves X and Y together to an absolute position and waits.
+            Z stays where it is."""
+            self._refuse_if_busy()
+            self._move_xy(x_um, y_um, speed, positioner)
+            time.sleep(max(0.0, settle_s))
+            return StagePosition(**self._position(positioner))
+
+        @offer(moves=True, effects=Effects.REPEATABLE, locks=["microscope"])
+        def home_axis(axis: HomeAxis, positioner: OptionalPositioner = None) -> StagePosition:
+            """Home Axis
+            Drives X or Y to its endstop and zeroes it (blocking). Z is
+            not homed remotely: use the frame homing in ImSwitch."""
+            self._refuse_if_busy()
+            self._positioner_controller().homeAxis(
+                positionerName=self._name(positioner), axis=axis.value, isBlocking=True)
+            return StagePosition(**self._position(positioner))
+
+        @offer(moves=True, effects=Effects.REPEATABLE, locks=["microscope"])
+        def move_to_sample_loading_position(
+                positioner: OptionalPositioner = None) -> StagePosition:
+            """Move To Sample Loading Position
+            Drives the stage to the configured loading position (blocking)."""
+            self._refuse_if_busy()
+            self._positioner_controller().moveToSampleLoadingPosition(
+                positionerName=self._name(positioner), is_blocking=True)
+            return StagePosition(**self._position(positioner))
+
+    def _declare_illumination_action(self, offer, Illumination):
+        from arkitekt import Description, Effects
+
+        @offer(effects=Effects.REPEATABLE, locks=["microscope"])
+        def set_illumination(
+            channel: Illumination,
+            active: bool,
+            intensity: Annotated[Optional[float], Description(
+                "In the source's own units, within its range; "
+                "empty keeps the current setting")] = None,
+        ) -> None:
+            """Set Illumination
+            Switches a light source on or off and optionally sets its
+            intensity. Refused outside the source's configured range."""
+            self._refuse_if_busy()
+            self._set_illumination(channel.value, active, intensity)
+
+    def _declare_camera_action(self, offer):
+        from arkitekt import Description, Effects
+
+        @offer(effects=Effects.REPEATABLE)
+        def set_camera(
+            exposure_ms: Annotated[Optional[float], Description("Empty: unchanged")] = None,
+            gain: Annotated[Optional[float], Description("Empty: unchanged")] = None,
+        ) -> None:
+            """Set Camera
+            Sets the exposure time (ms) and/or gain of the camera."""
+            self._set_camera(exposure_ms, gain)
+
+    def _declare_image_actions(self, offer, mikro_types, Illumination):
+        """acquire_frame and run_tile_scan: images go to mikro (axes c, y, x)."""
+        from arkitekt import Description, Effects, Task
+
+        Mikro, Image = mikro_types["Mikro"], mikro_types["Image"]
+        IlluminationArg = Annotated[Optional[Illumination] if Illumination else Optional[str],
+                                    Description("Light source to switch on during the scan; "
+                                                "empty leaves the illumination as it is")]
+
+        @offer(images=True, effects=Effects.REPEATABLE, locks=["microscope"])
+        def acquire_frame(
+            mikro: Mikro,
+            task: Task,
+            name: Annotated[Optional[str], Description("Default: frame + time")] = None,
+        ) -> Image:
+            """Acquire Frame
+            Takes one camera frame (captured after the call) and stores it in
+            mikro, with the stage position and pixel size in its metadata."""
+            self._refuse_if_busy()
+            task.progress(20, "Acquiring")
+            frame = self.grabCameraFrame(frameSync=2)
+            task.progress(60, "Uploading")
+            return self._upload(mikro, frame,
+                                name or f"Frame {datetime.datetime.now():%Y-%m-%d %H:%M:%S}",
+                                self._position(None))
+
+        @offer(moves=True, images=True, effects=Effects.IRREVERSIBLE, locks=["microscope"])
+        def run_tile_scan(
+            mikro: Mikro,
+            task: Task,
+            range_x_um: Annotated[float, Description("Scan width, µm")] = 1000.0,
+            range_y_um: Annotated[float, Description("Scan height, µm")] = 1000.0,
+            center_x_um: Annotated[Optional[float], Description(
+                "Default: the current X")] = None,
+            center_y_um: Annotated[Optional[float], Description(
+                "Default: the current Y")] = None,
+            overlap_percent: Annotated[float, Description(
+                "Overlap of neighbouring tiles, used when no step is given")] = 10.0,
+            step_x_um: Annotated[Optional[float], Description(
+                "Default: from the field of view and the overlap")] = None,
+            step_y_um: Annotated[Optional[float], Description(
+                "Default: from the field of view and the overlap")] = None,
+            illumination: IlluminationArg = None,
+            intensity: Annotated[Optional[float], Description(
+                "Intensity for the illumination, in its own units")] = None,
+            exposure_ms: Annotated[Optional[float], Description("Empty: unchanged")] = None,
+            autofocus: Annotated[bool, Description("Autofocus at every tile (moves Z)")] = False,
+            autofocus_range_um: float = 100.0,
+            autofocus_step_um: float = 10.0,
+            speed: Annotated[Optional[float], Description("Default: configured speed")] = None,
+            settle_s: Annotated[float, Description("Wait after each move")] = 0.2,
+        ) -> Generator[Image, None, None]:
+            """Run Tile Scan
+            Scans a grid around a centre (snake order), yields each tile as it
+            is stored, and places all tiles in one stage space in mikro so the
+            Arkitekt viewer shows them stitched by position. Returns the stage
+            to where it started and restores the illumination."""
+            self._refuse_if_busy()
+            if exposure_ms is not None:
+                self._set_camera(exposure_ms, None)
+            grid = self._tile_grid(range_x_um, range_y_um, center_x_um, center_y_um,
+                                   overlap_percent, step_x_um, step_y_um)
+            yield from self._tile_scan(
+                mikro, task, grid, getattr(illumination, "value", illumination), intensity,
+                (autofocus_range_um, autofocus_step_um) if autofocus else None, speed, settle_s)
+
+    def _mikro_types(self) -> Optional[dict]:
         try:
-            return self.mDetector._camera.exposure_time / 1e6
+            from mikro import Mikro, mikro_service
+            from mikro.arkitekt.specs import MultichannelImage
+        except ImportError as e:
+            self._logger.warning(f"mikro not installed, no image actions: {e}")
+            return None
+        return {"Mikro": Mikro, "service": mikro_service, "Image": MultichannelImage}
+
+    # ── activity log (what the panel shows) ─────────────────────────────────
+
+    def _tracked(self, fn):
+        """Log each remote call (start, progress, result, error) for the panel.
+        functools.wraps keeps the signature the action is declared from; a
+        generator stays a generator, so it still streams."""
+        name = fn.__name__
+
+        if inspect.isgeneratorfunction(fn):
+            @functools.wraps(fn)
+            def generator(*args, **kwargs):
+                entry = self._activity_start(name, kwargs)
+                count = 0
+                try:
+                    for item in fn(*args, **kwargs):
+                        count += 1
+                        self._activity_update(entry, results=count)
+                        yield item
+                except BaseException as e:
+                    self._activity_end(entry, e)
+                    raise
+                self._activity_end(entry)
+            return generator
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            entry = self._activity_start(name, kwargs)
+            try:
+                result = fn(*args, **kwargs)
+            except BaseException as e:
+                self._activity_end(entry, e)
+                raise
+            self._activity_end(entry)
+            return result
+        return wrapper
+
+    def _activity_start(self, name: str, kwargs: dict) -> dict:
+        arguments = {k: _plain(v) for k, v in kwargs.items()
+                     if k not in ("task", "mikro", "state") and _plain(v) is not None}
+        entry = {"id": next(self._activity_ids), "action": name, "arguments": arguments,
+                 "status": "running", "startedAt": _now(), "started": time.time(),
+                 "durationS": None, "progress": None, "results": 0, "error": None}
+        with self._activity_lock:
+            self._activity.append(entry)
+        self.sigArkitektActivity.emit(dict(entry))
+        return entry
+
+    def _activity_update(self, entry: dict, **changes) -> None:
+        with self._activity_lock:
+            entry.update(changes)
+        self.sigArkitektActivity.emit(dict(entry))
+
+    def _activity_end(self, entry: dict, error: Optional[BaseException] = None) -> None:
+        cancelled = isinstance(error, (GeneratorExit, asyncio.CancelledError))
+        self._activity_update(
+            entry, status="cancelled" if cancelled else "failed" if error else "done",
+            error=None if error is None or cancelled else f"{type(error).__name__}: {error}",
+            durationS=round(time.time() - entry["started"], 2))
+
+    def _running_action(self) -> str:
+        with self._activity_lock:
+            return next((e["action"] for e in reversed(self._activity)
+                         if e["status"] == "running"), "")
+
+    # ── hardware helpers ────────────────────────────────────────────────────
+
+    def _refuse_if_busy(self) -> None:
+        """Remote calls must not interfere with what runs locally."""
+        get = getattr(self._master, "getController", lambda name: None)
+        reasons = []
+        experiment, recording = get("Experiment"), get("Recording")
+        try:
+            if experiment is not None and (
+                    experiment.getExperimentStatus().get("status") in BUSY_STATES):
+                reasons.append("an experiment is running")
+            if recording is not None and recording.isRecording():
+                reasons.append("a recording is running")
+            for name in ("Workflow", "Timelapse"):
+                manager = getattr(get(name), "workflow_manager", None)
+                if manager is not None and manager.get_status().get("status") in BUSY_STATES:
+                    reasons.append(f"a {name.lower()} is running")
+        except Exception as e:
+            self._logger.warning(f"Arkitekt busy check failed (not blocking): {e}")
+        if reasons:
+            raise RuntimeError(f"Refused: {', '.join(reasons)} in ImSwitch.")
+
+    def _positioner_controller(self):
+        controller = self._master.getController("Positioner")
+        if controller is None:
+            raise RuntimeError("No PositionerController in this setup.")
+        return controller
+
+    def _name(self, positioner) -> str:
+        names = self._master.positionersManager.getAllDeviceNames()
+        name = getattr(positioner, "value", positioner)
+        return name if name in names else names[0]
+
+    def _position(self, positioner, fresh: bool = False) -> Dict[str, float]:
+        """{x, y, z, a} in µm, user frame.
+
+        The stage manager's cached position by default: moves and the device's
+        position callback keep it current. *fresh* asks the device, as
+        PositionerController does, which is a serial round trip on UC2 stages
+        (ESP32StageManager.getPosition), so never for the 1 s state publishing."""
+        name = self._name(positioner)
+        controller = self._master.getController("Positioner") if fresh else None
+        if controller is not None:
+            position = controller.getPositionerPositions().get(name, {})
+        else:
+            position = getattr(self._master.positionersManager[name], "position", None) or {}
+        return {axis.lower(): float(position.get(axis, 0.0) or 0.0) for axis in "XYZA"}
+
+    def _move_xy(self, x_um: float, y_um: float, speed: Optional[float], positioner) -> None:
+        self._positioner_controller().movePositionerXYZ(
+            positionerName=self._name(positioner), x=x_um, y=y_um, isAbsolute=True,
+            isBlocking=True, speed=speed)
+
+    def _state_snapshot(self) -> dict:
+        """The published MicroscopeState; best effort, never raises."""
+        state = {"x_um": 0.0, "y_um": 0.0, "z_um": 0.0, "illumination_on": "",
+                 "exposure_ms": 0.0, "running_action": self._running_action()}
+        try:
+            if self._master.positionersManager.getAllDeviceNames():
+                position = self._position(None)
+                state.update(x_um=position["x"], y_um=position["y"], z_um=position["z"])
+            lasers = self._master.lasersManager
+            state["illumination_on"] = ", ".join(
+                n for n in lasers.getAllDeviceNames() if getattr(lasers[n], "enabled", False))
+            state["exposure_ms"] = self._exposure_ms()
+        except Exception as e:
+            self._logger.debug(f"Arkitekt state snapshot incomplete: {e}")
+        return state
+
+    def _set_illumination(self, name: str, active: bool, intensity: Optional[float]) -> None:
+        laser = self._master.lasersManager[name]
+        if intensity is not None:
+            low, high = laser.valueRangeMin, laser.valueRangeMax
+            if not low <= intensity <= high:
+                raise ValueError(f"{name}: intensity {intensity} outside its range "
+                                 f"{low}..{high}.")
+        controller = self._master.getController("Laser")
+        if controller is not None:
+            if intensity is not None:
+                controller.setLaserValue(name, intensity)
+            controller.setLaserActive(name, active)
+        else:
+            if intensity is not None:
+                laser.setValue(intensity)
+            laser.setEnabled(active)
+
+    def _set_camera(self, exposure_ms: Optional[float], gain: Optional[float]) -> None:
+        settings = self._master.getController("Settings")
+        name = self._master.detectorsManager.getAllDeviceNames()[0]
+        if exposure_ms is not None:
+            if exposure_ms <= 0:
+                raise ValueError("exposure_ms must be positive.")
+            if settings is not None:
+                settings.setDetectorExposureTime(name, exposure_ms)
+            else:
+                self.mDetector.setParameter("exposure", exposure_ms)
+        if gain is not None:
+            if settings is not None:
+                settings.setDetectorGain(name, gain)
+            else:
+                self.mDetector.setParameter("gain", gain)
+
+    def _exposure_ms(self) -> float:
+        try:
+            value = self.mDetector.getParameter("exposure") if self.mDetector else None
+            return float(value) if value is not None else 0.0
         except Exception:
-            return 0.1
+            return 0.0
+
+    def _pixel_size_um(self) -> float:
+        try:
+            return float(self.mDetector.pixelSizeUm[-1]) or 1.0
+        except Exception:
+            return 1.0
+
+    # Deterministic frame grabs, same duck-typed protocol as ExperimentController.
 
     def _beginTriggeredAcquisition(self) -> bool:
-        """Switch the detector to software-trigger mode for deterministic post-move grabs.
-
-        Returns True when successful; False when the detector does not support
-        it (graceful degradation to freerun fallback).
-        """
-        if not hasattr(self.mDetector, "setTriggerSource") or not hasattr(self.mDetector, "snapSync"):
+        """Software-trigger mode, so a frame is taken after each move. False
+        when the camera cannot (free-run polling is used instead)."""
+        if not hasattr(self.mDetector, "setTriggerSource") or not hasattr(
+                self.mDetector, "snapSync"):
             self._useTriggeredGrab = False
             return False
         try:
-            ok = bool(self.mDetector.setTriggerSource("software"))
+            self._useTriggeredGrab = bool(self.mDetector.setTriggerSource("software"))
         except Exception as e:
             self._logger.warning(f"Could not enable software trigger: {e}")
-            ok = False
-        self._useTriggeredGrab = ok
-        if ok:
-            self._logger.info("ArkitektController: camera in software-trigger mode (deterministic grabs)")
-        else:
-            self._logger.warning("ArkitektController: software trigger not supported, using freerun fallback")
-        return ok
+            self._useTriggeredGrab = False
+        return self._useTriggeredGrab
 
     def _endTriggeredAcquisition(self) -> None:
-        """Restore continuous (free-run) acquisition — safe to call unconditionally."""
-        if not getattr(self, "_useTriggeredGrab", False):
+        """Back to continuous acquisition; safe to call unconditionally."""
+        if not self._useTriggeredGrab:
             return
         self._useTriggeredGrab = False
         try:
-            if hasattr(self.mDetector, "setTriggerSource"):
-                self.mDetector.setTriggerSource("continuous")
-                self._logger.info("ArkitektController: camera restored to continuous mode")
+            self.mDetector.setTriggerSource("continuous")
         except Exception as e:
             self._logger.warning(f"Could not restore continuous mode: {e}")
 
-    def grabCameraFrame(self, frameSync: int = 2, returnFrameNumber: bool = False):
-        """Return a single camera frame guaranteed to be captured after this call.
-
-        Fast path (triggered): fires one software trigger via mDetector.snapSync()
-        and returns exactly the resulting frame.
-
-        Fallback (freerun): flushes ring-buffer, then polls by frame-number until
-        the counter advances by frameSync counts.  Timeout is exposure-time-scaled.
-        """
-        # ── Fast path ────────────────────────────────────────────────────────
-        if getattr(self, "_useTriggeredGrab", False) and hasattr(self.mDetector, "snapSync"):
-            mFrame = self.mDetector.snapSync(timeout=max(2.0, self._getExposureTimeSec() * 4 + 1.0))
-            if returnFrameNumber:
-                fn = self.mDetector.getFrameNumber() if hasattr(self.mDetector, "getFrameNumber") else -1
-                return mFrame, fn
-            return mFrame
-
-        # ── Fallback path ────────────────────────────────────────────────────
+    def grabCameraFrame(self, frameSync: int = 2) -> np.ndarray:
+        """One frame captured after this call: a software trigger when
+        _beginTriggeredAcquisition succeeded, else wait until the free-running
+        frame counter advanced by *frameSync* (timeout scaled by exposure)."""
+        exposure_s = max(self._exposure_ms(), 1.0) / 1000.0
+        if self._useTriggeredGrab:
+            return self.mDetector.snapSync(timeout=max(2.0, exposure_s * 4 + 1.0))
+        if not getattr(self.mDetector, "_running", True):
+            self.mDetector.startAcquisition()
         try:
             if hasattr(self.mDetector, "flushBuffer"):
                 self.mDetector.flushBuffer()
         except Exception:
             pass
-
-        exposure_s = self._getExposureTimeSec()
-        timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
-        cTime = time.time()
-        lastFrameNumber = -1
-        currentFrameNumber = -1
-        mFrame = None
-
+        timeout = max(1.0, (frameSync + 2) * exposure_s + 0.5)
+        start, first, frame = time.time(), None, None
         while True:
-            mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
-            if lastFrameNumber == -1:
-                lastFrameNumber = currentFrameNumber
-            if time.time() - cTime > timeoutFrameRequest:
-                if mFrame is None:
-                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
-                self._logger.warning(
-                    f"grabCameraFrame: timed out after {timeoutFrameRequest:.1f}s "
-                    f"(exposure={exposure_s*1000:.0f}ms, frameSync={frameSync})"
-                )
-                break
-            if currentFrameNumber <= lastFrameNumber + frameSync:
-                time.sleep(0.01)
-            else:
-                break
-
-        if returnFrameNumber:
-            return mFrame, currentFrameNumber
-        return mFrame
-
-    def moveToSampleLoadingPosition(
-        self, speed: float = 10000, is_blocking: bool = True
-    ):
-        """Move to sample loading position."""
-        positionerNames = self._master.positionersManager.getAllDeviceNames()
-        if len(positionerNames) == 0:
-            self._logger.warning(
-                "No positioners available to move to sample loading position."
-            )
-            return
-        positionerName = positionerNames[0]
-        self._logger.debug(
-            f"Moving to sample loading position for positioner {positionerName}"
-        )
-        self._master.positionersManager[positionerName].moveToSampleLoadingPosition(
-            speed=speed, is_blocking=is_blocking
-        )
-        
-    
-    @APIExport(runOnUIThread=False)
-    def getStagePosition(self, positionerName: str | None = None) -> Position:
-        """Get current stage position."""
-        if positionerName is None:
-            positionerNames = self._master.positionersManager.getAllDeviceNames()
-            if len(positionerNames) == 0:
-                self._logger.warning("No positioners available to get stage position.")
-                return None
-            positionerName = positionerNames[0]
-        mStage = self._master.positionersManager[positionerName]
-        currentPositions = mStage.getPosition()
-        return Position(
-            x=currentPositions["x"],
-            y=currentPositions["y"],
-            z=currentPositions["z"],
-        )
-    
-    @APIExport(runOnUIThread=False)
-    def homeStageAxis(self, positionerName: str | None = None, axis: str = "X", is_blocking: bool = False):
-        """Home stage axis."""
-        if positionerName is None:
-            positionerNames = self._master.positionersManager.getAllDeviceNames()
-            if len(positionerNames) == 0:
-                self._logger.warning("No positioners available to home stage axis.")
-                return None
-            positionerName = positionerNames[0]
-        mStage = self._master.positionersManager[positionerName]
-        if axis == "X":
-            mStage.home_x(is_blocking=is_blocking)
-        elif axis == "Y":
-            mStage.home_y(is_blocking=is_blocking)
-        elif axis == "Z":
-            mStage.home_z(is_blocking=is_blocking)
-
-        
-    @APIExport(runOnUIThread=False) 
-    def setLaserState(self, laserName: str, isActive: bool, value: float = 100):
-        """Set laser state."""
-        if laserName not in self._master.lasersManager.getAllDeviceNames():
-            self._logger.warning(f"Laser {laserName} not available to set state.")
-            return
-        mLaser = self._master.lasersManager[laserName]
-        mLaser.setEnabled(isActive)
-        mLaser.setValue(value)
-        
-    @APIExport(runOnUIThread=False)
-    def moveStage(self, positionerName: str | None = None, axis: str = "X", distance: float = 100, is_absolute: bool = True, is_blocking: bool = True, speed: float = 10000):
-        """Move stage."""
-        if positionerName is None:
-            positionerNames = self._master.positionersManager.getAllDeviceNames()
-            if len(positionerNames) == 0:
-                self._logger.warning("No positioners available to move stage.")
-                return None
-            positionerName = positionerNames[0]
-        mStage = self._master.positionersManager[positionerName]
-        mStage.move(value=distance, axis=axis, is_absolute=is_absolute, is_blocking=is_blocking, speed=speed)  
-    
-    
-    @APIExport(runOnUIThread=False)
-    def acquireFrame(self, frameSync: int = 3) -> Generator[Image, None, None]:
-        """Acquire a single frame from the detector.
-
-        Uses grabCameraFrame() which prefers software-trigger mode (deterministic)
-        and falls back to freerun frame-number polling when unsupported.
-
-        Args:
-            frameSync (int): Passed to grabCameraFrame fallback path.
-        Returns:
-            Generator[Image]: Single Arkitekt Image yielded once.
-        """
-        mFrame, currentFrameNumber = self.grabCameraFrame(frameSync=frameSync, returnFrameNumber=True)
-        # Ensure channel axis required by from_array_like
-        if len(mFrame.shape) == 2:
-            mFrame = np.expand_dims(mFrame, axis=-1)
-        # Convert to Arkitekt image format
-        image = from_array_like(
-            xr.DataArray(
-                mFrame,
-                dims=["y", "x", "c"],
-                attrs={
-                    "frame_number": currentFrameNumber,
-                }
-            ),
-            name=f"Frame_{currentFrameNumber}",
-        )
-        yield image
-
-
-    @APIExport(runOnUIThread=False)
-    def goToPosition(
-        self,
-        x_micrometer: float,
-        y_micrometer: float,
-        positionerName: str | None = None,
-        speed: float = 10000,
-        is_blocking: bool = True,
-        t_settle: float = 0.2,
-    ) -> None:
-        """Move the stage to the specified X,Y position.
-
-        Moves the specified positioner (or the first available one) to the given
-        X and Y coordinates in micrometers.
-
-        Args:
-            x_micrometer (float): Target X position in micrometers.
-            y_micrometer (float): Target Y position in micrometers.
-            positionerName (str | None): Name of the positioner to use. If None,
-                the first available positioner will be used.
-            speed (float): Speed of the positioner movement (units per second).
-                Default is 10000.
-            is_blocking (bool): Whether to wait for movement completion before returning.
-                Default is True.
-            t_settle (float): Settling time in seconds to wait after movement completes.
-                Only used if is_blocking is True. Default is 0.2 seconds.
-
-        Example:
-            >>> # Move to position (5000, 3000) micrometers
-            >>> goToPosition(x_micrometer=5000, y_micrometer=3000)
-            
-            >>> # Move with custom speed and non-blocking
-            >>> goToPosition(
-            ...     x_micrometer=5000,
-            ...     y_micrometer=3000,
-            ...     speed=5000,
-            ...     is_blocking=False
-            ... )
-        """
-        # Get positioner
-        if positionerName is None:
-            positionerNames = self._master.positionersManager.getAllDeviceNames()
-            if len(positionerNames) == 0:
-                self._logger.error("No positioners available for positioning")
-                return
-            positionerName = positionerNames[0]
-
-        mPositioner = self._master.positionersManager[positionerName]
-
-        self._logger.debug(
-            f"Moving positioner {positionerName} to ({x_micrometer}, {y_micrometer}) µm"
-        )
-
-        # Move to position
-        mPositioner.move(
-            value=(x_micrometer, y_micrometer),
-            axis="XY",
-            is_absolute=True,
-            is_blocking=is_blocking,
-            speed=(speed, speed)
-        )
-
-        # Wait for settling if blocking
-        if is_blocking:
-            time.sleep(t_settle)
-            self._logger.debug(
-                f"Position reached and settled at ({x_micrometer}, {y_micrometer}) µm"
-            )
-
-    @APIExport(runOnUIThread=False)
-    def runTileScanInThread(self,
-        center_x_micrometer: float | None = None,
-        center_y_micrometer: float | None = None,
-        range_x_micrometer: float = 100,
-        range_y_micrometer: float = 100,
-        step_x_micrometer: float | None = None,
-        step_y_micrometer: float | None = None,
-        overlap_percent: float = 10.0,
-        illumination_channel: str | None = None,
-        illumination_intensity: float = 100,
-        exposure_time: float | None = None,
-        gain: float | None = None,
-        speed: float = 10000,
-        positionerName: str | None = None,
-        performAutofocus: bool = False,
-        autofocus_range: float = 100,
-        autofocus_resolution: float = 10,
-        autofocus_illumination_channel: str | None = None,
-        objective_id: int | None = None):
-        """Run tile scan in a separate thread."""
-        import threading
-
-        mThread = threading.Thread(
-            target=self.runTileScan,
-            kwargs={
-                'center_x_micrometer': center_x_micrometer,
-                'center_y_micrometer': center_y_micrometer,
-                'range_x_micrometer': range_x_micrometer,
-                'range_y_micrometer': range_y_micrometer,
-                'step_x_micrometer': step_x_micrometer,
-                'step_y_micrometer': step_y_micrometer,
-                'overlap_percent': overlap_percent,
-                'illumination_channel': illumination_channel,
-                'illumination_intensity': illumination_intensity,
-                'exposure_time': exposure_time,
-                'gain': gain,
-                'speed': speed,
-                'positionerName': positionerName,
-                'performAutofocus': performAutofocus,
-                'autofocus_range': autofocus_range,
-                'autofocus_resolution': autofocus_resolution,
-                'autofocus_illumination_channel': autofocus_illumination_channel,
-                'objective_id': objective_id
-            }
-        )
-        mThread.start()
-        return 1
-
-    def acquire_frame(self, frameSync: int = 3):
-        """Acquire a single frame — delegates to grabCameraFrame()."""
-        return self.grabCameraFrame(frameSync=frameSync)
-
-    @APIExport(runOnUIThread=False)
-    def runTileScan(
-        self,
-        center_x_micrometer: float | None = None,
-        center_y_micrometer: float | None = None,
-        range_x_micrometer: float = 5000,
-        range_y_micrometer: float = 5000,
-        step_x_micrometer: float | None = None,
-        step_y_micrometer: float | None = None,
-        overlap_percent: float = 10.0,
-        illumination_channel: str | None = "LED",
-        illumination_intensity: float = 1024,
-        exposure_time: float | None = None,
-        gain: float | None = None,
-        speed: float = 10000,
-        positionerName: str | None = None,
-        performAutofocus: bool = False,
-        autofocus_range: float = 100,
-        autofocus_resolution: float = 10,
-        autofocus_illumination_channel: str | None = None,
-        objective_id: int | None = None,
-        t_settle: float = 0.2,
-    ) -> Generator[Image, None, None]:
-        """Run a tile scan with enhanced control over imaging parameters.
-
-        Runs a tile scan by moving the specified positioner in a grid pattern centered
-        at the given coordinates, capturing images at each position with specified
-        illumination and camera settings, and yielding the images with appropriate
-        affine transformations for stitching.
-
-        The step size is automatically calculated based on the current objective's
-        field of view and the specified overlap percentage, unless explicitly provided.
-
-        Args:
-            center_x_micrometer (float | None): Center position in the X direction (micrometers).
-                If None, uses current X position.
-            center_y_micrometer (float | None): Center position in the Y direction (micrometers).
-                If None, uses current Y position.
-            range_x_micrometer (float): Total range to scan in the X direction (micrometers).
-            range_y_micrometer (float): Total range to scan in the Y direction (micrometers).
-            step_x_micrometer (float | None): Step size in the X direction (micrometers).
-                If None, automatically calculated based on objective FOV and overlap.
-            step_y_micrometer (float | None): Step size in the Y direction (micrometers).
-                If None, automatically calculated based on objective FOV and overlap.
-            overlap_percent (float): Percentage of overlap between adjacent tiles (0-100).
-                Only used if step_x/y_micrometer are None. Default is 10%.
-            illumination_channel (str | None): Name of the illumination source to use.
-                If None, uses current illumination settings.
-            illumination_intensity (float): Intensity value for the illumination source (0-100).
-            exposure_time (float | None): Exposure time in milliseconds. If None, uses current setting.
-            gain (float | None): Camera gain value. If None, uses current setting.
-            speed (float): Speed of the positioner movement (units per second).
-            positionerName (str | None): Name of the positioner to use. If None,
-                the first available positioner will be used.
-            performAutofocus (bool): Whether to perform autofocus at each tile position.
-            autofocus_range (float): Range for autofocus scan in Z direction (micrometers).
-            autofocus_resolution (float): Step size for autofocus scan (micrometers).
-            autofocus_illumination_channel (str | None): Illumination channel to use for autofocus.
-                If None, uses the same as illumination_channel.
-            objective_id (int | None): ID of the objective to use (0 or 1).
-                If specified, the objective will be moved to this position before scanning
-                and magnification will be retrieved from ObjectiveManager. If None, uses current objective.
-
-        Yields:
-            Image: Captured image with affine transformation for stitching.
-
-        Example:
-            >>> # Scan with automatic step size and specific objective
-            >>> for image in runTileScan(
-            ...     center_x_micrometer=5000,
-            ...     center_y_micrometer=5000,
-            ...     range_x_micrometer=1000,
-            ...     range_y_micrometer=1000,
-            ...     overlap_percent=10,  # 10% overlap
-            ...     illumination_channel="LED",
-            ...     illumination_intensity=50,
-            ...     exposure_time=100,
-            ...     objective_id=1,  # Switch to objective 1 (0-based indexing)
-            ...     performAutofocus=True
-            ... ):
-            ...     # Process each image
-            ...     pass
-
-            >>> # Or specify step size manually
-            >>> for image in runTileScan(
-            ...     center_x_micrometer=5000,
-            ...     center_y_micrometer=5000,
-            ...     range_x_micrometer=1000,
-            ...     range_y_micrometer=1000,
-            ...     step_x_micrometer=200,
-            ...     step_y_micrometer=200,
-            ...     illumination_channel="LED",
-            ...     objective_id=0  # Switch to objective 0
-            ... ):
-            ...     pass
-        """
-        # Get objective manager for FOV calculation
-        objective_manager = None
-        if hasattr(self._master, 'objectiveManager'):
-            objective_manager = self._master.objectiveManager
-
-        # Handle objective switching if specified
-        objective_magnification = None
-        if objective_id is not None:
-            # Get objective controller for moving the objective
-            objective_controller = None
             try:
-                objective_controller = self._master.getController('Objective')
-                if objective_controller is not None:
-                    self._logger.debug(f"Moving to objective ID: {objective_id}")
-                    objective_controller.moveToObjective(objective_id)  # This is a blocking operation
-                    self._logger.debug(f"Successfully moved to objective ID: {objective_id}")
-                else:
-                    self._logger.warning("ObjectiveController not available, cannot switch objective")
-            except Exception as e:
-                self._logger.error(f"Failed to move to objective ID {objective_id}: {e}")
+                frame, number = self.mDetector.getLatestFrame(returnFrameNumber=True)
+            except TypeError:  # a camera without frame numbers: wait frameSync frames instead
+                time.sleep((frameSync + 1) * exposure_s)
+                return self.mDetector.getLatestFrame()
+            first = number if first is None else first
+            if number > first + frameSync:
+                return frame
+            if time.time() - start > timeout:
+                self._logger.warning(f"grabCameraFrame: no new frame after {timeout:.1f} s")
+                return frame if frame is not None else self.mDetector.getLatestFrame()
+            time.sleep(0.01)
 
-        # Calculate step sizes based on objective FOV if not provided
-        if step_x_micrometer is None or step_y_micrometer is None:
-            if objective_manager is not None:
-                fov = objective_manager.getCurrentFOV()
-                if fov is not None:
-                    fov_x, fov_y = fov
-                    # Calculate step size with overlap
-                    # step = FOV * (1 - overlap/100)
-                    overlap_factor = 1.0 - (overlap_percent / 100.0)
+    # ── images to mikro ─────────────────────────────────────────────────────
 
-                    if step_x_micrometer is None:
-                        step_x_micrometer = fov_x * overlap_factor
-                        self._logger.debug(f"Calculated step_x from FOV: {step_x_micrometer:.2f} µm "
-                                         f"(FOV: {fov_x:.2f} µm, overlap: {overlap_percent}%)")
+    def _upload(self, mikro, frame: np.ndarray, name: str, position: Dict[str, float],
+                space=None):
+        """Store *frame* as an array dataset (axes c, y, x, with a pyramid and
+        per-channel contrast), register it in *space* at its stage position,
+        remember a thumbnail for the panel and return its lens."""
+        import xarray as xr
+        from mikro import dataset_arrays
+        from mikro.api.schema import CoordinateAnchorInput
 
-                    if step_y_micrometer is None:
-                        step_y_micrometer = fov_y * overlap_factor
-                        self._logger.debug(f"Calculated step_y from FOV: {step_y_micrometer:.2f} µm "
-                                         f"(FOV: {fov_y:.2f} µm, overlap: {overlap_percent}%)")
-                else:
-                    self._logger.warning("Could not get FOV from ObjectiveManager - no detector dimensions set?")
-            else:
-                self._logger.warning("ObjectiveManager not available for automatic step size calculation")
+        array = np.asarray(frame)
+        data = array[np.newaxis] if array.ndim == 2 else np.moveaxis(array, -1, 0)
+        cyx = xr.DataArray(data, dims=("c", "y", "x"))
+        levels = max(1, min(4, int(np.log2(max(cyx.shape[1:]) / 512)) + 1))
+        level_zero, scales = dataset_arrays(cyx, levels=levels, method="mean")
+        dataset = mikro.create_array_dataset(
+            data=level_zero, scales=scales, name=name, axes=["c", "y", "x"],
+            anchors=CoordinateAnchorInput.histogram_anchors(cyx))
+        pixel_size = self._pixel_size_um()
+        if space is not None:
+            space.register(dataset, scale={"y": pixel_size, "x": pixel_size},
+                           x=position["x"], y=position["y"])
+        self._remember_upload(array, name, getattr(dataset, "id", None), position, pixel_size)
+        return dataset.lens()
 
-            # Fallback to default values if still None
-            if step_x_micrometer is None:
-                step_x_micrometer = 100.0
-                self._logger.warning(f"Using default step_x_micrometer: {step_x_micrometer} µm")
-            if step_y_micrometer is None:
-                step_y_micrometer = 100.0
-                self._logger.warning(f"Using default step_y_micrometer: {step_y_micrometer} µm")
+    def _remember_upload(self, array: np.ndarray, name: str, dataset_id, position: dict,
+                         pixel_size: float) -> None:
+        entry = {"id": next(self._activity_ids), "name": name, "datasetId": dataset_id,
+                 "shape": list(array.shape), "dtype": str(array.dtype),
+                 "positionUm": {k: position[k] for k in ("x", "y", "z")},
+                 "pixelSizeUm": pixel_size, "time": _now(), "thumbnail": _thumbnail(array)}
+        self._uploads.append(entry)
+        self.sigArkitektUpload.emit(entry)
 
-        # Get objective magnification from manager after potential switch
-        if objective_manager is not None:
-            objective_magnification = objective_manager.getCurrentMagnification()
-            if objective_magnification is not None:
-                current_objective_slot = objective_manager.getCurrentObjective()
-                self._logger.debug(f"Using objective slot {current_objective_slot} with magnification: {objective_magnification}x")
+    def _tile_grid(self, range_x_um, range_y_um, center_x_um, center_y_um, overlap_percent,
+                   step_x_um, step_y_um) -> dict:
+        """The tile positions (µm, snake order) around a centre (default: here)."""
+        here = self._position(None)
+        center_x = here["x"] if center_x_um is None else center_x_um
+        center_y = here["y"] if center_y_um is None else center_y_um
+        if step_x_um is None or step_y_um is None:
+            fov_y, fov_x = self._field_of_view_um()
+            keep = 1.0 - min(max(overlap_percent, 0.0), 90.0) / 100.0
+            step_x_um, step_y_um = step_x_um or fov_x * keep, step_y_um or fov_y * keep
+        if step_x_um <= 0 or step_y_um <= 0:
+            raise ValueError("Tile steps must be positive.")
+        nx, ny = int(range_x_um // step_x_um) + 1, int(range_y_um // step_y_um) + 1
+        x0, y0 = center_x - (nx - 1) * step_x_um / 2, center_y - (ny - 1) * step_y_um / 2
+        tiles = [(ix, iy, x0 + ix * step_x_um, y0 + iy * step_y_um)
+                 for iy in range(ny)
+                 for ix in (range(nx) if iy % 2 == 0 else reversed(range(nx)))]
+        return {"tiles": tiles, "nx": nx, "ny": ny, "step": (step_x_um, step_y_um),
+                "start": here}
 
-        # Get positioner
-        if positionerName is None:
-            positionerNames = self._master.positionersManager.getAllDeviceNames()
-            if len(positionerNames) == 0:
-                self._logger.error("No positioners available for tile scan")
-                return
-            positionerName = positionerNames[0]
+    def _tile_scan(self, mikro, task, grid: dict, illumination: Optional[str],
+                   intensity: Optional[float], autofocus: Optional[tuple], speed, settle_s):
+        from kanne.scalars import Unit
+        from mikro import space_2d
 
-        mPositioner = self._master.positionersManager[positionerName]
-
-        # Get current position and use as center if not provided
-        current_pos = mPositioner.getPosition()
-        if center_x_micrometer is None:
-            center_x_micrometer = current_pos.get("X", 0)
-            self._logger.debug(f"Using current X position as center: {center_x_micrometer}")
-        if center_y_micrometer is None:
-            center_y_micrometer = current_pos.get("Y", 0)
-            self._logger.debug(f"Using current Y position as center: {center_y_micrometer}")
-
-        # Calculate start positions from center and range
-        xStart = center_x_micrometer - range_x_micrometer / 2
-        yStart = center_y_micrometer - range_y_micrometer / 2
-
-        # Use the new parameter names internally
-        xRange = int(range_x_micrometer)
-        yRange = int(range_y_micrometer)
-        xStep = int(step_x_micrometer)
-        yStep = int(step_y_micrometer)
-
-        self._logger.debug(f"Starting tile scan for positioner {positionerName}")
-        self._logger.debug(f"Scan parameters: center=({center_x_micrometer}, {center_y_micrometer}), "
-                         f"range=({range_x_micrometer}, {range_y_micrometer}), "
-                         f"step=({step_x_micrometer}, {step_y_micrometer})")
-
-        # Set up camera parameters if specified
-        if exposure_time is not None and exposure_time > 0:
-            self._commChannel.sharedAttrs.sigAttributeSet(
-                ['Detector', None, None, "exposureTime"], exposure_time
-            )
-            self._logger.debug(f"Setting exposure time to {exposure_time}ms")
-
-        if gain is not None and gain >= 0:
-            self._commChannel.sharedAttrs.sigAttributeSet(
-                ['Detector', None, None, "gain"], gain
-            )
-            self._logger.debug(f"Setting gain to {gain}")
-
-        # Set up illumination if specified
-        original_illumination_state = None
-        if illumination_channel is not None:
-            try:
-                # Store original state to restore later
-                laser_manager = self._master.lasersManager
-                if illumination_channel in laser_manager.getAllDeviceNames():
-                    laser = laser_manager[illumination_channel]
-                    original_illumination_state = {
-                        'enabled': laser.enabled,
-                        'value': laser.power if hasattr(laser, 'power') else 0
-                    }
-                    # Set illumination
-                    laser.setValue(illumination_intensity)
-                    if laser.enabled == 0:
-                        laser.setEnabled(1)
-                    self._logger.debug(f"Set illumination {illumination_channel} to {illumination_intensity}")
-            except Exception as e:
-                self._logger.warning(f"Failed to set illumination channel {illumination_channel}: {e}")
-
-        # Get autofocus controller if needed
-        autofocusController = None
-        if performAutofocus:
-            autofocusController = self._master.getController('Autofocus')
-            if autofocusController is None:
-                self._logger.warning("Autofocus requested but AutofocusController not available")
-                performAutofocus = False
-
-            # Set autofocus illumination if different from main illumination
-            if autofocus_illumination_channel and autofocus_illumination_channel != illumination_channel:
-                # TODO: Implement temporary illumination switching for autofocus
-                self._logger.debug(f"Using autofocus illumination channel: {autofocus_illumination_channel}")
-
-        # Start camera if not running
-        if not self.mDetector._running:
-            self.mDetector.startAcquisition()
-
-        # Create stage for stitching metadata
+        autofocus_controller = self._master.getController("Autofocus") if autofocus else None
+        if autofocus and autofocus_controller is None:
+            raise RuntimeError("Autofocus requested, but this setup has no autofocus.")
+        nx, ny, tiles = grid["nx"], grid["ny"], grid["tiles"]
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        space = space_2d(mikro, f"Tile scan {stamp} ({nx}x{ny})", unit=Unit("micrometer"))
+        restore_light = self._switch_illumination(illumination, intensity)
+        task.progress(0, f"{nx} x {ny} tiles, step {grid['step'][0]:.0f} x "
+                         f"{grid['step'][1]:.0f} µm")
+        if autofocus_controller is None:  # autofocus switches the trigger mode itself
+            self._beginTriggeredAcquisition()
         try:
-            stage = create_stage(name=f"Tile Scan Stage - {center_x_micrometer},{center_y_micrometer}")
-        except Exception as e:
-            self._logger.error(f"Failed to create stage for tile scan: {e}")
-            stage = None
-
-        # Create directory for saving tiles if stage creation failed
-        save_dir = None
-        metadata_list = []
-        if stage is None:
-            # Get data storage path from ImSwitch config
-            data_path = dirtools.UserFileDirs.getValidatedDataPath()
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            scan_name = f"tilescan_{timestamp}_cx{center_x_micrometer:.0f}_cy{center_y_micrometer:.0f}"
-            save_dir = os.path.join(data_path, scan_name)
-            os.makedirs(save_dir, exist_ok=True)
-            self._logger.info(f"Saving tiles to: {save_dir}")
-
-        # Get positioner (moved earlier to access before calculating center)
-        # Already retrieved above when checking center positions
-
-        # Get current position
-        current_pos = mPositioner.getPosition()
-        current_x = current_pos.get("X", xStart)
-        current_y = current_pos.get("Y", yStart)
-
-        self._logger.debug(f"Starting scan from position: ({current_x}, {current_y})")
-
-        # Calculate number of tiles in each direction
-        num_tiles_x = int(xRange / xStep) + 1
-        num_tiles_y = int(yRange / yStep) + 1
-        total_tiles = num_tiles_x * num_tiles_y
-
-        self._logger.info(f"Starting snake scan: {num_tiles_x}x{num_tiles_y} tiles "
-                         f"({total_tiles} total), step: ({xStep}, {yStep}) µm, "
-                         f"overlap: {overlap_percent}%")
-
-        # Perform scan in snake pattern
-        tile_count = 0
-
-        for iy in range(num_tiles_y):
-            for ix in range(num_tiles_x):
-                # Snake pattern: reverse x direction on odd rows
-                if iy % 2 == 1:
-                    # Odd row: scan right to left
-                    actual_ix = num_tiles_x - 1 - ix
-                else:
-                    # Even row: scan left to right
-                    actual_ix = ix
-
-                # Calculate absolute position
-                actual_x = xStart + actual_ix * xStep
-                actual_y = yStart + iy * yStep
-
-                # Move to position
-                mPositioner.move(
-                    value=(actual_x, actual_y),
-                    axis="XY",
-                    is_absolute=True,
-                    is_blocking=True,
-                    speed=(speed, speed)
-                )
-                # Wait for settling
-                time.sleep(t_settle)
-
-                # Perform autofocus at this position if requested
-                if performAutofocus and autofocusController is not None:
-                    try:
-                        autofocusController.autoFocus(
-                            rangez=autofocus_range,
-                            resolutionz=autofocus_resolution,
-                            defocusz=0
-                        )
-                        self._logger.debug(f"Autofocus completed at tile ({actual_ix}, {iy})")
-                    except Exception as e:
-                        self._logger.error(f"Autofocus failed at tile ({actual_ix}, {iy}): {e}")
-
-                # Capture image
-                numpy_array = self.acquire_frame(frameSync=2)
-
-                # Create affine transformation matrix for stitching
-                affine_matrix_four_d = [
-                    [1, 0, 0, actual_x],
-                    [0, 1, 0, actual_y],
-                    [0, 0, 1, 0],
-                    [0, 0, 0, 1],
-                ]
-
-                # Create image with metadata
-                actual_id = iy * num_tiles_x + ix
-                image_name = f"Tile_{actual_id}_{actual_ix:03d}_{iy:03d}_x{actual_x:.1f}_y{actual_y:.1f}"
-                if illumination_channel:
-                    image_name += f"_{illumination_channel}"
-
-                # ensure we have a channel axis
-                if len(numpy_array.shape) == 2:
-                    numpy_array = np.expand_dims(numpy_array, axis=-1)
-
-                if stage is not None:
-                    print("Image has the following properties: ", numpy_array.shape)
-                    image = from_array_like(
-                        xr.DataArray(
-                            numpy_array,
-                            dims=["y", "x", "c"],
-                            attrs={
-                                "tile_x": actual_ix,
-                                "tile_y": iy,
-                                "position_x_um": actual_x,
-                                "position_y_um": actual_y,
-                                "illumination_channel": illumination_channel or "unknown",
-                                "illumination_intensity": illumination_intensity,
-                                "exposure_time_ms": exposure_time,
-                                "gain": gain,
-                                "objective_magnification": objective_magnification,
-                            }
-                        ),
-                        transformation_views=[
-                            PartialAffineTransformationViewInput(
-                                affineMatrix=affine_matrix_four_d,
-                                stage=stage
-                            )
-                        ],
-                        name=image_name,
-                    )
-                else:
-                    # Save as individual TIF files with JSON metadata
-
-                    # Create metadata dictionary
-                    tile_metadata = {
-                        "tile_index_x": actual_ix,
-                        "tile_index_y": iy,
-                        "position_x_um": actual_x,
-                        "position_y_um": actual_y,
-                        "center_x_um": center_x_micrometer,
-                        "center_y_um": center_y_micrometer,
-                        "illumination_channel": illumination_channel or "unknown",
-                        "illumination_intensity": illumination_intensity,
-                        "exposure_time_ms": exposure_time,
-                        "gain": gain,
-                        "objective_magnification": objective_magnification,
-                        "affine_matrix": affine_matrix_four_d,
-                        "image_shape": list(numpy_array.shape),
-                        "dtype": str(numpy_array.dtype),
-                    }
-
-                    # Add to metadata list
-                    metadata_list.append(tile_metadata)
-
-                    # Save TIF file
-                    tif_filename = f"{image_name}.tif"
-                    tif_path = os.path.join(save_dir, tif_filename)
-                    tif.imwrite(tif_path, numpy_array)
-
-                    self._logger.debug(f"Saved tile to {tif_path}")
-
-                    # Create a dummy image object for consistency (won't be yielded)
-                    image = None
-
-                tile_count += 1
-                self._logger.debug(f"Captured tile {tile_count}/{total_tiles} at ({actual_x}, {actual_y})")
-
-                if stage is not None and image is not None:
-                    yield image
-
-        # Save metadata JSON file if we were saving individual TIFs
-        if save_dir is not None and metadata_list:
-            import json
-
-            # Create comprehensive scan metadata
-            scan_metadata = {
-                "scan_info": {
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "center_x_um": center_x_micrometer,
-                    "center_y_um": center_y_micrometer,
-                    "range_x_um": range_x_micrometer,
-                    "range_y_um": range_y_micrometer,
-                    "step_x_um": step_x_micrometer,
-                    "step_y_um": step_y_micrometer,
-                    "overlap_percent": overlap_percent,
-                    "num_tiles_x": num_tiles_x,
-                    "num_tiles_y": num_tiles_y,
-                    "total_tiles": total_tiles,
-                    "positioner": positionerName,
-                    "illumination_channel": illumination_channel,
-                    "illumination_intensity": illumination_intensity,
-                    "exposure_time_ms": exposure_time,
-                    "gain": gain,
-                    "objective_magnification": objective_magnification,
-                    "autofocus_enabled": performAutofocus,
-                },
-                "tiles": metadata_list
-            }
-
-            # Save metadata JSON
-            metadata_path = os.path.join(save_dir, "scan_metadata.json")
-            with open(metadata_path, 'w') as f:
-                json.dump(scan_metadata, f, indent=2)
-
-            self._logger.info(f"Saved scan metadata to {metadata_path}")
-
-        # move back to starting position
-        mPositioner.move(
-            value=(current_x, current_y),
-            axis="XY",
-            is_absolute=True,
-            is_blocking=False,
-            speed=(speed, speed)
-        )
-        # Restore original illumination state if it was changed
-        if original_illumination_state is not None and illumination_channel is not None:
+            for index, (ix, iy, x, y) in enumerate(tiles):
+                self._move_xy(x, y, speed, None)
+                time.sleep(max(0.0, settle_s))
+                if autofocus_controller is not None:
+                    self._autofocus(autofocus_controller, *autofocus)
+                frame = self.grabCameraFrame(frameSync=2)
+                position = {**self._position(None), "x": x, "y": y}
+                lens = self._upload(mikro, frame, f"Tile {ix:03d}_{iy:03d} x{x:.0f} y{y:.0f}",
+                                    position, space)
+                task.progress(int(100 * (index + 1) / len(tiles)),
+                              f"Tile {index + 1}/{len(tiles)}")
+                yield lens
+            space.stage(name=f"Tile scan {stamp}")
+        finally:
+            self._endTriggeredAcquisition()
+            restore_light()
             try:
-                laser = self._master.lasersManager[illumination_channel]
-                laser.setValue(original_illumination_state['value'])
-                laser.setEnabled(original_illumination_state['enabled'])
-                self._logger.debug(f"Restored illumination {illumination_channel} to original state")
+                self._move_xy(grid["start"]["x"], grid["start"]["y"], speed, None)
             except Exception as e:
-                self._logger.warning(f"Failed to restore illumination state: {e}")
+                self._logger.warning(f"Could not return to the scan start: {e}")
 
-        self._logger.info(f"Tile scan completed: {tile_count} tiles captured")
+    def _switch_illumination(self, name: Optional[str], intensity: Optional[float]):
+        """Switch *name* on; returns the call that puts it back as it was."""
+        if not name:
+            return lambda: None
+        laser = self._master.lasersManager[name]
+        was_on, power = getattr(laser, "enabled", False), getattr(laser, "power", None)
+        self._set_illumination(name, True, intensity)
+
+        def restore():
+            try:
+                self._set_illumination(name, bool(was_on), power)
+            except Exception as e:
+                self._logger.warning(f"Could not restore {name}: {e}")
+        return restore
+
+    def _autofocus(self, controller, range_um: float, step_um: float) -> None:
+        """Run the software autofocus here and wait for it: autoFocus() only
+        starts a thread. Bounded like the experiment's wait."""
+        started = controller.autoFocus(rangez=range_um, resolutionz=step_um)
+        if isinstance(started, dict) and started.get("status") == "error":
+            raise RuntimeError(f"Autofocus: {started.get('message')}")
+        thread = getattr(controller, "_AutofocusThead", None)
+        if thread is not None and thread.is_alive():
+            steps = 2 * range_um / max(step_um, 0.1) + 1
+            thread.join(timeout=30.0 + steps * (1.0 + self._exposure_ms() / 1000.0))
+            if thread.is_alive():
+                raise RuntimeError("Autofocus did not finish in time.")
+
+    def _field_of_view_um(self) -> tuple:
+        """(height, width) of the camera image in µm, from the latest frame."""
+        frame = self.mDetector.getLatestFrame()
+        if frame is None or np.asarray(frame).ndim < 2:
+            raise RuntimeError("No camera image to size the tiles: give step_x_um and step_y_um.")
+        rows, cols = np.asarray(frame).shape[:2]
+        pixel_size = self._pixel_size_um()
+        return rows * pixel_size, cols * pixel_size
+
+    def _planned_actions(self) -> List[dict]:
+        """Before the first bind, what would be offered (no arkitekt import)."""
+        has_stage = bool(self._master.positionersManager.getAllDeviceNames())
+        has_lasers = bool(self._master.lasersManager.getAllDeviceNames())
+        has_camera = self.mDetector is not None
+        images = has_camera and self._manager.info.useMikro
+        planned = [("get_stage_position", "Get Stage Position", False, False, has_stage),
+                   ("move_stage", "Move Stage", True, False, has_stage),
+                   ("go_to_xy", "Go To XY", True, False, has_stage),
+                   ("home_axis", "Home Axis", True, False, has_stage),
+                   ("move_to_sample_loading_position", "Move To Sample Loading Position",
+                    True, False, has_stage),
+                   ("set_illumination", "Set Illumination", False, False, has_lasers),
+                   ("set_camera", "Set Camera", False, False, has_camera),
+                   ("acquire_frame", "Acquire Frame", False, True, images),
+                   ("run_tile_scan", "Run Tile Scan", True, True, images and has_stage)]
+        return [{"name": n, "title": t, "description": "", "moves": m, "images": i}
+                for n, t, m, i, ok in planned if ok]
 
 
-    @APIExport(runOnUIThread=False)
-    def deconvolve(self) -> int:
-        """Trigger deconvolution via Arkitekt."""
-        # grab an image
-        frame = self.mDetector.getLatestFrame()  # X,Y,C, uint8 numpy array
-        numpy_array = list(frame)[0]
-
-        # Deconvolve using Arkitekt
-        deconvolved_image = self._master.arkitektManager.upload_and_deconvolve_image(
-            numpy_array
-        )
-        # QUESTION: Is this a synchronous call? Do we need to wait for the result?
-        # The result that came back was none
-
-        if deconvolved_image is not None:
-            print("Image deconvolution successful!")
-            return 2
-        else:
-            print("Deconvolution failed, returning original image")
-            return 1
+def _thumbnail(array: np.ndarray) -> Optional[str]:
+    """A small JPEG data URL of a frame, contrast-stretched (1-99 %)."""
+    try:
+        import cv2
+        image = np.asarray(array, dtype=np.float32)
+        if image.ndim == 3 and image.shape[-1] not in (3, 4):
+            image = image[..., 0]
+        low, high = np.percentile(image, (1, 99))
+        image = np.clip((image - low) / max(high - low, 1e-6) * 255, 0, 255).astype(np.uint8)
+        scale = THUMBNAIL_PX / max(image.shape[:2])
+        if scale < 1:
+            image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        if image.ndim == 3:
+            image = cv2.cvtColor(image[..., :3], cv2.COLOR_RGB2BGR)
+        ok, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return "data:image/jpeg;base64," + base64.b64encode(jpeg).decode() if ok else None
+    except Exception:
+        return None

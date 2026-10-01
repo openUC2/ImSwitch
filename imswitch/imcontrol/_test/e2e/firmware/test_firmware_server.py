@@ -1,4 +1,4 @@
-"""Check the firmware server and what it offers the boards on the CAN bus.
+"""Check the firmware server and whether the boards run the newest firmware.
 
 Read-only: nothing here flashes anything. The OTA endpoints that would are
 deliberately not touched.
@@ -8,11 +8,11 @@ deliberately not touched.
 - test_firmware_server_lists_binaries: that server answers with .bin files
 - test_reachable_bus_devices_have_firmware: every CAN node the master can
   actually talk to has a firmware file mapped to its id
-- test_reachable_bus_devices_run_current_firmware: and it runs that firmware
+- test_boards_run_newest_firmware: the master and every reachable node run
+  the version the server offers
 """
 
 import os
-import re
 
 import pytest
 import requests
@@ -22,19 +22,6 @@ BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 
 # Scanning the bus takes a few seconds on the firmware side.
 SCAN_TIMEOUT = int(os.environ.get("FIRMWARE_SCAN_TIMEOUT", "5"))
-
-# A firmware image is roughly 800 kB, and the server is only reachable from
-# inside the container, where the runner executes this suite.
-FETCH_TIMEOUT = int(os.environ.get("FIRMWARE_FETCH_TIMEOUT", "60"))
-
-# The three literals that identify a build: "UC2-ESP v2.0", __TIME__, __DATE__.
-IDENTITY_PATTERN = re.compile(
-    rb"(UC2-ESP v[0-9.]+)\x00([0-9]{2}:[0-9]{2}:[0-9]{2})\x00"
-    rb"([A-Z][a-z]{2} [ 0-9][0-9] 20[0-9]{2})\x00"
-)
-
-# Images are downloaded once per URL; several CAN ids share one file.
-_identities = {}
 
 
 def api(method, **params):
@@ -71,6 +58,68 @@ def firmware_files():
         pytest.skip(f"firmware server unusable: {listing.get('message')}")
 
     return listing
+
+
+def fetch_manifest(server_url):
+    """The firmware server's version.json, or None when it publishes none.
+
+    The firmware build writes it next to the images (youseetoo/uc2-esp32,
+    tools/write_fw_manifest.py). Its "version" is the exact string every image
+    of that build reports as fwVersion (CANopen OD 0x2500), so it is the newest
+    version the server can hand out. Servers built before versioned firmware
+    have no version.json. Raises requests.RequestException when unreachable.
+    """
+    response = requests.get(f"{server_url.rstrip('/')}/version.json", timeout=30)
+
+    if response.status_code == 404:
+        return None
+
+    response.raise_for_status()
+    return response.json()
+
+
+def boards(scan):
+    """The master and every CAN node that answered the scan."""
+    nodes = [
+        device for device in scan.get("scan") or []
+        if device.get("statusStr") != "unreachable"
+    ]
+    return ([scan["master"]] if scan.get("master") else []) + nodes
+
+
+def outdated(scan, newest):
+    """The boards that report a fwVersion other than the newest one.
+
+    A board that reports no fwVersion cannot be compared, which is not the
+    same as outdated, so it is left out here.
+    """
+    return [
+        board for board in boards(scan)
+        if board.get("fwVersion") and board["fwVersion"] != newest
+    ]
+
+
+def label(board):
+    """'CAN 10 (motor)'; the master's scan entry carries no device type."""
+    return f"CAN {board['canId']} ({board.get('deviceTypeStr', 'master')})"
+
+
+def newest_firmware():
+    """The server's version.json, skipping when the server cannot name a version."""
+    url = api("getOTAFirmwareServer").get("firmware_server_url")
+
+    if not url:
+        pytest.skip("no OTA firmware server configured")
+
+    try:
+        manifest = fetch_manifest(url)
+    except requests.RequestException as exc:
+        pytest.skip(f"firmware server not reachable from this host: {exc}")
+
+    if not (manifest or {}).get("version"):
+        pytest.skip(f"{url} publishes no version.json: firmware built before versioning")
+
+    return manifest
 
 
 @pytest.mark.hardware
@@ -182,132 +231,40 @@ def test_reachable_bus_devices_have_firmware():
     )
 
 
-def firmware_build_identity(url):
-    """The (fwVersion, build) pair a node running this .bin would report.
-
-    The build string is not stored in the image. CANopenModule.cpp assembles it
-    at startup with snprintf("%s %s", __DATE__, __TIME__) into OD 0x2508, while
-    OD 0x2500 receives the literal "UC2-ESP v2.0" (populateSystemOD, same
-    function). Those three literals therefore sit next to each other in rodata,
-    so the pair can be read back out and joined the same way the firmware does.
-
-    Anchored on "UC2-ESP v2.0" because it occurs exactly once in the firmware
-    source. Anything other than exactly one match means that assumption no
-    longer holds for this image, and None makes the caller skip that device
-    rather than guess.
-
-    Do not be tempted to use the server's mod_time or the esp_app_desc
-    timestamp instead: both belong to a different translation unit and are
-    seconds apart from the string the node actually reports.
-    """
-    if url not in _identities:
-        try:
-            response = requests.get(url, timeout=FETCH_TIMEOUT)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            pytest.skip(f"firmware server not reachable from this host: {exc}")
-
-        found = {
-            (
-                match.group(1).decode(),
-                f"{match.group(3).decode()} {match.group(2).decode()}",
-            )
-            for match in IDENTITY_PATTERN.finditer(response.content)
-        }
-
-        _identities[url] = found.pop() if len(found) == 1 else None
-
-    return _identities[url]
-
-
 @pytest.mark.hardware
-def test_reachable_bus_devices_run_current_firmware():
-    """Every reachable CAN node must run the firmware the server offers it.
+def test_boards_run_newest_firmware():
+    """The master and every reachable CAN node must run the newest firmware.
 
-    Compares the node's own OD 0x2500/0x2508 strings with the identity read out
-    of its mapped .bin. Both sides are exact strings from the same two
-    literals, so this is an equality check, not a date comparison.
+    Newest is what the firmware server offers: the "version" in its
+    version.json, the same string a board built from those images reports as
+    fwVersion. So this is an exact string comparison, no dates involved.
 
-    A node without a mapping is left to test_reachable_bus_devices_have_firmware.
-    A node that answers but reports no build, or an image whose identity is not
-    unique, is reported and skipped rather than counted as a mismatch.
+    Boards that answer but report no fwVersion are printed, not counted.
     """
+    manifest = newest_firmware()
+    newest = manifest["version"]
     scan = api("scan_canbus", timeout=SCAN_TIMEOUT)
-    devices = scan.get("scan") or []
+    answering = boards(scan)
 
-    if not devices:
-        pytest.skip("no devices on the CAN bus")
+    if not answering:
+        pytest.skip(f"no board answered the scan: {scan.get('detected_ids')}")
 
-    reachable = [
-        device for device in devices
-        if device.get("statusStr") != "unreachable"
-    ]
+    print(f"\nserver offers {newest} (commit {manifest.get('commit') or '?'})")
 
-    if not reachable:
-        pytest.skip(f"no reachable CAN node: {scan.get('detected_ids')}")
+    for board in answering:
+        print(f"{label(board)}: {board.get('fwVersion') or 'reports no fwVersion'}")
 
-    # Keys are CAN ids, but JSON object keys are strings.
-    mapped = api("listAvailableFirmware").get("firmware") or {}
-
-    mismatches = []
-    mismatch_ids = []
-    undetermined = []
-    compared = 0
-
-    for device in reachable:
-        can_id = device["canId"]
-        entry = mapped.get(str(can_id))
-
-        if entry is None:
-            continue
-
-        running = (device.get("fwVersion"), device.get("build"))
-
-        if not all(running):
-            undetermined.append(
-                f"CAN {can_id}: answers, but reports no build/fwVersion"
-            )
-            continue
-
-        expected = firmware_build_identity(entry["url"])
-
-        if expected is None:
-            undetermined.append(
-                f"CAN {can_id}: no unique identity in {entry['filename']}"
-            )
-            continue
-
-        compared += 1
-
-        print(
-            f"\nCAN {can_id} ({device.get('deviceTypeStr')}): "
-            f"running {running[0]!r} {running[1]!r} | "
-            f"expected {expected[0]!r} {expected[1]!r} "
-            f"from {entry['filename']}"
-        )
-
-        if running != expected:
-            mismatch_ids.append(can_id)
-            mismatches.append(
-                f"CAN {can_id} ({device.get('deviceTypeStr')}): "
-                f"running {running[1]!r} [{running[0]}], "
-                f"expected {expected[1]!r} [{expected[0]}] "
-                f"from {entry['filename']}"
-            )
-
-    for line in undetermined:
-        print(f"\nnot compared - {line}")
+    compared = [board for board in answering if board.get("fwVersion")]
 
     if not compared:
-        pytest.skip(
-            "no reachable node whose firmware identity could be determined: "
-            + "; ".join(undetermined or ["none had a firmware mapping"])
-        )
+        pytest.skip("no answering board reports a fwVersion")
+
+    stale = outdated(scan, newest)
 
     # Everything on one line, ids first: the runners pass --tb=line, which
     # shows nothing but the first line of the message.
-    assert not mismatches, (
-        f"CAN {mismatch_ids} outdated ({len(mismatches)} of {compared} "
-        f"reachable nodes do not run the offered firmware) | "
-        + " | ".join(mismatches)
+    assert not stale, (
+        f"CAN {[board['canId'] for board in stale]} outdated ({len(stale)} of "
+        f"{len(compared)} boards do not run {newest}) | "
+        + " | ".join(f"{label(board)}: {board['fwVersion']}" for board in stale)
     )

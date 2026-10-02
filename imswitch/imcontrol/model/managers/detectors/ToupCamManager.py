@@ -30,7 +30,11 @@ class ToupCamManager(DetectorManager):
     - ``lowNoise`` -- enable the sensor's low-noise readout (default ``True``):
       higher SNR at a lower frame rate.
     - ``heat`` -- window heater against condensation on a cooled sensor
-      (default ``True`` = the camera's maximum level; an integer picks a level).
+      (default ``False``; ``True`` = the camera's maximum level, an integer
+      picks a level). Off by default because it heats the camera from the
+      inside, against both the cooler and the over-temperature cutoff.
+    - ``readSaveTemperature`` -- append the sensor temperature to a CSV in the
+      day's recordings folder every few seconds while the camera is armed.
     - ``blacklevelAutoAdjust`` -- optical-black based automatic offset. Left at
       the camera default unless set here, and turned off automatically whenever
       a manual ``blacklevel`` is written (it would otherwise overwrite it).
@@ -74,17 +78,24 @@ class ToupCamManager(DetectorManager):
             binning = 1
 
         # Low-noise / long-exposure configuration. Defaults are the low-noise
-        # long-exposure setup (HCG + low noise + window heater); each is a
+        # long-exposure setup (HCG + low noise, heater off); each is a
         # no-op on cameras that do not advertise the capability. Set any of
         # them to null in the setup file to leave the camera's own default.
         props = detectorInfo.managerProperties
         conversionGain = props.get('conversionGain', 'HCG')
         lowNoise = props.get('lowNoise', True)
-        heat = props.get('heat', True)
+        # The window heater is off unless the setup asks for it: it fights the
+        # cooler, and condensation is only a risk at low target temperatures.
+        heat = props.get('heat', False)
         blacklevelAutoAdjust = props.get('blacklevelAutoAdjust', None)
         # Append the sensor temperature to a CSV in the day's recordings folder
-        # every few seconds while the camera is armed (TEC models).
-        readSaveTemperature = bool(props.get('readSaveTemperature', False))
+        # every few seconds while the camera is armed (TEC models). Accepted
+        # both next to the other manager properties and inside the nested
+        # 'toupcam' block, because that is where it reads like it belongs.
+        cameraProps = dict(detectorInfo.managerProperties['toupcam'])
+        readSaveTemperature = bool(
+            cameraProps.pop('readSaveTemperature',
+                            props.get('readSaveTemperature', False)))
 
         self._camera = self._getToupcamObj(
             cameraId, isRGB, binning, flipImage,
@@ -92,7 +103,7 @@ class ToupCamManager(DetectorManager):
             blacklevelAutoAdjust=blacklevelAutoAdjust,
             readSaveTemperature=readSaveTemperature)
 
-        for propertyName, propertyValue in detectorInfo.managerProperties['toupcam'].items():
+        for propertyName, propertyValue in cameraProps.items():
             self._camera.setPropertyValue(propertyName, propertyValue)
 
         fullShape = (self._camera.SensorWidth,
@@ -524,7 +535,7 @@ class ToupCamManager(DetectorManager):
         return self._camera.getTriggerTypes()
 
     def _getToupcamObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False),
-                       heat=True, lowNoise=True, conversionGain="HCG",
+                       heat=False, lowNoise=True, conversionGain="HCG",
                        blacklevelAutoAdjust=None, readSaveTemperature=False):
         try:
             from imswitch.imcontrol.model.interfaces.toupcamcamera import CameraToupcam

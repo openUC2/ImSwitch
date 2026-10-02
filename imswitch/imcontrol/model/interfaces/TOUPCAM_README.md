@@ -87,11 +87,41 @@ back to `musl` (Alpine) automatically.
 - **TEC models** additionally expose `temperature` (read-only),
   `target_temperature` and `fan_speed` parameters. The target is re-applied
   after a reconnect, so the sensor stays at the requested temperature.
-- **Temperature log** (`"readSaveTemperature": true`): while the camera is
-  armed (live view or a snap in progress) the sensor temperature, TEC target
-  and state, fan, heater and exposure are appended every 5 s to
-  `recordings/<YYYY-MM-DD>/toupcam_temperature_log.csv` in the data folder —
-  the same folder the day's snaps go to. Off by default.
+- **Temperature monitor**: a background thread polls the sensor temperature
+  every 5 s for as long as the camera is open (the cooler runs then too, so the
+  check cannot wait for an acquisition).
+  - **TEC keep-alive**: the target is re-written to the camera every 60 s.
+    One write is not reliable on this family - the camera reports the target
+    back correctly, with the cooler on, and can still sit at ambient for hours
+    (seen in a real log at a -40 C target). Re-asserting it costs one register
+    write a minute and gets the regulation going again by itself.
+  - **Target range**: `set_temperature()` clamps to the model's own range
+    (`TOUPCAM_OPTION_TECTARGET_RANGE`, logged at startup) and warns when it
+    has to. An out-of-range target is accepted by the SDK and read back
+    unchanged, but the cooler may then not regulate at all - which is exactly
+    what a sensor stuck at ambient with `tec_on=1` looks like.
+  - **Stall warning**: if the sensor stays more than 5 C above the target for
+    5 minutes with the cooler on, one warning says so (and `tec_stalled`
+    appears in the camera status), instead of the problem only showing up as
+    noisy images days later.
+  - **Over-temperature cutoff**: two consecutive readings at or above
+    `TEMPERATURE_SHUTDOWN_C` (30 C by default) switch the cooler *and* the
+    window heater off - a sensor that hot means the
+    heat is not getting out (stalled fan, blocked vents, failing TEC), and the
+    cooler's own dissipation then makes it worse. The cooler is re-armed at the
+    cached target once the camera falls back 5 C below that cutoff, at most
+    3 times;
+    after that it stays off until a target temperature is set again, which is
+    also the manual override. `tec_over_temperature` in the camera status says
+    whether the cutoff is currently tripped.
+  - **Log** (`"readSaveTemperature": true`): while the camera is armed (live
+    view or a snap in progress) the sensor temperature, TEC target and state,
+    fan, heater, exposure and the cutoff flag are appended every 5 s to
+    `recordings/<YYYY-MM-DD>/toupcam_temperature_log.csv` in the data folder -
+    the same folder the day's snaps go to. Off by default.
+- **Window heater** is **off** unless the setup asks for it (`"heat": 5`, or
+  `true` for the model's maximum level). It fights the cooler, and fogging is
+  only a risk at low target temperatures.
 - **Reconnect**: on `TOUPCAM_EVENT_DISCONNECTED` (USB drop) a background
   thread reopens the camera, re-applies the cached settings and resumes
   streaming.

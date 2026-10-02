@@ -8,6 +8,8 @@ import apiUC2ConfigControllerSetBusPower from "../backendapi/apiUC2ConfigControl
 import apiUC2ConfigControllerGetFanState from "../backendapi/apiUC2ConfigControllerGetFanState";
 import apiUC2ConfigControllerSetFanMode from "../backendapi/apiUC2ConfigControllerSetFanMode";
 import apiUC2ConfigControllerGetBoardTemperature from "../backendapi/apiUC2ConfigControllerGetBoardTemperature";
+import apiUC2ConfigControllerStartPalletUpgrade from "../backendapi/apiUC2ConfigControllerStartPalletUpgrade";
+import apiUC2ConfigControllerGetPalletUpgradeStatus from "../backendapi/apiUC2ConfigControllerGetPalletUpgradeStatus";
 import {
   Box,
   Typography,
@@ -55,6 +57,7 @@ import {
   Thermostat as ThermostatIcon,
   ReportProblem as ReportProblemIcon,
   HelpOutline as HelpOutlineIcon,
+  SystemUpdateAlt as SystemUpdateAltIcon,
 } from "@mui/icons-material";
 
 import FirmwareVersionsPanel from "./FirmwareVersionsPanel";
@@ -296,6 +299,59 @@ const SystemUpdateController = () => {
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tempPollingEnabled, isBackendConnected]);
+
+  // --- OS update: Forklift pallet upgrade (EXPERIMENTAL) ------------------
+  // state is systemd's ActiveState of the host unit: "activating" while it runs.
+  const [palletUpgrade, setPalletUpgrade] = useState({ state: "", log: "" });
+
+  const refreshPalletUpgrade = async () => {
+    try {
+      setPalletUpgrade(await apiUC2ConfigControllerGetPalletUpgradeStatus());
+    } catch (e) {
+      // expected while the upgrade restarts the ImSwitch container
+    }
+  };
+
+  const handleStartPalletUpgrade = async () => {
+    if (
+      !window.confirm(
+        "Upgrade the OS software now? ImSwitch restarts during the upgrade and running acquisitions are interrupted.",
+      )
+    )
+      return;
+    try {
+      const res = await apiUC2ConfigControllerStartPalletUpgrade();
+      if (res?.status === "started") {
+        setPalletUpgrade({ state: "activating", log: "" });
+      } else {
+        dispatch(
+          setNotification({
+            message: "Could not start the upgrade: " + (res?.message || "unknown error"),
+            type: "error",
+          }),
+        );
+      }
+    } catch (e) {
+      dispatch(
+        setNotification({
+          message: "startPalletUpgrade failed: " + (e.message || e),
+          type: "error",
+        }),
+      );
+    }
+  };
+
+  // Read the status once, then every 3 s while the upgrade runs.
+  useEffect(() => {
+    if (isBackendConnected) refreshPalletUpgrade();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBackendConnected]);
+  useEffect(() => {
+    if (palletUpgrade.state !== "activating") return undefined;
+    const id = setInterval(refreshPalletUpgrade, 3000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [palletUpgrade.state]);
 
   // LED status control
   const [ledStatus, setLedStatus] = useState("idle");
@@ -870,6 +926,77 @@ const SystemUpdateController = () => {
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
               No board connected: only updating over a USB cable is available.
             </Typography>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* OS update: Forklift pallet (EXPERIMENTAL) */}
+      <Card sx={{ mt: 3 }}>
+        <CardContent>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
+            <SystemUpdateAltIcon color="primary" />
+            <Typography variant="h6">
+              Operating System Update (experimental)
+            </Typography>
+          </Box>
+
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              <strong>Highly experimental.</strong> This button upgrades the
+              openUC2 OS software (the Forklift pallet) on the Raspberry Pi.
+              ImSwitch restarts during the upgrade, so this page loses its
+              connection for a while.
+            </Typography>
+            <Typography variant="body2">
+              It is better to run the command yourself: in the Cockpit terminal
+              (<code>/admin/cockpit/</code> on this machine), or connect to the
+              microscope over Wi-Fi/Ethernet and run{" "}
+              <code>ssh pi@192.168.4.1</code>.
+            </Typography>
+          </Alert>
+
+          <Paper
+            component="pre"
+            sx={{ p: 1.5, mb: 2, bgcolor: "background.default", fontSize: 13 }}
+          >
+            forklift plt upgrade --force &amp;&amp; forklift stage apply
+          </Paper>
+
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1 }}>
+            <Button
+              variant="contained"
+              color="warning"
+              onClick={handleStartPalletUpgrade}
+              disabled={
+                !isBackendConnected || palletUpgrade.state === "activating"
+              }
+            >
+              Upgrade pallet
+            </Button>
+            {palletUpgrade.state === "activating" && (
+              <CircularProgress size={18} />
+            )}
+            {palletUpgrade.state && (
+              <Typography variant="body2" color="text.secondary">
+                Status: {palletUpgrade.state}
+              </Typography>
+            )}
+          </Box>
+
+          {palletUpgrade.log && (
+            <Paper
+              component="pre"
+              sx={{
+                p: 1.5,
+                maxHeight: 320,
+                overflow: "auto",
+                whiteSpace: "pre-wrap",
+                fontSize: 12,
+                bgcolor: "background.default",
+              }}
+            >
+              {palletUpgrade.log}
+            </Paper>
           )}
         </CardContent>
       </Card>

@@ -11,6 +11,12 @@
 		},
 		{
 			"path": "../../UC2-REST-CANOPEN"
+		},
+		{
+			"path": "../../../../../../Downloads/arkitekt"
+		},
+		{
+			"path": "../../../../../../Downloads/os-rpi"
 		}
 	],
 	"settings": {

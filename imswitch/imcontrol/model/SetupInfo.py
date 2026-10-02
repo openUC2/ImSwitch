@@ -656,19 +656,37 @@ class ArkitektInfo:
     """ Whether Arkitekt integration is enabled. """
 
     appName: str = "imswitch"
-    """ Application name for Arkitekt registration. """
+    """ App identifier this microscope registers as (lower-cased, spaces become
+    dashes). One agent per machine: the server tells microscopes apart by
+    their device id. """
+
+    url: str = "https://go.arkitekt.live"
+    """ Arkitekt server to bind to, e.g. ``http://nas.local`` for a local
+    deployment. Set from the Arkitekt panel when binding. """
 
     redeemToken: str = ""
-    """ Redeem token for Arkitekt authentication. """
+    """ Provisioning token for an unattended login (no browser approval).
+    It is a credential: keep it out of setup files that are shared. """
 
-    url: str = "http://go.arkitekt.io"
-    """ Arkitekt server URL. """
+    autoConnect: bool = True
+    """ Reconnect at startup when this microscope was bound before (stored
+    login or redeem token). Never starts a browser login by itself. """
+
+    allowInsecureTransport: bool = False
+    """ Allow the login over plain http to a server that is not localhost
+    (a NAS without TLS). Anyone on the network path can read the session. """
+
+    useMikro: bool = True
+    """ Offer the image actions (acquire frame, tile scan), which store images
+    in the server's mikro service. Turn off for a server without mikro. """
 
     syncInAsync: bool = True
-    """ Enable sync-in-async mode for Koil. """
+    """ Unused since the move from arkitekt_next to arkitekt; kept so older
+    setup files load. """
 
-    deconvolveActionHash: str = "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"
-    """ Hash of the deconvolution action in Arkitekt. """
+    deconvolveActionHash: str = ""
+    """ Unused since the move from arkitekt_next to arkitekt (actions are no
+    longer looked up by hash); kept so older setup files load. """
 
 
 @dataclass(frozen=False)

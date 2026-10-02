@@ -110,6 +110,33 @@ node joined WiFi and pulled its image over ArduinoOTA. Restore it from git histo
 
 `image_source` is `reported` when the board named its own image, and `mapping` for older firmware.
 
+### Which image for one board (`getRecommendedFirmware`)
+
+`getRecommendedFirmware(port="")` asks a board which firmware it runs and names the server image that
+fits it. It is read-only: nothing is flashed.
+
+- `port` empty (or ImSwitch's own port): the board ImSwitch is connected to, read over the open link
+  (`getFirmwareInfo`). A master without a reported CAN id counts as node 1.
+- Any other port is opened and sent `/state_get` (`UsbFlasher.identify`, parsed by
+  `parse_state_reply`). Opening a port can reset that board. It is refused while a USB flash or a CAN
+  OTA owns a serial port.
+
+`images.recommend_image` picks the first candidate that is on the server:
+
+1. `reported`: the board's `identifier_image` (`UC2_FW_IMAGE`);
+2. `can_id`: the fixed role of a slave's CAN id (`CAN_NODES`). Only this tells motor axes apart on
+   old firmware, because they share one pindef;
+3. `pindef`: `esp32_<env>_release.bin`, then `esp32_<env>.bin`, where env is the pindef, or
+   `PINDEF_ENVS[pindef]` for the XIAO builds whose pindef differs from their env;
+4. the master role last: several boards act as master (CAN HAT, UC2_4_CAN, standalone v4) and only
+   the pindef tells them apart.
+
+The update check (`choose_image`) uses the same candidate order. The result carries
+`{filename, merged, source, reason, candidates, file}`; `filename` is `None` with a reason when no
+candidate is on the server. The USB wizard's *Select Firmware* step runs this for ImSwitch's board
+when the list loads, and for another port on *Detect firmware*. It lists the recommended file first
+and selects it.
+
 ### What `startFirmwareUpdate` does
 
 1. **Refuses** with the reasons, and nothing starts, when:

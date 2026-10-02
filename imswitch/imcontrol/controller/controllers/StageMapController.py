@@ -237,18 +237,29 @@ def strobeAutoDelayUs(windowUs: float, widthUs: float, delayUs: float = -1.0,
     return max(0.0, float(windowUs) - float(widthUs) - float(marginUs))
 
 
-def strobeFrameKeys(triggerIndices, frameIds):
+def strobeFrameKeys(triggerIndices, frameIds, arrivalS=None, periodUs: float = 0.0):
     """Per-frame counter to pair frames with trigger pulses, and which one it is.
 
     The camera's trigger index counts pulses, lost frames included, so it is
-    the right key. Some models leave it at 0; then the camera frame number
-    (counts frames the camera produced) is next best, and arrival order the
-    last resort. Returns ``(keys, "trigger" | "frame" | "arrival")``.
+    the right key. Some models leave it at 0; then the frames' arrival times
+    are next best: in trigger mode a frame exists only for a trigger the
+    camera took, so the time between two arrivals, in trigger periods, is
+    how many pulses lie between them — a skipped trigger shows up as a gap
+    where it happened instead of pulling every later frame back by one. The
+    camera frame number (counts frames the camera produced, not pulses) comes
+    after that, and arrival order is the last resort. Returns
+    ``(keys, "trigger" | "timing" | "frame" | "arrival")``.
     """
     trig = np.asarray(triggerIndices, dtype=np.int64).ravel()
     ids = np.asarray(frameIds, dtype=np.int64).ravel()
     if trig.size <= 1 or np.all(np.diff(trig) > 0):
         return trig, "trigger"
+    if arrivalS is not None and periodUs > 0:
+        t = np.asarray(arrivalS, dtype=np.float64).ravel()
+        if t.size == trig.size and np.all(np.isfinite(t)) and np.all(np.diff(t) > 0):
+            keys = np.round((t - t[0]) / (float(periodUs) * 1e-6)).astype(np.int64)
+            if np.all(np.diff(keys) > 0):
+                return keys, "timing"
     if ids.size == trig.size and np.all(np.diff(ids) > 0):
         return ids, "frame"
     return np.arange(trig.size, dtype=np.int64), "arrival"
@@ -1239,6 +1250,12 @@ class StageMapController(ImConWidgetController):
     STROBE_PERIOD_MARGIN_US = 1000.0
     # Row uniformity below this at the best delay means no delay lit all rows.
     STROBE_MIN_UNIFORMITY = 0.5
+    # Calibration lengthens a window no delay can light evenly, this often...
+    STROBE_CAL_WINDOW_TRIES = 4
+    # ...aiming for this much range in which every sensor row is open...
+    STROBE_LIT_MARGIN_US = 5000.0
+    # ...and never beyond this.
+    STROBE_MAX_WINDOW_US = 200000.0
     # Delay steps one calibration may try.
     STROBE_CAL_MAX_DELAYS = 200
 
@@ -1400,6 +1417,22 @@ class StageMapController(ImConWidgetController):
         self._logger.info(
             f"Strobed prescan: {widthUs:.0f} us flash on laser channel {state['channel']} "
             f"{delayUs:.0f} us after each trigger, {windowUs / 1000:.1f} ms window")
+        # With the window set as exposure, the camera's own frame period is
+        # exposure + readout: the pace triggers may come at, and the readout
+        # is how long the window must be before every row is open at once.
+        cameraUs = self._cameraFramePeriodUs()
+        if cameraUs > 0:
+            readoutUs = max(0.0, cameraUs - windowUs)
+            self._logger.info(
+                f"Strobed prescan: the camera delivers at most one frame per "
+                f"{cameraUs / 1000:.1f} ms at this window (sensor readout about "
+                f"{readoutUs / 1000:.1f} ms)")
+            if windowUs < readoutUs + widthUs + 1000.0:
+                self._logger.warning(
+                    f"Strobed prescan: the {windowUs / 1000:.1f} ms window is shorter than the "
+                    f"sensor readout (about {readoutUs / 1000:.1f} ms) plus the flash: no delay "
+                    f"has every row open, so part of every frame stays dark. Calibrate the "
+                    f"strobe (it lengthens the window) or set a longer window")
         return state
 
     def _exitStrobeMode(self, strobe: Optional[Dict]):
@@ -1548,26 +1581,32 @@ class StageMapController(ImConWidgetController):
         wanted = min(self.PRESCAN_MAX_FRAMES, wanted)
         bandPx = min(frameW, int(np.ceil(1.25 * dx / pixelSize)))
         intervalUs = (span / max(speedX, 1e-6)) / wanted * 1e6  # nominal µs per exposure
-        periodUs = max(intervalUs, self._strobeMinPeriodUs(strobe["windowUs"]))
-        if periodUs > intervalUs * 1.01:
-            pitch = speedX * periodUs * 1e-6
+        periodUs = max(intervalUs, self._strobeMinPeriodUs(strobe["windowUs"], strobe))
+        # The camera sets the pace, the speed follows: faster than one field
+        # per frame would leave gaps between the fields, and a locator with
+        # holes is worse than a slower one.
+        speedUsed = min(float(speedX), dx / (periodUs * 1e-6))
+        if speedUsed < speedX * 0.99:
             self._warnOnce(
-                strobe, "period",
-                f"Strobed prescan: the {strobe['windowUs'] / 1000:.1f} ms window allows a frame "
-                f"every {periodUs / 1000:.1f} ms, {pitch:.0f} um apart at this speed; "
-                f"beyond the {dx:.0f} um pitch the strip has gaps (lower the speed or the window)")
+                strobe, "speed",
+                f"Strobed prescan: the camera takes one frame per {periodUs / 1000:.1f} ms at "
+                f"the {strobe['windowUs'] / 1000:.1f} ms window, so the sweep runs at "
+                f"{speedUsed:.0f} um/s instead of {speedX:.0f} to keep the {dx:.0f} um fields "
+                f"contiguous (a shorter window allows a faster prescan)")
 
-        bands, frameIds, triggers = [], [], []
+        bands, frameIds, triggers, arrivals = [], [], [], []
 
-        def onChunk(frames, ids, trigs):
-            for frame, fid, trig in zip(frames, ids, trigs):
+        def onChunk(frames, ids, trigs, times=None):
+            for i, (frame, fid, trig) in enumerate(zip(frames, ids, trigs)):
                 bands.append(self._centreBand(frame, bandPx, subsample))
                 frameIds.append(int(fid))
                 triggers.append(int(trig))
+                arrivals.append(float(times[i]) if times is not None and len(times) > i
+                                else float("nan"))
 
         result = self._runStrobeSweep(
-            endX, speedX, periodUs, strobe, strobe["delayUs"], 0, onChunk,
-            timeoutS=(span / max(speedX, 1e-6)) * 3.0 + 10.0)
+            endX, speedUsed, periodUs, strobe, strobe["delayUs"], 0, onChunk,
+            timeoutS=(span / max(speedUsed, 1e-6)) * 3.0 + 10.0)
         if result is None:
             return None
         reportN, reportX, done = result
@@ -1575,11 +1614,30 @@ class StageMapController(ImConWidgetController):
             self._logger.warning(
                 f"Strobed line y={y:.0f}: {len(bands)} frame(s), {len(reportN)} position(s)")
             return None
-        keys, source = strobeFrameKeys(triggers, frameIds)
-        if source != "trigger":
+        times = np.asarray(arrivals, dtype=np.float64)
+        keys, source = strobeFrameKeys(triggers, frameIds,
+                                       times if np.all(np.isfinite(times)) else None, periodUs)
+        if source == "timing":
+            self._warnOnce(strobe, "keys", "Camera reports no trigger index; pairing frames "
+                                           "with triggers by their arrival times")
+        elif source != "trigger":
             self._warnOnce(strobe, "keys",
-                           f"Camera reports no trigger index; pairing frames by {source} order")
+                           f"Camera reports no trigger index and no arrival times; pairing "
+                           f"frames by {source} order — a skipped trigger shifts every later frame")
         pulses = int(done.get("camera", 0) or 0)
+        if pulses and len(bands) < pulses:
+            # The camera ignored triggers. The pairing above keeps the frames
+            # we did get where they belong; the following lines get a longer
+            # period so it does not happen again (the speed follows it).
+            message = (f"Strobed line y={y:.0f}: the camera delivered {len(bands)} frames for "
+                       f"{pulses} triggers at one per {periodUs / 1000:.1f} ms")
+            if len(bands) <= 0.75 * pulses:
+                scale = float(max(2, int(round(pulses / len(bands)))))
+                if scale > strobe.get("periodScale", 1.0):
+                    strobe["periodScale"] = scale
+                    message += (f"; the following lines use {scale:.0f}x the period "
+                                f"(calibrate the strobe to measure the camera's limit)")
+            self._logger.warning(message)
         if pulses and int(keys.max() - keys.min()) + 1 > pulses:
             self._logger.warning(
                 f"Strobed line y={y:.0f}: frames span {int(keys.max() - keys.min()) + 1} "
@@ -1590,7 +1648,8 @@ class StageMapController(ImConWidgetController):
             return None
         if len(pairs) < len(reportN):
             self._logger.info(
-                f"Strobed line y={y:.0f}: {len(pairs)} of {len(reportN)} frames placed")
+                f"Strobed line y={y:.0f}: {len(pairs)} of {len(bands)} frames placed over "
+                f"{len(reportN)} triggers")
         scale = pixelSize * subsample
         strip = spreadBands([(x, bands[i]) for i, _, x in pairs],
                             min(startX, endX), max(startX, endX), span, scale, forward=True)
@@ -2069,16 +2128,65 @@ class StageMapController(ImConWidgetController):
         except Exception as e:
             self._logger.warning(f"Could not save strobe settings {path}: {e}")
 
-    def _strobeMinPeriodUs(self, windowUs: float) -> float:
-        """Shortest frame period: the window plus a margin, or the calibrated minimum."""
-        return max(float(windowUs) + self.STROBE_PERIOD_MARGIN_US,
-                   max(0.0, float(getattr(self.params, "strobeMinPeriodMs", 0.0))) * 1000.0)
+    def _cameraFramePeriodUs(self) -> float:
+        """Shortest frame period the camera reports for its current exposure (µs), or 0.
+
+        HIK cameras expose it as ResultingFrameRate: exposure plus sensor
+        readout — a rolling shutter cannot start the next exposure before the
+        last row of the previous one is read — capped by the link. A trigger
+        that comes sooner is ignored by the camera. Read it with the strobe
+        window set as exposure.
+        """
+        getter = getattr(self._detector, "getResultingFrameRate", None)
+        if getter is None:
+            return 0.0
+        try:
+            fps = getter()
+        except Exception as e:
+            self._logger.debug(f"Could not read the camera frame rate: {e}")
+            return 0.0
+        return 1e6 / float(fps) if fps and fps > 0 else 0.0
+
+    def _strobeMinPeriodUs(self, windowUs: float, strobe: Optional[Dict] = None) -> float:
+        """Shortest frame period for strobed frames.
+
+        The longest of: the window plus a margin, the camera's own frame
+        period at this exposure plus the margin (see _cameraFramePeriodUs),
+        and the calibrated minimum; times ``strobe["periodScale"]`` when a
+        sweep already found the camera skipping triggers at that pace.
+        """
+        period = max(float(windowUs) + self.STROBE_PERIOD_MARGIN_US,
+                     max(0.0, float(getattr(self.params, "strobeMinPeriodMs", 0.0))) * 1000.0)
+        cameraUs = self._cameraFramePeriodUs()
+        if cameraUs > 0:
+            period = max(period, cameraUs + self.STROBE_PERIOD_MARGIN_US)
+        if strobe:
+            period *= max(1.0, float(strobe.get("periodScale", 1.0)))
+        return period
+
+    def _longerStrobeWindowUs(self, windowUs: float, widthUs: float,
+                              readoutUs: float) -> Optional[float]:
+        """The next exposure window to try when no delay lit every row; None at the cap.
+
+        A rolling shutter has every row open at once only for
+        ``window - readout - flash``. With the readout known the answer is
+        direct: readout plus flash plus STROBE_LIT_MARGIN_US of such range.
+        Without it the window grows by half.
+        """
+        if readoutUs > 0:
+            longer = readoutUs + widthUs + self.STROBE_LIT_MARGIN_US
+            if longer <= windowUs * 1.05:
+                longer = windowUs * 1.5
+        else:
+            longer = windowUs * 1.5
+        longer = min(longer, self.STROBE_MAX_WINDOW_US)
+        return float(longer) if longer > windowUs * 1.05 else None
 
     def _strobeBurst(self, x, strobe, delayUs, nFrames, periodUs):
         """``nFrames`` strobed frames with the stage still: ``(frames, triggers, done)`` or None."""
         frames, triggers = [], []
 
-        def onChunk(f, ids, trigs):
+        def onChunk(f, ids, trigs, *rest):
             frames.extend(f)
             triggers.extend(int(t) for t in trigs)
 
@@ -2135,7 +2243,8 @@ class StageMapController(ImConWidgetController):
         widthUs = min(max(1.0, float(self.params.strobeWidthUs)), STROBE_MAX_WIDTH_US)
         strobe = {"laser": laser, "channel": int(laser.channel_index), "widthUs": widthUs,
                   "warned": set()}
-        result: Dict[str, Any] = {"windowUs": windowUs, "widthFromUs": widthUs}
+        result: Dict[str, Any] = {"windowUs": windowUs, "windowFromUs": windowUs,
+                                  "widthFromUs": widthUs}
         framesPerDelay = max(1, int(framesPerDelay))
         self._strobeCalibrating = True
         self._shouldStop.clear()
@@ -2152,7 +2261,7 @@ class StageMapController(ImConWidgetController):
                             error=f"Could not set up camera triggering: {e}")
             outcome = self._calibrateStrobeSteps(result, delays, pos[0], strobe, windowUs,
                                                  framesPerDelay, max(1, int(testFrames)),
-                                                 bool(adjustWidth))
+                                                 bool(adjustWidth), float(delayStepUs))
         finally:
             self._exitStrobeMode({"laser": laser, "camera": camera})
             if acqHandle is not None:
@@ -2165,8 +2274,11 @@ class StageMapController(ImConWidgetController):
             return dict(result, success=False, matched=False, error=outcome)
 
         check = result["check"]
+        windowUs = result["windowUs"]
         self.params.strobeDelayUs = result["bestDelayUs"]
         self.params.strobeWidthUs = result["widthUs"]
+        if windowUs != result["windowFromUs"]:
+            self.params.strobeWindowMs = windowUs / 1000.0
         if check is not None and check["missing"] == 0:
             # Store only a period longer than the default rule; 0 keeps the rule.
             longer = check["periodUs"] > windowUs + self.STROBE_PERIOD_MARGIN_US + 1.0
@@ -2175,31 +2287,70 @@ class StageMapController(ImConWidgetController):
         self._emitStatus()
         result["hints"] = strobeCheckHints(check, result.get("litRangeUs"), windowUs,
                                            result.get("level", 0.0))
+        if windowUs != result["windowFromUs"]:
+            result["hints"].append(
+                f"The exposure window was lengthened from {result['windowFromUs'] / 1000:.1f} "
+                f"to {windowUs / 1000:.1f} ms: the sensor readout is about "
+                f"{result.get('readoutUs', 0.0) / 1000:.1f} ms, and every row is open at once "
+                f"only for the window minus that readout.")
         result["matched"] = bool(check and check["ok"])
         self._logger.info(
             f"Strobe calibrated: delay {result['bestDelayUs']:.0f} us, width "
-            f"{result['widthUs']:.0f} us, level {result.get('level', 0):.0%}; "
-            + " ".join(result["hints"]))
+            f"{result['widthUs']:.0f} us, window {windowUs / 1000:.1f} ms, level "
+            f"{result.get('level', 0):.0%}; " + " ".join(result["hints"]))
         return dict(result, success=True)
 
     def _calibrateStrobeSteps(self, result, delays, x, strobe, windowUs, framesPerDelay,
-                              testFrames, adjustWidth) -> Optional[str]:
-        """The three calibration steps; fills ``result``, returns an error or None."""
-        minPeriod = self._strobeMinPeriodUs(windowUs)
-        table = self._scoreStrobeDelays(delays, x, strobe, framesPerDelay, 2.0 * minPeriod)
-        result["table"] = table
-        if self._shouldStop.is_set():
-            return "stopped"
-        dl, sc = [r["delayUs"] for r in table], [r["score"] for r in table]
-        best = pickStrobeDelay(dl, sc)
-        if best is None:
-            return "No delay lit the frame: check the strobe laser, its intensity and the window"
-        bestRow = next(r for r in table if r["delayUs"] == best)
-        if bestRow["uniformity"] < self.STROBE_MIN_UNIFORMITY:
-            return ("No delay lit every row at once: the window is shorter than the camera's "
-                    "readout. Lengthen the window.")
+                              testFrames, adjustWidth, delayStepUs=1000.0) -> Optional[str]:
+        """The three calibration steps; fills ``result``, returns an error or None.
+
+        Step 1 may lengthen the exposure window. A rolling shutter has every
+        row open at once only for ``window - readout``, so a window shorter
+        than the sensor readout cannot be lit evenly at any delay — the best
+        delay then lights the top of the frame and leaves the bottom dark.
+        The camera's own frame period at this exposure (window + readout)
+        says how much longer the window must be; without it the window grows
+        by half each try, up to STROBE_CAL_WINDOW_TRIES times.
+        """
+        widthUs = strobe["widthUs"]
+        step = max(1.0, float(delayStepUs))
+        result["windowTries"] = []
+        for attempt in range(self.STROBE_CAL_WINDOW_TRIES):
+            result["windowTries"].append(windowUs)
+            result["windowUs"] = windowUs
+            minPeriod = self._strobeMinPeriodUs(windowUs)
+            table = self._scoreStrobeDelays(delays, x, strobe, framesPerDelay, 2.0 * minPeriod)
+            result["table"] = table
+            if self._shouldStop.is_set():
+                return "stopped"
+            dl, sc = [r["delayUs"] for r in table], [r["score"] for r in table]
+            best = pickStrobeDelay(dl, sc)
+            if best is None:
+                return ("No delay lit the frame: check the strobe laser, its intensity and "
+                        "the window")
+            bestRow = next(r for r in table if r["delayUs"] == best)
+            if bestRow["uniformity"] >= self.STROBE_MIN_UNIFORMITY:
+                break
+            readoutUs = max(0.0, self._cameraFramePeriodUs() - windowUs)
+            longer = self._longerStrobeWindowUs(windowUs, widthUs, readoutUs)
+            about = f" (about {readoutUs / 1000:.1f} ms)" if readoutUs > 0 else ""
+            if longer is None or attempt == self.STROBE_CAL_WINDOW_TRIES - 1:
+                return (f"No delay lit every row at once: the sensor readout{about} is longer "
+                        f"than the {windowUs / 1000:.1f} ms window, and lengthening the window "
+                        f"did not help. Use a shorter readout (fewer rows) or a longer window.")
+            self._logger.info(
+                f"Strobe calibration: no delay lights every row within the {windowUs / 1000:.1f} "
+                f"ms window (sensor readout{about}); trying {longer / 1000:.1f} ms")
+            self._detector.setParameter("exposure", longer / 1000.0)
+            windowUs = longer
+            # The same step across the longer window, coarser if that would be too many.
+            step = max(step, (windowUs - widthUs) / self.STROBE_CAL_MAX_DELAYS)
+            delays = np.arange(0.0, windowUs - widthUs + 1e-6, step)
         lo, hi = strobeLitRange(dl, sc)
         result["bestDelayUs"], result["litRangeUs"] = best, [lo, hi]
+        # Every row is open for window - readout - flash: the lit range measures the readout.
+        result["readoutUs"] = max(0.0, windowUs - (hi - lo) - widthUs)
+        minPeriod = self._strobeMinPeriodUs(windowUs)
         darkMean = min((r["mean"] for r in table if r["frames"]), default=0.0)
 
         burst = self._strobeBurst(x, strobe, best, framesPerDelay, 2.0 * minPeriod)
@@ -2280,7 +2431,7 @@ class StageMapController(ImConWidgetController):
             frames = []
             result = self._runStrobeSweep(
                 x, 1000.0, periodUs, strobe, float(delay), nFrames,
-                lambda f, ids, trigs: frames.extend(f),
+                lambda f, ids, trigs, *rest: frames.extend(f),
                 timeoutS=nFrames * periodUs * 1e-6 * 3.0 + 5.0)
             if result is None and self._shouldStop.is_set():
                 break

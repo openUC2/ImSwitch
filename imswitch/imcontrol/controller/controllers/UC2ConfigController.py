@@ -996,6 +996,56 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
     def isImSwitchRunning(self):
         return True
 
+    # --- Forklift pallet upgrade (openUC2 OS only, EXPERIMENTAL) -------------
+    # The upgrade runs in the host's systemd unit imswitch-pallet-upgrade.service (from the
+    # openUC2/os-rpi pallet), not in this container, because `forklift stage apply` recreates
+    # this container. We reach systemd through the host D-Bus socket mounted into the container.
+    _PALLET_UPGRADE_UNIT = "imswitch-pallet-upgrade.service"
+
+    def _callSystemd(self, method, signature, body, path="/org/freedesktop/systemd1",
+                     interface="org.freedesktop.systemd1.Manager"):
+        from jeepney import DBusAddress, new_method_call
+        from jeepney.io.blocking import open_dbus_connection
+        from jeepney.wrappers import unwrap_msg
+        address = DBusAddress(path, bus_name="org.freedesktop.systemd1", interface=interface)
+        with open_dbus_connection(bus="SYSTEM") as conn:
+            return unwrap_msg(conn.send_and_get_reply(
+                new_method_call(address, method, signature, body), timeout=5))
+
+    @APIExport(runOnUIThread=False)
+    def startPalletUpgrade(self):
+        """EXPERIMENTAL: run `forklift plt upgrade --force && forklift stage apply` on the host.
+
+        Returns once systemd has queued the job. The upgrade then restarts this ImSwitch
+        container; poll getPalletUpgradeStatus for its state and terminal output.
+        """
+        try:
+            self._callSystemd("StartUnit", "ss", (self._PALLET_UPGRADE_UNIT, "replace"))
+        except Exception as e:
+            self._logger.error(f"Could not start the pallet upgrade: {e}")
+            return {"status": "error", "message": str(e)}
+        return {"status": "started"}
+
+    @APIExport(runOnUIThread=False)
+    def getPalletUpgradeStatus(self):
+        """systemd state of the pallet upgrade ("activating" while it runs, then "inactive" or
+        "failed") and the last 500 lines of its terminal output."""
+        try:
+            (unitPath,) = self._callSystemd("LoadUnit", "s", (self._PALLET_UPGRADE_UNIT,))
+            ((_, state),) = self._callSystemd(
+                "Get", "ss", ("org.freedesktop.systemd1.Unit", "ActiveState"),
+                path=unitPath, interface="org.freedesktop.DBus.Properties")
+        except Exception as e:
+            state = f"unknown: {e}"
+        try:
+            # Written by the unit's StandardOutput= into the bind-mounted config folder
+            with open(os.path.join(dirtools.UserFileDirs.Root, "pallet-upgrade.log"),
+                      errors="replace") as f:
+                log = "".join(f.readlines()[-500:])
+        except OSError:
+            log = ""
+        return {"state": state, "log": log}
+
     @APIExport(runOnUIThread=False)
     def getDataPath(self):
         return dirtools.UserFileDirs.getValidatedDataPath()

@@ -64,12 +64,12 @@ dependencies = [
     "numcodecs>=0.13.1",
     "jsonschema>=4.0",
     "aiohttp>=3.9.4",
-    "arkitekt-next[all]>=1.0.1",
+    "arkitekt[rekuest,mikro]>=5.0.1",
     "koil>=2.0.5",
     "msgpack>=1.0.4",
     "esptool",
     "av==13.1.0",
-    "uc2-rest==0.2.0.41",  # fwVersion/fwImage, CAN OTA reconnect fixes
+    "uc2-rest>=0.2.0.41",  # fwVersion/fwImage, CAN OTA reconnect fixes
     "unitelabs-sila",
     "unitelabs-cdk",
     "mikro-next>=1",
@@ -82,6 +82,7 @@ dependencies = [
     "ashlarUC2>=1.18.5",
     "uc2canopen>=0.1.4",
     "vmbpy>=1.2.2 ; sys_platform == 'linux'",
+    "jeepney>=0.9 ; sys_platform == 'linux'",  # D-Bus to the host systemd (pallet upgrade)
 ]
 
 [project.optional-dependencies]

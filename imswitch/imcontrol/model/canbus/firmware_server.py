@@ -13,7 +13,7 @@ from pathlib import Path
 
 import requests
 
-from .images import CAN_NODES, legacy_images
+from .images import CAN_NODES, legacy_images, recommend_image
 
 # Master images from before the CANopen naming, tried after the CANopen one.
 _LEGACY_MASTER_IMAGES = (
@@ -135,6 +135,20 @@ class FirmwareServer:
             return custom[0]
         image = legacy_images().get(can_id)
         return image if image in names else None
+
+    def recommend(self, identity: dict) -> dict:
+        """The server's image for the board *identity* describes
+        (images.recommend_image), with that file's listing entry:
+        {status, firmware_server, server_version, recommended: {filename,
+        merged, source, reason, candidates, file}}."""
+        flat = self.files()
+        if flat.get("status") != "success":
+            return flat
+        by_name = {f["filename"]: f for f in flat["files"]}
+        recommended = recommend_image(identity, by_name)
+        recommended["file"] = by_name.get(recommended["filename"])
+        return {"status": "success", "firmware_server": self.url,
+                "server_version": flat.get("server_version"), "recommended": recommended}
 
     def master_image(self):
         """The USB master's image when none was named: the CANopen master,

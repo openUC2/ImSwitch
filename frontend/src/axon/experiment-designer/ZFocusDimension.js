@@ -302,27 +302,32 @@ const ZFocusDimension = () => {
             </FormControl>
           </Box>
 
-          {/* Autofocus scope — where autofocus runs within a round */}
+          {/* How often autofocus runs within a round */}
           <Box sx={{ mb: 2 }}>
             <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
               <Typography variant="caption" sx={{ fontWeight: 500 }}>
-                Autofocus Scope
+                Autofocus every N positions
               </Typography>
-              <Tooltip title="Every Position: run autofocus at every XY tile (most accurate, slowest, more photobleaching). First Position Only: autofocus once per round at the first tile and apply the result as a global Z offset to all positions — best when drift is global (e.g. thermal).">
+              <Tooltip title="1 = autofocus at every XY position (most accurate, slowest, most photobleaching). Higher values autofocus at every Nth position and reuse the last measured Z offset in between — best when drift is slow or global (e.g. thermal). Set it above the total number of positions to autofocus only once per round.">
                 <IconButton size="small">
                   <InfoIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             </Box>
-            <FormControl size="small" fullWidth>
-              <Select
-                value={parameterValue.autoFocusScope || "everyPosition"}
-                onChange={(e) => dispatch(experimentSlice.setAutoFocusScope(e.target.value))}
-              >
-                <MenuItem value="everyPosition">Every Position</MenuItem>
-                <MenuItem value="firstPositionOnly">First Position Only (global Z offset)</MenuItem>
-              </Select>
-            </FormControl>
+            <TextField
+              size="small"
+              fullWidth
+              type="number"
+              inputProps={{ min: 1, step: 1 }}
+              value={parameterValue.autoFocusEveryNFovs ?? 1}
+              onChange={(e) =>
+                dispatch(
+                  experimentSlice.setAutoFocusEveryNFovs(
+                    parseInt(e.target.value, 10) || 1,
+                  ),
+                )
+              }
+            />
             <FormControlLabel
               sx={{ mt: 1 }}
               control={

@@ -43,5 +43,53 @@ export const apiStageMapGetTiles = (fromId = 0, includePreviews = true) =>
 export const apiStageMapGotoPosition = (x, y, isAbsolute = true, isBlocking = false) =>
   get("gotoStagePosition", { x, y, isAbsolute, isBlocking });
 
+// Fast prescan: sweeps the area and drops strips into the same tile store the
+// map uses, so the existing overlay draws them with no new render path.
+export const apiStageMapStartPrescan = async (area) => {
+  const axiosInstance = createAxiosInstance();
+  const response = await axiosInstance.post(
+    "/StageMapController/startPrescan",
+    null,
+    { params: area },
+  );
+  return response.data;
+};
+
+export const apiStageMapStopPrescan = () => get("stopPrescan");
+
+// Strobed prescan: find the flash delay (µs after the camera trigger) at which
+// one flash lights every sensor row. The stage does not move; the LED flashes
+// and the camera is triggered for the duration. The backend stores the best
+// delay in params.strobeDelayUs and returns the whole table.
+export const apiStageMapCalibrateStrobeDelay = async (options = {}) => {
+  const axiosInstance = createAxiosInstance();
+  const response = await axiosInstance.post(
+    "/StageMapController/calibrateStageMapStrobeDelay",
+    null,
+    { params: options },
+  );
+  return response.data;
+};
+
+// Strobed prescan: full calibration with the stage still: flash delay, flash
+// width (to params.strobeTargetLevel of full scale) and a frame check at the
+// prescan's frame rate that lengthens the period until no trigger is skipped.
+// The backend stores and persists the result; the answer carries plain-language
+// hints ("Every trigger gave one frame lit by one flash, ...").
+export const apiStageMapCalibrateStrobe = async (options = {}) => {
+  const axiosInstance = createAxiosInstance();
+  const response = await axiosInstance.post(
+    "/StageMapController/calibrateStageMapStrobe",
+    null,
+    { params: options },
+  );
+  return response.data;
+};
+
+// The whole map as one image plus the stage extent it covers (µm). For
+// consumers outside this app.
+export const apiStageMapGetOverview = (maxWidthPx = 2048) =>
+  get("getStageMapOverview", { maxWidthPx });
+
 export const apiStageMapSaveOmeTiff = (filename = "") =>
   get("saveStitchedOmeTiff", { filename });

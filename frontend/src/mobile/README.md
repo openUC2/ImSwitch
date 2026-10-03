@@ -31,7 +31,7 @@ renders the regular desktop SPA (same bundle, same session).
 
 | Hash | Page | Backing APIs |
 |---|---|---|
-| `#/mobile` | Home: static GLB digital twin (live positions), status column, quick nav | `Frame3DViewer`, PositionSlice, UC2Slice, StorageSlice, `getMicroscopeStandName`, `getBoardTemperature` |
+| `#/mobile` | Home: static GLB digital twin (live positions), status column, quick nav; "Live view" swaps the twin for the MJPEG stream (explicit start/stop — the kiosk never holds the camera on its own) | `Frame3DViewer`, PositionSlice, UC2Slice, StorageSlice, `getMicroscopeStandName`, `getBoardTemperature`, `LiveViewController/mjpeg_stream` |
 | `#/mobile/stage` | XY jog pad, Z column with ZEN-style focus view (tap to seek), safe homing, stop | `movePositionerXYZ`, `startFrameHoming`, `stopAllAxes`, HomingSlice |
 | `#/mobile/lasers` | Per-laser on/off + intensity (sent on release) | ParameterRangeSlice (`getHardwareParameters`), `setLaserValue/Active` |
 | `#/mobile/leds` | LED matrix patterns (all/ring/circle/halves), brightness, off | `LEDMatrixController/*` |

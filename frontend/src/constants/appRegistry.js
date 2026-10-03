@@ -21,6 +21,7 @@ import {
   Tune as TuneIcon,
   NetworkCheck as NetworkCheckIcon,
   DeviceHub as DeviceHubIcon,
+  Hub as HubIcon,
   Speed as SpeedIcon,
   Thermostat as ThermostatIcon,
   Insights as InsightsIcon,
@@ -210,6 +211,20 @@ export const APP_REGISTRY = {
     pluginId: "STORMArkitekt",
   },
 
+  arkitekt: {
+    id: "arkitekt",
+    name: "Arkitekt",
+    description:
+      "Bind this microscope to an Arkitekt server (cloud or a local one, e.g. on a NAS) so notebooks, apps and workflows can drive it. Shows the login, what is offered, remote calls and the images sent.",
+    category: APP_CATEGORIES.SYSTEM,
+    icon: HubIcon,
+    enabled: false,
+    essential: false,
+    keywords: ["arkitekt", "remote", "workflow", "server", "nas", "mikro", "login", "bind"],
+    pluginId: "Arkitekt",
+    requiredControllers: ["ArkitektController"],
+  },
+
   stageMap: {
     id: "stageMap",
     name: "Stage Map",
@@ -319,13 +334,14 @@ export const APP_REGISTRY = {
     id: "flowStop",
     name: "Flow Stop",
     description:
-      "Control flow stop mechanisms for microfluidics experiments. Manage fluid flow and timing.",
+      "Flow-cell imaging for plankton and particles: live preview, pump and focus control, EcoTaxa sample metadata, timed acquisition and gallery.",
     category: APP_CATEGORIES.APPS,
     icon: DeviceHubIcon,
     enabled: false,
     essential: false,
-    keywords: ["flow", "stop", "microfluidics", "fluid", "timing"],
+    keywords: ["flow", "stop", "microfluidics", "fluid", "plankton", "planktoscope", "ecotaxa"],
     pluginId: "FlowStop",
+    requiredControllers: ["FlowStopController"],
   },
 
   lepmon: {
@@ -654,7 +670,7 @@ export const APP_REGISTRY = {
     id: "shitScope",
     name: "ShitScope",
     description:
-      "Dedicated single-button paving scan application with fixed 50x30mm scan area, live view, stage homing, and overview canvas.",
+      "Dedicated tile scan for the ShitScope: live mosaic, tile registration and stitching at measured positions, placement-error report.",
     category: APP_CATEGORIES.APPS,
     icon: CropFreeIcon,
     enabled: false,
@@ -666,8 +682,10 @@ export const APP_REGISTRY = {
       "single",
       "dedicated",
       "customer",
+      "stitching",
     ],
     pluginId: "ShitScope",
+    requiredControllers: ["ShitScopeController"],
   },
 
   socketView: {

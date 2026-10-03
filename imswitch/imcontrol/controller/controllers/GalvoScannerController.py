@@ -8,7 +8,13 @@ exposing scan parameters and control functions via REST API.
 from typing import Dict, List, Optional, Any
 from imswitch.imcommon.model import APIExport, initLogger
 from ..basecontrollers import ImConWidgetController
+import base64
+import io
 import json
+import math
+import time
+
+import numpy as np
 
 
 class GalvoScannerController(ImConWidgetController):
@@ -90,6 +96,10 @@ class GalvoScannerController(ImConWidgetController):
                 det.setGalvoScanner(scanners[scannerName])
                 self.__logger.info(
                     f"Bound galvo scanner '{scannerName}' to detector '{detName}'")
+                # A persisted camera<->scanner calibration already tells us
+                # the µm per DAC count - hand it over so FOV/pixel size are
+                # physical from the first frame on.
+                self._propagateUmPerDacToFlim(scannerName)
             else:
                 self.__logger.warning(
                     f"Detector '{detName}' requests galvo scanner '{scannerName}' "
@@ -872,7 +882,8 @@ class GalvoScannerController(ImConWidgetController):
                 "status": "transform_updated",
                 "scannerName": scannerName,
                 "affine_transform": transform,
-                "saved": save
+                "saved": save,
+                "flim": self._propagateUmPerDacToFlim(scannerName),
             }
         except Exception as e:
             self.__logger.error(f"Error setting affine transform: {e}")
@@ -908,7 +919,8 @@ class GalvoScannerController(ImConWidgetController):
             return {
                 "status": "transform_reset",
                 "scannerName": scannerName,
-                "affine_transform": scanner.get_affine_transform_dict()
+                "affine_transform": scanner.get_affine_transform_dict(),
+                "flim": self._propagateUmPerDacToFlim(scannerName),
             }
         except Exception as e:
             self.__logger.error(f"Error resetting affine transform: {e}")
@@ -973,7 +985,8 @@ class GalvoScannerController(ImConWidgetController):
                 "scannerName": scannerName,
                 "affine_transform": transform,
                 "num_points_used": len(cam_points),
-                "saved": save
+                "saved": save,
+                "flim": self._propagateUmPerDacToFlim(scannerName),
             }
         except json.JSONDecodeError as e:
             return {"error": f"Invalid calibration data JSON: {e}"}
@@ -1003,6 +1016,295 @@ class GalvoScannerController(ImConWidgetController):
                 "2) Laser turns on, 3) Click the bright spot in camera view, "
                 "4) Click 'Confirm' to record the pair."
             )
+        }
+
+    # ========================
+    # Camera <-> scanner calibration
+    # ========================
+    #
+    # The affine transform maps camera pixels -> DAC counts. Together with the
+    # camera's (calibrated) pixel size that is the only bridge between the
+    # 0..4095 scanner units and micrometres at the sample, which is what the
+    # raster tab needs to draw the camera image behind the scan region and to
+    # label the scan range in µm.
+
+    DAC_FULL_SCALE = 4096
+    _BACKGROUND_MAX_DIM = 1024
+
+    def _cameraDetectorNames(self) -> List[str]:
+        """Detectors that *look at* the sample (widefield cameras).
+
+        A FLIM/scan detector's frame IS the scan, so it can't serve as the
+        background behind it; those are recognised by their galvo binding.
+        """
+        try:
+            detectors = self._master.detectorsManager
+        except Exception:
+            return []
+        return [name for name in detectors.getAllDeviceNames()
+                if not hasattr(detectors[name], 'setGalvoScanner')]
+
+    def _resolveCamera(self, detectorName: Optional[str]) -> Optional[str]:
+        names = self._cameraDetectorNames()
+        if not names:
+            return None
+        if detectorName in names:
+            return detectorName
+        try:
+            current = self._master.detectorsManager.getCurrentDetectorName()
+            if current in names:
+                return current
+        except Exception:
+            pass
+        return names[0]
+
+    @staticmethod
+    def _cameraPixelSizeUm(detector) -> tuple:
+        """(x, y) µm per camera pixel; pixelSizeUm is [Z, Y, X]."""
+        try:
+            ps = list(detector.pixelSizeUm)
+            x = float(ps[-1])
+            y = float(ps[-2]) if len(ps) >= 2 else x
+            if x <= 0 or y <= 0:
+                raise ValueError
+            return x, y
+        except Exception:
+            return 1.0, 1.0
+
+    @staticmethod
+    def _isIdentityAffine(affine: Dict[str, float]) -> bool:
+        ident = {'a11': 1.0, 'a12': 0.0, 'tx': 0.0, 'a21': 0.0, 'a22': 1.0, 'ty': 0.0}
+        return all(abs(float(affine.get(k, v)) - v) < 1e-9 for k, v in ident.items())
+
+    @staticmethod
+    def _umPerDacFromAffine(affine: Dict[str, float], pixelUmX: float,
+                            pixelUmY: float) -> tuple:
+        """µm at the sample per DAC count along scanner X and Y.
+
+        Invert the 2x2 part of the camera->DAC affine: its columns are the
+        camera-pixel displacement of the spot for +1 count on X resp. Y.
+        Scale to µm with the (possibly anisotropic) camera pixel size.
+        Returns (None, None) for a singular transform.
+        """
+        a11, a12 = float(affine['a11']), float(affine['a12'])
+        a21, a22 = float(affine['a21']), float(affine['a22'])
+        det = a11 * a22 - a12 * a21
+        if abs(det) < 1e-12:
+            return None, None
+        dxX, dyX = a22 / det, -a21 / det     # +1 DAC on X -> camera (dx, dy)
+        dxY, dyY = -a12 / det, a11 / det     # +1 DAC on Y
+        return (math.hypot(dxX * pixelUmX, dyX * pixelUmY),
+                math.hypot(dxY * pixelUmX, dyY * pixelUmY))
+
+    def _flimDetectorsFor(self, scannerName: str):
+        try:
+            detectors = self._master.detectorsManager
+        except Exception:
+            return []
+        out = []
+        for detName in detectors.getAllDeviceNames():
+            det = detectors[detName]
+            if not hasattr(det, 'setUmPerDac'):
+                continue
+            if getattr(det, 'galvoScannerName', None) not in (None, scannerName):
+                continue
+            out.append((detName, det))
+        return out
+
+    def _propagateUmPerDacToFlim(self, scannerName: str) -> Dict[str, Any]:
+        """Push the affine-derived µm/DAC into the FLIM detectors bound to
+        this scanner, or revert them to their setup values when the affine
+        is identity (uncalibrated)."""
+        results = {}
+        flim = self._flimDetectorsFor(scannerName)
+        if not flim:
+            return results
+        try:
+            scanner = self._master.galvoScannersManager[scannerName]
+            affine = scanner.get_affine_transform_dict()
+        except Exception as e:
+            self.__logger.warning(f"Could not read affine for '{scannerName}': {e}")
+            return results
+        umX = umY = None
+        if not self._isIdentityAffine(affine):
+            camName = self._resolveCamera(None)
+            if camName is not None:
+                cam = self._master.detectorsManager[camName]
+                umX, umY = self._umPerDacFromAffine(
+                    affine, *self._cameraPixelSizeUm(cam))
+        for detName, det in flim:
+            try:
+                results[detName] = det.setUmPerDac(umX, umY, source='affine')
+            except Exception as e:
+                self.__logger.warning(
+                    f"Could not apply scanner calibration to '{detName}': {e}")
+                results[detName] = {'error': str(e)}
+        return results
+
+    @APIExport()
+    def getGalvoCameraCalibration(self, scannerName: Optional[str] = None,
+                                  detectorName: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Summarise the camera<->scanner calibration in physical units.
+
+        Combines the affine transform (camera px -> DAC counts, from the
+        3-point wizard) with the camera's pixel size to give µm per DAC count
+        and the field of view / pixel size of the current raster scan. With an
+        identity affine the scanner is *uncalibrated* and only the raw DAC
+        numbers are meaningful.
+
+        Args:
+            scannerName: Scanner device name (default: first)
+            detectorName: 2D camera to use (default: current/first camera)
+
+        Example:
+            GET /api/GalvoScannerController/getGalvoCameraCalibration
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        scanner = self._master.galvoScannersManager[scannerName]
+        affine = scanner.get_affine_transform_dict()
+        calibrated = not self._isIdentityAffine(affine)
+
+        cameras = self._cameraDetectorNames()
+        camName = self._resolveCamera(detectorName)
+        info: Dict[str, Any] = {
+            'scannerName': scannerName,
+            'affine_transform': affine,
+            'calibrated': calibrated,
+            'cameraDetectors': cameras,
+            'detectorName': camName,
+            'frameWidth': None, 'frameHeight': None,
+            'pixelSizeUmX': None, 'pixelSizeUmY': None,
+            'umPerDacX': None, 'umPerDacY': None,
+            'scan': None,
+        }
+        if camName is None:
+            info['hint'] = 'No 2D camera configured - cannot relate DAC counts to µm.'
+            return info
+
+        cam = self._master.detectorsManager[camName]
+        try:
+            w, h = int(cam.shape[0]), int(cam.shape[1])
+        except Exception:
+            w = h = None
+        psX, psY = self._cameraPixelSizeUm(cam)
+        info.update({'frameWidth': w, 'frameHeight': h,
+                     'pixelSizeUmX': psX, 'pixelSizeUmY': psY})
+        if not calibrated:
+            info['hint'] = ('Scanner is not calibrated to the camera: run the '
+                            '3-point affine wizard (Arbitrary Points tab).')
+            return info
+
+        umX, umY = self._umPerDacFromAffine(affine, psX, psY)
+        info['umPerDacX'], info['umPerDacY'] = umX, umY
+        if umX is None:
+            info['hint'] = 'Affine transform is singular - re-run the calibration.'
+            return info
+        cfg = scanner.config
+        spanX = abs(int(cfg.x_max) - int(cfg.x_min))
+        spanY = abs(int(cfg.y_max) - int(cfg.y_min))
+        nx, ny = max(1, int(cfg.nx)), max(1, int(cfg.ny))
+        info['scan'] = {
+            'nx': nx, 'ny': ny,
+            'x_min': cfg.x_min, 'x_max': cfg.x_max,
+            'y_min': cfg.y_min, 'y_max': cfg.y_max,
+            'fovUmX': umX * spanX, 'fovUmY': umY * spanY,
+            'pixelUmX': umX * spanX / nx, 'pixelUmY': umY * spanY / ny,
+            'fullScaleUmX': umX * self.DAC_FULL_SCALE,
+            'fullScaleUmY': umY * self.DAC_FULL_SCALE,
+        }
+        # Rotation of the scanner's X axis as seen by the camera, for the eye
+        a11, a21 = float(affine['a11']), float(affine['a21'])
+        a12, a22 = float(affine['a12']), float(affine['a22'])
+        det = a11 * a22 - a12 * a21
+        info['rotationDeg'] = math.degrees(math.atan2(-a21 / det, a22 / det))
+        info['flim'] = {name: det_.umPerDacInfo
+                        for name, det_ in self._flimDetectorsFor(scannerName)}
+        return info
+
+    @APIExport(runOnUIThread=False)
+    def snapGalvoCameraBackground(self, scannerName: Optional[str] = None,
+                                  detectorName: Optional[str] = None,
+                                  maxDim: int = 1024) -> Dict[str, Any]:
+        """
+        Grab one frame from the 2D camera as a PNG to draw behind the scan
+        pattern preview.
+
+        The frame is contrast-stretched (1st-99th percentile) to 8 bit and
+        downsampled so its longer edge is at most ``maxDim`` px. The returned
+        ``frameWidth``/``frameHeight`` are the camera frame's real size, i.e.
+        the coordinate system the affine calibration was measured in;
+        ``subsampling`` is the integer stride applied to get ``width`` x
+        ``height``.
+
+        Example:
+            GET /api/GalvoScannerController/snapGalvoCameraBackground?maxDim=800
+        """
+        camName = self._resolveCamera(detectorName)
+        if camName is None:
+            return {"error": "No 2D camera configured"}
+        cam = self._master.detectorsManager[camName]
+
+        frame = None
+        try:
+            frame = cam.getLatestFrame()
+        except Exception:
+            frame = None
+        if frame is None or getattr(frame, 'size', 0) == 0:
+            # Live view isn't running - start the camera and wait for a frame
+            try:
+                cam.startAcquisition()
+            except Exception as e:
+                return {"error": f"Camera '{camName}' could not start: {e}"}
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                time.sleep(0.1)
+                try:
+                    frame = cam.getLatestFrame()
+                except Exception:
+                    frame = None
+                if frame is not None and getattr(frame, 'size', 0) > 0:
+                    break
+        if frame is None or getattr(frame, 'size', 0) == 0:
+            return {"error": f"No frame available from '{camName}'"}
+
+        try:
+            img = np.asarray(frame)
+            if img.ndim == 3:
+                img = img.mean(axis=-1)      # RGB -> gray for the backdrop
+            img = np.squeeze(img)
+            if img.ndim != 2:
+                return {"error": f"Unexpected frame shape {img.shape}"}
+            frameH, frameW = img.shape
+            maxDim = max(64, int(maxDim or self._BACKGROUND_MAX_DIM))
+            stride = max(1, int(math.ceil(max(frameH, frameW) / maxDim)))
+            small = img[::stride, ::stride]
+            lo, hi = np.percentile(small, (1, 99))
+            if hi <= lo:
+                hi = lo + 1
+            scaled = np.clip((small.astype(np.float32) - lo) * 255.0 / (hi - lo),
+                             0, 255).astype(np.uint8)
+            from PIL import Image
+            buf = io.BytesIO()
+            Image.fromarray(scaled, mode='L').save(buf, format='PNG')
+            b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+        except Exception as e:
+            self.__logger.error(f"Failed to render camera background: {e}")
+            return {"error": f"Failed to render camera background: {e}"}
+
+        psX, psY = self._cameraPixelSizeUm(cam)
+        return {
+            'detectorName': camName,
+            'image': f'data:image/png;base64,{b64}',
+            'width': int(scaled.shape[1]), 'height': int(scaled.shape[0]),
+            'frameWidth': int(frameW), 'frameHeight': int(frameH),
+            'subsampling': stride,
+            'pixelSizeUmX': psX, 'pixelSizeUmY': psY,
+            'timestamp': time.time(),
         }
 
     # ========================

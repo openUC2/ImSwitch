@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1076" width="1500" height="1076"
+     font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+  <defs>
+    <style>
+      .title   { font-size: 26px; font-weight: 700; fill: #0f172a; }
+      .sub     { font-size: 14px; fill: #475569; }
+      .panel   { font-size: 15px; font-weight: 700; fill: #0f172a; }
+      .btitle  { font-size: 15px; font-weight: 700; fill: #0f172a; }
+      .bsub    { font-size: 11.5px; fill: #64748b; font-family: Menlo, Consolas, monospace; }
+      .tx      { font-size: 13px; fill: #1e293b; }
+      .mono    { font-size: 11.5px; fill: #1e293b; font-family: Menlo, Consolas, monospace; }
+      .small   { font-size: 11.5px; fill: #334155; }
+      .lane    { font-size: 12.5px; fill: #334155; text-anchor: end; }
+      .note    { font-size: 12.5px; fill: #475569; }
+      .flash   { font-size: 11.5px; fill: #92400e; font-weight: 600; }
+      .stepn   { font-size: 11.5px; font-weight: 700; fill: #ffffff; text-anchor: middle; }
+      .changed { fill: #ffffff; stroke: #0e7490; stroke-width: 1.6; }
+      .same    { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.2; stroke-dasharray: 5 4; }
+      .link    { stroke: #334155; stroke-width: 2; fill: none; }
+      .bus     { stroke: #334155; stroke-width: 5; }
+      .dim     { stroke: #475569; stroke-width: 1; fill: none; }
+      .idle    { stroke: #94a3b8; stroke-width: 1; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect width="1500" height="1076" fill="#ffffff"/>
+
+  <!-- ============================ TITLE ============================ -->
+  <text x="40" y="48" class="title">Strobed StageMap sweep over CANopen SYNC</text>
+  <text x="40" y="74" class="sub">No new wires: the camera trigger stays on the HAT, the 20 µs flash is timed on the illumination node, both from one SYNC frame.</text>
+
+  <!-- legend -->
+  <rect x="820" y="101" width="26" height="15" rx="3" class="changed"/>
+  <text x="854" y="113" class="small">needs changes</text>
+  <rect x="970" y="101" width="26" height="15" rx="3" class="same"/>
+  <text x="1004" y="113" class="small">unchanged</text>
+  <line x1="1095" y1="108" x2="1121" y2="108" class="link"/>
+  <text x="1129" y="113" class="small">existing link · no new wires</text>
+
+  <!-- ============================ PANEL A ============================ -->
+  <text x="40" y="118" class="panel">A · Signal path</text>
+
+  <!-- Raspberry Pi / ImSwitch -->
+  <rect x="40" y="150" width="330" height="180" rx="6" class="changed"/>
+  <text x="56" y="176" class="btitle">Raspberry Pi · ImSwitch</text>
+  <text x="56" y="204" class="tx">StageMapController: strobe sweep mode</text>
+  <text x="56" y="226" class="tx">HikCamManager: trigger index, window W</text>
+  <text x="56" y="248" class="tx">ESP32 managers: sweep and strobe calls</text>
+  <circle cx="66" cy="280" r="10" fill="#0e7490"/><text x="66" y="284" class="stepn">5</text>
+  <text x="84" y="284" class="tx">pair frames by trigger index,</text>
+  <text x="84" y="304" class="tx">place each frame at x + v·D</text>
+
+  <!-- HIK camera -->
+  <rect x="40" y="390" width="330" height="120" rx="6" class="changed"/>
+  <text x="56" y="416" class="btitle">HIK camera · rolling shutter</text>
+  <text x="56" y="442" class="tx">Line0 external trigger, rising edge</text>
+  <text x="56" y="464" class="tx">exposure = window W, not the flash</text>
+  <text x="56" y="486" class="tx">global reset release, if available</text>
+
+  <!-- CAN HAT master -->
+  <rect x="470" y="150" width="380" height="200" rx="6" class="changed"/>
+  <text x="486" y="176" class="btitle">CAN HAT master · ESP32</text>
+  <text x="486" y="194" class="bsub">UC2_canopen_master</text>
+  <circle cx="496" cy="222" r="10" fill="#0e7490"/><text x="496" y="226" class="stepn">1</text>
+  <text x="514" y="226" class="tx">Sweep task: frame tick, queue SYNC 0x080</text>
+  <circle cx="496" cy="256" r="10" fill="#0e7490"/><text x="496" y="260" class="stepn">2</text>
+  <text x="514" y="260" class="tx">CAN task: on TX success of that SYNC,</text>
+  <text x="514" y="278" class="tx">pulse the camera trigger</text>
+  <circle cx="496" cy="306" r="10" fill="#0e7490"/><text x="496" y="310" class="stepn">5</text>
+  <text x="514" y="310" class="tx">Batch {n, x} reports to ImSwitch</text>
+  <text x="486" y="336" class="small">Before each line: configure strobe and latch by SDO</text>
+
+  <!-- Motor X node -->
+  <rect x="930" y="150" width="250" height="200" rx="6" class="changed"/>
+  <text x="946" y="176" class="btitle">Motor X · node 11</text>
+  <text x="946" y="194" class="bsub">UC2_canopen_slave_motor</text>
+  <circle cx="956" cy="222" r="10" fill="#0e7490"/><text x="956" y="226" class="stepn">4</text>
+  <text x="974" y="226" class="tx">SYNC seen in CAN task:</text>
+  <text x="974" y="244" class="tx">latch the step count</text>
+  <text x="946" y="276" class="mono">TPDO3 · COB-ID 0x380+node</text>
+  <text x="946" y="298" class="tx">position + SYNC count</text>
+  <text x="946" y="320" class="tx">no inhibit time</text>
+
+  <!-- Illumination node -->
+  <rect x="1210" y="150" width="250" height="200" rx="6" class="changed"/>
+  <text x="1226" y="176" class="btitle">Illumination · node 30</text>
+  <text x="1226" y="194" class="bsub">UC2_canopen_slave_led</text>
+  <circle cx="1236" cy="222" r="10" fill="#0e7490"/><text x="1236" y="226" class="stepn">3</text>
+  <text x="1254" y="226" class="tx">SYNC seen in CAN task:</text>
+  <text x="1254" y="244" class="tx">arm a hardware timer</text>
+  <text x="1226" y="276" class="tx">LED on after D, off after w</text>
+  <text x="1226" y="298" class="tx">GPIO4 · LED driver · power LED</text>
+  <text x="1226" y="320" class="tx">PWM detached while strobing</text>
+
+  <!-- links -->
+  <line x1="370" y1="215" x2="470" y2="215" class="link"/>
+  <text x="420" y="207" class="small" text-anchor="middle">USB serial</text>
+  <text x="420" y="231" class="small" text-anchor="middle">JSON</text>
+
+  <line x1="205" y1="330" x2="205" y2="390" class="link"/>
+  <text x="215" y="364" class="small">USB3 · frames + trigger index</text>
+
+  <path d="M540,350 V450 H370" class="link"/>
+  <text x="455" y="468" class="small" text-anchor="middle">trigger wire</text>
+  <text x="455" y="483" class="small" text-anchor="middle">GPIO27 to camera Line0</text>
+
+  <!-- CAN bus -->
+  <line x1="640" y1="440" x2="1460" y2="440" class="bus"/>
+  <line x1="660" y1="350" x2="660" y2="440" class="link"/>
+  <line x1="1055" y1="350" x2="1055" y2="440" class="link"/>
+  <line x1="1335" y1="350" x2="1335" y2="440" class="link"/>
+  <text x="680" y="464" class="small">CAN bus · 500 kbit/s · SYNC = COB-ID 0x080, no data</text>
+
+  <line x1="1195" y1="440" x2="1195" y2="482" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <rect x="930" y="482" width="530" height="40" rx="6" class="same"/>
+  <text x="1195" y="507" class="small" text-anchor="middle">Motor Y, Z · laser node · galvo: receive SYNC, nothing changes</text>
+
+  <line x1="40" y1="550" x2="1460" y2="550" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <!-- ============================ PANEL B ============================ -->
+  <text x="40" y="584" class="panel">B · One frame on the time axis · not to scale</text>
+
+  <!-- t0 -->
+  <line x1="440" y1="596" x2="440" y2="1000" stroke="#0f172a" stroke-width="1" stroke-dasharray="5 4"/>
+  <text x="448" y="608" class="note">t₀ = end of the SYNC frame, the same instant on every node</text>
+
+  <!-- lane labels -->
+  <text x="250" y="634" class="lane">CAN bus</text>
+  <text x="250" y="700" class="lane">Camera trigger · HAT</text>
+  <text x="250" y="796" class="lane">Sensor rows</text>
+  <text x="250" y="814" class="lane">rolling shutter</text>
+  <text x="250" y="918" class="lane">Power LED · node 30</text>
+  <text x="250" y="968" class="lane">Motor X latch · node 11</text>
+
+  <!-- L1: SYNC frame -->
+  <line x1="270" y1="630" x2="1440" y2="630" class="idle"/>
+  <rect x="350" y="618" width="90" height="24" fill="#e2e8f0" stroke="#334155" stroke-width="1.2"/>
+  <text x="395" y="634" class="mono" text-anchor="middle">SYNC</text>
+  <text x="432" y="657" class="small" text-anchor="end">≈ 0.1 ms on the wire</text>
+
+  <!-- L2: camera trigger pulse -->
+  <path d="M270,708 H455 V684 H490 V708 H1440" stroke="#0f172a" stroke-width="2" fill="none"/>
+  <text x="500" y="694" class="small">pulse on TX success, after master wake-up ε<tspan font-size="9" dy="3">m</tspan></text>
+
+  <!-- L3: rolling-shutter rows -->
+  <rect x="830" y="752" width="150" height="108" fill="#fde68a" fill-opacity="0.55" stroke="#d97706" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <rect x="470" y="758" width="510" height="14" fill="#cbd5e1" fill-opacity="0.85" stroke="#64748b" stroke-width="1"/>
+  <rect x="560" y="778" width="510" height="14" fill="#cbd5e1" fill-opacity="0.85" stroke="#64748b" stroke-width="1"/>
+  <rect x="650" y="798" width="510" height="14" fill="#cbd5e1" fill-opacity="0.85" stroke="#64748b" stroke-width="1"/>
+  <rect x="740" y="818" width="510" height="14" fill="#cbd5e1" fill-opacity="0.85" stroke="#64748b" stroke-width="1"/>
+  <rect x="830" y="838" width="510" height="14" fill="#cbd5e1" fill-opacity="0.85" stroke="#64748b" stroke-width="1"/>
+  <text x="484" y="769" class="small">row 1</text>
+  <text x="1296" y="849" class="small" text-anchor="end">last row</text>
+
+  <!-- W dimension -->
+  <path d="M470,732 V744 M470,738 H980 M980,732 V744" class="dim"/>
+  <text x="725" y="730" class="small" text-anchor="middle">window W = camera exposure</text>
+  <!-- t_ro dimension -->
+  <path d="M470,860 V872 M470,866 H830 M830,860 V872" class="dim"/>
+  <text x="650" y="884" class="small" text-anchor="middle">readout t<tspan font-size="9" dy="3">ro</tspan></text>
+  <text x="875" y="878" class="flash" text-anchor="middle">all rows open</text>
+
+  <!-- L4: LED flash -->
+  <path d="M270,920 H940 V896 H952 V920 H1440" stroke="#b45309" stroke-width="2.2" fill="none"/>
+  <rect x="940" y="896" width="12" height="24" fill="#f59e0b"/>
+  <line x1="946" y1="896" x2="946" y2="752" stroke="#d97706" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <text x="962" y="912" class="flash">w = 20 µs flash</text>
+  <path d="M450,930 V942 M450,936 H940 M940,930 V942" class="dim"/>
+  <text x="695" y="954" class="small" text-anchor="middle">delay D, counted from SYNC reception</text>
+
+  <!-- L5: position latch -->
+  <line x1="270" y1="975" x2="1440" y2="975" class="idle"/>
+  <circle cx="450" cy="975" r="5" fill="#0e7490"/>
+  <text x="466" y="966" class="small">latch x at t₀ + ε<tspan font-size="9" dy="3">s</tspan><tspan dy="-3">, frame placed at x + v·D</tspan></text>
+
+  <!-- time axis -->
+  <line x1="270" y1="1002" x2="1432" y2="1002" stroke="#475569" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <text x="1446" y="1006" class="small">time</text>
+
+  <!-- constraints -->
+  <text x="40" y="1036" class="note">Choose D so the flash sits inside the band: t<tspan font-size="9" dy="3">ro</tspan><tspan dy="-3"> &lt; D and D + w &lt; W, with margin for the difference between ε</tspan><tspan font-size="9" dy="3">m</tspan><tspan dy="-3"> and ε</tspan><tspan font-size="9" dy="3">s</tspan><tspan dy="-3">.</tspan></text>
+  <text x="40" y="1058" class="note">ε<tspan font-size="9" dy="3">m</tspan><tspan dy="-3">, ε</tspan><tspan font-size="9" dy="3">s</tspan><tspan dy="-3">: task wake-ups on master and node, estimated tens of µs, measured in WP2. With global reset release the band starts at the trigger and W shrinks to jitter + w.</tspan></text>
+</svg>

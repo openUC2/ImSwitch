@@ -19,6 +19,7 @@ Features:
     - OMERO streaming upload for real-time server storage
 """
 
+import inspect
 import os
 import time
 import threading
@@ -28,6 +29,7 @@ from dataclasses import dataclass
 import numpy as np
 import zarr
 import tifffile as tif
+import tifffile
 
 # Import from local writers module
 from .ome_tiff_stitcher import OmeTiffStitcher
@@ -85,8 +87,13 @@ class OMEWriterConfig:
     write_individual_tiffs: bool = False
     write_omero: bool = False
     omero_queue_size: int = 100
-    min_period: float = 0.2
+    min_period: float = 0.2   # inert: the writer no longer throttles itself
     compression: str = "zlib"
+    # zlib level 1, not the library default of 6. On 12-bit-in-uint16 camera
+    # frames level 6 gains ~1 % over level 1 for 3x the CPU; the horizontal
+    # predictor is what actually helps (measured: 1.43x -> 1.56x).
+    compression_level: int = 1
+    predictor: bool = True
     zarr_compressor = None
     pixel_size: float = 1.0
     pixel_size_z: float = 1.0
@@ -100,6 +107,12 @@ class OMEWriterConfig:
     y_start: float = 0.0
     z_start: float = 0.0
     time_interval: float = 1.0
+
+    def tiff_write_kwargs(self) -> Dict[str, Any]:
+        """Compression kwargs for tifffile writes."""
+        return tiff_compression_kwargs(
+            self.compression, self.compression_level, self.predictor
+        )
 
     def __post_init__(self):
         """Initialize default compressor and channel metadata."""
@@ -115,6 +128,35 @@ class OMEWriterConfig:
             # Default colors: green, red, blue, cyan, magenta, yellow
             default_colors = ["00FF00", "FF0000", "0000FF", "00FFFF", "FF00FF", "FFFF00"]
             self.channel_colors = [default_colors[i % len(default_colors)] for i in range(self.n_channels)]
+
+
+def _sanitize_region_tag(region_id: Optional[str]) -> str:
+    """Region id reduced to what a filename can carry, or "" when unset."""
+    return "".join(c for c in (region_id or "") if c.isalnum())[:24]
+
+
+def _sanitize_channel_name(channel) -> str:
+    """Channel name as the tile filename pattern accepts it: ``[A-Za-z0-9_]``."""
+    cleaned = "".join(c if (c.isascii() and c.isalnum()) else "_" for c in str(channel or ""))
+    return cleaned.strip("_") or "unknown"
+
+
+def tiff_compression_kwargs(compression="zlib", level=1, predictor=True) -> Dict[str, Any]:
+    """Compression kwargs for a tifffile write, degrading on older tifffile.
+
+    ``compressionargs``/``predictor`` were added after the minimum tifffile we
+    support, so both are probed once and dropped when missing rather than
+    raising per frame.
+    """
+    if not compression:
+        return {}
+    kwargs: Dict[str, Any] = {"compression": compression}
+    supported = inspect.signature(tifffile.TiffWriter.write).parameters
+    if level is not None and "compressionargs" in supported:
+        kwargs["compressionargs"] = {"level": level}
+    if predictor and "predictor" in supported:
+        kwargs["predictor"] = True
+    return kwargs
 
 
 def _get_zarr_compressor():
@@ -263,6 +305,7 @@ class OMEWriter:
         shared_omero_key: Optional[str] = None,
         well_metadata: Optional[Dict[str, Any]] = None,
         image_name: Optional[str] = None,
+        region_id: Optional[str] = None,
     ):
         """
         Initialize the OME writer.
@@ -306,6 +349,12 @@ class OMEWriter:
 
         # TIFF writers
         self.tiff_stitcher: Optional[OmeTiffStitcher] = None
+        self._finalized = False
+        self._pyramid_failures = 0
+        # Goes into every individual-TIFF filename so downstream tooling can
+        # tell one scan region's tiles from another's without relying on the
+        # directory layout.
+        self._region_tag = _sanitize_region_tag(region_id)
         self.single_tiff_writer: Optional[SingleTiffWriter] = None
 
         # In-memory mosaic for the unified multi-dimensional OME-TIFF hyperstack
@@ -319,8 +368,19 @@ class OMEWriter:
         self.omero_uploader: Optional[OMEROUploader] = None
         self._owns_omero_uploader = False  # Track if we own the uploader
 
-        # Timing for throttling
-        self.t_last = time.time()
+        # Per-output write timings, summarised to the log every N frames
+        # (see write_frame). Cheap, and the only way to see what a slow Pi is
+        # actually spending its time on from a field log.
+        self._timing_ms = {}
+        self._timing_frames = 0
+
+        # A stitched canvas (zarr / in-RAM mosaic / stitched TIFF) costs at
+        # least one full pass over the whole scan at the end. On a Pi that is
+        # minutes of I/O for a slide and, for the in-RAM mosaic, an allocation
+        # the OS may grant and then kill us for touching. Above the budget the
+        # run keeps only the per-tile outputs; downstream tools (napari
+        # plugin, Ashlar) stitch from those on a machine that can afford it.
+        self._apply_large_scan_policy()
 
         # Initialize storage backends
         if config.write_zarr:
@@ -337,6 +397,42 @@ class OMEWriter:
 
         if config.write_omero:
             self._setup_omero_uploader()
+
+    TIMING_LOG_EVERY = 100
+
+    # Canvas budgets. The mosaic lives in RAM, so it gets the tighter one.
+    LARGE_SCAN_CANVAS_BYTES = 2 * 1024 ** 3      # 2 GiB, any stitched canvas
+    IN_RAM_MOSAIC_BYTES = 512 * 1024 ** 2         # 512 MiB, write_tiff mosaic
+
+    def canvas_bytes(self) -> int:
+        """Size of one full stitched canvas for this writer's geometry."""
+        per_px = 3 if self.isRGB else 2
+        return (int(self.config.n_time_points) * int(self.config.n_channels)
+                * int(self.config.n_z_planes) * int(self.ny) * int(self.tile_h)
+                * int(self.nx) * int(self.tile_w) * per_px)
+
+    def _apply_large_scan_policy(self):
+        size = self.canvas_bytes()
+        self.large_scan = size > self.LARGE_SCAN_CANVAS_BYTES
+        dropped = []
+        if self.config.write_tiff and size > self.IN_RAM_MOSAIC_BYTES:
+            self.config.write_tiff = False
+            dropped.append("OME-TIFF mosaic (in RAM)")
+        if self.large_scan:
+            for flag, label in (("write_zarr", "OME-Zarr canvas"),
+                                ("write_stitched_tiff", "stitched TIFF")):
+                if getattr(self.config, flag):
+                    setattr(self.config, flag, False)
+                    dropped.append(label)
+            if not self.config.write_individual_tiffs:
+                self.config.write_individual_tiffs = True
+                dropped.append("→ individual TIFFs enabled instead")
+        if dropped and self.logger:
+            self.logger.warning(
+                f"Large scan: stitched canvas would be {size / 1024 ** 3:.1f} GiB "
+                f"({self.nx}x{self.ny} tiles). Skipping: {', '.join(dropped)}. "
+                "Stitch offline from the individual tiles."
+            )
 
     def _setup_zarr_store(self):
         """Set up the OME-Zarr store and canvas with proper OME-NGFF metadata."""
@@ -518,7 +614,11 @@ class OMEWriter:
         # before the stitcher opens its output file inside it.
         os.makedirs(self.file_paths.base_dir, exist_ok=True)
         stitched_tiff_path = os.path.join(self.file_paths.base_dir, "stitched.ome.tif")
-        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True, isRGB=self.isRGB, nx=self.nx, ny=self.ny, tile_w=self.tile_w, tile_h=self.tile_h)
+        self.tiff_stitcher = OmeTiffStitcher(
+            stitched_tiff_path, bigtiff=True, isRGB=self.isRGB,
+            tile_w=self.tile_w, tile_h=self.tile_h,
+            write_kwargs=self.config.tiff_write_kwargs(),
+        )
         self.tiff_stitcher.start()
         if self.logger:
             self.logger.debug(f"TIFF stitcher initialized: {stitched_tiff_path}")
@@ -613,36 +713,30 @@ class OMEWriter:
             Dictionary with information about the written chunk (for Zarr)
         """
         result = {}
+        cfg = self.config
+        outputs = (
+            ("mosaic", cfg.write_tiff and self.tiff_mosaic is not None, self._write_tiff_mosaic_tile),
+            ("zarr", cfg.write_zarr and self.canvas is not None, self._write_zarr_tile),
+            ("stitched", cfg.write_stitched_tiff and self.tiff_stitcher is not None, self._write_stitched_tiff_tile),
+            ("single", cfg.write_tiff_single and self.single_tiff_writer is not None, self._write_single_tiff_tile),
+            ("individual", cfg.write_individual_tiffs, self._write_individual_tiff),
+            ("omero", cfg.write_omero and self.omero_uploader is not None, self._write_omero_tile),
+        )
+        for name, enabled, write in outputs:
+            if not enabled:
+                continue
+            t0 = time.perf_counter()
+            out = write(frame, metadata)
+            self._timing_ms[name] = self._timing_ms.get(name, 0.0) + (time.perf_counter() - t0) * 1e3
+            if name == "zarr" and out:
+                result.update(out)
 
-        # Accumulate into the in-memory multi-dimensional OME-TIFF mosaic.
-        # The full hyperstack is flushed to disk once in finalize().
-        if self.config.write_tiff and self.tiff_mosaic is not None:
-            self._write_tiff_mosaic_tile(frame, metadata)
-
-        # Write to Zarr canvas if requested
-        if self.config.write_zarr and self.canvas is not None:
-            chunk_info = self._write_zarr_tile(frame, metadata)
-            result.update(chunk_info)
-
-        # Write to stitched TIFF if requested
-        if self.config.write_stitched_tiff and self.tiff_stitcher is not None:
-            self._write_stitched_tiff_tile(frame, metadata)
-
-        # Write to single TIFF if requested
-        if self.config.write_tiff_single and self.single_tiff_writer is not None:
-            self._write_single_tiff_tile(frame, metadata)
-
-        # Write individual TIFF files with position-based naming if requested
-        if self.config.write_individual_tiffs:
-            self._write_individual_tiff(frame, metadata)
-
-        # Write to OMERO if requested
-        if self.config.write_omero and self.omero_uploader is not None:
-            self._write_omero_tile(frame, metadata)
-
-        # Throttle writes if needed
-        self._throttle_writes()
-
+        self._timing_frames += 1
+        if self._timing_frames % self.TIMING_LOG_EVERY == 0 and self.logger:
+            n = self.TIMING_LOG_EVERY
+            parts = ", ".join(f"{k}={v / n:.0f}" for k, v in self._timing_ms.items())
+            self.logger.info(f"Writer timing, ms/frame over last {n}: {parts}")
+            self._timing_ms = {}
         return result
 
     def _write_tiff_mosaic_tile(self, frame, metadata: Dict[str, Any]):
@@ -767,13 +861,24 @@ class OMEWriter:
         y_microns = int(metadata.get("y", 0) * 1000)
         z_microns = int(metadata.get("z", 0) * 1000)
 
-        channel = metadata.get("illuminationChannel", "unknown")
+        # The name goes into a filename that downstream stitchers (the napari
+        # openUC2 processor, ashlar) parse with ``_c<idx>_<[A-Za-z0-9_]+>_i``:
+        # a space or hyphen ("LED Matrix", "Laser-488") would make every tile
+        # of that channel unparseable, so reduce it to what the pattern takes.
+        channel = _sanitize_channel_name(metadata.get("illuminationChannel", "unknown"))
         laser_power = int(metadata.get("illuminationValue", 0))
-        iterator = metadata.get("runningNumber", 0)
+        # ``_i`` is the tile's index within its scan region — the same
+        # ``iterator`` the protocol JSON lists — so stitchers can look tiles
+        # up in it. Older callers only sent the workflow step id.
+        iterator = metadata.get("iterator", metadata.get("runningNumber", 0))
 
         timepoint_dir = self.file_paths.get_timepoint_dir(t_idx)
         current_time = time.strftime("%Y%m%d_%H%M%S")
-        filename = f"t{current_time}_x{x_microns}_y{y_microns}_z{z_microns}_c{c_idx}_{channel}_i{iterator:04d}_p{laser_power}.tif"
+        region = f"_r{self._region_tag}" if self._region_tag else ""
+        filename = (
+            f"t{current_time}{region}_x{x_microns}_y{y_microns}_z{z_microns}"
+            f"_c{c_idx}_{channel}_i{iterator:04d}_p{laser_power}.tif"
+        )
         filepath = os.path.join(timepoint_dir, filename)
 
         # RGB tiles (H, W, 3) must be tagged photometric="rgb" or tifffile would
@@ -797,15 +902,15 @@ class OMEWriter:
                 # Build OME-XML string
                 ome_xml = build_ome_metadata_from_dict(ome_metadata)
                 if ome_xml:
-                    tif.imwrite(filepath, frame, compression=self.config.compression, description=ome_xml, photometric=photometric)
+                    tif.imwrite(filepath, frame, description=ome_xml, photometric=photometric, **self.config.tiff_write_kwargs())
                 else:
-                    tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
+                    tif.imwrite(filepath, frame, photometric=photometric, **self.config.tiff_write_kwargs())
             else:
-                tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
+                tif.imwrite(filepath, frame, photometric=photometric, **self.config.tiff_write_kwargs())
         except Exception as e:
             if self.logger:
                 self.logger.warning(f"Failed to write OME metadata to individual TIFF: {e}")
-            tif.imwrite(filepath, frame, compression=self.config.compression, photometric=photometric)
+            tif.imwrite(filepath, frame, photometric=photometric, **self.config.tiff_write_kwargs())
 
     def _write_omero_tile(self, frame, metadata: Dict[str, Any]):
         """
@@ -855,13 +960,6 @@ class OMEWriter:
         # Queue the tile for upload
         self.omero_uploader.queue_tile(tile_meta)
 
-    def _throttle_writes(self):
-        """Throttle disk writes if needed."""
-        t_now = time.time()
-        if t_now - self.t_last < self.config.min_period:
-            time.sleep(self.config.min_period - (t_now - self.t_last))
-        self.t_last = t_now
-
     def finalize(self):
         """
         Finalize the writing process.
@@ -869,12 +967,27 @@ class OMEWriter:
         - Builds pyramid levels for OME-Zarr
         - Closes all TIFF writers
         - Waits for OMERO upload to complete (if owned)
+
+        Idempotent: the workflow finalizes each tile writer and then makes a
+        final cleanup pass over all of them, and an aborted run finalizes
+        whatever the workflow never reached. Rebuilding pyramids on the second
+        call is pure waste.
         """
+        if self._finalized:
+            return
+        self._finalized = True
+
         if self.config.write_zarr and self.store is not None:
             try:
+                self._pyramid_failures = 0
                 self._build_vanilla_zarr_pyramids()
                 if self.logger:
-                    self.logger.info("Vanilla Zarr pyramid generated successfully")
+                    if self._pyramid_failures:
+                        self.logger.error(
+                            f"Zarr pyramid INCOMPLETE: {self._pyramid_failures} level(s) failed — "
+                            "the full-resolution data is intact, lower levels are missing")
+                    else:
+                        self.logger.info("Vanilla Zarr pyramid generated successfully")
             except Exception as err:
                 if self.logger:
                     self.logger.warning(f"Pyramid generation failed: {err}")
@@ -963,9 +1076,9 @@ class OMEWriter:
             self.tiff_mosaic,
             photometric=photometric,
             metadata=ome_metadata,
-            compression=self.config.compression,
             ome=True,
             bigtiff=True,
+            **self.config.tiff_write_kwargs(),
         )
 
         # Release the buffer promptly — a full mosaic can be large.
@@ -1044,23 +1157,43 @@ class OMEWriter:
 
         self._update_multiscales_metadata()
 
+    # Rows of the full-resolution canvas read per pyramid step. Bounds the
+    # working set to a band, whatever the canvas size.
+    PYRAMID_BAND_ROWS = 4096
+
     def _downsample_all_dimensions(self, source_canvas, target_canvas, level, n_t, n_c, n_z):
-        """Downsample data for all t, c, z dimensions."""
-        downsample_factor = 2 ** level
+        """Downsample data for all t, c, z dimensions, one row band at a time.
+
+        This used to materialise the whole full-resolution plane with
+        ``np.array(source_canvas[t, c, z])`` before slicing it ``[::f, ::f]``.
+        On a large slide scan that is a request for the entire canvas in RAM —
+        a 270k x 172k RGB canvas is 130 GiB — which either fails outright or,
+        if the OS grants it, takes the machine down with it. Reading a band
+        at a time keeps the working set at a few hundred MB regardless of how
+        big the scan was.
+        """
+        f = 2 ** level
+        height = source_canvas.shape[3]
+        band = max(f, (self.PYRAMID_BAND_ROWS // f) * f)  # keep bands aligned to the stride
 
         for t_idx in range(n_t):
             for c_idx in range(n_c):
                 for z_idx in range(n_z):
                     try:
-                        if self.isRGB:
-                            source_data = np.array(source_canvas[t_idx, c_idx, z_idx, :, :, :])
-                            downsampled = source_data[::downsample_factor, ::downsample_factor, :]
-                            target_canvas[t_idx, c_idx, z_idx, :, :, :] = downsampled
-                        else:
-                            source_data = np.array(source_canvas[t_idx, c_idx, z_idx, :, :])
-                            downsampled = source_data[::downsample_factor, ::downsample_factor]
-                            target_canvas[t_idx, c_idx, z_idx, :, :] = downsampled
+                        for y0 in range(0, height, band):
+                            y1 = min(height, y0 + band)
+                            if self.isRGB:
+                                block = np.asarray(source_canvas[t_idx, c_idx, z_idx, y0:y1, :, :])
+                                small = block[::f, ::f, :]
+                                target_canvas[t_idx, c_idx, z_idx,
+                                              y0 // f:y0 // f + small.shape[0], :small.shape[1], :] = small
+                            else:
+                                block = np.asarray(source_canvas[t_idx, c_idx, z_idx, y0:y1, :])
+                                small = block[::f, ::f]
+                                target_canvas[t_idx, c_idx, z_idx,
+                                              y0 // f:y0 // f + small.shape[0], :small.shape[1]] = small
                     except Exception as e:
+                        self._pyramid_failures += 1
                         if self.logger:
                             self.logger.warning(f"Failed to downsample t={t_idx}, c={c_idx}, z={z_idx}: {e}")
 

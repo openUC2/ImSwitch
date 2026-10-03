@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { useDispatch, useSelector } from "react-redux";
+import { useSelector } from "react-redux";
 import {
   Button,
   Box,
@@ -9,726 +9,410 @@ import {
   Chip,
   Alert,
   CircularProgress,
-  Slider,
-  Tabs,
-  Tab,
   TextField,
   Divider,
+  FormControlLabel,
+  Checkbox,
+  MenuItem,
 } from "@mui/material";
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import {
   PlayArrow as PlayArrowIcon,
   Stop as StopIcon,
   Home as HomeIcon,
   FolderOpen as FolderOpenIcon,
+  Refresh as RefreshIcon,
+  SaveAlt as SaveAltIcon,
 } from "@mui/icons-material";
 
-import * as experimentSlice from "../state/slices/ExperimentSlice.js";
-import * as experimentStatusSlice from "../state/slices/ExperimentStatusSlice.js";
-import * as experimentStateSlice from "../state/slices/ExperimentStateSlice.js";
-import * as wellSelectorSlice from "../state/slices/WellSelectorSlice.js";
-import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
-import * as coordinateCalculator from "../axon/CoordinateCalculator.js";
-
-import apiExperimentControllerStartWellplateExperiment from "../backendapi/apiExperimentControllerStartWellplateExperiment.js";
-import apiExperimentControllerStopExperiment from "../backendapi/apiExperimentControllerStopExperiment.js";
 import apiExperimentControllerHomeAllAxes from "../backendapi/apiExperimentControllerHomeAllAxes.js";
-import fetchGetExperimentStatus from "../middleware/fetchExperimentControllerGetExperimentStatus.js";
+import {
+  apiShitScopeGetInfo,
+  apiShitScopeStartScan,
+  apiShitScopeStopScan,
+  apiShitScopeGetStatus,
+  apiShitScopeGetPreview,
+  apiShitScopeGetResult,
+  apiShitScopeAnalyzeScan,
+  apiShitScopeExportFullRes,
+} from "../backendapi/apiShitScopeController.js";
 
-import WellSelectorCanvas from "../axon/WellSelectorCanvas.js";
+import ShitScopeStageMap from "../axon/ShitScopeStageMap.js";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
 import InfoPopup from "../axon/InfoPopup.js";
+import ShitScopeCalibrationPanel from "./ShitScopeCalibrationPanel.js";
 
-// Status enum matching ExperimentComponent
-const Status = Object.freeze({
-  IDLE: "idle",
-  RUNNING: "running",
-  PAUSED: "paused",
-  STOPPING: "stopping",
-});
+// Preset area for "Fill area" (µm)
+const PRESET_AREA_X = 15000;
+const PRESET_AREA_Y = 7000;
+const BUSY_STATES = ["homing", "running", "analysing"];
 
-// Hardcoded ShitScope scan area dimensions (micrometers)
-const SHITSCOPE_SCAN_WIDTH = 15000; // 15 mm
-const SHITSCOPE_SCAN_HEIGHT = 7000; // 7 mm
-
-/**
- * Build an ordered list of (x,y) stage positions for a snake-pattern tile scan.
- * The origin is the current stage position; tiles are placed at stepSizeX / stepSizeY intervals.
- */
-function buildTileEditorSnakePositions(baseX, baseY, numTilesX, numTilesY, stepSizeX, stepSizeY) {
-  const positions = [];
-  for (let iY = 0; iY < numTilesY; iY++) {
-    const row = [];
-    for (let iX = 0; iX < numTilesX; iX++) {
-      row.push({
-        x: baseX + iX * stepSizeX,
-        y: baseY + iY * stepSizeY,
-        z: 0,
-        iX,
-        iY,
-      });
-    }
-    // Reverse every other row for snake pattern
-    if (iY % 2 === 1) row.reverse();
-    positions.push(...row);
-  }
-  return positions;
-}
+const fmt = (v, digits = 0) => (typeof v === "number" && isFinite(v) ? v.toFixed(digits) : "–");
+// Largest whole number of stage full steps that keeps `overlap` (mirrors shitscope_scan.suggested_step)
+const suggestStep = (fov, full, overlap) => {
+  const max = fov * (1 - overlap);
+  return full > 0 ? Math.max(full, Math.floor(max / full) * full) : max;
+};
+const fmtTime = (s) => (typeof s === "number" && isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}` : "–");
 
 /**
- * ShitScope - Dedicated single-button scan application
+ * ShitScope - dedicated tile scanning app, driven by the ShitScopeController.
  *
- * Simplified scan interface with:
- * - Fixed rectangular scan area (15x7 mm)
- * - Live view with overview canvas showing current position
- * - Pre-experiment homing of all axes
- * - Single start button to launch paving scan
+ * The backend does everything (see ShitScopeController / model/shitscope_scan.py):
+ * move with one approach direction, grab a frame exposed after the move, save
+ * the tile, live mosaic; afterwards register the tiles against each other,
+ * stitch at the measured positions and report the placement errors.
  */
 const ShitScopeComponent = ({ onOpenFileManager }) => {
-  const dispatch = useDispatch();
   const infoPopupRef = useRef(null);
-  const canvasRef = useRef(null);
+  const pos = useSelector(positionSlice.getPositionState);
 
-  // Homing state
+  const [info, setInfo] = useState(null);
+  const [tilesX, setTilesX] = useState(5);
+  const [tilesY, setTilesY] = useState(5);
+  const [stepX, setStepX] = useState(0); // 0 = suggested by the backend
+  const [stepY, setStepY] = useState(0);
+  const [centered, setCentered] = useState(true);
+  const [homeFirst, setHomeFirst] = useState(false);
+  const [returnToStart, setReturnToStart] = useState(true);
+  const [pattern, setPattern] = useState(""); // "" = stage recommendation
+  const [overlapPct, setOverlapPct] = useState(0); // 0 = stage recommendation
+  const [speed, setSpeed] = useState(0); // steps/s, 0 = stage default
+  const [settleMs, setSettleMs] = useState(0);
+  const [isExporting, setIsExporting] = useState(false);
+  const [scanPlan, setScanPlan] = useState(null); // tiles of the running/last scan (µm)
+  const [status, setStatus] = useState({ state: "idle", tile: 0, total: 0 });
+  const [preview, setPreview] = useState(null);
+  const [result, setResult] = useState(null);
   const [isHoming, setIsHoming] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  // Tab: 0 = Overview, 1 = Tile Editor
-  const [activeTab, setActiveTab] = useState(0);
+  const busy = BUSY_STATES.includes(status.state);
+  const notify = (msg) => infoPopupRef.current && infoPopupRef.current.showMessage(msg);
 
-  // Tile editor parameters
-  const [tilesX, setTilesX] = useState(3);
-  const [tilesY, setTilesY] = useState(3);
-  const [stepSizeX, setStepSizeX] = useState(0);
-  const [stepSizeY, setStepSizeY] = useState(0);
+  const loadInfo = useCallback(() => {
+    apiShitScopeGetInfo()
+      .then((i) => {
+        setInfo(i);
+        if (i.status) setStatus(i.status);
+      })
+      .catch(() => setInfo(null));
+  }, []);
+  useEffect(loadInfo, [loadInfo]);
 
-  // Workflow step tracking
-  const [cachedStepId, setCachedStepId] = useState(0);
-  const [cachedTotalSteps, setCachedTotalSteps] = useState(undefined);
-  const [cachedStepName, setCachedStepName] = useState("");
+  const effOverlap = overlapPct > 0 ? overlapPct / 100 : info?.minOverlap || 0.25;
+  const effStepX = stepX > 0 ? stepX : info ? suggestStep(info.fovXUm, info.fullStepUm?.X, effOverlap) : 0;
+  const effStepY = stepY > 0 ? stepY : info ? suggestStep(info.fovYUm, info.fullStepUm?.Y, effOverlap) : 0;
+  const effPattern = pattern || info?.pattern || "raster";
 
-  // Redux state
-  const experimentState = useSelector(experimentSlice.getExperimentState);
-  const experimentWorkflowState = useSelector(
-    experimentStateSlice.getExperimentState
-  );
-  const experimentStatusState = useSelector(
-    experimentStatusSlice.getExperimentStatusState
-  );
-  const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
-  const objectiveState = useSelector(objectiveSlice.getObjectiveState);
-  const positionState = useSelector(positionSlice.getPositionState);
-
-  // Initialize the ShitScope layout on mount
+  // ── Polling: status every second; preview every 2 s while busy ─────────
+  const lastStateRef = useRef(status.state);
   useEffect(() => {
-    // Set the well layout to the shitscope single-area rectangle
-    dispatch(
-      experimentSlice.setWellLayout({
-        name: "ShitScope",
-        unit: "um",
-        width: SHITSCOPE_SCAN_WIDTH * 1.2, // Canvas padding
-        height: SHITSCOPE_SCAN_HEIGHT * 1.2,
-        wells: [
-          {
-            id: "A1",
-            name: "Scan Area",
-            shape: "rectangle",
-            x: SHITSCOPE_SCAN_WIDTH * 1.2 / 2,
-            y: SHITSCOPE_SCAN_HEIGHT * 1.2 / 2,
-            width: SHITSCOPE_SCAN_WIDTH,
-            height: SHITSCOPE_SCAN_HEIGHT,
-            row: 0,
-            col: 0,
-          },
-        ],
-      })
-    );
-
-    // Set mode to MOVE_CAMERA so canvas clicks move the stage instead of adding points
-    dispatch(wellSelectorSlice.setMode("camera"));
-    dispatch(wellSelectorSlice.setAreaSelectSnakescan(true));
-
-    // Create a single point covering the entire scan area
-    dispatch(experimentSlice.setPointList([]));
-    dispatch(
-      experimentSlice.createPoint({
-        x: SHITSCOPE_SCAN_WIDTH / 2,
-        y: SHITSCOPE_SCAN_HEIGHT / 2,
-        z: 0,
-        name: "ShitScope Scan",
-        shape: "rectangle",
-        rectPlusX: SHITSCOPE_SCAN_WIDTH / 2,
-        rectPlusY: SHITSCOPE_SCAN_HEIGHT / 2,
-        rectMinusX: SHITSCOPE_SCAN_WIDTH / 2,
-        rectMinusY: SHITSCOPE_SCAN_HEIGHT / 2,
-      })
-    );
+    let tick = 0;
+    const id = setInterval(async () => {
+      tick += 1;
+      try {
+        const s = await apiShitScopeGetStatus();
+        setStatus(s);
+        const wasBusy = BUSY_STATES.includes(lastStateRef.current);
+        lastStateRef.current = s.state;
+        if (BUSY_STATES.includes(s.state) && tick % 2 === 0) {
+          const p = await apiShitScopeGetPreview();
+          if (p.image) setPreview(p.image);
+        }
+        if (wasBusy && !BUSY_STATES.includes(s.state)) {
+          // finished: final (registered) preview + result
+          const p = await apiShitScopeGetPreview();
+          if (p.image) setPreview(p.image);
+          const r = await apiShitScopeGetResult();
+          setResult(r.success ? r : null);
+          notify(s.state === "error" ? `Scan failed: ${s.error}` : `Scan ${s.state}: ${s.tile}/${s.total} tiles`);
+        }
+      } catch (err) {
+        /* backend unreachable: keep last state */
+      }
+    }, 1000);
+    return () => clearInterval(id);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Periodic experiment status polling
-  useEffect(() => {
-    fetchGetExperimentStatus(dispatch);
-    const intervalId = setInterval(() => {
-      fetchGetExperimentStatus(dispatch);
-    }, 3000);
-    return () => clearInterval(intervalId);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Cache workflow step updates
-  useEffect(() => {
-    if (experimentWorkflowState.totalSteps !== undefined) {
-      setCachedTotalSteps(experimentWorkflowState.totalSteps);
-    }
-    if (experimentWorkflowState.stepId !== undefined) {
-      setCachedStepId(experimentWorkflowState.stepId);
-    }
-    if (experimentWorkflowState.stepName !== undefined) {
-      setCachedStepName(experimentWorkflowState.stepName);
-    }
-  }, [
-    experimentWorkflowState.totalSteps,
-    experimentWorkflowState.stepId,
-    experimentWorkflowState.stepName,
-  ]);
-
-  // Progress calculation
-  const progress =
-    cachedTotalSteps && cachedTotalSteps > 0
-      ? Math.floor((cachedStepId / cachedTotalSteps) * 100)
-      : 0;
-
-  const isRunning = experimentStatusState.status === Status.RUNNING;
-  const isIdle = experimentStatusState.status === Status.IDLE;
-
-  // FOV info (needed by handleStart and the tile editor UI)
-  const fovX = objectiveState.fovX || 0;
-  const fovY = objectiveState.fovY || 0;
-  const pixelSize = objectiveState.pixelsize || 0;
-
-  // Keep stepSizeX/Y in sync with FOV as the suggested default (only while
-  // the user has not manually overridden them, i.e. while they equal 0).
-  useEffect(() => {
-    if (fovX > 0 && stepSizeX === 0) setStepSizeX(fovX);
-  }, [fovX]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (fovY > 0 && stepSizeY === 0) setStepSizeY(fovY);
-  }, [fovY]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const tilesX_computed = fovX > 0 ? Math.ceil(SHITSCOPE_SCAN_WIDTH / fovX) : "?";
-  const tilesY_computed = fovY > 0 ? Math.ceil(SHITSCOPE_SCAN_HEIGHT / fovY) : "?";
-  const totalTiles_computed =
-    typeof tilesX_computed === "number" && typeof tilesY_computed === "number"
-      ? tilesX_computed * tilesY_computed
-      : "?";
-
-  // ── Start experiment ───────────────────────────────────────────────────
-  const handleStart = useCallback(async () => {
+  const handleStart = async () => {
     try {
-      // ── TILE EDITOR MODE ─────────────────────────────────────────────
-      if (activeTab === 1) {
-        const numX = Math.max(1, Math.round(tilesX));
-        const numY = Math.max(1, Math.round(tilesY));
-        const sX = stepSizeX > 0 ? stepSizeX : fovX;
-        const sY = stepSizeY > 0 ? stepSizeY : fovY;
-        if (sX <= 0 || sY <= 0) throw new Error('Tile Editor requires a positive step size (set Step X/Y or ensure FOV is available).');
-        const snakePositions = buildTileEditorSnakePositions(
-          positionState.x,
-          positionState.y,
-          numX,
-          numY,
-          sX,
-          sY,
-        );
-
-        const scanArea = {
-          areaId: "tile_editor_scan",
-          areaName: "Tile Editor Scan",
-          areaType: "tile_scan",
-          wellId: null,
-          centerPosition: {
-            x: positionState.x + ((numX - 1) * sX) / 2,
-            y: positionState.y + ((numY - 1) * sY) / 2,
-            z: 0,
-          },
-          bounds: {
-            minX: positionState.x,
-            maxX: positionState.x + (numX - 1) * sX,
-            minY: positionState.y,
-            maxY: positionState.y + (numY - 1) * sY,
-            width: (numX - 1) * sX,
-            height: (numY - 1) * sY,
-          },
-          scanPattern: "snake",
-          positions: snakePositions.map((pos, idx) => ({ ...pos, index: idx })),
-        };
-
-        const pointList = [
-          {
-            id: "tile_editor_scan",
-            name: "Tile Editor Scan",
-            x: scanArea.centerPosition.x,
-            y: scanArea.centerPosition.y,
-            z: 0,
-            iX: 0,
-            iY: 0,
-            wellId: null,
-            areaType: "tile_scan",
-            neighborPointList: snakePositions.map((pos) => ({
-              x: pos.x,
-              y: pos.y,
-              z: 0,
-              iX: pos.iX,
-              iY: pos.iY,
-            })),
-          },
-        ];
-
-        const channelEnabled =
-          experimentState.parameterValue.channelEnabledForExperiment || [];
-        const rawIntensities =
-          experimentState.parameterValue.illuIntensities || [];
-        const filteredIntensities = rawIntensities.map((val, idx) =>
-          channelEnabled[idx] === true ? val : 0
-        );
-
-        const experimentRequest = {
-          name: experimentState.name || "ShitScope_TileEditor",
-          parameterValue: {
-            ...experimentState.parameterValue,
-            illuIntensities: filteredIntensities,
-            resortPointListToSnakeCoordinates: false,
-            is_snakescan: true,
-            overlapWidth: 0,
-            overlapHeight: 0,
-          },
-          scanAreas: [scanArea],
-          scanMetadata: {
-            totalPositions: snakePositions.length,
-            fovX: fovX,
-            fovY: fovY,
-            overlapWidth: 0,
-            overlapHeight: 0,
-            scanPattern: "snake",
-          },
-          pointList,
-        };
-
-        console.log(
-          `[ShitScope TileEditor] ${numX}×${numY} = ${snakePositions.length} tiles, step ${sX}×${sY} µm`
-        );
-
-        await apiExperimentControllerStartWellplateExperiment(experimentRequest);
-        dispatch(experimentStatusSlice.setStatus(Status.RUNNING));
-
-        if (infoPopupRef.current) {
-          infoPopupRef.current.showMessage(
-            `Tile scan started: ${numX}×${numY} = ${snakePositions.length} tiles`
-          );
-        }
-        return;
-      }
-
-      // ── OVERVIEW MODE (existing flow) ────────────────────────────────
-      // Step 1: Sync state – raster scan (never snake)
-      dispatch(experimentSlice.setIsSnakescan(true  ));
-      dispatch(
-        experimentSlice.setOverlapWidth(wellSelectorState.areaSelectOverlap)
-      );
-      dispatch(
-        experimentSlice.setOverlapHeight(wellSelectorState.areaSelectOverlap)
-      );
-
-      // Step 2: "We are here" – use current stage position as scan center so
-      // the scan starts from where the stage currently is without homing.
-      const weAreHerePoint = experimentState.pointList[0]
-        ? {
-            ...experimentState.pointList[0],
-            x: positionState.x,
-            y: positionState.y,
-          }
-        : null;
-      if (weAreHerePoint) {
-        // Also update canvas visualisation
-        dispatch(
-          experimentSlice.replacePoint({ index: 0, newPoint: weAreHerePoint })
-        );
-      }
-
-      // Step 3: Calculate scan coordinates using current stage position
-      const scanExperimentState = weAreHerePoint
-        ? { ...experimentState, pointList: [weAreHerePoint] }
-        : experimentState;
-
-      const scanConfig = coordinateCalculator.calculateScanCoordinates(
-        scanExperimentState,
-        objectiveState,
-        wellSelectorState
-      );
-
-      console.log(
-        `[ShitScope] Scan: ${scanConfig.scanAreas.length} areas, ${scanConfig.metadata.totalPositions} positions`
-      );
-
-      // Step 4: Filter illumination intensities
-      const channelEnabled =
-        scanExperimentState.parameterValue.channelEnabledForExperiment || [];
-      const rawIntensities =
-        scanExperimentState.parameterValue.illuIntensities || [];
-      const filteredIntensities = rawIntensities.map((val, idx) =>
-        channelEnabled[idx] === true ? val : 0
-      );
-
-      // Step 5: Build experiment request
-      const experimentRequest = {
-        name: scanExperimentState.name || "ShitScope_Scan",
-        parameterValue: {
-          ...scanExperimentState.parameterValue,
-          illuIntensities: filteredIntensities,
-          resortPointListToSnakeCoordinates: false,
-          is_snakescan: true, // always raster
-          overlapWidth: wellSelectorState.areaSelectOverlap,
-          overlapHeight: wellSelectorState.areaSelectOverlap,
-        },
-        scanAreas: scanConfig.scanAreas,
-        scanMetadata: scanConfig.metadata,
-        pointList: coordinateCalculator.convertToBackendFormat(
-          scanConfig,
-          scanExperimentState
-        ).pointList,
-      };
-
-      // Step 6: Send to backend
-      await apiExperimentControllerStartWellplateExperiment(experimentRequest);
-      dispatch(experimentStatusSlice.setStatus(Status.RUNNING));
-
-      if (infoPopupRef.current) {
-        infoPopupRef.current.showMessage("ShitScope scan started!");
-      }
-    } catch (err) {
-      console.error("[ShitScope] Start failed:", err);
-      if (infoPopupRef.current) {
-        infoPopupRef.current.showMessage(
-          "Failed to start scan: " + (err.message || "Unknown error")
-        );
-      }
-    }
-  }, [
-    dispatch,
-    activeTab,
-    tilesX,
-    tilesY,
-    stepSizeX,
-    stepSizeY,
-    fovX,
-    fovY,
-    experimentState,
-    objectiveState,
-    positionState,
-    wellSelectorState,
-  ]);
-
-  // ── Stop experiment ────────────────────────────────────────────────────
-  const handleStop = useCallback(() => {
-    apiExperimentControllerStopExperiment()
-      .then(() => {
-        dispatch(experimentStatusSlice.setStatus(Status.IDLE));
-        if (infoPopupRef.current) {
-          infoPopupRef.current.showMessage("Scan stopped.");
-        }
-      })
-      .catch((err) => {
-        console.error("[ShitScope] Stop failed:", err);
+      const r = await apiShitScopeStartScan({
+        nx: tilesX, ny: tilesY, stepXUm: stepX, stepYUm: stepY, centered, homeFirst, returnToStart,
+        pattern: effPattern, overlap: overlapPct / 100, speed, settleMs,
       });
-  }, [dispatch]);
+      if (!r.success) throw new Error(r.error);
+      setResult(null);
+      setPreview(null);
+      setScanPlan(r.plan || null);
+      setStatus({ state: homeFirst ? "homing" : "running", tile: 0, total: r.tiles });
+      lastStateRef.current = "running";
+      notify(`Scan started: ${r.tiles} tiles, ${fmt(r.stepXUm)} × ${fmt(r.stepYUm)} µm steps (${r.pattern})`);
+    } catch (err) {
+      notify("Failed to start scan: " + (err.message || "unknown error"));
+    }
+  };
+
+  const handleStop = () => apiShitScopeStopScan().catch(() => notify("Stop failed"));
+
+  const handleReanalyze = async () => {
+    setIsAnalyzing(true);
+    try {
+      const r = await apiShitScopeAnalyzeScan();
+      if (!r.success) throw new Error(r.error);
+      setResult(r);
+      const p = await apiShitScopeGetPreview();
+      if (p.image) setPreview(p.image);
+    } catch (err) {
+      notify("Analysis failed: " + (err.message || "unknown error"));
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    try {
+      const r = await apiShitScopeExportFullRes();
+      if (!r.success) throw new Error(r.error);
+      notify(`Full-resolution mosaic saved: ${r.shape.join(" × ")} px, ${r.sizeMB} MB → ${r.path}`);
+    } catch (err) {
+      notify("Export failed: " + (err.message || "unknown error"));
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const fillPresetArea = () => {
+    if (effStepX > 0 && info?.fovXUm) setTilesX(Math.max(1, Math.ceil((PRESET_AREA_X - info.fovXUm) / effStepX) + 1));
+    if (effStepY > 0 && info?.fovYUm) setTilesY(Math.max(1, Math.ceil((PRESET_AREA_Y - info.fovYUm) / effStepY) + 1));
+  };
+
+  // Grid the next scan would take (mirrors shitscope_scan.plan_grid), drawn on the PCB map
+  const plannedTiles = [];
+  if (info && effStepX > 0 && effStepY > 0) {
+    const x0 = (pos.x || 0) - (centered ? ((tilesX - 1) * effStepX) / 2 : 0);
+    const y0 = (pos.y || 0) - (centered ? ((tilesY - 1) * effStepY) / 2 : 0);
+    for (let iy = 0; iy < tilesY; iy++)
+      for (let ix = 0; ix < tilesX; ix++) plannedTiles.push({ x: x0 + ix * effStepX, y: y0 + iy * effStepY });
+  }
+
+  const areaX = info ? (tilesX - 1) * effStepX + info.fovXUm : 0;
+  const areaY = info ? (tilesY - 1) * effStepY + info.fovYUm : 0;
+  const overlapX = info?.fovXUm ? 1 - effStepX / info.fovXUm : 0;
+  const overlapY = info?.fovYUm ? 1 - effStepY / info.fovYUm : 0;
+  const progress = status.total ? (100 * status.tile) / status.total : 0;
+  const q = result?.summary || null;
+  const gaps = q && ((q.min_overlap_x ?? 1) < 0 || (q.min_overlap_y ?? 1) < 0);
 
   return (
     <Box sx={{ width: "100%", p: 1 }}>
-      {/* Header */}
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          mb: 1,
-        }}
-      >
-        <Typography variant="h5" sx={{ fontWeight: "bold" }}>
-          ShitScope
-        </Typography>
-      </Box>
+      <Typography variant="h5" sx={{ fontWeight: "bold", mb: 1 }}>
+        ShitScope
+      </Typography>
 
-      {/* Scan info chips */}
-      <Box sx={{ display: "flex", gap: 1, mb: 2, flexWrap: "wrap" }}>
-        <Chip
-          label={`Scan Area: ${SHITSCOPE_SCAN_WIDTH / 1000} × ${SHITSCOPE_SCAN_HEIGHT / 1000} mm`}
-          variant="outlined"
-          size="small"
-        />
-        <Chip
-          label={`FOV: ${(fovX / 1000).toFixed(1)} × ${(fovY / 1000).toFixed(1)} mm`}
-          variant="outlined"
-          size="small"
-          color="info"
-        />
-        <Chip
-          label={`Pixel Size: ${pixelSize.toFixed(2)} µm`}
-          variant="outlined"
-          size="small"
-          color="info"
-        />
-        <Chip
-          label={`Tiles (overview): ${tilesX_computed} × ${tilesY_computed} = ${totalTiles_computed}`}
-          variant="outlined"
-          size="small"
-          color="secondary"
-        />
-      </Box>
+      {!info && (
+        <Alert severity="warning" sx={{ mb: 1 }}>
+          ShitScopeController not reachable. Add "ShitScope" to availableWidgets in the setup file.
+        </Alert>
+      )}
+      {info && !info.stageAvailable && (
+        <Alert severity="error" sx={{ mb: 1 }}>
+          No stage available: check the stage's serial connection and restart ImSwitch.
+        </Alert>
+      )}
+      {info && (
+        <Box sx={{ display: "flex", gap: 1, mb: 2, flexWrap: "wrap" }}>
+          <Chip size="small" variant="outlined" color="info"
+                label={`FOV: ${fmt(info.fovXUm / 1000, 2)} × ${fmt(info.fovYUm / 1000, 2)} mm`} />
+          <Chip size="small" variant="outlined" color="info" label={`Pixel: ${fmt(info.umPerPx, 3)} µm`} />
+          {info.fullStepUm && (
+            <Chip size="small" variant="outlined"
+                  label={`Full step: ${fmt(info.fullStepUm.X)} / ${fmt(info.fullStepUm.Y)} µm`} />
+          )}
+          <Chip size="small" variant="outlined" color="secondary"
+                label={`Scan area: ${fmt(areaX / 1000, 1)} × ${fmt(areaY / 1000, 1)} mm`} />
+          <Chip size="small" color={overlapX < info.minOverlap - 1e-6 || overlapY < info.minOverlap - 1e-6 ? "warning" : "default"}
+                label={`Overlap: ${fmt(overlapX * 100)} / ${fmt(overlapY * 100)} %`} />
+        </Box>
+      )}
 
-      {/* Main layout: canvas + live view + controls */}
       <Box sx={{ display: "flex", gap: 2 }}>
-        {/* Left panel: tabbed (Overview / Tile Editor) + live view */}
-        <Box sx={{ flex: 3, display: "flex", flexDirection: "row", gap: 1 }}>
-          <Box sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
-            {/* Tab bar */}
-            <Tabs
-              value={activeTab}
-              onChange={(_, v) => setActiveTab(v)}
-              sx={{ mb: 1, minHeight: 36 }}
-              variant="fullWidth"
-            >
-              <Tab label="Overview – click to move" sx={{ minHeight: 36, py: 0.5 }} />
-              <Tab label="Tile Editor" sx={{ minHeight: 36, py: 0.5 }} />
-            </Tabs>
-
-            {/* Tab 0: Overview canvas */}
-            {activeTab === 0 && (
-              <Box sx={{ minHeight: 220 }}>
-                <WellSelectorCanvas ref={canvasRef} />
-              </Box>
-            )}
-
-            {/* Tab 1: Tile Editor */}
-            {activeTab === 1 && (
-              <Box sx={{ p: 1 }}>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                  Set number of tiles and step size. The scan starts from the
-                  current stage position and runs in a snake pattern.
-                </Typography>
-
-                <Box sx={{ display: "flex", gap: 2, mb: 2 }}>
-                  <TextField
-                    label="Tiles X"
-                    type="number"
-                    size="small"
-                    value={tilesX}
-                    onChange={(e) => setTilesX(Math.max(1, parseInt(e.target.value) || 1))}
-                    inputProps={{ min: 1, step: 1 }}
-                    sx={{ flex: 1 }}
-                    disabled={isRunning}
-                  />
-                  <TextField
-                    label="Tiles Y"
-                    type="number"
-                    size="small"
-                    value={tilesY}
-                    onChange={(e) => setTilesY(Math.max(1, parseInt(e.target.value) || 1))}
-                    inputProps={{ min: 1, step: 1 }}
-                    sx={{ flex: 1 }}
-                    disabled={isRunning}
-                  />
-                </Box>
-
-                <Box sx={{ display: "flex", gap: 2, mb: 2 }}>
-                  <TextField
-                    label="Step X (µm)"
-                    type="number"
-                    size="small"
-                    value={stepSizeX}
-                    onChange={(e) => setStepSizeX(parseFloat(e.target.value) || 0)}
-                    helperText={fovX > 0 ? `Suggested: ${fovX.toFixed(1)} µm (FOV)` : ""}
-                    inputProps={{ min: 1, step: 1 }}
-                    sx={{ flex: 1 }}
-                    disabled={isRunning}
-                  />
-                  <TextField
-                    label="Step Y (µm)"
-                    type="number"
-                    size="small"
-                    value={stepSizeY}
-                    onChange={(e) => setStepSizeY(parseFloat(e.target.value) || 0)}
-                    helperText={fovY > 0 ? `Suggested: ${fovY.toFixed(1)} µm (FOV)` : ""}
-                    inputProps={{ min: 1, step: 1 }}
-                    sx={{ flex: 1 }}
-                    disabled={isRunning}
-                  />
-                </Box>
-
-                <Divider sx={{ my: 1 }} />
-
-                {/* Computed summary */}
-                <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
-                  <Chip
-                    label={`Total tiles: ${tilesX * tilesY}`}
-                    size="small"
-                    color="primary"
-                  />
-                  <Chip
-                    label={`Scan area: ${((tilesX * (stepSizeX || fovX)) / 1000).toFixed(2)} × ${((tilesY * (stepSizeY || fovY)) / 1000).toFixed(2)} mm`}
-                    size="small"
-                    color="secondary"
-                  />
-                  <Chip
-                    label={`Base: (${positionState.x?.toFixed(0) ?? "?"}, ${positionState.y?.toFixed(0) ?? "?"}) µm`}
-                    size="small"
-                    variant="outlined"
-                  />
-                </Box>
-              </Box>
-            )}
-          </Box>
-
+        {/* Left: overview (click to move) + live view */}
+        <Box sx={{ flex: 3, display: "flex", gap: 1 }}>
           <Box sx={{ flex: 1, minHeight: 220 }}>
             <Typography variant="caption" color="text.secondary">
-              Live View
+              PCB stage – click the slide to move · <b>right-click where the camera really is</b> to re-align the slide ("we are here")
             </Typography>
+            <ShitScopeStageMap tiles={busy && scanPlan ? scanPlan : plannedTiles}
+                               doneTiles={busy ? status.tile : 0} disabled={busy}
+                               fovUm={{ x: info?.fovXUm || 0, y: info?.fovYUm || 0 }} />
+          </Box>
+          <Box sx={{ flex: 1, minHeight: 220 }}>
+            <Typography variant="caption" color="text.secondary">Live View</Typography>
             <LiveViewControlWrapper />
           </Box>
         </Box>
 
-        {/* Right panel: Controls */}
-        <Box sx={{ flex: 1, minWidth: 240 }}>
+        {/* Right: scan control */}
+        <Box sx={{ flex: 1, minWidth: 260 }}>
           <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Scan Control
-            </Typography>
+            <Typography variant="h6" gutterBottom>Scan</Typography>
+            <Box sx={{ display: "flex", gap: 1, mb: 1.5 }}>
+              <TextField label="Tiles X" type="number" size="small" value={tilesX} disabled={busy}
+                         onChange={(e) => setTilesX(Math.max(1, parseInt(e.target.value) || 1))} />
+              <TextField label="Tiles Y" type="number" size="small" value={tilesY} disabled={busy}
+                         onChange={(e) => setTilesY(Math.max(1, parseInt(e.target.value) || 1))} />
+            </Box>
+            <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
+              <TextField label="Step X (µm)" type="number" size="small" value={stepX || ""} disabled={busy}
+                         placeholder={fmt(effStepX)} helperText="empty = suggested"
+                         onChange={(e) => setStepX(parseFloat(e.target.value) || 0)} />
+              <TextField label="Step Y (µm)" type="number" size="small" value={stepY || ""} disabled={busy}
+                         placeholder={fmt(effStepY)} helperText="empty = suggested"
+                         onChange={(e) => setStepY(parseFloat(e.target.value) || 0)} />
+            </Box>
+            <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
+              <TextField select label="Pattern" size="small" value={effPattern} disabled={busy} sx={{ minWidth: 110 }}
+                         helperText={info?.pattern === "raster" ? "raster: one approach dir." : " "}
+                         onChange={(e) => setPattern(e.target.value)}>
+                <MenuItem value="raster">Raster</MenuItem>
+                <MenuItem value="snake">Snake</MenuItem>
+              </TextField>
+              <TextField label="Overlap (%)" type="number" size="small" value={overlapPct || ""} disabled={busy}
+                         placeholder={fmt((info?.minOverlap || 0.25) * 100)} helperText="sets the steps"
+                         inputProps={{ min: 0, max: 90 }}
+                         onChange={(e) => setOverlapPct(Math.min(90, Math.max(0, parseFloat(e.target.value) || 0)))} />
+            </Box>
+            <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
+              <TextField label="Speed (steps/s)" type="number" size="small" value={speed || ""} disabled={busy}
+                         placeholder="default"
+                         helperText={info?.maxSpeedSteps ? `stage cap ${info.maxSpeedSteps}` : "firmware max 2000"}
+                         onChange={(e) => setSpeed(Math.max(0, parseFloat(e.target.value) || 0))} />
+              <TextField label="Extra settle (ms)" type="number" size="small" value={settleMs || ""} disabled={busy}
+                         placeholder="0" helperText={`+ stage ${fmt(info?.defaultSettleMs)} ms, then a fresh frame`}
+                         onChange={(e) => setSettleMs(Math.max(0, parseFloat(e.target.value) || 0))} />
+            </Box>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1 }}>
+              <FormControlLabel
+                control={<Checkbox size="small" checked={centered} disabled={busy} onChange={(e) => setCentered(e.target.checked)} />}
+                label={<Typography variant="body2">Centred on position</Typography>} />
+              <Button size="small" onClick={fillPresetArea} disabled={busy || !info}>
+                Fill {PRESET_AREA_X / 1000}×{PRESET_AREA_Y / 1000} mm
+              </Button>
+            </Box>
 
-            {/* Status */}
-            <Alert severity={isRunning ? "info" : "success"} sx={{ mb: 2 }}>
-              {isRunning ? "Scan running" : "Ready"}
-            </Alert>
+            <FormControlLabel sx={{ mb: 1 }}
+              control={<Checkbox size="small" checked={homeFirst} disabled={busy} onChange={(e) => setHomeFirst(e.target.checked)} />}
+              label={<Typography variant="body2">Home before scan (−X/−Y stop, then scan in +X/+Y)</Typography>} />
+            <FormControlLabel sx={{ mb: 1 }}
+              control={<Checkbox size="small" checked={returnToStart} disabled={busy} onChange={(e) => setReturnToStart(e.target.checked)} />}
+              label={<Typography variant="body2">Move back to the start position after the scan</Typography>} />
 
-            {/* Start / Stop button */}
             <Box sx={{ display: "flex", gap: 1, mb: 2 }}>
-              <Button
-                variant="contained"
-                color="primary"
-                size="large"
-                fullWidth
-                startIcon={<PlayArrowIcon />}
-                onClick={handleStart}
-                disabled={!isIdle}
-              >
+              <Button variant="contained" size="large" fullWidth startIcon={<PlayArrowIcon />}
+                      onClick={handleStart} disabled={busy || !info?.stageAvailable}>
                 Start Scan
               </Button>
-
-              <Button
-                variant="contained"
-                color="error"
-                size="large"
-                startIcon={<StopIcon />}
-                onClick={handleStop}
-                disabled={!isRunning}
-              >
+              <Button variant="contained" color="error" size="large" startIcon={<StopIcon />}
+                      onClick={handleStop} disabled={status.state !== "running"}>
                 Stop
               </Button>
             </Box>
 
-            {/* Home button (manual) */}
-            <Button
-              variant="outlined"
-              fullWidth
-              startIcon={
-                isHoming ? (
-                  <CircularProgress size={16} color="inherit" />
-                ) : (
-                  <HomeIcon />
-                )
-              }
-              onClick={async () => {
-                setIsHoming(true);
-                try {
-                  await apiExperimentControllerHomeAllAxes();
-                  if (infoPopupRef.current) {
-                    infoPopupRef.current.showMessage("Homing complete.");
-                  }
-                } catch (err) {
-                  if (infoPopupRef.current) {
-                    infoPopupRef.current.showMessage("Homing failed.");
-                  }
-                } finally {
-                  setIsHoming(false);
-                }
-              }}
-              disabled={isRunning || isHoming}
-              sx={{ mb: 2 }}
-            >
-              Home All Axes
+            <Alert severity={status.state === "error" ? "error" : busy ? "info" : "success"} sx={{ mb: 1 }}>
+              {status.state === "error" ? status.error : busy ? `${status.state}…` : status.state === "idle" ? "Ready" : `Last scan: ${status.state}`}
+            </Alert>
+            <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+              <Typography variant="body2" color="text.secondary">
+                Tile {status.tile} / {status.total || "–"}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {fmtTime(status.elapsed_s)}{status.eta_s ? ` · ETA ${fmtTime(status.eta_s)}` : ""}
+              </Typography>
+            </Box>
+            <LinearProgress variant={status.state === "analysing" ? "indeterminate" : "determinate"}
+                            value={progress} sx={{ height: 8, borderRadius: 1, mb: 2 }} />
+
+            <Divider sx={{ mb: 2 }} />
+            <Button variant="outlined" fullWidth sx={{ mb: 1 }} disabled={busy || isHoming}
+                    startIcon={isHoming ? <CircularProgress size={16} color="inherit" /> : <HomeIcon />}
+                    onClick={async () => {
+                      setIsHoming(true);
+                      try {
+                        await apiExperimentControllerHomeAllAxes();
+                        notify("Homing complete.");
+                      } catch (err) {
+                        notify("Homing failed.");
+                      } finally {
+                        setIsHoming(false);
+                      }
+                    }}>
+              Home stage (−X/−Y stop)
             </Button>
-
-            {/* Overlap slider */}
-            <Box sx={{ mb: 2 }}>
-              <Typography variant="body2" gutterBottom>
-                Tile Overlap:{" "}
-                <strong>
-                  {Math.round((wellSelectorState.areaSelectOverlap || 0) * 100)}%
-                </strong>
-              </Typography>
-              <Slider
-                min={-50}
-                max={50}
-                step={1}
-                value={Math.round((wellSelectorState.areaSelectOverlap || 0) * 100)}
-                onChange={(_, v) => {
-                  const pct = v / 100;
-                  dispatch(wellSelectorSlice.setAreaSelectOverlap(pct));
-                  dispatch(experimentSlice.setOverlapWidth(pct));
-                  dispatch(experimentSlice.setOverlapHeight(pct));
-                }}
-                valueLabelDisplay="auto"
-                valueLabelFormat={(v) => `${v}%`}
-                disabled={isRunning || isHoming}
-                size="small"
-              />
-            </Box>
-
-            {/* Progress – always visible */}
-            <Box sx={{ mb: 2 }}>
-              <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.5 }}>
-                <Typography variant="body2" color="text.secondary" noWrap title={cachedStepName}>
-                  {isRunning ? cachedStepName || "Running…" : "Idle"}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {cachedStepId} / {cachedTotalSteps ?? "–"}
-                </Typography>
-              </Box>
-              <LinearProgress
-                variant="determinate"
-                value={progress}
-                color={isRunning ? "primary" : "inherit"}
-                sx={{ height: 8, borderRadius: 1 }}
-              />
-              <Typography variant="caption" color="text.secondary">
-                {isRunning
-                  ? `${progress}% complete`
-                  : progress > 0
-                  ? `Last scan: ${progress}% (${cachedStepId}/${cachedTotalSteps})`
-                  : "No scan data yet"}
-              </Typography>
-            </Box>
-
-            {/* Open latest scan in file manager */}
             {onOpenFileManager && (
-              <Button
-                variant="outlined"
-                fullWidth
-                startIcon={<FolderOpenIcon />}
-                onClick={() => onOpenFileManager("/ExperimentController")}
-                sx={{ mt: 1 }}
-              >
+              <Button variant="outlined" fullWidth startIcon={<FolderOpenIcon />}
+                      onClick={() => onOpenFileManager("/ShitScope")}>
                 Open Scans Folder
               </Button>
             )}
           </Paper>
         </Box>
       </Box>
+
+      {/* Mosaic + scan quality */}
+      <Paper sx={{ p: 2, mt: 2 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1 }}>
+          <Typography variant="h6">Mosaic &amp; Scan Quality</Typography>
+          <Button size="small" variant="outlined" onClick={handleReanalyze} disabled={busy || isAnalyzing || !status.outDir}
+                  startIcon={isAnalyzing ? <CircularProgress size={14} color="inherit" /> : <RefreshIcon />}>
+            Re-analyse last scan
+          </Button>
+          <Button size="small" variant="outlined" onClick={handleExport} disabled={busy || isExporting || !result}
+                  startIcon={isExporting ? <CircularProgress size={14} color="inherit" /> : <SaveAltIcon />}>
+            Export full resolution
+          </Button>
+          <Typography variant="caption" color="text.secondary">
+            {busy ? "Tiles at commanded positions (live)" : result ? "Tiles at measured positions (registered) · scroll/pinch to zoom, double-click to reset" : ""}
+          </Typography>
+        </Box>
+        {q && (
+          <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mb: 1 }}>
+            <Chip size="small" label={`Registered: ${q.tiles_solved}/${q.tiles}`}
+                  color={q.tiles_solved === q.tiles ? "success" : "warning"} />
+            <Chip size="small" label={`Max error: ${fmt(q.max_err_um)} µm`} />
+            <Chip size="small" label={`RMS error: ${fmt(q.rms_err_um)} µm`} />
+            <Chip size="small" label={`Step X: ${fmt(q.measured_step_x_um)} ± ${fmt(q.measured_step_x_sd)} µm (cmd ${fmt(q.step_x_um)})`} />
+            <Chip size="small" label={`Step Y: ${fmt(q.measured_step_y_um)} ± ${fmt(q.measured_step_y_sd)} µm (cmd ${fmt(q.step_y_um)})`} />
+            <Chip size="small" color={gaps ? "error" : "default"}
+                  label={`Min overlap: ${fmt((q.min_overlap_x ?? NaN) * 100)} / ${fmt((q.min_overlap_y ?? NaN) * 100)} %`} />
+            <Chip size="small" label={`Holes: ${fmt(q.holes_pct, 1)} %`} />
+            <Chip size="small" variant="outlined" label={`Registration: ${fmt(q.pair_rms_um, 1)} µm rms`} />
+            <Chip size="small" variant="outlined" label={`Rotation: ${fmt(q.rotation_deg, 2)}°`} />
+          </Box>
+        )}
+        <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "flex-start" }}>
+          {preview && (
+            <Box sx={{ maxWidth: 700, width: "100%", border: 1, borderColor: "divider", cursor: "grab" }}>
+              <TransformWrapper minScale={1} maxScale={16} wheel={{ step: 0.15 }} doubleClick={{ mode: "reset" }}>
+                <TransformComponent wrapperStyle={{ width: "100%" }} contentStyle={{ width: "100%" }}>
+                  <img src={preview} alt="Mosaic" style={{ width: "100%", imageRendering: "pixelated" }} />
+                </TransformComponent>
+              </TransformWrapper>
+            </Box>
+          )}
+          {result?.error_map && <img src={result.error_map} alt="Tile position error" style={{ maxWidth: 420, width: "100%" }} />}
+          {!preview && <Typography variant="body2" color="text.secondary">No scan yet.</Typography>}
+        </Box>
+        {status.outDir && (
+          <Typography variant="caption" color="text.secondary">
+            {status.outDir} · tiles/, stitched.tif, scan_quality.json
+          </Typography>
+        )}
+      </Paper>
+
+      <ShitScopeCalibrationPanel disabled={busy} />
 
       <InfoPopup ref={infoPopupRef} />
     </Box>

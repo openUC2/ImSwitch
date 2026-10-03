@@ -482,13 +482,19 @@ class PeakMetric(FocusMetricBase):
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
-            plt.figure()
-            plt.plot(zsig, label="zsig(MAD units)")
-            if len(peaks):
-                plt.plot(peaks, zsig[peaks], "x")
-            plt.title(f"peaks={len(peaks)} left={left_peak} right={right_peak}")
-            plt.legend()
-            plt.savefig("test.png")
+            # compute() runs per frame, so the figure MUST be closed: pyplot
+            # keeps every unclosed one alive and the focus lock would grow a
+            # figure per frame for as long as debug_plot is set.
+            fig = plt.figure()
+            try:
+                plt.plot(zsig, label="zsig(MAD units)")
+                if len(peaks):
+                    plt.plot(peaks, zsig[peaks], "x")
+                plt.title(f"peaks={len(peaks)} left={left_peak} right={right_peak}")
+                plt.legend()
+                plt.savefig("test.png")
+            finally:
+                plt.close(fig)
 
         return {
             "t": ts,

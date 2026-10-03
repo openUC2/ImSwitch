@@ -101,8 +101,14 @@ Always discover, never assume ([§3.3](#33-discovery)).
 ### Starting the server
 
 ```bash
-python main.py --headless --http-port 8001
+python -m imswitch --http-port 8001
 ```
+
+Use `python -m imswitch`, **not** `python main.py`. `main.py` calls `main(ssl=0)`, and `main()` parses
+the command line only when it gets no arguments, so `python main.py --config-file X ...` silently
+ignores every flag. It then starts the user's default setup from
+`~/ImSwitchConfig/config/imcontrol_options.json` against real hardware. There is no `--headless` flag;
+the server is always headless.
 
 Flags (`imswitch/__main__.py`):
 
@@ -119,8 +125,12 @@ Flags (`imswitch/__main__.py`):
 Hardware-free session for agents:
 
 ```bash
-python main.py --headless --no-ssl --http-port 8001 --config-file ~/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json
+python -m imswitch --no-ssl --http-port 8001 --config-file ~/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json
 ```
+
+Add `--config-folder` / `--data-folder` pointing at a scratch directory to keep a test session out of
+the user's config. Startup writes `config/imcontrol_options.json`, `modules.json` and overview
+registration files into the config folder.
 
 ---
 
@@ -141,6 +151,8 @@ imswitch/
       detectors/               cameras (Hik, Toupcam, Basler, PiCam, Virtual, MMCore, …)
       positioners/             stages (ESP32Stage, UC2CANOpen, MMCore, Virtual, …)
       lasers/ LEDs/ LEDMatrixs/ rotators/ galvoscanners/ rs232/
+    model/canbus/              UC2 CAN network + firmware (no ImSwitch imports; endpoints in
+                               controllers/uc2config/can_network_api.py)
     model/SetupInfo.py         setup-JSON schema (dataclasses)
     model/io/recording_service.py   SaveFormat / RecMode enums, writers
     _test/                     unit + api tests
@@ -509,6 +521,14 @@ Safe to read:
   `listPtzActions()`
 - `getDataPath()`, `isImSwitchRunning()`, `getOTAStatus`, `getOTADeviceMapping`,
   `listAvailableFirmware`, `listAllFirmwareFiles`, `getUSBFlashStatus`
+- `checkFirmwareUpdates(timeout, probe_range)` — installed vs server firmware version per
+  board (reads `<server>/version.json`; runs a CAN scan on a master). See
+  `docs/FIRMWARE_VERSIONING.md`.
+- `getRecommendedFirmware(port)` — the server image that fits a board, from its `/state_get`
+  identity. Empty port = ImSwitch's own board over the open link; another port is opened and
+  may reset that board.
+- `getFirmwareUpdateStatus`, `getFirmwareUpdatePrompt`, `getFirmwareCheckOnConnect`
+- `getPalletUpgradeStatus()` — systemd state + terminal output of the OS pallet upgrade
 
 Confirm before calling:
 
@@ -523,20 +543,26 @@ Confirm before calling:
   `resetTriggerTable`, `getDigitalIn`, `actDigitalIn`
 - Lifecycle: `espRestart`, `restartCANDevice`, `stopImSwitch`, `restartImSwitch`,
   `moveToSampleMountingPosition`
+- **OS upgrade (experimental, openUC2 OS only):** `startPalletUpgrade()` starts the host unit
+  `imswitch-pallet-upgrade.service` over the mounted D-Bus socket, which runs
+  `forklift plt upgrade --force && forklift stage apply` and recreates the ImSwitch container
 - **Firmware — highest risk:** `flashMasterFirmwareUSB(port, match, baud, firmware_filename)`,
-  `cancelUSBFlash`, `sendCanAddress`, `reassignCANId(new_id, mac, target)`,
-  `startSingleDeviceOTA(can_id, ssid, password, timeout)`, `startMultipleDeviceOTA`,
-  `startCANStreamingOTA(can_id, firmware_url, baud)`, `startMultipleCANStreamingOTA`,
-  `cancelCANStreamingOTA`, `setOTAWiFiCredentials`, `setOTAFirmwareServer`,
-  `clearOTAFirmwareCache`
+  `cancelUSBFlash`, `sendCanAddress`, `testDeviceAction` (moves a freshly flashed motor),
+  `reassignCANId(new_id, mac, target)`, `startCANStreamingOTA(can_id, firmware_url, baud)`,
+  `startMultipleCANStreamingOTA`, `cancelCANStreamingOTA`, `setOTAFirmwareServer`,
+  `clearOTAFirmwareCache`, `startFirmwareUpdate(can_ids, include_master)` (flashes every
+  listed board, master last over USB), `cancelFirmwareUpdate`, `setFirmwareCheckOnConnect`
+  (writes the setup JSON)
 
 Setup files (defined directly on the server, not via `@APIExport`):
 `returnAvailableSetups`, `getCurrentSetupFilename`, `readSetupFile(setupFileName)`,
 `writeNewSetupFile(...)` (POST), `setSetupFileName(setupFileName, restartSoftware)`,
 `getDiskUsage`, `is_connected`.
 
-Firmware/OTA background: `docs/CAN_OTA_UPDATE_GUIDE.md`, `docs/OTA_API_QUICKREF.md`,
-`docs/CAN_OTA_FIRMWARE_SERVER.md`.
+The CAN-network and firmware endpoints are thin wrappers
+(`controllers/uc2config/can_network_api.py`) around `imswitch/imcontrol/model/canbus`, which has no
+ImSwitch imports: bus scan, node ids, CAN streaming OTA, esptool flashing, the verified update. Firmware
+background: `docs/FIRMWARE_VERSIONING.md`. WiFi OTA (the device downloads over WiFi) was removed.
 
 ### 4.12 Specialised imaging modes
 
@@ -559,6 +585,12 @@ Present only when the setup enables them. Discover with `getAvailableControllers
 | `MMCoreController` | Micro-Manager device layer |
 | `WellPlateController` (`moveToXY(wellID)`), `SquidStageScanController`, `StageScanAcquisitionController` | Plate/stage scanning |
 | `HyphaController`, `ArkitektController`, `SiLa2Controller`, `WebRTCController` | External integrations |
+
+`ArkitektController` (`docs/ARKITEKT.md`): `getArkitektStatus`, `bindArkitekt(url)` (device-code
+login, returns at once), `cancelArkitekt`, `unbindArkitekt` (forgets the stored login),
+`setArkitektSettings`, `getArkitektUploads`. Binding is network-only, but once connected the server
+can call the declared actions, which move the stage and switch illumination. **Ask first** before
+binding a real instrument.
 | `StresstestController`, `DebugController`, `DemoController`, `AcceptanceTestController` | Diagnostics and self-test |
 
 ---

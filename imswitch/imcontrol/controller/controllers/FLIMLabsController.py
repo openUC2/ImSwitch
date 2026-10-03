@@ -128,6 +128,7 @@ class FLIMLabsController(ImConWidgetController):
             # file); otherwise they are the static setup value.
             'pixelSizeUm': det.pixelSizeUm,
             'fovUm': det.fovUm,
+            'scannerCalibration': det.umPerDacInfo,
             'parameters': {
                 'dwell_time': det.parameters['dwell_time'].value,
                 'frames_to_integrate': det.parameters['frames_to_integrate'].value,
@@ -504,7 +505,7 @@ class FLIMLabsController(ImConWidgetController):
             'detectorName', 'serverUrl', 'cardSerial', 'step', 'firmware',
             'frameNumber', 'imageWidth', 'imageHeight', 'scanWidth',
             'scanHeight', 'calibrationReference', 'galvoScanner',
-            'pixelSizeUm', 'fovUm', 'parameters', 'cps')}
+            'pixelSizeUm', 'fovUm', 'scannerCalibration', 'parameters', 'cps')}
         meta['savedAt'] = stamp
         meta['maxCount'] = int(frame.max())
         metaPath = os.path.join(outDir, f'{base}_meta.json')

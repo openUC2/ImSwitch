@@ -70,7 +70,9 @@ const FreeNumberField = ({
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
-      e.currentTarget.blur();
+      // e.target, not e.currentTarget: TextField puts onKeyDown on its wrapper
+      // div, and blurring that did nothing, so Enter never committed.
+      e.target.blur();
     }
   };
 

@@ -211,7 +211,7 @@ const MobileSystemPage = () => {
           <Box sx={{ mb: 1.5 }}>
             <ConnectionDot ok={uc2State.uc2Connected} labelOn="Connected" labelOff="Not connected" />
           </Box>
-          <InfoRow label="Firmware" value={firmwareInfo?.version} />
+          <InfoRow label="Firmware" value={firmwareInfo?.fwVersion || firmwareInfo?.version} />
           <InfoRow label="Build date" value={firmwareInfo?.date} />
           <InfoRow label="Serial port" value={firmwareInfo?.serialport} />
           <InfoRow

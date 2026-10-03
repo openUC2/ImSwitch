@@ -331,6 +331,8 @@ const WellPlateWorkspace = () => {
       label: "Plate Map",
       icon: <GridViewIcon />,
       help: "Pan/zoom plate map. Select positions, draw scan areas, move the camera — selections flow straight into the experiment on the right.",
+      // Kept mounted, hidden rather than unmounted (see the render below).
+      keepMounted: true,
       render: () => <WellSelectorComponent />,
     },
     {
@@ -483,7 +485,19 @@ const WellPlateWorkspace = () => {
               overscrollBehavior: "contain",
             }}
           >
-            {active.render()}
+            {/* Viewports flagged keepMounted stay in the DOM and are merely
+                hidden, because their pan/zoom and any half-drawn freehand
+                region live in component state and are lost on unmount. The
+                heavy ones (camera, overview, 3D twin) stay conditional so
+                their streams still start and stop on demand. */}
+            {viewports.map((vp, index) =>
+              vp.keepMounted ? (
+                <Box key={vp.key} hidden={index !== viewport}>
+                  {vp.render()}
+                </Box>
+              ) : null,
+            )}
+            {!active.keepMounted && active.render()}
           </Box>
         </Box>
 

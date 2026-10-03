@@ -1,0 +1,264 @@
+"""ShitScope: dedicated tile scan with live preview, registration and stitching.
+
+Loaded when "ShitScope" is in the setup's availableWidgets. The scan itself
+(move -> fresh frame -> save -> preview, then register + stitch) lives in
+imswitch.imcontrol.model.shitscope_scan and is tested standalone; this
+controller only wires it to the detector, the stage and the REST API.
+
+Results of each scan: <data>/ShitScope/<timestamp>/{tiles/, scan.json,
+tiles.json, scan_quality.json, stitched.tif}.
+"""
+import os
+import threading
+import time
+from typing import Dict, Optional
+
+from imswitch.imcommon.model import APIExport, dirtools, initLogger
+from imswitch.imcontrol.model import shitscope_calibration, shitscope_scan
+from ..basecontrollers import ImConWidgetController
+
+
+class ShitScopeController(ImConWidgetController):
+    """Tile scans for the ShitScope (PCB planar stage)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._logger = initLogger(self)
+        self._scan: Optional[shitscope_scan.ShitScopeScan] = None
+        self._cal: Optional[shitscope_calibration.StageCalibration] = None
+        self._last_dir: str = ""
+
+    # ------------------------------------------------------------ hardware
+    def _detector(self):
+        name = self._master.detectorsManager.getCurrentDetectorName()
+        return self._master.detectorsManager[name]
+
+    def _stage(self):
+        """First positioner, or None when none initialised (e.g. serial port missing)."""
+        names = self._master.positionersManager.getAllDeviceNames()
+        return self._master.positionersManager[names[0]] if names else None
+
+    def _um_per_px(self) -> float:
+        try:
+            v = float(self._detector().pixelSizeUm[-1])
+            return v if v > 0 else 1.0
+        except Exception:
+            return 1.0
+
+    def _hints(self) -> Dict:
+        stage = self._stage()
+        if stage is None:
+            return {}
+        try:
+            return stage.getScanHints() if hasattr(stage, "getScanHints") else {}
+        except Exception as exc:
+            self._logger.warning(f"Stage scan hints unavailable: {exc}")
+            return {}
+
+    # ------------------------------------------------------------ API
+    @APIExport()
+    def getShitScopeInfo(self) -> Dict:
+        """Pixel size, field of view, stage hints and suggested tile steps."""
+        det, px = self._detector(), self._um_per_px()
+        w, h = (list(det.shape) + [0, 0])[:2]
+        hints = self._hints()
+        min_overlap = float(hints.get("recommendedMinOverlap", 0.25))
+        full = hints.get("fullStepUm") or {}
+        fov_x, fov_y = w * px, h * px
+        return {
+            "umPerPx": px, "fovXUm": fov_x, "fovYUm": fov_y,
+            "minOverlap": min_overlap,
+            "pattern": hints.get("recommendedPattern", "snake"),
+            "fullStepUm": full or None,
+            "suggestedStepXUm": shitscope_scan.suggested_step(fov_x, full.get("X"), min_overlap),
+            "suggestedStepYUm": shitscope_scan.suggested_step(fov_y, full.get("Y"), min_overlap),
+            "stageHints": hints,
+            "maxSpeedSteps": hints.get("maxSpeedSteps"),
+            "defaultSettleMs": hints.get("settleMs", 0),
+            "stageAvailable": self._stage() is not None,
+            "status": self.getShitScopeStatus(),
+        }
+
+    @APIExport()
+    def startShitScopeScan(self, nx: int = 3, ny: int = 3, stepXUm: float = 0.0, stepYUm: float = 0.0,
+                           pattern: str = "", centered: bool = True, returnToStart: bool = True,
+                           homeFirst: bool = False, overlap: float = 0.0, speed: float = 0.0,
+                           settleMs: float = 0.0) -> Dict:
+        """Start a tile scan around (centered=True) or from the current position.
+        homeFirst: drive into the -X/-Y stop first (position -> 0), then scan the
+        same grid; the grid only makes sense if the stage was homed before.
+        overlap: fraction (0..0.9) used for the suggested steps (0 = stage recommendation).
+        speed: stage speed in steps/s (0 = stage default; capped by maxSpeedSteps).
+        settleMs: extra wait after each move before the frame is taken (on top of
+        the stage's own settleMs and the wait for a frame exposed after the move).
+        Steps of 0 use the suggested steps (whole stage full steps, min overlap);
+        an empty pattern uses the stage's recommendation (raster for the PCB stage)."""
+        if self._calibrating():
+            return {"success": False, "error": "A stage calibration is running"}
+        if self._scan is not None and self._scan.state in ("homing", "running", "analysing"):
+            return {"success": False, "error": "A scan is already running"}
+        if self._stage() is None:
+            return {"success": False, "error": "No stage available (check the stage's serial connection)"}
+        info = self.getShitScopeInfo()
+        ov = min(max(float(overlap), 0.0), 0.9) or info["minOverlap"]
+        full = info["fullStepUm"] or {}
+        sx = float(stepXUm) if stepXUm > 0 else shitscope_scan.suggested_step(info["fovXUm"], full.get("X"), ov)
+        sy = float(stepYUm) if stepYUm > 0 else shitscope_scan.suggested_step(info["fovYUm"], full.get("Y"), ov)
+        if sx <= 0 or sy <= 0:
+            return {"success": False, "error": "No step size (field of view unknown); pass stepXUm/stepYUm"}
+        nx, ny = max(1, int(nx)), max(1, int(ny))
+        pos = self._stage().getPosition()
+        plan = shitscope_scan.plan_grid(pos["X"], pos["Y"], nx, ny, sx, sy,
+                                        pattern or info["pattern"], centered=bool(centered))
+        out_dir = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "ShitScope",
+                               time.strftime("%Y%m%d_%H%M%S"))
+        det_mgr = self._master.detectorsManager
+        # The live view starts the camera without a handle; taking one and
+        # releasing it afterwards would stop the camera and kill the stream.
+        handle = None if getattr(self._detector(), "_running", False) else det_mgr.startAcquisition()
+        self._scan = shitscope_scan.ShitScopeScan(
+            self._detector(), self._stage(), out_dir, info["umPerPx"], plan,
+            return_to_start=bool(returnToStart), logger=self._logger.error,
+            on_done=lambda: handle is not None and det_mgr.stopAcquisition(handle),
+            speed=float(speed) or None, settle_s=float(settleMs) / 1000,
+            home=self._stage().home if homeFirst and hasattr(self._stage(), "home") else None)
+        self._last_dir = out_dir
+        self._scan.start()
+        self._logger.info(f"ShitScope scan {nx}x{ny}, step {sx:.0f}x{sy:.0f} µm -> {out_dir}")
+        return {"success": True, "outDir": out_dir, "tiles": len(plan), "stepXUm": sx, "stepYUm": sy,
+                "plan": plan, "homeFirst": bool(homeFirst), "overlap": ov,
+                "pattern": pattern or info["pattern"]}
+
+    @APIExport()
+    def stopShitScopeScan(self) -> Dict:
+        """Stop after the current tile; the tiles taken so far are kept and registered."""
+        if self._scan is None:
+            return {"success": False, "error": "No scan"}
+        self._scan.stop(join_s=0)
+        return {"success": True}
+
+    @APIExport()
+    def getShitScopeStatus(self) -> Dict:
+        """state (idle/homing/running/analysing/done/stopped/error), tile k of n, ETA, summary when done."""
+        if self._scan is None:
+            return {"state": "idle", "tile": 0, "total": 0, "outDir": self._last_dir}
+        return self._scan.status()
+
+    @APIExport()
+    def getShitScopePreview(self) -> Dict:
+        """Live mosaic (PNG data URL): commanded positions while scanning,
+        measured positions after registration."""
+        if self._scan is None:
+            return {"image": None}
+        return {"image": self._scan.preview_png(), "registered": self._scan.result is not None}
+
+    @APIExport()
+    def getShitScopeResult(self) -> Dict:
+        """Registration result of the last scan: summary, per-tile commanded and
+        measured positions (µm), error map and mosaic (PNG data URLs)."""
+        if self._scan is None or self._scan.result is None:
+            return {"success": False, "error": "No registered scan yet"}
+        return {"success": True, **self._scan.result}
+
+    @APIExport()
+    def analyzeShitScopeScan(self, scanDir: str = "") -> Dict:
+        """Re-run registration and stitching on a saved scan (default: the last one)."""
+        target = (scanDir or "").strip() or self._last_dir
+        if not target or not os.path.isdir(target):
+            return {"success": False, "error": f"Scan directory not found: '{target}'"}
+        try:
+            return {"success": True, **shitscope_scan.analyse_saved_scan(target)}
+        except Exception as exc:
+            self._logger.warning(f"ShitScope re-analysis failed: {exc}")
+            return {"success": False, "error": str(exc)}
+
+    @APIExport()
+    def exportShitScopeFullRes(self, scanDir: str = "") -> Dict:
+        """Stitch the raw tiles at full resolution (colour if the camera is colour)
+        at the registered positions -> stitched_full.tif in the scan folder."""
+        target = (scanDir or "").strip() or self._last_dir
+        if not target or not os.path.isfile(os.path.join(target, "scan_quality.json")):
+            return {"success": False, "error": f"No analysed scan in '{target}'"}
+        try:
+            return {"success": True, **shitscope_scan.export_full_res(target)}
+        except Exception as exc:
+            self._logger.warning(f"ShitScope full-res export failed: {exc}")
+            return {"success": False, "error": str(exc)}
+
+    # ------------------------------------------------------------ calibration
+    def _calibrating(self) -> bool:
+        return self._cal is not None and self._cal.state == "running"
+
+    @APIExport()
+    def startShitScopeCalibration(self, maxPower: int = 30000, margin: float = 1.5,
+                                  probeSteps: int = 4) -> Dict:
+        """Measure, with the camera, what the stage needs right now (about a
+        minute, on a textured area of the sample): drive threshold per axis
+        (-> recommended drive = margin x threshold), µm per µstep, reversal
+        loss (-> approach overshoot) and whether the sled rotated. Nothing is
+        changed until applyShitScopeCalibration."""
+        stage = self._stage()
+        if stage is None or not hasattr(stage, "move_steps"):
+            return {"success": False, "error": "No calibratable stage (StepperXYStageManager) available"}
+        if self._calibrating() or (self._scan is not None and self._scan.state in ("homing", "running", "analysing")):
+            return {"success": False, "error": "A scan or calibration is already running"}
+        det, det_mgr = self._detector(), self._master.detectorsManager
+        handle = None if getattr(det, "_running", False) else det_mgr.startAcquisition()
+        try:
+            start_power = stage.get_axis_power()
+        except Exception:
+            start_power = (18000, 24000)
+        self._cal = shitscope_calibration.StageCalibration(
+            grab=lambda: shitscope_scan.fresh_frame(det), move_steps=stage.move_steps,
+            set_power=stage.set_axis_power, um_per_px=self._um_per_px(), start_power=start_power,
+            max_power=int(maxPower), margin=float(margin), probe_steps=int(probeSteps),
+            logger=self._logger.info)
+        cal = self._cal
+
+        def run():
+            try:
+                cal.run()
+            finally:
+                if handle is not None:
+                    det_mgr.stopAcquisition(handle)
+        cal.state = "running"
+        threading.Thread(target=run, daemon=True, name="ShitScopeCalibration").start()
+        return {"success": True, "startPower": list(start_power)}
+
+    @APIExport()
+    def stopShitScopeCalibration(self) -> Dict:
+        if self._cal is None:
+            return {"success": False, "error": "No calibration"}
+        self._cal.stop()
+        return {"success": True}
+
+    @APIExport()
+    def getShitScopeCalibrationStatus(self) -> Dict:
+        """state (idle/running/done/stopped/error), phase, progress 0..1, log, result."""
+        if self._cal is None:
+            return {"state": "idle"}
+        return self._cal.status()
+
+    @APIExport()
+    def applyShitScopeCalibration(self, persist: bool = False) -> Dict:
+        """Apply the recommended values of the last calibration to the stage
+        (drive per axis, µm per µstep, approach overshoot); persist=True also
+        writes them to the positioner in the setup file."""
+        if self._cal is None or not self._cal.result or not self._cal.result.get("recommended"):
+            return {"success": False, "error": "No calibration result to apply"}
+        stage = self._stage()
+        props = stage.apply_calibration(**self._cal.result["recommended"])
+        saved = False
+        if persist and props:
+            try:
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                name = self._master.positionersManager.getAllDeviceNames()[0]
+                self._setupInfo.positioners[name].managerProperties.update(props)
+                options, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                saved = True
+            except Exception as exc:
+                self._logger.warning(f"Could not save the stage calibration: {exc}")
+                return {"success": True, "applied": props, "saved": False, "error": str(exc)}
+        self._logger.info(f"Stage calibration applied{' and saved' if saved else ''}: {props}")
+        return {"success": True, "applied": props, "saved": saved}

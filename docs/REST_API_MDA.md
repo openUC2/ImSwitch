@@ -138,7 +138,7 @@ from imswitchclient import ImSwitchClient
 from useq import MDASequence, Channel, ZRangeAround
 
 # Connect to ImSwitch
-client = ImSwitchClient('localhost', 8000)
+client = ImSwitchClient('http://localhost:8001/imswitch/api')
 
 # Create MDA sequence
 sequence = MDASequence(

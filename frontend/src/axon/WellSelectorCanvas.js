@@ -48,6 +48,11 @@ export const Shape = Object.freeze({
 });
 
 //##################################################################################
+// The polygon being drawn is canvas-local until CONVERT puts it in redux, and
+// the canvas unmounts whenever the user leaves the page. Keep the draft here
+// so leaving and coming back does not throw away a half-traced outline.
+const freehandDraft = { points: [], closed: false };
+
 const WellSelectorCanvas = forwardRef((props, ref) => {
   const canvasRef = useRef(null);
   const parentRef = useRef(null);
@@ -84,9 +89,16 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   const [dragPointIndex, setDragPointIndex] = useState(-1);
 
   //mode: freehand draw – polygon vertices in physical (µm) coordinates
-  const [freehandPoints, setFreehandPoints] = useState([]);
+  const [freehandPoints, setFreehandPoints] = useState(() => freehandDraft.points);
   const [isFreehandDrawing, setIsFreehandDrawing] = useState(false);
-  const [freehandClosed, setFreehandClosed] = useState(false);
+  const [freehandClosed, setFreehandClosed] = useState(() => freehandDraft.closed);
+  useEffect(() => {
+    freehandDraft.points = freehandPoints;
+    freehandDraft.closed = freehandClosed;
+  }, [freehandPoints, freehandClosed]);
+  // Did the pointer actually move between press and release? Distinguishes a
+  // click (append a vertex) from a drag (trace and close).
+  const freehandDragRef = useRef(false);
   // Throttle: minimum stage distance between recorded freehand points (µm).
   const FREEHAND_MIN_STEP_UM = 500;
 
@@ -149,39 +161,61 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
       setIsFreehandDrawing(false);
       setFreehandClosed(false);
     },
+    /** Append a vertex at an absolute stage position (µm). */
+    addFreehandVertex: ({ x, y }) => {
+      setFreehandPoints((prev) => (freehandClosed ? [{ x, y }] : [...prev, { x, y }]));
+      setFreehandClosed(false);
+    },
+    /** Close the polygon being built (needs at least 3 vertices). */
+    closeFreehand: () => {
+      setIsFreehandDrawing(false);
+      setFreehandClosed(freehandPoints.length >= 3);
+      return freehandPoints.length >= 3;
+    },
+    /**
+     * Build the polygon as the convex hull of the current point list, so a
+     * handful of points dropped around the tissue become a region to scan.
+     * Monotone chain; returns the number of hull vertices.
+     */
+    wrapPointsIntoFreehand: () => {
+      const pts = (experimentState.pointList || []).map((p) => ({ x: p.x, y: p.y }));
+      if (pts.length < 3) return 0;
+      const sorted = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
+      const cross = (o, a, b) =>
+        (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+      const half = (input) => {
+        const out = [];
+        for (const p of input) {
+          while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) {
+            out.pop();
+          }
+          out.push(p);
+        }
+        out.pop();
+        return out;
+      };
+      const hull = [...half(sorted), ...half([...sorted].reverse())];
+      if (hull.length < 3) return 0;
+      setFreehandPoints(hull);
+      setIsFreehandDrawing(false);
+      setFreehandClosed(true);
+      return hull.length;
+    },
+    freehandVertexCount: () => freehandPoints.length,
     /**
      * Generate scan positions inside the closed freehand polygon using
      * the current objective FOV (with optional overlap).
      * Returns an array of {x, y} in physical (µm) coordinates.
      */
-    generateFreehandScanPositions: (overlap = 0) => {
-      const polygon = freehandPoints;
-      if (!polygon || polygon.length < 3) return [];
-      const fovX = objectiveState?.fovX || 0;
-      const fovY = objectiveState?.fovY || 0;
-      if (fovX <= 0 || fovY <= 0) return [];
-      const stepX = fovX * (1 - overlap);
-      const stepY = fovY * (1 - overlap);
-      let minX = Infinity,
-        minY = Infinity,
-        maxX = -Infinity,
-        maxY = -Infinity;
-      polygon.forEach((p) => {
-        if (p.x < minX) minX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y > maxY) maxY = p.y;
-      });
-      const positions = [];
-      for (let y = minY; y <= maxY; y += stepY) {
-        for (let x = minX; x <= maxX; x += stepX) {
-          if (wsUtils.isPointInPolygon({ x, y }, polygon)) {
-            positions.push({ x, y });
-          }
-        }
-      }
-      return positions;
-    },
+    generateFreehandScanPositions: (overlap = 0) =>
+      wsUtils.generatePolygonScanPositions(
+        freehandPoints,
+        objectiveState?.fovX || 0,
+        objectiveState?.fovY || 0,
+        overlap,
+      ),
+    /** The closed freehand polygon as drawn, in physical (µm) coordinates. */
+    getFreehandPolygon: () => freehandPoints.map((p) => ({ x: p.x, y: p.y })),
   }));
 
   //##################################################################################
@@ -230,10 +264,26 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   }, [positionState.x, positionState.y]);
 
   //##################################################################################
+  // renderCanvas repaints everything (wells, every tile, overlays, stage-map
+  // images). Mouse moves change state far faster than the screen refreshes, and
+  // repainting once per state change made drawing crawl. Coalesce to at most
+  // one repaint per animation frame, always with the latest closure.
+  const renderCanvasRef = useRef(null);
+  useEffect(() => {
+    renderCanvasRef.current = renderCanvas; // after render: renderCanvas is declared below
+  });
+  const renderFrameRef = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(renderFrameRef.current), []);
   useEffect(() => {
     // Draw canvas content when state changed
-    renderCanvas();
+    if (renderFrameRef.current) return;
+    renderFrameRef.current = requestAnimationFrame(() => {
+      renderFrameRef.current = 0;
+      if (canvasRef.current) renderCanvasRef.current();
+    });
   }, [
+    freehandPoints,
+    freehandClosed,
     scale,
     offset,
     wellSelectorState,
@@ -398,7 +448,6 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
   //##################################################################################
   const renderCanvas = () => {
-    console.log("renderCanvas");
 
     //------------ create canvas
 
@@ -1037,6 +1086,13 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     ctx.save();
     ctx.globalAlpha = 0.9;
 
+    // Drop decoded bitmaps for tiles that are gone: the cache is one Image per
+    // tile and a long mapping session would otherwise hold them all.
+    const liveIds = new Set(tiles.map((t) => t.id));
+    Object.keys(stageMapTileImagesRef.current).forEach((id) => {
+      if (!liveIds.has(Number(id))) delete stageMapTileImagesRef.current[id];
+    });
+
     tiles.forEach((tile) => {
       if (tile.x == null || tile.y == null || !tile.image) return;
       // Respect the channel visibility toggles from the StageMap app
@@ -1381,12 +1437,17 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
       });
     }
 
-    // Freehand drawing: start a new polygon (or restart after closing one)
+    // Freehand: a press APPENDS a vertex to the polygon being built. Dragging
+    // still traces a continuous outline (handleMouseMove); releasing without
+    // having dragged leaves the vertex in place, so a boundary can be built one
+    // tap at a time. Every press used to discard the polygon so far, which is
+    // why tracing round a slide meant one unbroken drag or nothing.
     if (wellSelectorState.mode == Mode.FREEHAND_DRAW) {
       const phy = calcPxPoint2PhyPoint(newMousePosition);
-      setFreehandPoints([phy]);
+      setFreehandPoints((prev) => (freehandClosed ? [phy] : [...prev, phy]));
       setIsFreehandDrawing(true);
       setFreehandClosed(false);
+      freehandDragRef.current = false;
     }
   };
 
@@ -1430,6 +1491,7 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
         const dx = phy.x - last.x;
         const dy = phy.y - last.y;
         if (Math.hypot(dx, dy) >= FREEHAND_MIN_STEP_UM) {
+          freehandDragRef.current = true;
           setFreehandPoints([...freehandPoints, phy]);
         }
       }
@@ -1445,17 +1507,20 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
   //##################################################################################
   const handleMouseUp = (e) => {
-    console.log("handleMouseUp");
 
     //handle mode single select
     if (wellSelectorState.mode == Mode.SINGLE_SELECT) {
       setDragPointIndex(-1);
     }
 
-    // Freehand drawing: close the polygon on mouse-up
+    // Freehand: a drag closes the polygon on release, exactly as before. A
+    // click (no movement) leaves it open so the next click adds another vertex;
+    // "Close region" finishes it.
     if (wellSelectorState.mode == Mode.FREEHAND_DRAW && isFreehandDrawing) {
       setIsFreehandDrawing(false);
-      if (freehandPoints.length >= 3) setFreehandClosed(true);
+      if (freehandDragRef.current && freehandPoints.length >= 3) {
+        setFreehandClosed(true);
+      }
     }
 
     //handle mode cup select

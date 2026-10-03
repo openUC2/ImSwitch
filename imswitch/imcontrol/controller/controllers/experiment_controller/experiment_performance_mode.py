@@ -11,11 +11,10 @@ import threading
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
-import numpy as np
 
 from .experiment_mode_base import ExperimentModeBase
-from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths
-from imswitch.imcontrol.model.io.ome_writers import write_plate_metadata_sidecar
+from .scan_plan import stage_scan_frame_table, stage_scan_frame_count, stage_scan_channel_sequence
+from imswitch.imcontrol.model.io import OMEWriter, OMEFileStorePaths
 from imswitch.imcommon.model import dirtools
 
 
@@ -154,7 +153,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                     return
 
                 # Switch off all illumination levels before starting scan
-                self._switch_off_all_illumination()
+                self.controller._switch_off_all_illumination()
 
                 # Execute fast stage scan
                 zarr_url = self._execute_fast_stage_scan(scan_params, t_period, n_times, experiment_params)
@@ -208,15 +207,8 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         # Calculate number of active channels
         n_channels = sum(1 for i in illumination_intensities if i > 0) or 1
         
-        # Get timing parameters
-        m_experiment = experiment_params.get('mExperiment')
-        if m_experiment and hasattr(m_experiment, 'parameterValue'):
-            exposure_times = getattr(m_experiment.parameterValue, 'illuExposures', [50])
-            if not isinstance(exposure_times, list):
-                exposure_times = [exposure_times]
-            t_exposure = max(exposure_times) if exposure_times else 50
-        else:
-            t_exposure = 50
+        exposure_times = self._exposures_ms(experiment_params)
+        t_exposure = max(exposure_times) if exposure_times else 50
         
         t_settle = experiment_params.get('tSettle', 90)
         
@@ -267,35 +259,6 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             self._logger.debug("Waiting for previous fast stage scan to finish...")
             time.sleep(0.1)
 
-    def _switch_off_all_illumination(self) -> None:
-        """
-        Turn off all illumination sources before starting scan.
-        This ensures clean state for hardware-controlled illumination.
-        """
-        try:
-            # Try to access laser manager
-            if hasattr(self.controller, '_master') and hasattr(self.controller._master, 'lasersManager'):
-                for laser_name in self.controller._master.lasersManager.getAllDeviceNames():
-                    try:
-                        self.controller._master.lasersManager[laser_name].setEnabled(False)
-                        self.controller._master.lasersManager[laser_name].setValue(0)
-                    except Exception as e:
-                        self._logger.debug(f"Could not turn off laser {laser_name}: {e}")
-            
-            # Try to turn off LED via UC2 interface
-            if hasattr(self.controller, 'mStage') and hasattr(self.controller.mStage, '_motor'):
-                try:
-                    # Send zero illumination to all channels
-                    esp32 = self.controller.mStage._rs232manager._esp32
-                    if hasattr(esp32, 'led'):
-                        esp32.led.send_LEDMatrix_array(intensity=0, ids=[i for i in range(64)])
-                except Exception as e:
-                    self._logger.debug(f"Could not turn off LED matrix: {e}")
-                    
-            self._logger.debug("All illumination sources switched off before scan")
-        except Exception as e:
-            self._logger.warning(f"Error switching off illumination: {e}")
-
     def _reset_camera_to_continous_trigger(self) -> None:
         """
         Reset camera to software/continuous triggering after scan completion.
@@ -322,21 +285,15 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         Returns:
             tPre value in milliseconds
         """
-        m_experiment = experiment_params.get('mExperiment')
-        
-        if m_experiment and hasattr(m_experiment, 'parameterValue'):
-            exposure_times = getattr(m_experiment.parameterValue, 'illuExposures', [])
-            if not isinstance(exposure_times, list):
-                exposure_times = [exposure_times] if exposure_times else []
-            
-            if exposure_times:
-                max_exposure = max(exposure_times)
-                t_pre = max_exposure * EXPOSURE_TIME_MARGIN
-                self._logger.debug(f"Calculated tPre from max exposure {max_exposure}ms: {t_pre}ms")
-                return t_pre
-        
-        # Default settle time if no exposure info available
-        return 90
+        exposure_times = self._exposures_ms(experiment_params)
+        if exposure_times:
+            return max(exposure_times) * EXPOSURE_TIME_MARGIN
+        return 90  # no exposure info
+
+    @staticmethod
+    def _exposures_ms(experiment_params: Dict[str, Any]) -> List[float]:
+        """Per-channel exposures (ms) as resolved by the controller; [] when unknown."""
+        return [float(e) for e in (experiment_params.get("exposures") or []) if e is not None and e > 0]
 
     def _extract_timing_parameters(self, experiment_params: Dict[str, Any]) -> tuple:
         """
@@ -377,12 +334,8 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 t_post = frontend_t_post
                 self._logger.debug(f"Using frontend tPost: {t_post}ms")
             else:
-                # Use first exposure time as default
-                exposure_times = getattr(param_value, 'illuExposures', [50])
-                if isinstance(exposure_times, list) and exposure_times:
-                    t_post = exposure_times[0]
-                elif exposure_times:
-                    t_post = exposure_times
+                exposure_times = self._exposures_ms(experiment_params)
+                t_post = exposure_times[0] if exposure_times else 50.0
         
         self._logger.info(f"Timing parameters: tPre={t_pre}ms, tPost={t_post}ms")
         return (t_pre, t_post)
@@ -409,11 +362,16 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         nx = int((xEnd - xStart) // xStep) + 1 if xStep != 0 else 1
         ny = int((yEnd - yStart) // yStep) + 1 if yStep != 0 else 1
 
-        # Prepare illumination parameters
-        illumination_list = self.prepare_illumination_parameters(illumination_intensities)
+        # Firmware laser channels 0..4, mapped by source name -> channel_index
+        illumination_list = self.prepare_illumination_parameters(
+            illumination_intensities, experiment_params.get("illumination_sources"))
 
-        # Handle LED parameter if present
-        led_value = 0 * self._extract_led_value(experiment_params) # TODO: We have to rework the LED MAtrix interface as it's also not working properly on the microcontorller it seems
+        # The firmware's ``led`` drives the LED *array*. In ImSwitch that is the
+        # LED-matrix, which only appears as synthetic ring/DPC channels, and those
+        # force normal mode (scan_plan.resolve_channels). A laser manager merely
+        # named "LED" is already a laser channel above, so ``led`` stays off here
+        # or the same light would be fired twice per position.
+        led_value = 0
 
         # Extract Z-stack parameters
         z_params = self._extract_z_stack_parameters(experiment_params)
@@ -447,31 +405,10 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         Returns:
             Dictionary with zstart, zstep, nz
         """
-        m_experiment = experiment_params.get('mExperiment')
-        
-        if m_experiment and hasattr(m_experiment, 'parameterValue'):
-            param_value = m_experiment.parameterValue
-            
-            # Check if Z-stack is enabled
-            z_stack_enabled = getattr(param_value, 'zStackEnabled', False)
-            
-            if z_stack_enabled:
-                z_start = getattr(param_value, 'zStackStart', 0)
-                z_step = getattr(param_value, 'zStackStep', 0)
-                n_z = getattr(param_value, 'zStackSteps', 1)
-                
-                return {
-                    'zstart': z_start,
-                    'zstep': z_step,
-                    'nz': max(1, n_z)
-                }
-        
-        # Default: no Z-stacking
-        return {
-            'zstart': 0,
-            'zstep': 0,
-            'nz': 1
-        }
+        # Relative offsets from the plan; the firmware steps uniformly, so
+        # hand-picked non-uniform slices are scanned with their first step.
+        z = [float(v) for v in (experiment_params.get("z_positions") or [0.0])]
+        return {"zstart": z[0], "zstep": (z[1] - z[0]) if len(z) > 1 else 0.0, "nz": len(z)}
 
     def _extract_led_value(self, experiment_params: Dict[str, Any]) -> float:
         """
@@ -536,35 +473,28 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             relative=False
         )
 
-        # Turn off all illumination channels before starting scan
-        self._switch_off_all_illumination()
+        self.controller._switch_off_all_illumination()
 
         # Get illumination list from scan params
-        illumination_list = scan_params.get('illumination', [])
+        illumination_list = list(scan_params.get('illumination', []))
         led_value = scan_params['led']
-        
-        # Build illumination dict for metadata (backward compatibility)
-        illum_dict = {}
-        for i, val in enumerate(illumination_list[:5]):
-            illum_dict[f"illumination{i}"] = val
-        illum_dict["led"] = led_value
 
-        # Count active illumination channels (including LED)
-        nIlluminations = sum(val is not None and val > 0 for val in illumination_list) + (1 if led_value and led_value > 0 else 0)
-        nScan = max(nIlluminations, 1)
-        
+        # Channels in the order the firmware fires them; the writer's channel
+        # axis is exactly this list (at least one so the loop runs once).
+        nIlluminations = max(len(stage_scan_channel_sequence(illumination_list, led_value)), 1)
+
         nx, ny, nz = scan_params['nx'], scan_params['ny'], scan_params['nz']
         xstart, ystart = scan_params['xstart'], scan_params['ystart']
         xstep, ystep, zstep = scan_params['xstep'], scan_params['ystep'], scan_params['zstep']
         zstart = scan_params.get('zstart', 0)
-        
-        total_frames = nx * ny * nz * nScan
+
+        total_frames = stage_scan_frame_count(nx, ny, nz, illumination_list, led_value)
         self._logger.info(f"Stage-scan: {nx}×{ny}×{nz} ({total_frames} frames)")
 
-        # Build metadata list for writer thread
+        # One row per camera frame-id, in firmware order (scan_plan pins it).
         metadata_list = self._build_scan_metadata(
-            nx, ny, nz, xstart, ystart, zstart,
-            xstep, ystep, zstep, illum_dict, nIlluminations
+            nx, ny, nz, xstart, ystart, zstart, xstep, ystep, zstep,
+            illumination_list, led_value,
         )
 
         # Reset frame tracking
@@ -580,21 +510,13 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             # Hardware trigger: camera receives external TTL signal from firmware
             self._configure_camera_for_hardware_trigger()
 
-        # Get exposure time
         t_exposure = scan_params["tExposure"]
-        m_experiment = experiment_params.get('mExperiment')
-        if m_experiment and hasattr(m_experiment, 'parameterValue'):
-            exposure_times = getattr(m_experiment.parameterValue, 'illuExposures', [50])
-            if isinstance(exposure_times, list) and exposure_times:
-                t_exposure = exposure_times[0]
-            elif exposure_times:
-                t_exposure = exposure_times
 
         # Execute timelapse loop # TODO: check if we have the outer loop for different wells/areas .. should actually come AFTER time points
         for iTime in range(n_times):
             # Set up OME-Zarr writer for this time point
-            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.controller.mFilePath = os.path.join(self.controller.save_dir, f"{timeStamp}_FastStageScan")
+            self.controller.mFilePath = os.path.join(
+                experiment_params["dirPath"], f"{experiment_params['mFileName']}_t{iTime:04d}_FastStageScan")
             omezarr_store = OMEFileStorePaths(self.controller.mFilePath)
             data_path = dirtools.UserFileDirs.getValidatedDataPath()
             self.controller.setOmeZarrUrl(self.controller.mFilePath.split(data_path)[-1] + ".ome.zarr")
@@ -609,9 +531,9 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             )
             self.controller._writer_thread_ome.start()
             
-            # Prepare illumination tuple - pad to 5 channels
-            illumination_padded = (illumination_list + [0] * 5)[:5] # TODO: we need to keep the sequence proposed by the esp32 firmware here!  adding zeros will shift the channel information
-            illumination_tuple = tuple(illumination_padded) if nIlluminations > 0 else (0, 0, 0, 0, 0)
+            # illumination_list is already indexed by firmware channel (0..4);
+            # trailing zeros only fill unused channels and never shift a value.
+            illumination_tuple = tuple((illumination_list + [0] * 5)[:5])
             
             # Reset stagescan completion flag and register callback
             self._register_stagescan_callback()
@@ -620,13 +542,14 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             self.controller.mStage.start_stage_scanning(
                 xstart=0, xstep=xstep, nx=nx,  # Use 0 as we start from current position
                 ystart=0, ystep=ystep, ny=ny,
-                zstart=0, zstep=zstep, nz=nz,
+                zstart=zstart, zstep=zstep, nz=nz,
                 tsettle=scan_params['tsettle'],
                 tExposure=t_exposure,
                 illumination=illumination_tuple,
                 led=led_value,
+                tTrig=scan_params.get('tTrig'),
             )
-            
+
             # Wait for stagescan completion with timeout
             scan_completed = self._wait_for_scan_completion(total_frames, t_period)
             
@@ -646,56 +569,15 @@ class ExperimentPerformanceMode(ExperimentModeBase):
     def _build_scan_metadata(self, nx: int, ny: int, nz: int,
                             xstart: float, ystart: float, zstart: float,
                             xstep: float, ystep: float, zstep: float,
-                            illum_dict: Dict[str, Any], nIlluminations: int) -> List[Dict]:
+                            illumination: List[float], led: float) -> List[Dict]:
+        """One metadata row per camera frame, in the firmware's trigger order.
+
+        Delegates to :func:`scan_plan.stage_scan_frame_table`, the single
+        definition of that order shared with the fast-stage-scan API (and
+        mirrored by the uc2-ESP native test), so frame-id -> row can't drift.
         """
-        Build metadata list for each scan position.
-        
-        This corresponds to the metadataList in the UC2-ESP firmware.
-        
-        Args:
-            nx, ny, nz: Number of steps in each direction
-            xstart, ystart, zstart: Starting positions
-            xstep, ystep, zstep: Step sizes
-            illum_dict: Dictionary of illumination channels and values
-            nIlluminations: Number of active illumination channels
-            
-        Returns:
-            List of metadata dictionaries for each frame
-        """
-        metadata_list = []
-        running_number = 0
-        
-        for iy in range(ny):
-            for ix in range(nx):
-                for iz in range(nz):
-                    z = zstart + iz * zstep
-                    x = xstart + ix * xstep
-                    y = ystart + iy * ystep
-                    
-                    # Snake pattern: reverse X on odd Y rows
-                    if iy % 2 == 1:
-                        x = xstart + (nx - 1 - ix) * xstep
-                    
-                    if nIlluminations == 0:
-                        running_number += 1
-                        metadata_list.append({
-                            "x": x, "y": y, "z": z,
-                            "illuminationChannel": "default",
-                            "illuminationValue": -1,
-                            "runningNumber": running_number
-                        })
-                    else:
-                        for channel, value in illum_dict.items():
-                            if value is not None and value > 0:
-                                running_number += 1
-                                metadata_list.append({
-                                    "x": x, "y": y, "z": z,
-                                    "illuminationChannel": channel,
-                                    "illuminationValue": value,
-                                    "runningNumber": running_number
-                                })
-        
-        return metadata_list
+        return stage_scan_frame_table(nx, ny, nz, xstart, ystart, zstart,
+                                      xstep, ystep, zstep, illumination, led, snake=True)
 
     def _register_stagescan_callback(self) -> None:
         """Register callback for stagescan completion signal from firmware."""
@@ -727,13 +609,25 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         """
         Callback function for stagescan completion signal from firmware.
         
-        Expected JSON: {"stagescan": {}, "qid": 0, "success": 1}
-        
+        Expected JSON: {"stagescan": true, "frames": N, "moveTimeouts": k,
+                        "aborted": 0|1, "qid": 0, "success": 1}
+        (older firmware sends only stagescan/qid/success).
+
         Args:
             data: Dictionary with completion information
         """
         self._logger.info(f"Stagescan completion signal received: {data}")
-        time.sleep(0.5)  # Small delay to ensure all processing is done # TODO: 
+        fired = data.get("frames")
+        if fired is not None and self._expected_frames and int(fired) != int(self._expected_frames):
+            # The writer pairs frame-id k with row k of the frame table; a
+            # different trigger count means the two sides disagree on the order.
+            self._logger.error(
+                f"Firmware fired {fired} triggers but the frame table has {self._expected_frames} rows; "
+                "frames after the first mismatch carry the wrong metadata")
+        if data.get("aborted") or data.get("moveTimeouts"):
+            self._logger.warning(
+                f"Stagescan ended with aborted={data.get('aborted')} moveTimeouts={data.get('moveTimeouts')}")
+        time.sleep(0.5)  # let the last frame reach the writer before we finish
         self._stagescan_complete_event.set()
 
     def _wait_for_scan_completion(self, expected_frames: int, timeout: float) -> bool:
@@ -860,8 +754,14 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             trigger_info: Dictionary with trigger information
         """
         self._last_frame_time = time.time()
+        # Newer firmware numbers the triggers ({"cam":1,"frame":n}); a gap
+        # means a notification was lost, so the frame count is unreliable.
+        frame = trigger_info.get("frame") if isinstance(trigger_info, dict) else None
+        if frame is not None and int(frame) != self._frame_count:
+            self._logger.warning(f"Camera trigger notification {frame} arrived, expected {self._frame_count}")
+            self._frame_count = int(frame)
         self._frame_count += 1
-        
+
         if self._use_software_trigger:
             # Trigger software capture
             try:
@@ -893,125 +793,28 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                           snake_tiles: List[List[Dict]],
                           illumination_intensities: List[float],
                           experiment_params: Dict[str, Any]) -> List[OMEWriter]:
-        """
-        Set up OME writers for single TIFF output in performance mode.
-        
-        This method mirrors the setup in normal mode to ensure consistent
-        file saving interface for timelapses and other experiments.
-        
-        Args:
-            snake_tiles: List of tiles containing scan points
-            illumination_intensities: List of illumination values
-            experiment_params: Dictionary containing experiment parameters
-            
-        Returns:
-            List of OMEWriter instances
-        """
-        file_writers = []
-        
-        # shared_individual_tiffs_dir is no longer needed - OMEFileStorePaths handles it internally
-        shared_individual_tiffs_dir = None
-
-        # Only create writers if single TIFF mode is enabled
-        is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-        if not is_single_tiff_mode:
-            return file_writers
-
-        self._logger.debug("Setting up OME writers for single TIFF output in performance mode")
-
-        # Create experiment directory and file paths
-        timeStamp, dirPath, mFileName = self.create_experiment_directory("performance_scan")
-
-        # Create a single OME writer for all tiles in single TIFF mode
-        experiment_name = "0_performance_scan"
-        m_file_path = os.path.join(dirPath, f"{mFileName}_{experiment_name}.ome.tif")
-        self._logger.debug(f"Performance mode single TIFF path: {m_file_path}")
-
-        # Create file paths
-        file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
-
-        # Calculate combined tile and grid parameters for all positions
-        all_tiles = [tile for tiles in snake_tiles for tile in tiles]  # Flatten all tiles
-        if hasattr(self.controller, 'mDetector') and hasattr(self.controller.mDetector, '_shape'):
-            tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
-        else:
-            tile_shape = (512, 512)  # Default shape
-        grid_shape, grid_geometry = self.calculate_grid_parameters(all_tiles)
-
-        # Extract Z-stack parameters for writer config
-        z_params = self._extract_z_stack_parameters(experiment_params)
-        n_z_planes = z_params['nz']
-        
-        # Get time points
-        n_time_points = experiment_params.get('nTimes', 1)
-
-        # Create writer configuration for single TIFF mode
-        n_channels = sum(np.array(illumination_intensities) > 0) or 1
+        """One writer over all positions, single-TIFF mode only (the fast scan writes its own zarr)."""
+        if not getattr(self.controller, "_ome_write_single_tiff", False):
+            return []
+        dir_path, m_file_name = experiment_params["dirPath"], experiment_params["mFileName"]
+        grid_shape, grid_geometry = self.calculate_grid_parameters([tile for tiles in snake_tiles for tile in tiles])
+        n_channels, channel_names = self.channel_layout(
+            illumination_intensities, getattr(self.controller, "_illuminationSources", None), None)
         writer_config = self.create_writer_config(
-            write_tiff=False,  # Disable individual TIFF files
-            write_zarr=getattr(self.controller, '_ome_write_zarr', True),
-            write_stitched_tiff=False,  # Disable stitched TIFF
-            write_tiff_single=True,  # Enable single TIFF writing
-            write_individual_tiffs=getattr(self.controller, '_ome_write_individual_tiffs', False),
-            min_period=0.1,
-            n_time_points=n_time_points,
-            n_z_planes=n_z_planes,
-            n_channels=n_channels
+            write_tiff=False, write_zarr=getattr(self.controller, "_ome_write_zarr", True),
+            write_stitched_tiff=False, write_tiff_single=True,
+            write_individual_tiffs=getattr(self.controller, "_ome_write_individual_tiffs", False),
+            min_period=0.1, n_time_points=experiment_params.get("nTimes", 1),
+            n_z_planes=self._extract_z_stack_parameters(experiment_params)["nz"],
+            n_channels=n_channels, channel_names=channel_names,
         )
-
-        # Create single OME writer for all positions
-        ome_writer = OMEWriter(
-            file_paths=file_paths,
-            tile_shape=tile_shape,
-            grid_shape=grid_shape,
-            grid_geometry=grid_geometry,
-            config=writer_config,
-            logger=self._logger,
-            isRGB=getattr(self.controller, 'isRGB', False),
+        writer = OMEWriter(
+            file_paths=self.create_ome_file_paths(os.path.join(dir_path, f"{m_file_name}_0_performance_scan"), None),
+            tile_shape=self.tile_shape(), grid_shape=grid_shape, grid_geometry=grid_geometry,
+            config=writer_config, logger=self._logger, isRGB=getattr(self.controller, "isRGB", False),
         )
-        file_writers.append(ome_writer)
-
-        # Best-effort OME-NGFF plate metadata sidecar (performance mode uses
-        # one writer for all wells, so we emit only the sidecar – not per-well
-        # zarr attrs).
-        try:
-            wells_used: List[tuple] = []
-            condition_labels: Dict[str, str] = {}
-            labware_load_name: Optional[str] = None
-            for tiles in snake_tiles:
-                if not tiles:
-                    continue
-                first = tiles[0]
-                w_row = first.get("wellRow")
-                w_col = first.get("wellColumn")
-                w_load = first.get("labwareLoadName")
-                w_cond = first.get("conditionLabel")
-                if w_load and labware_load_name is None:
-                    labware_load_name = w_load
-                if w_row and w_col is not None:
-                    wells_used.append((str(w_row), str(int(w_col))))
-                    if w_cond:
-                        condition_labels[f"{w_row}{int(w_col)}"] = w_cond
-            if labware_load_name and getattr(self.controller, "labware_manager", None) is not None:
-                lab = self.controller.labware_manager.get(labware_load_name)
-                if lab is not None:
-                    write_plate_metadata_sidecar(
-                        output_dir=dirPath,
-                        plate_name=labware_load_name,
-                        rows=list(lab.rows),
-                        columns=[str(c) for c in lab.columns],
-                        wells_used=wells_used,
-                        extra={
-                            "imswitch_labware": {
-                                "loadName": labware_load_name,
-                                "conditionLabels": condition_labels or None,
-                            }
-                        },
-                    )
-        except Exception as exc:  # noqa: BLE001 - sidecar is best-effort
-            self._logger.warning(f"Failed to write plate metadata sidecar (performance mode): {exc}")
-
-        return file_writers
+        self.write_plate_sidecar(snake_tiles, experiment_params.get("region_meta", {}), dir_path)
+        return [writer]
 
     def _finalize_ome_writers(self, file_writers: List[OMEWriter]) -> None:
         """
@@ -1157,7 +960,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 param_value = m_experiment.parameterValue
                 illumination_sources = getattr(param_value, 'illumination', [])
                 illumination_intensities = getattr(param_value, 'illuIntensities', [])
-                exposures = getattr(param_value, 'illuExposures', [])
+                exposures = self._exposures_ms(experiment_params)
             
             # Build protocol data
             protocol_data = {
@@ -1187,7 +990,8 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 "illumination_sources": illumination_sources,
                 "illumination_intensities": illumination_intensities,
                 "exposures": exposures,
-                "total_frames": scan_params['nx'] * scan_params['ny'] * scan_params['nz'] * max(sum(1 for i in scan_params['illumination'] if i > 0), 1)
+                "total_frames": stage_scan_frame_count(scan_params['nx'], scan_params['ny'], scan_params['nz'],
+                                                       scan_params['illumination'], scan_params['led']),
             }
             
             # Create protocol file path from controller's mFilePath

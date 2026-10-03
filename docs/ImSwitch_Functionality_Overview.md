@@ -165,7 +165,7 @@
 - **REST HTTP API** for remote control
 - **Python scripting interface**
 - **Hypha integration** (distributed computing)
-- **Arkitekt integration** (workflow management)
+- **Arkitekt integration**: bind the microscope to an Arkitekt server by device-code login; stage, illumination, camera, frame and tile-scan actions; images to mikro (see `docs/ARKITEKT.md`)
 
 ### Configuration
 - **JSON-based setup files**
@@ -219,6 +219,7 @@
 ### UC2-Specific Features
 - **UC2 configuration manager**
 - **ESP32 firmware integration**
+- **Firmware version check** (installed vs. firmware-server version per board, see `FIRMWARE_VERSIONING.md`)
 - **LED matrix patterns**
 - **Modular microscope support**
 - **UC2-REST device control**

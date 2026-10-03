@@ -32,16 +32,6 @@ const defaultFocusMapConfig = {
   z_max: 0.0,
 
   // Autofocus settings (synced from frontend ExperimentSlice parameterValue)
-  af_range: 100.0,
-  af_resolution: 10.0,
-  af_cropsize: 2048,
-  af_algorithm: "LAPE",
-  af_settle_time: 0.1,
-  af_static_offset: 0.0,
-  af_two_stage: false,
-  af_n_gauss: 0,
-  af_illumination_channel: "",
-  af_mode: "software",
 
   // Autofocus integration
   autofocus_profile: null,

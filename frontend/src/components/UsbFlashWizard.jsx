@@ -1,10 +1,6 @@
 import React, { useEffect } from "react";  
 import { useDispatch, useSelector } from "react-redux";
 import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   Button,
   Stepper,
   Step,
@@ -43,7 +39,6 @@ import {
   Memory as MemoryIcon,
   CloudDownload as DownloadIcon,
   Settings as SettingsIcon,
-  DeleteForever as EraseIcon,
   Router as CanIcon,
   Search as SearchIcon,
   FlashOn as FlashOnIcon,
@@ -62,6 +57,8 @@ import apiUC2ConfigControllerSendCanAddress from "../backendapi/apiUC2ConfigCont
 import apiUC2ConfigControllerProbeDeviceState from "../backendapi/apiUC2ConfigControllerProbeDeviceState";
 import apiUC2ConfigControllerTestDeviceAction from "../backendapi/apiUC2ConfigControllerTestDeviceAction";
 import apiUC2ConfigControllerCancelUSBFlash from "../backendapi/apiUC2ConfigControllerCancelUSBFlash";
+import apiUC2ConfigControllerGetRecommendedFirmware from "../backendapi/apiUC2ConfigControllerGetRecommendedFirmware";
+import { FIRMWARE_STATUS, firmwareUpdateStatus } from "./firmwareStatus";
 
 // Firmware filenames that ship the *master* (CAN HAT) image. When the user
 // picks one of these we should disconnect ImSwitch first and reconnect after.
@@ -186,6 +183,9 @@ const UsbFlashWizard = ({ open, onClose }) => {
         dispatch(usbFlashSlice.setFirmwareFiles(result.files || []));
         if (!result.files || result.files.length === 0) {
           dispatch(usbFlashSlice.setError("No .bin firmware files found on the server"));
+        } else if (!usbFlashState.detectPort) {
+          // Reading the board ImSwitch is connected to opens no port: do it unasked
+          detectBoard("", { replaceSelection: false });
         }
       } else {
         dispatch(usbFlashSlice.setError(result.message || "Failed to load firmware list"));
@@ -195,6 +195,30 @@ const UsbFlashWizard = ({ open, onClose }) => {
       dispatch(usbFlashSlice.setError("Failed to load firmware list from server"));
     } finally {
       dispatch(usbFlashSlice.setIsLoadingFirmware(false));
+    }
+  };
+
+  // --- Board identification ---
+  // Ask the board which firmware it runs (/state_get: image, pindef, CAN id)
+  // and pick the matching server image. port "" = the board ImSwitch is
+  // connected to; another port is opened and probed (may reset that board).
+  const detectBoard = async (port, { replaceSelection = true } = {}) => {
+    dispatch(usbFlashSlice.setIsDetectingBoard(true));
+    try {
+      const result = await apiUC2ConfigControllerGetRecommendedFirmware(port || "");
+      dispatch(usbFlashSlice.setBoardDetection(result));
+      const file = result?.recommended?.file;
+      if (result?.status === "success" && file && (replaceSelection || !usbFlashState.selectedFirmware)) {
+        dispatch(usbFlashSlice.setSelectedFirmware(file));
+      }
+      if (result?.status === "success" && result.source === "port" && result.port) {
+        dispatch(usbFlashSlice.setSelectedPort(result.port)); // flash the board that was identified
+      }
+    } catch (error) {
+      console.error("Error identifying the board:", error);
+      dispatch(usbFlashSlice.setBoardDetection({ status: "error", message: error.message }));
+    } finally {
+      dispatch(usbFlashSlice.setIsDetectingBoard(false));
     }
   };
 
@@ -540,13 +564,110 @@ const UsbFlashWizard = ({ open, onClose }) => {
     </Box>
   );
 
+  // Which board is attached and which image fits it (above the file list)
+  const renderBoardDetection = () => {
+    const detection = usbFlashState.boardDetection;
+    const identity = detection?.identity;
+    const recommended = detection?.recommended;
+    const available = recommended?.file?.version;
+    const status = identity?.fwVersion ? firmwareUpdateStatus(identity.fwVersion, available) : null;
+    const facts = identity
+      ? [
+          identity.pindef && ["pin definition", identity.pindef],
+          identity.fwImage && ["built as", identity.fwImage],
+          ["firmware", identity.fwVersion || "unknown (predates version reporting)"],
+          identity.canId && ["CAN id", identity.canId],
+          detection.chip && ["chip", detection.chip],
+        ].filter(Boolean)
+      : [];
+    return (
+      <Paper variant="outlined" sx={{ p: 1.5, mb: 2 }}>
+        <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
+          <FormControl size="small" sx={{ minWidth: 240, flex: 1 }}>
+            <InputLabel>Board</InputLabel>
+            <Select
+              label="Board"
+              value={usbFlashState.detectPort}
+              onOpen={() => usbFlashState.availablePorts.length === 0 && loadSerialPorts()}
+              onChange={(e) => dispatch(usbFlashSlice.setDetectPort(e.target.value))}
+            >
+              <MenuItem value="">Connected to ImSwitch</MenuItem>
+              {usbFlashState.availablePorts.map((port) => (
+                <MenuItem key={port.device} value={port.device}>
+                  {port.device}
+                  {port.description ? ` \u00b7 ${port.description}` : ""}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => detectBoard(usbFlashState.detectPort)}
+            disabled={usbFlashState.isDetectingBoard}
+            startIcon={usbFlashState.isDetectingBoard ? <CircularProgress size={16} /> : <SearchIcon />}
+          >
+            Detect firmware
+          </Button>
+        </Box>
+        {usbFlashState.detectPort && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+            Opening {usbFlashState.detectPort} may reset that board. Use this for a board ImSwitch is not connected to.
+          </Typography>
+        )}
+
+        {detection && detection.status !== "success" && !identity && (
+          <Alert severity={detection.status === "busy" ? "warning" : "info"} sx={{ mt: 1 }}>
+            {detection.message || "Could not identify the board."}
+          </Alert>
+        )}
+
+        {identity && (
+          <Box sx={{ mt: 1.5 }}>
+            <Box component="dl" sx={{ m: 0, display: "grid", gridTemplateColumns: "max-content 1fr", columnGap: 2, rowGap: 0.25 }}>
+              {facts.map(([label, value]) => (
+                <React.Fragment key={label}>
+                  <Typography component="dt" variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    {label}
+                  </Typography>
+                  <Typography component="dd" variant="body2" sx={{ m: 0, fontFamily: "monospace", wordBreak: "break-all" }}>
+                    {value}
+                  </Typography>
+                </React.Fragment>
+              ))}
+            </Box>
+            {recommended?.filename ? (
+              <Typography variant="body2" sx={{ mt: 1 }}>
+                Recommended: <strong style={{ fontFamily: "monospace" }}>{recommended.filename}</strong>
+                {" \u2014 "}{recommended.reason}.
+                {status && (
+                  <Typography component="span" variant="body2" sx={{ color: FIRMWARE_STATUS[status]?.color, ml: 0.5 }}>
+                    {FIRMWARE_STATUS[status]?.label}
+                    {available ? ` (server ${available})` : ""}.
+                  </Typography>
+                )}
+              </Typography>
+            ) : (
+              <Alert severity="warning" sx={{ mt: 1 }}>
+                {recommended?.reason || detection.message || "No matching image on the server."}
+              </Alert>
+            )}
+          </Box>
+        )}
+      </Paper>
+    );
+  };
+
   // --- Step 1: Select Firmware ---
   const renderFirmwareSelection = () => {
     // Filter by merged-firmware toggle first, then by search query
     const query = (usbFlashState.firmwareSearchQuery || "").toLowerCase();
+    const recommended = usbFlashState.boardDetection?.recommended;
+    const recommendedNames = [recommended?.filename, recommended?.merged].filter(Boolean);
     const filteredFiles = usbFlashState.firmwareFiles
       .filter((fw) => usbFlashState.showMergedFirmware || !fw.filename.includes("_merged"))
-      .filter((fw) => !query || fw.filename.toLowerCase().includes(query));
+      .filter((fw) => !query || fw.filename.toLowerCase().includes(query))
+      .sort((a, b) => recommendedNames.includes(b.filename) - recommendedNames.includes(a.filename));
 
     return (
     <Box sx={{ mt: 2 }}>
@@ -566,6 +687,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
         </Box>
       ) : usbFlashState.firmwareFiles.length > 0 ? (
         <Box sx={{ mt: 2 }}>
+          {renderBoardDetection()}
+
           {/* Search bar */}
           <TextField
             fullWidth
@@ -645,6 +768,13 @@ const UsbFlashWizard = ({ open, onClose }) => {
                           {(fw.size / 1024).toFixed(1)} KB
                           {fw.mod_time && (" \u00b7 " + fw.mod_time)}
                         </Typography>
+                        {recommendedNames.includes(fw.filename) && (
+                          <Typography variant="caption" color="primary" sx={{ display: "block", fontWeight: 600 }}>
+                            {fw.filename === recommended.filename
+                              ? "Recommended for the detected board"
+                              : "Recommended board image, merged (first flash / erase flash)"}
+                          </Typography>
+                        )}
                       </Box>
                     }
                     sx={{ width: "100%", m: 0 }}
@@ -1512,48 +1642,32 @@ const UsbFlashWizard = ({ open, onClose }) => {
     return "Next";
   };
 
+  // Rendered inside FirmwareUpdateDialog ("Update firmware" → over a USB
+  // cable), which provides the dialog frame and title.
   return (
-    <Dialog
-      open={open}
-      onClose={handleClose}
-      maxWidth="md"
-      fullWidth
-      disableEscapeKeyDown={usbFlashState.isFlashing}
-    >
-      <DialogTitle>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <UsbIcon color="primary" />
-          <Typography variant="h6">USB Firmware Flash Wizard</Typography>
-        </Box>
-      </DialogTitle>
+    <Box>
+      <Stepper activeStep={usbFlashState.currentStep} sx={{ mb: 3 }}>
+        {steps.map((label) => (
+          <Step key={label}>
+            <StepLabel>{label}</StepLabel>
+          </Step>
+        ))}
+      </Stepper>
 
-      <DialogContent>
-        {/* Stepper */}
-        <Stepper activeStep={usbFlashState.currentStep} sx={{ mb: 3 }}>
-          {steps.map((label) => (
-            <Step key={label}>
-              <StepLabel>{label}</StepLabel>
-            </Step>
-          ))}
-        </Stepper>
+      {usbFlashState.error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => dispatch(usbFlashSlice.clearMessages())}>
+          {usbFlashState.error}
+        </Alert>
+      )}
+      {usbFlashState.successMessage && (
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => dispatch(usbFlashSlice.clearMessages())}>
+          {usbFlashState.successMessage}
+        </Alert>
+      )}
 
-        {/* Error/Success messages */}
-        {usbFlashState.error && (
-          <Alert severity="error" sx={{ mb: 2 }} onClose={() => dispatch(usbFlashSlice.clearMessages())}>
-            {usbFlashState.error}
-          </Alert>
-        )}
-        {usbFlashState.successMessage && (
-          <Alert severity="success" sx={{ mb: 2 }} onClose={() => dispatch(usbFlashSlice.clearMessages())}>
-            {usbFlashState.successMessage}
-          </Alert>
-        )}
+      {renderStepContent(usbFlashState.currentStep)}
 
-        {/* Step Content */}
-        {renderStepContent(usbFlashState.currentStep)}
-      </DialogContent>
-
-      <DialogActions>
+      <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, mt: 3 }}>
         <Button onClick={handleClose} disabled={usbFlashState.isFlashing}>
           {usbFlashState.currentStep === 5 ? "Close" : "Cancel"}
         </Button>
@@ -1571,8 +1685,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
             {getNextLabel()}
           </Button>
         )}
-      </DialogActions>
-    </Dialog>
+      </Box>
+    </Box>
   );
 };
 

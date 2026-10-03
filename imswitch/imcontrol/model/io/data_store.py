@@ -106,6 +106,12 @@ class AcquisitionDataStore:
         store.write_frame(detector_name, frame, frame_event=manual_event)
         store.close()
     """
+
+    # Frames the background writer may fall behind by, and how many error
+    # strings to keep. Both were unbounded, and both grow for as long as
+    # storage cannot keep up with acquisition.
+    MAX_QUEUED_WRITES = 64
+    MAX_KEPT_ERRORS = 50
     
     def __init__(self,
                  session_info: SessionInfo,
@@ -349,6 +355,18 @@ class AcquisitionDataStore:
         
         if self.background_writes:
             with self._lock:
+                # Every task holds a full frame copy, so an unbounded queue is
+                # an unbounded memory leak whenever the writer falls behind.
+                # Dropping the OLDEST keeps the most recent data and is loud.
+                if len(self._write_queue) >= self.MAX_QUEUED_WRITES:
+                    self._write_queue.popleft()
+                    self._stats.events_dropped += 1
+                    if self._stats.events_dropped % 50 == 1:
+                        logger.error(
+                            f"Write queue full ({self.MAX_QUEUED_WRITES} frames); "
+                            f"dropped {self._stats.events_dropped} frame(s) — "
+                            "storage cannot keep up with acquisition"
+                        )
                 self._write_queue.append(write_task)
         else:
             self._execute_write(write_task)
@@ -381,7 +399,10 @@ class AcquisitionDataStore:
         except Exception as e:
             logger.error(f"Write error for {detector_name}: {e}")
             with self._lock:
+                # Keep the recent ones only: a persistently failing writer
+                # would otherwise accumulate a string per frame for ever.
                 self._stats.errors.append(f"{detector_name}: {str(e)}")
+                del self._stats.errors[:-self.MAX_KEPT_ERRORS]
     
     def _background_write_loop(self):
         """Background thread for writing frames."""

@@ -12,6 +12,7 @@ import {
 } from "@mui/material";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper";
 import ObjectiveCalibrationWizard from "./ObjectiveCalibrationWizard";
+import ObjectiveTurretView from "./ObjectiveTurretView";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as stormSlice from "../state/slices/STORMSlice.js";
@@ -269,18 +270,7 @@ const ExtendedObjectiveController = () => {
       <Grid container spacing={3}>
         {/* Objective Information */}
         <Grid item xs={12}>
-          <Typography>
-            <b>Current Objective:</b>{" "}
-            {objectiveState.currentObjective !== null
-              ? objectiveState.currentObjective
-              : "Unknown"}{" "}
-            ({objectiveState.objectivName || "Unknown"})
-          </Typography>
-          <Typography>
-            <b>Pixelsize:</b> {objectiveState.pixelsize ?? "Unknown"},{" "}
-            <b>NA:</b> {objectiveState.NA ?? "Unknown"}, <b>Magnification:</b>{" "}
-            {objectiveState.magnification || "Unknown"}
-          </Typography>
+          <ObjectiveTurretView />
 
           {/* Per-slot metadata cards */}
           <Grid container spacing={2} sx={{ mt: 1 }}>
@@ -638,140 +628,6 @@ const ExtendedObjectiveController = () => {
               the <strong>Z (focus)</strong> moves to each objective's par-focal
               height so the sample stays in focus.
             </Typography>
-            <Box sx={{ display: "flex", justifyContent: "center", my: 1 }}>
-              <svg
-                viewBox="0 0 360 130"
-                width="100%"
-                style={{ maxWidth: 360 }}
-                role="img"
-                aria-label="Revolver with two objective slots along the X/A axis and a Z focus axis"
-              >
-                {/* X/A axis */}
-                <line
-                  x1="20"
-                  y1="40"
-                  x2="340"
-                  y2="40"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  opacity="0.6"
-                />
-                <polygon
-                  points="340,40 332,36 332,44"
-                  fill="currentColor"
-                  opacity="0.6"
-                />
-                <text
-                  x="300"
-                  y="30"
-                  fill="currentColor"
-                  fontSize="11"
-                  opacity="0.8"
-                >
-                  A / X axis
-                </text>
-                {/* Slot 1 (Obj 1 @ X0) */}
-                <circle
-                  cx="110"
-                  cy="40"
-                  r="16"
-                  fill="none"
-                  stroke="#2e9b57"
-                  strokeWidth="2.5"
-                />
-                <line
-                  x1="110"
-                  y1="40"
-                  x2="110"
-                  y2="70"
-                  stroke="#2e9b57"
-                  strokeWidth="2"
-                  strokeDasharray="3,3"
-                />
-                <text
-                  x="110"
-                  y="92"
-                  fill="#2e9b57"
-                  fontSize="12"
-                  fontWeight="bold"
-                  textAnchor="middle"
-                >
-                  Obj 1
-                </text>
-                <text
-                  x="110"
-                  y="106"
-                  fill="currentColor"
-                  fontSize="10"
-                  textAnchor="middle"
-                  opacity="0.8"
-                >
-                  X0 / Z0
-                </text>
-                {/* Slot 2 (Obj 2 @ X1) */}
-                <circle
-                  cx="250"
-                  cy="40"
-                  r="16"
-                  fill="none"
-                  stroke="#3f7fd0"
-                  strokeWidth="2.5"
-                />
-                <line
-                  x1="250"
-                  y1="40"
-                  x2="250"
-                  y2="70"
-                  stroke="#3f7fd0"
-                  strokeWidth="2"
-                  strokeDasharray="3,3"
-                />
-                <text
-                  x="250"
-                  y="92"
-                  fill="#3f7fd0"
-                  fontSize="12"
-                  fontWeight="bold"
-                  textAnchor="middle"
-                >
-                  Obj 2
-                </text>
-                <text
-                  x="250"
-                  y="106"
-                  fill="currentColor"
-                  fontSize="10"
-                  textAnchor="middle"
-                  opacity="0.8"
-                >
-                  X1 / Z1
-                </text>
-                {/* Z axis */}
-                <line
-                  x1="320"
-                  y1="58"
-                  x2="320"
-                  y2="120"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  opacity="0.6"
-                />
-                <polygon
-                  points="320,120 316,112 324,112"
-                  fill="currentColor"
-                  opacity="0.6"
-                />
-                <text
-                  x="328"
-                  y="100"
-                  fill="currentColor"
-                  fontSize="11"
-                  opacity="0.8"
-                >
-                  Z focus
-                </text>
-              </svg>
-            </Box>
             <Typography variant="caption" color="text.secondary">
               <strong>Position 1/2</strong> = the revolver X position for each
               objective.

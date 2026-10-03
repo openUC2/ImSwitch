@@ -7,8 +7,8 @@ from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberPara
 _HARDWARE_READABLE_PARAMS = (
     'exposure', 'gain', 'blacklevel', 'exposure_mode', 'frame_rate',
     'frame_number', 'image_width', 'image_height', 'trigger_source',
-    'temperature', 'pixel_format', 'conversion_gain', 'low_noise', 'heat',
-    'blacklevel_autoadjust',
+    'temperature', 'target_temperature', 'fan_speed', 'pixel_format',
+    'conversion_gain', 'low_noise', 'heat', 'blacklevel_autoadjust',
 )
 
 
@@ -30,7 +30,11 @@ class ToupCamManager(DetectorManager):
     - ``lowNoise`` -- enable the sensor's low-noise readout (default ``True``):
       higher SNR at a lower frame rate.
     - ``heat`` -- window heater against condensation on a cooled sensor
-      (default ``True`` = the camera's maximum level; an integer picks a level).
+      (default ``False``; ``True`` = the camera's maximum level, an integer
+      picks a level). Off by default because it heats the camera from the
+      inside, against both the cooler and the over-temperature cutoff.
+    - ``readSaveTemperature`` -- append the sensor temperature to a CSV in the
+      day's recordings folder every few seconds while the camera is armed.
     - ``blacklevelAutoAdjust`` -- optical-black based automatic offset. Left at
       the camera default unless set here, and turned off automatically whenever
       a manual ``blacklevel`` is written (it would otherwise overwrite it).
@@ -74,21 +78,32 @@ class ToupCamManager(DetectorManager):
             binning = 1
 
         # Low-noise / long-exposure configuration. Defaults are the low-noise
-        # long-exposure setup (HCG + low noise + window heater); each is a
+        # long-exposure setup (HCG + low noise, heater off); each is a
         # no-op on cameras that do not advertise the capability. Set any of
         # them to null in the setup file to leave the camera's own default.
         props = detectorInfo.managerProperties
         conversionGain = props.get('conversionGain', 'HCG')
         lowNoise = props.get('lowNoise', True)
-        heat = props.get('heat', True)
+        # The window heater is off unless the setup asks for it: it fights the
+        # cooler, and condensation is only a risk at low target temperatures.
+        heat = props.get('heat', False)
         blacklevelAutoAdjust = props.get('blacklevelAutoAdjust', None)
+        # Append the sensor temperature to a CSV in the day's recordings folder
+        # every few seconds while the camera is armed (TEC models). Accepted
+        # both next to the other manager properties and inside the nested
+        # 'toupcam' block, because that is where it reads like it belongs.
+        cameraProps = dict(detectorInfo.managerProperties['toupcam'])
+        readSaveTemperature = bool(
+            cameraProps.pop('readSaveTemperature',
+                            props.get('readSaveTemperature', False)))
 
         self._camera = self._getToupcamObj(
             cameraId, isRGB, binning, flipImage,
             heat=heat, lowNoise=lowNoise, conversionGain=conversionGain,
-            blacklevelAutoAdjust=blacklevelAutoAdjust)
+            blacklevelAutoAdjust=blacklevelAutoAdjust,
+            readSaveTemperature=readSaveTemperature)
 
-        for propertyName, propertyValue in detectorInfo.managerProperties['toupcam'].items():
+        for propertyName, propertyValue in cameraProps.items():
             self._camera.setPropertyValue(propertyName, propertyValue)
 
         fullShape = (self._camera.SensorWidth,
@@ -200,16 +215,24 @@ class ToupCamManager(DetectorManager):
                 value=bool(self._camera.get_blacklevel_autoadjust()),
                 editable=True)
 
-        # TEC-cooled models get temperature control parameters
+        # TEC-cooled models get temperature control parameters. The values are
+        # read back from the camera so the dialog shows the target that is
+        # actually active rather than a placeholder.
         if getattr(self._camera, '_hasTEC', False):
+            target = self._camera.get_target_temperature()
+            if target is None:
+                target = getattr(self._camera, 'targetTemperature', 0)
             parameters['target_temperature'] = DetectorNumberParameter(
-                group='Cooling', value=0, valueUnits='°C', editable=True)
+                group='Cooling', value=target, valueUnits='°C', editable=True)
         if getattr(self._camera, '_hasGetTemperature', False):
             parameters['temperature'] = DetectorNumberParameter(
-                group='Cooling', value=0, valueUnits='°C', editable=False)
+                group='Cooling', value=self._camera.get_temperature() or 0,
+                valueUnits='°C', editable=False)
         if getattr(self._camera, '_hasFan', False):
+            fan = self._camera.get_fan_speed()
             parameters['fan_speed'] = DetectorNumberParameter(
-                group='Cooling', value=-1, valueUnits='arb.u.', editable=True)
+                group='Cooling', value=-1 if fan is None else fan,
+                valueUnits='arb.u.', editable=True)
 
         # Prepare actions
         actions = {
@@ -512,15 +535,16 @@ class ToupCamManager(DetectorManager):
         return self._camera.getTriggerTypes()
 
     def _getToupcamObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False),
-                       heat=True, lowNoise=True, conversionGain="HCG",
-                       blacklevelAutoAdjust=None):
+                       heat=False, lowNoise=True, conversionGain="HCG",
+                       blacklevelAutoAdjust=None, readSaveTemperature=False):
         try:
             from imswitch.imcontrol.model.interfaces.toupcamcamera import CameraToupcam
             self.__logger.debug(f'Trying to initialize Toupcam camera {cameraId}')
             camera = CameraToupcam(cameraNo=cameraId, isRGB=isRGB, binning=binning,
                                    flipImage=flipImage, heat=heat, lowNoise=lowNoise,
                                    conversionGain=conversionGain,
-                                   blacklevelAutoAdjust=blacklevelAutoAdjust)
+                                   blacklevelAutoAdjust=blacklevelAutoAdjust,
+                                   readSaveTemperature=readSaveTemperature)
         except Exception as e:
             self.__logger.error(e)
             self.__logger.warning(f'Failed to initialize CameraToupcam {cameraId}, loading TIS mocker')

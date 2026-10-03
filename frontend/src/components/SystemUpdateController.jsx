@@ -8,6 +8,8 @@ import apiUC2ConfigControllerSetBusPower from "../backendapi/apiUC2ConfigControl
 import apiUC2ConfigControllerGetFanState from "../backendapi/apiUC2ConfigControllerGetFanState";
 import apiUC2ConfigControllerSetFanMode from "../backendapi/apiUC2ConfigControllerSetFanMode";
 import apiUC2ConfigControllerGetBoardTemperature from "../backendapi/apiUC2ConfigControllerGetBoardTemperature";
+import apiUC2ConfigControllerStartPalletUpgrade from "../backendapi/apiUC2ConfigControllerStartPalletUpgrade";
+import apiUC2ConfigControllerGetPalletUpgradeStatus from "../backendapi/apiUC2ConfigControllerGetPalletUpgradeStatus";
 import {
   Box,
   Typography,
@@ -47,7 +49,6 @@ import {
   CheckCircle,
   Refresh,
   Build,
-  AutoFixHigh as WizardIcon,
   Usb as UsbIcon,
   Bluetooth as BluetoothIcon,
   LightbulbOutlined as LedIcon,
@@ -56,10 +57,11 @@ import {
   Thermostat as ThermostatIcon,
   ReportProblem as ReportProblemIcon,
   HelpOutline as HelpOutlineIcon,
+  SystemUpdateAlt as SystemUpdateAltIcon,
 } from "@mui/icons-material";
 
-import CanOtaWizard from "./CanOtaWizard";
-import UsbFlashWizard from "./UsbFlashWizard";
+import FirmwareVersionsPanel from "./FirmwareVersionsPanel";
+import FirmwareUpdateDialog from "./FirmwareUpdateDialog";
 
 // Redux state management
 import * as uc2Slice from "../state/slices/UC2Slice.js";
@@ -298,6 +300,59 @@ const SystemUpdateController = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tempPollingEnabled, isBackendConnected]);
 
+  // --- OS update: Forklift pallet upgrade (EXPERIMENTAL) ------------------
+  // state is systemd's ActiveState of the host unit: "activating" while it runs.
+  const [palletUpgrade, setPalletUpgrade] = useState({ state: "", log: "" });
+
+  const refreshPalletUpgrade = async () => {
+    try {
+      setPalletUpgrade(await apiUC2ConfigControllerGetPalletUpgradeStatus());
+    } catch (e) {
+      // expected while the upgrade restarts the ImSwitch container
+    }
+  };
+
+  const handleStartPalletUpgrade = async () => {
+    if (
+      !window.confirm(
+        "Upgrade the OS software now? ImSwitch restarts during the upgrade and running acquisitions are interrupted.",
+      )
+    )
+      return;
+    try {
+      const res = await apiUC2ConfigControllerStartPalletUpgrade();
+      if (res?.status === "started") {
+        setPalletUpgrade({ state: "activating", log: "" });
+      } else {
+        dispatch(
+          setNotification({
+            message: "Could not start the upgrade: " + (res?.message || "unknown error"),
+            type: "error",
+          }),
+        );
+      }
+    } catch (e) {
+      dispatch(
+        setNotification({
+          message: "startPalletUpgrade failed: " + (e.message || e),
+          type: "error",
+        }),
+      );
+    }
+  };
+
+  // Read the status once, then every 3 s while the upgrade runs.
+  useEffect(() => {
+    if (isBackendConnected) refreshPalletUpgrade();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBackendConnected]);
+  useEffect(() => {
+    if (palletUpgrade.state !== "activating") return undefined;
+    const id = setInterval(refreshPalletUpgrade, 3000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [palletUpgrade.state]);
+
   // LED status control
   const [ledStatus, setLedStatus] = useState("idle");
   const [isSettingLed, setIsSettingLed] = useState(false);
@@ -331,8 +386,7 @@ const SystemUpdateController = () => {
   };
 
   // Wizard state
-  const [showCanOtaWizard, setShowCanOtaWizard] = React.useState(false);
-  const [showUsbFlashWizard, setShowUsbFlashWizard] = React.useState(false);
+  const [showFirmwareUpdate, setShowFirmwareUpdate] = React.useState(false);
 
   // Mock firmware flash (future API integration)
   const handleFirmwareFlash = async () => {
@@ -849,77 +903,101 @@ const SystemUpdateController = () => {
         </CardContent>
       </Card>
 
-      {/* CAN OTA Update Card */}
+      {/* Firmware: versions of all boards + one "Update firmware" (CAN bus or USB cable) */}
       <Card sx={{ mt: 3 }}>
         <CardContent>
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
             <Build color="primary" />
-            <Typography variant="h6">Device Firmware Update</Typography>
+            <Typography variant="h6">Firmware</Typography>
           </Box>
 
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Update firmware on connected devices (motors, lasers, LEDs) via CAN
-            or via Over-The-Air WIFI (OTA) updates
-          </Typography>
+          <FirmwareVersionsPanel disabled={!uc2Connected} />
 
           <Button
             variant="contained"
-            color="secondary"
-            onClick={() => setShowCanOtaWizard(true)}
-            startIcon={<WizardIcon />}
+            onClick={() => setShowFirmwareUpdate(true)}
+            startIcon={<Build />}
             size="large"
             fullWidth
-            disabled={!uc2Connected}
           >
-            Launch CAN OTA Wizard
+            Update firmware…
           </Button>
-
           {!uc2Connected && (
-            <Alert severity="warning" sx={{ mt: 2 }}>
-              UC2 device must be connected to use CAN OTA updates
-            </Alert>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              No board connected: only updating over a USB cable is available.
+            </Typography>
           )}
         </CardContent>
       </Card>
 
-      {/* USB Master Flash Card */}
+      {/* OS update: Forklift pallet (EXPERIMENTAL) */}
       <Card sx={{ mt: 3 }}>
         <CardContent>
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
-            <UsbIcon color="primary" />
-            <Typography variant="h6">Master CAN HAT Firmware (USB)</Typography>
-            <Chip
-              label="esptool"
-              color="info"
-              size="small"
-              variant="outlined"
-            />
+            <SystemUpdateAltIcon color="primary" />
+            <Typography variant="h6">
+              Operating System Update (experimental)
+            </Typography>
           </Box>
 
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Flash firmware to the master CAN HAT controller via USB connection.
-            This device coordinates all CAN slave devices and cannot be updated
-            via WiFi OTA.
-          </Typography>
-
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={() => setShowUsbFlashWizard(true)}
-            startIcon={<UsbIcon />}
-            size="large"
-            fullWidth
-          >
-            Launch USB Flash Wizard
-          </Button>
-
-          <Alert severity="info" sx={{ mt: 2 }}>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              <strong>Highly experimental.</strong> This button upgrades the
+              openUC2 OS software (the Forklift pallet) on the Raspberry Pi.
+              ImSwitch restarts during the upgrade, so this page loses its
+              connection for a while.
+            </Typography>
             <Typography variant="body2">
-              <strong>Note:</strong> The ESP32 will be disconnected temporarily
-              during flashing. Make sure the device is connected via USB before
-              starting.
+              It is better to run the command yourself: in the Cockpit terminal
+              (<code>/admin/cockpit/</code> on this machine), or connect to the
+              microscope over Wi-Fi/Ethernet and run{" "}
+              <code>ssh pi@192.168.4.1</code>.
             </Typography>
           </Alert>
+
+          <Paper
+            component="pre"
+            sx={{ p: 1.5, mb: 2, bgcolor: "background.default", fontSize: 13 }}
+          >
+            forklift plt upgrade --force &amp;&amp; forklift stage apply
+          </Paper>
+
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1 }}>
+            <Button
+              variant="contained"
+              color="warning"
+              onClick={handleStartPalletUpgrade}
+              disabled={
+                !isBackendConnected || palletUpgrade.state === "activating"
+              }
+            >
+              Upgrade pallet
+            </Button>
+            {palletUpgrade.state === "activating" && (
+              <CircularProgress size={18} />
+            )}
+            {palletUpgrade.state && (
+              <Typography variant="body2" color="text.secondary">
+                Status: {palletUpgrade.state}
+              </Typography>
+            )}
+          </Box>
+
+          {palletUpgrade.log && (
+            <Paper
+              component="pre"
+              sx={{
+                p: 1.5,
+                maxHeight: 320,
+                overflow: "auto",
+                whiteSpace: "pre-wrap",
+                fontSize: 12,
+                bgcolor: "background.default",
+              }}
+            >
+              {palletUpgrade.log}
+            </Paper>
+          )}
         </CardContent>
       </Card>
 
@@ -964,17 +1042,13 @@ const SystemUpdateController = () => {
         </DialogActions>
       </Dialog>
 
-      {/* CAN OTA Wizard */}
-      <CanOtaWizard
-        open={showCanOtaWizard}
-        onClose={() => setShowCanOtaWizard(false)}
-      />
-
-      {/* USB Flash Wizard */}
-      <UsbFlashWizard
-        open={showUsbFlashWizard}
-        onClose={() => setShowUsbFlashWizard(false)}
-      />
+      {showFirmwareUpdate && (
+        <FirmwareUpdateDialog
+          open
+          canAvailable={uc2Connected}
+          onClose={() => setShowFirmwareUpdate(false)}
+        />
+      )}
     </Box>
   );
 };

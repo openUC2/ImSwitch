@@ -59,7 +59,18 @@ class HikCamManager(DetectorManager):
             binning = detectorInfo.managerProperties['binning']
         except:
             binning = 1
-        self._camera = self._getHikObj(cameraId, isRGB, binning, flipImage)
+        # Frame rate must reach the CONSTRUCTOR: openCamera() decides there
+        # whether to enable the rate limiter at all, and CameraHIK's default is
+        # 30 fps. Leaving it out meant a setup file asking for -1 ("no cap")
+        # still got a hard 30 fps cap applied behind its back — and on a link
+        # that only carries ~29 fps that surplus queues inside the camera and
+        # shows up as live-view latency that grows until the stream restarts.
+        try:
+            frame_rate = float(detectorInfo.managerProperties['hikcam']['frame_rate'])
+        except (KeyError, TypeError, ValueError):
+            frame_rate = -1
+
+        self._camera = self._getHikObj(cameraId, isRGB, binning, flipImage, frame_rate)
 
         for propertyName, propertyValue in detectorInfo.managerProperties['hikcam'].items():
             self._camera.setPropertyValue(propertyName, propertyValue)
@@ -94,6 +105,11 @@ class HikCamManager(DetectorManager):
         except Exception:
             initial_gain = 1
 
+        try:
+            initial_frame_rate = self._camera.getPropertyValue('frame_rate')
+        except Exception:
+            initial_frame_rate = frame_rate
+
         # Prepare parameters
         parameters = {
             'exposure': DetectorNumberParameter(group='Misc', value=initial_exposure, valueUnits='ms',
@@ -107,8 +123,10 @@ class HikCamManager(DetectorManager):
                         editable=False),
             'image_height': DetectorNumberParameter(group='Misc', value=fullShape[1], valueUnits='arb.u.',
                         editable=False),
-            'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
-                                    editable=True),
+            # Seeded from the camera, not from a constant: a hard-coded -1 here
+            # reported "no cap" in the UI while the camera was actually capped.
+            'frame_rate': DetectorNumberParameter(group='Misc', value=initial_frame_rate,
+                                    valueUnits='fps', editable=True),
             'frame_number': DetectorNumberParameter(group='Misc', value=1, valueUnits='frames',
                                     editable=False),
             'exposure_mode': DetectorListParameter(group='Misc', value='manual',
@@ -274,8 +292,79 @@ class HikCamManager(DetectorManager):
         except:
             return None
 
+    def getChunkWithTriggerIndex(self):
+        """Drain the frame buffer as (frames, frame_ids, trigger_indices).
+
+        The trigger index is the camera's own count of trigger pulses, so a
+        caller that knows how many pulses it sent can pair frames with them
+        even when some frames were lost. Returns None when the camera (e.g.
+        the mock fallback) cannot report it.
+        """
+        getter = getattr(self._camera, "getLastChunkWithTriggerIndex", None)
+        if getter is None:
+            return None
+        try:
+            return getter()
+        except Exception as e:
+            self.__logger.error(f"getChunkWithTriggerIndex failed: {e}")
+            return None
+
+    def _cameraBool(self, method, *args):
+        """Call an optional CameraHIK setter; False when missing or failing."""
+        fn = getattr(self._camera, method, None)
+        if fn is None:
+            self.__logger.warning(f"{method} not supported by {self._camera.model}")
+            return False
+        try:
+            return bool(fn(*args))
+        except Exception as e:
+            self.__logger.error(f"{method}{args} failed: {e}")
+            return False
+
+    def getTriggerActivation(self):
+        """Current trigger edge/level entry name, or None when unknown."""
+        fn = getattr(self._camera, "getTriggerActivation", None)
+        if fn is None:
+            return None
+        try:
+            return fn()
+        except Exception as e:
+            self.__logger.debug(f"getTriggerActivation failed: {e}")
+            return None
+
+    def setTriggerActivation(self, edge="RisingEdge"):
+        """Trigger edge/level (GenICam TriggerActivation entry); True on success."""
+        return self._cameraBool("setTriggerActivation", edge)
+
+    def setTriggerDelayUs(self, us):
+        """Delay from trigger edge to exposure start in µs; True on success."""
+        return self._cameraBool("setTriggerDelayUs", us)
+
+    def setShutterMode(self, mode):
+        """Sensor shutter mode (e.g. "Rolling", "GlobalReset"); False if unsupported."""
+        return self._cameraBool("setShutterMode", mode)
+
+    def setTriggerIndexEmbedding(self, enable=True):
+        """Have the camera report its trigger counter per frame; False if unsupported."""
+        return self._cameraBool("setTriggerIndexEmbedding", enable)
+
     def flushBuffers(self):
         self._camera.flushBuffer()
+
+    def getResultingFrameRate(self):
+        """Frames per second the camera can deliver at its current exposure, or None.
+
+        1 / this is the shortest trigger period the camera honours (exposure
+        plus sensor readout); used to pace strobed sweeps.
+        """
+        fn = getattr(self._camera, "getResultingFrameRate", None)
+        if fn is None:
+            return None
+        try:
+            return fn()
+        except Exception as e:
+            self.__logger.debug(f"getResultingFrameRate failed: {e}")
+            return None
 
     def startAcquisition(self):
         if self._camera.model == "mock":
@@ -383,11 +472,12 @@ class HikCamManager(DetectorManager):
         """Get the available trigger types for the camera."""
         return self._camera.getTriggerTypes()
 
-    def _getHikObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False)):
+    def _getHikObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False), frame_rate=-1):
         try:
             from imswitch.imcontrol.model.interfaces.hikcamera import CameraHIK
             self.__logger.debug(f'Trying to initialize Hik camera {cameraId}')
-            camera = CameraHIK(cameraNo=cameraId, isRGB=isRGB, binning=binning, flipImage=flipImage)
+            camera = CameraHIK(cameraNo=cameraId, isRGB=isRGB, binning=binning,
+                               flipImage=flipImage, frame_rate=frame_rate)
         except Exception as e:
             self.__logger.error(e)
             self.__logger.warning(f'Failed to initialize CameraHik {cameraId}, loading TIS mocker')

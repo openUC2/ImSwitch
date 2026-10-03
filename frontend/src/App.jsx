@@ -45,6 +45,7 @@ import { JupyterProvider } from "./context/JupyterContext.js";
 import { PWAProvider } from "./context/PWAContext.js";
 import DemoController from "./components/DemoController.js";
 import StageMapController from "./components/StageMapController.jsx";
+import ArkitektController from "./components/ArkitektController.jsx";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
 import GalvoScannerController from "./components/GalvoScannerController.jsx";
 import ShitScopeComponent from "./components/ShitScopeComponent.js";
@@ -57,6 +58,7 @@ import MobileApp from "./mobile/MobileApp";
 import { useMobileRoute } from "./mobile/mobileRoutes";
 import AppManagerPage from "./components/AppManagerPage.jsx";
 import OnboardingTour from "./components/OnboardingTour.jsx";
+import FirmwareUpdatePrompt from "./components/FirmwareUpdatePrompt";
 
 //axon
 import AxonTabComponent from "./axon/AxonTabComponent.js";
@@ -600,6 +602,7 @@ function App() {
           <ReduxNotificationBridge />
           <WebSocketHandler />
           <OnboardingTour selectedPlugin={selectedPlugin} />
+          <FirmwareUpdatePrompt />
           <CssBaseline />
 
           <Dialog
@@ -834,6 +837,7 @@ function App() {
               )}
               {selectedPlugin === "DemoController" && <DemoController />}
               {selectedPlugin === "StageMap" && <StageMapController />}
+              {selectedPlugin === "Arkitekt" && <ArkitektController />}
               {selectedPlugin === "CompositeAcquisition" && (
                 <CompositeAcquisitionComponent />
               )}

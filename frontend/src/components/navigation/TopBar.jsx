@@ -15,6 +15,8 @@ const TopBar = ({
   selectedPlugin,
   onSettingsNavigate,
   onStorageChange,
+  // 48 px instead of 64 px: on a 480 px tall touchscreen every row counts.
+  dense = false,
 }) => {
   // Get backend connection status
   const uc2State = useSelector(uc2Slice.getUc2State);
@@ -29,7 +31,14 @@ const TopBar = ({
       })}
     >
       <Toolbar
-        sx={{ width: "100%", display: "flex", alignItems: "center", px: 2 }}
+        variant={dense ? "dense" : "regular"}
+        sx={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          px: dense ? 1 : 2,
+          ...(dense && { minHeight: 48 }),
+        }}
       >
         <>
           {isMobile ? (
@@ -51,13 +60,15 @@ const TopBar = ({
           sx={{
             flexGrow: 1,
             fontWeight: "bold",
-            fontSize: isMobile ? "1rem" : "1.25rem",
+            fontSize: isMobile || dense ? "1rem" : "1.25rem",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}
         >
-          {isMobile ? selectedPlugin : `ImSwitch UI - ${selectedPlugin}`}
+          {isMobile || dense
+            ? selectedPlugin
+            : `ImSwitch UI - ${selectedPlugin}`}
         </Typography>
 
         <StorageButton

@@ -226,7 +226,7 @@ const PositionsDimension = () => {
         }}
       >
         <Typography variant="body2" color="textSecondary">
-          📍 Select positions on the <strong>Plate Map</strong> viewport (left). They appear here
+          📍 Select positions on the <strong>Plate Map</strong> viewport. They appear here
           instantly — edit the name and X/Y/Z below, or drive the stage to a row.
         </Typography>
       </Box>

@@ -20,6 +20,7 @@ import apiDownloadJson from "../backendapi/apiDownloadJson.js";
 import fetchObjectiveControllerGetStatus from "../middleware/fetchObjectiveControllerGetStatus.js";
 import LabwareSelectionPanel from "../components/LabwareSelectionPanel.jsx";
 import StrobeSettingsButton from "../components/StrobeSettingsButton.jsx";
+import useDeviceProfile from "../hooks/useDeviceProfile";
 
 import {
   Button,
@@ -81,6 +82,7 @@ const WellSelectorComponent = () => {
 
   //redux dispatcher
   const dispatch = useDispatch();
+  const { touchUI } = useDeviceProfile();
 
   // Access global Redux state
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
@@ -552,7 +554,9 @@ const WellSelectorComponent = () => {
     // via the setStageOffsetAxis API (single source of truth for offsets).
     if (infoPopupRef.current) {
       infoPopupRef.current.showMessage(
-        "Right-click on the map where you are and select 'We are here' to calibrate the stage offset.",
+        touchUI
+          ? "Long-press the map where you are and select 'We are here' to calibrate the stage offset."
+          : "Right-click on the map where you are and select 'We are here' to calibrate the stage offset.",
       );
     }
   };
@@ -638,38 +642,35 @@ const WellSelectorComponent = () => {
             Reset History
           </Button>
 
-          <label
-            style={{
-              fontSize: "14px",
-              display: "flex",
-              alignItems: "center",
-              gap: "4px",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={wellSelectorState.showOverlap}
-              onChange={handleShowOverlapChange}
-            />
-            Show Overlap
-          </label>
+          <FormControlLabel
+            sx={{ ml: 0, mr: 0.5 }}
+            control={
+              <Checkbox
+                size="small"
+                checked={Boolean(wellSelectorState.showOverlap)}
+                onChange={handleShowOverlapChange}
+              />
+            }
+            label={<Typography variant="body2">Show Overlap</Typography>}
+          />
 
-          <label
-            style={{
-              fontSize: "14px",
-              display: "flex",
-              alignItems: "center",
-              gap: "4px",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={wellSelectorState.showShape}
-              onChange={handleShowShapeChange}
-            />
-            Show Shape
-          </label>
+          <FormControlLabel
+            sx={{ ml: 0, mr: 0.5 }}
+            control={
+              <Checkbox
+                size="small"
+                checked={Boolean(wellSelectorState.showShape)}
+                onChange={handleShowShapeChange}
+              />
+            }
+            label={<Typography variant="body2">Show Shape</Typography>}
+          />
         </Box>
+        <Typography variant="caption" sx={{ display: "block", mt: 0.5, color: "text.secondary" }}>
+          {touchUI
+            ? "Pinch to zoom, two fingers to pan, long-press the map to remove a point or to set “We are here”."
+            : "Ctrl+wheel to zoom, Ctrl+drag to pan, right-click the map to remove a point or to set “We are here”."}
+        </Typography>
       </div>
 
       {/* MODE — selection tools + stage actions, with explanatory icons + tooltips */}
@@ -917,7 +918,11 @@ const WellSelectorComponent = () => {
             size="small"
             value={wellSelectorState.moveCameraSpeedXY ?? 20000}
             onChange={handleMoveCameraSpeedXYChange}
-            inputProps={{ min: 1, step: 1000 }}
+            inputProps={{
+              min: 1,
+              step: 1000,
+              "data-keypad-presets": "1000,5000,10000,15000,20000",
+            }}
             error={
               (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000
             }
@@ -934,7 +939,11 @@ const WellSelectorComponent = () => {
             size="small"
             value={wellSelectorState.moveCameraSpeedZ ?? 1000}
             onChange={handleMoveCameraSpeedZChange}
-            inputProps={{ min: 1, step: 100 }}
+            inputProps={{
+              min: 1,
+              step: 100,
+              "data-keypad-presets": "100,500,1000,2000",
+            }}
             sx={{ width: 140 }}
           />
         </Box>

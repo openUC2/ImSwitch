@@ -11,6 +11,8 @@ import {
   IconButton,
   Drawer,
   Tooltip,
+  ToggleButton,
+  ToggleButtonGroup,
   useMediaQuery,
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
@@ -21,6 +23,14 @@ import VisibilityIcon from "@mui/icons-material/Visibility";
 import SensorsIcon from "@mui/icons-material/Sensors";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import ControlCameraIcon from "@mui/icons-material/ControlCamera";
+import PhotoCameraIcon from "@mui/icons-material/PhotoCamera";
+import TuneIcon from "@mui/icons-material/Tune";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import StopIcon from "@mui/icons-material/Stop";
+import CameraAltIcon from "@mui/icons-material/CameraAlt";
+import useDeviceProfile from "../hooks/useDeviceProfile";
+import TouchControlDock from "./touch/TouchControlDock.jsx";
+import TouchStagePanel from "./touch/TouchStagePanel.jsx";
 import AxisControl from "./AxisControl.jsx";
 import JoystickControl from "./JoystickControl.jsx";
 import VirtualJoystickControl from "./VirtualJoystickControl.js";
@@ -116,6 +126,11 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
   // Stage control tabs state
   const [stageControlTab, setStageControlTab] = useState(0); // 0 = Multiple Axis View, 1 = Joystick Control
+
+  // Compact (phone / Pi touchscreen / narrow window): the stream stays on
+  // screen and the controls dock beside or below it (see the early return
+  // below). The side-panel layout further down is the desktop layout.
+  const { compactLayout, isPortrait, widthClass } = useDeviceProfile();
 
   // Responsive design: collapsible right panel for mobile
   const isMobile = useMediaQuery("(max-width:600px)");
@@ -706,6 +721,190 @@ export default function LiveView({ setFileManagerInitialPath }) {
     await stopRecAndDownload();
   };
 
+  const streamControls = (
+    <StreamControls
+      isStreamRunning={isStreamRunning}
+      isLongExposure={isLongExposure}
+      exposureMs={exposureMs}
+      longExposureThresholdMs={longExposureThresholdMs}
+      onCancelSnap={cancelSnap}
+      onToggleStream={toggleStream}
+      onSnap={snap}
+      onSnapAndDownload={snapAndDownload}
+      isRecording={isRecording}
+      onStartRecord={startRec}
+      onStopRecord={stopRec}
+      onStopRecordAndDownload={stopRecAndDownload}
+      onRecordAndDownload={recordAndDownload}
+      onGoToFolder={handleGoToFolder}
+      lastCapturePath={lastCapturePath}
+    />
+  );
+
+  if (compactLayout) {
+    const dockBeside = !isPortrait;
+    const sections = [
+      {
+        key: "stage",
+        label: "Stage",
+        icon: <ControlCameraIcon fontSize="small" />,
+        render: () => <TouchStagePanel buttonSize={dockBeside ? 56 : 64} />,
+      },
+      {
+        key: "light",
+        label: "Light",
+        icon: <LightModeIcon fontSize="small" />,
+        render: () => (
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <IlluminationController hostIP={hostIP} hostPort={hostPort} />
+            {hasLEDMatrixController && (
+              <ExtendedLEDMatrixController hostIP={hostIP} hostPort={hostPort} />
+            )}
+          </Box>
+        ),
+      },
+      {
+        key: "camera",
+        label: "Camera",
+        icon: <PhotoCameraIcon fontSize="small" />,
+        render: () => (
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {streamControls}
+            <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
+          </Box>
+        ),
+      },
+      {
+        key: "focus",
+        label: "Focus",
+        icon: <CenterFocusStrongIcon fontSize="small" />,
+        render: () => (
+          <AutofocusController hostIP={hostIP} hostPort={hostPort} />
+        ),
+      },
+      hasObjectiveController && {
+        key: "objective",
+        label: "Lens",
+        icon: <VisibilityIcon fontSize="small" />,
+        render: () => <ObjectiveSwitcher hostIP={hostIP} hostPort={hostPort} />,
+      },
+      {
+        key: "more",
+        label: "More",
+        icon: <TuneIcon fontSize="small" />,
+        render: () => (
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <Box>
+              <Typography variant="subtitle2" gutterBottom>
+                All axes · homing · absolute moves
+              </Typography>
+              <AxisControl hostIP={hostIP} hostPort={hostPort} />
+            </Box>
+            <Box>
+              <Typography variant="subtitle2" gutterBottom>
+                Detector trigger
+              </Typography>
+              <DetectorTriggerController hostIP={hostIP} hostPort={hostPort} />
+            </Box>
+          </Box>
+        ),
+      },
+    ].filter(Boolean);
+
+    const isSnapping = liveViewState.isSnapping;
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: dockBeside ? "row" : "column",
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          gap: 1,
+          overflow: "hidden",
+        }}
+      >
+        {/* stream column: detector picker, live image, quick actions */}
+        <Box
+          sx={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 0.75,
+            minWidth: 0,
+            minHeight: 0,
+            ...(dockBeside ? { flex: 1 } : { flex: "0 0 auto" }),
+          }}
+        >
+          {detectors.length > 1 && (
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              value={activeTab}
+              onChange={(_, idx) =>
+                idx !== null && dispatch(liveViewSlice.setActiveTab(idx))
+              }
+              aria-label="Detector selection"
+              sx={{
+                overflowX: "auto",
+                flexShrink: 0,
+                "& .MuiToggleButton-root": {
+                  textTransform: "none",
+                  whiteSpace: "nowrap",
+                },
+              }}
+            >
+              {detectors.map((name, idx) => (
+                <ToggleButton key={name} value={idx}>
+                  {name}
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+          )}
+
+          <Box
+            data-tour="live-view"
+            sx={{
+              position: "relative",
+              minHeight: 0,
+              ...(dockBeside ? { flex: 1 } : { height: "min(45vh, 75vw)" }),
+            }}
+          >
+            <LiveViewControlWrapper fill />
+          </Box>
+
+          <Box sx={{ display: "flex", gap: 1, flexShrink: 0 }}>
+            <Button
+              variant={isStreamRunning ? "outlined" : "contained"}
+              color={isStreamRunning ? "error" : "primary"}
+              startIcon={isStreamRunning ? <StopIcon /> : <PlayArrowIcon />}
+              onClick={toggleStream}
+              sx={{ flex: 1 }}
+            >
+              {isStreamRunning ? "Stop" : "Live"}
+            </Button>
+            <Button
+              variant="contained"
+              color="secondary"
+              startIcon={<CameraAltIcon />}
+              onClick={() => snap("", liveViewState.snapFormat || 1)}
+              disabled={isSnapping}
+              sx={{ flex: 1 }}
+            >
+              {isSnapping ? "Saving…" : "Snap"}
+            </Button>
+          </Box>
+        </Box>
+
+        <TouchControlDock
+          sections={sections}
+          placement={dockBeside ? "side" : "bottom"}
+          width={widthClass === "xs" || widthClass === "sm" ? 300 : 340}
+          storageKey="imswitch-liveview-dock-tab"
+        />
+      </Box>
+    );
+  }
+
   return (
     <Box
       sx={{
@@ -833,23 +1032,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
         {/* Stream, Record and Detector Controls */}
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mb: 2 }}>
-          <StreamControls
-            isStreamRunning={isStreamRunning}
-            isLongExposure={isLongExposure}
-            exposureMs={exposureMs}
-            longExposureThresholdMs={longExposureThresholdMs}
-            onCancelSnap={cancelSnap}
-            onToggleStream={toggleStream}
-            onSnap={snap}
-            onSnapAndDownload={snapAndDownload}
-            isRecording={isRecording}
-            onStartRecord={startRec}
-            onStopRecord={stopRec}
-            onStopRecordAndDownload={stopRecAndDownload}
-            onRecordAndDownload={recordAndDownload}
-            onGoToFolder={handleGoToFolder}
-            lastCapturePath={lastCapturePath}
-          />
+          {streamControls}
 
           <Box data-tour="camera-controls">
             <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
@@ -899,6 +1082,8 @@ export default function LiveView({ setFileManagerInitialPath }) {
               setStageControlTab={setStageControlTab}
               hostIP={hostIP}
               hostPort={hostPort}
+              hasObjectiveController={hasObjectiveController}
+              hasLEDMatrixController={hasLEDMatrixController}
             />
           </Box>
         </Drawer>

@@ -406,6 +406,7 @@ const ImprovedAxisControl = ({ hostIP, hostPort }) => {
                     type="number"
                     value={stepSizes[axis]}
                     onChange={(e) => setStepSize(axis, Number(e.target.value))}
+                    inputProps={{ min: 0, "data-keypad-presets": "1,10,100,1000" }}
                     sx={{ width: "100%", mt: 0.5 }}
                     InputProps={{
                       style: { fontSize: "0.75rem", height: 32 },
@@ -440,6 +441,13 @@ const ImprovedAxisControl = ({ hostIP, hostPort }) => {
               value={globalSpeed}
               onChange={(e) => setGlobalSpeed(Number(e.target.value))}
               sx={{ width: 150 }}
+              // Quick picks for the on-screen number pad; they skip the
+              // step-losing band warned about below.
+              inputProps={{
+                min: 1,
+                step: 1000,
+                "data-keypad-presets": `5000,10000,${SPEED_WARN_MIN},${SPEED_WARN_MAX},100000`,
+              }}
               InputProps={{
                 startAdornment: <Speed fontSize="small" sx={{ mr: 0.5 }} />,
                 style: { fontSize: "0.8rem" },

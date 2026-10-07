@@ -9,6 +9,10 @@ const de = {
   // --- shared UI chrome ---
   "Dark Mode": "Dunkles Design",
   Language: "Sprache",
+  "Touch UI": "Touch-Bedienung",
+  "Touchscreen detected": "Touchscreen erkannt",
+  "No touchscreen detected": "Kein Touchscreen erkannt",
+  "Number pad": "Ziffernblock",
 
   // --- illumination colours (also used as dynamic keys, hence lower case) ---
   Red: "Rot",

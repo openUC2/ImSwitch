@@ -59,6 +59,9 @@ const pulse = keyframes`
  *   Set to false for precise single-click workflows (e.g. pixel calibration marking):
  *   the react-zoom-pan-pinch panning layer otherwise intercepts pointer events and
  *   swallows the click, so the viewer is rendered directly and clicks reach the canvas.
+ * @param {boolean} fill - Size the viewport to the parent's height instead of the
+ *   default 480 px minimum / viewport-relative maximum (compact touch layouts,
+ *   where the parent is a flex cell next to the control dock).
  */
 const LiveViewControlWrapper = ({
   useFastMode = true,
@@ -67,6 +70,7 @@ const LiveViewControlWrapper = ({
   overlayContent,
   enableStageMovement = true,
   enableZoomPan = true,
+  fill = false,
 }) => {
   const dispatch = useDispatch();
   const t = useT();
@@ -373,6 +377,7 @@ const LiveViewControlWrapper = ({
       style={{
         position: "relative",
         width: "100%",
+        ...(fill && { height: "100%", minHeight: 0 }),
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
@@ -472,8 +477,10 @@ const LiveViewControlWrapper = ({
           position: "relative",
           flex: "1",
           width: "100%",
-          minHeight: "480px", // Prevent collapse before stream loads
-          maxHeight: "calc(100vh - 220px)",
+          // Prevent collapse before stream loads; in fill mode the parent
+          // decides the height.
+          minHeight: fill ? 160 : "480px",
+          maxHeight: fill ? "none" : "calc(100vh - 220px)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",

@@ -32,6 +32,8 @@ import {
   School,
   DesktopWindows,
   Language as LanguageIcon,
+  TouchApp,
+  Dialpad,
 } from "@mui/icons-material";
 import { useDeveloperMode } from "../../utils/useDeveloperMode";
 
@@ -43,6 +45,33 @@ import { getStorageState } from "../../state/slices/StorageSlice";
 import { startTour } from "../../state/slices/OnboardingSlice.js";
 import { setLanguage, getLanguage } from "../../state/slices/LanguageSlice.js";
 import { LANGUAGES, useT } from "../../i18n";
+import {
+  getUIPreferences,
+  setTouchMode,
+  setOnScreenKeypad,
+  TRI_STATE,
+} from "../../state/slices/UIPreferencesSlice.js";
+import useDeviceProfile from "../../hooks/useDeviceProfile";
+
+// Auto / On / Off selector used by the touch-related preferences.
+const TriStateToggle = ({ value, onChange }) => (
+  <ToggleButtonGroup
+    size="small"
+    exclusive
+    value={value}
+    onChange={(e, next) => next && onChange(next)}
+  >
+    {TRI_STATE.map((option) => (
+      <ToggleButton
+        key={option}
+        value={option}
+        sx={{ px: 1, py: 0.25, fontSize: "0.7rem", textTransform: "capitalize" }}
+      >
+        {option}
+      </ToggleButton>
+    ))}
+  </ToggleButtonGroup>
+);
 
 /**
  * ImSwitch Settings Menu Component
@@ -59,6 +88,8 @@ const SettingsMenu = ({ onNavigate }) => {
 
   const { isDarkMode } = useSelector(getThemeState);
   const language = useSelector(getLanguage);
+  const uiPreferences = useSelector(getUIPreferences);
+  const deviceProfile = useDeviceProfile();
   const t = useT();
   const connectionSettings = useSelector(
     connectionSettingsSlice.getConnectionSettingsState,
@@ -314,6 +345,41 @@ const SettingsMenu = ({ onNavigate }) => {
               </ToggleButton>
             ))}
           </ToggleButtonGroup>
+        </MenuItem>
+
+        {/* Touch UI - larger targets + stream-first layouts. "Auto" follows the
+            device; force it on a kiosk that also has a mouse attached. */}
+        <MenuItem disableRipple onClick={(e) => e.stopPropagation()}>
+          <ListItemIcon>
+            <TouchApp fontSize="small" />
+          </ListItemIcon>
+          <ListItemText
+            primary={t("Touch UI")}
+            secondary={
+              uiPreferences.touchMode === "auto"
+                ? deviceProfile.touchUI
+                  ? t("Touchscreen detected")
+                  : t("No touchscreen detected")
+                : null
+            }
+            secondaryTypographyProps={{ fontSize: "0.7rem" }}
+          />
+          <TriStateToggle
+            value={uiPreferences.touchMode}
+            onChange={(v) => dispatch(setTouchMode(v))}
+          />
+        </MenuItem>
+
+        {/* On-screen number pad for numeric fields (no OS keyboard on a Pi). */}
+        <MenuItem disableRipple onClick={(e) => e.stopPropagation()}>
+          <ListItemIcon>
+            <Dialpad fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary={t("Number pad")} />
+          <TriStateToggle
+            value={uiPreferences.onScreenKeypad}
+            onChange={(v) => dispatch(setOnScreenKeypad(v))}
+          />
         </MenuItem>
 
         <Divider />

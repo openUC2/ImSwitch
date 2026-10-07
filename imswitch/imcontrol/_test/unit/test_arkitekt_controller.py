@@ -364,10 +364,24 @@ class FakeFakts:
 def private_state_dir(tmp_path, monkeypatch):
     """Sessions go to tmp_path, never the user's arkitekt state directory."""
     pytest.importorskip("arkitekt")
+    import importlib
     import platformdirs
-    import arkitekt.app.fakts as fakts_module
-    monkeypatch.setattr(platformdirs, "user_state_dir", lambda *a, **k: str(tmp_path))
-    monkeypatch.setattr(fakts_module, "user_state_dir", lambda *a, **k: str(tmp_path))
+    private = lambda *a, **k: str(tmp_path)  # noqa: E731
+    monkeypatch.setattr(platformdirs, "user_state_dir", private)
+    # arkitekt does `from platformdirs import user_state_dir`, so patching
+    # platformdirs alone does not reach it: patch the module that binds it.
+    # That module moved between releases (5.x: app.fakts, 6.x: app.sessions),
+    # and CI resolves "arkitekt>=5.0.1" to whatever is newest.
+    for name in ("arkitekt.app.fakts", "arkitekt.app.sessions"):
+        module = importlib.import_module(name)
+        if hasattr(module, "user_state_dir"):
+            monkeypatch.setattr(module, "user_state_dir", private)
+    # Fail loudly rather than write test logins into the real state directory
+    # if a future arkitekt keeps the path somewhere this fixture does not reach.
+    from arkitekt.app.fakts import _cache_path
+    probe = _cache_path(types.SimpleNamespace(identifier="probe", version="0"), "http://probe")
+    assert str(probe).startswith(str(tmp_path)), (
+        f"arkitekt still resolves sessions outside the test dir: {probe}")
     monkeypatch.setenv("ARKITEKT_DEVICE_ID", "test-microscope")
 
 
@@ -433,6 +447,32 @@ def test_only_http_approval_links_reach_the_panel(no_arkitekt):
     endpoint.configure = "https://lok.example/configure/{code}"
     asyncio.run(manager._on_device_code(endpoint, "ABCD"))
     assert manager.status()["approveUrl"] == "https://lok.example/configure/ABCD"
+
+
+def test_device_code_hook_takes_the_fakts_5_4_challenge(no_arkitekt):
+    """fakts 5.4+ (arkitekt 6) calls the hook with one DeviceCodeChallenge, not
+    (endpoint, code): the Bind button failed with a TypeError before this."""
+    import asyncio
+    manager = manager_module.ArkitektManager(ArkitektInfo(autoConnect=False))
+    endpoint = types.SimpleNamespace(configure="https://lok.example/configure/{code}",
+                                     base_url="https://lok.example", name="Lok")
+
+    def challenge(link):
+        return types.SimpleNamespace(endpoint=endpoint, user_code="WXYZ-1234",
+                                     verification_uri_complete=link, expires_in=600)
+
+    asyncio.run(manager._on_device_code(challenge("https://lok.example/approve?c=WXYZ-1234")))
+    status = manager.status()
+    assert status["userCode"] == "WXYZ-1234" and status["serverName"] == "Lok"
+    assert status["approveUrl"] == "https://lok.example/approve?c=WXYZ-1234"
+
+    # No ready-made link from the server: fall back to the endpoint's template.
+    asyncio.run(manager._on_device_code(challenge("")))
+    assert manager.status()["approveUrl"] == "https://lok.example/configure/WXYZ-1234"
+
+    # The panel renders the link, so a non-http one never reaches it.
+    asyncio.run(manager._on_device_code(challenge("javascript:alert(1)")))
+    assert manager.status()["approveUrl"] is None
 
 
 def test_frame_grab_without_frame_numbers(no_arkitekt):

@@ -322,15 +322,28 @@ class ArkitektManager:
         if not self._stop_requested:
             self._set(state=ERROR, message="The Arkitekt agent stopped.", boundSince=None)
 
-    async def _on_device_code(self, endpoint: Any, code: str) -> None:
+    async def _on_device_code(self, *args: Any) -> None:
         """fakts' device-code hook: show the code instead of opening a browser
-        on the microscope's own computer."""
+        on the microscope's own computer.
+
+        fakts 5.4+ (arkitekt 6) hands over one DeviceCodeChallenge; earlier
+        releases called ``hook(endpoint, code)``. Both are accepted, because
+        pyproject allows ``arkitekt>=5.0.1`` and a fresh install gets the new one.
+        """
         if self._automatic:
             raise StoredLoginInvalid(
                 "The stored login is no longer valid (expired or revoked on the server). "
                 "Bind again to approve this microscope.")
-        configure = getattr(endpoint, "configure", None)
-        approve = configure.replace("{code}", code) if configure else endpoint.base_url
+        if len(args) == 1:
+            challenge = args[0]
+            endpoint, code = challenge.endpoint, challenge.user_code
+            approve = getattr(challenge, "verification_uri_complete", None)
+        else:
+            endpoint, code = args
+            approve = None
+        if not approve:
+            configure = getattr(endpoint, "configure", None)
+            approve = configure.replace("{code}", code) if configure else endpoint.base_url
         if urlparse(approve or "").scheme not in ("http", "https"):
             approve = None  # the panel renders it as a link: never javascript: and the like
         self.__logger.info(f"Arkitekt login: approve code {code} at {approve}")

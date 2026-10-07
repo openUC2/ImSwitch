@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "../../openUC2-PCB-XY-Stage"
+		},
+		{
+			"path": "../../../../../../Downloads/i4-controller-firmware"
+		},
+		{
+			"path": "."
+		}
+	],
+	"settings": {}
+}

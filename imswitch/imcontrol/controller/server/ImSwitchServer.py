@@ -55,6 +55,25 @@ images_dir =  os.path.join(_baseDataFilesDir, 'images')
 app = FastAPI(root_path="/imswitch", docs_url=None, redoc_url=None)
 api_router = APIRouter(prefix="/api")
 
+
+class _SPAStaticFiles(StaticFiles):
+    """React build: the HTML shell is never answered with 304.
+
+    Starlette's ETag is md5(mtime-size) and it also honours If-Modified-Since when
+    If-None-Match does not match. A rebuilt index.html only swaps the hashes inside its
+    bundle names (same size), so after a frontend update or rollback the browser got a 304,
+    kept its old index.html, requested bundles that no longer exist and showed a blank page
+    (a private window worked). The shell is ~1 kB: always send it and make the browser ask
+    every time. The hashed bundles keep Starlette's normal conditional caching.
+    """
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        if not str(full_path).endswith(".html"):
+            return super().file_response(full_path, stat_result, scope, status_code)
+        return FileResponse(full_path, status_code=status_code, stat_result=stat_result,
+                            headers={"Cache-Control": "no-cache"})
+
+
 # Mount Socket.IO app at root path for WebSocket connections
 # This allows Socket.IO to handle all socket.io/* paths
 socket_app = get_socket_app()
@@ -63,7 +82,7 @@ print("Socket.IO app mounted at /socket.io")
 
 # Mount static files and other apps
 app.mount("/static", StaticFiles(directory=static_dir), name="static")  # serve static files such as the swagger UI
-try:app.mount("/ui", StaticFiles(directory=imswitchapp_dir), name="imswitch") # serve react app
+try:app.mount("/ui", _SPAStaticFiles(directory=imswitchapp_dir), name="imswitch") # serve react app
 except:print("Could not mount /imcontrol ui static files since directory is missing/a symlink. Please copy the react build files to:", imswitchapp_dir)
 app.mount("/images", StaticFiles(directory=images_dir), name="images") # serve images for GUI
 # provide data path via static files

@@ -1,0 +1,41 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../../../../../Downloads/arkitekt"
+		},
+		{
+			"path": "../../../../../../Downloads/os-rpi"
+		},
+		{
+			"path": "../../../../../../Downloads/ARKITEKT_STUFF/fairino"
+		},
+		{
+			"path": "../../../../../../Downloads/ARKITEKT_STUFF/fairinogale"
+		},
+		{
+			"path": "../../../../../../Downloads/ARKITEKT_STUFF/jena_flow_code_new"
+		},
+		{
+			"path": "../../../../../../Downloads/ARKITEKT_STUFF/OT2windy_service"
+		},
+		{
+			"path": "../../../../../../Downloads/ARKITEKT_STUFF/protocolapp"
+		}
+	],
+	"settings": {
+		"terminal.integrated.profiles.osx": {
+			"x86 bash": {
+				"path": "/usr/bin/arch",
+				"args": [
+					"-arch",
+					"x86_64",
+					"/bin/bash"
+				]
+			}
+		},
+		"terminal.integrated.defaultProfile.osx": "x86 bash"
+	}
+}

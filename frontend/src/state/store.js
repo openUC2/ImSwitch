@@ -35,6 +35,7 @@ import demoReducer from "./slices/DemoSlice";
 import mazeGameReducer from "./slices/MazeGameSlice";
 import themeReducer from "./slices/ThemeSlice";
 import languageReducer from "./slices/LanguageSlice";
+import uiPreferencesReducer from "./slices/UIPreferencesSlice";
 import notificationReducer from "./slices/NotificationSlice";
 import autofocusReducer from "./slices/AutofocusSlice";
 import opticalFlowReducer from "./slices/OpticalFlowSlice";
@@ -175,6 +176,7 @@ const rootReducer = combineReducers({
   mazeGameState: mazeGameReducer,
   themeState: themeReducer,
   languageState: languageReducer,
+  uiPreferencesState: uiPreferencesReducer,
   notification: notificationReducer,
   autofocusState: autofocusReducer,
   opticalFlowState: opticalFlowReducer,
@@ -223,6 +225,7 @@ const persistConfig = {
     "workflowState",
     "themeState",
     "languageState", // Persist the UI language choice
+    "uiPreferencesState", // Persist touch mode / on-screen keypad choice
     "mazeGameState",
     "appManager", // Persist user's app preferences
     "onboardingState", // Persist the "intro tour was done" flag (first-run UX)

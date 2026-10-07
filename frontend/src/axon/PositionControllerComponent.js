@@ -11,6 +11,7 @@ import {
 
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
 import apiPositionerControllerMovePositionerForever from "../backendapi/apiPositionerControllerMovePositionerForever.js";
+import useStageJog from "../hooks/useStageJog.js";
 
 const validXYStepSizes = [10, 100, 1000];
 const validZStepSizes = [50, 100, 500];
@@ -70,10 +71,9 @@ const PositionControllerComponent = () => {
   const keyPressedRef = useRef({});
   const continuousModeTriggeredRef = useRef({}); // Track if continuous mode was activated
 
-  // Long-press state per axis. One shared record meant that pressing a second
-  // button while the first was held overwrote the axis, so the stop command
-  // targeted the wrong one and the original move never stopped.
-  const buttonPressRef = useRef({});
+  // On-screen buttons: step on press, continuous travel after a 1 s hold,
+  // stop on release (state is kept per axis inside the hook).
+  const { jogHandlers } = useStageJog({ holdDelayMs: 1000 });
 
   //##################################################################################
   const movePositioner = (axis, dist) => {
@@ -107,43 +107,6 @@ const PositionControllerComponent = () => {
       .catch((error) => {
         console.log(`Move forever ${axis} error:`, error);
       });
-  };
-
-  //##################################################################################
-  // The step goes out on press, not on release: waiting for the 1 s
-  // long-press timer to rule out a hold meant nothing happened while the
-  // button was down, which is the "clicks register with a delay" complaint.
-  // Holding still starts continuous travel from the same handler.
-  const handleButtonDown = (axis, speed, singleDist, event) => {
-    // Pointer capture delivers the release even if the finger slides off the
-    // button, so a held move can never be left running.
-    event?.currentTarget?.setPointerCapture?.(event.pointerId);
-
-    const presses = buttonPressRef.current;
-    if (presses[axis]?.active) return; // already held; ignore a second press
-    movePositioner(axis, singleDist);
-
-    presses[axis] = {
-      active: true,
-      continuousMode: false,
-      speed,
-      timer: setTimeout(() => {
-        presses[axis].continuousMode = true;
-        presses[axis].timer = null;
-        movePositionerForever(axis, speed, false);
-      }, 1000),
-    };
-  };
-
-  const handleButtonUp = (axis) => {
-    const press = buttonPressRef.current[axis];
-    if (!press?.active) return;
-
-    if (press.timer) clearTimeout(press.timer);
-    if (press.continuousMode) {
-      movePositionerForever(axis, press.speed, true); // stop
-    }
-    delete buttonPressRef.current[axis];
   };
 
   //##################################################################################
@@ -396,66 +359,60 @@ const PositionControllerComponent = () => {
       >
         <Button
           variant="contained"
-          onPointerDown={(event) =>
-            handleButtonDown("Z", -continuousMoveSpeed, -zStepSize, event)
-          }
-          onPointerUp={() => handleButtonUp("Z")}
-          onPointerCancel={() => handleButtonUp("Z")}
+          {...jogHandlers("Z", {
+            dist: -zStepSize,
+            speed: -continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           Z-
         </Button>
         <Button
           variant="contained"
-          onPointerDown={(event) =>
-            handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize, event)
-          }
-          onPointerUp={() => handleButtonUp("Y")}
-          onPointerCancel={() => handleButtonUp("Y")}
+          {...jogHandlers("Y", {
+            dist: -xyStepSize,
+            speed: -continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           Y↑
         </Button>
         <Button
           variant="contained"
-          onPointerDown={(event) =>
-            handleButtonDown("Z", continuousMoveSpeed, zStepSize, event)
-          }
-          onPointerUp={() => handleButtonUp("Z")}
-          onPointerCancel={() => handleButtonUp("Z")}
+          {...jogHandlers("Z", {
+            dist: zStepSize,
+            speed: continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           Z+
         </Button>
         <Button
           variant="contained"
-          onPointerDown={(event) =>
-            handleButtonDown("X", -continuousMoveSpeed, -xyStepSize, event)
-          }
-          onPointerUp={() => handleButtonUp("X")}
-          onPointerCancel={() => handleButtonUp("X")}
+          {...jogHandlers("X", {
+            dist: -xyStepSize,
+            speed: -continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           X←
         </Button>
         <Button
           variant="contained"
-          onPointerDown={(event) =>
-            handleButtonDown("Y", continuousMoveSpeed, xyStepSize, event)
-          }
-          onPointerUp={() => handleButtonUp("Y")}
-          onPointerCancel={() => handleButtonUp("Y")}
+          {...jogHandlers("Y", {
+            dist: xyStepSize,
+            speed: continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           Y↓
         </Button>
         <Button
           variant="contained"
-          onPointerDown={(event) =>
-            handleButtonDown("X", continuousMoveSpeed, xyStepSize, event)
-          }
-          onPointerUp={() => handleButtonUp("X")}
-          onPointerCancel={() => handleButtonUp("X")}
+          {...jogHandlers("X", {
+            dist: xyStepSize,
+            speed: continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           X→

@@ -1,6 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { Box, Tabs, Tab, Tooltip, Typography, IconButton } from "@mui/material";
+import {
+  Box,
+  Tabs,
+  Tab,
+  Tooltip,
+  Typography,
+  IconButton,
+  ToggleButton,
+  ToggleButtonGroup,
+} from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import introJs from "intro.js";
 import "intro.js/introjs.css";
@@ -14,6 +23,8 @@ import LockIcon from "@mui/icons-material/Lock";
 import MyLocationIcon from "@mui/icons-material/MyLocation";
 import LinkIcon from "@mui/icons-material/Link";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
+import ScienceIcon from "@mui/icons-material/Science";
+import useDeviceProfile from "../../hooks/useDeviceProfile";
 
 // Existing components — re-hosted verbatim (no logic / design changes)
 import WellSelectorComponent from "../WellSelectorComponent";
@@ -35,6 +46,7 @@ import apiLiveViewControllerStartLiveView from "../../backendapi/apiLiveViewCont
 import apiLiveViewControllerStopLiveView from "../../backendapi/apiLiveViewControllerStopLiveView";
 
 const VIEWPORT_STORAGE_KEY = "wp2-activeViewport";
+const PANE_STORAGE_KEY = "wp2-compactPane";
 const TOUR_SEEN_KEY = "wp2-tour-seen";
 
 // Viewport indices that drive camera auto-switching (see VIEWPORTS below).
@@ -125,8 +137,9 @@ const TOUR_STEPS = [
     target: null,
     title: "WellPlate workspace",
     intro:
-      "The left shows <b>one viewport at a time</b>; the <b>experiment</b> is always on the right, " +
-      "so you configure while you watch the sample.",
+      "<b>One viewport at a time</b> (plate map, camera, overview, 3D twin) next to the " +
+      "<b>experiment</b>, so you configure while you watch the sample. On small screens " +
+      "the switch at the top flips between the two.",
   },
   {
     target: '[data-tour-wp="viewport-strip"]',
@@ -200,14 +213,23 @@ const launchTour = (isDarkMode) => {
 
 /**
  * Live View viewport: camera selector + the existing live view controls,
- * relocated unchanged from the legacy left/right "Live View" tabs.
+ * relocated unchanged from the legacy left/right "Live View" tabs. In the
+ * compact layout the image fills the pane instead of its 480 px minimum.
  */
-const LiveViewPanel = () => (
-  <Box>
-    <DetectorToggle />
-    <LiveViewControlWrapper />
-  </Box>
-);
+const LiveViewPanel = ({ fill = false }) =>
+  fill ? (
+    <Box sx={{ height: "100%", minHeight: 240, display: "flex", flexDirection: "column" }}>
+      <DetectorToggle />
+      <Box sx={{ flex: 1, minHeight: 0 }}>
+        <LiveViewControlWrapper fill />
+      </Box>
+    </Box>
+  ) : (
+    <Box>
+      <DetectorToggle />
+      <LiveViewControlWrapper />
+    </Box>
+  );
 
 /**
  * Stage state viewport: the existing connection / camera-position readouts,
@@ -252,7 +274,7 @@ const TooltipTab = React.forwardRef(function TooltipTab(
  * always-mounted siblings, selecting positions on the Plate Map updates the
  * inspector's Positions list live — no tab round-trips.
  */
-const WellPlateWorkspace = () => {
+const WellPlateWorkspace = ({ headerAction = null }) => {
   const theme = useTheme();
   const dispatch = useDispatch();
 
@@ -262,6 +284,20 @@ const WellPlateWorkspace = () => {
     overviewRegSlice.getOverviewRegistrationState,
   );
   const { isDarkMode } = useSelector(getThemeState);
+
+  // Phone / Pi touchscreen / narrow window: there is no room for the map and
+  // a >=380 px inspector side by side, so show one pane at a time with a
+  // switch between them. Both stay mounted, so map selections still reach
+  // the Positions list live.
+  const { compactLayout } = useDeviceProfile();
+  const [compactPane, setCompactPane] = useState(
+    () => localStorage.getItem(PANE_STORAGE_KEY) || "viewport",
+  );
+  useEffect(() => {
+    localStorage.setItem(PANE_STORAGE_KEY, compactPane);
+  }, [compactPane]);
+  const showViewport = !compactLayout || compactPane === "viewport";
+  const showInspector = !compactLayout || compactPane === "experiment";
 
   // Which viewport is showing on the left. Purely UI state, persisted so the
   // view is sticky across remounts (mirrors GenericTabBar's localStorage).
@@ -340,7 +376,7 @@ const WellPlateWorkspace = () => {
       label: "Camera feed",
       icon: <VideocamIcon />,
       help: "Live widefield camera (auto-selected here) and capture controls.",
-      render: () => <LiveViewPanel />,
+      render: () => <LiveViewPanel fill={compactLayout} />,
     },
     {
       key: "overview",
@@ -401,16 +437,43 @@ const WellPlateWorkspace = () => {
           flexShrink: 0,
         }}
       >
-        <LinkIcon sx={{ fontSize: 16 }} />
-        <Typography variant="caption">
-          Pick a viewport on the left — the experiment is always on the right.
-          Map selections fill the Positions list live.
-        </Typography>
+        {compactLayout ? (
+          <ToggleButtonGroup
+            exclusive
+            size="small"
+            value={compactPane}
+            onChange={(_e, v) => v && setCompactPane(v)}
+            aria-label="Workspace pane"
+            sx={{ flex: 1, "& .MuiToggleButton-root": { flex: 1, gap: 0.75, textTransform: "none" } }}
+          >
+            <ToggleButton value="viewport">
+              {active.icon}
+              {active.label}
+            </ToggleButton>
+            <ToggleButton value="experiment" data-tour-wp="inspector-toggle">
+              <ScienceIcon />
+              Experiment
+            </ToggleButton>
+          </ToggleButtonGroup>
+        ) : (
+          <>
+            <LinkIcon sx={{ fontSize: 16 }} />
+            <Typography variant="caption">
+              Pick a viewport on the left — the experiment is always on the right.
+              Map selections fill the Positions list live.
+            </Typography>
+          </>
+        )}
         <Tooltip title="Take a quick tour of the WellPlate workspace">
           <IconButton size="small" onClick={handleTour} sx={{ p: 0.25 }}>
             <HelpOutlineIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
+        {headerAction && (
+          <Box sx={{ ml: compactLayout ? 0 : "auto", flexShrink: 0 }}>
+            {headerAction}
+          </Box>
+        )}
       </Box>
 
       <Box
@@ -428,7 +491,7 @@ const WellPlateWorkspace = () => {
           sx={{
             flex: 3,
             minWidth: 0,
-            display: "flex",
+            display: showViewport ? "flex" : "none",
             flexDirection: "column",
             minHeight: 0,
           }}
@@ -507,10 +570,11 @@ const WellPlateWorkspace = () => {
           data-tour-wp="inspector"
           sx={{
             flex: 2,
-            minWidth: 380,
+            minWidth: compactLayout ? 0 : 380,
             minHeight: 0,
-            borderLeft: `1px solid ${theme.palette.divider}`,
-            pl: 1,
+            display: showInspector ? "block" : "none",
+            borderLeft: compactLayout ? "none" : `1px solid ${theme.palette.divider}`,
+            pl: compactLayout ? 0 : 1,
             overflowY: "auto",
             overscrollBehavior: "contain",
           }}

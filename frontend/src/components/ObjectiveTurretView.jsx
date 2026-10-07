@@ -106,12 +106,19 @@ export default function ObjectiveTurretView() {
   const noMotor = obj.hasMotor === false || !Number.isFinite(num(pos.a));
   const a = noMotor ? slots[current ?? 0].x : num(pos.a);
   const tolerance = Math.max(5, 0.02 * span);
+  // Nearest configured slot within tolerance — not the first one: with
+  // closely spaced stored positions both can be "within tolerance". Without a
+  // motor there is nothing to measure, so the reported slot is in the beam.
+  const nearest = slots
+    .filter((s) => s.configured && span > 0 && Math.abs(a - s.x) <= tolerance)
+    .sort((p, q) => Math.abs(a - p.x) - Math.abs(a - q.x))[0];
+  const reported = slots[current ?? 0];
   const inBeam =
-    slots.find(
-      (s) =>
-        s.configured &&
-        (span > 0 ? Math.abs(a - s.x) <= tolerance : s.i === (current ?? 0)),
-    ) ?? null;
+    noMotor || span === 0
+      ? reported.configured
+        ? reported
+        : null
+      : nearest ?? null;
   // plate centre relative to the optical axis (mm): slot i's axis is on the
   // optical axis at A = x_i, linear in between, clamped when far outside
   const c0 = bodyOf(slots[0]).axis;

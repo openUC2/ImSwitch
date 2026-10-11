@@ -74,9 +74,9 @@ dependencies = [
     "unitelabs-cdk",
     "mikro-next>=1",
     "pip>=26.1",
-    "opencv-python-headless>=4.13.0.92",
+    # Exactly ONE OpenCV wheel: all variants install into the same cv2/ folder and
+    # overwrite each other. contrib-headless is the superset without Qt/GUI.
     "opencv-contrib-python-headless>=4.13.0.92",
-    "opencv-contrib-python>=4.13.0.92",
     "ipympl>=0.9.2",
     "useq-schema",
     "ashlarUC2>=1.18.5",
@@ -140,6 +140,12 @@ imswitch-provisioner = "imswitch.imcontrol.model.jupyter_connection:ExistingProv
 # The compiled (mypyc) version forbids subclassing which ImSwitch requires.
 # See https://github.com/pyapp-kit/psygnal/issues/330
 no-binary-package = ["psygnal"]
+# Drop the other OpenCV variants pulled in transitively (e.g. imswitchclient -> opencv-python).
+override-dependencies = [
+    "opencv-python; sys_platform == 'never'",
+    "opencv-python-headless; sys_platform == 'never'",
+    "opencv-contrib-python; sys_platform == 'never'",
+]
 
 
 [tool.ruff]

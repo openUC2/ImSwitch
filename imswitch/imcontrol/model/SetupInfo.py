@@ -341,10 +341,6 @@ class WebRTCInfo:
     pass
 
 @dataclass(frozen=False)
-class HyphaInfo:
-    pass
-
-@dataclass(frozen=False)
 class MockXXInfo:
     pass
 
@@ -906,9 +902,6 @@ class SetupInfo:
 
     webrtc: Optional[WebRTCInfo] = field(default_factory=lambda: None)
     """ WebRTC settings. Required to be defined to use WebRTC functionality. """
-
-    hypha: Optional[HyphaInfo] = field(default_factory=lambda: None)
-    """ Hypha settings. Required to be defined to use Hypha functionality. """
 
     mockxx: Optional[MockXXInfo] = field(default_factory=lambda: None)
     """ MockXX settings. Required to be defined to use MockXX functionality."""

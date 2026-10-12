@@ -164,7 +164,6 @@
 ### API & Integration
 - **REST HTTP API** for remote control
 - **Python scripting interface**
-- **Hypha integration** (distributed computing)
 - **Arkitekt integration**: bind the microscope to an Arkitekt server by device-code login; stage, illumination, camera, frame and tile-scan actions; images to mikro (see `docs/ARKITEKT.md`)
 
 ### Configuration

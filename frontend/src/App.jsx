@@ -8,7 +8,6 @@ import useDeviceProfile from "./hooks/useDeviceProfile";
 import TouchKeypadHost from "./components/touch/TouchKeypadHost.jsx";
 
 import AboutPage from "./components/AboutPage.js";
-import BlocklyController from "./components/BlocklyController.js";
 import ConnectionSettings from "./components/ConnectionSettings.jsx";
 import DesktopAppSettings from "./components/DesktopAppSettings.jsx";
 import DetectorTriggerController from "./components/DetectorTriggerController.js";
@@ -809,7 +808,6 @@ function App() {
               {selectedPlugin === "Infinity Scanning" && (
                 <LargeFovScanController />
               )}
-              {selectedPlugin === "Blockly" && <BlocklyController />}
               {selectedPlugin === "Objective" && <ObjectiveController />}
               {selectedPlugin === "About" && <AboutPage />}
               {selectedPlugin === "SystemSettings" && <SystemSettings />}

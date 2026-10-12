@@ -17,15 +17,6 @@ overrides = [
 ]
 
 [[package]]
-name = "aiofiles"
-version = "24.1.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0b/03/a88171e277e8caa88a4c77808c20ebb04ba74cc4681bf1e9416c862de237/aiofiles-24.1.0.tar.gz", hash = "sha256:22a075c9e5a3810f0c2e48f3008c94d68c65d763b9b03857924c99e57355166c", size = 30247, upload-time = "2024-06-24T11:02:03.584Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a5/45/30bb92d442636f570cb5651bc661f52b610e2eec3f891a5dc3a4c3667db0/aiofiles-24.1.0-py3-none-any.whl", hash = "sha256:b4ec55f4195e3eb5d7abd1bf7e061763e864dd4954231fb8539a0ef8bb8260e5", size = 15896, upload-time = "2024-06-24T11:02:01.529Z" },
-]
-
-[[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1226,12 +1217,6 @@ wheels = [
 ]
 
 [[package]]
-name = "elfinder-client"
-version = "2.1.62a3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b7/a2/9c48e616a94990e0630599f7610d39e666625c1d93097e63cd6b72df482d/elfinder-client-2.1.62a3.tar.gz", hash = "sha256:c836733f02597aa41930fd40de1d3757a6883934f2492daf718a137d0a33c25b", size = 4019544, upload-time = "2024-02-25T17:08:29.323Z" }
-
-[[package]]
 name = "esptool"
 version = "5.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1766,73 +1751,6 @@ wheels = [
 ]
 
 [[package]]
-name = "imjoy"
-version = "0.10.12"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "imjoy-elfinder", extra = ["jupyter"] },
-    { name = "imjoy-jupyter-extension" },
-    { name = "imjoy-rpc" },
-    { name = "ipykernel" },
-    { name = "jupyter" },
-    { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/03/9d/111cdfc46d75e012ba8298f2d5074119e57627411b245b9f60a84e5bab7b/imjoy-0.10.12.tar.gz", hash = "sha256:aacb79fe6974835080acdca733e433df8be2b376095ff4421f7f2ca6988e4ac8", size = 10319, upload-time = "2020-12-14T16:24:54.828Z" }
-
-[[package]]
-name = "imjoy-elfinder"
-version = "0.1.62"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiofiles" },
-    { name = "elfinder-client" },
-    { name = "fastapi" },
-    { name = "jinja2" },
-    { name = "pathvalidate" },
-    { name = "pillow" },
-    { name = "python-dotenv" },
-    { name = "python-multipart" },
-    { name = "typing-extensions" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/30/a2/fbcac66d5777ab67a150d4eb164a2964a652a48258fe9391266e24650651/imjoy-elfinder-0.1.62.tar.gz", hash = "sha256:df5bb529437459c67c74ff4f3e393652b64060732fdc215c5695e875ba8f68d5", size = 36077, upload-time = "2023-10-06T19:42:34.184Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/50/ab/b5576a66332d05d1deff5f4fe3126c1961bf7eeb6004861d369dcee6ab5d/imjoy_elfinder-0.1.62-py3-none-any.whl", hash = "sha256:9d4f3711280b77981f1a309a64a05c107b4813d003ca25d398bda542953bb785", size = 37494, upload-time = "2023-10-06T19:42:32.144Z" },
-]
-
-[package.optional-dependencies]
-jupyter = [
-    { name = "jupyter-server-proxy" },
-]
-
-[[package]]
-name = "imjoy-jupyter-extension"
-version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "imjoy-rpc" },
-    { name = "notebook" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6f/4b/5b0b8c5f940aa32e4fb8cb718eb659892d086e798144cebee541dc865456/imjoy-jupyter-extension-0.3.0.tar.gz", hash = "sha256:1a87372b05201e3e08821ce1ebf0551af510051b4f5d5aab8d767f6ef42f06e1", size = 25008, upload-time = "2021-11-27T19:36:03.996Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/4a/711bbce20f0d9ec5927a0b7f40508b417d76d386e407b8ba1344400d1e3f/imjoy_jupyter_extension-0.3.0-py3-none-any.whl", hash = "sha256:0cc095e6fa9e73d0631c280095a14582ffad88a3e82847939bd5d2ae041a052e", size = 39444, upload-time = "2021-11-27T19:36:00.678Z" },
-]
-
-[[package]]
-name = "imjoy-rpc"
-version = "0.5.59"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "msgpack" },
-    { name = "shortuuid" },
-    { name = "websockets", marker = "sys_platform != 'emscripten'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/9c/49/7929a82277756e63714290234a659d270df057f9a86ea2c1a0024f4479b8/imjoy-rpc-0.5.59.tar.gz", hash = "sha256:72c9745a0ccf4163101a11d7e1f0cf69d5e8ffd8561f4ee99a0461ed95e16c9c", size = 61522, upload-time = "2024-07-23T05:00:12.275Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/46/1f/b856a3241843d9dec722dd3ed85acbf98079e4da3d74ea2aff7052354f7c/imjoy_rpc-0.5.59-py3-none-any.whl", hash = "sha256:0a61bf87ca862100d8a80215448520d594e28bebf58b1d0f0e30147e3a9b1f23", size = 75778, upload-time = "2024-07-23T05:00:10.272Z" },
-]
-
-[[package]]
 name = "importlib-metadata"
 version = "8.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1924,10 +1842,6 @@ dependencies = [
 dev = [
     { name = "pytest" },
 ]
-imjoy = [
-    { name = "imjoy" },
-    { name = "imjoy-rpc" },
-]
 lepmon = [
     { name = "luma-oled" },
     { name = "rpi-gpio" },
@@ -1958,9 +1872,6 @@ requires-dist = [
     { name = "esptool" },
     { name = "fastapi", specifier = ">=0.86.0" },
     { name = "h5py", specifier = ">=2.10" },
-    { name = "imjoy", marker = "extra == 'imjoy'" },
-    { name = "imjoy-rpc", marker = "extra == 'imjoy'" },
-    { name = "imjoy-rpc", marker = "extra == 'imjoy'", specifier = "==0.5.59" },
     { name = "imswitchclient", specifier = ">=0.1.7" },
     { name = "ipympl", specifier = ">=0.9.2" },
     { name = "jeepney", marker = "sys_platform == 'linux'", specifier = ">=0.9" },
@@ -2011,7 +1922,7 @@ requires-dist = [
     { name = "vmbpy", marker = "sys_platform == 'linux'", specifier = ">=1.2.2" },
     { name = "zarr", specifier = ">=3.0.0a0" },
 ]
-provides-extras = ["microeye", "lepmon", "imjoy", "dev", "omero", "pymmcore"]
+provides-extras = ["microeye", "lepmon", "dev", "omero", "pymmcore"]
 
 [[package]]
 name = "inflection"
@@ -2401,22 +2312,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5b/ac/e040ec363d7b6b1f11304cc9f209dac4517ece5d5e01821366b924a64a50/jupyter_server-2.17.0.tar.gz", hash = "sha256:c38ea898566964c888b4772ae1ed58eca84592e88251d2cfc4d171f81f7e99d5", size = 731949, upload-time = "2025-08-21T14:42:54.042Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/92/80/a24767e6ca280f5a49525d987bf3e4d7552bf67c8be07e8ccf20271f8568/jupyter_server-2.17.0-py3-none-any.whl", hash = "sha256:e8cb9c7db4251f51ed307e329b81b72ccf2056ff82d50524debde1ee1870e13f", size = 388221, upload-time = "2025-08-21T14:42:52.034Z" },
-]
-
-[[package]]
-name = "jupyter-server-proxy"
-version = "4.4.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "jupyter-server" },
-    { name = "simpervisor" },
-    { name = "tornado" },
-    { name = "traitlets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/2a/c8/ff6ecdbf55ac1a9253d53d87c60004ee508cfc852662b15fb33cd6ebfdbc/jupyter_server_proxy-4.4.0.tar.gz", hash = "sha256:e5732eb9c810c0caa997f90a2f15f7d09af638e7eea9c67eb5c43e9c1f0e1157", size = 136830, upload-time = "2024-08-29T12:49:22.906Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fd/c6/e4a1d9fdd22d40962befd82780a98b20b67ef9cafe87246e4955f44b8f09/jupyter_server_proxy-4.4.0-py3-none-any.whl", hash = "sha256:707b5c84810bb8863d50f6c6d50a386fec216149e11802b7d4c451b54a63a9a6", size = 37567, upload-time = "2024-08-29T12:49:20.89Z" },
 ]
 
 [[package]]
@@ -3600,15 +3495,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b2/3a/3f06f34820a31257ddcabdfafc2672c5816be79c7e353b02c1f318daa7d4/partd-1.4.2.tar.gz", hash = "sha256:d022c33afbdc8405c226621b015e8067888173d85f7f5ecebb3cafed9a20f02c", size = 21029, upload-time = "2024-05-06T19:51:41.945Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/71/e7/40fb618334dcdf7c5a316c0e7343c5cd82d3d866edc100d98e29bc945ecd/partd-1.4.2-py3-none-any.whl", hash = "sha256:978e4ac767ec4ba5b86c6eaa52e5a2a3bc748a2ca839e8cc798f1cc6ce6efb0f", size = 18905, upload-time = "2024-05-06T19:51:39.271Z" },
-]
-
-[[package]]
-name = "pathvalidate"
-version = "3.3.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/fa/2a/52a8da6fe965dea6192eb716b357558e103aea0a1e9a8352ad575a8406ca/pathvalidate-3.3.1.tar.gz", hash = "sha256:b18c07212bfead624345bb8e1d6141cdcf15a39736994ea0b94035ad2b1ba177", size = 63262, upload-time = "2025-06-15T09:07:20.736Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/70/875f4a23bfc4731703a5835487d0d2fb999031bd415e7d17c0ae615c18b7/pathvalidate-3.3.1-py3-none-any.whl", hash = "sha256:5263baab691f8e1af96092fa5137ee17df5bdfbd6cff1fcac4d6ef4bc2e1735f", size = 24305, upload-time = "2025-06-15T09:07:19.117Z" },
 ]
 
 [[package]]
@@ -5028,15 +4914,6 @@ wheels = [
 ]
 
 [[package]]
-name = "shortuuid"
-version = "1.0.13"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/8c/e2/bcf761f3bff95856203f9559baf3741c416071dd200c0fc19fad7f078f86/shortuuid-1.0.13.tar.gz", hash = "sha256:3bb9cf07f606260584b1df46399c0b87dd84773e7b25912b7e391e30797c5e72", size = 9662, upload-time = "2024-03-11T20:11:06.879Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c0/44/21d6bf170bf40b41396480d8d49ad640bca3f2b02139cd52aa1e272830a5/shortuuid-1.0.13-py3-none-any.whl", hash = "sha256:a482a497300b49b4953e15108a7913244e1bb0d41f9d332f5e9925dba33a3c5a", size = 10529, upload-time = "2024-03-11T20:11:04.807Z" },
-]
-
-[[package]]
 name = "sigtools"
 version = "4.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -5046,15 +4923,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5f/db/669ca14166814da187b3087b908ca924cf83f5b504fe23b3859a3ef67d4f/sigtools-4.0.1.tar.gz", hash = "sha256:4b8e135a9cd4d2ea00da670c093372d74e672ba3abb87f4c98d8e73dea54445c", size = 71910, upload-time = "2022-10-13T07:03:54.149Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1f/91/853dbf6ec096197dba9cd5fd0c836c5fc19142038b7db60ebe6332b1bab1/sigtools-4.0.1-py2.py3-none-any.whl", hash = "sha256:d216b4cf920bbab0fce636ddc429ed8463a5b533d9e1492acb45a2a1bc36ac6c", size = 76419, upload-time = "2022-10-13T07:03:52.658Z" },
-]
-
-[[package]]
-name = "simpervisor"
-version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/dd/fc/9182a4049036c5de29f84a16c5a33304ffc4dbb06d76d569ded8ad527574/simpervisor-1.0.0.tar.gz", hash = "sha256:7eb87ca86d5e276976f5bb0290975a05d452c6a7b7f58062daea7d8369c823c1", size = 14637, upload-time = "2023-05-18T14:01:27.069Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/65/be223a02df814a3dbd84d8a0c446d21d4860a4f23ec4d81aabea34e7e994/simpervisor-1.0.0-py3-none-any.whl", hash = "sha256:3e313318264559beea3f475ead202bc1cd58a2f1288363abb5657d306c5b8388", size = 8342, upload-time = "2023-05-18T14:01:25.92Z" },
 ]
 
 [[package]]

@@ -94,11 +94,6 @@ setup(
             "arkitekt==0.7.8",
             "arkitekt_next>=0.35.0"
         ],
-        'imjoy':[
-            "imjoy-rpc==0.5.59",
-            "imjoy_rpc",
-            "imjoy",
-        ],
         # Test dependencies for API testing
         'testing': [
             "pytest>=6.0",

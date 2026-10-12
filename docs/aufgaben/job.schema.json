@@ -1,0 +1,2193 @@
+{
+ "$defs": {
+  "AbsolutePosition": {
+   "description": "An absolute position in 3D space.",
+   "properties": {
+    "x": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "X"
+    },
+    "y": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Y"
+    },
+    "z": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Z"
+    },
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Name"
+    },
+    "sequence": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/MDASequence"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "title": "AbsolutePosition",
+   "type": "object"
+  },
+  "AutofocusResource": {
+   "additionalProperties": false,
+   "description": "How to focus. ``range_um`` is the half-range around the current Z.",
+   "properties": {
+    "kind": {
+     "const": "autofocus",
+     "default": "autofocus",
+     "title": "Kind",
+     "type": "string"
+    },
+    "mode": {
+     "default": "software",
+     "enum": [
+      "software",
+      "hardware"
+     ],
+     "title": "Mode",
+     "type": "string"
+    },
+    "method": {
+     "default": "scan",
+     "enum": [
+      "scan",
+      "hill_climbing"
+     ],
+     "title": "Method",
+     "type": "string"
+    },
+    "range_um": {
+     "default": 50.0,
+     "exclusiveMinimum": 0,
+     "title": "Range Um",
+     "type": "number"
+    },
+    "step_um": {
+     "default": 5.0,
+     "exclusiveMinimum": 0,
+     "title": "Step Um",
+     "type": "number"
+    },
+    "channel": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Illumination source used while focusing",
+     "title": "Channel"
+    },
+    "algorithm": {
+     "default": "LAPE",
+     "title": "Algorithm",
+     "type": "string"
+    },
+    "settle_s": {
+     "default": 0.1,
+     "minimum": 0,
+     "title": "Settle S",
+     "type": "number"
+    },
+    "max_attempts": {
+     "default": 2,
+     "minimum": 1,
+     "title": "Max Attempts",
+     "type": "integer"
+    }
+   },
+   "title": "AutofocusResource",
+   "type": "object"
+  },
+  "AxesBasedAF": {
+   "description": "Autofocus plan that performs autofocus when any of the specified axes change.\n\nAttributes\n----------\naxes : Tuple[str, ...]\n    Tuple of axis label to use for hardware autofocus.  At every event in which\n    *any* axis in this tuple is change, autofocus will be performed.  For example,\n    if `axes` is `('p',)` then autofocus will be performed every time the `p` axis\n    is change, (in other words: every time the position is changed.).",
+   "properties": {
+    "autofocus_device_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Autofocus Device Name"
+    },
+    "autofocus_motor_offset": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Autofocus Motor Offset"
+    },
+    "axes": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Axes",
+     "type": "array"
+    }
+   },
+   "required": [
+    "axes"
+   ],
+   "title": "AxesBasedAF",
+   "type": "object"
+  },
+  "CaptureChannel": {
+   "description": "A useq ``Channel`` plus what ImSwitch needs to switch the light.\n\n``config`` names the illumination source as configured in the setup (a\nlaser, LED or LED-matrix pattern). ``exposure`` is in ms, ``z_offset`` in\nµm, as in useq. The extra fields are dropped on export to useq.",
+   "properties": {
+    "config": {
+     "title": "Config",
+     "type": "string"
+    },
+    "group": {
+     "default": "Channel",
+     "title": "Group",
+     "type": "string"
+    },
+    "exposure": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0.0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Exposure"
+    },
+    "do_stack": {
+     "default": true,
+     "title": "Do Stack",
+     "type": "boolean"
+    },
+    "z_offset": {
+     "default": 0.0,
+     "title": "Z Offset",
+     "type": "number"
+    },
+    "acquire_every": {
+     "default": 1,
+     "exclusiveMinimum": 0,
+     "title": "Acquire Every",
+     "type": "integer"
+    },
+    "camera": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Camera"
+    },
+    "intensity": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Source intensity in the source's own units; None keeps it",
+     "title": "Intensity"
+    },
+    "gain": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Camera gain; None keeps it",
+     "title": "Gain"
+    },
+    "kind": {
+     "default": "default",
+     "enum": [
+      "default",
+      "ring",
+      "dpc"
+     ],
+     "title": "Kind",
+     "type": "string"
+    },
+    "led_pattern": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "LED-matrix pattern parameters for kind ring/dpc",
+     "title": "Led Pattern"
+    }
+   },
+   "required": [
+    "config"
+   ],
+   "title": "CaptureChannel",
+   "type": "object"
+  },
+  "CaptureResource": {
+   "additionalProperties": false,
+   "description": "The channels one capture takes, in order (JOBS: capture definition).",
+   "properties": {
+    "kind": {
+     "const": "capture",
+     "default": "capture",
+     "title": "Kind",
+     "type": "string"
+    },
+    "channels": {
+     "items": {
+      "$ref": "#/$defs/CaptureChannel"
+     },
+     "minItems": 1,
+     "title": "Channels",
+     "type": "array"
+    },
+    "keep_light_on_between_channels": {
+     "default": false,
+     "title": "Keep Light On Between Channels",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "channels"
+   ],
+   "title": "CaptureResource",
+   "type": "object"
+  },
+  "Channel": {
+   "description": "Define an acquisition channel.\n\nAttributes\n----------\nconfig : str\n    Name of the configuration to use for this channel, (e.g. `\"488nm\"`, `\"DAPI\"`,\n    `\"FITC\"`).\ngroup : str\n    Optional name of the group to which this channel belongs. By default,\n    `\"Channel\"`.\nexposure : float | None\n    Exposure time in milliseconds. Must be positive.  If not provided, implies use\n    current exposure time. By default, `None`.\ndo_stack : bool\n    If `True`, instructs engine to include this channel in any Z stacks being\n    acquired. By default, `True`.\nz_offset : float\n    Relative Z offset from current position, in microns. By default, `0`.\nacquire_every : int\n    Acquire every Nth frame (if acquiring a time series). By default, `1`.\ncamera: str | None\n    Name of the camera to use for this channel. If not provided, implies use\n    current camera. By default, `None`.",
+   "properties": {
+    "config": {
+     "title": "Config",
+     "type": "string"
+    },
+    "group": {
+     "default": "Channel",
+     "title": "Group",
+     "type": "string"
+    },
+    "exposure": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0.0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Exposure"
+    },
+    "do_stack": {
+     "default": true,
+     "title": "Do Stack",
+     "type": "boolean"
+    },
+    "z_offset": {
+     "default": 0.0,
+     "title": "Z Offset",
+     "type": "number"
+    },
+    "acquire_every": {
+     "default": 1,
+     "exclusiveMinimum": 0,
+     "title": "Acquire Every",
+     "type": "integer"
+    },
+    "camera": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Camera"
+    }
+   },
+   "required": [
+    "config"
+   ],
+   "title": "Channel",
+   "type": "object"
+  },
+  "Every": {
+   "additionalProperties": false,
+   "description": "Run a node only on every n-th iteration of a loop (JOBS: Every nth).",
+   "properties": {
+    "nth": {
+     "minimum": 1,
+     "title": "Nth",
+     "type": "integer"
+    },
+    "of": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Loop node id; default the innermost loop",
+     "title": "Of"
+    },
+    "include_first": {
+     "default": true,
+     "title": "Include First",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "nth"
+   ],
+   "title": "Every",
+   "type": "object"
+  },
+  "FocusMapResource": {
+   "additionalProperties": false,
+   "description": "A focus surface, filled at run time by a create-focus-map task.",
+   "properties": {
+    "kind": {
+     "const": "focus_map",
+     "default": "focus_map",
+     "title": "Kind",
+     "type": "string"
+    },
+    "method": {
+     "default": "spline",
+     "enum": [
+      "spline",
+      "rbf",
+      "constant"
+     ],
+     "title": "Method",
+     "type": "string"
+    },
+    "z_offset_um": {
+     "default": 0.0,
+     "title": "Z Offset Um",
+     "type": "number"
+    }
+   },
+   "title": "FocusMapResource",
+   "type": "object"
+  },
+  "GridFromEdges": {
+   "description": "Yield absolute stage positions to cover a bounded area.\n\nThe bounded area is defined by top, left, bottom and right edges in\nstage coordinates.  The bounds define the *outer* edges of the images, including\nthe field of view and overlap.\n\nAttributes\n----------\ntop : float\n    Top stage position of the bounding area\nleft : float\n    Left stage position of the bounding area\nbottom : float\n    Bottom stage position of the bounding area\nright : float\n    Right stage position of the bounding area\noverlap : float | Tuple[float, float]\n    Overlap between grid positions in percent. If a single value is provided, it is\n    used for both x and y. If a tuple is provided, the first value is used\n    for x and the second for y.\nmode : OrderMode\n    Define the ways of ordering the grid positions. Options are\n    row_wise, column_wise, row_wise_snake, column_wise_snake and spiral.\n    By default, row_wise_snake.\nfov_width : Optional[float]\n    Width of the field of view in microns.  If not provided, acquisition engines\n    should use current width of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.\nfov_height : Optional[float]\n    Height of the field of view in microns. If not provided, acquisition engines\n    should use current height of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.",
+   "properties": {
+    "fov_width": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Width"
+    },
+    "fov_height": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Height"
+    },
+    "overlap": {
+     "default": [
+      0.0,
+      0.0
+     ],
+     "maxItems": 2,
+     "minItems": 2,
+     "prefixItems": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "number"
+      }
+     ],
+     "title": "Overlap",
+     "type": "array"
+    },
+    "mode": {
+     "$ref": "#/$defs/OrderMode",
+     "default": "row_wise_snake"
+    },
+    "top": {
+     "title": "Top",
+     "type": "number"
+    },
+    "left": {
+     "title": "Left",
+     "type": "number"
+    },
+    "bottom": {
+     "title": "Bottom",
+     "type": "number"
+    },
+    "right": {
+     "title": "Right",
+     "type": "number"
+    }
+   },
+   "required": [
+    "top",
+    "left",
+    "bottom",
+    "right"
+   ],
+   "title": "GridFromEdges",
+   "type": "object"
+  },
+  "GridFromPolygon": {
+   "description": "Grid plan based on a polygon boundary.\n\nThis grid plan generates absolute stage positions that cover a polygon region.\nAdditionally the convex hull, and/or a buffered polygon can be created to generate\ntiles over a larger area surrounding the initial polygon.\n\nAttributes\n----------\nvertices : list[tuple[float, float]]\n    List of (x, y) points that define the polygon boundary.\n    Must have at least 3 points.\nconvex_hull : Optional[bool]\n    If True, the convex hull of the polygon will be used.\noffset : Optional[float]\n    Expand area bounded by vertices to include all points within a `offset` of the\n    original boundary. A positive offset produces a dilation, a negative offset an\n    erosion.\noverlap : float | Tuple[float, float]\n    Overlap between grid positions in percent. If a single value is provided, it is\n    used for both x and y. If a tuple is provided, the first value is used\n    for x and the second for y.\nmode : OrderMode\n    Define the ways of ordering the grid positions. Options are\n    row_wise, column_wise, row_wise_snake, column_wise_snake and spiral.\n    By default, row_wise_snake.\nfov_width : Optional[float]\n    Width of the field of view in microns.  If not provided, acquisition engines\n    should use current width of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.\nfov_height : Optional[float]\n    Height of the field of view in microns. If not provided, acquisition engines\n    should use current height of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.",
+   "properties": {
+    "fov_width": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Width"
+    },
+    "fov_height": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Height"
+    },
+    "overlap": {
+     "default": [
+      0.0,
+      0.0
+     ],
+     "maxItems": 2,
+     "minItems": 2,
+     "prefixItems": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "number"
+      }
+     ],
+     "title": "Overlap",
+     "type": "array"
+    },
+    "mode": {
+     "$ref": "#/$defs/OrderMode",
+     "default": "row_wise_snake"
+    },
+    "vertices": {
+     "description": "List of vertices that define the polygon, must have at least 3 vertices.",
+     "items": {
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "number"
+       }
+      ],
+      "type": "array"
+     },
+     "minItems": 3,
+     "title": "Vertices",
+     "type": "array"
+    },
+    "convex_hull": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": false,
+     "description": "If True, the convex hull of the polygon will be used.",
+     "title": "Convex Hull"
+    },
+    "offset": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Offsets the polygon in all directions to improve tile coverage.",
+     "title": "Offset"
+    }
+   },
+   "required": [
+    "vertices"
+   ],
+   "title": "GridFromPolygon",
+   "type": "object"
+  },
+  "GridResource": {
+   "additionalProperties": false,
+   "description": "A tile pattern relative to a position (useq grid plans, µm).",
+   "properties": {
+    "kind": {
+     "const": "grid",
+     "default": "grid",
+     "title": "Kind",
+     "type": "string"
+    },
+    "plan": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/GridRowsColumns"
+      },
+      {
+       "$ref": "#/$defs/GridWidthHeight"
+      },
+      {
+       "$ref": "#/$defs/GridFromEdges"
+      },
+      {
+       "$ref": "#/$defs/GridFromPolygon"
+      },
+      {
+       "$ref": "#/$defs/RandomPoints"
+      }
+     ],
+     "title": "Plan"
+    }
+   },
+   "required": [
+    "plan"
+   ],
+   "title": "GridResource",
+   "type": "object"
+  },
+  "GridRowsColumns": {
+   "description": "Grid plan based on number of rows and columns.\n\nAttributes\n----------\nrows: int\n    Number of rows.\ncolumns: int\n    Number of columns.\nrelative_to : RelativeTo\n    Point in the grid to which the coordinates are relative. If \"center\", the grid\n    is centered around the origin. If \"top_left\", the grid is positioned such that\n    the top left corner is at the origin.\noverlap : float | Tuple[float, float]\n    Overlap between grid positions in percent. If a single value is provided, it is\n    used for both x and y. If a tuple is provided, the first value is used\n    for x and the second for y.\nmode : OrderMode\n    Define the ways of ordering the grid positions. Options are\n    row_wise, column_wise, row_wise_snake, column_wise_snake and spiral.\n    By default, row_wise_snake.\nfov_width : Optional[float]\n    Width of the field of view in microns.  If not provided, acquisition engines\n    should use current width of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.\nfov_height : Optional[float]\n    Height of the field of view in microns. If not provided, acquisition engines\n    should use current height of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.",
+   "properties": {
+    "fov_width": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Width"
+    },
+    "fov_height": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Height"
+    },
+    "overlap": {
+     "default": [
+      0.0,
+      0.0
+     ],
+     "maxItems": 2,
+     "minItems": 2,
+     "prefixItems": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "number"
+      }
+     ],
+     "title": "Overlap",
+     "type": "array"
+    },
+    "mode": {
+     "$ref": "#/$defs/OrderMode",
+     "default": "row_wise_snake"
+    },
+    "rows": {
+     "minimum": 1,
+     "title": "Rows",
+     "type": "integer"
+    },
+    "columns": {
+     "minimum": 1,
+     "title": "Columns",
+     "type": "integer"
+    },
+    "relative_to": {
+     "$ref": "#/$defs/RelativeTo",
+     "default": "center"
+    }
+   },
+   "required": [
+    "rows",
+    "columns"
+   ],
+   "title": "GridRowsColumns",
+   "type": "object"
+  },
+  "GridWidthHeight": {
+   "description": "Grid plan based on total width and height.\n\nAttributes\n----------\nwidth: float\n    Minimum total width of the grid, in microns. (may be larger based on fov_width)\nheight: float\n    Minimum total height of the grid, in microns. (may be larger based on\n    fov_height)\nrelative_to : RelativeTo\n    Point in the grid to which the coordinates are relative. If \"center\", the grid\n    is centered around the origin. If \"top_left\", the grid is positioned such that\n    the top left corner is at the origin.\noverlap : float | Tuple[float, float]\n    Overlap between grid positions in percent. If a single value is provided, it is\n    used for both x and y. If a tuple is provided, the first value is used\n    for x and the second for y.\nmode : OrderMode\n    Define the ways of ordering the grid positions. Options are\n    row_wise, column_wise, row_wise_snake, column_wise_snake and spiral.\n    By default, row_wise_snake.\nfov_width : Optional[float]\n    Width of the field of view in microns.  If not provided, acquisition engines\n    should use current width of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.\nfov_height : Optional[float]\n    Height of the field of view in microns. If not provided, acquisition engines\n    should use current height of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.",
+   "properties": {
+    "fov_width": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Width"
+    },
+    "fov_height": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Height"
+    },
+    "overlap": {
+     "default": [
+      0.0,
+      0.0
+     ],
+     "maxItems": 2,
+     "minItems": 2,
+     "prefixItems": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "number"
+      }
+     ],
+     "title": "Overlap",
+     "type": "array"
+    },
+    "mode": {
+     "$ref": "#/$defs/OrderMode",
+     "default": "row_wise_snake"
+    },
+    "width": {
+     "exclusiveMinimum": 0,
+     "title": "Width",
+     "type": "number"
+    },
+    "height": {
+     "exclusiveMinimum": 0,
+     "title": "Height",
+     "type": "number"
+    },
+    "relative_to": {
+     "$ref": "#/$defs/RelativeTo",
+     "default": "center"
+    }
+   },
+   "required": [
+    "width",
+    "height"
+   ],
+   "title": "GridWidthHeight",
+   "type": "object"
+  },
+  "MDASequence": {
+   "description": "A sequence of MDA (Multi-Dimensional Acquisition) events.\n\nThis is the core object in the `useq` library, and is used define a sequence of\nevents to be run on a microscope. It object may be constructed manually, or from\nfile (e.g. json or yaml).\n\nThe object itself acts as an iterator for [`useq.MDAEvent`][] objects:\n\nAttributes\n----------\nmetadata : dict\n    A dictionary of user metadata to be stored with the sequence.\naxis_order : str\n    The order of the axes in the sequence. Must be a permutation of `\"tpgcz\"`. The\n    default is `\"tpgcz\"`.\nstage_positions : tuple[Position, ...]\n    The stage positions to visit. (each with `x`, `y`, `z`, `name`, and `sequence`,\n    all of which are optional).\ngrid_plan : GridFromEdges | GridRelative | None\n    The grid plan to follow. One of `GridFromEdges`, `GridRelative` or `None`.\nchannels : tuple[Channel, ...]\n    The channels to acquire. see `Channel`.\ntime_plan : MultiPhaseTimePlan | TIntervalDuration | TIntervalLoops         | TDurationLoops | None\n    The time plan to follow. One of `TIntervalDuration`, `TIntervalLoops`,\n    `TDurationLoops`, `MultiPhaseTimePlan`, or `None`\nz_plan : ZTopBottom | ZRangeAround | ZAboveBelow | ZRelativePositions |         ZAbsolutePositions | None\n    The z plan to follow. One of `ZTopBottom`, `ZRangeAround`, `ZAboveBelow`,\n    `ZRelativePositions`, `ZAbsolutePositions`, or `None`.\nuid : UUID\n    A read-only unique identifier (uuid version 4) for the sequence. This will be\n    generated, do not set.\nautofocus_plan : AxesBasedAF | None\n    The hardware autofocus plan to follow. One of `AxesBasedAF` or `None`.\nkeep_shutter_open_across : tuple[str, ...]\n    A tuple of axes `str` across which the illumination shutter should be kept open.\n    Resulting events will have `keep_shutter_open` set to `True` if and only if\n    ALL axes whose indices are changing are in this tuple. For example, if\n    `keep_shutter_open_across=('z',)`, then the shutter would be kept open between\n    events axes {'t': 0, 'z: 0} and {'t': 0, 'z': 1}, but not between\n    {'t': 0, 'z': 0} and {'t': 1, 'z': 0}.\n\nExamples\n--------\nCreate a MDASequence\n\n>>> from useq import MDASequence, Position, Channel, TIntervalDuration\n>>> seq = MDASequence(\n...     axis_order=\"tpgcz\",\n...     time_plan={\"interval\": 0.1, \"loops\": 2},\n...     stage_positions=[(1, 1, 1)],\n...     grid_plan={\"rows\": 2, \"columns\": 2},\n...     z_plan={\"range\": 3, \"step\": 1},\n...     channels=[{\"config\": \"DAPI\", \"exposure\": 1}]\n... )\n\nPrint the sequence to visualize its structure\n\n>>> print(seq)\n... MDASequence(\n...     stage_positions=(Position(x=1.0, y=1.0, z=1.0, name=None),),\n...     grid_plan=GridRowsColumns(\n...         fov_width=None,\n...         fov_height=None,\n...         overlap=(0.0, 0.0),\n...         mode=<OrderMode.row_wise_snake: 'row_wise_snake'>,\n...         rows=2,\n...         columns=2,\n...         relative_to=<RelativeTo.center: 'center'>\n...     ),\n...     channels=(\n...         Channel(\n...             config='DAPI',\n...             group='Channel',\n...             exposure=1.0,\n...             do_stack=True,\n...             z_offset=0.0,\n...             acquire_every=1,\n...             camera=None\n...         ),\n...     ),\n...     time_plan=TIntervalLoops(\n...         prioritize_duration=False,\n...         interval=datetime.timedelta(microseconds=100000),\n...         loops=2\n...     ),\n...     z_plan=ZRangeAround(go_up=True, range=3.0, step=1.0)\n... )\n\nIterate over the events in the sequence\n\n>>> print(list(seq))\n... [\n...     MDAEvent(\n...         index=mappingproxy({'t': 0, 'p': 0, 'g': 0, 'c': 0, 'z': 0}),\n...         channel=Channel(config='DAPI'),\n...         exposure=1.0,\n...         min_start_time=0.0,\n...         x_pos=0.5,\n...         y_pos=1.5,\n...         z_pos=-0.5\n...     ),\n...     MDAEvent(\n...         index=mappingproxy({'t': 0, 'p': 0, 'g': 0, 'c': 0, 'z': 1}),\n...         channel=Channel(config='DAPI'),\n...         exposure=1.0,\n...         min_start_time=0.0,\n...         x_pos=0.5,\n...         y_pos=1.5,\n...         z_pos=0.5\n...     ),\n...     ...\n... ]\n\nPrint the sequence as yaml\n\n>>> print(seq.yaml())\n\n```yaml\naxis_order:\n   - t\n   - p\n   - g\n   - c\n   - z\nchannels:\n   - config: DAPI\n     exposure: 1.0\ngrid_plan:\n   columns: 2\n   rows: 2\nstage_positions:\n   - x: 1.0\n     y: 1.0\n     z: 1.0\ntime_plan:\n   interval: '0:00:00.100000'\n   loops: 2\nz_plan:\n   range: 3.0\n   step: 1.0\n```",
+   "properties": {
+    "metadata": {
+     "additionalProperties": true,
+     "title": "Metadata",
+     "type": "object"
+    },
+    "axis_order": {
+     "default": [
+      "t",
+      "p",
+      "g",
+      "c",
+      "z"
+     ],
+     "items": {
+      "type": "string"
+     },
+     "title": "Axis Order",
+     "type": "array"
+    },
+    "stage_positions": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/WellPlatePlan"
+      },
+      {
+       "items": {
+        "$ref": "#/$defs/AbsolutePosition"
+       },
+       "type": "array"
+      }
+     ],
+     "title": "Stage Positions"
+    },
+    "grid_plan": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/GridFromEdges"
+      },
+      {
+       "$ref": "#/$defs/GridFromPolygon"
+      },
+      {
+       "$ref": "#/$defs/GridRowsColumns"
+      },
+      {
+       "$ref": "#/$defs/GridWidthHeight"
+      },
+      {
+       "$ref": "#/$defs/RandomPoints"
+      },
+      {
+       "$ref": "#/$defs/RelativePosition"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Grid Plan"
+    },
+    "channels": {
+     "items": {
+      "$ref": "#/$defs/Channel"
+     },
+     "title": "Channels",
+     "type": "array"
+    },
+    "time_plan": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/MultiPhaseTimePlan"
+      },
+      {
+       "$ref": "#/$defs/TIntervalDuration"
+      },
+      {
+       "$ref": "#/$defs/TIntervalLoops"
+      },
+      {
+       "$ref": "#/$defs/TDurationLoops"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Time Plan"
+    },
+    "z_plan": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/ZTopBottom"
+      },
+      {
+       "$ref": "#/$defs/ZAboveBelow"
+      },
+      {
+       "$ref": "#/$defs/ZRangeAround"
+      },
+      {
+       "$ref": "#/$defs/ZAbsolutePositions"
+      },
+      {
+       "$ref": "#/$defs/ZRelativePositions"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Z Plan"
+    },
+    "autofocus_plan": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/AxesBasedAF"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "keep_shutter_open_across": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Keep Shutter Open Across",
+     "type": "array"
+    }
+   },
+   "title": "MDASequence",
+   "type": "object"
+  },
+  "MultiPhaseTimePlan": {
+   "description": "Time sequence composed of multiple phases.\n\nAttributes\n----------\nphases : Sequence[TIntervalDuration | TIntervalLoops | TDurationLoops]\n    Sequence of time plans.",
+   "properties": {
+    "prioritize_duration": {
+     "default": false,
+     "title": "Prioritize Duration",
+     "type": "boolean"
+    },
+    "phases": {
+     "items": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/TIntervalDuration"
+       },
+       {
+        "$ref": "#/$defs/TIntervalLoops"
+       },
+       {
+        "$ref": "#/$defs/TDurationLoops"
+       }
+      ]
+     },
+     "title": "Phases",
+     "type": "array"
+    }
+   },
+   "required": [
+    "phases"
+   ],
+   "title": "MultiPhaseTimePlan",
+   "type": "object"
+  },
+  "Node": {
+   "additionalProperties": false,
+   "description": "One step of a job.\n\n``task`` names a task type from the catalogue. ``params`` are validated\nagainst that task's parameter model. Containers use ``body``; a condition\nalso uses ``orelse``; a time lapse may use ``idle`` for work done while it\nwaits for the next round.",
+   "properties": {
+    "id": {
+     "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+     "title": "Id",
+     "type": "string"
+    },
+    "task": {
+     "title": "Task",
+     "type": "string"
+    },
+    "params": {
+     "additionalProperties": true,
+     "title": "Params",
+     "type": "object"
+    },
+    "body": {
+     "items": {
+      "$ref": "#/$defs/Node"
+     },
+     "title": "Body",
+     "type": "array"
+    },
+    "orelse": {
+     "items": {
+      "$ref": "#/$defs/Node"
+     },
+     "title": "Orelse",
+     "type": "array"
+    },
+    "idle": {
+     "items": {
+      "$ref": "#/$defs/Node"
+     },
+     "title": "Idle",
+     "type": "array"
+    },
+    "enabled": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "string"
+      }
+     ],
+     "default": true,
+     "title": "Enabled"
+    },
+    "every": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/Every"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "on_error": {
+     "anyOf": [
+      {
+       "enum": [
+        "abort",
+        "skip",
+        "continue_loop"
+       ],
+       "type": "string"
+      },
+      {
+       "$ref": "#/$defs/Retry"
+      }
+     ],
+     "default": "abort",
+     "title": "On Error"
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Label"
+    }
+   },
+   "required": [
+    "id",
+    "task"
+   ],
+   "title": "Node",
+   "type": "object"
+  },
+  "OrderMode": {
+   "description": "Order in which grid positions will be iterated.\n\nAttributes\n----------\nrow_wise : Literal['row_wise']\n    Iterate row by row.\ncolumn_wise : Literal['column_wise']\n    Iterate column by column.\nrow_wise_snake : Literal['row_wise_snake']\n    Iterate row by row, but alternate the direction of the columns.\ncolumn_wise_snake : Literal['column_wise_snake']\n    Iterate column by column, but alternate the direction of the rows.\nspiral : Literal['spiral']\n    Iterate in a spiral pattern, starting from the center.",
+   "enum": [
+    "row_wise",
+    "column_wise",
+    "row_wise_snake",
+    "column_wise_snake",
+    "spiral"
+   ],
+   "title": "OrderMode",
+   "type": "string"
+  },
+  "Parameter": {
+   "additionalProperties": false,
+   "description": "A value the operator sets before a run; referenced as ``param.<name>``.",
+   "properties": {
+    "type": {
+     "enum": [
+      "integer",
+      "number",
+      "boolean",
+      "string",
+      "choice"
+     ],
+     "title": "Type",
+     "type": "string"
+    },
+    "default": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "integer"
+      },
+      {
+       "type": "number"
+      },
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Default"
+    },
+    "minimum": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Minimum"
+    },
+    "maximum": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Maximum"
+    },
+    "choices": {
+     "items": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "number"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "title": "Choices",
+     "type": "array"
+    },
+    "unit": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Unit"
+    },
+    "title": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Title"
+    },
+    "description": {
+     "default": "",
+     "title": "Description",
+     "type": "string"
+    },
+    "ui": {
+     "default": "runtime",
+     "enum": [
+      "wizard",
+      "runtime",
+      "both",
+      "hidden"
+     ],
+     "title": "Ui",
+     "type": "string"
+    }
+   },
+   "required": [
+    "type"
+   ],
+   "title": "Parameter",
+   "type": "object"
+  },
+  "PositionsResource": {
+   "additionalProperties": false,
+   "description": "Named stage positions in µm (user frame). Tasks may add or remove points.",
+   "properties": {
+    "kind": {
+     "const": "positions",
+     "default": "positions",
+     "title": "Kind",
+     "type": "string"
+    },
+    "positions": {
+     "items": {
+      "$ref": "#/$defs/AbsolutePosition"
+     },
+     "title": "Positions",
+     "type": "array"
+    },
+    "labels": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "description": "position name -> label",
+     "title": "Labels",
+     "type": "object"
+    }
+   },
+   "title": "PositionsResource",
+   "type": "object"
+  },
+  "RandomPoints": {
+   "description": "Yield random points in a specified geometric shape.\n\nAttributes\n----------\nnum_points : int\n    Number of points to generate.\nmax_width : float\n    Maximum width of the bounding box in microns.\nmax_height : float\n    Maximum height of the bounding box in microns.\nshape : Shape\n    Shape of the bounding box. Current options are \"ellipse\" and \"rectangle\".\nrandom_seed : Optional[int]\n    Random numpy seed that should be used to generate the points. If None, a random\n    seed will be used.\nallow_overlap : bool\n    By defaut, True. If False and `fov_width` and `fov_height` are specified, points\n    will not overlap and will be at least `fov_width` and `fov_height apart.\norder : TraversalOrder\n    Order in which the points will be visited. If None, order is simply the order\n    in which the points are generated (random).  Use 'nearest_neighbor' or\n    'two_opt' to order the points in a more structured way.\nstart_at : int | RelativePosition\n    Position or index of the point to start at. This is only used if `order` is\n    'nearest_neighbor' or 'two_opt'.  If a position is provided, it will *always*\n    be included in the list of points. If an index is provided, it must be less than\n    the number of points, and corresponds to the index of the (randomly generated)\n    points; this likely only makes sense when `random_seed` is provided.",
+   "properties": {
+    "fov_width": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Width"
+    },
+    "fov_height": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Height"
+    },
+    "num_points": {
+     "exclusiveMinimum": 0,
+     "title": "Num Points",
+     "type": "integer"
+    },
+    "max_width": {
+     "default": 1,
+     "exclusiveMinimum": 0,
+     "title": "Max Width",
+     "type": "number"
+    },
+    "max_height": {
+     "default": 1,
+     "exclusiveMinimum": 0,
+     "title": "Max Height",
+     "type": "number"
+    },
+    "shape": {
+     "$ref": "#/$defs/Shape",
+     "default": "ellipse"
+    },
+    "random_seed": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Random Seed"
+    },
+    "allow_overlap": {
+     "default": true,
+     "title": "Allow Overlap",
+     "type": "boolean"
+    },
+    "order": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/TraversalOrder"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": "two_opt"
+    },
+    "start_at": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/RelativePosition"
+      },
+      {
+       "minimum": 0,
+       "type": "integer"
+      }
+     ],
+     "default": 0,
+     "title": "Start At"
+    }
+   },
+   "required": [
+    "num_points"
+   ],
+   "title": "RandomPoints",
+   "type": "object"
+  },
+  "Region": {
+   "additionalProperties": false,
+   "properties": {
+    "name": {
+     "title": "Name",
+     "type": "string"
+    },
+    "min_x": {
+     "title": "Min X",
+     "type": "number"
+    },
+    "max_x": {
+     "title": "Max X",
+     "type": "number"
+    },
+    "min_y": {
+     "title": "Min Y",
+     "type": "number"
+    },
+    "max_y": {
+     "title": "Max Y",
+     "type": "number"
+    },
+    "vertices": {
+     "anyOf": [
+      {
+       "items": {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Vertices"
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Label"
+    }
+   },
+   "required": [
+    "name",
+    "min_x",
+    "max_x",
+    "min_y",
+    "max_y"
+   ],
+   "title": "Region",
+   "type": "object"
+  },
+  "RegionsResource": {
+   "additionalProperties": false,
+   "description": "Areas in stage µm, drawn by a user or produced by an analysis task.",
+   "properties": {
+    "kind": {
+     "const": "regions",
+     "default": "regions",
+     "title": "Kind",
+     "type": "string"
+    },
+    "regions": {
+     "items": {
+      "$ref": "#/$defs/Region"
+     },
+     "title": "Regions",
+     "type": "array"
+    }
+   },
+   "title": "RegionsResource",
+   "type": "object"
+  },
+  "RelativePosition": {
+   "description": "A relative position in 3D space.\n\nRelative positions also support `fov_width` and `fov_height` attributes, and can\nbe used to define a single field of view for a \"multi-point\" plan.",
+   "properties": {
+    "fov_width": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Width"
+    },
+    "fov_height": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Height"
+    },
+    "x": {
+     "default": 0,
+     "title": "X",
+     "type": "number"
+    },
+    "y": {
+     "default": 0,
+     "title": "Y",
+     "type": "number"
+    },
+    "z": {
+     "default": 0,
+     "title": "Z",
+     "type": "number"
+    },
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Name"
+    },
+    "sequence": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/MDASequence"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "title": "RelativePosition",
+   "type": "object"
+  },
+  "RelativeTo": {
+   "description": "Where the coordinates of the grid are relative to.\n\nAttributes\n----------\ncenter : Literal['center']\n    Grid is centered around the origin.\ntop_left : Literal['top_left']\n    Grid is positioned such that the top left corner is at the origin.",
+   "enum": [
+    "center",
+    "top_left"
+   ],
+   "title": "RelativeTo",
+   "type": "string"
+  },
+  "Retry": {
+   "additionalProperties": false,
+   "properties": {
+    "retry": {
+     "minimum": 1,
+     "title": "Retry",
+     "type": "integer"
+    },
+    "then": {
+     "default": "abort",
+     "enum": [
+      "abort",
+      "skip",
+      "continue_loop"
+     ],
+     "title": "Then",
+     "type": "string"
+    }
+   },
+   "required": [
+    "retry"
+   ],
+   "title": "Retry",
+   "type": "object"
+  },
+  "Shape": {
+   "description": "Shape of the bounding box for random points.\n\nAttributes\n----------\nELLIPSE : Literal['ellipse']\n    The bounding box is an ellipse.\nRECTANGLE : Literal['rectangle']\n    The bounding box is a rectangle.",
+   "enum": [
+    "ellipse",
+    "rectangle"
+   ],
+   "title": "Shape",
+   "type": "string"
+  },
+  "Storage": {
+   "additionalProperties": false,
+   "description": "Where and how frames are written. Both formats are plain OME.",
+   "properties": {
+    "formats": {
+     "items": {
+      "enum": [
+       "ome-zarr",
+       "ome-tiff"
+      ],
+      "type": "string"
+     },
+     "title": "Formats",
+     "type": "array"
+    },
+    "layout": {
+     "default": "auto",
+     "description": "positions: one OME image per stage position; plate: an OME-NGFF plate (wells/fields). auto: plate when a well loop is used.",
+     "enum": [
+      "auto",
+      "positions",
+      "plate"
+     ],
+     "title": "Layout",
+     "type": "string"
+    },
+    "folder": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Relative to the data folder; default by job name",
+     "title": "Folder"
+    },
+    "stitched_preview": {
+     "default": false,
+     "description": "Also write a stitched mosaic per region",
+     "title": "Stitched Preview",
+     "type": "boolean"
+    }
+   },
+   "title": "Storage",
+   "type": "object"
+  },
+  "TDurationLoops": {
+   "description": "Define temporal sequence using duration and number of loops.\n\nAttributes\n----------\nduration : str | timedelta\n    Total duration of sequence. Scalars are interpreted as seconds.\n    Strings are parsed according to ISO 8601.\nloops : int\n    Number of frames.\nprioritize_duration : bool\n    If `True`, instructs engine to prioritize duration over number of frames in case\n    of conflict. By default, `False`.",
+   "properties": {
+    "prioritize_duration": {
+     "default": false,
+     "title": "Prioritize Duration",
+     "type": "boolean"
+    },
+    "duration": {
+     "title": "Duration",
+     "anyOf": [
+      {
+       "type": "number",
+       "description": "seconds"
+      },
+      {
+       "type": "string",
+       "format": "duration"
+      }
+     ]
+    },
+    "loops": {
+     "exclusiveMinimum": 0,
+     "title": "Loops",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "duration",
+    "loops"
+   ],
+   "title": "TDurationLoops",
+   "type": "object"
+  },
+  "TIntervalDuration": {
+   "description": "Define temporal sequence using interval and duration.\n\nAttributes\n----------\ninterval : str | timedelta\n    Time between frames. Scalars are interpreted as seconds.\n    Strings are parsed according to ISO 8601.\nduration : str | timedelta\n    Total duration of sequence.\nprioritize_duration : bool\n    If `True`, instructs engine to prioritize duration over number of frames in case\n    of conflict. By default, `True`.",
+   "properties": {
+    "prioritize_duration": {
+     "default": true,
+     "title": "Prioritize Duration",
+     "type": "boolean"
+    },
+    "interval": {
+     "title": "Interval",
+     "anyOf": [
+      {
+       "type": "number",
+       "description": "seconds"
+      },
+      {
+       "type": "string",
+       "format": "duration"
+      }
+     ]
+    },
+    "duration": {
+     "title": "Duration",
+     "anyOf": [
+      {
+       "type": "number",
+       "description": "seconds"
+      },
+      {
+       "type": "string",
+       "format": "duration"
+      }
+     ]
+    }
+   },
+   "required": [
+    "interval",
+    "duration"
+   ],
+   "title": "TIntervalDuration",
+   "type": "object"
+  },
+  "TIntervalLoops": {
+   "description": "Define temporal sequence using interval and number of loops.\n\nAttributes\n----------\ninterval : str | timedelta | float\n    Time between frames. Scalars are interpreted as seconds.\n    Strings are parsed according to ISO 8601.\nloops : int\n    Number of frames.\nprioritize_duration : bool\n    If `True`, instructs engine to prioritize duration over number of frames in case\n    of conflict. By default, `False`.",
+   "properties": {
+    "prioritize_duration": {
+     "default": false,
+     "title": "Prioritize Duration",
+     "type": "boolean"
+    },
+    "interval": {
+     "title": "Interval",
+     "anyOf": [
+      {
+       "type": "number",
+       "description": "seconds"
+      },
+      {
+       "type": "string",
+       "format": "duration"
+      }
+     ]
+    },
+    "loops": {
+     "exclusiveMinimum": 0,
+     "title": "Loops",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "interval",
+    "loops"
+   ],
+   "title": "TIntervalLoops",
+   "type": "object"
+  },
+  "TimePlanResource": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "const": "time_plan",
+     "default": "time_plan",
+     "title": "Kind",
+     "type": "string"
+    },
+    "plan": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/MultiPhaseTimePlan"
+      },
+      {
+       "$ref": "#/$defs/TIntervalDuration"
+      },
+      {
+       "$ref": "#/$defs/TIntervalLoops"
+      },
+      {
+       "$ref": "#/$defs/TDurationLoops"
+      }
+     ],
+     "title": "Plan"
+    }
+   },
+   "required": [
+    "plan"
+   ],
+   "title": "TimePlanResource",
+   "type": "object"
+  },
+  "TraversalOrder": {
+   "enum": [
+    "nearest_neighbor",
+    "two_opt",
+    "random"
+   ],
+   "title": "TraversalOrder",
+   "type": "string"
+  },
+  "WellPlate": {
+   "description": "A multi-well plate definition.\n\nParameters\n----------\nrows : int\n    The number of rows in the plate. Must be > 0.\ncolumns : int\n    The number of columns in the plate. Must be > 0.\nwell_spacing : tuple[float, float] | float\n    The center-to-center distance in mm (pitch) between wells in the x and y\n    directions. If a single value is provided, it is used for both x and y.\nwell_size : tuple[float, float] | float\n    The size in mm of each well in the x and y directions. If the well is squared or\n    rectangular, this is the width and height of the well. If the well is circular,\n    this is the diameter. If a single value is provided, it is used for both x and\n    y.\ncircular_wells : bool\n    Whether wells are circular (True) or squared/rectangular (False).\nname : str\n    A name for the plate.",
+   "properties": {
+    "rows": {
+     "exclusiveMinimum": 0,
+     "title": "Rows",
+     "type": "integer"
+    },
+    "columns": {
+     "exclusiveMinimum": 0,
+     "title": "Columns",
+     "type": "integer"
+    },
+    "well_spacing": {
+     "maxItems": 2,
+     "minItems": 2,
+     "prefixItems": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "number"
+      }
+     ],
+     "title": "Well Spacing",
+     "type": "array"
+    },
+    "well_size": {
+     "maxItems": 2,
+     "minItems": 2,
+     "prefixItems": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "number"
+      }
+     ],
+     "title": "Well Size",
+     "type": "array"
+    },
+    "circular_wells": {
+     "default": true,
+     "title": "Circular Wells",
+     "type": "boolean"
+    },
+    "name": {
+     "default": "",
+     "title": "Name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "rows",
+    "columns",
+    "well_spacing",
+    "well_size"
+   ],
+   "title": "WellPlate",
+   "type": "object"
+  },
+  "WellPlatePlan": {
+   "description": "A plan for acquiring images from a multi-well plate.\n\nParameters\n----------\nplate : WellPlate | str | int\n    The well-plate definition. Minimally including rows, columns, and well spacing.\n    If expressed as a string, it is assumed to be a key in\n    `useq.registered_well_plate_keys`.\na1_center_xy : tuple[float, float]\n    The stage coordinates in µm of the center of well A1 (top-left corner).\nrotation : float | None\n    The rotation angle in degrees (anti-clockwise) of the plate.\n    If None, no rotation is applied.\n    If expressed as a string, it is assumed to be an angle with units (e.g., \"5°\",\n    \"4 rad\", \"4.5deg\").\n    If expressed as an arraylike, it is assumed to be a 2x2 rotation matrix\n    `[[cos, -sin], [sin, cos]]`, or a 4-tuple `(cos, -sin, sin, cos)`.\nselected_wells : IndexExpression | None\n    Any <=2-dimensional index expression for selecting wells.\n    for example:\n    -   None -> No wells are selected.\n    -   slice(0) -> (also) select no wells.\n    -   slice(None) -> Selects all wells.\n    -   0 -> Selects the first row.\n    -   [0, 1, 2] -> Selects the first three rows.\n    -   slice(1, 5) -> selects wells from row 1 to row 4.\n    -   (2, slice(1, 4)) -> select wells in the second row and only columns 1 to 3.\n    -   ([1, 2], [3, 4]) -> select wells in (row, column): (1, 3) and (2, 4)\nwell_points_plan : GridRowsColumns | RandomPoints | Position\n    A plan for acquiring images within each well. This can be a single position\n    (for a single image per well), a GridRowsColumns (for a grid of images),\n    or RandomPoints (for random points within each well).",
+   "properties": {
+    "plate": {
+     "$ref": "#/$defs/WellPlate"
+    },
+    "a1_center_xy": {
+     "maxItems": 2,
+     "minItems": 2,
+     "prefixItems": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "number"
+      }
+     ],
+     "title": "A1 Center Xy",
+     "type": "array"
+    },
+    "rotation": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Rotation"
+    },
+    "selected_wells": {
+     "anyOf": [
+      {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "items": {
+          "type": "integer"
+         },
+         "type": "array"
+        },
+        {
+         "items": {
+          "type": "integer"
+         },
+         "type": "array"
+        }
+       ],
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Selected Wells"
+    },
+    "well_points_plan": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/GridRowsColumns"
+      },
+      {
+       "$ref": "#/$defs/GridWidthHeight"
+      },
+      {
+       "$ref": "#/$defs/RandomPoints"
+      },
+      {
+       "$ref": "#/$defs/RelativePosition"
+      }
+     ],
+     "title": "Well Points Plan"
+    }
+   },
+   "required": [
+    "plate",
+    "a1_center_xy"
+   ],
+   "title": "WellPlatePlan",
+   "type": "object"
+  },
+  "WellPlateResource": {
+   "additionalProperties": false,
+   "description": "A plate, its alignment and the selected wells (useq ``WellPlatePlan``).",
+   "properties": {
+    "kind": {
+     "const": "well_plate",
+     "default": "well_plate",
+     "title": "Kind",
+     "type": "string"
+    },
+    "plan": {
+     "$ref": "#/$defs/WellPlatePlan"
+    },
+    "labels": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "description": "well name -> label",
+     "title": "Labels",
+     "type": "object"
+    }
+   },
+   "required": [
+    "plan"
+   ],
+   "title": "WellPlateResource",
+   "type": "object"
+  },
+  "ZAboveBelow": {
+   "description": "Define Z as asymmetric range above and below some reference position.\n\nNote that `below` will always be visited, regardless of `go_up`, while `above` will\nalways be *encompassed* by the range, but may not be precisely visited if the step\nsize does not divide evenly into the range.\n\nAttributes\n----------\nabove : float\n    Range above reference position in microns (inclusive).\nbelow : float\n    Range below reference position in microns (inclusive).\nstep : float\n    Step size in microns.\ngo_up : bool\n    If `True`, instructs engine to start at bottom and move towards top. By default,\n    `True`.",
+   "properties": {
+    "go_up": {
+     "default": true,
+     "title": "Go Up",
+     "type": "boolean"
+    },
+    "above": {
+     "title": "Above",
+     "type": "number"
+    },
+    "below": {
+     "title": "Below",
+     "type": "number"
+    },
+    "step": {
+     "title": "Step",
+     "type": "number"
+    }
+   },
+   "required": [
+    "above",
+    "below",
+    "step"
+   ],
+   "title": "ZAboveBelow",
+   "type": "object"
+  },
+  "ZAbsolutePositions": {
+   "description": "Define Z as a list of absolute positions.\n\nAttributes\n----------\nrelative : list[float]\n    List of relative z positions.\ngo_up : bool\n    If `True` (the default), visits points in the order provided, otherwise in\n    reverse.",
+   "properties": {
+    "go_up": {
+     "default": true,
+     "title": "Go Up",
+     "type": "boolean"
+    },
+    "absolute": {
+     "items": {
+      "type": "number"
+     },
+     "title": "Absolute",
+     "type": "array"
+    }
+   },
+   "required": [
+    "absolute"
+   ],
+   "title": "ZAbsolutePositions",
+   "type": "object"
+  },
+  "ZPlanResource": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "const": "z_plan",
+     "default": "z_plan",
+     "title": "Kind",
+     "type": "string"
+    },
+    "plan": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/ZTopBottom"
+      },
+      {
+       "$ref": "#/$defs/ZAboveBelow"
+      },
+      {
+       "$ref": "#/$defs/ZRangeAround"
+      },
+      {
+       "$ref": "#/$defs/ZAbsolutePositions"
+      },
+      {
+       "$ref": "#/$defs/ZRelativePositions"
+      }
+     ],
+     "title": "Plan"
+    }
+   },
+   "required": [
+    "plan"
+   ],
+   "title": "ZPlanResource",
+   "type": "object"
+  },
+  "ZRangeAround": {
+   "description": "Define Z as a symmetric range around some reference position.\n\nNote that `-range / 2` will always be visited, regardless of `go_up`, while\n`+range / 2` will always be *encompassed* by the range, but may not be precisely\nvisited if the step size does not divide evenly into the range.\n\nAttributes\n----------\nrange : float\n    Range in microns (inclusive). For example, a range of 4 with a step size\n    of 1 would visit [-2, -1, 0, 1, 2].\nstep : float\n    Step size in microns.\ngo_up : bool\n    If `True`, instructs engine to start at bottom and move towards top. By default,\n    `True`.",
+   "properties": {
+    "go_up": {
+     "default": true,
+     "title": "Go Up",
+     "type": "boolean"
+    },
+    "range": {
+     "title": "Range",
+     "type": "number"
+    },
+    "step": {
+     "title": "Step",
+     "type": "number"
+    }
+   },
+   "required": [
+    "range",
+    "step"
+   ],
+   "title": "ZRangeAround",
+   "type": "object"
+  },
+  "ZRelativePositions": {
+   "description": "Define Z as a list of positions relative to some reference.\n\nTypically, the \"reference\" will be whatever the current Z position is at the start\nof the sequence.\n\nAttributes\n----------\nrelative : list[float]\n    List of relative z positions.\ngo_up : bool\n    If `True` (the default), visits points in the order provided, otherwise in\n    reverse.",
+   "properties": {
+    "go_up": {
+     "default": true,
+     "title": "Go Up",
+     "type": "boolean"
+    },
+    "relative": {
+     "items": {
+      "type": "number"
+     },
+     "title": "Relative",
+     "type": "array"
+    }
+   },
+   "required": [
+    "relative"
+   ],
+   "title": "ZRelativePositions",
+   "type": "object"
+  },
+  "ZTopBottom": {
+   "description": "Define Z using absolute top & bottom positions.\n\nNote that `bottom` will always be visited, regardless of `go_up`, while `top` will\nalways be *encompassed* by the range, but may not be precisely visited if the step\nsize does not divide evenly into the range.\n\nAttributes\n----------\ntop : float\n    Top position in microns (inclusive).\nbottom : float\n    Bottom position in microns (inclusive).\nstep : float\n    Step size in microns.\ngo_up : bool\n    If `True`, instructs engine to start at bottom and move towards top. By default,\n    `True`.",
+   "properties": {
+    "go_up": {
+     "default": true,
+     "title": "Go Up",
+     "type": "boolean"
+    },
+    "top": {
+     "title": "Top",
+     "type": "number"
+    },
+    "bottom": {
+     "title": "Bottom",
+     "type": "number"
+    },
+    "step": {
+     "title": "Step",
+     "type": "number"
+    }
+   },
+   "required": [
+    "top",
+    "bottom",
+    "step"
+   ],
+   "title": "ZTopBottom",
+   "type": "object"
+  }
+ },
+ "additionalProperties": false,
+ "description": "An Aufgaben job document.",
+ "properties": {
+  "schema": {
+   "const": "aufgaben.job/1",
+   "default": "aufgaben.job/1",
+   "title": "Schema",
+   "type": "string"
+  },
+  "name": {
+   "minLength": 1,
+   "title": "Name",
+   "type": "string"
+  },
+  "description": {
+   "default": "",
+   "title": "Description",
+   "type": "string"
+  },
+  "parameters": {
+   "additionalProperties": {
+    "$ref": "#/$defs/Parameter"
+   },
+   "title": "Parameters",
+   "type": "object"
+  },
+  "variables": {
+   "additionalProperties": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "integer"
+     },
+     {
+      "type": "number"
+     },
+     {
+      "type": "string"
+     }
+    ]
+   },
+   "title": "Variables",
+   "type": "object"
+  },
+  "resources": {
+   "additionalProperties": {
+    "discriminator": {
+     "mapping": {
+      "autofocus": "#/$defs/AutofocusResource",
+      "capture": "#/$defs/CaptureResource",
+      "focus_map": "#/$defs/FocusMapResource",
+      "grid": "#/$defs/GridResource",
+      "positions": "#/$defs/PositionsResource",
+      "regions": "#/$defs/RegionsResource",
+      "time_plan": "#/$defs/TimePlanResource",
+      "well_plate": "#/$defs/WellPlateResource",
+      "z_plan": "#/$defs/ZPlanResource"
+     },
+     "propertyName": "kind"
+    },
+    "oneOf": [
+     {
+      "$ref": "#/$defs/PositionsResource"
+     },
+     {
+      "$ref": "#/$defs/WellPlateResource"
+     },
+     {
+      "$ref": "#/$defs/GridResource"
+     },
+     {
+      "$ref": "#/$defs/ZPlanResource"
+     },
+     {
+      "$ref": "#/$defs/TimePlanResource"
+     },
+     {
+      "$ref": "#/$defs/CaptureResource"
+     },
+     {
+      "$ref": "#/$defs/AutofocusResource"
+     },
+     {
+      "$ref": "#/$defs/RegionsResource"
+     },
+     {
+      "$ref": "#/$defs/FocusMapResource"
+     }
+    ]
+   },
+   "title": "Resources",
+   "type": "object"
+  },
+  "storage": {
+   "$ref": "#/$defs/Storage"
+  },
+  "tasks": {
+   "items": {
+    "$ref": "#/$defs/Node"
+   },
+   "title": "Tasks",
+   "type": "array"
+  },
+  "metadata": {
+   "additionalProperties": true,
+   "title": "Metadata",
+   "type": "object"
+  }
+ },
+ "required": [
+  "name"
+ ],
+ "title": "Job",
+ "type": "object",
+ "$id": "https://openuc2.github.io/schemas/aufgaben.job/1.json"
+}

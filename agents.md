@@ -153,6 +153,8 @@ imswitch/
       lasers/ LEDs/ LEDMatrixs/ rotators/ galvoscanners/ rs232/
     model/canbus/              UC2 CAN network + firmware (no ImSwitch imports; endpoints in
                                controllers/uc2config/can_network_api.py)
+    model/aufgaben/            Aufgaben job format, tasks, validator, useq bridge (no ImSwitch
+                               imports; plan in docs/AUFGABEN_ROADMAP.md)
     model/SetupInfo.py         setup-JSON schema (dataclasses)
     model/io/recording_service.py   SaveFormat / RecMode enums, writers
     _test/                     unit + api tests
@@ -437,7 +439,8 @@ Running:
 useq-schema MDA:
 
 - `get_mda_capabilities()`, `get_mda_sequence_info(request)`,
-  `start_mda_experiment(request: MDASequenceRequest)`, `run_native_mda_sequence(sequence_dict)`
+  `start_mda_experiment(request: MDASequenceRequest)`, `run_native_mda_sequence(sequence_dict)`,
+  `stop_native_mda_sequence()`
 - Examples in `examples/mda_demo.py`, `examples/native_useq_mda_example.py`; docs in
   `docs/REST_API_MDA.md`, `docs/NATIVE_USEQ_MDA.md`
 
@@ -584,7 +587,7 @@ Present only when the setup enables them. Discover with `getAvailableControllers
 | `TimelapseController`, `RotationScanController`, `ROIScanController`, `TriggerAcquisitionController` | Acquisition patterns |
 | `MMCoreController` | Micro-Manager device layer |
 | `WellPlateController` (`moveToXY(wellID)`), `SquidStageScanController`, `StageScanAcquisitionController` | Plate/stage scanning |
-| `HyphaController`, `ArkitektController`, `SiLa2Controller`, `WebRTCController` | External integrations |
+| `ArkitektController`, `SiLa2Controller`, `WebRTCController` | External integrations |
 
 `ArkitektController` (`docs/ARKITEKT.md`): `getArkitektStatus`, `bindArkitekt(url)` (device-code
 login, returns at once), `cancelArkitekt`, `unbindArkitekt` (forgets the stored login),

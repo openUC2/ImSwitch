@@ -94,7 +94,7 @@ Separately, `imswitch/imcontrol/controller/MasterController.py:123-190` re-check
 *same* `availableWidgets` list to decide whether to build the underlying **manager**
 object for ~20 subsystems:
 
-`SLM`, `SIM`, `DPC`, `NIDAQ`, `Hypha`, `ROIScan`, `Lightsheet`, `WebRTC`,
+`SLM`, `SIM`, `DPC`, `NIDAQ`, `ROIScan`, `Lightsheet`, `WebRTC`,
 `Timelapse`, `Experiment`, `Objective`, `HistoScan`, `Stresstest`, `FlowStop`,
 `Lepmon`, `AutoFocus`, `FOV`, `Workflow`, `Arkitekt`, `SiLa2`.
 
@@ -166,7 +166,7 @@ never surfaces).
 `availableWidgets` key matters, nothing about the section body does.**
 `WorkflowManager()` is called with **no arguments at all**
 (`MasterController.py:175-176`) — `WorkflowInfo`'s fields are never read anywhere
-in the codebase. `HyphaManager`, `ROIScanManager`, `HistoScanManager` likewise
+in the codebase. `ROIScanManager`, `HistoScanManager` likewise
 ignore their info argument's content. Same applies to `Stresstest`, `FlowStop`,
 `Lepmon`, `WebRTC`. For all of these, writing a detailed section body is
 cosmetic — the *only* thing that does anything is whether the widget key string is
@@ -229,7 +229,7 @@ The apps that actually declare `requiredControllers` today
 
 **Every other entry in `appRegistry.js` (~29 of ~35 — FocusLock, GalvoScanner,
 LightSheet, FlowStop, Lepmon, Stresstest, HoloController, GoniometerController,
-WellPlate, Blockly, ImJoy, i2cSensor, MazeGame, …) has no `requiredControllers`, so
+WellPlate, ImJoy, i2cSensor, MazeGame, …) has no `requiredControllers`, so
 `isAppAvailableForControllers()` returns `true` unconditionally for them.** They
 remain visible and clickable in the nav drawer / App Manager regardless of
 `availableWidgets`, even when their backend controller was never instantiated.
@@ -260,7 +260,7 @@ Several example configs (`FRAME.json`, `FRAME2b.json`, `example_uc2.json`,
 `example_virtual_microscope.json`, …) also set a `nonAvailableWidgets` array, e.g.:
 
 ```json
-"nonAvailableWidgets": ["STORMRecon", "DPC", "Holo", "FFT", "Hypha", "FocusLock", "FOVLock"]
+"nonAvailableWidgets": ["STORMRecon", "DPC", "Holo", "FFT", "FocusLock", "FOVLock"]
 ```
 
 **No code anywhere reads this key** (`grep -rn "\.nonAvailableWidgets\b" imswitch`
@@ -276,7 +276,7 @@ misleading whoever edits them next.
 | Mechanism | Where | Governs | Coverage |
 |---|---|---|---|
 | `availableWidgets` list | `ImConMainViewNoQt` (view) | Whether a controller/widget is attempted at all | All widget keys — the actual master switch |
-| `availableWidgets` re-check | `MasterController` | Whether ~20 named managers are constructed | SLM/SIM/DPC/NIDAQ/Hypha/ROIScan/Lightsheet/WebRTC/Timelapse/Experiment/Objective/HistoScan/Stresstest/FlowStop/Lepmon/AutoFocus/FOV/Workflow/Arkitekt/SiLa2 |
+| `availableWidgets` re-check | `MasterController` | Whether ~20 named managers are constructed | SLM/SIM/DPC/NIDAQ/ROIScan/Lightsheet/WebRTC/Timelapse/Experiment/Objective/HistoScan/Stresstest/FlowStop/Lepmon/AutoFocus/FOV/Workflow/Arkitekt/SiLa2 |
 | Non-empty device dict | `MasterController` | Whether a device manager has anything to control | detectors/lasers/LEDs/LEDMatrixs/positioners/galvoScanners/rotators/rs232devices (managers always exist) |
 | Section-content check inside a controller's `__init__` | Individual controllers (§2.3) | Whether that *one* controller hard-fails (bucket a), soft-degrades (bucket b), or doesn't care (bucket c) | Inconsistent per feature — see §2.3 and the per-field table in §3.1 |
 | `requiredControllers` in `appRegistry.js` | Frontend (nav drawer + App Manager) | Whether the app is filtered out of the list entirely | Only 6 of ~35 apps today |
@@ -314,7 +314,6 @@ before trusting this column**, since "gates" here means "the key must be in
 | `roiscan` | `ROIScanInfo?` | `null` | `ROIScan` | Bucket (c): manager ignores content entirely. |  |
 | `lightsheet` | `LightsheetInfo?` | `null` | `Lightsheet` | Manager checks `is None` and returns gracefully (bucket b). Marker-only class today (no fields) — no `appRegistry.js` `requiredControllers` either, so its nav entry is always shown. |  |
 | `webrtc` | `WebRTCInfo?` | `null` | `WebRTC` | Bucket (c): content-agnostic manager. | Marker-only class. |
-| `hypha` | `HyphaInfo?` | `null` | `Hypha` | Bucket (c): content-agnostic manager. | Marker-only class. |
 | `mockxx` | `MockXXInfo?` | `null` | — | Bucket (d): fully dead, referenced nowhere. | Marker-only class; not in `MasterController`'s gate list. |
 | `jetsonnano` | `JetsonNanoInfo?` | `null` | — | Bucket (d): fully dead. | Marker-only class; not gated. |
 | `Stresstest` | `StresstestInfo?` | `null` | `Stresstest` | Bucket (c): content-agnostic manager. `appRegistry.js` has a `stresstest` entry but no `requiredControllers`. | Marker-only class. |
@@ -415,7 +414,7 @@ Grouped by theme; field lists are exhaustive per the dataclass, required fields
 - `ArkitektInfo`: `enabled`, `appName`, `redeemToken`, `url`, `syncInAsync`,
   `deconvolveActionHash`.
 - `SiLA2Info`: `enabled`, `serverName/Description/Host/Port/Version`, `vendorUrl`.
-- `HyphaInfo` / `WebRTCInfo` / `MockXXInfo` / `JetsonNanoInfo` / `LightsheetInfo` /
+- `WebRTCInfo` / `MockXXInfo` / `JetsonNanoInfo` / `LightsheetInfo` /
   `ROIScanInfo` / `StresstestInfo` / `WorkflowInfo` / `FlowStopInfo` / `LepmonInfo` /
   `UC2ConfigInfo`: marker-only classes today (no fields) — their entire purpose in
   the JSON is the *key's presence* (or `availableWidgets` membership), not any
@@ -623,7 +622,7 @@ options vs. always-available software tools):
 - **Config-dependent but software-only:** `stresstest`, `holoController`,
   `offAxisHoloController`, `wellSelector` — depend on whether the relevant
   `SetupInfo` section / detector role is configured, not on extra hardware per se.
-- **Probably fine to leave ungated (genuinely universal):** `blockly`, `imjoy`,
+- **Probably fine to leave ungated (genuinely universal):** `imjoy`,
   `jupyterNotebook`, `serialDebug`, `socketView`, `acceptanceTest`,
   `detectorTrigger`, `mazeGame` — these are development/debug tools or generic
   utilities that don't depend on FRAME hardware options.

@@ -1,0 +1,39 @@
+{
+  "schema": "aufgaben.job/1",
+  "name": "Tile scan with focus check",
+  "description": "Asks the operator to confirm the sample, then tiles each region with autofocus on every fourth tile. A tile whose autofocus fails is logged and skipped; three failures in a row stop the run.",
+  "variables": {"af_failures": 0, "answer": ""},
+  "resources": {
+    "regions": {"kind": "positions", "positions": [
+      {"x": 1000, "y": 2000, "z": 0, "name": "region_a"},
+      {"x": 9000, "y": 2000, "z": 0, "name": "region_b"}]},
+    "tiles": {"kind": "grid", "plan": {"rows": 3, "columns": 3, "fov_width": 400, "fov_height": 300, "overlap": 10}},
+    "af": {"kind": "autofocus", "mode": "software", "range_um": 30, "step_um": 3, "channel": "LED"},
+    "z": {"kind": "z_plan", "plan": {"range": 4, "step": 2}},
+    "rgb": {"kind": "capture", "channels": [{"config": "LED", "exposure": 8, "intensity": 250}]}
+  },
+  "storage": {"formats": ["ome-zarr", "ome-tiff"], "layout": "positions", "stitched_preview": true},
+  "tasks": [
+    {"id": "ready", "task": "question", "params": {"text": "Is the slide clamped and the objective clear?", "buttons": ["Start", "Cancel"], "store_as": "answer"}},
+    {"id": "cancelled", "task": "condition", "params": {"expr": "answer == 'Cancel'"},
+     "body": [{"id": "leave", "task": "finish", "params": {"message": "Cancelled by the operator"}}]},
+    {"id": "region", "task": "loop_positions", "params": {"source": "@regions"},
+     "body": [
+       {"id": "tile", "task": "loop_grid", "params": {"plan": "@tiles"},
+        "body": [
+          {"id": "focus", "task": "autofocus", "params": {"$from": "@af"}, "every": {"nth": 4}, "on_error": "continue_loop"},
+          {"id": "check", "task": "condition", "params": {"expr": "result.focus is None"},
+           "body": [
+             {"id": "count", "task": "set_variable", "params": {"name": "af_failures", "value": "${af_failures + 1}"}},
+             {"id": "note", "task": "log", "params": {"message": "autofocus failed; tile skipped", "level": "warning"}},
+             {"id": "too_many", "task": "condition", "params": {"expr": "af_failures >= 3"},
+              "body": [{"id": "give_up", "task": "exit_with_error", "params": {"message": "Autofocus failed three times"}}]},
+             {"id": "skip", "task": "continue"}],
+           "orelse": [
+             {"id": "reset", "task": "set_variable", "params": {"name": "af_failures", "value": 0}}]},
+          {"id": "stack", "task": "zstack", "params": {"plan": "@z"},
+           "body": [{"id": "img", "task": "capture", "params": {"channels": "@rgb"}}]}
+        ]}
+     ]}
+  ]
+}

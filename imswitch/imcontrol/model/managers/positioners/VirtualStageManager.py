@@ -170,10 +170,14 @@ class VirtualStageManager(PositionerManager):
     def stopAll(self):
         pass
 
-    def doHome(self, axis, isBlocking=False):
+    def doHome(self, axis, isBlocking=False, **homingOptions):
+        # PositionerController.homeAxis passes direction, speed, polarity,
+        # release distance and timeout; a virtual endstop needs none of them.
+        # Taking only (axis, isBlocking) made every REST homing call raise.
         if axis == "X": self.home_x(isBlocking)
         if axis == "Y": self.home_y(isBlocking)
         if axis == "Z": self.home_z(isBlocking)
+        if axis == "A": self.home_a(isBlocking)
 
 
     def home_x(self, is_blocking):
@@ -188,9 +192,13 @@ class VirtualStageManager(PositionerManager):
         self.move(value=0, axis="Z", is_absolute=True)
         self.setPosition(axis="Z", value=0)
 
+    def home_a(self, is_blocking):
+        self.move(value=0, axis="A", is_absolute=True)
+        self.setPosition(axis="A", value=0)
+
     def home_xyz(self):
-        if self.homeXenabled and self.homeYenabled and self.homeZenabled:
-            [self.setPosition(axis=axis, value=0) for axis in ["X","Y","Z"]]
+        for axis in ("X", "Y", "Z"):
+            self.doHome(axis)
 
 
     # ------------------------------------------------------------------ #

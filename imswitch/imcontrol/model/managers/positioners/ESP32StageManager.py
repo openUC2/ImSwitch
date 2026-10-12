@@ -968,8 +968,12 @@ class ESP32StageManager(PositionerManager):
         self._motor.register_stagescan_callback(on_stagescan_complete_fct)
         
     
-    def unregister_stagescan_callback(self):
-        self._motor.unregister_stagescan_callback()
+    def unregister_stagescan_callback(self, on_stagescan_complete_fct=None):
+        # uc2rest removes one specific callback; calling it without one raised
+        # a TypeError that the caller swallowed, so callbacks piled up.
+        if on_stagescan_complete_fct is None:
+            return
+        self._motor.unregister_stagescan_callback(on_stagescan_complete_fct)
     
     def reset_stagescan_complete(self):
         pass

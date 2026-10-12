@@ -26,7 +26,6 @@ from .ExperimentManager import ExperimentManager
 from .ROIScanManager import ROIScanManager
 from .LightsheetManager import LightsheetManager
 from .WebRTCManager import WebRTCManager
-from .HyphaManager import HyphaManager
 from .HistoScanManager import HistoScanManager
 from .StresstestManager import StresstestManager
 from .ObjectiveManager import ObjectiveManager

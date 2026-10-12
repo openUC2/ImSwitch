@@ -93,10 +93,15 @@ class SingleTiffWriter:
                     'PhysicalSizeY': float(pixel_size),
                     'PhysicalSizeYUnit': 'µm'
                 },
-                'axes': 'ZYX',
+                # Must match the frame: 'ZYX' on a 2-D frame made tifffile
+                # reject every write after the first, so the file held one
+                # image and no OME-XML.
+                'axes': 'YX' if image.ndim == 2 else 'ZYX',
                 'Plane': {
                     'PositionX': float(pos_x),
-                    'PositionY': float(pos_y)
+                    'PositionXUnit': 'µm',
+                    'PositionY': float(pos_y),
+                    'PositionYUnit': 'µm',
                 }
             }
 

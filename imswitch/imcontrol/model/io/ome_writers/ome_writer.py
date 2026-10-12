@@ -866,7 +866,9 @@ class OMEWriter:
         # a space or hyphen ("LED Matrix", "Laser-488") would make every tile
         # of that channel unparseable, so reduce it to what the pattern takes.
         channel = _sanitize_channel_name(metadata.get("illuminationChannel", "unknown"))
-        laser_power = int(metadata.get("illuminationValue", 0))
+        # -1 marks "no light"; "_p-1" does not match the stitchers' "_p(\d+)",
+        # so such tiles were skipped. Write 0 instead.
+        laser_power = max(0, int(metadata.get("illuminationValue", 0)))
         # ``_i`` is the tile's index within its scan region — the same
         # ``iterator`` the protocol JSON lists — so stitchers can look tiles
         # up in it. Older callers only sent the workflow step id.

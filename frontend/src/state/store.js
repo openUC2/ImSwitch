@@ -28,7 +28,6 @@ import flowStopReducer from "./slices/FlowStopSlice";
 import lightsheetReducer from "./slices/LightsheetSlice";
 import zarrinitialZarrReducer from "./slices/OmeZarrTileStreamSlice";
 import stresstestReducer from "./slices/StresstestSlice";
-import workflowReducer from "./slices/WorkflowSlice";
 import stormReducer from "./slices/STORMSlice";
 import focusLockReducer from "./slices/FocusLockSlice";
 import demoReducer from "./slices/DemoSlice";
@@ -169,7 +168,6 @@ const rootReducer = combineReducers({
   lightsheet: persistReducer(lightsheetPersistConfig, lightsheetReducer), // Nested persist for axis config
   omeZarrState: zarrinitialZarrReducer,
   stresstestState: stresstestReducer,
-  workflowState: workflowReducer,
   storm: stormReducer,
   focusLockState: focusLockReducer,
   demoState: demoReducer,
@@ -222,7 +220,6 @@ const persistConfig = {
     "experimentState",
     "wellSelectorState",
     "position", // Persist step sizes
-    "workflowState",
     "themeState",
     "languageState", // Persist the UI language choice
     "uiPreferencesState", // Persist touch mode / on-screen keypad choice

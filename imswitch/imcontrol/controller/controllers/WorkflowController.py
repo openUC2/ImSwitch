@@ -342,8 +342,8 @@ class WorkflowController(LiveUpdatedController):
         except:zarr_writer["tiles"].write_tile(img.T, row, col)
         metadata["frame_saved"] = True
 
-    def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
-        time.sleep(seconds)
+    def wait_time(self, seconds: float, context: WorkflowContext, metadata: Dict[str, Any]):
+        context.sleep(seconds)  # returns early on stop
 
     def addFrametoFile(self, frame:np.ndarray, context: WorkflowContext, metadata: Dict[str, Any]):
         self._logger.debug(f"Adding frame to file for step {metadata['step_id']}...")

@@ -7,7 +7,6 @@ import {
   AutoFixHigh as AutoFixHighIcon,
   Cable as CableIcon,
   Dashboard as DashboardIcon,
-  Extension as ExtensionIcon,
   Folder as FolderIcon,
   GridOn as GridOnIcon,
   GridView as GridViewIcon,
@@ -371,19 +370,6 @@ export const APP_REGISTRY = {
   },
 
   // === CODING - Development and debugging tools ===
-  blockly: {
-    id: "blockly",
-    name: "Blockly Controller",
-    description:
-      "Visual programming interface for creating custom microscopy workflows. Drag-and-drop programming for experiments.",
-    category: APP_CATEGORIES.CODING,
-    icon: ExtensionIcon,
-    enabled: false,
-    essential: false,
-    keywords: ["blockly", "visual", "programming", "workflow", "experiments"],
-    pluginId: "Blockly",
-  },
-
   imjoy: {
     id: "imjoy",
     name: "ImJoy Integration",

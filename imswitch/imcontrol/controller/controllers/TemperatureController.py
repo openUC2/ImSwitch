@@ -119,6 +119,18 @@ class TemperatureController(ImConWidgetController):
         self.temperatureController.set_temperature(active=active
             , Kp=self.Kp, Ki=self.Ki, Kd=self.Kd, target=self.controlTarget+sensorOffset)
 
+    @APIExport(runOnUIThread=False)
+    def getTemperature(self) -> dict:
+        """Current heater sensor reading in °C, the setpoint and the PID gains.
+
+        target_c is the value last passed to set_temperature (without its
+        sensorOffset). Non-blocking: the reading is the board's last report.
+        """
+        value = self.temperatureController.get_temperature()
+        return {"temperature_c": None if value is None or value <= -200 else float(value),
+                "target_c": float(self.controlTarget),
+                "Kp": self.Kp, "Ki": self.Ki, "Kd": self.Kd}
+
     def updateSetPointData(self):
         if self.currPoint < self.nBuffer:
             self.setPointData[self.currPoint,0] = self.temperatureValue
@@ -141,7 +153,8 @@ class TemperatureController(ImConWidgetController):
             self.temperatureValue  = self.temperatureController.get_temperature()
             if self.temperatureValue and self.temperatureValue > -200: # if not, we have faulty values
 
-                self._widget.updateTemperature(self.temperatureValue)
+                if self._widget is not None:  # headless: no widget
+                    self._widget.updateTemperature(self.temperatureValue)
 
                 # logging temperature to file
                 mFileName = os.path.join(self.temperatureDir, 'temperature.csv')
@@ -161,7 +174,9 @@ class TemperatureController(ImConWidgetController):
 
                 # update plot
                 self.updateSetPointData()
-                if self.currPoint < self.nBuffer:
+                if self._widget is None:
+                    pass
+                elif self.currPoint < self.nBuffer:
                     self._widget.temperaturePlotCurve.setData(self.timeData[1:self.currPoint],
                                                         self.setPointData[1:self.currPoint,0])
                 else:

@@ -177,6 +177,7 @@ class FocusMapMixin:
                         group_name="Combined (single-FOV areas)",
                         bounds=combined_bounds,
                         config=config,
+                        af_kwargs=af_kwargs,
                     )
                 # Assign the combined map to each degenerate area
                 combined_fm = self.focus_map_manager.get(combined_gid)

@@ -419,8 +419,9 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
         self._logger.debug("Dummy main function called")
         return True
 
-    def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
-        time.sleep(seconds)
+    def wait_time(self, seconds: float, context: WorkflowContext, metadata: Dict[str, Any]):
+        # Interruptible: returns early when the experiment is stopped.
+        context.sleep(seconds)
 
     def wait_for_next_timepoint(self, timepoint: int, t_period: float, context: WorkflowContext, metadata: Dict[str, Any]):
         """
@@ -448,7 +449,9 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
 
         if wait_time > 0:
             self._logger.info(f"Waiting {wait_time:.2f}s for next timepoint (timepoint {timepoint})")
-            time.sleep(wait_time)
+            # Interruptible, so stopExperiment does not wait out the period.
+            if not context.sleep(wait_time):
+                self._logger.info("Timepoint wait interrupted by stop request")
         else:
             self._logger.warning(f"Timepoint {timepoint} is running {abs(wait_time):.2f}s behind schedule")
             # Small delay to prevent issues
@@ -564,10 +567,20 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
         """Force stop the experiment. Works for both normal and performance modes."""
         results = {}
 
-        # Force stop workflow
+        # Force stop workflow. The stop flag wakes a paused or waiting thread;
+        # give it a moment to leave its current step before replacing the
+        # manager, so a new run does not start next to a still-running one.
         try:
-            self.workflow_manager.stop_workflow()
-            del self.workflow_manager
+            old_manager = self.workflow_manager
+            old_thread = getattr(old_manager, "current_thread", None)
+            old_manager.stop_workflow()
+            if old_thread is not None and old_thread.is_alive():
+                old_thread.join(timeout=2.0)
+                if old_thread.is_alive():
+                    self._logger.warning(
+                        "Force stop: workflow thread still inside a step; "
+                        "it will exit at its next checkpoint."
+                    )
             self.workflow_manager = WorkflowsManager()
             results["workflow"] = {"status": "force_stopped", "message": "Workflow force stopped"}
         except Exception as e:

@@ -254,7 +254,6 @@ const ConfigurationWizard = ({ open, onClose, hostIP, hostPort }) => {
         "roiscan": null,
         "lightsheet": null,
         "webrtc": null,
-        "hypha": null,
         "mockxx": null,
         "jetsonnano": null,
         "Stresstest": {},

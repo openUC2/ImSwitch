@@ -103,8 +103,8 @@ class TimelapseController(ImConWidgetController):
     def autofocus(self):
         self._logger.error("Performing autofocus...NOT IMPLEMENTED")
 
-    def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
-        time.sleep(seconds)
+    def wait_time(self, seconds: float, context: WorkflowContext, metadata: Dict[str, Any]):
+        context.sleep(seconds)  # returns early on stop
 
     def save_frame_tiff(self, context: WorkflowContext, metadata: Dict[str, Any]):
         # Retrieve the TIFF writer and write the tile

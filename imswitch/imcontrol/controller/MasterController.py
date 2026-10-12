@@ -19,7 +19,6 @@ from imswitch.imcontrol.model import (
     LEDMatrixsManager,
     ROIScanManager,
     WebRTCManager,
-    HyphaManager,
     UC2ConfigManager,
     AutofocusManager,
     HistoScanManager,
@@ -139,8 +138,6 @@ class MasterController:
             self.dpcManager = DPCManager(self.__setupInfo.dpc)
         if "NIDAQ" in self.__setupInfo.availableWidgets:
             self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
-        if "Hypha" in self.__setupInfo.availableWidgets:
-            self.hyphaManager = HyphaManager(self.__setupInfo.hypha)
         if "ROIScan" in self.__setupInfo.availableWidgets:
             self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
         if "Lightsheet" in self.__setupInfo.availableWidgets:

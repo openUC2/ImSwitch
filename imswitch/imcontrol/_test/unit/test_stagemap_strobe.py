@@ -207,7 +207,10 @@ def esp32_stage(motor, offsetX=0.0):
     stage.stageOffsetPositions = {"X": offsetX, "Y": 0, "Z": 0, "A": 0}
     stage._strobeAxis, stage._strobeCallbacks = "X", {}
     stage._speed = {"X": 1000, "Y": 1000, "Z": 1000, "A": 1000}
-    stage.limitXenabled, stage.minX, stage.maxX = False, -np.inf, np.inf
+    stage._axes, stage.axisIds = ["X", "Y", "Z", "A"], {"A": 0, "X": 1, "Y": 2, "Z": 3}
+    stage.limitEnabled = {ax: False for ax in stage._axes}
+    stage.minPos = {ax: -np.inf for ax in stage._axes}
+    stage.maxPos = {ax: np.inf for ax in stage._axes}
     return stage
 
 
@@ -233,7 +236,7 @@ def test_esp32_stage_sweeps_in_the_user_frame():
 def test_esp32_stage_respects_the_soft_limits():
     motor = FakeMotor()
     stage = esp32_stage(motor)
-    stage.limitXenabled, stage.minX, stage.maxX = True, 0.0, 5000.0
+    stage.limitEnabled["X"], stage.minPos["X"], stage.maxPos["X"] = True, 0.0, 5000.0
     assert stage.startStrobeSweep(axis="X", target=6000.0, speed=1000) is False
     assert motor.started == []
 

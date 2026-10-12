@@ -118,7 +118,7 @@ class PositionerController(ImConWidgetController):
             self._master.positionersManager[positionerName].move(value=dist, axis=axis, is_absolute=isAbsolute, is_blocking=isBlocking, speed=speed)
             if dist is None:
                 self.__logger.info(f"Moving {positionerName}, axis {axis}, at speed {str(speed)}")
-                self._master.positionersManager[positionerName].moveForeverByAxis(speed=speed, axis=axis, is_stop=~(abs(speed)>0))
+                self._master.positionersManager[positionerName].moveForeverByAxis(speed=speed, axis=axis, is_stop=abs(speed) == 0)
         except Exception as e:
             # if the positioner does not have the move method, use the default move method
             self._logger.error(e)

@@ -291,7 +291,6 @@
     "roiscan": null,
     "lightsheet": null,
     "webrtc": null,
-    "hypha": null,
     "mockxx": null,
     "jetsonnano": null,
     "Stresstest": null,
@@ -388,7 +387,6 @@
         "DPC",
         "Holo",
         "FFT",
-        "Hypha",
         "HistoScan",
         "FocusLock",
         "FOVLock"

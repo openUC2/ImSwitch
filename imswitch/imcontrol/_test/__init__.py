@@ -128,8 +128,7 @@ setupInfoBasic = ViewSetupInfo.from_json("""
     "Positioner",
     "Autofocus",
     "ROIScan",
-    "HistoScan",
-    "Hypha"
+    "HistoScan"
   ],
   "nonAvailableWidgets":[
     "FocusLock",
@@ -269,7 +268,6 @@ setupInfoWithoutWidgets = ViewSetupInfo.from_json("""
     "Autofocus",
     "ROIScan",
     "HistoScan",
-    "Hypha",
     "ImSwitchServer",
     "Lightsheet",
     "Workflow",

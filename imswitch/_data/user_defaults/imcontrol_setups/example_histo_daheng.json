@@ -198,7 +198,6 @@
        "ImSwitchServer",
        "PixelCalibration",
        "HistoScan",
-       "Hypha",
        "LEDMatrix",
        "Joystick",
        "ROIScan"

@@ -136,6 +136,21 @@
                     "offset": 0.0
                 }
             }
+        },
+        "ESP32": {
+            "managerName": "VirtualESP32Manager",
+            "managerProperties": {
+                "ambientC": 22.0,
+                "heaterTauS": 60.0,
+                "heaterMaxRiseC": 30.0,
+                "noiseC": 0.02,
+                "humidityPct": 45.0,
+                "lux": 120.0,
+                "digitalIn": {
+                    "1": {"mirrorOut": 1},
+                    "2": {"schedule": [[30, 1], [60, 0]]}
+                }
+            }
         }
     },
     "slm": null,
@@ -177,7 +192,6 @@
     "roiscan": null,
     "lightsheet": null,
     "webrtc": null,
-    "hypha": null,
     "mockxx": null,
     "jetsonnano": null,
     "Stresstest": {},
@@ -372,12 +386,13 @@
         "Arkitekt",
         "LiveView", 
         "Composite",
-        "InLineHolo"
+        "InLineHolo",
+        "Temperature",
+        "I2CSensor"
     ],
     "nonAvailableWidgets": [
         "STORMRecon",
         "Lepmon",
-        "Hypha",
         "Histogramm",
         "imswitch_lightsheet",
         "imswitch_arkitekt_next",

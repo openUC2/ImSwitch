@@ -164,8 +164,7 @@
     "Laser",
     "UC2Config",
     "LEDMatrix",
-    "Lightsheet", 
-    "Hypha"
+    "Lightsheet" 
     ],
   "nonAvailableWidgets":[
     "STORMRecon",
@@ -176,7 +175,6 @@
     "MCT",
     "ImSwitchServer",
     "PixelCalibration",
-    "Hypha",
     "FocusLock",
     "HistoScan", 
     "FocusLock"]

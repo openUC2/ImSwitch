@@ -154,7 +154,8 @@ imswitch/
     model/canbus/              UC2 CAN network + firmware (no ImSwitch imports; endpoints in
                                controllers/uc2config/can_network_api.py)
     model/aufgaben/            Aufgaben job format, tasks, validator, useq bridge (no ImSwitch
-                               imports; plan in docs/AUFGABEN_ROADMAP.md)
+                               imports; plan in docs/AUFGABEN_ROADMAP.md); storage.py is the one
+                               OME-Zarr/OME-TIFF writer for all of ImSwitch (save_image, NgffImage)
     model/SetupInfo.py         setup-JSON schema (dataclasses)
     model/io/recording_service.py   SaveFormat / RecMode enums, writers
     _test/                     unit + api tests
@@ -667,6 +668,9 @@ role with physical consequences.
     signals; expose a status endpoint and a stop endpoint for anything long-running.
   - Signals broadcast to the frontend through `imcommon/framework/noqt.py`. Adding a signal
     means adding traffic — throttle high-rate ones.
+  - Image files go through `model/aufgaben/storage.py` (`save_image` for one array, `NgffImage`
+    for a growing one) so they open in Fiji, napari and OMERO. Do not call `tifffile` or zarr
+    writers directly.
 - **Always:** verify against `example_virtual_microscope.json` before claiming a change works.
 - **Ask first:** changing an existing endpoint's name, path, or response shape (the React SPA
   and external clients depend on it); adding a dependency to `pyproject.toml`.

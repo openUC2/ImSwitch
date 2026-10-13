@@ -1200,7 +1200,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
 
     # Digital Input/Output API Methods
     @APIExport(runOnUIThread=False)
-    def getDigitalIn(self, digitalinid=1, timeout=1, is_blocking=True):
+    def getDigitalIn(self, digitalinid: int = 1, timeout: float = 1, is_blocking: bool = True):
         """
         Get the current value of a digital input.
         
@@ -1220,7 +1220,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def actDigitalIn(self, timeout=1, is_blocking=False):
+    def actDigitalIn(self, timeout: float = 1, is_blocking: bool = False):
         """
         Trigger the digitalin act function.
         
@@ -1238,7 +1238,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def getDigitalOut(self, digitaloutid=1, timeout=1, is_blocking=True):
+    def getDigitalOut(self, digitaloutid: int = 1, timeout: float = 1, is_blocking: bool = True):
         """
         Get the current value and pin of a digital output.
         
@@ -1258,7 +1258,8 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def setDigitalOut(self, digitaloutid=1, digitaloutval=0, timeout=1, is_blocking=False):
+    def setDigitalOut(self, digitaloutid: int = 1, digitaloutval: int = 0, timeout: float = 1,
+                      is_blocking: bool = False):
         """
         Set the value of a digital output. Use digitaloutval=-1 to trigger a pulse (HIGH->LOW).
         
@@ -1280,7 +1281,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def setupDigitalOutPin(self, digitaloutid=1, pin=4):
+    def setupDigitalOutPin(self, digitaloutid: int = 1, pin: int = 4):
         """
         Setup the pin for a digital output.
         
@@ -1311,9 +1312,9 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def setTrigger(self, trigger1=False, delayOn1=0, delayOff1=0, 
-                   trigger2=False, delayOn2=0, delayOff2=0,
-                   trigger3=False, delayOn3=0, delayOff3=0):
+    def setTrigger(self, trigger1: bool = False, delayOn1: float = 0, delayOff1: float = 0,
+                   trigger2: bool = False, delayOn2: float = 0, delayOff2: float = 0,
+                   trigger3: bool = False, delayOn3: float = 0, delayOff3: float = 0):
         """
         Set up a trigger table with 3 triggers.
         
@@ -1339,7 +1340,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def sendTrigger(self, triggerId=0):
+    def sendTrigger(self, triggerId: int = 0):
         """
         Send a trigger pulse on the specified digital output.
         

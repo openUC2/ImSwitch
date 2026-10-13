@@ -8969,6 +8969,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "number",
               "default": 1,
               "title": "Timeout"
             }
@@ -8978,6 +8979,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "boolean",
               "default": false,
               "title": "Is Blocking"
             }
@@ -9545,6 +9547,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "integer",
               "default": 1,
               "title": "Digitalinid"
             }
@@ -9554,6 +9557,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "number",
               "default": 1,
               "title": "Timeout"
             }
@@ -9563,6 +9567,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "boolean",
               "default": true,
               "title": "Is Blocking"
             }
@@ -9601,6 +9606,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "integer",
               "default": 1,
               "title": "Digitaloutid"
             }
@@ -9610,6 +9616,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "number",
               "default": 1,
               "title": "Timeout"
             }
@@ -9619,6 +9626,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "boolean",
               "default": true,
               "title": "Is Blocking"
             }
@@ -10713,6 +10721,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "integer",
               "default": 0,
               "title": "Triggerid"
             }
@@ -10979,6 +10988,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "integer",
               "default": 1,
               "title": "Digitaloutid"
             }
@@ -10988,6 +10998,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "integer",
               "default": 0,
               "title": "Digitaloutval"
             }
@@ -10997,6 +11008,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "number",
               "default": 1,
               "title": "Timeout"
             }
@@ -11006,6 +11018,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "boolean",
               "default": false,
               "title": "Is Blocking"
             }
@@ -11643,6 +11656,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "boolean",
               "default": false,
               "title": "Trigger1"
             }
@@ -11652,6 +11666,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "number",
               "default": 0,
               "title": "Delayon1"
             }
@@ -11661,6 +11676,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "number",
               "default": 0,
               "title": "Delayoff1"
             }
@@ -11670,6 +11686,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "boolean",
               "default": false,
               "title": "Trigger2"
             }
@@ -11679,6 +11696,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "number",
               "default": 0,
               "title": "Delayon2"
             }
@@ -11688,6 +11706,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "number",
               "default": 0,
               "title": "Delayoff2"
             }
@@ -11697,6 +11716,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "boolean",
               "default": false,
               "title": "Trigger3"
             }
@@ -11706,6 +11726,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "number",
               "default": 0,
               "title": "Delayon3"
             }
@@ -11715,6 +11736,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "number",
               "default": 0,
               "title": "Delayoff3"
             }
@@ -11753,6 +11775,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "integer",
               "default": 1,
               "title": "Digitaloutid"
             }
@@ -11762,6 +11785,7 @@
             "in": "query",
             "required": false,
             "schema": {
+              "type": "integer",
               "default": 4,
               "title": "Pin"
             }
@@ -16163,7 +16187,7 @@
     "/api/TemperatureController/set_temperature": {
       "get": {
         "summary": "Set Temperature",
-        "description": "Switch the heater PID on/off; the board regulates to target + sensorOffset (°C).",
+        "description": "Switch the heater PID on or off.\n\nArgs:\n    active: True regulates, false switches the heater off.\n    Kp, Ki, Kd: PID gains; empty keeps the previous ones.\n    target: Setpoint in °C at the sample; empty keeps the previous one.\n    sensorOffset: °C added for the board, whose sensor sits at the heater.\n\nReturns the state as getTemperature does.",
         "operationId": "set_temperature_api_TemperatureController_set_temperature_get",
         "parameters": [
           {
@@ -16171,6 +16195,7 @@
             "in": "query",
             "required": true,
             "schema": {
+              "type": "boolean",
               "title": "Active"
             }
           },
@@ -16179,6 +16204,14 @@
             "in": "query",
             "required": false,
             "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Kp"
             }
           },
@@ -16187,6 +16220,14 @@
             "in": "query",
             "required": false,
             "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Ki"
             }
           },
@@ -16195,6 +16236,14 @@
             "in": "query",
             "required": false,
             "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Kd"
             }
           },
@@ -16203,6 +16252,14 @@
             "in": "query",
             "required": false,
             "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Target"
             }
           },
@@ -16211,7 +16268,8 @@
             "in": "query",
             "required": false,
             "schema": {
-              "default": 3,
+              "type": "number",
+              "default": 3.0,
               "title": "Sensoroffset"
             }
           }
@@ -16221,7 +16279,11 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Set Temperature Api Temperaturecontroller Set Temperature Get"
+                }
               }
             }
           },

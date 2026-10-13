@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field
 from enum import Enum
 
 # Import OME writers from io module
-from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths, SingleTiffWriter
+from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 from dataclasses import dataclass
 
 
@@ -94,7 +95,6 @@ class LightsheetController(ImConWidgetController):
         self._scanStatus = LightsheetScanStatus()
         self._currentScanParams: Optional[LightsheetScanParameters] = None
         self._omeWriter: Optional[OMEWriter] = None
-        self._tiffWriter: Optional[SingleTiffWriter] = None
 
         # Observation camera streaming (similar to PixelCalibrationController)
         self.observationStreamRunning = False
@@ -225,14 +225,6 @@ class LightsheetController(ImConWidgetController):
             except Exception as e:
                 self._logger.error(f"Error finalizing OME writer: {e}")
             self._omeWriter = None
-
-        # Close tiff writer if open
-        if self._tiffWriter is not None:
-            try:
-                self._tiffWriter.close()
-            except Exception as e:
-                self._logger.error(f"Error closing tiff writer: {e}")
-            self._tiffWriter = None
 
     # ========================================================================
     # New Go-Stop-Acquire Mode with OME-Zarr support
@@ -569,22 +561,19 @@ class LightsheetController(ImConWidgetController):
         zarrPath = None
         tiffPath = None
 
-        # Initialize OME-Zarr writer if needed
-        if params.storageFormat in (StorageFormat.OME_ZARR, StorageFormat.BOTH):
-            zarrPath = os.path.join(dirPath, f"{params.experimentName}.zarr")
-            self.mZarrPath = zarrPath
-            self._scanStatus.zarrPath = zarrPath
-
-            # Import from io module (already imported at top)
-            
-            # Create file paths structure
-            base_name = params.experimentName
-            base_path = os.path.join(dirPath, base_name)
-            file_paths = OMEFileStorePaths(base_dir=base_path)
-            
-            zarrPath = file_paths.zarr_dir
-            self.mZarrPath = zarrPath
-            self._scanStatus.zarrPath = zarrPath
+        # One OME writer: the canvas as OME-Zarr and/or its OME-TIFF export
+        wantZarr = params.storageFormat in (StorageFormat.OME_ZARR, StorageFormat.BOTH)
+        wantTiff = params.storageFormat in (StorageFormat.TIFF, StorageFormat.BOTH)
+        if wantZarr or wantTiff:
+            file_paths = OMEFileStorePaths(base_dir=os.path.join(dirPath, params.experimentName))
+            if wantZarr:
+                zarrPath = file_paths.zarr_dir
+                self.mZarrPath = zarrPath
+                self._scanStatus.zarrPath = zarrPath
+            if wantTiff:
+                tiffPath = os.path.join(file_paths.base_dir, "stitched.ome.tif")
+                self.mFilePath = tiffPath
+                self._scanStatus.tiffPath = tiffPath
             
             # Calculate grid shape for tiling
             if params.enableTiling:
@@ -596,8 +585,8 @@ class LightsheetController(ImConWidgetController):
             
             # Create OME writer config with proper dimensions
             ome_config = OMEWriterConfig(
-                write_tiff=False,
-                write_zarr=True,
+                write_zarr=wantZarr,
+                write_stitched_tiff=wantTiff,
                 n_time_points=params.timepoints,
                 n_z_planes=totalZSteps,
                 n_channels=1,
@@ -619,15 +608,8 @@ class LightsheetController(ImConWidgetController):
                 config=ome_config,
                 logger=self._logger
             )
-            self._logger.info(f"OME-Zarr writer initialized: {zarrPath}, grid={grid_shape}, timepoints={params.timepoints}")
-
-        # Initialize TIFF writer if needed (NOTE: TIFF may not support full stitching like OME-Zarr)
-        if params.storageFormat in (StorageFormat.TIFF, StorageFormat.BOTH):
-            tiffPath = os.path.join(dirPath, f"{params.experimentName}.tif")
-            self.mFilePath = tiffPath
-            self._scanStatus.tiffPath = tiffPath
-            self._tiffWriter = SingleTiffWriter(tiffPath, bigtiff=True)
-            self._logger.info(f"TIFF writer initialized: {tiffPath}")
+            self._logger.info(f"OME writer initialized: zarr={zarrPath}, tiff={tiffPath}, "
+                              f"grid={grid_shape}, timepoints={params.timepoints}")
 
         try:
             # Turn on illumination
@@ -709,22 +691,7 @@ class LightsheetController(ImConWidgetController):
                                     }
                                     self._omeWriter.write_frame(frame_2d.astype(np.uint16), frame_metadata)
                                 except Exception as e:
-                                    self._logger.error(f"Error writing to Zarr: {e}")
-
-                            # Write to TIFF if enabled (writes all frames sequentially)
-                            if self._tiffWriter is not None:
-                                try:
-                                    metadata = {
-                                        "pixel_size": self.detector.pixelSizeUm[-1],
-                                        "x": xyTile["x"],
-                                        "y": xyTile["y"],
-                                        "z": zPos,
-                                        "time": t_idx,
-                                        "tile": tile_idx
-                                    }
-                                    self._tiffWriter.add_image(frame_2d.astype(np.uint16), metadata)
-                                except Exception as e:
-                                    self._logger.error(f"Error writing to TIFF: {e}")
+                                    self._logger.error(f"Error writing frame: {e}")
 
                             frameCounter += 1
 
@@ -755,17 +722,12 @@ class LightsheetController(ImConWidgetController):
             # Move back to initial position
             self.stages.move(value=initialPosition[params.axis], axis=params.axis, is_absolute=True, is_blocking=False)
 
-            # Close writers
+            # Close writers (the OME-TIFF is exported here)
             if self._omeWriter is not None:
                 self._logger.info("Finalizing OME writer...")
                 self._omeWriter.finalize()
                 self._omeWriter = None
-                self._logger.info(f"OME writer finalized: {zarrPath}")
-
-            if self._tiffWriter is not None:
-                self._tiffWriter.close()
-                self._tiffWriter = None
-                self._logger.info(f"TIFF writer closed: {tiffPath}")
+                self._logger.info(f"OME writer finalized: zarr={zarrPath}, tiff={tiffPath}")
 
             self._logger.info(f"Scan completed: {frameCounter} frames acquired")
 
@@ -989,66 +951,16 @@ class LightsheetController(ImConWidgetController):
 
             imgHeight, imgWidth = initFrame.shape[:2]
 
-            # Estimate total frames for OME-Zarr writer initialization
-            totalDistance = abs(params.maxPos - params.minPos)
-            estimatedFrameRate = 30  # Approximate frame rate (Hz)
-            estimatedScanTime = totalDistance / params.speed  # seconds
-            estimatedFrames = max(int(estimatedFrameRate * estimatedScanTime), 100)
-
-            # Initialize OME-Zarr writer if needed (direct frame-by-frame writing like step-acquire)
+            # Output paths; the frames are buffered and written with save_image at the end
+            base_path = os.path.join(dirPath, params.experimentName)
             if params.storageFormat in (StorageFormat.OME_ZARR, StorageFormat.BOTH):
-                # Import from io module (already imported at top)
-                
-                # Create file paths structure - base_dir without .zarr extension
-                base_name = params.experimentName
-                base_path = os.path.join(dirPath, base_name)
-                file_paths = OMEFileStorePaths(base_dir=base_path)
-                
-                # Update zarrPath to match what OMEFileStorePaths creates
-                zarrPath = file_paths.zarr_dir
+                zarrPath = base_path + ".ome.zarr"
                 self.mZarrPath = zarrPath
                 self._scanStatus.zarrPath = zarrPath
-                
-                # Calculate step size from estimated frames
-                step_size_z = totalDistance / max(1, estimatedFrames - 1) if estimatedFrames > 1 else 1.0
-                
-                # Create OME writer config
-                ome_config = OMEWriterConfig(
-                    write_tiff=False,
-                    write_zarr=True,
-                    n_time_points=1,
-                    n_z_planes=estimatedFrames,  # Estimated, will write as many as captured
-                    n_channels=1,
-                    pixel_size=1.0,
-                    pixel_size_z=step_size_z,
-                    channel_names=["Lightsheet"],
-                    channel_colors=["00FF00"],
-                    x_start=0.0,
-                    y_start=0.0,
-                    z_start=params.minPos
-                )
-                
-                # Initialize OME writer
-                self._omeWriter = OMEWriter(
-                    file_paths=file_paths,
-                    tile_shape=(imgHeight, imgWidth),
-                    grid_shape=(1, 1),
-                    grid_geometry=(0, 0, 0, 0),
-                    config=ome_config,
-                    logger=self._logger
-                )
-                self._logger.info(f"OME-Zarr writer initialized for continuous scan: {zarrPath}")
-
-            # Initialize TIFF writer if needed
             if params.storageFormat in (StorageFormat.TIFF, StorageFormat.BOTH):
-                tiffPath = os.path.join(dirPath, f"{params.experimentName}.tif")
+                tiffPath = base_path + ".ome.tif"
                 self.mFilePath = tiffPath
                 self._scanStatus.tiffPath = tiffPath
-                # Use tifffile directly with imagej=True so napari reads
-                # all pages as a proper Z-stack (not individual 2D images).
-                import tifffile
-                self._tiffWriter = tifffile.TiffWriter(tiffPath, bigtiff=True, imagej=True)
-                self._logger.info(f"TIFF writer (ImageJ stack) initialized: {tiffPath}")
 
             # Start continuous movement
             controller = MovementController(self.stages)
@@ -1105,66 +1017,22 @@ class LightsheetController(ImConWidgetController):
             # Capture local references for the background thread
             local_frame_buffer = list(frame_buffer)
             frame_buffer.clear()  # Free main-thread reference immediately
-            local_ome_writer = self._omeWriter
-            local_tiff_writer = self._tiffWriter
-            local_zarr_path = zarrPath
-            local_tiff_path = tiffPath
-            local_illu_source = params.illuSource
-            local_illu_value = params.illuValue
-            self._omeWriter = None
-            self._tiffWriter = None
+            local_paths = [path for path in (zarrPath, tiffPath) if path]
+            pixel_size = float(self.detector.pixelSizeUm[-1])
+            channel = params.illuSource or "Lightsheet"
 
             def _write_frames_background():
-                """Write buffered frames to OME-Zarr and/or TIFF in background."""
+                """The buffered Z sweep as one OME image per requested format."""
                 try:
-                    # Write to OME-Zarr if enabled
-                    if local_ome_writer is not None:
-                        self._logger.info("Writing buffered frames to OME-Zarr...")
-                        for idx, (frame_data, z_pos) in enumerate(local_frame_buffer):
-                            try:
-                                frame_metadata = {
-                                    "x": 0,
-                                    "y": 0,
-                                    "z": z_pos,
-                                    "tile_index": 0,
-                                    "time_index": 0,
-                                    "z_index": idx,
-                                    "channel_index": 0,
-                                    "runningNumber": idx,
-                                    "illuminationChannel": local_illu_source if local_illu_source else "Default",
-                                    "illuminationValue": local_illu_value
-                                }
-                                local_ome_writer.write_frame(frame_data.astype(np.uint16), frame_metadata)
-                                if idx % 10 == 0:
-                                    self._logger.info(f"OME-Zarr writing progress: {(idx + 1) / len(local_frame_buffer) * 100:.1f}%")
-                            except Exception as e:
-                                self._logger.error(f"Error writing frame {idx} to OME-Zarr: {e}")
-                        self._logger.info(f"OME-Zarr writing complete: {len(local_frame_buffer)} frames written")
-
-                        # Finalize OME-Zarr writer
-                        try:
-                            local_ome_writer.finalize()
-                            self._logger.info(f"OME-Zarr writer finalized: {local_zarr_path}")
-                        except Exception as e:
-                            self._logger.error(f"Error finalizing OME-Zarr writer: {e}")
-
-                    # Write to TIFF if enabled — write plain pages so napari
-                    # interprets them as a Z-stack (ImageJ-compatible format).
-                    if local_tiff_writer is not None:
-                        self._logger.info("Writing buffered frames to TIFF...")
-                        for idx, (frame_data, z_pos) in enumerate(local_frame_buffer):
-                            try:
-                                local_tiff_writer.write(
-                                    frame_data.astype(np.uint16),
-                                    contiguous=True,
-                                )
-                                if idx % 10 == 0:
-                                    self._logger.info(f"TIFF writing progress: {(idx + 1) / len(local_frame_buffer) * 100:.1f}%")
-                            except Exception as e:
-                                self._logger.error(f"Error writing frame {idx} to TIFF: {e}")
-
-                        local_tiff_writer.close()
-                        self._logger.info(f"TIFF writing complete: {len(local_frame_buffer)} frames written to {local_tiff_path}")
+                    if not local_frame_buffer or not local_paths:
+                        return
+                    stack = np.stack([frame.astype(np.uint16) for frame, _ in local_frame_buffer])
+                    zs = [z for _, z in local_frame_buffer]
+                    dz = abs(zs[-1] - zs[0]) / max(1, len(zs) - 1) or 1.0
+                    for path in local_paths:
+                        save_image(path, stack, "ZYX", pixel_size_um=pixel_size, z_step_um=dz,
+                                   origin_um=(0.0, 0.0, min(zs)), channel_names=[channel])
+                        self._logger.info(f"Wrote {len(zs)} planes to {path}")
                 except Exception as e:
                     self._logger.error(f"Error in background frame writing: {e}")
                 finally:

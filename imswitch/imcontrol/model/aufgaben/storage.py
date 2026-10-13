@@ -203,6 +203,7 @@ def _write_ome_tiff(path, levels, spec: ImageSpec, rgb: bool = False) -> Path:
     planes = list(np.ndindex(*levels[0].shape[:3]))
     samples = (3,) if rgb else ()
     path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with tifffile.TiffWriter(path, bigtiff=True, ome=False) as tif:
         for i, level in enumerate(levels):
             y, x = level.shape[3:5]

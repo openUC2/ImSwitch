@@ -50,12 +50,9 @@ Alternative APIs:
        store.write_frame(detector_name, frame, frame_event)
        store.close()
 
-3. OmeTiffStitcher - For mosaic/tile acquisitions
-       from imswitch.imcontrol.model.io import OmeTiffStitcher
-       stitcher = OmeTiffStitcher('/path/to/mosaic.ome.tif')
-       stitcher.start()
-       stitcher.add_image(image, pos_x, pos_y, index_x, index_y, pixel_size)
-       stitcher.stop()
+3. save_image - one image to an OME-TIFF or OME-Zarr file
+       from imswitch.imcontrol.model.aufgaben.storage import save_image
+       save_image('/data/snap.ome.tif', frame, pixel_size_um=0.65)
 
 """
 
@@ -94,8 +91,6 @@ from .ome_writers import (
     OMEWriter,
     OMEWriterConfig,
     OMEFileStorePaths,
-    OmeTiffStitcher,
-    SingleTiffWriter,
     MinimalMetadata,
     # OMERO uploader
     OMEROUploader,
@@ -154,8 +149,6 @@ __all__ = [
     'OMEWriter',
     'OMEWriterConfig',
     'OMEFileStorePaths',
-    'OmeTiffStitcher',
-    'SingleTiffWriter',
     'MinimalMetadata',
     # OMERO uploader
     'OMEROUploader',

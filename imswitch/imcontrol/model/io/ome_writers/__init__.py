@@ -1,52 +1,23 @@
 """
-Writers submodule for microscopy data output.
+Writers for experiment output.
 
-This module provides specialized writers for various microscopy data formats:
+- **OMEWriter**: the region canvas as OME-Zarr and/or OME-TIFF (``stitched.ome.tif``),
+  individual OME-TIFF tiles, and OMERO upload
+- **OMEWriterConfig**, **OMEFileStorePaths**: its configuration and folder layout
+- **OMEROUploader**, **OMEROConnectionParams**, **TileMetadata**: OMERO streaming
 
-- **OmeTiffStitcher**: Background-threaded writer for tiled mosaic OME-TIFF files
-- **SingleTiffWriter**: Synchronous writer for multi-image TIFF files
-- **OMEWriter**: Unified writer supporting OME-Zarr, stitched TIFF, individual TIFFs, and OMERO
-- **OMEWriterConfig**: Configuration dataclass for OMEWriter
-- **OMEFileStorePaths**: Helper for managing output directory structure
-- **OMEROUploader**: Thread-safe OMERO uploader for streaming tiles
-- **OMEROConnectionParams**: OMERO connection parameters dataclass
-- **TileMetadata**: Metadata for OMERO tile uploads
+All image files go through the shared OME writer in
+``imswitch.imcontrol.model.aufgaben.storage`` (``NgffImage``, ``save_image``).
 
-Example Usage:
-    >>> from imswitch.imcontrol.model.io.ome_writers import (
-    ...     OMEWriter, OMEWriterConfig, OMEFileStorePaths,
-    ...     OmeTiffStitcher, SingleTiffWriter,
-    ...     OMEROUploader, OMEROConnectionParams, TileMetadata
-    ... )
-    >>> 
-    >>> # For simple tile stitching:
-    >>> stitcher = OmeTiffStitcher("/path/to/mosaic.ome.tif")
-    >>> stitcher.start()
-    >>> stitcher.add_image(img, pos_x=0, pos_y=0, index_x=0, index_y=0, pixel_size=0.325)
-    >>> stitcher.stop()
-    >>> 
-    >>> # For comprehensive OME-Zarr + TIFF + OMERO output:
-    >>> config = OMEWriterConfig(write_zarr=True, write_stitched_tiff=True, write_omero=True)
+Example:
+    >>> config = OMEWriterConfig(write_zarr=True, write_stitched_tiff=True)
     >>> paths = OMEFileStorePaths("/path/to/experiment")
-    >>> omero_params = OMEROConnectionParams(host="omero.server.com", username="user", password="pass")
     >>> writer = OMEWriter(paths, tile_shape=(512, 512), grid_shape=(5, 5),
-    ...                    grid_geometry=(0, 0, 500, 500), config=config,
-    ...                    omero_connection_params=omero_params)
+    ...                    grid_geometry=(0, 0, 500, 500), config=config)
     >>> writer.write_frame(image, {"x": 100, "y": 200})
     >>> writer.finalize()
-
-Migration Notes:
-    These classes were migrated from:
-    - imswitch.imcontrol.controller.controllers.experiment_controller.OmeTiffStitcher
-    - imswitch.imcontrol.controller.controllers.experiment_controller.SingleTiffWriter
-    - imswitch.imcontrol.controller.controllers.experiment_controller.ome_writer
-    - imswitch.imcontrol.model.writers.omero_uploader
-    
-    The old locations are deprecated and will be removed in a future version.
 """
 
-from .ome_tiff_stitcher import OmeTiffStitcher
-from .single_tiff_writer import SingleTiffWriter
 from .ome_writer import OMEWriter, OMEWriterConfig, OMEFileStorePaths
 from .metadata import MinimalMetadata
 from .omero_uploader import (
@@ -55,21 +26,13 @@ from .omero_uploader import (
     TileMetadata,
     is_omero_available,
 )
-from .ome_tiff_metadata import build_ome_metadata_from_dict
 from .plate_metadata import build_plate_metadata, write_plate_metadata_sidecar
 
 __all__ = [
-    # Primary unified writer
     'OMEWriter',
     'OMEWriterConfig',
     'OMEFileStorePaths',
-    # Specialized writers
-    'OmeTiffStitcher',
-    'SingleTiffWriter',
-    # Metadata utilities
     'MinimalMetadata',
-    # OME-XML for single-plane TIFFs (ome-types, shared with the OME writer)
-    'build_ome_metadata_from_dict',
     # OME-NGFF plate metadata sidecar
     'build_plate_metadata',
     'write_plate_metadata_sidecar',

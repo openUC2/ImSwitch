@@ -9,31 +9,24 @@ streaming to OMERO servers.
 Migrated from: imswitch/imcontrol/controller/controllers/experiment_controller/ome_writer.py
 
 Features:
-    - OME-Zarr with proper NGFF 0.4 metadata and pyramid generation
-    - Stitched OME-TIFF via OmeTiffStitcher
-    - Single TIFF files via SingleTiffWriter  
-    - Individual TIFF files with position-based naming
+    - OME-Zarr canvas of a scan region (NGFF 0.4, pyramid) through the shared
+      ``NgffImage``; ``stitched.ome.tif`` is that canvas exported as OME-TIFF
+    - Individual OME-TIFF tiles with position-based naming (``save_image``)
     - Multi-dimensional support (TCZYX)
     - Physical coordinate transformations
     - Channel metadata (names, colors)
     - OMERO streaming upload for real-time server storage
 """
 
-import inspect
 import os
+import shutil
 import time
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
 import numpy as np
-import tifffile as tif
-import tifffile
 
-# Import from local writers module
-from .ome_tiff_metadata import build_ome_metadata_from_dict
-from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage, ome_xml
-from .ome_tiff_stitcher import OmeTiffStitcher
-from .single_tiff_writer import SingleTiffWriter
+from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage, save_image
 from .omero_uploader import (
     OMEROUploader,
     OMEROConnectionParams,
@@ -53,19 +46,16 @@ class OMEWriterConfig:
     Controls which output formats are enabled and their parameters.
     
     Attributes:
-        write_tiff: Write a single multi-dimensional OME-TIFF hyperstack
-                   (TCZYX / TCZYXS for RGB) with full OME-XML metadata at
-                   finalize(). Fiji-readable ("Bio-Formats") with correct
-                   dimensions, physical pixel sizes and channel names.
-        write_zarr: Write OME-Zarr format with pyramids
-        write_stitched_tiff: Write stitched OME-TIFF mosaic
-        write_tiff_single: Append tiles to a single TIFF file
+        write_tiff, write_stitched_tiff, write_tiff_single: Any of them writes
+                   the region canvas as ``stitched.ome.tif`` (TCZYX, pyramid,
+                   OME-XML) at finalize(). They were three writers once; now
+                   they are one export of the canvas.
+        write_zarr: Keep the canvas as OME-Zarr (otherwise it is temporary)
         write_individual_tiffs: Write individual OME-TIFFs with position naming
                                and proper OME-XML metadata (RECOMMENDED)
         write_omero: Stream tiles to OMERO server
         omero_queue_size: Max tiles to queue for OMERO upload
         min_period: Minimum time between writes (throttling)
-        compression: Compression algorithm for TIFF files
         pixel_size: Pixel size in microns (X/Y)
         pixel_size_z: Z-step size in microns
         n_time_points: Number of time points
@@ -86,12 +76,6 @@ class OMEWriterConfig:
     write_omero: bool = False
     omero_queue_size: int = 100
     min_period: float = 0.2   # inert: the writer no longer throttles itself
-    compression: str = "zlib"
-    # zlib level 1, not the library default of 6. On 12-bit-in-uint16 camera
-    # frames level 6 gains ~1 % over level 1 for 3x the CPU; the horizontal
-    # predictor is what actually helps (measured: 1.43x -> 1.56x).
-    compression_level: int = 1
-    predictor: bool = True
     pixel_size: float = 1.0
     pixel_size_z: float = 1.0
     n_time_points: int = 1
@@ -104,11 +88,9 @@ class OMEWriterConfig:
     z_start: float = 0.0
     time_interval: float = 1.0
 
-    def tiff_write_kwargs(self) -> Dict[str, Any]:
-        """Compression kwargs for tifffile writes."""
-        return tiff_compression_kwargs(
-            self.compression, self.compression_level, self.predictor
-        )
+    @property
+    def wants_tiff(self) -> bool:
+        return self.write_tiff or self.write_stitched_tiff or self.write_tiff_single
 
     def __post_init__(self):
         """Initialize default channel metadata."""
@@ -132,24 +114,6 @@ def _sanitize_channel_name(channel) -> str:
     """Channel name as the tile filename pattern accepts it: ``[A-Za-z0-9_]``."""
     cleaned = "".join(c if (c.isascii() and c.isalnum()) else "_" for c in str(channel or ""))
     return cleaned.strip("_") or "unknown"
-
-
-def tiff_compression_kwargs(compression="zlib", level=1, predictor=True) -> Dict[str, Any]:
-    """Compression kwargs for a tifffile write, degrading on older tifffile.
-
-    ``compressionargs``/``predictor`` were added after the minimum tifffile we
-    support, so both are probed once and dropped when missing rather than
-    raising per frame.
-    """
-    if not compression:
-        return {}
-    kwargs: Dict[str, Any] = {"compression": compression}
-    supported = inspect.signature(tifffile.TiffWriter.write).parameters
-    if level is not None and "compressionargs" in supported:
-        kwargs["compressionargs"] = {"level": level}
-    if predictor and "predictor" in supported:
-        kwargs["predictor"] = True
-    return kwargs
 
 
 class OMEFileStorePaths:
@@ -218,9 +182,7 @@ class OMEWriter:
     
     This class provides comprehensive support for writing microscopy data in
     multiple formats simultaneously. It handles:
-    - OME-Zarr with NGFF 0.4 metadata and pyramid levels
-    - Stitched OME-TIFF mosaics
-    - Single TIFF files with appended tiles
+    - The region canvas as OME-Zarr (NGFF 0.4, pyramid) and/or OME-TIFF
     - Individual TIFF files with position-based naming
     - OMERO streaming upload for real-time server storage
     
@@ -326,21 +288,12 @@ class OMEWriter:
         self.zarr_image: Optional[NgffImage] = None
         self.canvas = None
 
-        # TIFF writers
-        self.tiff_stitcher: Optional[OmeTiffStitcher] = None
         self._finalized = False
+        self._frames_written = 0
         # Goes into every individual-TIFF filename so downstream tooling can
         # tell one scan region's tiles from another's without relying on the
         # directory layout.
         self._region_tag = _sanitize_region_tag(region_id)
-        self.single_tiff_writer: Optional[SingleTiffWriter] = None
-
-        # In-memory mosaic for the unified multi-dimensional OME-TIFF hyperstack
-        # (write_tiff). Filled tile-by-tile in write_frame() and flushed to a
-        # single Fiji-readable OME-TIFF at finalize(). Allocated lazily so we
-        # never reserve RAM when the option is disabled.
-        self.tiff_mosaic: Optional[np.ndarray] = None
-        self._tiff_frames_written = 0
 
         # OMERO uploader
         self.omero_uploader: Optional[OMEROUploader] = None
@@ -352,35 +305,23 @@ class OMEWriter:
         self._timing_ms = {}
         self._timing_frames = 0
 
-        # A stitched canvas (zarr / in-RAM mosaic / stitched TIFF) costs at
+        # A stitched canvas (zarr, and the OME-TIFF exported from it) costs at
         # least one full pass over the whole scan at the end. On a Pi that is
-        # minutes of I/O for a slide and, for the in-RAM mosaic, an allocation
-        # the OS may grant and then kill us for touching. Above the budget the
-        # run keeps only the per-tile outputs; downstream tools (napari
-        # plugin, Ashlar) stitch from those on a machine that can afford it.
+        # minutes of I/O for a slide. Above the budget the run keeps only the
+        # per-tile outputs; downstream tools (napari plugin, Ashlar) stitch
+        # from those on a machine that can afford it.
         self._apply_large_scan_policy()
 
-        # Initialize storage backends
-        if config.write_zarr:
+        # The canvas: kept as OME-Zarr, or temporary when only the TIFF is wanted
+        if config.write_zarr or config.wants_tiff:
             self._setup_zarr_store()
-
-        if config.write_tiff:
-            self._setup_tiff_mosaic()
-
-        if config.write_stitched_tiff:
-            self._setup_tiff_stitcher()
-
-        if config.write_tiff_single:
-            self._setup_single_tiff_writer()
 
         if config.write_omero:
             self._setup_omero_uploader()
 
     TIMING_LOG_EVERY = 100
 
-    # Canvas budgets. The mosaic lives in RAM, so it gets the tighter one.
     LARGE_SCAN_CANVAS_BYTES = 2 * 1024 ** 3      # 2 GiB, any stitched canvas
-    IN_RAM_MOSAIC_BYTES = 512 * 1024 ** 2         # 512 MiB, write_tiff mosaic
 
     def canvas_bytes(self) -> int:
         """Size of one full stitched canvas for this writer's geometry."""
@@ -393,12 +334,11 @@ class OMEWriter:
         size = self.canvas_bytes()
         self.large_scan = size > self.LARGE_SCAN_CANVAS_BYTES
         dropped = []
-        if self.config.write_tiff and size > self.IN_RAM_MOSAIC_BYTES:
-            self.config.write_tiff = False
-            dropped.append("OME-TIFF mosaic (in RAM)")
         if self.large_scan:
             for flag, label in (("write_zarr", "OME-Zarr canvas"),
-                                ("write_stitched_tiff", "stitched TIFF")):
+                                ("write_tiff", "OME-TIFF canvas"),
+                                ("write_stitched_tiff", "stitched TIFF"),
+                                ("write_tiff_single", "single TIFF")):
                 if getattr(self.config, flag):
                     setattr(self.config, flag, False)
                     dropped.append(label)
@@ -436,8 +376,13 @@ class OMEWriter:
             chunks_yx=(int(self.tile_h), int(self.tile_w)))
 
     def _setup_zarr_store(self):
-        """One NGFF image per writer: the stitched canvas of this region."""
-        self.store = str(self.file_paths.zarr_dir)
+        """One NGFF image per writer: the stitched canvas of this region.
+
+        Without ``write_zarr`` it lives in a hidden folder and is removed after
+        the OME-TIFF export.
+        """
+        self.store = str(self.file_paths.zarr_dir) if self.config.write_zarr else \
+            os.path.join(self.file_paths.base_dir, ".canvas.ome.zarr")
         self.zarr_image = NgffImage.create(self.store, self._image_spec())
         self.canvas = self.zarr_image.array
         if self.well_metadata:   # custom attrs; NGFF plates come from Aufgaben
@@ -445,67 +390,6 @@ class OMEWriter:
             self.zarr_image.group.attrs["imswitch_well"] = {
                 k: wm.get(k) for k in ("wellRow", "wellColumn", "labwareLoadName",
                                        "conditionLabel")}
-
-    def _setup_tiff_mosaic(self):
-        """Allocate the in-memory mosaic backing the multi-dimensional OME-TIFF.
-
-        The mosaic mirrors the OME-Zarr canvas layout (TCZYX, plus a trailing
-        samples axis for RGB) so a full scan lands in a single Fiji-readable
-        hyperstack. Uint16 for mono detectors, uint8 for RGB (matching the
-        native camera range so colour renders correctly).
-        """
-        base_shape = (
-            int(self.config.n_time_points),
-            int(self.config.n_channels),
-            int(self.config.n_z_planes),
-            int(self.ny * self.tile_h),
-            int(self.nx * self.tile_w),
-        )
-        try:
-            if self.isRGB:
-                self.tiff_mosaic = np.zeros(base_shape + (3,), dtype=np.uint8)
-            else:
-                self.tiff_mosaic = np.zeros(base_shape, dtype=np.uint16)
-            if self.logger:
-                self.logger.debug(
-                    f"OME-TIFF mosaic allocated: shape={self.tiff_mosaic.shape}, "
-                    f"dtype={self.tiff_mosaic.dtype}"
-                )
-        except MemoryError:
-            # Refuse gracefully rather than crashing the acquisition thread.
-            self.tiff_mosaic = None
-            self.config.write_tiff = False
-            if self.logger:
-                self.logger.error(
-                    "Not enough memory to build the multi-dimensional OME-TIFF "
-                    f"mosaic (shape {base_shape}); disabling OME-TIFF output. "
-                    "Use OME-Zarr or Stitched OME-TIFF for very large scans."
-                )
-
-    def _setup_tiff_stitcher(self):
-        """Set up the TIFF stitcher for creating stitched OME-TIFF files."""
-        # base_dir is created lazily (see OMEFileStorePaths); ensure it exists
-        # before the stitcher opens its output file inside it.
-        os.makedirs(self.file_paths.base_dir, exist_ok=True)
-        stitched_tiff_path = os.path.join(self.file_paths.base_dir, "stitched.ome.tif")
-        self.tiff_stitcher = OmeTiffStitcher(
-            stitched_tiff_path, bigtiff=True, isRGB=self.isRGB,
-            tile_w=self.tile_w, tile_h=self.tile_h,
-            write_kwargs=self.config.tiff_write_kwargs(),
-        )
-        self.tiff_stitcher.start()
-        if self.logger:
-            self.logger.debug(f"TIFF stitcher initialized: {stitched_tiff_path}")
-
-    def _setup_single_tiff_writer(self):
-        """Set up the single TIFF writer for appending tiles with metadata."""
-        # base_dir is created lazily (see OMEFileStorePaths); ensure it exists
-        # before the single-TIFF writer opens its output file inside it.
-        os.makedirs(self.file_paths.base_dir, exist_ok=True)
-        single_tiff_path = os.path.join(self.file_paths.base_dir, "single_tiles.ome.tif")
-        self.single_tiff_writer = SingleTiffWriter(single_tiff_path, bigtiff=True, isRGB=self.isRGB)
-        if self.logger:
-            self.logger.debug(f"Single TIFF writer initialized: {single_tiff_path}")
 
     def _setup_omero_uploader(self):
         """
@@ -589,10 +473,7 @@ class OMEWriter:
         result = {}
         cfg = self.config
         outputs = (
-            ("mosaic", cfg.write_tiff and self.tiff_mosaic is not None, self._write_tiff_mosaic_tile),
-            ("zarr", cfg.write_zarr and self.canvas is not None, self._write_zarr_tile),
-            ("stitched", cfg.write_stitched_tiff and self.tiff_stitcher is not None, self._write_stitched_tiff_tile),
-            ("single", cfg.write_tiff_single and self.single_tiff_writer is not None, self._write_single_tiff_tile),
+            ("canvas", self.zarr_image is not None, self._write_zarr_tile),
             ("individual", cfg.write_individual_tiffs, self._write_individual_tiff),
             ("omero", cfg.write_omero and self.omero_uploader is not None, self._write_omero_tile),
         )
@@ -602,8 +483,9 @@ class OMEWriter:
             t0 = time.perf_counter()
             out = write(frame, metadata)
             self._timing_ms[name] = self._timing_ms.get(name, 0.0) + (time.perf_counter() - t0) * 1e3
-            if name == "zarr" and out:
+            if name == "canvas" and out and cfg.write_zarr:   # chunk info for the live viewer
                 result.update(out)
+        self._frames_written += 1
 
         self._timing_frames += 1
         if self._timing_frames % self.TIMING_LOG_EVERY == 0 and self.logger:
@@ -612,44 +494,6 @@ class OMEWriter:
             self.logger.info(f"Writer timing, ms/frame over last {n}: {parts}")
             self._timing_ms = {}
         return result
-
-    def _write_tiff_mosaic_tile(self, frame, metadata: Dict[str, Any]):
-        """Place a single tile into the in-memory multi-dimensional OME-TIFF mosaic.
-
-        Uses the same grid/index maths as the Zarr canvas so the two outputs
-        stay pixel-aligned. Handles RGB/mono coercion identically to
-        ``_write_zarr_tile``.
-        """
-        # Calculate grid position
-        ix = int(round((metadata["x"] - self.x_start) / max(self.x_step, 1)))
-        iy = int(round((metadata["y"] - self.y_start) / max(self.y_step, 1)))
-
-        # Dimension indices, clamped to the allocated extents
-        t_idx = min(metadata.get("time_index", 0), self.config.n_time_points - 1)
-        c_idx = min(metadata.get("channel_index", 0), self.config.n_channels - 1)
-        z_idx = min(metadata.get("z_index", 0), self.config.n_z_planes - 1)
-
-        # Guard against out-of-range tiles (defensive; grid should already fit)
-        if not (0 <= ix < self.nx and 0 <= iy < self.ny):
-            if self.logger:
-                self.logger.warning(
-                    f"OME-TIFF tile ({ix},{iy}) outside grid ({self.nx}x{self.ny}); skipped"
-                )
-            return
-
-        y0, y1 = iy * self.tile_h, (iy + 1) * self.tile_h
-        x0, x1 = ix * self.tile_w, (ix + 1) * self.tile_w
-
-        if self.isRGB:
-            if frame.ndim == 2:
-                frame = np.stack([frame] * 3, axis=-1)
-            self.tiff_mosaic[t_idx, c_idx, z_idx, y0:y1, x0:x1, :] = frame
-        else:
-            if frame.ndim == 3:
-                frame = np.dot(frame[..., :3], [0.299, 0.587, 0.114]).astype(self.tiff_mosaic.dtype)
-            self.tiff_mosaic[t_idx, c_idx, z_idx, y0:y1, x0:x1] = frame
-
-        self._tiff_frames_written += 1
 
     def _write_zarr_tile(self, frame, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Write tile to Zarr canvas and return chunk information."""
@@ -695,26 +539,6 @@ class OMEWriter:
             "z_idx": z_idx
         }
 
-    def _write_stitched_tiff_tile(self, frame, metadata: Dict[str, Any]):
-        """Write tile to stitched TIFF using OmeTiffStitcher."""
-        ix = int(round((metadata["x"] - self.x_start) / max(self.x_step, 1)))
-        iy = int(round((metadata["y"] - self.y_start) / max(self.y_step, 1)))
-
-        self.tiff_stitcher.add_image(
-            image=frame,
-            position_x=metadata["x"],
-            position_y=metadata["y"],
-            index_x=ix,
-            index_y=iy,
-            pixel_size=self.config.pixel_size
-        )
-
-    def _write_single_tiff_tile(self, frame, metadata: Dict[str, Any]):
-        """Write tile to single TIFF using SingleTiffWriter."""
-        metadata_with_pixel_size = metadata.copy()
-        metadata_with_pixel_size["pixel_size"] = self.config.pixel_size
-        self.single_tiff_writer.add_image(image=frame, metadata=metadata_with_pixel_size)
-
     def _write_individual_tiff(self, frame, metadata: Dict[str, Any]):
         """
         Write individual TIFF file with position-based naming and OME-XML metadata.
@@ -758,22 +582,16 @@ class OMEWriter:
         )
         filepath = os.path.join(timepoint_dir, filename)
 
-        # RGB tiles (H, W, 3) must be tagged photometric="rgb" or tifffile would
-        # store them as a 3-plane grayscale stack, which is why colour tiles were
-        # being saved as grayscale. Grayscale tiles keep photometric=None (auto).
-        photometric = "rgb" if (self.isRGB and frame.ndim == 3) else None
-
-        try:
-            xml = build_ome_metadata_from_dict({
-                **metadata, "height": frame.shape[0], "width": frame.shape[1],
-                "dtype": str(frame.dtype), "pixel_size": self.config.pixel_size,
-                "channel_name": channel, "rgb": photometric == "rgb"})
-        except Exception as e:   # metadata must never cost the tile
-            if self.logger:
-                self.logger.warning(f"OME-XML for individual TIFF failed: {e}")
-            xml = None
-        tif.imwrite(filepath, frame, photometric=photometric, description=xml, metadata=None,
-                    **self.config.tiff_write_kwargs())
+        # RGB tiles (H, W, 3) are interleaved RGB; mono tiles one plane.
+        rgb = self.isRGB and frame.ndim == 3
+        h, w = frame.shape[:2]
+        px = self.config.pixel_size
+        x, y, z = (float(metadata.get(k) or 0.0) for k in ("x", "y", "z"))
+        exposure = metadata.get("exposure_time_ms", metadata.get("exposure"))
+        save_image(filepath, frame, "YXS" if rgb else "YX", pixel_size_um=px,
+                   origin_um=(x - w * px / 2, y - h * px / 2, z), channel_names=[channel],
+                   exposure_ms=[exposure] if exposure is not None else [],
+                   name=os.path.splitext(filename)[0])
 
     def _write_omero_tile(self, frame, metadata: Dict[str, Any]):
         """
@@ -840,31 +658,8 @@ class OMEWriter:
             return
         self._finalized = True
 
-        if self.config.write_zarr and self.zarr_image is not None:
-            try:
-                self.zarr_image.finalize(min_size=64, max_levels=4)
-                if self.logger:
-                    self.logger.info(f"OME-Zarr pyramid: {self.zarr_image.levels} level(s)")
-            except Exception as err:
-                if self.logger:
-                    self.logger.error(f"Pyramid generation failed (full resolution is intact): {err}")
-
-        if self.config.write_tiff and self.tiff_mosaic is not None:
-            try:
-                self._finalize_ome_tiff()
-            except Exception as err:
-                if self.logger:
-                    self.logger.error(f"Failed to write multi-dimensional OME-TIFF: {err}")
-
-        if self.config.write_stitched_tiff and self.tiff_stitcher is not None:
-            self.tiff_stitcher.close()
-            if self.logger:
-                self.logger.info("Stitched TIFF file completed")
-
-        if self.config.write_tiff_single and self.single_tiff_writer is not None:
-            self.single_tiff_writer.close()
-            if self.logger:
-                self.logger.info("Single TIFF file completed")
+        if self.zarr_image is not None:
+            self._finalize_canvas()
 
         # Finalize OMERO uploader if we own it
         if self.config.write_omero and self.omero_uploader is not None and self._owns_omero_uploader:
@@ -879,47 +674,26 @@ class OMEWriter:
         if self.logger:
             self.logger.info(f"OME writer finalized for {self.file_paths.base_dir}")
 
-    def _finalize_ome_tiff(self):
-        """Flush the accumulated mosaic to a single multi-dimensional OME-TIFF.
-
-        Produces a Fiji/Bio-Formats-readable hyperstack: TCZYX (plus a trailing
-        samples axis for RGB) with the OME-XML of the shared OME writer
-        (``ome_xml``: physical sizes, Z step, time increment, channel names,
-        plane positions), the same model the OME-Zarr canvas carries.
-        """
-        if self.tiff_mosaic is None:
-            return
-
-        if self._tiff_frames_written == 0:
+    def _finalize_canvas(self):
+        """Pyramid for the canvas, its OME-TIFF export, and the temporary store removed."""
+        try:
+            self.zarr_image.finalize(min_size=64, max_levels=4)
             if self.logger:
-                self.logger.warning(
-                    "OME-TIFF requested but no frames were written; skipping empty file"
-                )
-            return
-
-        # Write the single hyperstack next to the OME-Zarr store so the two
-        # outputs live side by side under the same experiment folder.
-        os.makedirs(self.file_paths.base_dir, exist_ok=True)
-        out_path = os.path.join(
-            self.file_paths.base_dir,
-            os.path.basename(self.file_paths.base_dir) + ".ome.tif",
-        )
-
-        # RGB hyperstacks carry a trailing samples axis and must be tagged
-        # photometric="rgb"; mono stacks stay minisblack.
-        photometric = "rgb" if self.isRGB else "minisblack"
-        description = ome_xml(self._image_spec(), rgb=self.isRGB).encode("utf-8")
-        with tif.TiffWriter(out_path, bigtiff=True, ome=False) as writer:
-            writer.write(self.tiff_mosaic, photometric=photometric, description=description,
-                         metadata=None, **self.config.tiff_write_kwargs())
-
-        # Release the buffer promptly — a full mosaic can be large.
-        self.tiff_mosaic = None
-
-        if self.logger:
-            self.logger.info(
-                f"Multi-dimensional OME-TIFF written ({self._tiff_frames_written} frames): {out_path}"
-            )
+                self.logger.info(f"Canvas pyramid: {self.zarr_image.levels} level(s)")
+        except Exception as err:
+            if self.logger:
+                self.logger.error(f"Pyramid generation failed (full resolution is intact): {err}")
+        if self.config.wants_tiff and self._frames_written:
+            path = os.path.join(self.file_paths.base_dir, "stitched.ome.tif")
+            try:
+                self.zarr_image.export_ome_tiff(path)
+                if self.logger:
+                    self.logger.info(f"OME-TIFF written ({self._frames_written} frames): {path}")
+            except Exception as err:
+                if self.logger:
+                    self.logger.error(f"OME-TIFF export failed: {err}")
+        if not self.config.write_zarr:
+            shutil.rmtree(self.store, ignore_errors=True)
 
     def get_zarr_url(self) -> Optional[str]:
         """Get the Zarr store path for frontend streaming."""

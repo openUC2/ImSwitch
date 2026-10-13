@@ -167,13 +167,15 @@ def test_experiment_writer_output_is_valid_ngff(tmp_path, rgb):
     assert transforms[0]["scale"] == [60.0, 1.0, 3.0, 0.5, 0.5]
     assert transforms[1]["translation"] == [0.0, 0.0, 7.0, 184.0, 80.0]   # top-left pixel corner
 
-    mosaic = tmp_path / "run" / "run.ome.tif"   # the OME-TIFF hyperstack, same metadata model
+    mosaic = tmp_path / "run" / "stitched.ome.tif"   # the canvas exported, same metadata model
     pixels = ome_types.from_tiff(mosaic).images[0].pixels
-    assert [c.name for c in pixels.channels] == ["LED", "Laser488"]
+    names = ["LED_rgb_r", "LED_rgb_g", "LED_rgb_b", "Laser488_rgb_r", "Laser488_rgb_g",
+             "Laser488_rgb_b"] if rgb else ["LED", "Laser488"]
+    assert [c.name for c in pixels.channels] == names
     assert pixels.size_c == (6 if rgb else 2) and pixels.physical_size_z == 3.0
     assert pixels.planes[0].position_x == 80.0
     with tifffile.TiffFile(mosaic) as f:
-        assert f.series[0].shape[-3 if rgb else -2:] == ((128, 160, 3) if rgb else (128, 160))
+        assert f.series[0].shape[-2:] == (128, 160)
 
 
 def test_large_ome_tiff_export_streams_tiles_and_keeps_the_pyramid(tmp_path):
@@ -196,23 +198,27 @@ def test_large_ome_tiff_export_streams_tiles_and_keeps_the_pyramid(tmp_path):
 
 
 @pytest.mark.parametrize("rgb", [False, True])
-def test_single_plane_tiff_metadata(tmp_path, rgb):
-    """Experiment tiles and snaps: one plane, positions in µm, exposure in ms."""
-    from imswitch.imcontrol.model.io.ome_writers.ome_tiff_metadata import (
-        build_ome_metadata_from_dict,
+def test_experiment_tiles_carry_position_and_channel(tmp_path, rgb):
+    """Individual experiment tiles: one plane, top-left position in µm, napari-plugin name."""
+    from imswitch.imcontrol.model.io.ome_writers.ome_writer import (
+        OMEFileStorePaths, OMEWriter, OMEWriterConfig,
     )
+    cfg = OMEWriterConfig(write_zarr=False, write_individual_tiffs=True, pixel_size=0.5,
+                          channel_names=["LED"])
+    writer = OMEWriter(OMEFileStorePaths(str(tmp_path / "run")), (30, 40), (1, 1),
+                       (1000.0, 2000.0, 40.0, 32.0), cfg, isRGB=rgb)
     frame = np.zeros((30, 40, 3) if rgb else (30, 40), np.uint8 if rgb else np.uint16)
-    xml = build_ome_metadata_from_dict({"height": 30, "width": 40, "dtype": str(frame.dtype),
-                                        "pixel_size": 0.5, "x": 1000.0, "y": 2000.0, "z": 3.0,
-                                        "channel_name": "LED", "exposure": 12, "rgb": rgb})
-    path = tmp_path / "tile.tif"
-    tifffile.imwrite(path, frame, description=xml, metadata=None,
-                     photometric="rgb" if rgb else None)
-    pixels = ome_types.from_tiff(path).images[0].pixels
+    writer.write_frame(frame, {"x": 1000.0, "y": 2000.0, "z": 3.0, "exposure": 12,
+                               "illuminationChannel": "LED", "illuminationValue": 5})
+    writer.finalize()
+    tile = next((tmp_path / "run" / "tiles" / "timepoint_0000").glob("*.tif"))
+    assert "_x1000000_y2000000_z3000_c0_LED_i0000_p5" in tile.name
+    pixels = ome_types.from_tiff(tile).images[0].pixels
     plane = pixels.planes[0]
     assert (plane.position_x, plane.position_y, plane.exposure_time) == (990.0, 1992.5, 12.0)
     assert [c.name for c in pixels.channels] == ["LED"]
     assert pixels.channels[0].samples_per_pixel == (3 if rgb else 1)
+    assert not (tmp_path / "run.ome.zarr").exists()
 
 
 def test_save_image_axes_formats_and_unknown_metadata(tmp_path):

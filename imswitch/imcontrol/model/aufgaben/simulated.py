@@ -165,6 +165,9 @@ class SimulatedMicroscope:
     def pump_stop(self, pump) -> None:
         self._call("pump_stop", pump)
 
+    def stop_pumps(self) -> None:
+        self._call("stop_pumps")
+
     def set_valve(self, valve, position) -> None:
         self._call("valve", valve, position)
         self.valves[valve] = position

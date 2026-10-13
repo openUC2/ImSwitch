@@ -3,7 +3,7 @@
 ``Run(job, hw, sink=...).start()`` validates the job and runs it on its own
 thread; ``run()`` does the same synchronously. Control: ``pause``, ``resume``,
 ``finish`` (stop at the next node, keep data), ``abort(force=...)`` (also stop
-the stage and switch the light off), ``answer`` for question nodes.
+the stage and the pumps and switch the light off), ``answer`` for question nodes.
 
 Every node starts at a checkpoint: stop first, then pause. Loops push a frame
 (index, count, item) that expressions read as ``loop.<id>`` and that gives
@@ -226,7 +226,7 @@ class Run:
     def abort(self, force: bool = False, message: str = "aborted on request") -> None:
         self._request_stop("aborted", message)
         if force:
-            for stop in (self.hw.stop_stage, self.hw.illumination_off):
+            for stop in (self.hw.stop_stage, self.hw.stop_pumps, self.hw.illumination_off):
                 self._try(stop)
 
     def answer(self, text: str) -> None:

@@ -3,9 +3,10 @@
 Stage, light, camera and autofocus go through ExperimentController's verbs
 (``move_stage_xy/z``, ``grabCameraFrame``, ``set_exposure_time_gain``,
 ``autofocus`` ...), so the same code drives an experiment and a job. The fast
-stage scan is ExperimentController's, the prescan the StageMap's. Digital I/O,
+stage scan is ExperimentController's, the prescan the StageMap's. Pumps and
+valves are the setup's ``pumps`` and ``valves`` managers. Digital I/O,
 temperature and sensors use the UC2 board client, the Temperature and
-I2CSensor controllers when they are loaded. Units: µm, ms, s, °C.
+I2CSensor controllers when they are loaded. Units: µm, ms, s, °C, µL, µL/min.
 """
 import time
 from typing import Dict, List, Optional, Set, Tuple
@@ -73,6 +74,18 @@ class ImSwitchMicroscope:
     def _esp32(self):
         return getattr(getattr(self._master, "UC2ConfigManager", None), "ESP32", None)
 
+    def _has(self, group: str) -> bool:
+        manager = getattr(self._master, group, None)
+        return manager is not None and manager.hasDevices()
+
+    def _group(self, kind: str):
+        return getattr(self._master, f"{kind}sManager")
+
+    def _device(self, kind: str, name: str):
+        if not self._has(f"{kind}sManager") or name not in self.devices(kind):
+            raise ValueError(f"no {kind} {name!r}; this setup has {self.devices(kind)}")
+        return self._group(kind)[name]
+
     def _laser(self, source: str):
         if source not in self._master.lasersManager.getAllDeviceNames():
             raise ValueError(f"no light source {source!r}")
@@ -101,6 +114,8 @@ class ImSwitchMicroscope:
             "temperature": getattr(esp, "temperature", None) is not None,
             "sensors": self._get("I2CSensor") is not None,
             "stage_map": self._get("StageMap") is not None,
+            "pump": self._has("pumpsManager"),
+            "valve": self._has("valvesManager"),
         }
         return {cap for cap, present in checks.items() if present}
 
@@ -113,6 +128,8 @@ class ImSwitchMicroscope:
             return list(DIGITAL_LINES) if self._esp32() is not None else []
         if kind == "temperature":
             return ["heater"] if "temperature" in self.capabilities() else []
+        if kind in ("pump", "valve"):
+            return self._group(kind).getAllDeviceNames() if self._has(f"{kind}sManager") else []
         return []
 
     # -- stage ----------------------------------------------------------------
@@ -262,9 +279,20 @@ class ImSwitchMicroscope:
         return True
 
     def pump_volume(self, pump, volume_ul, rate_ul_min) -> None:
-        raise NotImplementedError("pumps arrive with the pump managers (roadmap Phase 4)")
+        self._device("pump", pump).pump_volume(volume_ul, rate_ul_min)
 
-    pump_run = pump_stop = set_valve = pump_volume
+    def pump_run(self, pump, rate_ul_min) -> None:
+        self._device("pump", pump).run(rate_ul_min)
+
+    def pump_stop(self, pump) -> None:
+        self._device("pump", pump).stop()
+
+    def stop_pumps(self) -> None:
+        if self._has("pumpsManager"):
+            self._group("pump").execOnAll(lambda pump: pump.stop())
+
+    def set_valve(self, valve, position) -> None:
+        self._device("valve", valve).set_position(position)
 
     def set_temperature(self, target_c, sensor=None) -> None:
         controller = self._get("Temperature")

@@ -74,6 +74,18 @@
         }
     },
     "LEDs": {},
+    "pumps": {
+        "peristaltic": {
+            "managerName": "VirtualPumpManager",
+            "managerProperties": {"maxRateUlMin": 2000, "speedup": 60}
+        }
+    },
+    "valves": {
+        "inlet": {
+            "managerName": "VirtualValveManager",
+            "managerProperties": {"positions": {"sample": 1, "waste": 0}}
+        }
+    },
     "LEDMatrixs": {},
     "positioners": {
         "VirtualStage": {

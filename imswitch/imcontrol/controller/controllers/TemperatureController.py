@@ -1,3 +1,5 @@
+from typing import Optional
+
 from imswitch.imcommon.model import APIExport, initLogger
 from ..basecontrollers import ImConWidgetController
 
@@ -13,16 +15,28 @@ class TemperatureController(ImConWidgetController):
         self.temperatureController = self._master.rs232sManager["ESP32"]._esp32.temperature
 
     @APIExport(runOnUIThread=False)
-    def set_temperature(self, active, Kp=None, Ki=None, Kd=None, target=None, sensorOffset=3):
-        """Switch the heater PID on/off; the board regulates to target + sensorOffset (°C)."""
-        self.Kp = self.Kp if Kp is None else Kp
-        self.Ki = self.Ki if Ki is None else Ki
-        self.Kd = self.Kd if Kd is None else Kd
+    def set_temperature(self, active: bool, Kp: Optional[float] = None,
+                        Ki: Optional[float] = None, Kd: Optional[float] = None,
+                        target: Optional[float] = None, sensorOffset: float = 3.0) -> dict:
+        """Switch the heater PID on or off.
+
+        Args:
+            active: True regulates, false switches the heater off.
+            Kp, Ki, Kd: PID gains; empty keeps the previous ones.
+            target: Setpoint in °C at the sample; empty keeps the previous one.
+            sensorOffset: °C added for the board, whose sensor sits at the heater.
+
+        Returns the state as getTemperature does.
+        """
+        self.Kp = self.Kp if Kp is None else float(Kp)
+        self.Ki = self.Ki if Ki is None else float(Ki)
+        self.Kd = self.Kd if Kd is None else float(Kd)
         if target is not None:
-            self.controlTarget = target
+            self.controlTarget = float(target)
         self.temperatureController.set_temperature(
-            active=active, Kp=self.Kp, Ki=self.Ki, Kd=self.Kd,
-            target=self.controlTarget + sensorOffset)
+            active=int(bool(active)), Kp=self.Kp, Ki=self.Ki, Kd=self.Kd,
+            target=self.controlTarget + float(sensorOffset))
+        return self.getTemperature()
 
     @APIExport(runOnUIThread=False)
     def getTemperature(self) -> dict:

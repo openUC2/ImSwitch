@@ -67,7 +67,8 @@
 ### Additional Hardware
 - **Galvo scanners** (for laser scanning)
 - **Temperature control**
-- **Flow control** (microfluidics)
+- **Flow control** (microfluidics): pumps (UC2 stepper, virtual) and valves (board outputs,
+  servo, serial, virtual) as setup blocks; named digital lines (`digitalIO`)
 
 ##  Autofocus 
 - usable in other controllers
@@ -142,6 +143,10 @@
   - Well plates from ImSwitch labware as useq plate plans
   - Pause, resume, finish, abort; operator questions
   - Import and export of useq-schema sequences
+  - Pumps, valves, digital I/O, temperature and serial commands as steps; the stop-flow
+    procedure of FlowStop is a bundled job
+  - The "Aufgaben" app: palette, outline editor, schema forms, start confirmation, run
+    monitor, job library
 - **Workflow automation**
   - Sequential operations
   - Conditional logic

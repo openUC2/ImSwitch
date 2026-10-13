@@ -646,31 +646,77 @@ map and its prescan, focus-lock calibration, Arkitekt and the firmware updater r
 another of them, a recording or a workflow runs. A job's own prescan calls the stage map past that
 check (`runPrescan`), because the job already holds the instrument.
 
-### 4.7 Frontend app (Phase 3)
+### 4.7 Frontend app (built in Phase 3)
 
-- Registered like other apps: `appRegistry.js` entry with `requiredControllers: ["AufgabenController"]`,
-  the `App.jsx` switch, one wrapper per endpoint in `backendapi/`, an `AufgabenSlice`, and branches
-  for the progress and question signals in `WebSocketHandler.js`.
-- Palette from the catalogue; outline editor with nested drag and drop (`react-sortablejs`, already
-  installed); validation markers on nodes; ask-first badges.
-- Parameter forms generated from the task schemas. Resource fields open the existing editors:
-  `WellSelectorCanvas`, `ZStackPanel`, `ChannelsDimension`, `FocusMapDimension`, and `StageMapController`
-  for picking positions.
-- Run monitor: the live path through the tree, counters, ETA, the plate view filling in, question
-  dialogs, pause, resume, finish and abort.
-- Later: an operator wizard (parameters marked `ui: wizard`) and a kiosk page under `#/mobile`.
+`frontend/src/components/aufgaben/`, registered as the app "Aufgaben" (`appRegistry.js`,
+`requiredControllers: ["AufgabenController"]`, `App.jsx`). Without the controller the page says so.
 
-### 4.8 Peripherals (Phase 4)
+- Wiring: `backendapi/apiAufgabenController.js` (one function per endpoint),
+  `state/slices/AufgabenSlice.js` (catalogue, the job being edited, persisted across reloads,
+  validation, run status, question, the last 300 events) and one `sigAufgabenEvent` branch in
+  `WebSocketHandler.js`. While a job runs the app also polls `getAufgabenStatus` once a second for
+  frames, loop path and elapsed time.
+- `utils/aufgabenJob.js`: pure helpers for the job tree (insert, move, indent, outdent, drop, rename
+  with its loop references, duplicate) and the form fields of a catalogue entry.
+- Editor: palette by category (click adds at the selection, drag drops anywhere); outline with the
+  branches of each container, validation markers, ask-first, motion and light markers and the
+  running step; toolbar for move, indent, outdent, duplicate and delete; native HTML drag and drop,
+  no new dependency.
+- Inspector: the step's parameters generated from its schema, without a form library. Numbers also
+  take `${expressions}`. Resource fields pick or create an `@resource`. Plans without their own
+  editor are JSON. Run conditions and the error policy sit under the parameters. Resources: a
+  positions table that adds the current stage position, a channel table over the setup's
+  illumination sources, JSON for the rest. Job settings: storage formats, layout, stitching,
+  variables, run parameters.
+- Start validates, refuses a job with errors and opens a dialog with what the job does (stage, focus,
+  light), the ask-first steps behind a checkbox and the run parameters. Run tab: state, step, loop
+  path, frames, elapsed, task progress, events; pause, resume, finish, abort, abort with stage and
+  pump stop and light off. Questions open a dialog.
+- Library: saved jobs and bundled examples, save, delete, JSON files, useq import and export, recent
+  runs.
+- Not built yet: the ExperimentDesigner editors as resource editors (`WellSelectorCanvas`,
+  `ZStackPanel`, `ChannelsDimension`, `FocusMapDimension`, picking positions on the stage map), the
+  plate view filling in during a run, an ETA, German strings, the operator wizard (parameters marked
+  `ui: wizard`) and a kiosk page under `#/mobile`.
 
-- `DigitalIOManager`: named outputs and inputs in the setup JSON; input callbacks set a
-  `threading.Event` and emit `sigDigitalInput`; typed `UC2ConfigController` GPIO endpoints (today
-  untyped: IDs arrive as query strings).
-- `PumpManager` (`StepperPumpManager` first: an axis plus `steps_per_ul` and a maximum rate; then
-  serial syringe pumps) and a `pumps` setup block. FlowStop becomes a template job.
-- `ValveManager` (`DOValveManager`, `ServoValveManager`, `SerialValveManager`) and a `valves` block.
-- `send_rs232(device, command)`, typed temperature endpoints, `wait_until` over sensors.
-- Outside the microscope: `http_request` exists; an Arkitekt client task belongs to the separate
-  Arkitekt project (D8).
+### 4.8 Peripherals (built in Phase 4)
+
+Three setup blocks, read by `MasterController`; jobs see the names as device choices:
+
+```json
+"pumps": {
+  "peristaltic": {"managerName": "StepperPumpManager",
+                  "managerProperties": {"axis": "B", "stepsPerUl": 80, "maxRateUlMin": 1500}}
+},
+"valves": {
+  "inlet": {"managerName": "DigitalOutValveManager",
+            "managerProperties": {"positions": {"sample": {"1": 1, "2": 0}, "waste": {"1": 0, "2": 1}}}}
+},
+"digitalIO": {"outputs": {"shutter": 1}, "inputs": {"door_open": 2}, "invert": ["door_open"]}
+```
+
+- Pumps (`model/managers/pumps/`): µL and µL/min, negative values backwards, bounded by
+  `maxRateUlMin`. `StepperPumpManager` runs a UC2 stepper axis (`stepsPerUl`; volumes are converted
+  with that axis' `stepSize`, because uc2rest moves in physical units); `pump_volume` blocks on the
+  board and `stop()` from another thread ends it. `VirtualPumpManager` takes the time the volume
+  needs, divided by `speedup`, and counts what it moved.
+- Valves (`model/managers/valves/`): named positions. `DigitalOutValveManager` (one or several board
+  outputs), `ServoValveManager` (`laser.set_servo`), `SerialValveManager` (a command per position to
+  an `RS232Manager` device), `VirtualValveManager`.
+- `DigitalIOManager`: names for the board's outputs and inputs, active-low lines read and write as
+  logical levels. Without the block the raw lines 1–3 are offered, as before.
+- Tasks: `pump_volume`, `pump_run`, `pump_stop`, `set_valve`, the digital I/O tasks, and
+  `send_serial(device, command, read_reply)` for plain serial devices (`RS232Manager` entries), which
+  is ask-first. A forced abort stops the stage and every pump and switches light off.
+- Typed endpoints: the `UC2ConfigController` GPIO and trigger endpoints and
+  `TemperatureController.set_temperature` took query strings (`"false"` was truthy, `"37" + 3` raised);
+  they are typed now.
+- The virtual microscope has a peristaltic pump (`speedup` 60) and an inlet valve, so
+  `stop_flow_fluidics.json`, the FlowStop procedure as a job, runs without hardware.
+- Not built: input callbacks and a `sigDigitalInput` signal (waiting polls every 20 ms), serial
+  syringe pump managers with their own protocols (`send_serial` covers them for now), named lines in
+  the `UC2ConfigController` endpoints. Outside the microscope: `http_request` exists; an Arkitekt
+  client task belongs to the separate Arkitekt project (D8).
 
 ### 4.9 Virtual microscope
 
@@ -788,17 +834,28 @@ channels, Z and three resolutions, and its N5 reader recognises the OME-Zarr sto
 both through the plugin with the right scale and position (headless `ViewerModel`); the plugin's
 Ashlar mosaic matches a reference to 99.4 % of pixels. Not checked: a napari window, Fiji's GUI.
 
-### Phase 3 — Aufgaben app (4–5 weeks; can start once 1.4 fixes the catalogue contract)
+### Phase 3 — Aufgaben app — **done 2026-10-13**
 
 The app of §4.7: registry entry, slice, wrappers, signal handling, palette, outline editor with
-validation markers, schema forms with the existing resource editors, run monitor, job library with
-import/export and useq import. Tests: slice reducers, outline move/nest logic, form rendering per
-field type, one RTL test per screen. Ask before adding a form library such as `@rjsf/mui`.
+validation markers and drag and drop, schema forms (in-house, no form library), resource tables,
+start dialog, run monitor, question dialog, job library with JSON and useq import and export.
 
-### Phase 4 — peripherals (2–3 weeks, parallel to Phases 2–3)
+Verified on 2026-10-13: 16 Jest tests (tree helpers, slice, the app with the backend mocked)
+against a catalogue the backend produced. Against a live virtual server (a throwaway test, not
+committed): all 42 catalogue entries render their forms; the bundled examples load and validate (the
+stop-flow one needed the Phase 4 pump and valve); a job built by clicking ran to the end and its
+question was answered in the dialog. Not checked in a browser window or on a phone.
 
-§4.8: typed GPIO endpoints, `DigitalIOManager`, pump and valve managers with setup blocks and
-virtual counterparts, RS232 command task, typed temperature endpoints, FlowStop as a template job.
+### Phase 4 — peripherals — **done 2026-10-13**
+
+§4.8: typed GPIO and temperature endpoints, `DigitalIOManager`, pump and valve managers with setup
+blocks and virtual counterparts, `send_serial`, FlowStop as a template job (`stop_flow_fluidics`).
+
+Verified on 2026-10-13: unit tests for the managers (unit conversion, stopping a blocking pump,
+valve positions, named and inverted lines on the virtual board), the host and the forced abort; the
+stop-flow example ran over HTTP on the virtual microscope (heater, valve, three pump-settle-capture
+cycles, flush); the typed endpoints convert and reject over HTTP. No pump, valve or servo was driven
+on hardware.
 
 ### Phase 5 — feedback and analysis (2–3 weeks)
 
@@ -821,8 +878,8 @@ users move to Aufgaben. ExperimentController stays (D3).
 | 0 | done |
 | 1 | done |
 | 2 | done |
-| 3 | 4–5 (parallel to 2) |
-| 4 | 2–3 (parallel to 2–3) |
+| 3 | done (resource editors from the ExperimentDesigner still open) |
+| 4 | done |
 | 5 | 2–3 |
 | 6 | 3–4 |
 
@@ -838,11 +895,11 @@ Phase 1 ──► Phase 2 ──► Phase 5 ──► Phase 6
 
 | Topic | Question | Proposal |
 |---|---|---|
-| Form library | In-house schema form renderer or `@rjsf/mui` | Start in-house; decide in Phase 3 with real schemas |
+| Form library | In-house schema form renderer or `@rjsf/mui` | Decided in Phase 3: in-house; the real schemas need eight field kinds |
 | Python script task | Allow unsandboxed code in jobs? | Allowed only when the setup enables it, always ask-first |
 | Run lock scope | Which other controllers must respect it? | Done: ExperimentController, Aufgaben, stage map and prescan, focus-lock calibration, Arkitekt, firmware updater; recordings and workflows count as busy |
 | NGFF 0.5 | When to make it the default | When Bio-Formats/Fiji/QuPath read it; check release notes before Phase 6 |
-| Temperature setpoint | `TemperatureController.set_temperature` adds `sensorOffset=3` °C to the target by default | Keep for the existing UI; the Aufgaben adapter passes 0 |
+| Temperature setpoint | `TemperatureController.set_temperature` adds `sensorOffset=3` °C to the target by default | Keep; the Aufgaben adapter passes 0 |
 | newswitch | The core ports by design; the adapter and controller do not | Write the newswitch host adapter when newswitch's Arkitekt 6 migration lands |
 
 ---
@@ -982,6 +1039,14 @@ multi-experiment detection needs the default experiment name.
 | 42 | The plugin's Ashlar mode handed its reader to `process_images`, which raised `NameError` (`BioformatsReader`); ashlarUC2 1.18.4 also broke on scikit-image 0.26 | `EdgeAligner` and `Mosaic` called directly; ashlarUC2 ≥ 1.18.5 |
 | 43 | The virtual strobe sweep made blocking moves, so it fell behind its own clock and the strobe test failed now and then | Non-blocking sweep steps |
 | 44 | Local OME-Zarr needed napari-ome-zarr, which the plugin cannot depend on (s3fs resolution on Python 3.13+) | The plugin's own OME reader |
+
+### 7.10 Fixed in Phases 3 and 4
+
+| # | Problem | Fix |
+|---|---|---|
+| 45 | `UC2ConfigController.setTrigger(trigger1=false)` received the string `"false"`, which is truthy, so a disabled trigger was enabled; output ids reached the board as strings | Typed parameters on the GPIO and trigger endpoints |
+| 46 | `TemperatureController.set_temperature` over HTTP: `target + sensorOffset` raised `TypeError` (`"37" + 3`), `active=false` switched the heater on | Typed parameters; returns the state |
+| 47 | `pump_volume`, `pump_run`, `pump_stop` and `set_valve` raised `NotImplementedError` on a real setup | Pump and valve managers (§4.8) |
 
 ---
 

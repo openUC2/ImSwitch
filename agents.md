@@ -47,6 +47,8 @@ with them.
   `moveToSampleLoadingPosition`, `moveToTransportPosition` — these drive to mechanical
   endstops at speed.
 - Turning a laser on (`setLaserActive`, `setLaserValue`) or raising an existing power.
+- Pumping or switching a valve on a real instrument (`pump_volume`, `pump_run`, `set_valve` in a
+  job): fluid ends up on optics and electronics when a tube is off.
 - Anything in [§4.11 Board, firmware and OTA](#411-board-firmware-and-ota): OTA flashing,
   `flashMasterFirmwareUSB`, `reassignCANId`, `espRestart`, `restartCANDevice`, `setBusPower`.
 - `stopImSwitch` / `restartImSwitch`, `setSetupFileName`, `writeNewSetupFile` — these change
@@ -151,6 +153,8 @@ imswitch/
       detectors/               cameras (Hik, Toupcam, Basler, PiCam, Virtual, MMCore, …)
       positioners/             stages (ESP32Stage, UC2CANOpen, MMCore, Virtual, …)
       lasers/ LEDs/ LEDMatrixs/ rotators/ galvoscanners/ rs232/
+      pumps/ valves/           fluidics (setup blocks "pumps", "valves"); DigitalIOManager.py
+                               names the board's lines (setup block "digitalIO")
     model/canbus/              UC2 CAN network + firmware (no ImSwitch imports; endpoints in
                                controllers/uc2config/can_network_api.py)
     model/aufgaben/            Aufgaben job format, tasks, validator, useq bridge (no ImSwitch
@@ -487,6 +491,11 @@ prescan and firmware stage scans, digital I/O, temperature; plan and format in
 - `listAufgabenJobs`, `getAufgabenJob(name)`, `saveAufgabenJob(job)` (POST),
   `deleteAufgabenJob(name)`, `listAufgabenRuns(limit)`, `getAufgabenJobSchema()`
 - `importAufgabenUseq(sequence)` / `exportAufgabenUseq(job)` (POST) — useq-schema bridge
+- Frontend: the "Aufgaben" app (`frontend/src/components/aufgaben/`) edits, validates, starts and
+  follows jobs; `sigAufgabenEvent` carries state, step, log, question and task-progress events.
+- Peripherals for jobs: the `pumps`, `valves` and `digitalIO` setup blocks (managers in
+  `model/managers/pumps|valves/`, `DigitalIOManager.py`); `send_serial` talks to plain
+  `RS232Manager` devices and is ask-first. The virtual setup has a pump and a valve.
 - `getAufgabenWellPlate(load_name, wells, offset_x_um, offset_y_um)` — a useq well-plate plan
   from ImSwitch labware (same convention: rows towards −Y), for a job's `well_plate` resource
 

@@ -153,6 +153,23 @@ class PeripheralInfo:
 
 
 @dataclass(frozen=False)
+class DigitalIOInfo:
+    """ Names for the UC2 board's digital lines (see ``DigitalIOManager``). """
+
+    outputs: Dict[str, int] = field(default_factory=dict)
+    """ Output name -> board output id (1..3), e.g. ``{"shutter": 1}``. """
+
+    inputs: Dict[str, int] = field(default_factory=dict)
+    """ Input name -> board input id (1..3), e.g. ``{"door": 2}``. """
+
+    invert: List[str] = field(default_factory=list)
+    """ Names of active-low lines; they read and write as logical levels. """
+
+    rs232device: str = "ESP32"
+    """ The board's ``rs232devices`` entry. """
+
+
+@dataclass(frozen=False)
 class SLMInfo:
     monitorIdx: int
     """ Index of the monitor in the system list of monitors (indexing starts at
@@ -882,6 +899,10 @@ class SetupInfo:
     """ Valves by name (``DigitalOutValveManager``, ``ServoValveManager``,
     ``SerialValveManager``, ``VirtualValveManager``); ``managerProperties.positions``
     names the positions a job can switch to. """
+
+    digitalIO: Optional[DigitalIOInfo] = field(default_factory=lambda: None)
+    """ Names for the board's digital outputs and inputs; without it jobs use the
+    raw lines "1".."3". """
 
     rs232devices: Dict[str, RS232Info] = field(default_factory=dict)
     """ RS232 connections in this setup. This is a map from unique RS232

@@ -10,6 +10,7 @@ from .MultiManager import MultiManager
 from .NidaqManager import NidaqManager
 from .PositionersManager import PositionersManager
 from .PumpsManager import PumpsManager
+from .DigitalIOManager import DigitalIOManager
 from .ValvesManager import ValvesManager
 from .GalvoScannersManager import GalvoScannersManager
 from .RS232sManager import RS232sManager

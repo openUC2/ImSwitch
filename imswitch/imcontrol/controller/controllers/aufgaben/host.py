@@ -16,7 +16,6 @@ import useq
 
 from imswitch.imcontrol.model.aufgaben.hardware import DerivedImage
 
-DIGITAL_LINES = ("1", "2", "3")
 LED_KINDS = {"ring": "ring", "dpc": "halves", "off": "off"}   # Aufgaben kind -> LED matrix call
 
 
@@ -74,6 +73,10 @@ class ImSwitchMicroscope:
     def _esp32(self):
         return getattr(getattr(self._master, "UC2ConfigManager", None), "ESP32", None)
 
+    @property
+    def _dio(self):
+        return getattr(self._master, "digitalIOManager", None)
+
     def _has(self, group: str) -> bool:
         manager = getattr(self._master, group, None)
         return manager is not None and manager.hasDevices()
@@ -110,7 +113,7 @@ class ImSwitchMicroscope:
             "illumination": bool(getattr(exp, "allIlluNames", None)),
             "led_matrix": getattr(exp, "_ledMatrix", None) is not None,
             "objective": self._get("Objective") is not None,
-            "digital_io": esp is not None,
+            "digital_io": self._dio is not None and self._dio.available,
             "temperature": getattr(esp, "temperature", None) is not None,
             "sensors": self._get("I2CSensor") is not None,
             "stage_map": self._get("StageMap") is not None,
@@ -124,8 +127,10 @@ class ImSwitchMicroscope:
             return list(self._master.lasersManager.getAllDeviceNames())
         if kind == "detector":
             return list(self._master.detectorsManager.getAllDeviceNames())
-        if kind in ("digital_output", "digital_input"):
-            return list(DIGITAL_LINES) if self._esp32() is not None else []
+        if kind == "digital_output":
+            return self._dio.outputs if self._dio is not None else []
+        if kind == "digital_input":
+            return self._dio.inputs if self._dio is not None else []
         if kind == "temperature":
             return ["heater"] if "temperature" in self.capabilities() else []
         if kind in ("pump", "valve"):
@@ -249,34 +254,22 @@ class ImSwitchMicroscope:
             raise RuntimeError("no UC2 board connected")
         return esp
 
+    def _digital(self):
+        if self._dio is None:
+            raise RuntimeError("no digital I/O in this setup")
+        return self._dio
+
     def set_digital_output(self, name, value) -> None:
-        self._board().digitalout.set_digitalout(digitaloutid=int(name), digitaloutval=int(value))
+        self._digital().set_output(name, value)
 
     def pulse_digital_output(self, name, duration_ms) -> None:
-        # The firmware pulse has its own fixed length; longer pulses are timed here.
-        out = self._board().digitalout
-        out.set_digitalout(digitaloutid=int(name), digitaloutval=1)
-        time.sleep(duration_ms / 1000.0)
-        out.set_digitalout(digitaloutid=int(name), digitaloutval=0)
+        self._digital().pulse_output(name, duration_ms)
 
     def read_digital_input(self, name) -> bool:
-        reply = self._board().digitalin.get_digitalin(digitalinid=int(name))
-        reply = reply[0] if isinstance(reply, list) else reply
-        return bool(reply["digitalin"]["digitalinval"])
+        return self._digital().read_input(name)
 
     def wait_for_digital_input(self, name, edge, timeout_s) -> bool:
-        deadline = None if timeout_s is None else time.monotonic() + timeout_s
-        want = edge in ("rising", "high")
-        if edge in ("rising", "falling"):   # an edge needs the opposite level first
-            while self.read_digital_input(name) == want:
-                if deadline is not None and time.monotonic() > deadline:
-                    return False
-                time.sleep(0.02)
-        while self.read_digital_input(name) != want:
-            if deadline is not None and time.monotonic() > deadline:
-                return False
-            time.sleep(0.02)
-        return True
+        return self._digital().wait_for_input(name, edge, timeout_s)
 
     def pump_volume(self, pump, volume_ul, rate_ul_min) -> None:
         self._device("pump", pump).pump_volume(volume_ul, rate_ul_min)

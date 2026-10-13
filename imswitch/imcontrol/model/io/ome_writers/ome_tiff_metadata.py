@@ -13,7 +13,7 @@ def _first(metadata: Dict[str, Any], *keys, default=None):
     return next((metadata[k] for k in keys if metadata.get(k) is not None), default)
 
 
-def build_ome_metadata_from_dict(metadata: Dict[str, Any]) -> str:
+def build_ome_metadata_from_dict(metadata: Dict[str, Any]) -> bytes:
     """OME-XML for one plane described by an ImSwitch metadata dict.
 
     Required: ``height``, ``width``. Optional: ``dtype``, ``pixel_size``/``pixelSizeUm``
@@ -34,4 +34,4 @@ def build_ome_metadata_from_dict(metadata: Dict[str, Any]) -> str:
                      channel_names=[channel] * (3 if rgb else 1),
                      exposure_ms=[float(exposure)] if exposure is not None else [],
                      name=str(metadata.get("name") or channel))
-    return ome_xml(spec, rgb=rgb)
+    return ome_xml(spec, rgb=rgb).encode("utf-8")   # Bio-Formats needs the µ as UTF-8

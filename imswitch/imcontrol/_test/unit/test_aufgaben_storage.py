@@ -213,3 +213,25 @@ def test_single_plane_tiff_metadata(tmp_path, rgb):
     assert (plane.position_x, plane.position_y, plane.exposure_time) == (990.0, 1992.5, 12.0)
     assert [c.name for c in pixels.channels] == ["LED"]
     assert pixels.channels[0].samples_per_pixel == (3 if rgb else 1)
+
+
+def test_save_image_axes_formats_and_unknown_metadata(tmp_path):
+    from imswitch.imcontrol.model.aufgaben.storage import save_image
+    zyx = np.arange(3 * 20 * 30, dtype=np.uint16).reshape(3, 20, 30)
+    tif = save_image(tmp_path / "stack.ome.tif", zyx, "ZYX", z_step_um=2.0)
+    pixels = ome_types.from_tiff(tif).images[0].pixels
+    assert (pixels.size_z, pixels.size_c) == (3, 1) and pixels.physical_size_x is None
+    assert pixels.planes[0].position_x is None                   # unknown: left out
+    assert np.array_equal(tifffile.imread(tif), zyx)
+    yxs = np.zeros((20, 30, 3), np.uint8)
+    yxs[..., 1] = 7
+    store = save_image(tmp_path / "rgb.ome.zarr", yxs, pixel_size_um=0.5, channel_names=["bf"])
+    group = zarr.open_group(str(store), mode="r")
+    open_ome_zarr(group)
+    assert group["0"].shape == (1, 3, 1, 20, 30) and int(group["0"][0, 1, 0, 0, 0]) == 7
+    assert [c["label"] for c in group.attrs["omero"]["channels"]] == ["bf_rgb_r", "bf_rgb_g",
+                                                                    "bf_rgb_b"]
+    with pytest.raises(ValueError, match="do not describe"):
+        save_image(tmp_path / "bad.ome.tif", zyx)                  # 3-D needs axes
+    with pytest.raises(ValueError, match="use .tif"):
+        save_image(tmp_path / "bad.png", zyx[0])

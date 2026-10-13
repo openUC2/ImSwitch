@@ -5,8 +5,10 @@
   offset, so the same class serves single fields and stitched canvases. T grows
   as needed. ``finalize`` builds the resolution pyramid; ``export_ome_tiff``
   writes the same data, pyramid included, as a tiled OME-TIFF.
-- ``ome_xml``: the OME-XML of an image (ome-types), shared by every TIFF ImSwitch
-  writes with OME metadata.
+- ``save_image``: one numpy image to an OME-TIFF or OME-Zarr file. With
+  ``NgffImage`` (and its ``export_ome_tiff``) this is how ImSwitch writes image
+  files; nothing else calls tifffile or zarr to write images.
+- ``ome_xml``: the OME-XML of an image (ome-types), shared by every OME-TIFF.
 - ``OmeStore``: the frame sink of a run. One image per stage field and capture
   node; an NGFF plate when the fields come from a well loop. Writes on its own
   thread so acquisition does not wait for compression.
@@ -16,7 +18,13 @@ their NGFF version before they are written, so invalid metadata fails loudly.
 
 Coordinates: µm in the stage user frame. The NGFF translation and the OME
 plane positions are the top-left pixel corner; the field centre is the stage
-position.
+position. An unknown pixel size or position is left out of the metadata rather
+than written as a guess.
+
+Readers: OME-TIFF opens as OME in Fiji/Bio-Formats (the XML is UTF-8, which
+Bio-Formats needs for the µ in units), napari (tifffile) and the openUC2
+napari plugin; OME-Zarr (NGFF 0.4, zarr v2) in napari-ome-zarr, Fiji's
+N5/OME-NGFF importer and the plugin.
 
 Each image also carries ``attrs["imswitch"]``: ``node``, ``position`` and
 ``tile`` for raw fields, ``derived`` ("stitched", or a task's image name) for
@@ -46,7 +54,9 @@ from ome_zarr_models.v05.well import WellAttrs as _Well05
 NGFF_VERSIONS = ("0.4", "0.5")
 _SCHEMAS = {"0.4": {"image": _Image04, "plate": _Hcs04, "well": _Well04},
             "0.5": {"image": _Image05, "plate": _Hcs05, "well": _Well05}}
-_COMPRESSOR = numcodecs.Blosc(cname="zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
+# Zstd, not Blosc: as fast at level 1 (~600 MB/s), and Fiji's N5/OME-NGFF reader decodes it
+# on every platform (its Blosc needs a native library that is missing on macOS arm64).
+_COMPRESSOR = numcodecs.Zstd(level=1)
 _TIFF_OPTIONS = dict(photometric="minisblack", compression="zlib", compressionargs={"level": 1},
                      predictor=True)
 _COLORS = (("405", "0000FF"), ("488", "00FF00"), ("561", "FFFF00"), ("640", "FF0000"),
@@ -63,10 +73,10 @@ def channel_color(name: str) -> str:
 class ImageSpec:
     shape: Tuple[int, int, int, int, int]                # T, C, Z, Y, X
     dtype: str = "uint16"
-    pixel_size_um: float = 1.0
+    pixel_size_um: Optional[float] = 1.0       # None: not calibrated, left out
     z_step_um: float = 1.0
     t_step_s: float = 1.0
-    origin_um: Tuple[float, float, float] = (0.0, 0.0, 0.0)   # x, y, z of the top-left pixel
+    origin_um: Optional[Tuple[float, float, float]] = (0.0, 0.0, 0.0)   # top-left pixel x, y, z
     channel_names: Sequence[str] = ()
     channel_colors: Sequence[str] = ()      # hex RRGGBB; default from the names
     name: str = "image"
@@ -100,13 +110,14 @@ def _versioned(version: str, body: dict) -> dict:
 
 
 def _multiscales(spec: ImageSpec, levels: int, version: str) -> dict:
-    ox, oy, oz = spec.origin_um
+    ox, oy, oz = spec.origin_um or (0.0, 0.0, 0.0)
+    px = spec.pixel_size_um or 1.0
+    unit = {"unit": "micrometer"} if spec.pixel_size_um else {}
     axes = [{"name": "t", "type": "time", "unit": "second"}, {"name": "c", "type": "channel"}] + \
-           [{"name": a, "type": "space", "unit": "micrometer"} for a in "zyx"]
+           [{"name": a, "type": "space", **unit} for a in "zyx"]
     datasets = [{"path": str(level), "coordinateTransformations": [
         {"type": "scale", "scale": [spec.t_step_s, 1.0, spec.z_step_um,
-                                    spec.pixel_size_um * 2 ** level,
-                                    spec.pixel_size_um * 2 ** level]},
+                                    px * 2 ** level, px * 2 ** level]},
         {"type": "translation", "translation": [0.0, 0.0, oz, oy, ox]}]} for level in range(levels)]
     return _versioned(version, {"name": spec.name, "axes": axes, "datasets": datasets})
 
@@ -126,31 +137,39 @@ def ome_xml(spec: ImageSpec, rgb: bool = False) -> str:
 
     ``rgb``: every three channels are one interleaved RGB channel (SamplesPerPixel 3),
     as in a TIFF written with photometric RGB. Positions are the top-left pixel
-    corner in µm; exposure per channel when the spec has it.
+    corner in µm; exposure per channel when the spec has it. Store it UTF-8
+    encoded (``_write_ome_tiff`` does): Bio-Formats rejects the units otherwise.
     """
     t, c, z, y, x = spec.shape
     samples = 3 if rgb else 1
     channels = spec.channels(c)[::samples]
-    ox, oy, oz = spec.origin_um
     exposures = list(spec.exposure_ms) + [None] * len(channels)
+
+    def where(zi: int) -> dict:
+        if spec.origin_um is None:
+            return {}
+        ox, oy, oz = spec.origin_um
+        return {"position_x": ox, "position_x_unit": "µm", "position_y": oy,
+                "position_y_unit": "µm", "position_z": oz + zi * spec.z_step_um,
+                "position_z_unit": "µm"}
+
     planes = [Plane(the_t=ti, the_c=ci, the_z=zi, delta_t=ti * spec.t_step_s, delta_t_unit="s",
-                    exposure_time=exposures[ci], exposure_time_unit="ms",
-                    position_x=ox, position_x_unit="µm", position_y=oy, position_y_unit="µm",
-                    position_z=oz + zi * spec.z_step_um, position_z_unit="µm")
+                    exposure_time=exposures[ci], exposure_time_unit="ms", **where(zi))
               for ti in range(t) for ci in range(len(channels)) for zi in range(z)]
+    px = spec.pixel_size_um
+    sizes = {} if px is None else {
+        "physical_size_x": px, "physical_size_x_unit": "µm", "physical_size_y": px,
+        "physical_size_y_unit": "µm", "physical_size_z": spec.z_step_um,
+        "physical_size_z_unit": "µm"}
     pixels = Pixels(
         dimension_order="XYZCT", type=str(np.dtype(spec.dtype)), significant_bits=spec.bit_depth,
-        size_x=x, size_y=y, size_z=z, size_c=c, size_t=t,
-        physical_size_x=spec.pixel_size_um, physical_size_x_unit="µm",
-        physical_size_y=spec.pixel_size_um, physical_size_y_unit="µm",
-        physical_size_z=spec.z_step_um, physical_size_z_unit="µm",
+        size_x=x, size_y=y, size_z=z, size_c=c, size_t=t, **sizes,
         time_increment=spec.t_step_s, time_increment_unit="s",
         channels=[Channel(name=name.removesuffix("_rgb_r") if rgb else name,
                           samples_per_pixel=samples, **({} if rgb else {"color": f"#{color}"}))
                   for name, color in channels],
         planes=planes, tiff_data_blocks=[TiffData(plane_count=len(planes))])
-    xml = OME(images=[Image(name=spec.name, pixels=pixels)], creator="ImSwitch").to_xml()
-    return xml.encode("ascii", "xmlcharrefreplace").decode("ascii")   # TIFF tags are ASCII
+    return OME(images=[Image(name=spec.name, pixels=pixels)], creator="ImSwitch").to_xml()
 
 
 def _tiff_tile(y: int, x: int) -> Tuple[int, int]:
@@ -169,9 +188,101 @@ def _tiff_tiles(level, planes, tile: Tuple[int, int]):
         for y0 in range(0, plane.shape[0], th):
             for x0 in range(0, plane.shape[1], tw):
                 block = plane[y0:y0 + th, x0:x0 + tw]
-                if block.shape != (th, tw):
-                    block = np.pad(block, ((0, th - block.shape[0]), (0, tw - block.shape[1])))
+                if block.shape[:2] != (th, tw):
+                    pad = [(0, th - block.shape[0]), (0, tw - block.shape[1])]
+                    block = np.pad(block, pad + [(0, 0)] * (block.ndim - 2))
                 yield block
+
+
+def _write_ome_tiff(path, levels, spec: ImageSpec, rgb: bool = False) -> Path:
+    """Tiled, compressed OME-TIFF; levels after the first become SubIFDs (a pyramid).
+
+    ``levels``: arrays indexed (t, c, z) -> plane (Y, X), or (Y, X, 3) with ``rgb``.
+    Planes are streamed tile by tile, so zarr-backed levels never load whole.
+    """
+    planes = list(np.ndindex(*levels[0].shape[:3]))
+    samples = (3,) if rgb else ()
+    path = Path(path)
+    with tifffile.TiffWriter(path, bigtiff=True, ome=False) as tif:
+        for i, level in enumerate(levels):
+            y, x = level.shape[3:5]
+            tile = _tiff_tile(y, x)
+            first = {"subifds": len(levels) - 1,
+                     "description": ome_xml(spec, rgb=rgb).encode("utf-8")} if i == 0 \
+                else {"subfiletype": 1}
+            tif.write(_tiff_tiles(level, planes, tile), shape=(len(planes), y, x) + samples,
+                      dtype=spec.dtype, tile=tile, metadata=None, **first,
+                      **{**_TIFF_OPTIONS, "photometric": "rgb" if rgb else "minisblack"})
+    return path
+
+
+def _pyramid(array: np.ndarray, min_size: int = 256, max_levels: int = 5) -> list:
+    """``array`` (T, C, Z, Y, X[, S]) and its 2x stride-decimated levels."""
+    y, x = array.shape[3:5]
+    levels = [array]
+    while len(levels) < max_levels and min(y, x) // 2 ** len(levels) >= min_size:
+        step = 2 ** len(levels)
+        levels.append(array[:, :, :, ::step, ::step])
+    return levels
+
+
+def save_image(path, data: np.ndarray, axes: Optional[str] = None, *,
+               pixel_size_um: Optional[float] = None, z_step_um: float = 1.0,
+               t_step_s: float = 1.0, origin_um: Optional[Tuple[float, float, float]] = None,
+               channel_names: Sequence[str] = (), channel_colors: Sequence[str] = (),
+               exposure_ms: Sequence[Optional[float]] = (), bit_depth: Optional[int] = None,
+               name: Optional[str] = None, version: str = "0.4") -> Path:
+    """Write one image as OME-TIFF (``*.tif``, ``*.tiff``) or OME-Zarr (``*.zarr``).
+
+    Args:
+        path: The file or store; its suffix picks the format.
+        data: The pixels. Its axes are named by ``axes``, letters from "TCZYX" plus
+            "S" for RGB samples: "YX", "ZYX", "CYX", "TZYX", "TCZYX", "YXS" ...
+            Default "YX" for 2-D data and "YXS" for (Y, X, 3).
+        pixel_size_um: Pixel size; None when the camera is not calibrated.
+        z_step_um: Z spacing.
+        t_step_s: Time between time points.
+        origin_um: Stage position (x, y, z) of the top-left pixel; None when unknown.
+        channel_names: One per channel (per C index).
+        channel_colors: Hex RRGGBB per channel; default from the names.
+        exposure_ms: Per channel.
+        bit_depth: Camera bits; sets the display window and SignificantBits.
+        name: Image name; default the file name.
+        version: NGFF version for OME-Zarr.
+
+    Returns the path written. Large images get a pyramid (SubIFDs or zarr levels).
+    """
+    path = Path(path)
+    array = np.asarray(data)
+    axes = (axes or ("YXS" if array.ndim == 3 and array.shape[-1] == 3 else "YX")).upper()
+    if len(axes) != array.ndim or len(set(axes)) != len(axes) or set(axes) - set("TCZYXS") \
+            or not {"Y", "X"} <= set(axes):
+        raise ValueError(f"axes {axes!r} do not describe data of shape {array.shape}")
+    rgb = "S" in axes
+    present = [a for a in "TCZYXS" if a in axes]
+    array = array.transpose([axes.index(a) for a in present])
+    full = "TCZYX" + ("S" if rgb else "")
+    array = array.reshape([array.shape[present.index(a)] if a in present else 1 for a in full])
+    t, c, z, y, x = array.shape[:5]
+    names = list(channel_names) or [f"C{i}" for i in range(c)]
+    spec = ImageSpec(shape=(t, c * (3 if rgb else 1), z, y, x), dtype=str(array.dtype),
+                     pixel_size_um=pixel_size_um, z_step_um=z_step_um, t_step_s=t_step_s,
+                     origin_um=origin_um, bit_depth=bit_depth,
+                     channel_names=[f"{n}_rgb_{s}" for n in names for s in "rgb"] if rgb
+                     else names, channel_colors=() if rgb else channel_colors,
+                     exposure_ms=[e for e in exposure_ms for _ in range(3 if rgb else 1)],
+                     name=name or path.name.split(".")[0])
+    if path.suffix.lower() in (".tif", ".tiff"):
+        return _write_ome_tiff(path, _pyramid(array), spec, rgb=rgb)
+    if path.suffix.lower() != ".zarr":
+        raise ValueError(f"{path.name}: use .tif/.tiff (OME-TIFF) or .zarr (OME-Zarr)")
+    image = NgffImage.create(path, spec, version)
+    for ti, ci, zi in np.ndindex(t, c, z):
+        planes = [array[ti, ci, zi]] if not rgb else [array[ti, ci, zi, ..., k] for k in range(3)]
+        for k, plane in enumerate(planes):
+            image.write(plane, ti, ci * len(planes) + k, zi)
+    image.finalize()
+    return path
 
 
 class NgffImage:
@@ -242,19 +353,7 @@ class NgffImage:
 
         Planes are streamed from zarr, never held in memory as a whole.
         """
-        levels = [self.group[str(i)] for i in range(self.levels)]
-        planes = list(np.ndindex(*levels[0].shape[:3]))
-        path = Path(path)
-        with tifffile.TiffWriter(path, bigtiff=True, ome=False) as tif:
-            for i, level in enumerate(levels):
-                y, x = level.shape[3:]
-                first = {"subifds": len(levels) - 1, "description": ome_xml(self.spec)} if i == 0 \
-                    else {"subfiletype": 1}
-                tile = _tiff_tile(y, x)
-                tif.write(_tiff_tiles(level, planes, tile), shape=(len(planes), y, x),
-                          dtype=self.spec.dtype, tile=tile, metadata=None,
-                          **first, **_TIFF_OPTIONS)
-        return path
+        return _write_ome_tiff(path, [self.group[str(i)] for i in range(self.levels)], self.spec)
 
 # --------------------------------------------------------------------------- #
 # Plates

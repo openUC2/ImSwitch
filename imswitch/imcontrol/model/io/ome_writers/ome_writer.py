@@ -908,7 +908,7 @@ class OMEWriter:
         # RGB hyperstacks carry a trailing samples axis and must be tagged
         # photometric="rgb"; mono stacks stay minisblack.
         photometric = "rgb" if self.isRGB else "minisblack"
-        description = ome_xml(self._image_spec(), rgb=self.isRGB)
+        description = ome_xml(self._image_spec(), rgb=self.isRGB).encode("utf-8")
         with tif.TiffWriter(out_path, bigtiff=True, ome=False) as writer:
             writer.write(self.tiff_mosaic, photometric=photometric, description=description,
                          metadata=None, **self.config.tiff_write_kwargs())

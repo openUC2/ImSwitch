@@ -17,6 +17,8 @@ import {
   renameNode,
   renameResource,
   catalogById,
+  duplicateNode,
+  paramSummary,
 } from "../utils/aufgabenJob";
 
 const byId = catalogById(catalog);
@@ -67,6 +69,8 @@ test("move, indent, outdent and place keep every node exactly once", () => {
   expect(placeNode(job, "loop", "loop", "body", 0)).toBe(false); // not into itself
   expect(placeNode(job, "wait", "loop", "body", 0)).toBe(true);
   expect(ids(job.tasks[0].body)).toEqual(["wait", "img"]);
+  expect(placeNode(job, "wait", "loop", "body", 2)).toBe(true);   // below itself
+  expect(ids(job.tasks[0].body)).toEqual(["img", "wait"]);
   expect(removeNode(job, "img").node.id).toBe("img");
   expect(findNode(job, "img")).toBeNull();
 });
@@ -117,4 +121,12 @@ test("renaming a resource rewrites its references", () => {
   expect(renameResource(job, "pts", "sites")).toBe(true);
   expect(Object.keys(job.resources)).toEqual(["sites", "z"]);
   expect(job.tasks[0].params.source).toBe("@sites");
+});
+
+test("duplicating copies children with fresh ids", () => {
+  const job = sampleJob();
+  const copy = duplicateNode(job, "loop");
+  expect(ids(job.tasks)).toEqual(["loop", "loop_2", "wait", "note"]);
+  expect(copy.body[0].id).toBe("img_2");
+  expect(paramSummary({ source: "@pts", n: 3, plan: { a: 1 } })).toBe("source=@pts  n=3  plan");
 });

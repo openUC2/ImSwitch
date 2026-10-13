@@ -46,14 +46,3 @@ export const apiAufgabenAbortJob = (force = false) => get("abortAufgabenJob", { 
 export const apiAufgabenGetStatus = () => get("getAufgabenStatus");
 export const apiAufgabenAnswerQuestion = (answer) => get("answerAufgabenQuestion", { answer });
 export const apiAufgabenListRuns = (limit = 50) => get("listAufgabenRuns", { limit });
-
-// The server's message for a failed call: FastAPI puts it in `detail`, a
-// string or a list of pydantic errors.
-export const aufgabenErrorText = (error) => {
-  const detail = error?.response?.data?.detail;
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail)) {
-    return detail.map((d) => `${(d.loc || []).join(".")}: ${d.msg}`).join("; ");
-  }
-  return error?.message || String(error);
-};

@@ -75,6 +75,23 @@ const aufgabenSlice = createSlice({
       state.selectedId = node.id;
       edited(state);
     },
+    addNodeAt: (state, action) => {
+      const { task, parentId, branch, index } = action.payload;
+      const entry = state.catalog.find((e) => e.id === task);
+      if (!entry) return;
+      const node = tree.newNode(state.job, entry);
+      if (tree.insertNodeAt(state.job, node, parentId, branch, index)) {
+        state.selectedId = node.id;
+        edited(state);
+      }
+    },
+    duplicateNode: (state, action) => {
+      const copy = tree.duplicateNode(state.job, action.payload);
+      if (copy) {
+        state.selectedId = copy.id;
+        edited(state);
+      }
+    },
     removeNode: (state, action) => {
       const removed = tree.removeNode(state.job, action.payload);
       if (removed) {
@@ -191,6 +208,8 @@ export const {
   setJobField,
   setStorage,
   addNode,
+  addNodeAt,
+  duplicateNode,
   removeNode,
   updateNode,
   setNodeParam,

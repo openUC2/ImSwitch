@@ -93,6 +93,32 @@ export const insertNode = (job, node, selectedId, catalog) => {
   }
 };
 
+// Insert into a container's branch (or the top level when parentId is null).
+export const insertNodeAt = (job, node, parentId, branch, index) => {
+  const parent = parentId ? findNode(job, parentId) : null;
+  if (parentId && !parent) return false;
+  const list = parent ? (parent.node[branch] ||= []) : job.tasks;
+  list.splice(Math.max(0, Math.min(index ?? list.length, list.length)), 0, node);
+  return true;
+};
+
+// A copy of a node (with its children) right after it; every copied id is new.
+export const duplicateNode = (job, id) => {
+  const target = findNode(job, id);
+  if (!target) return null;
+  const copy = JSON.parse(JSON.stringify(target.node));
+  const used = new Set([...walk(job.tasks)].map((e) => e.node.id));
+  for (const { node } of walk([copy])) {
+    const base = node.id.replace(/_\d+$/, "");
+    let n = 2;
+    while (used.has(`${base}_${n}`)) n += 1;
+    node.id = `${base}_${n}`;
+    used.add(node.id);
+  }
+  target.list.splice(target.index + 1, 0, copy);
+  return copy;
+};
+
 export const removeNode = (job, id) => {
   const target = findNode(job, id);
   if (target) target.list.splice(target.index, 1);
@@ -165,9 +191,9 @@ export const placeNode = (job, id, parentId, branch, index) => {
   if (!target) return false;
   if (parentId && (parentId === id || findNode({ tasks: [target.node] }, parentId))) return false;
   const [node] = target.list.splice(target.index, 1);
-  const list = parentId ? (findNode(job, parentId).node[branch] ||= []) : job.tasks;
-  list.splice(Math.max(0, Math.min(index, list.length)), 0, node);
-  return true;
+  // Dropping below itself in the same list: the removal shifted the index.
+  const sameList = (target.parent?.id ?? null) === (parentId ?? null) && target.branch === branch;
+  return insertNodeAt(job, node, parentId, branch, sameList && index > target.index ? index - 1 : index);
 };
 
 // -- parameter fields ---------------------------------------------------------
@@ -272,6 +298,28 @@ export const resourcesOfKind = (job, kinds) =>
     .filter(([, resource]) => !kinds || kinds.includes(resource.kind))
     .map(([name]) => name);
 
+// A short text for the outline: the first few parameters.
+export const paramSummary = (params) =>
+  Object.entries(params || {})
+    .slice(0, 3)
+    .map(([key, value]) => {
+      if (value !== null && typeof value === "object") return key;
+      const text = String(value);
+      return `${key}=${text.length > 24 ? `${text.slice(0, 23)}…` : text}`;
+    })
+    .join("  ");
+
 // Issues of one node from a validation report.
 export const issuesFor = (validation, id) =>
   ((validation && validation.issues) || []).filter((issue) => issue.node === id);
+
+// The server's message for a failed call: FastAPI puts it in `detail`, a
+// string or a list of pydantic errors.
+export const aufgabenErrorText = (error) => {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((d) => `${(d.loc || []).join(".")}: ${d.msg}`).join("; ");
+  }
+  return error?.message || String(error);
+};

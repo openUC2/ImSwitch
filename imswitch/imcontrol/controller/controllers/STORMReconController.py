@@ -1,9 +1,9 @@
 import numpy as np
 import time
-import tifffile as tif
 import os
 from datetime import datetime
 import queue
+import shutil
 from typing import Generator, Optional, Dict, Any
 from dataclasses import dataclass
 import threading
@@ -13,7 +13,7 @@ from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger, dirtools
 from ..basecontrollers import LiveUpdatedController
 from imswitch.imcommon.model import APIExport
-from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage
+from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage, save_image
 
 # Import pydantic models for parameter management
 try:
@@ -826,7 +826,7 @@ class STORMReconController(LiveUpdatedController):
 
         # Finalize saving
         frames_saved = self._frame_count
-        if self._ome_zarr_store is not None or hasattr(self, '_tiff_writer'):
+        if self._ome_zarr_store is not None:
             self._finalizeSaving()
 
         session_id = self._current_session_id
@@ -1412,7 +1412,7 @@ class STORMReconController(LiveUpdatedController):
                 else:
                     frame_to_save = reconstructed_frame.astype(np.uint16)
 
-                tif.imwrite(str(filepath), frame_to_save)
+                save_image(filepath, frame_to_save, name="STORM reconstruction")
                 self._last_reconstruction_path = str(filepath)
 
                 # Save localizations if available
@@ -1431,14 +1431,12 @@ class STORMReconController(LiveUpdatedController):
 
 
     def _initializeSaving(self, saveDirectory: str, save_format: str):
-        """Initialize saving mechanism based on format."""
+        """One OME-NGFF time series; a TIFF is exported from it at the end."""
+        self._tiff_save_path = None
         try:
-            if save_format.lower() == "omezarr":
-                self._initializeOMEZarrSaving(saveDirectory)
-            elif save_format.lower() == "tiff":
-                self._initializeTiffSaving(saveDirectory)
-            else:
+            if save_format.lower() not in ("omezarr", "tiff"):
                 raise ValueError(f"Unsupported save format: {save_format}")
+            self._initializeOMEZarrSaving(saveDirectory, temporary=save_format.lower() == "tiff")
         except Exception as e:
             self._logger.error(f"Failed to initialize saving: {e}")
             self._ome_zarr_store = None
@@ -1493,12 +1491,8 @@ class STORMReconController(LiveUpdatedController):
                             }
 
                             # Save frame based on format
-                            if self._save_format.lower() == "omezarr" and self._ome_zarr_store is not None:
+                            if self._ome_zarr_store is not None:
                                 self._saveFrameToZarr(frame, self._frame_count, metadata)
-                            elif self._save_format.lower() == "tiff":
-                                self._saveFrameToTiff(frame, self._frame_count, metadata)
-                            else:
-                                self._logger.error(f"Unsupported save format: {self._save_format}")
                                 self._acquisition_active = False
                                 break
 
@@ -1569,8 +1563,12 @@ class STORMReconController(LiveUpdatedController):
         # Default: assume it's (nBuffer, height, width)
         return [frames_chunk[i] for i in range(frames_chunk.shape[0])]
 
-    def _initializeOMEZarrSaving(self, saveDirectory: str):
-        """One OME-NGFF time series (T grows per frame) in the STORM data folder."""
+    def _initializeOMEZarrSaving(self, saveDirectory: str, temporary: bool = False):
+        """One OME-NGFF time series (T grows per frame) in the STORM data folder.
+
+        ``temporary``: only an OME-TIFF is wanted; the store is hidden and removed
+        after the export in ``_finalizeSaving``.
+        """
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         dirPath = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'STORMController',
                                timeStamp)
@@ -1585,23 +1583,13 @@ class STORMReconController(LiveUpdatedController):
         spec = ImageSpec(shape=(1, 1, 1) + tuple(shape_yx), dtype=str(sample[0].dtype),
                          pixel_size_um=float(self.detector.pixelSizeUm[-1]),
                          channel_names=["STORM"], name=os.path.basename(saveDirectory))
-        name = saveDirectory if saveDirectory.endswith(".zarr") else f"{saveDirectory}.ome.zarr"
-        self._ome_zarr_store = NgffImage.create(os.path.join(dirPath, name), spec)
-
-    def _initializeTiffSaving(self, saveDirectory: str):
-        """Initialize single TIFF saving following ExperimentController pattern."""
-        # Use standard data directory structure
-        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        drivePath = dirtools.UserFileDirs.getValidatedDataPath()
-        dirPath = os.path.join(drivePath, 'STORMController', timeStamp)
-
-        # Ensure directory exists
-        os.makedirs(dirPath, exist_ok=True)
-
-        # Create single TIFF file path
-        self._tiff_save_path = os.path.join(dirPath, f"{saveDirectory}_{timeStamp}.tiff")
-        self._tiff_writer = None
-        self._logger.info(f"TIFF saving initialized: {self._tiff_save_path}")
+        base = saveDirectory[:-5] if saveDirectory.endswith(".zarr") else saveDirectory
+        if temporary:
+            self._tiff_save_path = os.path.join(dirPath, f"{base}_{timeStamp}.ome.tif")
+            path = os.path.join(dirPath, f".{base}.ome.zarr")
+        else:
+            path = os.path.join(dirPath, f"{base}.ome.zarr")
+        self._ome_zarr_store = NgffImage.create(path, spec)
 
     def _saveFrameToZarr(self, frame: np.ndarray, frame_number: int, metadata: dict):
         """Save frame to OME-Zarr store."""
@@ -1611,39 +1599,16 @@ class STORMReconController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Failed to save frame to Zarr: {e}")
 
-    def _saveFrameToTiff(self, frame: np.ndarray, frame_number: int, metadata: dict):
-        """Save frame to single TIFF file using append mode."""
-        try:
-            # Initialize writer on first frame
-            if self._tiff_writer is None:
-                # Use tifffile to create a single multi-page TIFF
-                self._tiff_writer = tif.TiffWriter(self._tiff_save_path, bigtiff=True)
-
-            # Write frame to TIFF with metadata
-            self._tiff_writer.write(
-                frame.astype(np.uint16),
-                metadata={'FrameNumber': frame_number,
-                         'Timestamp': metadata.get('timestamp', ''),
-                         'SessionID': metadata.get('session_id', '')},
-                contiguous=True
-            )
-
-        except Exception as e:
-            self._logger.error(f"Failed to save frame to TIFF: {e}")
-
     def _finalizeSaving(self):
         """Finalize and close saving."""
         try:
-            # Close OME-Zarr store properly
-            if self._ome_zarr_store is not None:
-                self._ome_zarr_store.finalize()
-                self._ome_zarr_store = None
-
-            # Close single TIFF writer properly
-            if hasattr(self, '_tiff_writer') and self._tiff_writer is not None:
-                self._tiff_writer.close()
-                self._tiff_writer = None
-                self._logger.info(f"TIFF file finalized: {self._tiff_save_path}")
+            store, self._ome_zarr_store = self._ome_zarr_store, None
+            if store is not None:
+                store.finalize()
+                if self._tiff_save_path:   # TIFF format: export, then drop the hidden store
+                    store.export_ome_tiff(self._tiff_save_path)
+                    shutil.rmtree(str(store.group.store.root), ignore_errors=True)
+                    self._logger.info(f"OME-TIFF written: {self._tiff_save_path}")
 
         except Exception as e:
             self._logger.error(f"Failed to finalize saving: {e}")
@@ -1801,7 +1766,7 @@ class STORMReconImageComputationWorker:
             else:
                 image_to_save = self.sumReconstruction.astype(np.uint16)
 
-            tif.imwrite(filepath, image_to_save, append=False)
+            save_image(filepath, image_to_save, name="STORM reconstruction")
             self._logger.info(f"STORM reconstruction saved: {filepath}")
 
             # Reset reconstruction

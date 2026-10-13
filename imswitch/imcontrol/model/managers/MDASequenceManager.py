@@ -15,6 +15,7 @@ from typing import List, Dict, Any, Optional, Callable
 import time
 import numpy as np
 from imswitch.imcommon.model import initLogger
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowStep
 from psygnal import Signal as _PSignal
 
@@ -518,12 +519,6 @@ class MDASequenceManager:
         """
         import os
 
-        try:
-            import tifffile
-        except ImportError:
-            self.__logger.warning("tifffile not available, cannot save images")
-            return
-
         # Create filename from event indices
         t_idx = event.index.get('t', 0)
         p_idx = event.index.get('p', 0)
@@ -548,7 +543,8 @@ class MDASequenceManager:
             metadata['sequence_metadata'] = self._current_sequence.metadata
 
         os.makedirs(output_path, exist_ok=True)
-        tifffile.imwrite(filepath, image, metadata=metadata)
+        save_image(filepath, image, channel_names=[metadata["channel"] or "C0"],
+                   exposure_ms=[event.exposure] if event.exposure else [], annotations=metadata)
 
         self.__logger.debug(f"Saved image to {filepath}")
 

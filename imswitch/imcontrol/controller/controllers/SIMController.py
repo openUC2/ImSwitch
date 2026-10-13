@@ -5,11 +5,11 @@ import numpy as np
 import time
 import threading
 from datetime import datetime
-import tifffile as tif
 
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.framework import Signal
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 
 
 
@@ -596,7 +596,8 @@ class SIMController(ImConWidgetController):
         try:
             self.folder = self.simDir
             self.filename = os.path.join(self.folder, filename)
-            tif.imwrite(self.filename, image, dtype='uint16')
+            image = np.asarray(image, dtype=np.uint16)
+            save_image(self.filename, image, "CYX" if image.ndim == 3 else "YX")
             self._logger.debug("Saving file: "+self.filename)
         except  Exception as e:
             self._logger.error(e)
@@ -884,7 +885,7 @@ class SIMProcessor(object):
                 try:
                     self.folder = SIMParameters.path
                     self.filename = os.path.join(self.folder,filename) #FIXME: Remove hardcoded path
-                    tif.imwrite(self.filename, image)
+                    save_image(self.filename, image, "CYX" if np.ndim(image) == 3 else "YX")
                     self._logger.debug("Saving file: "+self.filename)
                 except  Exception as e:
                     self._logger.error(e)

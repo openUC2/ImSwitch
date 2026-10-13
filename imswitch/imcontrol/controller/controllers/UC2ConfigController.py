@@ -4,9 +4,14 @@ import datetime
 from imswitch.imcommon.model import APIExport, initLogger, dirtools, ostools
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 from .uc2config.can_network_api import CanNetworkApiMixin
-import tifffile as tif
 
+
+
+def _one_frame(image):
+    """A camera frame for saving: (Y, X) or RGB (Y, X, 3); a frame stack gives its first."""
+    return image if image.ndim == 2 or image.shape[-1] == 3 else image[0]
 
 class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
     """Linked to UC2ConfigWidget."""
@@ -98,12 +103,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             filePath = os.path.join(dirPath, fileName)
             self.__logger.debug(f"Saving image to {filePath}.tif")
             if mImage is not None:
-                if mImage.ndim == 2:
-                    tif.imwrite(filePath + ".tif", mImage)
-                elif mImage.ndim == 3:
-                    tif.imwrite(filePath + ".tif", mImage[0])
-                else:
-                    self.__logger.error("Image is not 2D or 3D")
+                save_image(filePath + ".tif", _one_frame(mImage))
             else:
                 self.__logger.error("Image is None")
 
@@ -344,7 +344,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             os.makedirs(dirPath, exist_ok=True)
             filePath = os.path.join(dirPath, fileName)
             if mImage is not None:
-                tif.imwrite(filePath + ".tif", mImage[0] if mImage.ndim == 3 else mImage)
+                save_image(filePath + ".tif", _one_frame(mImage))
                 self._commChannel.sigUpdateImage.emit('Image', mImage, True, 1, False)
             return {"ok": True, "action": "snap", "path": filePath + ".tif"}
         except Exception as e:

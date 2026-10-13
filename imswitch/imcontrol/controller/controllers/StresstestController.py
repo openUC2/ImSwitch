@@ -7,6 +7,7 @@ import math
 from datetime import datetime
 from typing import List, Dict
 from pydantic import BaseModel
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 try:
     from imswitch.imcommon.model import initLogger, APIExport, dirtools
     from imswitch.imcommon.framework import Signal, Timer
@@ -795,19 +796,10 @@ class StresstestController(ImConWidgetController):
             image_shift = [0.0, 0.0]
 
         try:
-            # Try to import tifffile, fall back to basic file saving
-            try:
-                import tifffile
-                has_tifffile = True
-            except ImportError:
-                has_tifffile = False
-
             # Create filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            if has_tifffile:
-                filename = f"stresstest_c{cycle:02d}_p{pos_idx:02d}_{timestamp}.tif"
-            else:
-                filename = f"stresstest_c{cycle:02d}_p{pos_idx:02d}_{timestamp}.txt"
+            filename = f"stresstest_c{cycle:02d}_p{pos_idx:02d}_{timestamp}." + \
+                ("tif" if _HAS_NUMPY else "txt")
             filepath = os.path.join(self.params.outputPath, filename)
 
             # Create metadata
@@ -833,8 +825,9 @@ class StresstestController(ImConWidgetController):
             }
 
             # Save image with metadata
-            if has_tifffile and _HAS_NUMPY:
-                tifffile.imwrite(filepath, image, metadata=metadata)
+            if _HAS_NUMPY:
+                save_image(filepath, image, pixel_size_um=self.params.pixelSizeUM or None,
+                           annotations=metadata)
             else:
                 # Save metadata only as JSON file if we can't save image
                 with open(filepath, 'w') as f:

@@ -7,7 +7,7 @@ import threading
 from datetime import datetime
 import tifffile as tif
 
-from imswitch.imcommon.model import dirtools, initLogger, APIExport, ostools
+from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.framework import Signal
 
@@ -90,11 +90,13 @@ class SIMController(ImConWidgetController):
 
         # load config file
         if self._setupInfo.sim is None:
-            self._widget.replaceWithError('SIM is not configured in your setup file.')
+            self._logger.info("SIM is not configured in this setup")
             return
 
-        # connect live update  https://github.com/napari/napari/issues/1110
-        self.sigImageReceived.connect(self.displayImage)
+        # Acquisition parameters (were text fields of the Qt widget)
+        self.simParameters = SIMParameters()
+        self.zStackParameters = (0.0, 0.0, -1)   # zMin, zMax, zStep; zStep < 0: no z moves
+        self.timelapseParameters = (0, 1)        # period s, frames
 
         # select lasers
         allLaserNames = self._master.lasersManager.getAllDeviceNames()
@@ -149,14 +151,6 @@ class SIMController(ImConWidgetController):
         if not self.isReconstruction:
             self.isActive = False
 
-    def openFolder(self):
-        """ Opens current folder in File Explorer. """
-        folder = self._widget.getRecFolder()
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-        ostools.openFolderInOS(folder)
-
-
     def initFastAPISIM(self, params):
         self.fastAPISIMParams = params
         self.IS_FASTAPISIM = True
@@ -189,35 +183,8 @@ class SIMController(ImConWidgetController):
         #self.imageComputationThread.quit()
         #self.imageComputationThread.wait()
 
-    def toggleSIMDisplay(self, enabled=True):
-        self._widget.setSIMDisplayVisible(enabled)
-
-    def monitorChanged(self, monitor):
-        self._widget.setSIMDisplayMonitor(monitor)
-
-    def patternIDChanged(self, patternID):
-        wl = self.getpatternWavelength()
-        if wl == 'Laser 488nm':
-            laserTag = 0
-        elif wl == 'Laser 635nm':
-            laserTag = 1
-        else:
-            laserTag = 0
-            self._logger.error("The laser wavelenth is not implemented")
-        self.simPatternByID(patternID,laserTag)
-
-    def getpatternWavelength(self):
-        return self._widget.laser_dropdown.currentText()
-
-    def displayMask(self, image):
-        self._widget.updateSIMDisplay(image)
-
     def setIlluPatternByID(self, iRot, iPhi):
         self.detector.setIlluPatternByID(iRot, iPhi)
-
-    def displayImage(self, im, name="SIM Reconstruction", pixelsize = None):
-        """ Displays the image in the view. """
-        self._widget.setImage(im, name=name, pixelsize=pixelsize)
 
     def saveParams(self):
         pass
@@ -250,15 +217,14 @@ class SIMController(ImConWidgetController):
 
         # start the background thread
         self.active = True
-        sim_parameters = self.getSIMParametersFromGUI()
-        #sim_parameters["reconstructionMethod"] = self.getReconstructionMethod()
-        #sim_parameters["useGPU"] = self.getIsUseGPU()
+        sim_parameters = self.simParameters
         self.simThread = threading.Thread(target=self.performSIMExperimentThread, args=(sim_parameters,), daemon=True)
         self.simThread.start()
 
     # for timelapse and zstack, check running is still needed also stop
-    @APIExport(runOnUIThread=True)
-    def startTimelapse(self):
+    @APIExport()
+    def startTimelapse(self, timePeriod: int = 60, nFrames: int = 1, zAntiDrift: float = 0):
+        """Run nFrames SIM acquisitions every timePeriod s; move Z by zAntiDrift µm after each."""
         if self.isPCO:
             self._commChannel.sigStopLiveAcquisition.emit(True)
             self.detector.setParameter("trigger_source","External start")
@@ -266,11 +232,8 @@ class SIMController(ImConWidgetController):
             self.detector.flushBuffers()
 
         self.active = True
-        sim_parameters = self.getSIMParametersFromGUI()
-
-        timePeriod = int(self._widget.period_textedit.text())
-        Nframes = int(self._widget.frames_textedit.text())
-        zAntiDrift = int(self._widget.correction_textedit.text())
+        sim_parameters = self.simParameters
+        Nframes = nFrames
         self.oldTime = time.time()-timePeriod # to start the timelapse immediately
         iiter = 0
         self.positioner.enalbeMotors(enable=True)
@@ -292,7 +255,7 @@ class SIMController(ImConWidgetController):
             self.detector.setParameter("buffer_size",-1)
         self.detector.flushBuffers()
 
-    def startZstack(self):
+    def startZstack(self, zMin: float, zMax: float, zStep: int):
 
         if self.isPCO:
             self._commChannel.sigStopLiveAcquisition.emit(True)
@@ -301,10 +264,7 @@ class SIMController(ImConWidgetController):
             self.detector.flushBuffers()
 
         self.active = True
-        sim_parameters = self.getSIMParametersFromGUI()
-        zMin = float(self._widget.zmin_textedit.text())
-        zMax = float(self._widget.zmax_textedit.text())
-        zStep = int(self._widget.nsteps_textedit.text())
+        sim_parameters = self.simParameters
         zDis = int((zMax - zMin) / zStep)
         self._master.detectorsManager
         #do Zstack in background
@@ -314,23 +274,9 @@ class SIMController(ImConWidgetController):
 
     def toggle488Laser(self):
         self.is488 = not self.is488
-        if self.is488:
-            self._widget.is488LaserButton.setText("488 on")
-        else:
-            self._widget.is488LaserButton.setText("488 off")
 
     def toggle635Laser(self):
         self.is635 = not self.is635
-        if self.is635:
-            self._widget.is635LaserButton.setText("635 on")
-        else:
-            self._widget.is635LaserButton.setText("635 off")
-
-    def updateDisplayImage(self, image):
-        image = np.fliplr(image.transpose())
-        self._widget.img.setImage(image, autoLevels=True, autoDownsample=False)
-        self._widget.updateSIMDisplay(image)
-        # self._logger.debug("Updated displayed image")
 
     #@APIExport(runOnUIThread=True)
     def simPatternByID(self, patternID: int, wavelengthID: int):
@@ -354,12 +300,12 @@ class SIMController(ImConWidgetController):
         dic_wl = [488, 635]
 
         # retreive Z-stack parameters
-        zStackParameters = self._widget.getZStackParameters()
+        zStackParameters = self.zStackParameters
         zMin, zMax, zStep = zStackParameters[0], zStackParameters[1], zStackParameters[2] # if zStep < 0, it will not move in z
         tDebounce = 0.1 # debounce time between z-steps
 
         # retreive timelapse parameters
-        timelapsedParameters = self._widget.getTimelapseParameters()
+        timelapsedParameters = self.timelapseParameters
         timePeriod, Nframes = timelapsedParameters[0], timelapsedParameters[1] # if NFrames < 0, it will run indefinitely
 
         # get current z-position
@@ -464,7 +410,7 @@ class SIMController(ImConWidgetController):
                             self._logger.error("No image received")
                             continue
 
-                    self.sigImageReceived.emit(np.array(self.SIMStack),"SIMStack"+str(processor.wavelength), np.float32(self._widget.pixelsize_textedit.text()))
+                    self.sigImageReceived.emit(np.array(self.SIMStack),"SIMStack"+str(processor.wavelength), np.float32(self.simParameters.pixelsize))
                     processor.setSIMStack(self.SIMStack)
                     processor.getWF(self.SIMStack)
 
@@ -589,7 +535,7 @@ class SIMController(ImConWidgetController):
                     continue
 
 
-            self.sigImageReceived.emit(np.array(self.SIMStack),"SIMStack"+str(processor.wavelength), np.float32(self._widget.pixelsize_textedit.text()))
+            self.sigImageReceived.emit(np.array(self.SIMStack),"SIMStack"+str(processor.wavelength), np.float32(self.simParameters.pixelsize))
             processor.setSIMStack(self.SIMStack)
 
 
@@ -648,38 +594,12 @@ class SIMController(ImConWidgetController):
             date = datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
             filename = f"{date}_SIM_Stack.tif"
         try:
-            self.folder = self._widget.getRecFolder()
-            self.filename = os.path.join(self.folder,filename) #FIXME: Remove hardcoded path
+            self.folder = self.simDir
+            self.filename = os.path.join(self.folder, filename)
             tif.imwrite(self.filename, image, dtype='uint16')
             self._logger.debug("Saving file: "+self.filename)
         except  Exception as e:
             self._logger.error(e)
-
-    def getSIMParametersFromGUI(self):
-        ''' retrieve parameters from the GUI '''
-        sim_parameters = SIMParameters()
-
-
-        # parse textedit fields
-        sim_parameters.pixelsize = np.float32(self._widget.pixelsize_textedit.text())
-        sim_parameters.NA = np.float32(self._widget.NA_textedit.text())
-        sim_parameters.n = np.float32(self._widget.n_textedit.text())
-        sim_parameters.alpha = np.float32(self._widget.alpha_textedit.text())
-        sim_parameters.beta = np.float32(self._widget.beta_textedit.text())
-        sim_parameters.eta = np.float32(self._widget.eta_textedit.text())
-        sim_parameters.wavelength_1 = np.float32(self._widget.wavelength1_textedit.text())
-        sim_parameters.wavelength_2 = np.float32(self._widget.wavelength2_textedit.text())
-        sim_parameters.magnification = np.float32(self._widget.magnification_textedit.text())
-        sim_parameters.path = self._widget.path_edit.text()
-        return sim_parameters
-
-
-    def getReconstructionMethod(self):
-        return self._widget.SIMReconstructorList.currentText()
-
-    def getIsUseGPU(self):
-        return self._widget.useGPUCheckbox.isChecked()
-
 
 class SIMParameters(object):
     wavelength_1 = 0.52

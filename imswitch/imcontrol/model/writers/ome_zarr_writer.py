@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import logging
 
+from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage
 from .base import WriterBase, SessionContext, DetectorContext, FrameEvent, WriterCapabilities
 from .registry import register_writer
 
@@ -57,6 +58,7 @@ class OMEZarrWriter(WriterBase):
         self.stores: Dict[str, str] = {}
         self.roots: Dict[str, zarr.Group] = {}
         self.arrays: Dict[str, zarr.Array] = {}
+        self.images: Dict[str, NgffImage] = {}
         
         # Frame counters
         self._frame_counters: Dict[str, int] = {}
@@ -105,36 +107,27 @@ class OMEZarrWriter(WriterBase):
             det_path = os.path.join(base_path, det_name)
             os.makedirs(det_path, exist_ok=True)
             
-            # Initialize store and root group
-            self.stores[det_name] = det_path
-            self.roots[det_name] = zarr.open_group(store=det_path, mode="w")
-            
-            # Determine array shape
+            # One NGFF image per detector (shared writer with Experiment/Aufgaben)
             n_t = self.session_ctx.n_time_points
             n_c = self.session_ctx.n_channels
             n_z = self.session_ctx.n_z_planes
             height, width = det_ctx.shape_px[1], det_ctx.shape_px[0]
-            
-            # Create array with proper chunking
-            chunks = (
-                min(1, n_t),  # Time
-                min(1, n_c),  # Channel
-                min(1, n_z),  # Z
-                min(self.chunk_size[3], height),  # Y
-                min(self.chunk_size[4], width),   # X
-            )
-            
-            self.arrays[det_name] = self.roots[det_name].create_array(
-                name="0",
-                shape=(n_t, n_c, n_z, height, width),
-                chunks=chunks,
-                dtype=det_ctx.dtype or self.dtype,
-                compressor=self.compressor,
-            )
-            
-            # Set OME-NGFF metadata
-            self._set_ome_ngff_metadata(det_name, det_ctx, n_t, n_c, n_z)
-            
+            name = det_ctx.channel_name or det_name
+            image = NgffImage.create(det_path, ImageSpec(
+                shape=(n_t, n_c, n_z, height, width), dtype=det_ctx.dtype or self.dtype,
+                pixel_size_um=det_ctx.pixel_size_um or 1.0,
+                z_step_um=self.session_ctx.z_step_um or 1.0,
+                t_step_s=self.session_ctx.time_interval_s or 1.0,
+                channel_names=[f"{name}_{i}" if n_c > 1 else name for i in range(n_c)],
+                channel_colors=[det_ctx.channel_color] * n_c if det_ctx.channel_color else [],
+                name=det_name,
+                chunks_yx=(min(self.chunk_size[3], height), min(self.chunk_size[4], width))))
+            image.group.attrs["detector_context"] = det_ctx.to_dict()
+            self.images[det_name] = image
+            self.stores[det_name] = det_path
+            self.roots[det_name] = image.group
+            self.arrays[det_name] = image.array
+
             # Initialize frame counter
             self._frame_counters[det_name] = 0
             
@@ -154,79 +147,6 @@ class OMEZarrWriter(WriterBase):
             logger.info(f"Opened OME-Zarr writer for {det_name}: {det_path}")
         
         self._is_open = True
-    
-    def _set_ome_ngff_metadata(self, det_name: str, det_ctx: DetectorContext,
-                                n_t: int, n_c: int, n_z: int):
-        """Set OME-NGFF v0.4 compliant metadata for a detector."""
-        root = self.roots[det_name]
-        
-        # Physical pixel sizes
-        pixel_size_xy = det_ctx.pixel_size_um
-        pixel_size_z = self.session_ctx.z_step_um or 1.0
-        time_interval = self.session_ctx.time_interval_s or 1.0
-        
-        # Set multiscales metadata
-        root.attrs["multiscales"] = [{
-            "version": "0.4",
-            "name": det_name,
-            "datasets": [
-                {
-                    "path": "0",
-                    "coordinateTransformations": [
-                        {"type": "scale", "scale": [time_interval, 1, pixel_size_z, pixel_size_xy, pixel_size_xy]},
-                    ]
-                }
-            ],
-            "axes": [
-                {"name": "t", "type": "time", "unit": "second"},
-                {"name": "c", "type": "channel"},
-                {"name": "z", "type": "space", "unit": "micrometer"},
-                {"name": "y", "type": "space", "unit": "micrometer"},
-                {"name": "x", "type": "space", "unit": "micrometer"},
-            ],
-            "coordinateTransformations": [
-                {"type": "scale", "scale": [time_interval, 1, pixel_size_z, pixel_size_xy, pixel_size_xy]}
-            ]
-        }]
-        
-        # Set omero metadata for channel visualization
-        channels = []
-        for i in range(n_c):
-            channel_name = det_ctx.channel_name or det_name
-            if n_c > 1:
-                channel_name = f"{channel_name}_{i}"
-            
-            channel_color = det_ctx.channel_color or "FFFFFF"
-            
-            channels.append({
-                "label": channel_name,
-                "color": channel_color,
-                "active": True,
-                "coefficient": 1.0,
-                "family": "linear",
-                "inverted": False,
-                "window": {
-                    "start": 0,
-                    "end": 65535 if det_ctx.dtype == 'uint16' else 255,
-                    "min": 0,
-                    "max": 65535 if det_ctx.dtype == 'uint16' else 255,
-                }
-            })
-        
-        root.attrs["omero"] = {
-            "id": 1,
-            "name": det_name,
-            "version": "0.4",
-            "channels": channels,
-            "rdefs": {
-                "defaultT": 0,
-                "defaultZ": n_z // 2,
-                "model": "color"
-            }
-        }
-        
-        # Store detector context as custom metadata
-        root.attrs["detector_context"] = det_ctx.to_dict()
     
     def write(self, 
               detector_name: str,
@@ -283,7 +203,7 @@ class OMEZarrWriter(WriterBase):
     
     def _writer_loop(self, detector_name: str):
         """Background thread for writing frames."""
-        array = self.arrays[detector_name]
+        image = self.images[detector_name]
         
         while not self.stop_events[detector_name].is_set():
             task = None
@@ -298,8 +218,7 @@ class OMEZarrWriter(WriterBase):
                     c_idx = task['c_idx']
                     z_idx = task['z_idx']
                     
-                    # Write to array
-                    array[t_idx, c_idx, z_idx, :, :] = frame
+                    image.write(frame, t_idx, c_idx, z_idx)
                     logger.debug(f"Wrote frame to {detector_name}[{t_idx},{c_idx},{z_idx}]")
                     
                 except Exception as e:
@@ -316,7 +235,7 @@ class OMEZarrWriter(WriterBase):
             
             try:
                 frame = task['frame']
-                array[task['t_idx'], task['c_idx'], task['z_idx'], :, :] = frame
+                image.write(frame, task['t_idx'], task['c_idx'], task['z_idx'])
             except:
                 break
     
@@ -332,8 +251,12 @@ class OMEZarrWriter(WriterBase):
         for det_name, thread in self.threads.items():
             thread.join(timeout=5.0)
         
-        # Update metadata with actual frame count
+        # Trim to what was recorded, build the pyramid, mark complete
         for det_name, root in self.roots.items():
+            try:
+                self.images[det_name].finalize()
+            except Exception as e:
+                logger.error(f"OME-Zarr finalize failed for {det_name}: {e}")
             root.attrs["acquisition_complete"] = True
             root.attrs["finalized_at"] = time.time()
         

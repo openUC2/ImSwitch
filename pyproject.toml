@@ -97,6 +97,9 @@ Lepmon = [
 ]
 dev = [
     "pytest",
+    # Validators for the OME-Zarr / OME-TIFF files the writers produce (tests only).
+    "ome-zarr-models>=1.0",
+    "ome-types>=0.5",
 ]
 omero = [
     "omero-py >= 5.6.0",

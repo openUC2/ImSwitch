@@ -21,12 +21,10 @@ from .RotatorsManager import RotatorsManager
 from .UC2ConfigManager import UC2ConfigManager
 from .SIMManager import SIMManager
 from .DPCManager import DPCManager
-from .TimelapseManager import TimelapseManager
 from .ExperimentManager import ExperimentManager
 from .ROIScanManager import ROIScanManager
 from .LightsheetManager import LightsheetManager
 from .WebRTCManager import WebRTCManager
-from .HistoScanManager import HistoScanManager
 from .StresstestManager import StresstestManager
 from .ObjectiveManager import ObjectiveManager
 from .WorkflowManager import WorkflowManager

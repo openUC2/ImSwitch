@@ -37,6 +37,7 @@ class PositionerController(ImConWidgetController):
         self.settingAttr = False
         self._hasHomedSinceStartup = False
         self._homingRecommendationDismissed = False
+        self._stepSizes = {}   # positioner -> µm, see setPositionerStepSize
 
         self.__logger = initLogger(self, tryInheritParent=True)
 
@@ -205,17 +206,13 @@ class PositionerController(ImConWidgetController):
         self._master.positionersManager[positionerName].setPosition(position, axis)
         self.updatePosition(positionerName, axis)
 
-    def moveAbsolute(self, positionerName, axis):
-        self.move(positionerName, axis, self._widget.getAbsPosition(positionerName, axis), isAbsolute=True,
-                  isBlocking=False)
+    DEFAULT_STEP_UM = 10.0
 
-    def stepUp(self, positionerName, axis):
-        self.move(positionerName, axis, self._widget.getStepSize(positionerName, axis), isAbsolute=False,
-                  isBlocking=False)
-
-    def stepDown(self, positionerName, axis):
-        self.move(positionerName, axis, -self._widget.getStepSize(positionerName, axis), isAbsolute=False,
-                  isBlocking=False)
+    def _step(self, positionerName, axis, sign):
+        if not positionerName or positionerName not in self._master.positionersManager:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        step = self._stepSizes.get(positionerName, self.DEFAULT_STEP_UM)
+        self.move(positionerName, axis, sign * step, isAbsolute=False, isBlocking=False)
 
     def setSpeed(self, positionerName, axis, speed=(1000, 1000, 1000)):
         if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
@@ -345,8 +342,8 @@ class PositionerController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def setPositionerStepSize(self, positionerName: str, stepSize: float) -> None:
-        """ Sets the step size of the specified positioner to the specified
-        number of micrometers. """
+        """Step size in µm used by stepPositionerUp/Down for this positioner."""
+        self._stepSizes[positionerName] = float(stepSize)
 
     @APIExport(runOnUIThread=True)
     def movePositioner(self, positionerName: Optional[str]=None, axis: Optional[str]="X", dist: Optional[float] = None, isAbsolute: bool = False, isBlocking: bool=False, speed: float=None) -> None:
@@ -463,14 +460,14 @@ class PositionerController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def stepPositionerUp(self, positionerName: str, axis: str) -> None:
         """ Moves the specified positioner axis in positive direction by its
-        set step size. """
-        self.stepUp(positionerName, axis)
+        set step size (setPositionerStepSize, default 10 µm). """
+        self._step(positionerName, axis, +1)
 
     @APIExport(runOnUIThread=True)
     def stepPositionerDown(self, positionerName: str, axis: str) -> None:
         """ Moves the specified positioner axis in negative direction by its
-        set step size. """
-        self.stepDown(positionerName, axis)
+        set step size (setPositionerStepSize, default 10 µm). """
+        self._step(positionerName, axis, -1)
 
     @APIExport(runOnUIThread=True)
     def resetStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):

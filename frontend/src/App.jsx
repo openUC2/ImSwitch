@@ -27,11 +27,9 @@ import LiveView from "./components/LiveView.js";
 import MazeGameController from "./components/MazeGameController.js";
 import MotorSettingsController from "./components/MotorSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
-import LargeFovScanController from "./components/OpenLayers.js";
 import SocketView from "./components/SocketView.js";
 import MMCoreController from "./components/MMCoreController.jsx";
 
-import TimelapseController from "./components/TimelapseController.js";
 import STORMControllerArkitekt from "./components/STORMControllerArkitekt.js";
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
 import STORMControllerLocal from "./components/STORMControllerLocal.js";
@@ -805,9 +803,6 @@ function App() {
               {selectedPlugin === "GoniometerController" && (
                 <GoniometerController />
               )}
-              {selectedPlugin === "Infinity Scanning" && (
-                <LargeFovScanController />
-              )}
               {selectedPlugin === "Objective" && <ObjectiveController />}
               {selectedPlugin === "About" && <AboutPage />}
               {selectedPlugin === "SystemSettings" && <SystemSettings />}
@@ -864,7 +859,6 @@ function App() {
                 <AppManagerPage onNavigateToApp={handlePluginChange} />
               )}
               {selectedPlugin === "LightSheet" && <LightsheetController />}
-              {selectedPlugin === "Timelapse" && <TimelapseController />}
               {selectedPlugin === "MMCore" && <MMCoreController />}
 
               {selectedPlugin === "WiFi" && <WiFiController />}

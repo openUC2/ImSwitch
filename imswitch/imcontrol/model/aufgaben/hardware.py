@@ -14,7 +14,7 @@ capability is missing.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Mapping, Optional, Protocol, Set
+from typing import Any, Dict, List, Literal, Mapping, Optional, Protocol, Set, Tuple
 
 import numpy as np
 
@@ -53,12 +53,14 @@ class Microscope(Protocol):
         """One frame taken after the call (never a stale buffer frame)."""
         ...
     def pixel_size_um(self, detector: Optional[str] = None) -> float: ...
+    def fov_um(self, detector: Optional[str] = None) -> Tuple[float, float]:
+        """Field of view (width, height) of the detector at the current objective."""
+        ...
 
     # -- focus and objective -------------------------------------------------
-    def autofocus(self, mode: str, range_um: float, step_um: float,
-                  channel: Optional[str], algorithm: str, settle_s: float,
-                  max_attempts: int) -> Optional[float]:
-        """Focus at the current XY; returns the focused Z in µm or None if it failed."""
+    def autofocus(self, mode: str, range_um: float, step_um: float, algorithm: str,
+                  settle_s: float, max_attempts: int) -> Optional[float]:
+        """Focus at the current XY with the light as it is; returns Z in µm or None."""
         ...
     def set_objective(self, slot: int) -> None: ...
 

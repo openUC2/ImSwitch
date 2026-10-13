@@ -134,7 +134,7 @@ def set_camera(exposure_ms: Optional[Annotated[float, Gt(0)]] = None,
       flags=TaskFlags(moves_z=True, emits_light=True, needs=("autofocus",)))
 def autofocus(mode: Literal["software", "hardware"] = "software",
               range_um: Annotated[float, Gt(0)] = 50.0, step_um: Annotated[float, Gt(0)] = 5.0,
-              channel: Optional[str] = None,
+              channel: Optional[str] = None, intensity: Optional[float] = None,
               algorithm: Literal["LAPE", "GLVA", "JPEG"] = "LAPE",
               settle_s: float = 0.1, max_attempts: Annotated[int, Gt(0)] = 2,
               *, hw: Microscope, ctx: TaskContext) -> Optional[float]:
@@ -146,12 +146,20 @@ def autofocus(mode: Literal["software", "hardware"] = "software",
         mode: software sweeps Z and scores images; hardware uses the focus lock.
         range_um: Half range around the current Z (software mode).
         step_um: Z step (software mode).
-        channel: Light used while focusing; empty keeps the current light.
+        channel: Light switched on while focusing, and off afterwards; empty keeps the
+            light as it is.
+        intensity: Intensity of that light; empty keeps its current value.
         algorithm: Focus metric (software mode).
         settle_s: Wait after each Z step.
         max_attempts: Attempts before giving up.
     """
-    z = hw.autofocus(mode, range_um, step_um, channel, algorithm, settle_s, max_attempts)
+    if channel:
+        hw.set_illumination(channel, intensity=intensity, on=True)
+    try:
+        z = hw.autofocus(mode, range_um, step_um, algorithm, settle_s, max_attempts)
+    finally:
+        if channel:
+            hw.set_illumination(channel, on=False)
     ctx.log(f"autofocus: z = {z} µm" if z is not None else "autofocus failed")
     return z
 

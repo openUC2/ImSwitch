@@ -127,8 +127,7 @@ setupInfoBasic = ViewSetupInfo.from_json("""
     "Laser",
     "Positioner",
     "Autofocus",
-    "ROIScan",
-    "HistoScan"
+    "ROIScan"
   ],
   "nonAvailableWidgets":[
     "FocusLock",
@@ -136,7 +135,6 @@ setupInfoBasic = ViewSetupInfo.from_json("""
     "DPC",
     "FOVLock",
     "Temperature",
-    "HistoScan",
     "PixelCalibration",
     "Lightsheet",
     "WebRTC",
@@ -267,13 +265,11 @@ setupInfoWithoutWidgets = ViewSetupInfo.from_json("""
     "Positioner",
     "Autofocus",
     "ROIScan",
-    "HistoScan",
     "ImSwitchServer",
     "Lightsheet",
     "Workflow",
     "Lepmon",
     "Experiment",
-    "Timelapse",
     "UC2Config",
     "Objective"
   ],
@@ -287,7 +283,6 @@ setupInfoWithoutWidgets = ViewSetupInfo.from_json("""
     "DPC",
     "FOVLock",
     "Temperature",
-    "HistoScan",
     "PixelCalibration",
     "WebRTC",
     "Flatfield",

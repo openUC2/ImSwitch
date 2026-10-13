@@ -12,6 +12,7 @@ from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, Workflow
 from imswitch.imcontrol.model.managers.MDASequenceManager import MDASequenceManager
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
+from ..busy import busy_reasons
 
 from imswitch.imcontrol.model.io.frame_save_worker import FrameSaveWorker
 from imswitch.imcontrol.controller.controllers.experiment_controller import ExperimentPerformanceMode, ExperimentNormalMode, ExecutionContext, Experiment, ParameterValue
@@ -169,6 +170,9 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
             raise HTTPException(
                 status_code=400, detail="An experiment is already being started."
             )
+        others = busy_reasons(self._master, self._logger, ignore=("Experiment",))
+        if others:
+            raise HTTPException(status_code=409, detail=f"Refused: {', '.join(others)}.")
         self._experiment_starting = True
         try:
             return self._start_wellplate_experiment(mExperiment)

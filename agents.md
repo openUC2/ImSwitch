@@ -334,6 +334,9 @@ Backends live in `model/managers/detectors/`: `HikCamManager`, `ToupCamManager`,
 - `getLaserActive` / `setLaserActive(laserName, active)`
 - `setLaserChannelIndex` / `getLaserChannelIndex`
 
+`LEDController` covers the simple `LEDs` block: `getLEDNames`, `getLEDValueRange(ledName)`,
+`setLEDValue(ledName, value)`, `setLEDActive(ledName, active)`.
+
 `LEDMatrixController` drives the UC2 8×8 RGB matrix:
 
 - `setAllLEDOn` / `setAllLEDOff` / `setAllLED(state, intensity, intensity_r/g/b)`
@@ -465,7 +468,21 @@ Overview / slide registration and stitching:
 OMERO export: `getOMEROConfig` / `setOMEROConfig` / `isOMEROEnabled` /
 `getOMEROConnectionParams` / `getOMEWriterConfig`.
 
-### 4.9 Workflows and tiling — `WorkflowController`, `StageMapController`, `TilingController`
+### 4.9 Jobs, workflows and stage maps — `AufgabenController`, `WorkflowController`, `StageMapController`
+
+`AufgabenController` — composable acquisition jobs (loops, conditions, variables, capture,
+autofocus, digital I/O, temperature; plan and format in `docs/AUFGABEN_ROADMAP.md`). Output is
+standard OME-Zarr (NGFF 0.4) and OME-TIFF in `<data>/Aufgaben/<timestamp>_<job>/`:
+
+- `getAufgabenCatalog()` — control nodes and tasks this setup supports, with JSON schemas
+- `validateAufgabenJob(job)` (POST) — errors, warnings, ask-first steps, motion/light summary
+- `startAufgabenJob(request{job, parameters, confirmed})` (POST) — refused while anything else
+  drives the microscope; homing/objective steps need `confirmed`. **Ask first** on hardware.
+- `getAufgabenStatus()`, `pauseAufgabenJob`, `resumeAufgabenJob`, `finishAufgabenJob`,
+  `abortAufgabenJob(force)`, `answerAufgabenQuestion(answer)`
+- `listAufgabenJobs`, `getAufgabenJob(name)`, `saveAufgabenJob(job)` (POST),
+  `deleteAufgabenJob(name)`, `listAufgabenRuns(limit)`, `getAufgabenJobSchema()`
+- `importAufgabenUseq(sequence)` / `exportAufgabenUseq(job)` (POST) — useq-schema bridge
 
 `WorkflowController` — generic step-based execution engine:
 
@@ -576,18 +593,16 @@ Present only when the setup enables them. Discover with `getAvailableControllers
 | `SIMController` | Structured illumination microscopy |
 | `STORMReconController` | Single-molecule localisation / STORM |
 | `DPCController` | Differential phase contrast (LED-matrix halves) |
-| `InLineHoloController`, `OffAxisHoloController`, `HoloController`, `HoliSheetController` | Digital holography |
+| `InLineHoloController`, `OffAxisHoloController`, `HoloController` | Digital holography |
 | `LightsheetController` | Light-sheet scanning |
 | `GalvoScannerController` | Galvo scanning, incl. FLIM Labs bridge |
 | `FLIMLabsController` | FLIM acquisition |
-| `ISMController` | Image scanning microscopy |
 | `FlowStopController` | Flow-cell / imaging-flow-cytometry |
 | `PixelCalibrationController`, `StageCenterCalibrationController` | Pixel size and stage/camera affine calibration |
 | `ReadNoiseCalibrationController` | Camera noise characterisation |
-| `TimelapseController`, `RotationScanController`, `ROIScanController`, `TriggerAcquisitionController` | Acquisition patterns |
+| `TriggerAcquisitionController` | Hardware/software trigger acquisition |
 | `MMCoreController` | Micro-Manager device layer |
-| `WellPlateController` (`moveToXY(wellID)`), `SquidStageScanController`, `StageScanAcquisitionController` | Plate/stage scanning |
-| `ArkitektController`, `SiLa2Controller`, `WebRTCController` | External integrations |
+| `ArkitektController`, `SiLa2Controller` | External integrations |
 
 `ArkitektController` (`docs/ARKITEKT.md`): `getArkitektStatus`, `bindArkitekt(url)` (device-code
 login, returns at once), `cancelArkitekt`, `unbindArkitekt` (forgets the stored login),

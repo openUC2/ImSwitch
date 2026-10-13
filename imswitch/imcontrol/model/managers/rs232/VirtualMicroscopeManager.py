@@ -733,6 +733,9 @@ class Camera:
         self._cached_intensity = 1.0
         self._cached_psf = None
         self.binning = False  # For objective binning support
+        # Camera settings the manager writes; exposure scales brightness
+        # relative to the 1 ms default of VirtualCameraManager.
+        self.properties = {"exposure": 1.0, "gain": 0.0}
 
     def startAcquisition(self):
         """Start the continuous frame production thread"""
@@ -821,10 +824,11 @@ class Camera:
             # do all post-processing on cropped image
             if IS_NIP and defocusPSF is not None and not defocusPSF.shape == ():
                 image = np.array(np.real(nip.convolve(image, defocusPSF)))
-            image = np.float32(image) * np.float32(light_intensity)
+            exposure = max(float(self.properties.get("exposure") or 1.0), 0.0)
+            image = np.float32(image) * np.float32(light_intensity) * np.float32(exposure)
             image += self.noiseStack[:, :, np.random.randint(0, 100)]
-            # Adjust illumination
-            frame = image.astype(np.uint16)
+            # Saturate like a sensor instead of wrapping around
+            frame = np.clip(image, 0, 65535).astype(np.uint16)
             # Removed sleep here - controlled in producer loop
 
         # Apply flip if needed (zero-CPU operation using numpy)
@@ -944,7 +948,11 @@ class Camera:
         return np.expand_dims(mFrame, axis=0), [self.frameNumber]
 
     def setPropertyValue(self, propertyName, propertyValue):
-        pass
+        self.properties[propertyName] = propertyValue
+        return propertyValue
+
+    def getPropertyValue(self, propertyName):
+        return self.properties.get(propertyName)
 
 
 @njit(parallel=True)

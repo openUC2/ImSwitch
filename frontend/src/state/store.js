@@ -20,7 +20,6 @@ import objectiveReducer from "./slices/ObjectiveSlice";
 import LEDMatrixReducer from "./slices/LEDMatrixSlice";
 import experimentStateReducer from "./slices/ExperimentStateSlice";
 import liveViewReducer from "./slices/LiveViewSlice";
-import histoScanReducer from "./slices/HistoScanSlice";
 import widgetReducer from "./slices/WidgetSlice";
 import lepmonReducer from "./slices/LepmonSlice";
 import uc2Reducer from "./slices/UC2Slice";
@@ -160,7 +159,6 @@ const rootReducer = combineReducers({
   LEDMatrixState: LEDMatrixReducer,
   experimentWorkflowState: experimentStateReducer,
   liveViewState: persistReducer(liveViewPersistConfig, liveViewReducer), // Nested persist
-  histoScanState: histoScanReducer,
   widgetState: widgetReducer,
   lepmon: lepmonReducer,
   uc2State: uc2Reducer,

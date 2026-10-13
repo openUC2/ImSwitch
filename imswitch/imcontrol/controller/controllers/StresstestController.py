@@ -192,7 +192,7 @@ class StresstestController(ImConWidgetController):
     This controller periodically moves to different random locations within a 
     specified range, takes images, and quantifies variation in position over time.
     It combines stage motion, camera acquisition, and illumination control
-    similar to HistoScanController.
+    like the other scan controllers.
     """
 
     sigStresttestUpdate = Signal()

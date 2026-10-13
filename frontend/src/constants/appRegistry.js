@@ -3,7 +3,6 @@
 // Each app has metadata for display, categorization, and management
 
 import {
-  AccessTime as AccessTimeIcon,
   AutoFixHigh as AutoFixHighIcon,
   Cable as CableIcon,
   Dashboard as DashboardIcon,
@@ -282,26 +281,6 @@ export const APP_REGISTRY = {
     pluginId: "FRAMESettings",
   },
 
-  infinityScanning: {
-    id: "infinityScanning",
-    name: "Infinity Scanning",
-    description:
-      "Large field-of-view scanning microscopy with OpenLayers integration. Create stitched panoramic images from multiple high-resolution tiles.",
-    category: APP_CATEGORIES.APPS,
-    icon: CropFreeIcon,
-    enabled: false,
-    essential: false,
-    keywords: [
-      "infinity",
-      "scanning",
-      "largefov",
-      "panoramic",
-      "stitching",
-      "openlayers",
-    ],
-    pluginId: "Infinity Scanning",
-  },
-
   lightsheet: {
     id: "lightsheet",
     name: "LightSheet",
@@ -313,20 +292,6 @@ export const APP_REGISTRY = {
     essential: false,
     keywords: ["lightsheet", "3d", "volume", "phototoxicity", "large"],
     pluginId: "LightSheet",
-  },
-
-  timelapse: {
-    id: "timelapse",
-    name: "Timelapse",
-    description:
-      "Time-lapse microscopy with automated image acquisition. Schedule multi-position experiments over time.",
-    category: APP_CATEGORIES.APPS,
-    icon: AccessTimeIcon,
-    enabled: false,
-    essential: false,
-    keywords: ["timelapse", "time", "automated", "acquisition", "scheduling"],
-    pluginId: "Timelapse",
-    requiredControllers: ["TimelapseController"],
   },
 
   flowStop: {

@@ -21,7 +21,6 @@ from imswitch.imcontrol.model import (
     WebRTCManager,
     UC2ConfigManager,
     AutofocusManager,
-    HistoScanManager,
     StresstestManager,
     PixelCalibrationManager,
     LightsheetManager,
@@ -31,7 +30,6 @@ from imswitch.imcontrol.model import (
     LEDsManager,
     FlowStopManager,
     WorkflowManager,
-    TimelapseManager,
     LepmonManager,
     ExperimentManager,
     ObjectiveManager,
@@ -144,14 +142,10 @@ class MasterController:
             self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
         if "WebRTC" in self.__setupInfo.availableWidgets:
             self.webrtcManager = WebRTCManager(self.__setupInfo.webrtc)
-        if "Timelapse" in self.__setupInfo.availableWidgets:
-            self.timelapseManager = TimelapseManager()
         if "Experiment" in self.__setupInfo.availableWidgets:
             self.experimentManager = ExperimentManager(self.__setupInfo.experiment)
         if "Objective" in self.__setupInfo.availableWidgets:
             self.objectiveManager = ObjectiveManager(self.__setupInfo.objective, setupInfo=self.__setupInfo)
-        if "HistoScan" in self.__setupInfo.availableWidgets:
-            self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
         if "Stresstest" in self.__setupInfo.availableWidgets:
             self.StresstestManager = StresstestManager(self.__setupInfo.Stresstest)
         if "FlowStop" in self.__setupInfo.availableWidgets:

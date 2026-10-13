@@ -40,7 +40,7 @@ This is the mechanism behind the observation that *"some options are visible bas
 
 ```json
 "availableWidgets": ["Settings", "View", "Recording", "Image", "Laser",
-                      "Positioner", "Autofocus", "Objective", "HistoScan", "..."]
+                      "Positioner", "Autofocus", "Objective", "..."]
 ```
 
 It can also be the boolean `true` (enable everything) or `false` (enable nothing) —
@@ -95,7 +95,7 @@ Separately, `imswitch/imcontrol/controller/MasterController.py:123-190` re-check
 object for ~20 subsystems:
 
 `SLM`, `SIM`, `DPC`, `NIDAQ`, `ROIScan`, `Lightsheet`, `WebRTC`,
-`Timelapse`, `Experiment`, `Objective`, `HistoScan`, `Stresstest`, `FlowStop`,
+`Experiment`, `Objective`, `Stresstest`, `FlowStop`,
 `Lepmon`, `AutoFocus`, `FOV`, `Workflow`, `Arkitekt`, `SiLa2`.
 
 ```python
@@ -166,7 +166,7 @@ never surfaces).
 `availableWidgets` key matters, nothing about the section body does.**
 `WorkflowManager()` is called with **no arguments at all**
 (`MasterController.py:175-176`) — `WorkflowInfo`'s fields are never read anywhere
-in the codebase. `ROIScanManager`, `HistoScanManager` likewise
+in the codebase. `ROIScanManager` likewise
 ignore their info argument's content. Same applies to `Stresstest`, `FlowStop`,
 `Lepmon`, `WebRTC`. For all of these, writing a detailed section body is
 cosmetic — the *only* thing that does anything is whether the widget key string is
@@ -222,7 +222,6 @@ The apps that actually declare `requiredControllers` today
 |--------------------------|-------------------------------------------------|
 | `mmCore`                 | `MMCoreController`                              |
 | `stageMap`                | `StageMapController`                            |
-| `timelapse`               | `TimelapseController`                           |
 | `dpcController`            | `LEDMatrixController`, `DPCController`          |
 | `objective`               | `ObjectiveController`                           |
 | `extendedLEDMatrix`        | `LEDMatrixController`                           |
@@ -247,9 +246,7 @@ to the remaining `appRegistry.js` items (see § 7, Step 3).
 mechanism and call the underlying selector directly with a hard-coded controller
 name: `frontend/src/components/FRAMESettingsController.js:44-93` conditionally
 renders an "Objective" tab via `useSelector(selectHasController("ObjectiveController"))`,
-and `frontend/src/components/TimelapseController.js:20-21,176-183` filters an
-illumination-source dropdown via `selectHasController("LEDMatrixController")` —
-neither goes through `appRegistry.js` at all. So "add the app to `appRegistry.js`
+which does not go through `appRegistry.js` at all. So "add the app to `appRegistry.js`
 with `requiredControllers`" closes the nav-drawer/App-Manager gap (§7, Step 3), but
 a handful of in-widget checks like these are a separate, one-off pattern to be
 aware of if auditing gating exhaustively.
@@ -276,11 +273,11 @@ misleading whoever edits them next.
 | Mechanism | Where | Governs | Coverage |
 |---|---|---|---|
 | `availableWidgets` list | `ImConMainViewNoQt` (view) | Whether a controller/widget is attempted at all | All widget keys — the actual master switch |
-| `availableWidgets` re-check | `MasterController` | Whether ~20 named managers are constructed | SLM/SIM/DPC/NIDAQ/ROIScan/Lightsheet/WebRTC/Timelapse/Experiment/Objective/HistoScan/Stresstest/FlowStop/Lepmon/AutoFocus/FOV/Workflow/Arkitekt/SiLa2 |
+| `availableWidgets` re-check | `MasterController` | Whether ~20 named managers are constructed | SLM/SIM/DPC/NIDAQ/ROIScan/Lightsheet/WebRTC/Experiment/Objective/Stresstest/FlowStop/Lepmon/AutoFocus/FOV/Workflow/Arkitekt/SiLa2 |
 | Non-empty device dict | `MasterController` | Whether a device manager has anything to control | detectors/lasers/LEDs/LEDMatrixs/positioners/galvoScanners/rotators/rs232devices (managers always exist) |
 | Section-content check inside a controller's `__init__` | Individual controllers (§2.3) | Whether that *one* controller hard-fails (bucket a), soft-degrades (bucket b), or doesn't care (bucket c) | Inconsistent per feature — see §2.3 and the per-field table in §3.1 |
 | `requiredControllers` in `appRegistry.js` | Frontend (nav drawer + App Manager) | Whether the app is filtered out of the list entirely | Only 6 of ~35 apps today |
-| One-off `selectHasController(...)` calls | A handful of individual components | Whether one tab/dropdown-option within an otherwise-visible widget is shown | `FRAMESettingsController.js`, `TimelapseController.js` only, bypassing `appRegistry.js` |
+| One-off `selectHasController(...)` calls | A handful of individual components | Whether one tab/dropdown-option within an otherwise-visible widget is shown | `FRAMESettingsController.js` only, bypassing `appRegistry.js` |
 | `nonAvailableWidgets` | (nowhere) | Nothing | Dead key |
 
 ---
@@ -317,7 +314,6 @@ before trusting this column**, since "gates" here means "the key must be in
 | `mockxx` | `MockXXInfo?` | `null` | — | Bucket (d): fully dead, referenced nowhere. | Marker-only class; not in `MasterController`'s gate list. |
 | `jetsonnano` | `JetsonNanoInfo?` | `null` | — | Bucket (d): fully dead. | Marker-only class; not gated. |
 | `Stresstest` | `StresstestInfo?` | `null` | `Stresstest` | Bucket (c): content-agnostic manager. `appRegistry.js` has a `stresstest` entry but no `requiredControllers`. | Marker-only class. |
-| `HistoScan` | `HistoScanInfo?` | `null` | `HistoScan` | Bucket (c): `HistoScanManager` ignores content (just manages a cache file). No `appRegistry.js` entry. | ⚠ `PreviewCamera` typed `str` but used as `null` — see §5. |
 | `Workflow` | `WorkflowInfo?` | `null` | `Workflow` | Bucket (c), extreme case: `WorkflowManager()` is called with **no arguments at all** — `WorkflowInfo`'s fields are never read anywhere. | Marker-only in practice. |
 | `FlowStop` | `FlowStopInfo?` | `null` | `FlowStop` | Bucket (c): content-agnostic manager. `appRegistry.js` has a `flowStop` entry but no `requiredControllers`. | Marker-only class. |
 | `Lepmon` | `LepmonInfo?` | `null` | `Lepmon` | Bucket (c): content-agnostic manager. `appRegistry.js` has a `lepmon` entry but no `requiredControllers`. | Marker-only class. |
@@ -429,8 +425,6 @@ Grouped by theme; field lists are exhaustive per the dataclass, required fields
 - `NidaqInfo`: `timerCounterChannel`, `startTrigger`.
 - `PulseStreamerInfo`: `ipAddress`.
 - `StorageInfo`: `activeDataPath` (runtime-set, not normally hand-authored).
-- `HistoScanInfo`: `PreviewCamera` (detector name to use as HistoScan preview —
-  ⚠ typed `str`, used as `null`, see §5).
 - `MMCoreSettingsInfo`: `savedProperties` (runtime-persisted, not hand-authored).
 
 ---
@@ -494,7 +488,6 @@ config to match the dataclass (or vice versa) without knowing why it diverged.
 | File(s) | Section | Problem |
 |---|---|---|
 | `FRAME.json`, `example_uc2.json`, `example_histo_daheng.json` | `focusLock` | `FocusLockInfo` declares `piKp`, `piKi`, `focusLockMetric`, `laserName`, `laserValue` as **required** (no default), but these real configs omit all five. Either the dataclass grew required fields after these configs were written, or `dataclasses_json` is more lenient than a strict dataclass constructor about missing required fields — worth confirming which, since it affects whether *any* config is safe to omit them. |
-| `FRAME2b.json`, `FRAME2b_tucsen.json`, `example_toupcam.json`, `example_tucsen.json`, `example_tucsen_lumencor.json` | `HistoScan` | `HistoScanInfo.PreviewCamera` is typed `str` (not `Optional[str]`) but every one of these configs sets it to `null`. The dataclass annotation should almost certainly be `Optional[str] = None`. |
 | `example_histo_daheng.json`, `example_uc2.json`, `example_uc2_lightsheethik.json` | `dpc` | `wavelength` is typed `int` in `DPCInfo` but these configs pass `0.53` — clearly not a wavelength in nm, more likely a coherence/NA-style ratio. The field's type and docstring (copy-pasted from `SLMInfo`) both look wrong for how `dpc.wavelength` is actually used. |
 | `example_raspberry_pi_camera.json` | `dpc` | Uses `pixelSize` (capital S) where `DPCInfo` declares `pixelsize` (lowercase), and adds an extra `NA_illu` key not in the dataclass at all, while omitting the required `magnefication`. This file's `dpc` section looks like it was written against a different/older shape of `DPCInfo`. |
 | `example_raspberry_pi_camera.json` | `scan` | Value is `{"scanDesigner": {"scanModes": []}}` — `scanDesigner` here is a **nested object**, but `ScanInfo.scanDesigner` is a `str` (a class name to look up), and none of `ScanInfo`'s five other required fields are present. This section does not correspond to `ScanInfo` at all; either it predates the current `ScanInfo` shape or something else reads it directly. |
@@ -504,7 +497,7 @@ config to match the dataclass (or vice versa) without knowing why it diverged.
 | `SetupInfo.py` itself (not a specific config file) | `nidaq` | The `nidaq: NidaqInfo` field is declared **twice** in the dataclass body (`SetupInfo.py:825` and `:916`, identical type/default). Harmless today — the second definition simply wins — but it's a real duplicate worth removing so the field only exists once. |
 
 **Root-cause pattern across most of these:** several dataclasses (`FocusLockInfo`,
-`FOVLockInfo`, `HistoScanInfo`) declare fields as required-and-typed when real
+`FOVLockInfo`) declare fields as required-and-typed when real
 usage clearly needs them to be optional/nullable. This is worth a small, low-risk
 cleanup pass (loosen the type hints to match reality) independent of anything else
 in this document — it would make the generated schema authoritative instead of

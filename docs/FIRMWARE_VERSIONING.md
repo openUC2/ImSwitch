@@ -140,7 +140,7 @@ and selects it.
 ### What `startFirmwareUpdate` does
 
 1. **Refuses** with the reasons, and nothing starts, when:
-   - an experiment, recording, workflow or timelapse runs;
+   - an experiment, recording, workflow or Aufgaben job runs;
    - a stage is moving or frame-homing (`/motor_get isbusy`), or the objective turret moves;
    - another CAN OTA or USB flash runs;
    - the firmware server is not reachable;

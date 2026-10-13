@@ -10,7 +10,8 @@ Namespace at run time (all plain data):
 - ``param.<name>``   job parameters
 - ``var.<name>``     job variables; a bare ``name`` also resolves to a variable
 - ``loop.<id>``      ``index``, ``count`` and ``item`` of an enclosing loop
-- ``result.<id>``    what a node returned (e.g. ``result.af.z_um``)
+- ``result.<id>``    what a node last returned (e.g. ``result.af``); a node skipped by
+                     ``every`` or ``enabled`` keeps its previous result
 - ``device.<...>``   readings the host exposes (position, temperature, inputs)
 - ``job``            ``name``, ``run_id``, ``elapsed_s``
 """

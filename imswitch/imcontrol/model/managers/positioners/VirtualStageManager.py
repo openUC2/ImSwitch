@@ -39,15 +39,20 @@ class VirtualStageManager(PositionerManager):
 
         # get bootup position and write to GUI
         self._position = self.getPosition()
+        self._speed = None   # µm/s set by setSpeed; None: DEFAULT_SPEED_UM_S
 
     @property
     def combinedAxes(self):
         """The simulated stage applies X/Y (and X/Y/Z) in one step."""
         return ["XY", "XYZ"]
 
+    DEFAULT_SPEED_UM_S = 15000.0
+    MAX_MOVE_TIME_S = 10.0
+
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=1):
         # For absolute moves the caller passes user coordinates; the simulated
         # device sees user + offset (same convention as ESP32StageManager).
+        before = dict(self._positioner.position)
         ox = self.stageOffsetPositions.get("X", 0)
         oy = self.stageOffsetPositions.get("Y", 0)
         oz = self.stageOffsetPositions.get("Z", 0)
@@ -79,8 +84,19 @@ class VirtualStageManager(PositionerManager):
             )
         for axes in ["A","X","Y","Z"]:
             self._position[axes] = self._positioner.position[axes]
+        if is_blocking:   # a blocking move takes as long as the real stage would
+            self._wait_for_travel(before, speed)
 
         self.getPosition() # update position in GUI
+
+    def _wait_for_travel(self, before, speed):
+        steps = {"X": self.stepsizeX, "Y": self.stepsizeY, "Z": self.stepsizeZ, "A": self.stepsizeA}
+        distance = max(abs(self._positioner.position[a] - before[a]) / (abs(steps[a]) or 1)
+                       for a in steps)
+        if isinstance(speed, (tuple, list)):
+            speed = max(speed)
+        speed = float(speed or self._speed or self.DEFAULT_SPEED_UM_S)
+        time.sleep(min(self.MAX_MOVE_TIME_S, distance / max(speed, 1.0)))
 
     def getDevicePositionAxis(self, axis="X"):
         """Raw device position for one axis on the virtual stage."""
@@ -111,7 +127,7 @@ class VirtualStageManager(PositionerManager):
         pass
 
     def setSpeed(self, speed, axis=None):
-        pass
+        self._speed = max(speed) if isinstance(speed, (tuple, list)) else speed
 
     def setPosition(self, value, axis):
         pass

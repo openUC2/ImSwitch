@@ -170,12 +170,10 @@
     "STORMRecon",
     "LEDMatrix",
     "Joystick",    
-    "HistoScan", 
     "ROIScan",
     "MCT",
     "ImSwitchServer",
     "PixelCalibration",
     "FocusLock",
-    "HistoScan", 
     "FocusLock"]
 }

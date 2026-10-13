@@ -133,6 +133,7 @@ class AutofocusResource(_Model):
     range_um: float = Field(50.0, gt=0)
     step_um: float = Field(5.0, gt=0)
     channel: Optional[str] = Field(None, description="Illumination source used while focusing")
+    intensity: Optional[float] = Field(None, description="Its intensity; None keeps the value")
     algorithm: str = "LAPE"
     settle_s: float = Field(0.1, ge=0)
     max_attempts: int = Field(2, ge=1)

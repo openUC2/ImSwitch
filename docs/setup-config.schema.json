@@ -191,17 +191,6 @@
       ],
       "description": "Stresstest settings. Required to be defined to use Stresstest functionality."
     },
-    "HistoScan": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/HistoScanInfo"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "HistoScan settings. Required to be defined to use HistoScan functionality."
-    },
     "Workflow": {
       "anyOf": [
         {
@@ -1088,14 +1077,6 @@
     "JetsonNanoInfo": {
       "type": "object",
       "properties": {}
-    },
-    "HistoScanInfo": {
-      "type": "object",
-      "properties": {
-        "PreviewCamera": {
-          "type": "string"
-        }
-      }
     },
     "StresstestInfo": {
       "type": "object",

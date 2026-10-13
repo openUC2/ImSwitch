@@ -234,19 +234,6 @@ class LightsheetController(ImConWidgetController):
                 self._logger.error(f"Error closing tiff writer: {e}")
             self._tiffWriter = None
 
-        return
-        self._widget.startButton.setEnabled(True)
-        self._widget.stopButton.setEnabled(False)
-        self._widget.illuminationSlider.setValue(0)
-        illuSource = self._widget.getIlluminationSource()
-        if not self._master.lasersManager[illuSource].enabled:
-            self._master.lasersManager[illuSource].setEnabled(0)
-        self._widget.startButton.setText("Start")
-        self._widget.stopButton.setText("Stopped")
-        self._widget.stopButton.setStyleSheet("background-color: green")
-        self._widget.startButton.setStyleSheet("background-color: red")
-        self._logger.debug("Lightsheet scanning stopped.")
-
     # ========================================================================
     # New Go-Stop-Acquire Mode with OME-Zarr support
     # ========================================================================
@@ -603,7 +590,7 @@ class LightsheetController(ImConWidgetController):
             if params.enableTiling:
                 gridCols = params.tilesXPositive + params.tilesXNegative + 1
                 gridRows = params.tilesYPositive + params.tilesYNegative + 1
-                grid_shape = (gridRows, gridCols)
+                grid_shape = (gridCols, gridRows)   # OMEWriter wants (nx, ny)
             else:
                 grid_shape = (1, 1)
             

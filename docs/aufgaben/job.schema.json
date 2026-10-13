@@ -119,6 +119,19 @@
      "description": "Illumination source used while focusing",
      "title": "Channel"
     },
+    "intensity": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Its intensity; None keeps the value",
+     "title": "Intensity"
+    },
     "algorithm": {
      "default": "LAPE",
      "title": "Algorithm",

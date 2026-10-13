@@ -93,10 +93,8 @@
 - **Holography**
   - Off-axis holography
   - Inline holography
-  - HoliSheet (combined holography + lightsheet)
 - **SIM** (Structured Illumination Microscopy)
 - **DPC** (Differential Phase Contrast)
-- **ISM** (Image Scanning Microscopy)
 - **STORM reconstruction**
 - **Composite imaging** (multi-modal combinations)
   - ExperimentController where we provide a protocol for multi dimensional acquisitions (xyz, multi channel, autofocus )
@@ -117,13 +115,12 @@
   - Multi-position
   - Multi-channel
 - **Storage formats:**
-  - TIFF
-  - Zarr (for large datasets)
+  - TIFF and OME-TIFF
+  - OME-Zarr (NGFF 0.4 on zarr v2; one shared writer for experiments, recordings and Aufgaben jobs)
   - MP4/AVI (video)
 - **Metadata embedding**
 
 ### Scan Types
-- **ROI scanning** (Region of Interest, Click/Select and go back to that position/timelapse)
 - **Tile scanning** (large area mosaics)
 - **Stage scan acquisition**
 - **Well plate scanning** (keep annotations e.g. A1, B2, etc.)
@@ -131,9 +128,13 @@
 ## Automation & Workflows
 
 ### Experiment Management
-- **Timelapse experiments**
+- **Timelapse experiments** (through ExperimentController)
   - Configurable intervals
   - Multi-position support
+- **Aufgaben jobs** (`AufgabenController`, plan in `docs/AUFGABEN_ROADMAP.md`)
+  - A tree of loops, conditions, variables, captures and hardware tasks
+  - Pause, resume, finish, abort; operator questions
+  - Import and export of useq-schema sequences
 - **Workflow automation**
   - Sequential operations
   - Conditional logic

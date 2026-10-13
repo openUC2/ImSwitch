@@ -134,7 +134,6 @@ class WorkflowController(LiveUpdatedController):
     sigUpdatePartialImage = Signal()
     sigUpdateWorkflowState = Signal(str)
     sigStartHistoWorkflow = Signal(float, float, float, float, float, float, bool, list)
-    sigStartMultiColorTimelapseWorkflow = Signal(int, int, list, list, list, list, bool)
 
 
     WORKFLOW_STORAGE: Dict[str, WorkflowDefinition] = {}

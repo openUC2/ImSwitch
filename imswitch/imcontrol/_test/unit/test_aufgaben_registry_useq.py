@@ -29,7 +29,7 @@ def test_docstring_args_with_continuations():
 
 def test_spec_excludes_injected_arguments_and_reads_units():
     spec = A.REGISTRY["autofocus"]
-    assert spec.injected == ("hw", "ctx")
+    assert spec.injected == {"hw": "hw", "ctx": "ctx"}
     props = spec.schema()["properties"]
     assert "hw" not in props and "ctx" not in props
     assert props["range_um"]["x-unit"] == "µm" and props["range_um"]["exclusiveMinimum"] == 0
@@ -64,7 +64,7 @@ def test_registration_rules():
         Args:
             value: V.
         """
-    assert build_spec(_ok).injected == ("hw", "ctx")
+    assert build_spec(_ok).injected == {"hw": "hw", "ctx": "ctx"}
     cases = ((undocumented, "no Args"), (positional_hw, "keyword-only"), (reserved, "reserved"))
     for fn, msg in cases:
         with pytest.raises(TypeError, match=msg):

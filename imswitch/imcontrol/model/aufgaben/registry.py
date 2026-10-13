@@ -90,7 +90,7 @@ class TaskSpec:
     params_model: Type[BaseModel]
     param_docs: Dict[str, str]
     units: Dict[str, str]
-    injected: Tuple[str, ...]
+    injected: Dict[str, str]  # parameter name -> "hw" | "ctx"
     choices: Dict[str, str]
     locks: Tuple[str, ...]
     effects: Effects
@@ -162,15 +162,19 @@ def _unit(name: str) -> Optional[str]:
     return None
 
 
-def _is_injected(annotation: Any) -> bool:
+def _injected_kind(annotation: Any) -> Optional[str]:
+    """'ctx' for a TaskContext (or any Arkitekt task type), 'hw' for the Microscope."""
     origin = typing.get_origin(annotation)
     if origin is typing.Annotated:
         annotation = typing.get_args(annotation)[0]
     if origin is typing.Union:
         args = [a for a in typing.get_args(annotation) if a is not type(None)]
         annotation = args[0] if len(args) == 1 else annotation
-    return isinstance(annotation, type) and (
-        annotation in INJECTED_TYPES or getattr(annotation, "__arkitekt_task__", False) is True)
+    if not isinstance(annotation, type):
+        return None
+    if getattr(annotation, "__arkitekt_task__", False) is True:
+        return "ctx"
+    return "hw" if annotation in INJECTED_TYPES else None
 
 
 def build_spec(fn: Callable[..., Any], *, id: Optional[str] = None, title: Optional[str] = None,
@@ -180,17 +184,18 @@ def build_spec(fn: Callable[..., Any], *, id: Optional[str] = None, title: Optio
     doc_title, description, param_docs = parse_docstring(fn.__doc__)
     hints = typing.get_type_hints(fn, include_extras=True)
     fields: Dict[str, Any] = {}
-    injected: List[str] = []
+    injected: Dict[str, str] = {}
     units: Dict[str, str] = {}
     for name, param in inspect.signature(fn).parameters.items():
         if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
             raise TypeError(f"task {fn.__name__}: *args/**kwargs are not allowed")
         annotation = hints.get(name, Any)
-        if _is_injected(annotation):
+        kind = _injected_kind(annotation)
+        if kind:
             if param.kind is not param.KEYWORD_ONLY:
                 raise TypeError(
                     f"task {fn.__name__}: injected argument {name!r} must be keyword-only")
-            injected.append(name)
+            injected[name] = kind
             continue
         if name in RESERVED_PARAM_NAMES:
             raise TypeError(f"task {fn.__name__}: parameter name {name!r} is reserved")
@@ -209,7 +214,7 @@ def build_spec(fn: Callable[..., Any], *, id: Optional[str] = None, title: Optio
         id=task_id, title=title or doc_title or task_id.replace("_", " ").capitalize(),
         category=category, description=description, function=fn, params_model=model,
         param_docs={k: v for k, v in param_docs.items() if k in fields}, units=units,
-        injected=tuple(injected), choices=dict(choices or {}), locks=tuple(locks),
+        injected=injected, choices=dict(choices or {}), locks=tuple(locks),
         effects=effects, flags=flags or TaskFlags(),
     )
 

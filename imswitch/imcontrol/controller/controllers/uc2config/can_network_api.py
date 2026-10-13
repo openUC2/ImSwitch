@@ -12,6 +12,7 @@ import threading
 from pathlib import Path
 
 from imswitch.imcommon.model import APIExport
+from imswitch.imcontrol.controller.busy import busy_reasons
 from imswitch.imcontrol.model.canbus import CanNetwork, UpdateHooks, device_mapping
 # The module, not the package attribute: imswitch.imcontrol.model re-exports the
 # SetupInfo *class* under the module's name.
@@ -21,7 +22,6 @@ DEFAULT_FIRMWARE_URL = "http://host.docker.internal/firmware"
 # Seconds after startup before the opt-in firmware check: lets the serial
 # link, the CAN nodes' boot-up and the HTTP server settle.
 STARTUP_CHECK_DELAY_S = 20
-BUSY_STATES = ("running", "paused", "stopping")
 
 
 class _ManagerLink:
@@ -342,23 +342,12 @@ class CanNetworkApiMixin:
         """Why an unattended update must not start now (empty = go). A check
         that fails must not block every update, so it only logs."""
         get = getattr(self._master, "getController", lambda name: None)
-        experiment, recording, objective = get("Experiment"), get("Recording"), get("Objective")
+        objective = get("Objective")
         checks = [("A stage is moving or homing.", self._stage_moving)]
-        if experiment is not None:
-            checks.append(("An experiment is running.", lambda: (
-                experiment.getExperimentStatus().get("status") in BUSY_STATES
-                or getattr(experiment, "_experiment_starting", False))))
-        if recording is not None:
-            checks.append(("A recording is running.", recording.isRecording))
-        for name in ("Workflow", "Timelapse"):
-            manager = getattr(get(name), "workflow_manager", None)
-            if manager is not None:
-                checks.append((f"A {name.lower()} is running.", lambda m=manager: (
-                    m.get_status().get("status") in BUSY_STATES)))
         if objective is not None:
             checks.append(("The objective turret is moving.",
                            lambda: getattr(objective, "_isMovingObjective", False)))
-        reasons = []
+        reasons = [f"{r[0].upper()}{r[1:]}." for r in busy_reasons(self._master, self._logger)]
         for label, predicate in checks:
             try:
                 if predicate():

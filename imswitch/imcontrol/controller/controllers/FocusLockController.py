@@ -1728,42 +1728,18 @@ class FocusCalibThread(object):
         return float(1000 / self.poly[0])
 
     def show(self):
-        """Display calibration results (GUI or headless mode)."""
-        if not hasattr(self._controller, '_widget'):
-            # Enhanced headless mode signaling
-            if self._controller._current_calibration:
-                # Send comprehensive calibration signal for headless mode
-                headless_signal_data = {
-                    "event": "calibration_display_update",
-                    "calibration_text": f"1 unit → {self._controller._current_calibration.sensitivity_nm_per_unit:.1f} nm",
-                    "calibration_data": self._controller._current_calibration.to_dict(),
-                    "pid_integration_active": True,
-                    "timestamp": time.time(),
-                }
-                self._controller.sigCalibrationProgress.emit(headless_signal_data)
-                self._controller._logger.info(f"Headless calibration display: {headless_signal_data['calibration_text']}")
-            else:
-                # Send invalid calibration signal
-                headless_signal_data = {
-                    "event": "calibration_display_update",
-                    "calibration_text": "Calibration invalid",
-                    "calibration_data": None,
-                    "pid_integration_active": False,
-                    "timestamp": time.time(),
-                }
-                self._controller.sigCalibrationProgress.emit(headless_signal_data)
-            return
-
-        # GUI mode - update widget display
-        if self.poly is None or self.poly[0] == 0:
-            cal_text = "Calibration invalid"
-        else:
-            cal_nm = self._get_sensitivity_nm_per_px()
-            cal_text = f"1 px --> {cal_nm:.1f} nm"
-        try:
-            self._controller._widget.calibrationDisplay.setText(cal_text)
-        except AttributeError:
-            pass
+        """Send the calibration result to the frontend (sigCalibrationProgress)."""
+        calibration = self._controller._current_calibration
+        text = (f"1 unit → {calibration.sensitivity_nm_per_unit:.1f} nm" if calibration
+                else "Calibration invalid")
+        self._controller.sigCalibrationProgress.emit({
+            "event": "calibration_display_update",
+            "calibration_text": text,
+            "calibration_data": calibration.to_dict() if calibration else None,
+            "pid_integration_active": bool(calibration),
+            "timestamp": time.time(),
+        })
+        self._controller._logger.info(f"Calibration: {text}")
 
     def getData(self) -> Dict[str, Any]:
         """Return enhanced calibration data - now integrated with PID controller."""

@@ -294,9 +294,6 @@
     "mockxx": null,
     "jetsonnano": null,
     "Stresstest": null,
-    "HistoScan": {
-        "PreviewCamera": null
-    },
     "Workflow": null,
     "FlowStop": null,
     "Lepmon": null,
@@ -366,10 +363,8 @@
         "MCT",
         "UC2Config",
         "PixelCalibration",
-        "HistoScan",
         "Joystick",
         "Flatfield",
-        "ROIScan",
         "Objective",
         "Experiment",
         "Lightsheet",
@@ -387,7 +382,6 @@
         "DPC",
         "Holo",
         "FFT",
-        "HistoScan",
         "FocusLock",
         "FOVLock"
     ]

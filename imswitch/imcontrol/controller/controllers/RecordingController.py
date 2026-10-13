@@ -933,7 +933,6 @@ class RecordingController(ImConWidgetController):
             )
         elif detectorMode == -3:  # A specific detector
             pass 
-            #return self._widget.getSelectedSpecificDetectors()
 
     def getFileName(self, description: str = "", detector_names: list = None):
         """

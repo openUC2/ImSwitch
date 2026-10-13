@@ -8,7 +8,7 @@
       {"x": 1000, "y": 2000, "z": 0, "name": "region_a"},
       {"x": 9000, "y": 2000, "z": 0, "name": "region_b"}]},
     "tiles": {"kind": "grid", "plan": {"rows": 3, "columns": 3, "fov_width": 400, "fov_height": 300, "overlap": 10}},
-    "af": {"kind": "autofocus", "mode": "software", "range_um": 30, "step_um": 3, "channel": "LED"},
+    "af": {"kind": "autofocus", "mode": "software", "range_um": 30, "step_um": 3, "channel": "LED", "intensity": 250},
     "z": {"kind": "z_plan", "plan": {"range": 4, "step": 2}},
     "rgb": {"kind": "capture", "channels": [{"config": "LED", "exposure": 8, "intensity": 250}]}
   },
@@ -22,7 +22,7 @@
        {"id": "tile", "task": "loop_grid", "params": {"plan": "@tiles"},
         "body": [
           {"id": "focus", "task": "autofocus", "params": {"$from": "@af"}, "every": {"nth": 4}, "on_error": "continue_loop"},
-          {"id": "check", "task": "condition", "params": {"expr": "result.focus is None"},
+          {"id": "check", "task": "condition", "params": {"expr": "loop.tile.index % 4 == 0 and result.focus is None"},
            "body": [
              {"id": "count", "task": "set_variable", "params": {"name": "af_failures", "value": "${af_failures + 1}"}},
              {"id": "note", "task": "log", "params": {"message": "autofocus failed; tile skipped", "level": "warning"}},

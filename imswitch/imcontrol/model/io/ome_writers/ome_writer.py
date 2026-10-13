@@ -22,16 +22,15 @@ Features:
 import inspect
 import os
 import time
-import threading
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from dataclasses import dataclass
 
 import numpy as np
-import zarr
 import tifffile as tif
 import tifffile
 
 # Import from local writers module
+from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage
 from .ome_tiff_stitcher import OmeTiffStitcher
 from .single_tiff_writer import SingleTiffWriter
 from .omero_uploader import (
@@ -66,10 +65,8 @@ class OMEWriterConfig:
         omero_queue_size: Max tiles to queue for OMERO upload
         min_period: Minimum time between writes (throttling)
         compression: Compression algorithm for TIFF files
-        zarr_compressor: Compressor for Zarr arrays
         pixel_size: Pixel size in microns (X/Y)
         pixel_size_z: Z-step size in microns
-        dimension_separator: Separator for Zarr chunks
         n_time_points: Number of time points
         n_z_planes: Number of Z planes
         n_channels: Number of channels
@@ -94,10 +91,8 @@ class OMEWriterConfig:
     # predictor is what actually helps (measured: 1.43x -> 1.56x).
     compression_level: int = 1
     predictor: bool = True
-    zarr_compressor = None
     pixel_size: float = 1.0
     pixel_size_z: float = 1.0
-    dimension_separator: str = "/"
     n_time_points: int = 1
     n_z_planes: int = 1
     n_channels: int = 1
@@ -115,10 +110,7 @@ class OMEWriterConfig:
         )
 
     def __post_init__(self):
-        """Initialize default compressor and channel metadata."""
-        if self.zarr_compressor is None:
-            self.zarr_compressor = _get_zarr_compressor()
-
+        """Initialize default channel metadata."""
         # Initialize default channel names if not provided
         if self.channel_names is None:
             self.channel_names = [f"Channel_{i}" for i in range(self.n_channels)]
@@ -157,20 +149,6 @@ def tiff_compression_kwargs(compression="zlib", level=1, predictor=True) -> Dict
     if predictor and "predictor" in supported:
         kwargs["predictor"] = True
     return kwargs
-
-
-def _get_zarr_compressor():
-    """Get the appropriate Zarr compressor based on zarr version."""
-    if zarr.__version__.startswith("3"):
-        # Zarr v3 codec
-        return zarr.codecs.BloscCodec(
-            cname="zstd", clevel=3, 
-            shuffle=zarr.codecs.BloscShuffle.bitshuffle
-        )
-    else:
-        # Zarr v2 codec (using numcodecs)
-        import numcodecs
-        return numcodecs.Blosc("zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
 
 
 class OMEFileStorePaths:
@@ -342,15 +320,14 @@ class OMEWriter:
         # file basename (legacy behaviour) when not provided.
         self._image_name = image_name or None
 
-        # Zarr components
+        # OME-Zarr canvas (NGFF 0.4 on zarr v2, shared with Aufgaben)
         self.store = None
-        self.root = None
+        self.zarr_image: Optional[NgffImage] = None
         self.canvas = None
 
         # TIFF writers
         self.tiff_stitcher: Optional[OmeTiffStitcher] = None
         self._finalized = False
-        self._pyramid_failures = 0
         # Goes into every individual-TIFF filename so downstream tooling can
         # tell one scan region's tiles from another's without relying on the
         # directory layout.
@@ -435,43 +412,35 @@ class OMEWriter:
             )
 
     def _setup_zarr_store(self):
-        """Set up the OME-Zarr store and canvas with proper OME-NGFF metadata."""
-        # Use path string for Zarr v3 compatibility
-        self.store = str(self.file_paths.zarr_dir)
-        self.root = zarr.open_group(store=self.store, mode="w")
-        
-        # Colour (RGB) detectors deliver (H, W, 3) tiles. Add a trailing
-        # "samples" axis so the canvas can physically store them, and keep the
-        # native 8-bit range (Picamera2/Hik RGB are uint8) so viewers render
-        # true colour instead of a near-black 16-bit image. Mono detectors keep
-        # the original 5-D uint16 layout unchanged.
-        base_shape = (
-            int(self.config.n_time_points),
-            int(self.config.n_channels),
-            int(self.config.n_z_planes),
-            int(self.ny * self.tile_h),
-            int(self.nx * self.tile_w),
-        )
-        base_chunks = (1, 1, 1, int(self.tile_h), int(self.tile_w))
+        """One NGFF image per writer: the stitched canvas of this region.
+
+        RGB tiles become three uint8 channels per illumination channel; the
+        translation is the top-left pixel of the first tile.
+        """
+        cfg, samples = self.config, 3 if self.isRGB else 1
+        names = list(cfg.channel_names or [])[:cfg.n_channels]
+        names += [f"Channel_{i}" for i in range(len(names), cfg.n_channels)]
         if self.isRGB:
-            canvas_shape = base_shape + (3,)
-            canvas_chunks = base_chunks + (3,)
-            canvas_dtype = "uint8"
-        else:
-            canvas_shape = base_shape
-            canvas_chunks = base_chunks
-            canvas_dtype = "uint16"
-
-        self.canvas = self.root.create_array(
-            name="0",
-            shape=canvas_shape,   # t c z y x (s)
-            chunks=canvas_chunks,
-            dtype=canvas_dtype,
-            compressor=self.config.zarr_compressor
-        )
-
-        # Set OME-Zarr metadata
-        self._set_ome_ngff_metadata()
+            names = [f"{n}_rgb_{c}" for n in names for c in "rgb"]
+        px = cfg.pixel_size
+        spec = ImageSpec(
+            shape=(int(cfg.n_time_points), int(cfg.n_channels) * samples, int(cfg.n_z_planes),
+                   int(self.ny * self.tile_h), int(self.nx * self.tile_w)),
+            dtype="uint8" if self.isRGB else "uint16", pixel_size_um=px,
+            z_step_um=cfg.pixel_size_z, t_step_s=cfg.time_interval,
+            origin_um=(self.x_start - self.tile_w * px / 2, self.y_start - self.tile_h * px / 2,
+                       cfg.z_start),
+            channel_names=names, channel_colors=[] if self.isRGB else list(cfg.channel_colors or []),
+            name=self._image_name or os.path.basename(self.file_paths.base_dir),
+            chunks_yx=(int(self.tile_h), int(self.tile_w)))
+        self.store = str(self.file_paths.zarr_dir)
+        self.zarr_image = NgffImage.create(self.store, spec)
+        self.canvas = self.zarr_image.array
+        if self.well_metadata:   # custom attrs; NGFF plates come from Aufgaben
+            wm = self.well_metadata
+            self.zarr_image.group.attrs["imswitch_well"] = {
+                k: wm.get(k) for k in ("wellRow", "wellColumn", "labwareLoadName",
+                                       "conditionLabel")}
 
     def _setup_tiff_mosaic(self):
         """Allocate the in-memory mosaic backing the multi-dimensional OME-TIFF.
@@ -508,105 +477,6 @@ class OMEWriter:
                     f"mosaic (shape {base_shape}); disabling OME-TIFF output. "
                     "Use OME-Zarr or Stitched OME-TIFF for very large scans."
                 )
-
-    def _set_ome_ngff_metadata(self):
-        """
-        Set OME-NGFF compliant metadata for the Zarr store.
-        
-        This sets up:
-        - multiscales: Image pyramid metadata with physical coordinates
-        - omero: Channel visualization metadata (names, colors)
-        """
-        pixel_size_x = self.config.pixel_size
-        pixel_size_y = self.config.pixel_size
-        pixel_size_z = self.config.pixel_size_z
-        time_interval = self.config.time_interval
-
-        # 8-bit display range for RGB (uint8) canvases, 16-bit for mono.
-        display_max = 255 if self.isRGB else 65535
-
-        # Axes / scales. RGB canvases carry a trailing "samples" axis; mono
-        # canvases keep the classic 5-D TCZYX layout.
-        axes = [
-            {"name": "t", "type": "time", "unit": "second"},
-            {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": "micrometer"},
-            {"name": "y", "type": "space", "unit": "micrometer"},
-            {"name": "x", "type": "space", "unit": "micrometer"},
-        ]
-        scale = [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]
-        translation = [0, 0, self.config.z_start, self.y_start, self.x_start]
-        if self.isRGB:
-            axes.append({"name": "s", "type": "channel"})
-            scale = scale + [1]
-            translation = translation + [0]
-
-        # Set multiscales metadata with physical coordinate transformations
-        self.root.attrs["multiscales"] = [{
-            "version": "0.4",
-            "name": self._image_name or "experiment",
-            "datasets": [
-                {
-                    "path": "0",
-                    "coordinateTransformations": [
-                        {"type": "scale", "scale": list(scale)},
-                        {"type": "translation", "translation": list(translation)}
-                    ]
-                }
-            ],
-            "axes": axes,
-            "coordinateTransformations": [
-                {"type": "scale", "scale": list(scale)}
-            ]
-        }]
-
-        # Set omero metadata for channel visualization
-        channels = []
-        for i in range(self.config.n_channels):
-            channel_name = self.config.channel_names[i] if i < len(self.config.channel_names) else f"Channel_{i}"
-            channel_color = self.config.channel_colors[i] if i < len(self.config.channel_colors) else "FFFFFF"
-            channels.append({
-                "label": channel_name,
-                "color": channel_color,
-                "active": True,
-                "coefficient": 1.0,
-                "family": "linear",
-                "inverted": False,
-                "window": {
-                    "start": 0,
-                    "end": display_max,
-                    "min": 0,
-                    "max": display_max
-                }
-            })
-
-        self.root.attrs["omero"] = {
-            "id": 1,
-            "name": self._image_name or os.path.basename(self.file_paths.zarr_dir),
-            "version": "0.4",
-            "channels": channels,
-            "rdefs": {
-                "defaultT": 0,
-                "defaultZ": self.config.n_z_planes // 2,
-                "model": "color"
-            }
-        }
-
-        # OME-NGFF "well" group attrs + ImSwitch labware metadata.
-        # Emitted only when the caller passed structured well metadata, so the
-        # plain (non-plate) acquisition path stays byte-identical.
-        if self.well_metadata:
-            wm = self.well_metadata
-            self.root.attrs["well"] = {
-                "version": "0.4",
-                "images": [{"path": "0", "acquisition": 0}],
-            }
-            self.root.attrs["imswitch_well"] = {
-                "wellRow": wm.get("wellRow"),
-                "wellColumn": wm.get("wellColumn"),
-                "labwareLoadName": wm.get("labwareLoadName"),
-                "conditionLabel": wm.get("conditionLabel"),
-            }
 
     def _setup_tiff_stitcher(self):
         """Set up the TIFF stitcher for creating stitched OME-TIFF files."""
@@ -797,22 +667,23 @@ class OMEWriter:
         y0, y1 = iy * self.tile_h, (iy + 1) * self.tile_h
         x0, x1 = ix * self.tile_w, (ix + 1) * self.tile_w
 
-        # Write to canvas with proper indexing. RGB canvases carry a trailing
-        # samples axis; a stray 2-D frame is broadcast across the 3 samples,
-        # and a stray 3-D frame on a mono canvas is collapsed to luminance.
+        # RGB tiles fill three channels; a stray 2-D frame on an RGB canvas is
+        # copied to all three, a stray 3-D frame on a mono canvas becomes luminance.
         if self.isRGB:
             if frame.ndim == 2:
                 frame = np.stack([frame] * 3, axis=-1)
-            self.canvas[t_idx, c_idx, z_idx, y0:y1, x0:x1, :] = frame
+            for k in range(3):
+                self.zarr_image.write(frame[..., k], t_idx, c_idx * 3 + k, z_idx, y0, x0)
         else:
             if frame.ndim == 3:
                 frame = np.dot(frame[..., :3], [0.299, 0.587, 0.114]).astype(self.canvas.dtype)
-            self.canvas[t_idx, c_idx, z_idx, y0:y1, x0:x1] = frame
+            self.zarr_image.write(frame, t_idx, c_idx, z_idx, y0, x0)
 
-        # Return chunk information for frontend updates
-        rel_chunk = f"0/{iy}.{ix}"  # NGFF v0.4 layout
+        # The chunk key of this tile's first plane (zarr v2, "/" separator)
+        ch, cw = self.zarr_image.chunks_yx
+        c_first = c_idx * 3 if self.isRGB else c_idx
         return {
-            "rel_chunk": rel_chunk,
+            "rel_chunk": f"0/{t_idx}/{c_first}/{z_idx}/{y0 // ch}/{x0 // cw}",
             "grid_pos": (ix, iy),
             "canvas_bounds": (x0, x1, y0, y1),
             "t_idx": t_idx,
@@ -979,20 +850,14 @@ class OMEWriter:
             return
         self._finalized = True
 
-        if self.config.write_zarr and self.store is not None:
+        if self.config.write_zarr and self.zarr_image is not None:
             try:
-                self._pyramid_failures = 0
-                self._build_vanilla_zarr_pyramids()
+                self.zarr_image.finalize(min_size=64, max_levels=4)
                 if self.logger:
-                    if self._pyramid_failures:
-                        self.logger.error(
-                            f"Zarr pyramid INCOMPLETE: {self._pyramid_failures} level(s) failed — "
-                            "the full-resolution data is intact, lower levels are missing")
-                    else:
-                        self.logger.info("Vanilla Zarr pyramid generated successfully")
+                    self.logger.info(f"OME-Zarr pyramid: {self.zarr_image.levels} level(s)")
             except Exception as err:
                 if self.logger:
-                    self.logger.warning(f"Pyramid generation failed: {err}")
+                    self.logger.error(f"Pyramid generation failed (full resolution is intact): {err}")
 
         if self.config.write_tiff and self.tiff_mosaic is not None:
             try:
@@ -1090,191 +955,6 @@ class OMEWriter:
             self.logger.info(
                 f"Multi-dimensional OME-TIFF written ({self._tiff_frames_written} frames): {out_path}"
             )
-
-    def _build_vanilla_zarr_pyramids(self):
-        """Build pyramid levels for OME-Zarr format."""
-        if self.canvas is None:
-            return
-
-        def _generate_pyramids():
-            try:
-                self._generate_pyramids_sync()
-            except Exception as e:
-                if self.logger:
-                    self.logger.error(f"Pyramid generation failed: {e}")
-
-        pyramid_thread = threading.Thread(target=_generate_pyramids, daemon=True)
-        pyramid_thread.start()
-        pyramid_thread.join()  # Wait for completion
-
-    def _generate_pyramids_sync(self):
-        """Synchronous pyramid generation with memory-efficient processing."""
-        full_shape = self.canvas.shape
-        n_t, n_c, n_z = full_shape[0], full_shape[1], full_shape[2]
-        # RGB canvases are 6-D (…, Y, X, 3); mono are 5-D (…, Y, X).
-        spatial_shape = full_shape[3:5] if self.isRGB else full_shape[-2:]
-
-        max_levels = 4
-
-        for level in range(1, max_levels):
-            new_y = spatial_shape[0] // (2 ** level)
-            new_x = spatial_shape[1] // (2 ** level)
-
-            if new_y < 64 or new_x < 64:
-                break
-
-            level_name = str(level)
-            
-            # Check if array already exists and delete it to avoid "array exists in store" error
-            if level_name in self.root:
-                try:
-                    del self.root[level_name]
-                    if self.logger:
-                        self.logger.debug(f"Deleted existing pyramid level {level} for regeneration")
-                except Exception as e:
-                    if self.logger:
-                        self.logger.warning(f"Could not delete existing pyramid level {level}: {e}")
-                    continue
-
-            if self.isRGB:
-                level_shape = (n_t, n_c, n_z, int(new_y), int(new_x), 3)
-                level_chunks = (1, 1, 1, int(min(self.tile_h, new_y)), int(min(self.tile_w, new_x)), 3)
-                level_dtype = "uint8"
-            else:
-                level_shape = (n_t, n_c, n_z, int(new_y), int(new_x))
-                level_chunks = (1, 1, 1, int(min(self.tile_h, new_y)), int(min(self.tile_w, new_x)))
-                level_dtype = "uint16"
-            level_canvas = self.root.create_array(
-                name=level_name,
-                shape=level_shape,
-                chunks=level_chunks,
-                dtype=level_dtype,
-                compressor=self.config.zarr_compressor
-            )
-
-            self._downsample_all_dimensions(self.canvas, level_canvas, level, n_t, n_c, n_z)
-
-            if self.logger:
-                self.logger.debug(f"Created pyramid level {level} with shape ({n_t}, {n_c}, {n_z}, {new_y}, {new_x})")
-
-        self._update_multiscales_metadata()
-
-    # Rows of the full-resolution canvas read per pyramid step. Bounds the
-    # working set to a band, whatever the canvas size.
-    PYRAMID_BAND_ROWS = 4096
-
-    def _downsample_all_dimensions(self, source_canvas, target_canvas, level, n_t, n_c, n_z):
-        """Downsample data for all t, c, z dimensions, one row band at a time.
-
-        This used to materialise the whole full-resolution plane with
-        ``np.array(source_canvas[t, c, z])`` before slicing it ``[::f, ::f]``.
-        On a large slide scan that is a request for the entire canvas in RAM —
-        a 270k x 172k RGB canvas is 130 GiB — which either fails outright or,
-        if the OS grants it, takes the machine down with it. Reading a band
-        at a time keeps the working set at a few hundred MB regardless of how
-        big the scan was.
-        """
-        f = 2 ** level
-        height = source_canvas.shape[3]
-        band = max(f, (self.PYRAMID_BAND_ROWS // f) * f)  # keep bands aligned to the stride
-
-        for t_idx in range(n_t):
-            for c_idx in range(n_c):
-                for z_idx in range(n_z):
-                    try:
-                        for y0 in range(0, height, band):
-                            y1 = min(height, y0 + band)
-                            if self.isRGB:
-                                block = np.asarray(source_canvas[t_idx, c_idx, z_idx, y0:y1, :, :])
-                                small = block[::f, ::f, :]
-                                target_canvas[t_idx, c_idx, z_idx,
-                                              y0 // f:y0 // f + small.shape[0], :small.shape[1], :] = small
-                            else:
-                                block = np.asarray(source_canvas[t_idx, c_idx, z_idx, y0:y1, :])
-                                small = block[::f, ::f]
-                                target_canvas[t_idx, c_idx, z_idx,
-                                              y0 // f:y0 // f + small.shape[0], :small.shape[1]] = small
-                    except Exception as e:
-                        self._pyramid_failures += 1
-                        if self.logger:
-                            self.logger.warning(f"Failed to downsample t={t_idx}, c={c_idx}, z={z_idx}: {e}")
-
-    def _update_multiscales_metadata(self):
-        """Update the multiscales metadata to include all pyramid levels."""
-        pixel_size_x = self.config.pixel_size
-        pixel_size_y = self.config.pixel_size
-        pixel_size_z = self.config.pixel_size_z
-        time_interval = self.config.time_interval
-
-        rgb = self.isRGB
-        display_max = 255 if rgb else 65535
-
-        datasets = []
-        for level_name in sorted([k for k in self.root.keys() if k.isdigit()], key=int):
-            level_int = int(level_name)
-            scale_factor = 2 ** level_int
-            ds_scale = [
-                time_interval, 1, pixel_size_z,
-                pixel_size_y * scale_factor,
-                pixel_size_x * scale_factor,
-            ]
-            ds_translation = [0, 0, self.config.z_start, self.y_start, self.x_start]
-            if rgb:
-                ds_scale = ds_scale + [1]
-                ds_translation = ds_translation + [0]
-            datasets.append({
-                "path": level_name,
-                "coordinateTransformations": [
-                    {"type": "scale", "scale": ds_scale},
-                    {"type": "translation", "translation": ds_translation}
-                ]
-            })
-
-        axes = [
-            {"name": "t", "type": "time", "unit": "second"},
-            {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": "micrometer"},
-            {"name": "y", "type": "space", "unit": "micrometer"},
-            {"name": "x", "type": "space", "unit": "micrometer"},
-        ]
-        top_scale = [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]
-        if rgb:
-            axes.append({"name": "s", "type": "channel"})
-            top_scale = top_scale + [1]
-
-        self.root.attrs["multiscales"] = [{
-            "version": "0.4",
-            "name": self._image_name or "experiment",
-            "datasets": datasets,
-            "axes": axes,
-            "coordinateTransformations": [
-                {"type": "scale", "scale": top_scale}
-            ]
-        }]
-
-        # Preserve/set omero metadata
-        if "omero" not in self.root.attrs:
-            channels = []
-            for i in range(self.config.n_channels):
-                channel_name = self.config.channel_names[i] if i < len(self.config.channel_names) else f"Channel_{i}"
-                channel_color = self.config.channel_colors[i] if i < len(self.config.channel_colors) else "FFFFFF"
-                channels.append({
-                    "label": channel_name,
-                    "color": channel_color,
-                    "active": True,
-                    "coefficient": 1.0,
-                    "family": "linear",
-                    "inverted": False,
-                    "window": {"start": 0, "end": display_max, "min": 0, "max": display_max}
-                })
-
-            self.root.attrs["omero"] = {
-                "id": 1,
-                "name": os.path.basename(self.file_paths.zarr_dir),
-                "version": "0.4",
-                "channels": channels,
-                "rdefs": {"defaultT": 0, "defaultZ": self.config.n_z_planes // 2, "model": "color"}
-            }
 
     def get_zarr_url(self) -> Optional[str]:
         """Get the Zarr store path for frontend streaming."""

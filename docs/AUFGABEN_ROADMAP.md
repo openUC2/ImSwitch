@@ -1,9 +1,9 @@
 # Aufgaben: a JOBS-style workflow builder for ImSwitch — analysis, decisions, roadmap
 
-*Status 2026-10-12, branch `feat/AufgabenController`. Compares openUC2/ImSwitch with Nikon
+*Status 2026-10-13, branch `feat/AufgabenController`. Compares openUC2/ImSwitch with Nikon
 NIS-Elements **JOBS** (NIS-Elements AR online help) and plans a modular, user-composable
 acquisition-workflow system that reuses the ExperimentController primitives and also drives pumps,
-valves and general-purpose I/O. Phase 0 is done (§5). Phases 1–6 are proposals.*
+valves and general-purpose I/O. Phases 0 and 1 are done (§5). Phases 2–6 are proposals.*
 
 Names used throughout:
 
@@ -48,10 +48,28 @@ untyped.
   sensors, fan and bus power; virtual homing over HTTP works; `TemperatureController` gained a read
   endpoint.
 
-**Next.** Phase 1 builds the executor, the ImSwitch host adapter, an OME-compliant writer and
-`AufgabenController` (§5). About 18–24 developer-weeks of work remain to a complete v1 with
-peripherals and feedback; the frontend and peripheral phases can run in parallel with the
-acquisition phase.
+**What Phase 1 delivered.**
+
+- **Engine** (`engine.py`): runs a job tree on any `Microscope` with all 23 control nodes,
+  useq-indexed frames, pause, resume, finish and abort, error policies, `every`, `enabled`, overrun
+  policies, the idle branch and operator questions. A simulated host drives its tests without
+  ImSwitch.
+- **One OME writer** (`storage.py`) for Aufgaben, ExperimentController and the recording app.
+  Every output validates with `ome-zarr-models` (NGFF 0.4 image and HCS plate) and `ome-types`
+  (OME-TIFF). ExperimentController keeps its file names, per-tile TIFFs and protocol file, so the
+  napari openUC2 processor still reads its runs.
+- **ImSwitch side**: a host adapter over the ExperimentController verbs, `AufgabenController` with
+  17 endpoints and one Socket.IO signal, and a shared busy check so Aufgaben, ExperimentController,
+  Arkitekt and the firmware updater never drive the instrument at the same time.
+- **Removed**: the Timelapse and HistoScan apps (backend, frontend, the `ol` npm package), about 25
+  dead Qt-era controllers, all `self._widget` code in the remaining controllers, and 23 unused
+  signals. Phase 1 removes about 8,900 lines and adds about 2,600.
+- **Virtual microscope**: exposure scales the image, `getParameter` works, blocking stage moves
+  take distance divided by speed.
+
+**Next.** Phase 2 (capture depth, focus maps, well-plate coordinates, the fast-scan node, the napari
+NGFF path) and Phase 3 (the frontend app) can start now. The API tests pin the catalogue and status
+contract the app builds on. About 14–19 developer-weeks remain to a complete v1.
 
 ---
 
@@ -128,7 +146,8 @@ ImSwitch already covers the category.
 ## 3. What ImSwitch has today
 
 *As audited on 2026-10-12, before Phase 0. Statements marked **[Phase 0]** have changed since;
-§7 has the status of every bug.*
+§7 has the status of every bug. Phase 1 removed several controllers cited here, among them
+Timelapse, ROIScan, SquidStageScan and HistoScan (§7.7).*
 
 Paths are relative to the repository root. `EC/` = `imswitch/imcontrol/controller/controllers/experiment_controller/`.
 
@@ -429,8 +448,8 @@ Legend: ✅ exists as a callable primitive, 🟡 exists but needs wrapping/typin
 |---|---|---|---|
 | D1 | Name | **Aufgaben** for the feature (`AufgabenController`, frontend app "Aufgaben"). A document is a **job**. | "JOBS" is Nikon's product name. |
 | D2 | Job format: useq-schema or our own? | **Our own small tree format that embeds useq models unchanged.** Positions, well-plate plans, grid plans, z plans, time plans and channels in a job *are* useq objects. Loop nodes index frames on useq axes (t, p, g, z, c). A job without control flow exports to an `MDASequence`; any `MDASequence` imports. | useq 0.8–0.9 is a Cartesian product of axes. It has no conditions, variables, loops on results, peripheral steps or operator prompts. Its unreleased "v2" (`MultiAxisSequence`, nested axes, `should_skip` on already chosen values) adds nesting but no feedback channel. Embedding useq keeps the standard where it applies and stays compatible with pymmcore-plus and useq consumers. |
-| D3 | ExperimentController | **Keep it as it is.** Build `AufgabenController` beside it. No bridge that reroutes `startWellplateExperiment`. | The WellPlate UI and the napari openUC2 processor depend on its behaviour and file layout. |
-| D4 | Output format | **Standard OME.** OME-Zarr as **NGFF 0.4 on zarr v2** by default, NGFF 0.5 on zarr v3 as an option; one image per position, an NGFF plate for well-plate runs; OME-TIFF per position with full OME-XML. Validated in CI. | The OME audit (§7.3) found that no current ImSwitch zarr output is valid NGFF. NGFF 0.4/zarr v2 is what napari-ome-zarr, ome-zarr-py, vizarr and the Bio-Formats stack (Fiji, QuPath, OMERO) all read. |
+| D3 | ExperimentController | **Keep it as it is.** Build `AufgabenController` beside it. No bridge that reroutes `startWellplateExperiment`. Phase 1 moved only its OME-Zarr writer onto the shared NGFF writer; names and layout are unchanged. | The WellPlate UI and the napari openUC2 processor depend on its behaviour and file layout. |
+| D4 | Output format | **Standard OME.** OME-Zarr as **NGFF 0.4 on zarr v2** by default, NGFF 0.5 on zarr v3 as an option; one image per position, an NGFF plate for well-plate runs; OME-TIFF per position with full OME-XML. Validated in CI. | The OME audit (§7.3) found that no ImSwitch zarr output was valid NGFF. NGFF 0.4/zarr v2 is what napari-ome-zarr, ome-zarr-py, vizarr and the Bio-Formats stack (Fiji, QuPath, OMERO) all read. |
 | D5 | napari openUC2 processor | It reads only per-tile `.tif` files and `*_protocol.json` (§7.4). Aufgaben output is OME; the plugin gets an **OME-NGFF reader path** (positions from NGFF translations) in Phase 2. An optional "legacy tiles" export in the Aufgaben writer covers the gap until then. | Keeps the plugin working without tying the new writer to the old naming scheme. |
 | D6 | Host independence | The engine core lives in `imswitch/imcontrol/model/aufgaben/` and imports only pydantic, useq-schema, numpy and the standard library (enforced by a test). ImSwitch provides a host adapter implementing the `Microscope` protocol. | The core moves to newswitch unchanged, like `model/canbus`. |
 | D7 | Task formalism | **Plain functions.** Typed parameters; units in the name suffix (`_um`, `_ms`, `_s`, `_ul`, `_c`); descriptions only in a Google `Args:` docstring; `Literal`/`Enum` choices; `annotated_types` limits; device choices declared in the decorator; keyword-only injected `hw: Microscope` and `ctx: TaskContext`. `@task` returns the function unchanged. | Arkitekt 5.0.1 and 6.2.1 read exactly this. Verified: Arkitekt's own `prepare_definition` accepts all 19 tasks (a test runs it). Arkitekt reserves the port name `value`; the registry rejects it. |
@@ -483,73 +502,88 @@ serialization mode and lets duration fields be seconds, because useq writes inte
 while its own schema declares ISO duration strings. Loading also accepts useq's shorthands (a plate
 name such as `"384-well"`, a scalar grid overlap).
 
-### 4.3 Executor (Phase 1)
+### 4.3 Executor (`engine.py`, built in Phase 1)
 
-- **Walk** the tree; each loop pushes a frame (`index`, `count`, `item`) and contributes its useq
-  axis to the index of every frame captured inside it.
-- **Context** wraps the existing `WorkflowContext`, so ExperimentController's pre/main/post step
-  functions can run unchanged where useful. It adds variables, parameters, resources, results and
-  the run id.
-- **Checkpoints** before every node: stop first, then pause. Phase 0 already made
-  `WorkflowContext` event-backed (`wait_if_paused`, interruptible `sleep`); the executor reuses that.
-- **Stop semantics**: `finish` (keep data), `abort` (keep and mark), `force` (also stop all axes and
-  switch all light off).
-- **Time lapse**: period scheduling with `on_overrun: run_now | skip`, an `until` expression, and
-  the `idle` branch running while it waits.
-- **Errors** per node through `on_error`; containers get `finally`-style cleanup (light off, writers
-  closed).
-- **Progress**: `sigAufgabenProgress {run_id, path, node_id, status, eta_s}`, throttled to ≤10 Hz;
-  questions through `sigAufgabenQuestion` and an answer endpoint.
-- **One run lock** shared with ExperimentController, recording, StageMap and Arkitekt: only one
-  thing drives the stage.
-- **Run record**: `job.json` (document plus resolved parameters) and `run.jsonl` (one line per node)
-  next to the data.
+- **Walk.** `Run` walks the tree on its own thread. Each loop pushes a frame (`index`, `count`,
+  `item`) that expressions read as `loop.<id>`, and adds its useq axis (t, p, g, z, c) to the index
+  of every frame captured inside it. A `repeat` counts as t when no time lapse encloses it.
+- **State.** Variables, parameters, resources, results and the run id live in the run. It does not
+  reuse ExperimentController's `WorkflowContext` (D3); the two share only the busy check.
+- **Checkpoints** before every node: stop first, then pause.
+- **Stop semantics.** `finish` stops at the next node and keeps the data. `abort` does the same and
+  marks the run aborted. `abort(force)` also stops the stage and switches the light off at once.
+  Light off and writer close always run in `finally`.
+- **Time lapse.** Period scheduling, `on_overrun: run_now | skip`, an `until` expression, and the
+  `idle` branch while it waits.
+- **Errors** per node through `on_error`: `abort`, `skip`, `continue_loop`, or retry n times and
+  then one of those.
+- **MDA.** The `mda` node runs the events of an embedded useq sequence directly.
+- **Events** are plain dicts: run state, node start and end, questions, log lines.
+- **Run record.** `job.json` (document plus resolved parameters) and `run.jsonl` (one line per
+  node) next to the data.
+- **Tests** run it on `SimulatedMicroscope` (`simulated.py`), a host that records every call and
+  returns frames whose brightness encodes the light and Z.
 
-### 4.4 Host adapter (Phase 1)
+### 4.4 Host adapter (`controllers/aufgaben/host.py`, built in Phase 1)
 
-`ImSwitchMicroscope` implements `Microscope` over the managers and the existing
-ExperimentController verbs (`move_stage_xy/z`, `set_laser_power`, `set_led_matrix_pattern`,
-`set_exposure_time_gain`, `grabCameraFrame`/`snapSync`, `autofocus`). Peripherals map to the
-UC2Config client (`digitalout`, `digitalin`, `temperature`) and, in Phase 4, to new pump and valve
-managers. `capabilities()` comes from the loaded setup, so the catalogue hides what the instrument
-lacks. Device choices (`illumination`, `detector`, `digital_output`, `pump`, `valve`) are resolved
-from the managers when the catalogue is built.
+`ImSwitchMicroscope` implements `Microscope` over ExperimentController's verbs: `move_stage_xy/z`,
+`set_led_matrix_pattern`, `set_exposure_time_gain`, `grabCameraFrame`, `autofocus` and the
+triggered-acquisition bracket. Lasers go through `lasersManager`, digital I/O through the UC2Config
+board (`digitalout`, `digitalin`), temperature through `TemperatureController` without its setpoint
+offset (else the board sensor). Pumps and valves raise `NotImplementedError` until Phase 4.
+`capabilities()` and `devices(kind)` come from the loaded setup, so the catalogue hides what the
+instrument lacks and offers its real device names as choices.
 
-### 4.5 Storage (Phase 1)
+### 4.5 Storage (`storage.py`, built in Phase 1, shared with ExperimentController and recording)
 
-- A thin writer on zarr-python and tifffile (both already dependencies), not the existing
-  `OMEWriter` (§7.3) and not pymmcore-plus `ome-writers` (NGFF 0.5 only, adds `yaozarrs` and
-  `pydantic-extra-types`). Revisit `ome-writers` when NGFF 0.5 readers catch up.
-- Raw data: one field per position or tile. Stitching produces a separate derived image.
-- Each image is at most 5-D TCZYX; RGB becomes three uint8 channels.
-- NGFF metadata: axes with units; dataset transforms `scale [dt, 1, dz, py, px]` and `translation`
-  at the top-left pixel corner in µm (stage centre minus half the field of view, after the
-  camera-to-stage orientation); no multiscale-level scale; the omero display window from the camera
-  bit depth.
-- OME-TIFF: `ome=True`, BigTIFF, 512×512 tiles, SubIFD pyramid, per-plane positions with units,
-  `DeltaT`, `ExposureTime`, channel names and colours.
-- The writer is allocated from the loop structure (T, C, Z known before the run), so it never guesses
-  sizes.
-- CI validation: `ome-zarr-models` for zarr, `ome-types` for TIFF, both as test dependencies.
-- Optional legacy export: the per-tile `tiles/timepoint_NNNN/t…_x…_y…_z…_c…_i…_p….tif` layout plus a
-  `_protocol.json` with `snake_tiles`, so the napari plugin works before its NGFF path exists.
+- One small writer on zarr-python, numcodecs and tifffile. `NgffImage` writes one 5-D TCZYX image.
+  `NgffPlate` lays out an NGFF plate with row, column and field groups. `OmeStore` is the Aufgaben
+  frame sink: a writer thread, one image per capture node, position and tile, and a plate when
+  positions carry a well.
+- ExperimentController's `OMEWriter` and the recording `OMEZarrWriter` write through `NgffImage`
+  too, so chunking, metadata and pyramids exist once (§7.3 lists what that fixed). Their file
+  names, per-tile TIFFs and `_protocol.json` are unchanged.
+- Format: NGFF 0.4 on zarr v2 (`.zattrs`, "/" chunk keys, Blosc zstd with bit shuffle) by default,
+  NGFF 0.5 on zarr v3 as an option. RGB becomes three uint8 channels coloured red, green and blue;
+  thumbnails compose them back.
+- Metadata: axes with units; `scale [dt, 1, dz, py, px]` and `translation` at the top-left pixel
+  corner in µm (stage position minus half the field of view); no multiscale-level transform; omero
+  channels with names, colours and a display window over the dtype range.
+- Pyramids are built at `finalize` by stride-2 decimation in row bands, so memory stays bounded for
+  large mosaics. T is trimmed to the timepoints actually written, for a time lapse ended by `until`.
+- OME-TIFF is exported from zarr level 0, one file per image: BigTIFF, tiles up to 512×512, zlib with
+  a predictor, channel names, physical sizes, per-plane positions and `DeltaT`. Planes are streamed,
+  not held in memory.
+- Validation: unit tests open every output with `ome-zarr-models` and `ome-types`; both are in the
+  `dev` extra.
+- Not yet (Phase 2): camera-to-stage orientation in the translation, per-plane `ExposureTime`,
+  SubIFD pyramids in the TIFF, a display window from the camera bit depth, and the optional legacy
+  tile export (D5).
 
-### 4.6 HTTP and Socket.IO (Phase 1)
+### 4.6 HTTP and Socket.IO (`AufgabenController`, built in Phase 1)
 
-`AufgabenController` (method names prefixed to stay globally unique; `DebugController` already owns
-`listJobs`, `getJobStatus` and `stopJob`):
+Method names carry "Aufgaben" to stay globally unique (`DebugController` already owns `listJobs`,
+`getJobStatus` and `stopJob`).
 
 | Endpoint | Purpose |
 |---|---|
-| `getAufgabenCatalog()` | Palette: control nodes and tasks with JSON schemas, flags, units, resolved choices |
+| `getAufgabenCatalog()` | Palette: control nodes and tasks with JSON schemas, flags, units, the setup's device choices |
 | `getAufgabenJobSchema()` | The job JSON Schema |
-| `listAufgabenJobs()`, `getAufgabenJob(name)`, `saveAufgabenJob(job)` (POST), `deleteAufgabenJob(name)` | Documents in `~/ImSwitchConfig/aufgaben/` |
+| `listAufgabenJobs()`, `getAufgabenJob(name)`, `saveAufgabenJob(job)` (POST), `deleteAufgabenJob(name)` | Documents in `<config folder>/aufgaben/` |
 | `validateAufgabenJob(job)` (POST) | Errors, warnings, ask-first list, motion and light summary |
-| `startAufgabenJob(job, parameters, confirmed)` (POST) | Refuses while anything else runs, and refuses ask-first nodes unless confirmed |
+| `startAufgabenJob(job, parameters, confirmed)` (POST) | 409 while anything else runs, 403 for unconfirmed ask-first nodes, 400 for an invalid job |
 | `pauseAufgabenJob`, `resumeAufgabenJob`, `finishAufgabenJob`, `abortAufgabenJob(force)` | Run control |
-| `getAufgabenStatus()`, `answerAufgabenQuestion(run_id, node_id, answer)` (POST) | Status and operator answers |
+| `getAufgabenStatus()`, `answerAufgabenQuestion(answer)` | Status, and the operator's answer to the open question |
 | `importAufgabenUseq(sequence)` (POST), `exportAufgabenUseq(job)` (POST) | The useq bridge |
-| `listAufgabenRuns()`, `getAufgabenRun(run_id)` | Run records |
+| `listAufgabenRuns(limit)` | Run folders, newest first |
+
+Runs write to `<data folder>/Aufgaben/<YYYYmmdd_HHMMSS>_<job>/`: `job.json`, `run.jsonl` and the OME
+files. One signal, `sigAufgabenEvent`, carries the engine events to Socket.IO; node events are
+throttled to 10 Hz.
+
+The run lock is the busy check in `controller/busy.py`. ExperimentController, Aufgaben, Arkitekt and
+the firmware updater refuse to start while another of them, a recording or a workflow runs.
+StageMap and focus-lock calibration do not consult it yet.
 
 ### 4.7 Frontend app (Phase 3)
 
@@ -593,11 +627,15 @@ temperature; `TemperatureController`; `I2CSensorController`.
 | SHT45, TSL2591 | Temperature from the heater model, humidity and lux around configured values |
 | Not modelled | CAN, collision detector, PTZ, galvo: reads are empty, setters raise `NotImplementedError` |
 
-Still missing (Phase 1 and 4 work packages, all in device managers, none in shared code):
+Phase 1 added: the virtual camera scales intensity with exposure (reference 1 ms) and clips to
+16 bit; `VirtualCameraManager.getParameter` works; a blocking virtual stage move takes distance
+divided by speed (default 15,000 µm/s, at most 10 s per move), so waits and timeouts behave as on
+hardware.
 
-- `VirtualStageManager`: motion time from speed (so pump rates and blocking waits take real time),
-  `moveForever`, and a stage-scan simulation with frame IDs (performance mode cannot run virtually).
-- `VirtualCameraManager`: exposure that scales intensity; a working `getParameter`.
+Still missing (all in device managers, none in shared code):
+
+- `VirtualStageManager`: `moveForever`, and a stage-scan simulation with frame IDs (performance mode
+  cannot run virtually).
 - A virtual LED matrix (ring, halves, DPC) and a per-channel illuminator (today the last laser
   written sets the only intensity).
 - Virtual pump and valve managers once Phase 4 defines the real ones.
@@ -625,19 +663,32 @@ new files. Nothing is committed without being asked.
 | 0.4 Scaffolding | `model/aufgaben/` (§4.2), `docs/aufgaben/job.schema.json`, 62 unit tests: documents, validator, expressions (including what it refuses), registry, Arkitekt acceptance, useq round trips over four axis orders, host independence, schema drift. |
 | 0.5 Virtual microscope | `VirtualESP32Manager` and its setup entry; Temperature and I2CSensor widgets enabled in the virtual setup; `TemperatureController.getTemperature`; virtual homing fixed. 9 unit tests plus checks over HTTP. |
 
-### Phase 1 — engine, host adapter, writer, controller (4–5 weeks)
+### Phase 1 — engine, host adapter, writer, controller — **done 2026-10-13**
 
-| WP | Deliverable |
+| WP | Result |
 |---|---|
-| 1.1 | Executor `model/aufgaben/engine.py` per §4.3, driven by a fake `Microscope` in tests: nesting, `every`, `break` to a named loop, overrun policies, pause/resume/finish/abort, error policies, `idle` branch, expressions at run time |
-| 1.2 | OME writer `model/aufgaben/storage.py` per §4.5 with CI validation (`ome-zarr-models`, `ome-types` as test dependencies; ask before adding them) |
-| 1.3 | `ImSwitchMicroscope` host adapter per §4.4, plus capabilities and device choices from the setup |
-| 1.4 | `AufgabenController` per §4.6, run lock shared with ExperimentController, `~/ImSwitchConfig/aufgaben/` storage, signals |
-| 1.5 | Virtual microscope: motion time from speed in `VirtualStageManager`, camera exposure and `getParameter` |
-| 1.6 | API tests under `_test/api/` (with `HOME` pointed at a scratch folder, see the verification notes): catalogue shape, validate, start/pause/resume/abort of the three example jobs on the virtual microscope, OME validity of the output |
+| 1.1 Executor | `engine.py` per §4.3. 16 tests on the simulated host: the three example jobs, nesting, `every`, `break` to a named loop and `else`, `repeat … until`, error policies, `exit_with_error`, `wait_until` timeout, pause, resume, abort, finish while paused, ask-first refusal, parameter checks, both overrun policies with the idle branch, Z-stack channel offsets, capture inside a channel loop, the `mda` node. |
+| 1.2 Storage | `storage.py` per §4.5. 10 tests validate images (NGFF 0.4 and 0.5), plates, OME-TIFFs, RGB, and the ExperimentController and recording writers. `ome-zarr-models` and `ome-types` are in the `dev` extra. |
+| 1.3 Host adapter | `ImSwitchMicroscope` per §4.4. |
+| 1.4 Controller | `AufgabenController` per §4.6, the shared busy check, the job library and run folders. |
+| 1.5 Virtual microscope | Exposure, `getParameter`, motion time (§4.9). |
+| 1.6 API tests | 7 tests over HTTP on the virtual microscope: endpoints, catalogue devices, job library, validation, a run whose output validates as NGFF, ask-first confirmation, useq import and export. |
+| 1.7 Common writer (added) | ExperimentController and recording write through `NgffImage` (§4.5, §7.3). |
+| 1.8 Removals (added) | §7.7. |
 
-Demo: the tile-scan example runs over HTTP on the virtual microscope; its output opens in
-napari-ome-zarr and validates as NGFF 0.4.
+Verified on 2026-10-13:
+
+- Backend unit tests: 524 pass. The 4 Arkitekt tests that fail to import `arkitekt.app.sessions`
+  failed before this work.
+- API tests for Aufgaben, ExperimentController and multi-site scans: 24 pass. The ExperimentController
+  file had failed with 404 since its paths lacked `/imswitch/api`; that is fixed.
+- Jest: the same 7 suites and 27 tests fail as on HEAD.
+- By hand over HTTP on the virtual microscope: the tile-scan example paused, resumed and finished,
+  and its autofocus followed the virtual sample's tilt. The I/O job read the heater model and the
+  digital loopback. An ExperimentController run wrote valid NGFF 0.4 with pyramid levels, and
+  Aufgaben refused to start while it ran. The napari openUC2 processor parsed all 24 tiles of a
+  2-timepoint, 2-region, 3-plane run.
+- Not done: opening the output in a napari or Fiji window, and any run on real hardware.
 
 ### Phase 2 — acquisition depth and the napari path (3–4 weeks)
 
@@ -672,8 +723,8 @@ enables it). Templates: skip empty wells, stop after N cells, overview → regio
 ### Phase 6 — operator mode, results, consolidation (3–4 weeks)
 
 Operator wizard and kiosk page; run index (SQLite) with a per-well heatmap of a chosen result; OMERO
-upload as a task. Optional consolidation: the duplicated loops in Timelapse, ROIScan, SquidStageScan,
-WorkflowController and the empty StageScanAcquisition controller (§3.4) can be retired once their
+upload as a task. Timelapse, HistoScan, ROIScan and SquidStageScan were removed in Phase 1;
+`WorkflowController` and the empty `StageScanAcquisitionController` (§3.4) can follow once their
 users move to Aufgaben. ExperimentController stays (D3).
 
 ### Effort and order
@@ -681,7 +732,7 @@ users move to Aufgaben. ExperimentController stays (D3).
 | Phase | Weeks |
 |---|---|
 | 0 | done |
-| 1 | 4–5 |
+| 1 | done |
 | 2 | 3–4 |
 | 3 | 4–5 (parallel to 2) |
 | 4 | 2–3 (parallel to 2–3) |
@@ -700,10 +751,9 @@ Phase 1 ──► Phase 2 ──► Phase 5 ──► Phase 6
 
 | Topic | Question | Proposal |
 |---|---|---|
-| New test dependencies | `ome-zarr-models` and `ome-types` for validating output in CI | Add as test-only extras in Phase 1 (needs your OK, AGENTS.md) |
 | Form library | In-house schema form renderer or `@rjsf/mui` | Start in-house; decide in Phase 3 with real schemas |
 | Python script task | Allow unsandboxed code in jobs? | Allowed only when the setup enables it, always ask-first |
-| Run lock scope | Which other controllers must respect it? | ExperimentController, RecordingController, StageMap, FocusLock calibration, Arkitekt |
+| Run lock scope | Which other controllers must respect it? | Done for ExperimentController, Aufgaben, Arkitekt and the firmware updater (recordings and workflows count as busy). Open: StageMap and focus-lock calibration |
 | NGFF 0.5 | When to make it the default | When Bio-Formats/Fiji/QuPath read it; check release notes before Phase 6 |
 | Temperature setpoint | `TemperatureController.set_temperature` adds `sensorOffset=3` °C to the target by default | Keep for the existing UI; the Aufgaben adapter passes 0 |
 | newswitch | The core ports by design; the adapter and controller do not | Write the newswitch host adapter when newswitch's Arkitekt 6 migration lands |
@@ -741,24 +791,25 @@ Phase 1 ──► Phase 2 ──► Phase 5 ──► Phase 6
 | 18 | Virtual stage: `homeAxis` over HTTP raised `TypeError`; no A homing; `home_xyz` read undefined attributes | Accepts homing options; A homing; `home_xyz` homes X, Y, Z |
 | 19 | `TemperatureController` had no read endpoint and called Qt widgets in its polling loop | `getTemperature()`; widget calls skipped headless |
 
-### 7.3 OME compliance of the current writers (not changed; D3)
+### 7.3 OME compliance of the ExperimentController and recording writers (fixed in Phase 1)
 
-ExperimentController output stays as it is so existing readers keep working. For the record, and as
-the specification the Aufgaben writer must not repeat:
+Phase 0 left these writers alone (D3). In Phase 1 both moved onto the shared `NgffImage`, with their
+file layout unchanged. What the audit found, and where it stands:
 
-- Every zarr output is zarr v3 with NGFF 0.4 metadata: valid in neither version.
-- The multiscale-level `coordinateTransformations` repeats the dataset scale, so readers square the
-  pixel size and the time step.
-- Z spacing and time interval are never set (always 1.0); the translation is the tile centre, not the
-  pixel corner; tiles are placed edge to edge, discarding overlap.
-- RGB adds a sixth `s` axis typed as a channel.
-- The plate metadata is only a `plate_metadata.json` sidecar; the `A/1` paths do not exist.
-- The chunk key sent to the frontend (`0/{iy}.{ix}`) matches neither the v3 layout nor the 5-D grid.
-- The "stitched" OME-TIFF is a multi-series tile collection; individual TIFFs get OME-XML only if
-  `ome-types` is installed (it is not), and that code path has unit and plane-index errors.
-- The streaming writers behind `RecordingService.start_streaming` call constructors and methods
-  that do not exist.
-- No test checks format compliance.
+| Finding | Now |
+|---|---|
+| Every zarr output was zarr v3 with NGFF 0.4 metadata, valid in neither version | Zarr v2 with NGFF 0.4; a unit test validates it |
+| The multiscale-level transform repeated the dataset scale, so readers squared the pixel size and the time step | Removed |
+| Z spacing and time interval were never set (always 1.0) | From the run's Z step and period |
+| The translation was the tile centre | The top-left pixel corner |
+| RGB added a sixth `s` axis typed as a channel | Three uint8 channels; thumbnails compose them back |
+| The chunk key sent to the frontend matched neither layout | The real key of the 5-D chunk grid; a test checks the files exist |
+| Each writer had its own pyramid code | One banded implementation |
+| No test checked format compliance | `ome-zarr-models` and `ome-types` tests for all three writers |
+| Tiles are placed edge to edge, discarding overlap | Open: the canvas is a preview; stitching stays Ashlar's job |
+| Plate metadata is only a `plate_metadata.json` sidecar | Open for ExperimentController; Aufgaben writes real NGFF plates |
+| The "stitched" OME-TIFF is a multi-series tile collection; individual TIFFs get OME-XML only through `ome-types` | Open, unchanged |
+| `RecordingService.start_streaming` passes a path where the writers expect a `SessionContext` | Open; nothing calls it (the recording app uses the streaming adapter) |
 
 ### 7.4 The napari openUC2 processor's read contract
 
@@ -767,7 +818,8 @@ It reads only per-tile `.tif` files matched by
 `*_protocol.json` (`snake_tiles`, `iterator`, `iX`, `iY`, `region_id`). The timepoint comes from the
 folder (`timepoint_NNNN`, or `_experiment<i>_<t>_` when the experiment is named "experiment"). It
 never reads zarr, OME-XML, mosaics or the plate sidecar, and it does not depend on array shapes.
-All Phase 0 fixes keep this contract; a run on the virtual microscope was parsed by the plugin.
+Phase 0 and Phase 1 keep this contract: after each phase the plugin parsed a run from the virtual
+microscope.
 
 Still open on the plugin side: region tags longer than 24 characters fall back to the merged map;
 multi-experiment detection needs the default experiment name.
@@ -786,6 +838,33 @@ multi-experiment detection needs the default experiment name.
 - The Arkitekt controller tests fail to import `arkitekt.app.sessions` in the current venv.
 - Seven Jest suites (27 tests) fail on HEAD: App, FocusLockController, configValidation,
   fetchWithTimeout, useDeveloperMode, LiveViewComponent, WiFiController.
+
+### 7.6 Fixed in Phase 1
+
+| # | Problem | Fix |
+|---|---|---|
+| 20 | The ExperimentController writer's OME-Zarr was not valid NGFF (§7.3) | Shared `NgffImage` |
+| 21 | ExperimentDesigner's Vizarr link put an unencoded URL inside a query string | `encodeURIComponent` |
+| 22 | `getOmeZarrUrl` raised `AttributeError` before the first scan | Returns null until a scan sets it |
+| 23 | The Ashlar script path pointed one folder too shallow | Correct relative path |
+| 24 | `LightsheetController` passed the tile grid as (rows, columns) where the writer wants (nx, ny) | Swapped |
+| 25 | `setPositionerStepSize` was an empty stub; `setDetectorROI` went through the Qt-era parameter tree | Step sizes are stored per positioner; the ROI crops the detector directly, rounded up to multiples of 4 |
+| 26 | `SharedAttributes` did not support `in` | `__contains__` |
+| 27 | The virtual ESP32 rejected IDs that arrived as strings over HTTP | Coerced to int |
+| 28 | ExperimentController started even while a recording or workflow ran | Shared busy check, 409 |
+| 29 | `test_experimentcontroller.py` called paths without `/imswitch/api`, so every test hit 404 | Prefixed; discovery matches by suffix |
+
+### 7.7 Removed in Phase 1
+
+- **Apps**: Timelapse (controller, manager, frontend) and HistoScan (manager, setup info, three
+  signals, Redux slice, the OpenLayers "Infinity Scanning" view and its `ol` package).
+- **Dead controllers** with no headless use: AlignAverage, AlignXY, AlignmentLine, BeadRec, FFT,
+  FOVLock, ISM, Image, ROIScan, RotationScan, Rotator, SLM, SquidStageScan, ULenses, Watcher,
+  Tiling, WellPlate, HoliSheet, WebRTC, Console, two `_old` backups, PickSetup, PickUC2BoardConfig,
+  the imcommon pickers and update checker, and the imnotebook Qt controllers.
+- **Widget code**: every `self._widget` branch in the remaining controllers. TemperatureController,
+  LEDController and SettingsController are now a fraction of their size; LaserController lost its
+  Qt preset slots. 23 signals that nobody emitted or received are gone.
 
 ---
 

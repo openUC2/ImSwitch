@@ -2,7 +2,6 @@ from functools import partial
 
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
-from imswitch.imcontrol.view import guitools as guitools
 from imswitch.imcommon.model import initLogger
 
 class LEDMatrixController(ImConWidgetController):
@@ -22,15 +21,6 @@ class LEDMatrixController(ImConWidgetController):
         self.ledMatrix_name = self._master.LEDMatrixsManager.getAllDeviceNames()[0]
         self.ledMatrix = self._master.LEDMatrixsManager[self.ledMatrix_name]
 
-        # initialize matrix
-
-        return
-        self._widget.add_matrix_view(self.nLedsX, self.nLedsY)
-        self.connect_leds()
-        self.setAllLEDOff()
-        self._widget.ButtonAllOn.clicked.connect(self.setAllLEDOn)
-        self._widget.ButtonAllOff.clicked.connect(self.setAllLEDOff)
-        self._widget.slider.sliderReleased.connect(self.setIntensity)
 
     @APIExport()
     def setAllLEDOn(self, getReturn=True):
@@ -66,12 +56,6 @@ class LEDMatrixController(ImConWidgetController):
         self._ledmatrixMode = "single"
         self.ledMatrix.setLEDSingle(indexled=int(LEDid), state=state)
         pattern = self.ledMatrix.getPattern()
-
-    # GUI functions
-    def connect_leds(self):
-        """Connect leds (Buttons) to the Sample Pop-Up Method"""
-        # Connect signals for all buttons
-        return
 
     @APIExport()
     def setEnabled(self, enabled:bool) -> None:

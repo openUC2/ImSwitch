@@ -257,7 +257,6 @@ const ConfigurationWizard = ({ open, onClose, hostIP, hostPort }) => {
         "mockxx": null,
         "jetsonnano": null,
         "Stresstest": {},
-        "HistoScan": null,
         "Workflow": null,
         "FlowStop": null,
         "Lepmon": null,

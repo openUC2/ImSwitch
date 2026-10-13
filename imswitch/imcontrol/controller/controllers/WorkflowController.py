@@ -1,8 +1,10 @@
 from fastapi import HTTPException
 from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext, WorkflowStep, WorkflowsManager
-from imswitch.imcommon.model import initLogger
+from imswitch.imcommon.model import initLogger, dirtools
+from imswitch.imcontrol.model.aufgaben.storage import save_image
+import os
+import time
 import numpy as np
-import tifffile
 from imswitch.imcommon.model import APIExport
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import LiveUpdatedController
@@ -242,21 +244,19 @@ class WorkflowController(LiveUpdatedController):
         metadata["frame_saved"] = True
 
     def save_frame_tiff(self, context: WorkflowContext, metadata: Dict[str, Any]):
-        # Retrieve the TIFF writer and write the tile
-        tiff_writer = context.get_object("tiff_writer")
-        if tiff_writer is None:
-            self._logger.debug("No TIFF writer found in context!")
-            return
-        img = metadata["result"]
-        # append the image to the tiff file
-        tiff_writer.save(img)
+        """Keep the step's frame; close_tiff_writer writes them all as one OME-TIFF."""
+        context.data.setdefault("tiff_frames", []).append(np.asarray(metadata["result"]))
         metadata["frame_saved"] = True
 
-    def close_tiff_writer(self):
-        if self.tiff_writer is not None:
-            self.tiff_writer.close()
-        else:
-            raise ValueError("TIFF writer is not initialized.")
+    def close_tiff_writer(self, context: WorkflowContext, metadata: Dict[str, Any]):
+        """The frames kept by save_frame_tiff as a time series in <data>/Workflow/."""
+        frames = context.data.pop("tiff_frames", [])
+        if not frames:
+            return
+        path = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "Workflow",
+                            time.strftime("%Y%m%d_%H%M%S") + ".ome.tif")
+        save_image(path, np.stack(frames), "TYXS" if frames[0].ndim == 3 else "TYX")
+        metadata["tiff_path"] = path
 
 
     def wait_time(self, seconds: float, context: WorkflowContext, metadata: Dict[str, Any]):
@@ -372,9 +372,6 @@ class WorkflowController(LiveUpdatedController):
         wf = Workflow(steps, self.workflow_manager)
         context = WorkflowContext()
 
-        # Insert the tiff writer object into context so `save_frame` can use it
-        tiff_writer = tifffile.TiffWriter("timelapse.tif")
-        context.set_object("tiff_writer", tiff_writer)
         context.on("progress", sendProgress)
         # Run the workflow
         # context = wf.run_in_background(context)

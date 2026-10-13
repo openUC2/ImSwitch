@@ -39,3 +39,21 @@ def test_streaming_writes_valid_ngff(tmp_path):
     group = zarr.open_group(str(group_path), mode="r")
     Image.from_zarr(group)
     assert group["0"].shape == (3, 1, 1, 30, 40) and int(group["0"][2, 0, 0, 5, 5]) == 2
+
+
+def test_snap_tiff_keeps_calibration_position_and_attributes(tmp_path):
+    """Snaps are OME-TIFFs: pixel size, top-left position, exposure, all attributes kept."""
+    import ome_types
+    from imswitch.imcontrol.model.io.recording_service import save_snap_tiff
+    metadata = {"Detector": "cam", "Channel": "488nm", "PhysicalSizeX": 0.5,
+                "PositionX": 100.0, "PositionY": 50.0, "PositionZ": 3.0, "ExposureTime": 0.02,
+                "Gain": 2.0, "AcquisitionAttributes": {"Laser": {"power": 5}}}
+    path = tmp_path / "snap.ome.tiff"
+    save_snap_tiff(str(path), np.zeros((30, 40), np.uint16), metadata)
+    ome = ome_types.from_tiff(path)
+    pixels = ome.images[0].pixels
+    plane = pixels.planes[0]
+    assert pixels.physical_size_x == 0.5 and pixels.channels[0].name == "488nm"
+    assert (plane.position_x, plane.position_y, plane.exposure_time) == (90.0, 42.5, 20.0)
+    notes = {m.k: m.value for m in ome.structured_annotations.map_annotations[0].value.ms}
+    assert notes["Gain"] == "2.0" and notes["AcquisitionAttributes/Laser/power"] == "5"

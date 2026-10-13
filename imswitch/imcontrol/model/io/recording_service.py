@@ -24,12 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from .io_utils import _safe_scalar_float
-from .ome_writers.ome_tiff_metadata import build_ome_metadata_from_dict
-
-try:
-    import tifffile as tiff
-except ImportError:
-    tiff = None
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 
 try:
     import cv2
@@ -153,13 +148,6 @@ class BackgroundStorageWorker:
         self._tasks_completed = 0
         self._tasks_failed = 0
 
-        # Per-filepath kept-open TiffWriter handles for 'append_tiff' tasks.
-        # ``tiff.imwrite(..., append=True)`` reopens the file, reads the
-        # IFD chain, seeks to the end and rewrites the directory on every
-        # call. For 9 MP / 18 MB frames that's ~3x the cost of a normal
-        # append. Reuse one ``TiffWriter`` per filepath instead and close
-        # them all on stop().
-        self._tiff_appenders: Dict[str, "tiff.TiffWriter"] = {}
     
     def start(self):
         """Start the background worker thread."""
@@ -181,15 +169,6 @@ class BackgroundStorageWorker:
 
         if wait and self._worker_thread:
             self._worker_thread.join(timeout=timeout)
-
-        # Flush + close any kept-open append-TiffWriters so the IFD chain
-        # is finalised on disk and the files are readable.
-        for path, writer in list(self._tiff_appenders.items()):
-            try:
-                writer.close()
-            except Exception as e:
-                self._logger.warning(f"Closing TIFF appender for {path} failed: {e}")
-        self._tiff_appenders.clear()
 
         self._is_running = False
         self._logger.info(f"BackgroundStorageWorker stopped. Completed: {self._tasks_completed}, Failed: {self._tasks_failed}")
@@ -251,8 +230,6 @@ class BackgroundStorageWorker:
                 self._write_png(task.filepath, task.data)
             elif task.task_type == 'snap_jpg':
                 self._write_jpg(task.filepath, task.data)
-            elif task.task_type == 'append_tiff':
-                self._append_tiff(task.filepath, task.data)
             else:
                 message = f"Unknown task type: {task.task_type}"
                 success = False
@@ -265,20 +242,9 @@ class BackgroundStorageWorker:
                 task.callback(success, message)
     
     def _write_tiff(self, filepath: str, data: np.ndarray, metadata: Dict = None):
-        """Write TIFF file with optional OME-XML metadata."""
-        os.makedirs(os.path.dirname(filepath), exist_ok=True) if os.path.dirname(filepath) else None
-        if metadata:
-            try:
-                xml = build_ome_metadata_from_dict({
-                    **metadata, "height": data.shape[0], "width": data.shape[1],
-                    "dtype": str(data.dtype), "rgb": data.ndim == 3 and data.shape[-1] == 3})
-                tiff.imwrite(filepath, data, description=xml, metadata=None)
-            except Exception as e:
-                logger.warning(f"Failed to write metadata to TIFF: {e}")
-                tiff.imwrite(filepath, data)
-        else:
-            tiff.imwrite(filepath, data)
-    
+        """A snap as OME-TIFF through the shared OME writer."""
+        save_snap_tiff(filepath, data, metadata)
+
     def _write_png(self, filepath: str, data: np.ndarray):
         """Write PNG file."""
         os.makedirs(os.path.dirname(filepath), exist_ok=True) if os.path.dirname(filepath) else None
@@ -296,36 +262,28 @@ class BackgroundStorageWorker:
         if img.ndim == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
         cv2.imwrite(filepath, img)
-    
-    def _append_tiff(self, filepath: str, data: np.ndarray):
-        """Append a frame to a multi-page TIFF, keeping the writer open.
 
-        Previously this called ``tiff.imwrite(filepath, data, append=True)``
-        on every frame, which reopens the file and rewrites the IFD chain
-        each time — ~3x the cost of a normal append for 9 MP frames. We
-        now keep one ``TiffWriter`` per filepath in
-        ``self._tiff_appenders`` and only close them on ``stop()``.
 
-        Cheap compression (``zlib`` level 1) is applied by default — on
-        microscopy data it usually halves the on-disk size at ~1 GB/s on
-        a Pi 5, which is faster end-to-end than uncompressed because
-        storage I/O is the bottleneck. Pass ``metadata['compression']`` /
-        ``metadata['compressionargs']`` via a wrapper if you need to
-        override per task.
-        """
-        os.makedirs(os.path.dirname(filepath), exist_ok=True) if os.path.dirname(filepath) else None
+def save_snap_tiff(filepath: str, image: np.ndarray, metadata: Dict = None) -> None:
+    """A snap as OME-TIFF with what the snap metadata knows.
 
-        writer = self._tiff_appenders.get(filepath)
-        if writer is None:
-            writer = tiff.TiffWriter(filepath, bigtiff=True, append=os.path.exists(filepath))
-            self._tiff_appenders[filepath] = writer
-
-        try:
-            writer.write(data, compression="zlib", compressionargs={"level": 1})
-        except TypeError:
-            # Older tifffile rejects ``compressionargs`` — retry with the
-            # codec default level, which is still cheap.
-            writer.write(data, compression="zlib")
+    ``metadata`` as built by ``RecordingService._build_metadata``: PhysicalSizeX (µm),
+    PositionX/Y/Z (stage, µm, field centre), ExposureTime (s), Channel, Detector.
+    Everything else travels as OME key/value annotations.
+    """
+    md = dict(metadata or {})
+    rgb = image.ndim == 3 and image.shape[-1] == 3
+    h, w = image.shape[:2]
+    px = md.get("PhysicalSizeX")
+    pos = [md.get(f"Position{a}") for a in "XYZ"]
+    origin = None
+    if px and pos[0] is not None and pos[1] is not None:
+        origin = (pos[0] - w * px / 2, pos[1] - h * px / 2, pos[2] or 0.0)
+    exposure_s = md.get("ExposureTime")
+    os.makedirs(os.path.dirname(filepath), exist_ok=True) if os.path.dirname(filepath) else None
+    save_image(filepath, image, "YXS" if rgb else "YX", pixel_size_um=px, origin_um=origin,
+               channel_names=[str(md.get("Channel") or md.get("Detector") or "C0")],
+               exposure_ms=[exposure_s * 1000] if exposure_s else [], annotations=md)
 
 
 # =============================================================================
@@ -1059,18 +1017,7 @@ class RecordingService(SignalInterface):
                 os.makedirs(dirname, exist_ok=True)
             
             if format in (SaveFormat.TIFF, SaveFormat.OME_TIFF):
-                # Write TIFF with metadata as description (safe approach)
-                if metadata:
-                    try:
-                        import json
-                        # Store metadata as JSON description to avoid tifffile bugs
-                        desc_str = json.dumps(metadata, default=str)
-                        tiff.imwrite(filepath, image, description=desc_str)
-                    except Exception:
-                        # Fallback: write without metadata
-                        tiff.imwrite(filepath, image)
-                else:
-                    tiff.imwrite(filepath, image)
+                save_snap_tiff(filepath, image, metadata)
             elif format == SaveFormat.PNG:
                 img = image.copy()
                 if img.dtype in (np.float32, np.float64):

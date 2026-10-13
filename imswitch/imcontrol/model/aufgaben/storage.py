@@ -43,7 +43,8 @@ import numpy as np
 import tifffile
 import zarr
 from ome_types import OME
-from ome_types.model import Channel, Image, Pixels, Plane, TiffData
+from ome_types.model import (AnnotationRef, Channel, Image, Map, MapAnnotation, Pixels, Plane,
+                             StructuredAnnotations, TiffData)
 from ome_zarr_models.v04.hcs import HCSAttrs as _Hcs04
 from ome_zarr_models.v04.image import ImageAttrs as _Image04
 from ome_zarr_models.v04.well import WellAttrs as _Well04
@@ -83,6 +84,8 @@ class ImageSpec:
     chunks_yx: Optional[Tuple[int, int]] = None   # default: up to 1024 x 1024
     exposure_ms: List[Optional[float]] = field(default_factory=list)   # per channel
     bit_depth: Optional[int] = None         # camera bits; sets the display window
+    annotations: Dict[str, Any] = field(default_factory=dict)   # acquisition key/values
+
 
     def channels(self, n: int) -> List[Tuple[str, str]]:
         """(name, colour) for n channels, filling in what the spec leaves out."""
@@ -94,6 +97,18 @@ class ImageSpec:
         if self.bit_depth:
             return float(2 ** self.bit_depth - 1)
         return float(np.iinfo(self.dtype).max) if np.dtype(self.dtype).kind in "ui" else 1.0
+
+
+def _flat(values: Dict[str, Any], prefix: str = "") -> Dict[str, str]:
+    """Nested metadata as flat "a/b" -> text pairs (OME MapAnnotation, zarr attrs)."""
+    out: Dict[str, str] = {}
+    for key, value in values.items():
+        name = f"{prefix}{key}"
+        if isinstance(value, dict):
+            out.update(_flat(value, f"{name}/"))
+        elif value is not None:
+            out[name] = str(value)
+    return out
 
 
 def _group_attrs(version: str, kind: str, body: dict) -> dict:
@@ -169,7 +184,13 @@ def ome_xml(spec: ImageSpec, rgb: bool = False) -> str:
                           samples_per_pixel=samples, **({} if rgb else {"color": f"#{color}"}))
                   for name, color in channels],
         planes=planes, tiff_data_blocks=[TiffData(plane_count=len(planes))])
-    return OME(images=[Image(name=spec.name, pixels=pixels)], creator="ImSwitch").to_xml()
+    if not spec.annotations:
+        return OME(images=[Image(name=spec.name, pixels=pixels)], creator="ImSwitch").to_xml()
+    note = MapAnnotation(namespace="openuc2.org/imswitch/acquisition", value=Map(ms=[
+        Map.M(k=k, value=v) for k, v in _flat(spec.annotations).items()]))
+    image = Image(name=spec.name, pixels=pixels, annotation_refs=[AnnotationRef(id=note.id)])
+    return OME(images=[image], structured_annotations=StructuredAnnotations(map_annotations=[note]),
+               creator="ImSwitch").to_xml()
 
 
 def _tiff_tile(y: int, x: int) -> Tuple[int, int]:
@@ -232,7 +253,8 @@ def save_image(path, data: np.ndarray, axes: Optional[str] = None, *,
                t_step_s: float = 1.0, origin_um: Optional[Tuple[float, float, float]] = None,
                channel_names: Sequence[str] = (), channel_colors: Sequence[str] = (),
                exposure_ms: Sequence[Optional[float]] = (), bit_depth: Optional[int] = None,
-               name: Optional[str] = None, version: str = "0.4") -> Path:
+               name: Optional[str] = None, annotations: Optional[Dict[str, Any]] = None,
+               version: str = "0.4") -> Path:
     """Write one image as OME-TIFF (``*.tif``, ``*.tiff``) or OME-Zarr (``*.zarr``).
 
     Args:
@@ -249,6 +271,8 @@ def save_image(path, data: np.ndarray, axes: Optional[str] = None, *,
         exposure_ms: Per channel.
         bit_depth: Camera bits; sets the display window and SignificantBits.
         name: Image name; default the file name.
+        annotations: Acquisition key/values (nested dicts are flattened); an OME
+            MapAnnotation in TIFF, ``attrs["acquisition"]`` in zarr.
         version: NGFF version for OME-Zarr.
 
     Returns the path written. Large images get a pyramid (SubIFDs or zarr levels).
@@ -272,7 +296,7 @@ def save_image(path, data: np.ndarray, axes: Optional[str] = None, *,
                      channel_names=[f"{n}_rgb_{s}" for n in names for s in "rgb"] if rgb
                      else names, channel_colors=() if rgb else channel_colors,
                      exposure_ms=[e for e in exposure_ms for _ in range(3 if rgb else 1)],
-                     name=name or path.name.split(".")[0])
+                     name=name or path.name.split(".")[0], annotations=dict(annotations or {}))
     if path.suffix.lower() in (".tif", ".tiff"):
         return _write_ome_tiff(path, _pyramid(array), spec, rgb=rgb)
     if path.suffix.lower() != ".zarr":
@@ -321,6 +345,8 @@ class NgffImage:
         body = {"multiscales": [_multiscales(self.spec, self.levels, self.version)],
                 "omero": _omero(self.spec, self.array.shape[1], self.version)}
         self.group.attrs.update(_group_attrs(self.version, "image", body))
+        if self.spec.annotations:
+            self.group.attrs["acquisition"] = _flat(self.spec.annotations)
 
     def write(self, plane: np.ndarray, t: int, c: int, z: int, y0: int = 0, x0: int = 0) -> None:
         if t >= self.array.shape[0]:   # grow in doubling steps; finalize trims the rest

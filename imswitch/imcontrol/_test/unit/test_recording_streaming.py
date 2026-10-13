@@ -2,6 +2,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import zarr
 from ome_zarr_models.v04.image import Image
 
@@ -57,3 +58,24 @@ def test_snap_tiff_keeps_calibration_position_and_attributes(tmp_path):
     assert (plane.position_x, plane.position_y, plane.exposure_time) == (90.0, 42.5, 20.0)
     notes = {m.k: m.value for m in ome.structured_annotations.map_annotations[0].value.ms}
     assert notes["Gain"] == "2.0" and notes["AcquisitionAttributes/Laser/power"] == "5"
+
+
+@pytest.mark.parametrize("zarr_too", [False, True])
+def test_streaming_tiff_is_exported_from_the_zarr_image(tmp_path, zarr_too):
+    """OME-TIFF recordings come from the same NGFF image; TIFF-only keeps no zarr."""
+    import ome_types
+    service = RecordingService()
+    try:
+        service.start_streaming(str(tmp_path / "rec"), _Detectors(), write_zarr=zarr_too,
+                                write_tiff=True, auto_capture=False)
+        for t in range(4):
+            service.write_streaming_frame("cam", np.full((30, 40), t, np.uint16))
+        service.stop_streaming()
+    finally:
+        service.shutdown()
+    tiff = next(Path(tmp_path).rglob("*_cam.ome.tiff"))
+    pixels = ome_types.from_tiff(tiff).images[0].pixels
+    assert (pixels.size_t, pixels.size_y, pixels.size_x) == (4, 30, 40)
+    assert pixels.physical_size_x == 0.65
+    stores = [p for p in Path(tmp_path).rglob("*.zarr") if p.is_dir()]
+    assert bool(stores) == zarr_too

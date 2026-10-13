@@ -61,7 +61,6 @@ from .session import SessionInfo, SessionManager, SessionFileLock
 from .writers import (
     WriterBase,
     OMEZarrWriter,
-    OMETiffWriter,
     get_writer,
     convert_detector_context,
     convert_frame_event,
@@ -130,7 +129,6 @@ __all__ = [
     # === Base Writers ===
     'WriterBase',
     'OMEZarrWriter',
-    'OMETiffWriter',
     'get_writer',
     'convert_detector_context',
     'convert_frame_event',

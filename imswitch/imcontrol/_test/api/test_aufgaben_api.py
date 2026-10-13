@@ -142,3 +142,18 @@ def test_region_job_with_focus_map_prescan_and_stitching(api_server):
         models.open_ome_zarr(zarr.open_group(str(folder / f"{name}.ome.zarr"), mode="r"))
     stitched = zarr.open_group(str(folder / "ra_img_stitched.ome.zarr"), mode="r")["0"]
     assert stitched.shape[3:] == (540, 720)   # 2 x 2 tiles of 300 x 400 px, 20 % overlap
+
+
+def test_stop_flow_template_runs_on_the_virtual_fluidics(api_server):
+    """FlowStop as a job: heater, valve, pump volume, capture, flush."""
+    catalogue = {e["id"]: e for e in api_server.get(f"{API}/getAufgabenCatalog").json()}
+    assert catalogue["pump_volume"]["schema"]["properties"]["pump"]["enum"] == ["peristaltic"]
+    assert catalogue["set_valve"]["schema"]["properties"]["valve"]["enum"] == ["inlet"]
+    job = api_server.get(f"{API}/getAufgabenJob?name=stop_flow_fluidics").json()
+    assert api_server.post(f"{API}/validateAufgabenJob", json=job).json()["ok"]
+    response = api_server.post(f"{API}/startAufgabenJob", json={
+        "job": job, "parameters": {"cycles": 2, "volume_ul": 20, "target_c": 20}})
+    assert response.status_code == 200, response.text
+    status = _wait_done(api_server)
+    assert status["state"] == "finished", status
+    assert status["frames"] == 2 and status["variables"]["images"] == 2

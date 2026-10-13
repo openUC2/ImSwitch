@@ -38,19 +38,14 @@ It provides unified access to all recording operations with MetadataHub integrat
 Alternative APIs:
 =================
 
-1. SnapService - Lightweight snap-only service
-       from imswitch.imcontrol.model.io import get_snap_service
-       snap_service = get_snap_service()
-       results = snap_service.snap(savepath='/data/snap', format='tiff')
-
-2. AcquisitionDataStore - Low-level streaming with full control
+1. AcquisitionDataStore - Low-level streaming with full control
        from imswitch.imcontrol.model.io import AcquisitionDataStore, SessionInfo
        store = AcquisitionDataStore(session, hub_snapshot, write_zarr=True)
        store.open(detector_contexts)
        store.write_frame(detector_name, frame, frame_event)
        store.close()
 
-3. save_image - one image to an OME-TIFF or OME-Zarr file
+2. save_image - one image to an OME-TIFF or OME-Zarr file
        from imswitch.imcontrol.model.aufgaben.storage import save_image
        save_image('/data/snap.ome.tif', frame, pixel_size_um=0.65)
 
@@ -67,12 +62,6 @@ from .writers import (
     list_available_writers,
 )
 from .adapters import DataStoreAdapter, StreamingDataStoreAdapter
-from .snap_service import (
-    SnapService,
-    SnapResult as SnapServiceResult,
-    get_snap_service,
-    shutdown_snap_service,
-)
 from .recording_service import (
     RecordingService,
     SaveMode,
@@ -137,11 +126,6 @@ __all__ = [
     # === Adapters for compatibility ===
     'DataStoreAdapter',
     'StreamingDataStoreAdapter',
-    
-    # === Snap service (lightweight alternative) ===
-    'SnapService',
-    'get_snap_service',
-    'shutdown_snap_service',
     
     # === OME Writers (migrated from experiment_controller) ===
     'OMEWriter',

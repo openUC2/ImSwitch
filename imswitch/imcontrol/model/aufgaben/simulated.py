@@ -6,16 +6,20 @@ the light and the stage position, so tests can check what was acquired.
 from __future__ import annotations
 
 import time
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
-from .hardware import CAPABILITIES
+from .hardware import CAPABILITIES, DerivedImage
 
 
 class SimulatedMicroscope:
+    """``surface(x, y) -> z``: where autofocus finds focus (default: the current Z)."""
+
     def __init__(self, capabilities: Optional[Set[str]] = None, frame_shape=(32, 48),
-                 pixel_size_um: float = 1.0, sources=("LED", "Laser488")):
+                 pixel_size_um: float = 1.0, sources=("LED", "Laser488"),
+                 surface: Optional[Callable[[float, float], float]] = None):
+        self.surface = surface
         self.caps = set(CAPABILITIES) if capabilities is None else set(capabilities)
         self.frame_shape, self.px = frame_shape, pixel_size_um
         self.position = {"X": 0.0, "Y": 0.0, "Z": 0.0}
@@ -90,7 +94,8 @@ class SimulatedMicroscope:
 
     def snap(self, detector=None) -> np.ndarray:
         light = sum(self.lights[s] for s in self.lights if self.on[s])
-        self._call("snap", light, dict(self.position))
+        lit = tuple(s for s in self.on if self.on[s])
+        self._call("snap", light, dict(self.position), self.camera["exposure_ms"], lit)
         value = min(65535, int(light + abs(self.position["Z"])))
         return np.full(self.frame_shape, value, dtype=np.uint16)
 
@@ -100,10 +105,31 @@ class SimulatedMicroscope:
     def fov_um(self, detector=None) -> Tuple[float, float]:
         return self.frame_shape[1] * self.px, self.frame_shape[0] * self.px
 
+    def bit_depth(self, detector=None) -> Optional[int]:
+        return 12
+
     # -- focus and objective -----------------------------------------------------
     def autofocus(self, mode, range_um, step_um, algorithm, settle_s, max_attempts):
         self._call("autofocus", mode, range_um)
+        if self.surface is not None:
+            self.position["Z"] = float(self.surface(self.position["X"], self.position["Y"]))
         return self.position["Z"]
+
+    # -- scans ----------------------------------------------------------------------
+    def fast_stage_scan(self, x0_um, y0_um, nx, ny, step_x_um, step_y_um, sources, intensities,
+                        exposure_ms, settle_ms, timeout_s) -> str:
+        self._call("fast_stage_scan", x0_um, y0_um, nx, ny, step_x_um, step_y_um, list(sources))
+        self.position.update(X=x0_um + (nx - 1) * step_x_um, Y=y0_um + (ny - 1) * step_y_um)
+        return "/ExperimentController/simulated_FastStageScan.ome.zarr"
+
+    def stage_prescan(self, x_min_um, x_max_um, y_min_um, y_max_um, line_step_um, speed_um_s,
+                      timeout_s) -> DerivedImage:
+        self._call("stage_prescan", x_min_um, x_max_um, y_min_um, y_max_um)
+        um_per_px = 10.0
+        shape = (max(1, int((y_max_um - y_min_um) / um_per_px)),
+                 max(1, int((x_max_um - x_min_um) / um_per_px)))
+        data = np.arange(shape[0] * shape[1], dtype=np.uint8).reshape(shape)
+        return DerivedImage("overview", data, um_per_px, (x_min_um, y_min_um))
 
     def set_objective(self, slot: int) -> None:
         self._call("objective", slot)

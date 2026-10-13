@@ -49,21 +49,13 @@ from .ome_tiff_stitcher import OmeTiffStitcher
 from .single_tiff_writer import SingleTiffWriter
 from .ome_writer import OMEWriter, OMEWriterConfig, OMEFileStorePaths
 from .metadata import MinimalMetadata
-from .minimal_zarr_source import MinimalZarrDataSource
 from .omero_uploader import (
     OMEROUploader,
     OMEROConnectionParams,
     TileMetadata,
     is_omero_available,
 )
-from .ome_tiff_metadata import (
-    build_ome_metadata,
-    build_ome_metadata_from_dict,
-    build_ome_instrument,
-    OMEMetadataParams,
-    OMEInstrumentTemplate,
-    OME_TYPES_AVAILABLE,
-)
+from .ome_tiff_metadata import build_ome_metadata_from_dict
 from .plate_metadata import build_plate_metadata, write_plate_metadata_sidecar
 
 __all__ = [
@@ -74,17 +66,10 @@ __all__ = [
     # Specialized writers
     'OmeTiffStitcher',
     'SingleTiffWriter',
-    # Zarr streaming
-    'MinimalZarrDataSource',
     # Metadata utilities
     'MinimalMetadata',
-    # OME-TIFF metadata (using ome_types library)
-    'build_ome_metadata',
+    # OME-XML for single-plane TIFFs (ome-types, shared with the OME writer)
     'build_ome_metadata_from_dict',
-    'build_ome_instrument',
-    'OMEMetadataParams',
-    'OMEInstrumentTemplate',
-    'OME_TYPES_AVAILABLE',
     # OME-NGFF plate metadata sidecar
     'build_plate_metadata',
     'write_plate_metadata_sidecar',

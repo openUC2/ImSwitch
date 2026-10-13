@@ -30,10 +30,10 @@ It provides unified access to all recording operations with MetadataHub integrat
     service.add_video_frame(frame)
     service.stop_video_recording()
     
-    # Streaming to OME-Zarr
-    service.start_streaming('/path/to/data.zarr', format=SaveFormat.OME_ZARR)
-    service.write_streaming_frame(detector_name, frame, metadata)
-    service.stop_streaming()
+    # Streaming to OME-Zarr (one NGFF image per detector in the session folder)
+    service.start_streaming('/path/to/session', detectorsManager, auto_capture=False)
+    service.write_streaming_frame(detector_name, frame)
+    stats = service.stop_streaming()
 
 Alternative APIs:
 =================
@@ -97,7 +97,6 @@ from .ome_writers import (
     OmeTiffStitcher,
     SingleTiffWriter,
     MinimalMetadata,
-    MinimalZarrDataSource,
     # OMERO uploader
     OMEROUploader,
     OMEROConnectionParams,
@@ -158,7 +157,6 @@ __all__ = [
     'OmeTiffStitcher',
     'SingleTiffWriter',
     'MinimalMetadata',
-    'MinimalZarrDataSource',
     # OMERO uploader
     'OMEROUploader',
     'OMEROConnectionParams',

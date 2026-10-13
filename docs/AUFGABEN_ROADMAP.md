@@ -3,7 +3,7 @@
 *Status 2026-10-13, branch `feat/AufgabenController`. Compares openUC2/ImSwitch with Nikon
 NIS-Elements **JOBS** (NIS-Elements AR online help) and plans a modular, user-composable
 acquisition-workflow system that reuses the ExperimentController primitives and also drives pumps,
-valves and general-purpose I/O. Phases 0 and 1 are done (§5). Phases 2–6 are proposals.*
+valves and general-purpose I/O. Phases 0–2 are done (§5). Phases 3–6 are proposals.*
 
 Names used throughout:
 
@@ -67,9 +67,35 @@ untyped.
 - **Virtual microscope**: exposure scales the image, `getParameter` works, blocking stage moves
   take distance divided by speed.
 
-**Next.** Phase 2 (capture depth, focus maps, well-plate coordinates, the fast-scan node, the napari
-NGFF path) and Phase 3 (the frontend app) can start now. The API tests pin the catalogue and status
-contract the app builds on. About 14–19 developer-weeks remain to a complete v1.
+**What Phase 2 delivered.**
+
+- **Focus maps and regions**: `create_focus_map` autofocuses at points, region grids or wells and
+  fits one surface per region or well, with the same `FocusMap` ExperimentController uses (now in
+  the host-independent package). Position, well, region and tile loops follow a surface
+  (`focus_map`); `move_to_focus_surface` moves Z onto it. `loop_regions` visits regions, and
+  `loop_grid` without a plan covers the current region with tiles.
+- **Capture depth**: ring and DPC channels drive the LED matrix through a typed pattern;
+  `keep_light_on_between_channels` switches each light once; every frame records its exposure and
+  the camera bit depth.
+- **Well plates**: ImSwitch labware registers as useq plates. Both use the same convention (rows
+  towards −Y, columns towards +X), checked well by well for every regular plate.
+  `getAufgabenWellPlate` turns a labware and its stage offset into a plan.
+- **Scans and stitching**: `fast_stage_scan` wraps ExperimentController's firmware-timed scan;
+  `stage_prescan` keeps the stage map's prescan overview with the run; `stitched_preview` writes one
+  stitched image per position, at stage positions or registered with Ashlar.
+- **napari openUC2 processor**: reads OME-Zarr runs through the same processors as TIFF tiles.
+- **useq equivalence**: an imported sequence acquires exactly the events useq lists, in four axis
+  orders, expanded into loops or kept whole.
+- **Requested clean-ups**: ome-zarr-models and ome-types are runtime dependencies; every NGFF
+  attribute block is checked against ome-zarr-models when it is written; all OME-XML comes from one
+  ome-types builder; the other zarr writers were replaced or removed; the recording service's
+  streaming method works; the stage map and focus-lock calibration take part in the busy check;
+  `imswitch/_data/openapi.json` is regenerated.
+- **Bugs found on the way** (§7.8), among them an OME-TIFF export that failed for any frame wider
+  than 512 px and a virtual microscope whose camera was mirrored against its stage.
+
+**Next.** Phase 3 (the frontend app) and Phase 4 (peripherals) can start; Phase 5 adds the analysis
+tasks such as `regions_from_overview`. About 11–15 developer-weeks remain to a complete v1.
 
 ---
 
@@ -462,14 +488,17 @@ Legend: ✅ exists as a callable primitive, 🟡 exists but needs wrapping/typin
 | Module | Content |
 |---|---|
 | `document.py` | `Job`, `Node`, `Parameter`, `Storage`, the resource kinds (`positions`, `well_plate`, `grid`, `z_plan`, `time_plan`, `capture`, `autofocus`, `regions`, `focus_map`), `CaptureChannel` (a useq `Channel` plus intensity, gain, LED pattern) |
-| `control.py` | 23 control nodes with parameter models, allowed branches, useq axis, accepted resource kinds and expression fields |
-| `hardware.py` | `Microscope`: the protocol a host implements (stage, light, camera, autofocus, objective; optional digital I/O, pumps, valves, temperature, sensors) |
-| `registry.py` | `@task`, `TaskContext` (carries Arkitekt's task marker), `TaskFlags` (moves, homes, light, external, code, confirm, needed capabilities), `catalogue()` |
-| `primitives.py` | 19 tasks: move to/by, home, loading position, illumination, camera, autofocus, objective, digital out/pulse/wait for input, pump volume/run/stop, valve, set/read temperature, HTTP request |
+| `control.py` | 26 control nodes with parameter models, allowed branches, useq axis, accepted resource kinds and expression fields (Phase 2 added `loop_regions`, `create_focus_map`, `move_to_focus_surface`) |
+| `hardware.py` | `Microscope`: the protocol a host implements (stage, light, camera, autofocus, objective; optional fast stage scan, prescan, digital I/O, pumps, valves, temperature, sensors); `DerivedImage` for images a task computes |
+| `registry.py` | `@task`, `TaskContext` (carries Arkitekt's task marker), `TaskFlags` (moves, homes, light, external, code, confirm, needed capabilities), `catalogue()`, `MEMORY_STRUCTURES` (types an Arkitekt app declares once) |
+| `primitives.py` | 21 tasks: move to/by, home, loading position, illumination, camera, autofocus, objective, fast stage scan, prescan, digital out/pulse/wait for input, pump volume/run/stop, valve, set/read temperature, HTTP request |
+| `engine.py`, `simulated.py` | The executor (§4.3) and a simulated host for tests (Phase 1) |
+| `storage.py`, `stitching.py` | The shared OME writer (§4.5) and tile stitching (stage positions or Ashlar) |
+| `focus_map.py` | Surface fitting with leave-one-out error, shared with ExperimentController (moved here in Phase 2) |
 | `expressions.py` | Safe expression language: whitelisted AST, no `eval`, no imports, no underscore names, bounded exponents |
 | `validate.py` | Structure, references, parameter types, loop scoping, capabilities, and the ask-first list |
 | `useq_bridge.py` | `job_from_sequence`, `sequence_from_job`; round trip gives identical events |
-| `examples/*.json` | Live-cell plate time lapse; stop-flow with heater, valve and pump; tile scan with focus check and operator question |
+| `examples/*.json` | Live-cell plate time lapse; stop-flow with heater, valve and pump; tile scan with focus check and operator question; prescan, focus map and region tiles |
 
 A job, abridged from `examples/stop_flow_fluidics.json`:
 
@@ -554,11 +583,26 @@ instrument lacks and offers its real device names as choices.
 - OME-TIFF is exported from zarr level 0, one file per image: BigTIFF, tiles up to 512×512, zlib with
   a predictor, channel names, physical sizes, per-plane positions and `DeltaT`. Planes are streamed,
   not held in memory.
-- Validation: unit tests open every output with `ome-zarr-models` and `ome-types`; both are in the
-  `dev` extra.
-- Not yet (Phase 2): camera-to-stage orientation in the translation, per-plane `ExposureTime`,
-  SubIFD pyramids in the TIFF, a display window from the camera bit depth, and the optional legacy
-  tile export (D5).
+- Validation: ome-zarr-models and ome-types are runtime dependencies. Every NGFF attribute block
+  (image, plate, well) is validated against the ome-zarr-models schema of its version before it is
+  written, and unit tests open every output with both libraries.
+- OME-XML: one builder, `ome_xml`, on ome-types: physical sizes, channels with colours, per-plane
+  positions (top-left corner, µm), `DeltaT` and `ExposureTime`, and `SignificantBits` from the
+  camera. The OME-TIFF export, ExperimentController's mosaic hyperstack and every single-plane TIFF
+  (experiment tiles, snaps) use it.
+- OME-TIFF export (Phase 2): the pyramid goes into SubIFDs; planes are streamed tile by tile, so a
+  large image never sits in memory.
+- Orientation: frames reach the writer in stage orientation, because the pixel calibration's flips
+  are applied in the camera (`setFlipImage`). Rotation and shear are not applied anywhere in
+  ImSwitch; a rotated camera needs that first.
+- Display window: from the camera bit depth when the detector manager exposes `bitDepth`, else the
+  dtype range. No manager exposes it yet; the plumbing is in place.
+- Each image carries `attrs["imswitch"]` (`node`, `position`, `tile`, or `derived`) so readers can
+  rebuild the scan without parsing file names.
+- Stitching (`stitching.py`): with `stitched_preview`, one stitched image per capture node and
+  position from its tiles, at stage positions or after Ashlar registration (ashlarUC2's
+  EdgeAligner). The raw tiles stay untouched.
+- The legacy per-tile TIFF export (D5) is not needed: the napari plugin reads OME-Zarr (§7.4).
 
 ### 4.6 HTTP and Socket.IO (`AufgabenController`, built in Phase 1)
 
@@ -575,15 +619,17 @@ Method names carry "Aufgaben" to stay globally unique (`DebugController` already
 | `pauseAufgabenJob`, `resumeAufgabenJob`, `finishAufgabenJob`, `abortAufgabenJob(force)` | Run control |
 | `getAufgabenStatus()`, `answerAufgabenQuestion(answer)` | Status, and the operator's answer to the open question |
 | `importAufgabenUseq(sequence)` (POST), `exportAufgabenUseq(job)` (POST) | The useq bridge |
+| `getAufgabenWellPlate(load_name, wells, offset_x_um, offset_y_um)` | A useq well-plate plan from ImSwitch labware and its stage offset (Phase 2) |
 | `listAufgabenRuns(limit)` | Run folders, newest first |
 
 Runs write to `<data folder>/Aufgaben/<YYYYmmdd_HHMMSS>_<job>/`: `job.json`, `run.jsonl` and the OME
 files. One signal, `sigAufgabenEvent`, carries the engine events to Socket.IO; node events are
 throttled to 10 Hz.
 
-The run lock is the busy check in `controller/busy.py`. ExperimentController, Aufgaben, Arkitekt and
-the firmware updater refuse to start while another of them, a recording or a workflow runs.
-StageMap and focus-lock calibration do not consult it yet.
+The run lock is the busy check in `controller/busy.py`. ExperimentController, Aufgaben, the stage
+map and its prescan, focus-lock calibration, Arkitekt and the firmware updater refuse to start while
+another of them, a recording or a workflow runs. A job's own prescan calls the stage map past that
+check (`runPrescan`), because the job already holds the instrument.
 
 ### 4.7 Frontend app (Phase 3)
 
@@ -632,18 +678,22 @@ Phase 1 added: the virtual camera scales intensity with exposure (reference 1 ms
 divided by speed (default 15,000 µm/s, at most 10 s per move), so waits and timeouts behave as on
 hardware.
 
+Phase 2: the virtual setup enables the stage map, so `stage_prescan` runs virtually; its pixel
+calibration now applies (the camera is mirrored in X and Y against the stage, like an uncalibrated
+real camera; before, its overlapping tiles did not match); the virtual stage declares that its
+stage scan sends no camera triggers, so `fast_stage_scan` is hidden there.
+
 Still missing (all in device managers, none in shared code):
 
-- `VirtualStageManager`: `moveForever`, and a stage-scan simulation with frame IDs (performance mode
-  cannot run virtually).
-- A virtual LED matrix (ring, halves, DPC) and a per-channel illuminator (today the last laser
-  written sets the only intensity).
+- `VirtualStageManager`: `moveForever`, and a stage-scan simulation with camera triggers (performance
+  mode and `fast_stage_scan` cannot run virtually).
+- A virtual LED matrix: ring and DPC channels switch nothing in the virtual image.
+- The virtual sample is too sparse for Ashlar: it finds too few edges and keeps the stage positions.
 - Virtual pump and valve managers once Phase 4 defines the real ones.
 - The Virtual* managers should honour `managerProperties.rs232device` instead of the hard-coded
   "VirtualMicroscope", so a second instance can serve as a focus-lock camera.
 - Objective changes do not change the image magnification.
 - Autofocus needs NanoImagingPack for the defocus blur; without it there is no focus peak.
-
 
 ---
 
@@ -690,16 +740,33 @@ Verified on 2026-10-13:
   2-timepoint, 2-region, 3-plane run.
 - Not done: opening the output in a napari or Fiji window, and any run on real hardware.
 
-### Phase 2 — acquisition depth and the napari path (3–4 weeks)
+### Phase 2 — acquisition depth and the napari path — **done 2026-10-13**
 
-| WP | Deliverable |
+| WP | Result |
 |---|---|
-| 2.1 | Capture with ring and DPC channels, channel Z offsets, `keep_light_on_between_channels`, camera trigger bracket (`_beginTriggeredAcquisition`) |
-| 2.2 | Autofocus, focus maps (`create_focus_map`, `move_to_focus_surface`), per-region offsets |
-| 2.3 | Well plates: useq `WellPlatePlan` ↔ ImSwitch labware (`labware_api`), including the coordinate convention (useq plate rows run towards negative Y; check against the stage frame), NGFF plate layout |
-| 2.4 | `fast_stage_scan` leaf node over performance mode; `stage_prescan` over StageMap; Ashlar stitching as a derived image |
-| 2.5 | napari openUC2 processor: an NGFF discovery path (positions from translations, t/c/z from axes); keep the per-tile path |
-| 2.6 | Equivalence tests: a job imported from a useq sequence acquires the events useq lists, in the same order |
+| 2.1 Capture | Ring and DPC channels with a typed `LedPattern` (the host maps DPC to the matrix halves); `keep_light_on_between_channels`, one light on at a time; exposure and bit depth recorded per frame. Channel Z offsets and the trigger bracket were already in Phase 1. |
+| 2.2 Focus | `create_focus_map` (points, region grids, wells, or the current loop item; one surface per group; fails below `min_points`), `focus_map` on position, well, region and tile loops, `move_to_focus_surface`, `z_offset_um` per map. |
+| 2.3 Well plates | Labware → useq plates (`register_labware`), `getAufgabenWellPlate`. NGFF plates were already in Phase 1. |
+| 2.4 Scans, stitching | `loop_regions`, region-covering `loop_grid`, `fast_stage_scan`, `stage_prescan` with derived images, `stitched_preview` with stage or Ashlar placement. |
+| 2.5 napari plugin | `processing/ngff.py`: OME-Zarr images become the plugin's tiles; all pixel reads go through one loader; Ashlar uses the built-in reader for them; the pixel size comes from the data. In `~/Downloads/napari-openuc2-processor`, uncommitted. |
+| 2.6 Equivalence | Imported sequences acquire the useq events in order: four axis orders, expanded and kept whole. |
+
+Verified on 2026-10-13:
+
+- Backend unit tests: 559 pass; the 4 Arkitekt import errors predate this work. New: 21 Phase 2
+  engine tests (including the region example end to end and Ashlar recovering stage errors), plate
+  registration, the shared busy check, recording streaming, OME-TIFF export of large images, the
+  experiment mosaic hyperstack and single-plane TIFF metadata.
+- API tests on the virtual microscope: 26 pass (Aufgaben, ExperimentController, multi-site scan),
+  including a region job with prescan, focus map, region tiling and stitching.
+- By hand over HTTP: the region job wrote valid NGFF images and OME-TIFFs; overlapping virtual tiles
+  now correlate at 0.997 (X) and 0.57 (Y), up from about zero; the napari plugin read the run as one
+  region of 2 × 2 tiles and stitched it.
+- napari plugin: 47 tests pass. Its own Ashlar processor fails in its venv on a scikit-image import
+  (`skimage.restoration.uft`), unrelated to this change. Its `uv.lock` was already behind its
+  `pyproject.toml` and is not regenerated here.
+- Not done: any run on real hardware (fast stage scan, LED-matrix channels and prescan on a real
+  stage are untested), opening the output in Fiji or a napari window.
 
 ### Phase 3 — Aufgaben app (4–5 weeks; can start once 1.4 fixes the catalogue contract)
 
@@ -733,7 +800,7 @@ users move to Aufgaben. ExperimentController stays (D3).
 |---|---|
 | 0 | done |
 | 1 | done |
-| 2 | 3–4 |
+| 2 | done |
 | 3 | 4–5 (parallel to 2) |
 | 4 | 2–3 (parallel to 2–3) |
 | 5 | 2–3 |
@@ -753,7 +820,7 @@ Phase 1 ──► Phase 2 ──► Phase 5 ──► Phase 6
 |---|---|---|
 | Form library | In-house schema form renderer or `@rjsf/mui` | Start in-house; decide in Phase 3 with real schemas |
 | Python script task | Allow unsandboxed code in jobs? | Allowed only when the setup enables it, always ask-first |
-| Run lock scope | Which other controllers must respect it? | Done for ExperimentController, Aufgaben, Arkitekt and the firmware updater (recordings and workflows count as busy). Open: StageMap and focus-lock calibration |
+| Run lock scope | Which other controllers must respect it? | Done: ExperimentController, Aufgaben, stage map and prescan, focus-lock calibration, Arkitekt, firmware updater; recordings and workflows count as busy |
 | NGFF 0.5 | When to make it the default | When Bio-Formats/Fiji/QuPath read it; check release notes before Phase 6 |
 | Temperature setpoint | `TemperatureController.set_temperature` adds `sensorOffset=3` °C to the target by default | Keep for the existing UI; the Aufgaben adapter passes 0 |
 | newswitch | The core ports by design; the adapter and controller do not | Write the newswitch host adapter when newswitch's Arkitekt 6 migration lands |
@@ -808,12 +875,17 @@ file layout unchanged. What the audit found, and where it stands:
 | No test checked format compliance | `ome-zarr-models` and `ome-types` tests for all three writers |
 | Tiles are placed edge to edge, discarding overlap | Open: the canvas is a preview; stitching stays Ashlar's job |
 | Plate metadata is only a `plate_metadata.json` sidecar | Open for ExperimentController; Aufgaben writes real NGFF plates |
-| The "stitched" OME-TIFF is a multi-series tile collection; individual TIFFs get OME-XML only through `ome-types` | Open, unchanged |
-| `RecordingService.start_streaming` passes a path where the writers expect a `SessionContext` | Open; nothing calls it (the recording app uses the streaming adapter) |
+| The "stitched" OME-TIFF is a multi-series tile collection | Open, unchanged |
+| Individual TIFFs got OME-XML only when the optional `ome-types` was installed, and that builder had plane-index and unit errors | Phase 2: ome-types is a dependency; one builder for every OME-XML |
+| `RecordingService.start_streaming` passed a path where the writers expect a `SessionContext` | Phase 2: rebuilt on the streaming adapter; the recording app uses it |
 
 ### 7.4 The napari openUC2 processor's read contract
 
-It reads only per-tile `.tif` files matched by
+Phase 2 added an OME-Zarr path (`processing/ngff.py` in the plugin): any NGFF image becomes the
+plugin's tiles, one per plane, placed by its translation; ImSwitch images are grouped into regions
+by their `imswitch` attribute and derived images are skipped. The TIFF path below is unchanged.
+
+The TIFF path reads only per-tile `.tif` files matched by
 `t(\d{8}_\d{6})(_r<region>)?_x<x>_y<y>_z<z>_c<idx>_<channel>_i<iter>_p<power>\.tif` and the first
 `*_protocol.json` (`snake_tiles`, `iterator`, `iX`, `iY`, `region_id`). The timepoint comes from the
 folder (`timepoint_NNNN`, or `_experiment<i>_<t>_` when the experiment is named "experiment"). It
@@ -829,12 +901,12 @@ multi-experiment detection needs the default experiment name.
 - `docs/NATIVE_USEQ_MDA.md` claims support for "ALL useq-schema features"; `docs/scripting.rst`
   describes a removed module; `docs/controller_communication_pattern.md` and
   `docs/INTER_CONTROLLER_COMMUNICATION.md` disagree on `getController` versus signals.
-- `WorkflowController`: most registry functions are stubs, `getWorkflowStatus` reads an undefined
-  attribute, both histo endpoints crash, `startWorkflowTileBasedByParameters` does nothing. Kept for
-  now; retire in Phase 6.
+- `WorkflowController`: most registry functions are stubs and `getWorkflowStatus` reads an undefined
+  attribute. Its crashing histo workflows were removed in Phase 2; retire the rest in Phase 6.
 - The UC2Config GPIO endpoints are untyped (OpenAPI shows empty schemas; IDs arrive as strings).
   Phase 4.
-- `pyproject.toml` pins `pydantic==2.11.4` and `numpy==2.1.2`; the venv has 2.13.4 and 2.5.1.
+- `pyproject.toml` pins `numpy==2.1.2`; the venv has 2.5.1. (Phase 2 moved the pydantic pin to
+  2.12.5, which ome-zarr-models needs.)
 - The Arkitekt controller tests fail to import `arkitekt.app.sessions` in the current venv.
 - Seven Jest suites (27 tests) fail on HEAD: App, FocusLockController, configValidation,
   fetchWithTimeout, useDeveloperMode, LiveViewComponent, WiFiController.
@@ -866,6 +938,20 @@ multi-experiment detection needs the default experiment name.
   LEDController and SettingsController are now a fraction of their size; LaserController lost its
   Qt preset slots. 23 signals that nobody emitted or received are gone.
 
+### 7.8 Fixed in Phase 2
+
+| # | Problem | Fix |
+|---|---|---|
+| 30 | The OME-TIFF export streamed whole planes into tiled pages; tifffile wants tiles, so every frame wider or taller than 512 px failed (Phase 1 tests used small frames) | Streams padded tiles; a test exports a 700 × 1100 image with its pyramid |
+| 31 | `PositionerController` did not start on the virtual microscope since Phase 1: the virtual stage replaced its per-axis speed dict with a number | Travel speed kept separately; a test checks the dict |
+| 32 | The virtual pixel calibration never applied: old keys (`"0"`) and scale metrics that contradicted the matrix. Its camera is mirrored against the stage, so tiles could not be stitched | Keys `WidefieldCamera::<slot>` and signed metrics in the bundled virtual setup |
+| 33 | `MetadataHub`'s OME builders imported a class ome-types does not have, so they never ran; nothing called them | Removed |
+| 34 | The single-plane OME-XML builder used plane indices beyond SizeC/SizeZ, guessed mm from µm, referenced light sources that did not exist, and could not describe RGB | Rebuilt on the shared `ome_xml` |
+| 35 | `RecordingService.start_streaming` could not work (wrong constructor argument, a missing write method, no finalize) | On the streaming adapter; `RecordingController` delegates to it |
+| 36 | STORM wrote OME-Zarr through its own `MinimalZarrDataSource` | Shared `NgffImage`; T grows in doubling steps, trimmed at the end |
+| 37 | A focus-lock calibration set its running flag inside its thread, so a busy check right after the start missed it | Set before the thread starts |
+| 38 | WorkflowController's histo workflows wrote through a zarr stub that returned `None`; `startWorkflowTileBasedByParameters` did nothing | Removed |
+
 ---
 
 ## Appendix A — example jobs
@@ -877,11 +963,12 @@ Runnable with the v1 catalogue and validated in CI (`imswitch/imcontrol/model/au
 | `hcs_live_timelapse.json` | UCSD NIC: live-cell plate, 4 channels, z-stack every 30 min for 16 h | well-plate plan with labels, grid of sites, `every` (autofocus every 2nd round), job parameters, `enabled` expressions, `idle` branch, plate storage layout |
 | `stop_flow_fluidics.json` | FlowStop plus a heater and a valve | temperature, `wait_until` on a device reading, valve, pump, variables, `break` |
 | `tile_scan_focus_check.json` | Tile scan with quality control | operator question, `$from` resource, `on_error`, condition on `result.<id>`, `exit_with_error`, `continue` |
+| `region_overview_focus_map.json` | Slide overview, then tissue regions at high magnification | `stage_prescan`, `create_focus_map` per region, `loop_regions`, region-covering `loop_grid` on the focus surface, a dark-field ring channel, Ashlar-stitched output |
 
 Needs later phases:
 
-- **Histology overview** (UCSD use case 2): `stage_prescan` (Phase 2), `regions_from_overview` (Phase 5),
-  a region loop, focus map per region, z-stack, Ashlar stitching (Phase 2).
+- **Histology overview** (UCSD use case 2): everything but `regions_from_overview` (Phase 5) exists;
+  `region_overview_focus_map.json` uses fixed regions until then.
 - **Single-molecule tracking** (UCSD use case 3): a 5-minute 30 ms series needs a streaming capture
   node, a `fast_timelapse` in the spirit of JOBS (Phase 2, on the camera's continuous mode).
 

@@ -2,16 +2,56 @@
 
 Stage, light, camera and autofocus go through ExperimentController's verbs
 (``move_stage_xy/z``, ``grabCameraFrame``, ``set_exposure_time_gain``,
-``autofocus`` ...), so the same code drives an experiment and a job. Digital
-I/O, temperature and sensors use the UC2 board client, the Temperature and
+``autofocus`` ...), so the same code drives an experiment and a job. The fast
+stage scan is ExperimentController's, the prescan the StageMap's. Digital I/O,
+temperature and sensors use the UC2 board client, the Temperature and
 I2CSensor controllers when they are loaded. Units: µm, ms, s, °C.
 """
 import time
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
+import useq
+
+from imswitch.imcontrol.model.aufgaben.hardware import DerivedImage
 
 DIGITAL_LINES = ("1", "2", "3")
+LED_KINDS = {"ring": "ring", "dpc": "halves", "off": "off"}   # Aufgaben kind -> LED matrix call
+
+
+def useq_plate(lab) -> Optional[useq.WellPlate]:
+    """A labware definition (µm) as a useq plate, when its wells form a regular grid.
+
+    Both use the same convention: A1 first, columns towards +X, rows towards -Y.
+    """
+    first = lab.wells[f"{lab.rows[0]}{lab.columns[0]}"]
+    dx = abs(lab.wells[f"{lab.rows[0]}{lab.columns[1]}"].x - first.x) if len(lab.columns) > 1 else 0
+    dy = abs(lab.wells[f"{lab.rows[1]}{lab.columns[0]}"].y - first.y) if len(lab.rows) > 1 else 0
+    for r, row in enumerate(lab.rows):
+        for c, col in enumerate(lab.columns):
+            well = lab.wells.get(f"{row}{col}")
+            if well is None or abs(well.x - (first.x + c * dx)) > 1 or \
+                    abs(well.y - (first.y - r * dy)) > 1:
+                return None
+    geometry = first.geometry
+    circle = geometry.shape == "circle"
+    size = (2 * geometry.radius,) * 2 if circle else (geometry.width, geometry.height)
+    return useq.WellPlate(rows=len(lab.rows), columns=len(lab.columns),
+                          well_spacing=(dx / 1000 or 1.0, dy / 1000 or 1.0),
+                          well_size=(size[0] / 1000, size[1] / 1000), circular_wells=circle,
+                          name=lab.display_name or lab.load_name)
+
+
+def register_labware(manager) -> List[str]:
+    """Make ImSwitch labware usable as useq plate names in jobs; returns the names."""
+    plates = {}
+    for summary in manager.list_summaries():
+        name = summary["load_name"]
+        plate = useq_plate(manager.get(name))
+        if plate is not None:
+            plates[name] = plate
+    useq.register_well_plates(plates)
+    return sorted(plates)
 
 
 class ImSwitchMicroscope:
@@ -47,26 +87,22 @@ class ImSwitchMicroscope:
 
     # -- what is there ----------------------------------------------------------
     def capabilities(self) -> Set[str]:
-        caps: Set[str] = set()
-        exp = self._get("Experiment")
-        if exp is not None:
-            caps |= {"camera", "autofocus"}
-            if exp.mStage is not None:
-                caps.add("stage")
-            if exp.allIlluNames:
-                caps.add("illumination")
-            if exp._ledMatrix is not None:
-                caps.add("led_matrix")
-        if self._get("Objective") is not None:
-            caps.add("objective")
-        esp = self._esp32()
-        if esp is not None:
-            caps.add("digital_io")
-            if getattr(esp, "temperature", None) is not None:
-                caps.add("temperature")
-        if self._get("I2CSensor") is not None:
-            caps.add("sensors")
-        return caps
+        exp, esp = self._get("Experiment"), self._esp32()
+        stage = getattr(exp, "mStage", None)
+        checks = {
+            "camera": exp is not None, "autofocus": exp is not None,
+            "stage": stage is not None,
+            "stage_scan": hasattr(stage, "start_stage_scanning")
+            and getattr(stage, "scanTriggersFrames", True),
+            "illumination": bool(getattr(exp, "allIlluNames", None)),
+            "led_matrix": getattr(exp, "_ledMatrix", None) is not None,
+            "objective": self._get("Objective") is not None,
+            "digital_io": esp is not None,
+            "temperature": getattr(esp, "temperature", None) is not None,
+            "sensors": self._get("I2CSensor") is not None,
+            "stage_map": self._get("StageMap") is not None,
+        }
+        return {cap for cap, present in checks.items() if present}
 
     def devices(self, kind: str) -> List[str]:
         if kind == "illumination":
@@ -120,7 +156,7 @@ class ImSwitchMicroscope:
         return {"min": float(laser.valueRangeMin), "max": float(laser.valueRangeMax)}
 
     def set_led_pattern(self, kind, **params) -> None:
-        self._exp.set_led_matrix_pattern(kind=kind, **params)
+        self._exp.set_led_matrix_pattern(kind=LED_KINDS[kind], **params)
 
     def set_camera(self, exposure_ms=None, gain=None, detector=None) -> None:
         self._exp.set_exposure_time_gain(exposure_ms, gain, None, None)
@@ -130,6 +166,10 @@ class ImSwitchMicroscope:
 
     def pixel_size_um(self, detector=None) -> float:
         return float(self._exp.mDetector.pixelSizeUm[-1])
+
+    def bit_depth(self, detector=None) -> Optional[int]:
+        bits = getattr(self._exp.mDetector, "bitDepth", None)   # managers that know it say so
+        return int(bits) if bits else None
 
     def fov_um(self, detector=None) -> Tuple[float, float]:
         width, height = self._exp.mDetector.shape[:2]
@@ -145,6 +185,45 @@ class ImSwitchMicroscope:
 
     def set_objective(self, slot: int) -> None:
         self._get("Objective").moveToObjective(slot)
+
+    # -- scans -------------------------------------------------------------------------
+    def fast_stage_scan(self, x0_um, y0_um, nx, ny, step_x_um, step_y_um, sources, intensities,
+                        exposure_ms, settle_ms, timeout_s) -> str:
+        exp = self._exp
+        lasers = exp.performance_mode.prepare_illumination_parameters(list(intensities),
+                                                                     list(sources))
+        path = exp.startFastStageScanAcquisition(
+            xstart=x0_um, xstep=step_x_um, nx=nx, ystart=y0_um, ystep=step_y_um, ny=ny,
+            tsettle=settle_ms, tExposure=exposure_ms, illumination=lasers, led=0)
+        writer = exp._writer_thread_ome
+        try:
+            if writer is not None:
+                writer.join(timeout_s)   # the writer ends after the last expected frame
+                if writer.is_alive():
+                    raise TimeoutError(f"fast stage scan: frames still missing after {timeout_s} s")
+        finally:
+            exp.stopFastStageScanAcquisition()   # resets the firmware scan and the run flag
+        return path
+
+    def stage_prescan(self, x_min_um, x_max_um, y_min_um, y_max_um, line_step_um, speed_um_s,
+                      timeout_s) -> DerivedImage:
+        stage_map = self._get("StageMap")
+        started = stage_map.runPrescan(minX=x_min_um, maxX=x_max_um, minY=y_min_um,
+                                       maxY=y_max_um, dy=line_step_um, speedX=speed_um_s)
+        if not started.get("success"):
+            raise RuntimeError(f"prescan refused: {started.get('error')}")
+        deadline = time.monotonic() + timeout_s
+        while stage_map._prescanThread is not None:
+            if time.monotonic() > deadline:
+                stage_map.stopPrescan()
+                raise TimeoutError(f"prescan still running after {timeout_s} s")
+            time.sleep(0.2)
+        overview = stage_map.getStageMapOverview(maxWidthPx=4096)
+        if not overview.get("success"):
+            raise RuntimeError(f"no overview: {overview.get('error')}")
+        bounds = overview["bounds"]
+        return DerivedImage("overview", stage_map._decodePreview(overview["image"]),
+                            overview["umPerPixel"], (bounds["minX"], bounds["minY"]))
 
     # -- peripherals -------------------------------------------------------------
     def _board(self):

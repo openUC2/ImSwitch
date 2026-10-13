@@ -4,19 +4,29 @@
   NGFF 0.5 on zarr v3 on request. Planes go in by (t, c, z) and an optional YX
   offset, so the same class serves single fields and stitched canvases. T grows
   as needed. ``finalize`` builds the resolution pyramid; ``export_ome_tiff``
-  writes the same data as a tiled OME-TIFF.
+  writes the same data, pyramid included, as a tiled OME-TIFF.
+- ``ome_xml``: the OME-XML of an image (ome-types), shared by every TIFF ImSwitch
+  writes with OME metadata.
 - ``OmeStore``: the frame sink of a run. One image per stage field and capture
   node; an NGFF plate when the fields come from a well loop. Writes on its own
   thread so acquisition does not wait for compression.
 
-Coordinates: µm in the stage user frame. The image translation is the
-top-left pixel of the first plane; the field centre is the stage position.
+Every group's attributes are checked against the ome-zarr-models schema of
+their NGFF version before they are written, so invalid metadata fails loudly.
+
+Coordinates: µm in the stage user frame. The NGFF translation and the OME
+plane positions are the top-left pixel corner; the field centre is the stage
+position.
+
+Each image also carries ``attrs["imswitch"]``: ``node``, ``position`` and
+``tile`` for raw fields, ``derived`` ("stitched", or a task's image name) for
+computed images, so readers can rebuild the scan without parsing file names.
 """
 from __future__ import annotations
 
 import queue
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -24,9 +34,21 @@ import numcodecs
 import numpy as np
 import tifffile
 import zarr
+from ome_types import OME
+from ome_types.model import Channel, Image, Pixels, Plane, TiffData
+from ome_zarr_models.v04.hcs import HCSAttrs as _Hcs04
+from ome_zarr_models.v04.image import ImageAttrs as _Image04
+from ome_zarr_models.v04.well import WellAttrs as _Well04
+from ome_zarr_models.v05.hcs import HCSAttrs as _Hcs05
+from ome_zarr_models.v05.image import ImageAttrs as _Image05
+from ome_zarr_models.v05.well import WellAttrs as _Well05
 
 NGFF_VERSIONS = ("0.4", "0.5")
+_SCHEMAS = {"0.4": {"image": _Image04, "plate": _Hcs04, "well": _Well04},
+            "0.5": {"image": _Image05, "plate": _Hcs05, "well": _Well05}}
 _COMPRESSOR = numcodecs.Blosc(cname="zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
+_TIFF_OPTIONS = dict(photometric="minisblack", compression="zlib", compressionargs={"level": 1},
+                     predictor=True)
 _COLORS = (("405", "0000FF"), ("488", "00FF00"), ("561", "FFFF00"), ("640", "FF0000"),
            ("rgb_r", "FF0000"), ("rgb_g", "00FF00"), ("rgb_b", "0000FF"))
 
@@ -44,11 +66,37 @@ class ImageSpec:
     pixel_size_um: float = 1.0
     z_step_um: float = 1.0
     t_step_s: float = 1.0
-    origin_um: Tuple[float, float, float] = (0.0, 0.0, 0.0)   # x, y, z
+    origin_um: Tuple[float, float, float] = (0.0, 0.0, 0.0)   # x, y, z of the top-left pixel
     channel_names: Sequence[str] = ()
     channel_colors: Sequence[str] = ()      # hex RRGGBB; default from the names
     name: str = "image"
     chunks_yx: Optional[Tuple[int, int]] = None   # default: up to 1024 x 1024
+    exposure_ms: List[Optional[float]] = field(default_factory=list)   # per channel
+    bit_depth: Optional[int] = None         # camera bits; sets the display window
+
+    def channels(self, n: int) -> List[Tuple[str, str]]:
+        """(name, colour) for n channels, filling in what the spec leaves out."""
+        names = list(self.channel_names)[:n] + [f"C{i}" for i in range(len(self.channel_names), n)]
+        colors = list(self.channel_colors)[:n]
+        return list(zip(names, colors + [channel_color(nm) for nm in names[len(colors):]]))
+
+    def display_max(self) -> float:
+        if self.bit_depth:
+            return float(2 ** self.bit_depth - 1)
+        return float(np.iinfo(self.dtype).max) if np.dtype(self.dtype).kind in "ui" else 1.0
+
+
+def _group_attrs(version: str, kind: str, body: dict) -> dict:
+    """Attributes of an NGFF group, checked against the ome-zarr-models schema."""
+    if version == "0.5":
+        body = {"version": "0.5", **body}
+    _SCHEMAS[version][kind].model_validate(body)
+    return body if version == "0.4" else {"ome": body}
+
+
+def _versioned(version: str, body: dict) -> dict:
+    """NGFF 0.4 carries the version inside each metadata block; 0.5 once at the top."""
+    return {"version": version, **body} if version == "0.4" else body
 
 
 def _multiscales(spec: ImageSpec, levels: int, version: str) -> dict:
@@ -60,21 +108,70 @@ def _multiscales(spec: ImageSpec, levels: int, version: str) -> dict:
                                     spec.pixel_size_um * 2 ** level,
                                     spec.pixel_size_um * 2 ** level]},
         {"type": "translation", "translation": [0.0, 0.0, oz, oy, ox]}]} for level in range(levels)]
-    ms = {"name": spec.name, "axes": axes, "datasets": datasets}
-    return {"version": version, **ms} if version == "0.4" else ms
+    return _versioned(version, {"name": spec.name, "axes": axes, "datasets": datasets})
 
 
 def _omero(spec: ImageSpec, n_channels: int, version: str) -> dict:
-    top = float(np.iinfo(spec.dtype).max) if np.dtype(spec.dtype).kind in "ui" else 1.0
-    names = list(spec.channel_names) + [f"C{i}" for i in range(len(spec.channel_names), n_channels)]
-    colors = list(spec.channel_colors) + [channel_color(n) for n in names[len(spec.channel_colors):]]
+    top = spec.display_max()
     channels = [{"label": name, "color": color, "active": True, "coefficient": 1.0,
                  "family": "linear", "inverted": False,
                  "window": {"min": 0.0, "max": top, "start": 0.0, "end": top}}
-                for name, color in zip(names, colors)]
-    omero = {"channels": channels, "rdefs": {"model": "color", "defaultT": 0,
-                                             "defaultZ": spec.shape[2] // 2}}
-    return {"version": version, **omero} if version == "0.4" else omero
+                for name, color in spec.channels(n_channels)]
+    return _versioned(version, {"channels": channels, "rdefs": {
+        "model": "color", "defaultT": 0, "defaultZ": spec.shape[2] // 2}})
+
+
+def ome_xml(spec: ImageSpec, rgb: bool = False) -> str:
+    """OME-XML for an image whose planes are stored in T, C, Z order (XYZCT).
+
+    ``rgb``: every three channels are one interleaved RGB channel (SamplesPerPixel 3),
+    as in a TIFF written with photometric RGB. Positions are the top-left pixel
+    corner in µm; exposure per channel when the spec has it.
+    """
+    t, c, z, y, x = spec.shape
+    samples = 3 if rgb else 1
+    channels = spec.channels(c)[::samples]
+    ox, oy, oz = spec.origin_um
+    exposures = list(spec.exposure_ms) + [None] * len(channels)
+    planes = [Plane(the_t=ti, the_c=ci, the_z=zi, delta_t=ti * spec.t_step_s, delta_t_unit="s",
+                    exposure_time=exposures[ci], exposure_time_unit="ms",
+                    position_x=ox, position_x_unit="µm", position_y=oy, position_y_unit="µm",
+                    position_z=oz + zi * spec.z_step_um, position_z_unit="µm")
+              for ti in range(t) for ci in range(len(channels)) for zi in range(z)]
+    pixels = Pixels(
+        dimension_order="XYZCT", type=str(np.dtype(spec.dtype)), significant_bits=spec.bit_depth,
+        size_x=x, size_y=y, size_z=z, size_c=c, size_t=t,
+        physical_size_x=spec.pixel_size_um, physical_size_x_unit="µm",
+        physical_size_y=spec.pixel_size_um, physical_size_y_unit="µm",
+        physical_size_z=spec.z_step_um, physical_size_z_unit="µm",
+        time_increment=spec.t_step_s, time_increment_unit="s",
+        channels=[Channel(name=name.removesuffix("_rgb_r") if rgb else name,
+                          samples_per_pixel=samples, **({} if rgb else {"color": f"#{color}"}))
+                  for name, color in channels],
+        planes=planes, tiff_data_blocks=[TiffData(plane_count=len(planes))])
+    xml = OME(images=[Image(name=spec.name, pixels=pixels)], creator="ImSwitch").to_xml()
+    return xml.encode("ascii", "xmlcharrefreplace").decode("ascii")   # TIFF tags are ASCII
+
+
+def _tiff_tile(y: int, x: int) -> Tuple[int, int]:
+    return min(512, -(-y // 16) * 16), min(512, -(-x // 16) * 16)
+
+
+def _tiff_tiles(level, planes, tile: Tuple[int, int]):
+    """TIFF tiles of each plane in write order, edge tiles zero-padded to full size.
+
+    tifffile takes an iterator of *tiles* when writing tiled pages; one plane is
+    read at a time, so memory stays at one plane.
+    """
+    th, tw = tile
+    for p in planes:
+        plane = np.asarray(level[p])
+        for y0 in range(0, plane.shape[0], th):
+            for x0 in range(0, plane.shape[1], tw):
+                block = plane[y0:y0 + th, x0:x0 + tw]
+                if block.shape != (th, tw):
+                    block = np.pad(block, ((0, th - block.shape[0]), (0, tw - block.shape[1])))
+                yield block
 
 
 class NgffImage:
@@ -109,17 +206,13 @@ class NgffImage:
         return self.group.create_array(name, **kwargs)
 
     def _write_attrs(self):
-        ms = _multiscales(self.spec, self.levels, self.version)
-        omero = _omero(self.spec, self.array.shape[1], self.version)
-        if self.version == "0.4":
-            self.group.attrs.update({"multiscales": [ms], "omero": omero})
-        else:
-            ome = {"version": "0.5", "multiscales": [ms], "omero": omero}
-            self.group.attrs.update({"ome": ome})
+        body = {"multiscales": [_multiscales(self.spec, self.levels, self.version)],
+                "omero": _omero(self.spec, self.array.shape[1], self.version)}
+        self.group.attrs.update(_group_attrs(self.version, "image", body))
 
     def write(self, plane: np.ndarray, t: int, c: int, z: int, y0: int = 0, x0: int = 0) -> None:
-        if t >= self.array.shape[0]:
-            self.array.resize((t + 1,) + tuple(self.array.shape[1:]))
+        if t >= self.array.shape[0]:   # grow in doubling steps; finalize trims the rest
+            self.array.resize((max(t + 1, 2 * self.array.shape[0]),) + tuple(self.array.shape[1:]))
         h, w = plane.shape[:2]
         self.array[t, c, z, y0:y0 + h, x0:x0 + w] = plane
         self.t_written = max(self.t_written, t + 1)
@@ -145,33 +238,23 @@ class NgffImage:
         self._write_attrs()
 
     def export_ome_tiff(self, path) -> Path:
-        """Write level 0 as a tiled, compressed OME-TIFF (planes streamed, not held in RAM)."""
-        t, c, z, y, x = self.array.shape
-        spec = self.spec
-        names = list(spec.channel_names) + [f"C{i}" for i in range(len(spec.channel_names), c)]
-        ox, oy, oz = spec.origin_um
-        planes = [(ti, ci, zi) for ti in range(t) for ci in range(c) for zi in range(z)]
-        metadata = {
-            "axes": "TCZYX", "Name": spec.name,
-            "PhysicalSizeX": spec.pixel_size_um, "PhysicalSizeXUnit": "µm",
-            "PhysicalSizeY": spec.pixel_size_um, "PhysicalSizeYUnit": "µm",
-            "PhysicalSizeZ": spec.z_step_um, "PhysicalSizeZUnit": "µm",
-            "TimeIncrement": spec.t_step_s, "TimeIncrementUnit": "s",
-            "Channel": {"Name": names},
-            "Plane": {"PositionX": [ox] * len(planes), "PositionY": [oy] * len(planes),
-                      "PositionZ": [oz + zi * spec.z_step_um for _, _, zi in planes],
-                      "PositionXUnit": ["µm"] * len(planes), "PositionYUnit": ["µm"] * len(planes),
-                      "PositionZUnit": ["µm"] * len(planes),
-                      "DeltaT": [ti * spec.t_step_s for ti, _, _ in planes]},
-        }
-        path = Path(path)
-        tile = (min(512, -(-y // 16) * 16), min(512, -(-x // 16) * 16))
-        with tifffile.TiffWriter(path, bigtiff=True, ome=True) as tif:
-            tif.write((self.array[p] for p in planes), shape=(t, c, z, y, x), dtype=spec.dtype,
-                      metadata=metadata, photometric="minisblack", tile=tile,
-                      compression="zlib", compressionargs={"level": 1}, predictor=True)
-        return path
+        """Write the image and its pyramid (as SubIFDs) to a tiled OME-TIFF.
 
+        Planes are streamed from zarr, never held in memory as a whole.
+        """
+        levels = [self.group[str(i)] for i in range(self.levels)]
+        planes = list(np.ndindex(*levels[0].shape[:3]))
+        path = Path(path)
+        with tifffile.TiffWriter(path, bigtiff=True, ome=False) as tif:
+            for i, level in enumerate(levels):
+                y, x = level.shape[3:]
+                first = {"subifds": len(levels) - 1, "description": ome_xml(self.spec)} if i == 0 \
+                    else {"subfiletype": 1}
+                tile = _tiff_tile(y, x)
+                tif.write(_tiff_tiles(level, planes, tile), shape=(len(planes), y, x),
+                          dtype=self.spec.dtype, tile=tile, metadata=None,
+                          **first, **_TIFF_OPTIONS)
+        return path
 
 # --------------------------------------------------------------------------- #
 # Plates
@@ -202,11 +285,6 @@ class NgffPlate:
             self._write_attrs(row, col)
         return group
 
-    def _wrap(self, key: str, value: dict) -> dict:
-        if self.version == "0.4":
-            return {key: {"version": "0.4", **value}}
-        return {"ome": {"version": "0.5", key: value}}
-
     def _write_attrs(self, row: int, col: int) -> None:
         n_rows = max(r for r, _ in self.wells) + 1
         n_cols = max(c for _, c in self.wells) + 1
@@ -217,10 +295,12 @@ class NgffPlate:
                            for r, c in sorted(self.wells)],
                  "field_count": max(len(f) for f in self.wells.values()),
                  "acquisitions": [{"id": 0}]}
-        self.group.attrs.update(self._wrap("plate", plate))
+        v = self.version
+        self.group.attrs.update(_group_attrs(v, "plate", {"plate": _versioned(v, plate)}))
         well = {"images": [{"path": str(f), "acquisition": 0}
                            for f in sorted(self.wells[(row, col)])]}
-        self.group[f"{_row_name(row)}/{col + 1}"].attrs.update(self._wrap("well", well))
+        self.group[f"{_row_name(row)}/{col + 1}"].attrs.update(
+            _group_attrs(v, "well", {"well": _versioned(v, well)}))
 
 
 # --------------------------------------------------------------------------- #
@@ -241,6 +321,8 @@ class FrameInfo:
     z_step_um: Optional[float] = None
     t_step_s: Optional[float] = None
     stage_xy: Optional[Tuple[float, float]] = None   # when there is no position loop
+    exposure_ms: Optional[float] = None
+    bit_depth: Optional[int] = None
 
 
 @dataclass
@@ -253,10 +335,11 @@ class OmeStore:
     """Routes frames to one NgffImage per (capture node, position, tile)."""
 
     def __init__(self, root, formats: Sequence[str] = ("ome-zarr",), layout: str = "auto",
-                 version: str = "0.4", queue_size: int = 32):
+                 version: str = "0.4", queue_size: int = 32, stitch: Optional[str] = None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.formats, self.layout, self.version = tuple(formats), layout, version
+        self.stitch = stitch          # None, "stage" or "ashlar": stitched image per position
         self.fields: Dict[Tuple, _Field] = {}
         self.plates: Dict[str, NgffPlate] = {}
         self.frames_written = 0
@@ -272,17 +355,36 @@ class OmeStore:
         self._queue.put((np.asarray(frame).copy(), info))
 
     def close(self) -> List[Path]:
-        """Flush, build pyramids, export OME-TIFFs. Returns the files written."""
+        """Flush, build pyramids, stitch, export OME-TIFFs. Returns the TIFFs written."""
         self._queue.put(None)
         self._thread.join()
-        written = []
         for f in self.fields.values():
             f.image.finalize()
-            if "ome-tiff" in self.formats:
-                written.append(f.image.export_ome_tiff(self.root / f.tiff_name))
+        images = [(f.image, f.tiff_name) for f in self.fields.values()]
+        if self.stitch:
+            images += self._stitched()
+        written = [image.export_ome_tiff(self.root / tiff) for image, tiff in images
+                   if "ome-tiff" in self.formats]
         if self.error:
             raise RuntimeError(f"writer failed: {self.error}") from self.error
         return written
+
+    def _stitched(self) -> List[Tuple["NgffImage", str]]:
+        """One stitched image per (capture node, position) that has several tiles."""
+        from .stitching import stitch
+        groups: Dict[Tuple, List[NgffImage]] = {}
+        for (node, pos, tile), f in self.fields.items():
+            if tile is not None:
+                groups.setdefault((node, pos), []).append(f.image)
+        out = []
+        for (node, pos), tiles in groups.items():
+            if len(tiles) > 1:
+                stem = "_".join(str(p) for p in (pos, node, "stitched") if p)
+                image = stitch(tiles, self.root / f"{stem}.ome.zarr", stem, self.stitch)
+                image.group.attrs["imswitch"] = {"node": node, "position": pos,
+                                                 "derived": "stitched"}
+                out.append((image, f"{stem}.ome.tif"))
+        return out
 
     # -- internals ------------------------------------------------------------
     def _drain(self) -> None:
@@ -299,7 +401,11 @@ class OmeStore:
         f = self._field(frame, info, len(planes))
         t, z = info.index.get("t", 0), info.index.get("z", 0)
         for k, plane in enumerate(planes):
-            f.image.write(plane, t, info.index.get("c", 0) * len(planes) + k, z)
+            c = info.index.get("c", 0) * len(planes) + k
+            f.image.write(plane, t, c, z)
+            exposures = f.image.spec.exposure_ms
+            exposures.extend([None] * (c + 1 - len(exposures)))
+            exposures[c] = info.exposure_ms
         self.frames_written += 1
 
     def _field(self, frame: np.ndarray, info: FrameInfo, samples: int) -> _Field:
@@ -322,7 +428,7 @@ class OmeStore:
             dtype=str(frame.dtype), pixel_size_um=px, z_step_um=z_step,
             t_step_s=info.t_step_s or 1.0,
             origin_um=(cx - w * px / 2, cy - h * px / 2, z0), channel_names=names,
-            name="_".join(str(p) for p in key[1:] if p) or key[0])
+            name="_".join(str(p) for p in key[1:] if p) or key[0], bit_depth=info.bit_depth)
         plate = "row" in pos and self.layout in ("auto", "plate")
         if plate:
             if info.node_id not in self.plates:
@@ -336,5 +442,7 @@ class OmeStore:
             stem = "_".join(str(p) for p in (pos.get("name"), tile.get("name"), info.node_id) if p)
             image = NgffImage.create(self.root / f"{stem}.ome.zarr", spec, self.version)
             tiff = f"{stem}.ome.tif"
+        image.group.attrs["imswitch"] = {"node": info.node_id, "position": pos.get("name"),
+                                         "tile": tile.get("name")}
         self.fields[key] = _Field(image, tiff)
         return self.fields[key]

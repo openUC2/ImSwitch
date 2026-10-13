@@ -7,6 +7,10 @@ index on a useq axis (``t``, ``p``, ``g``, ``z``, ``c``), so a frame taken insid
 running their body (``move: true``). With ``move: false`` the loop only
 iterates and a ``move_to_item`` node moves, e.g. inside a condition.
 
+Position, well, region and tile loops can follow a focus surface
+(``focus_map: "@name"``): after the XY move, Z goes to the surface measured by
+a ``create_focus_map`` node.
+
 Parameter fields can hold a value, an ``"@resource"`` reference of an allowed
 kind, or a ``"${expression}"``. Fields listed in ``expr_fields`` are plain
 expression text without ``${}``.
@@ -19,7 +23,8 @@ from typing import Dict, List, Literal, Optional, Tuple, Type
 import useq
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .document import CaptureChannel, GridPlan, Scalar
+from .document import (AutofocusResource, CaptureChannel, FocusMapResource, GridPlan, Region,
+                       Scalar)
 
 
 class _Params(BaseModel):
@@ -29,10 +34,15 @@ class _Params(BaseModel):
 # --------------------------------------------------------------------------- #
 # Loops
 # --------------------------------------------------------------------------- #
+FOCUS_MAP_FIELD = Field(None, description="'@name' of a focus_map resource: Z follows its "
+                                         "surface at every item")
+
+
 class LoopPositionsParams(_Params):
     source: List[useq.AbsolutePosition] = Field(
         ..., description="Positions to visit, or '@name' of a positions resource")
     move: bool = Field(True, description="Move to each position (XY and its Z, if set)")
+    focus_map: Optional[FocusMapResource] = FOCUS_MAP_FIELD
     split_storage: bool = Field(False, description="One output per position")
 
 
@@ -40,12 +50,25 @@ class LoopWellsParams(_Params):
     plate: useq.WellPlatePlan = Field(..., description="'@name' of a well_plate resource")
     label: Optional[str] = Field(None, description="Only wells with this label")
     move: bool = Field(True, description="Move to each well centre")
+    focus_map: Optional[FocusMapResource] = FOCUS_MAP_FIELD
     split_storage: bool = False
 
 
+class LoopRegionsParams(_Params):
+    regions: List[Region] = Field(..., description="'@name' of a regions resource")
+    label: Optional[str] = Field(None, description="Only regions with this label")
+    move: bool = Field(True, description="Move to each region centre")
+    focus_map: Optional[FocusMapResource] = FOCUS_MAP_FIELD
+
+
 class LoopGridParams(_Params):
-    plan: GridPlan = Field(..., description="Tiles relative to the current loop position")
+    plan: Optional[GridPlan] = Field(
+        None, description="Tiles relative to the current position or well; empty inside a "
+                          "region loop covers the region with tiles")
+    overlap: float = Field(0.1, ge=0, lt=1, description="Tile overlap (fraction) when the "
+                                                        "grid covers a region")
     move: bool = True
+    focus_map: Optional[FocusMapResource] = FOCUS_MAP_FIELD
 
 
 class ZStackParams(_Params):
@@ -106,6 +129,29 @@ class CaptureParams(_Params):
 class MoveToItemParams(_Params):
     loop: Optional[str] = Field(None, description="Loop whose current item to move to; "
                                                   "default the innermost position/well/tile/Z loop")
+
+
+class CreateFocusMapParams(_Params):
+    focus_map: FocusMapResource = Field(..., description="'@name' of the focus_map to fill")
+    autofocus: AutofocusResource = Field(..., description="'@name' of an autofocus resource")
+    points: Optional[List[useq.AbsolutePosition]] = Field(
+        None, description="Measure here ('@positions'); one surface")
+    regions: Optional[List[Region]] = Field(
+        None, description="Measure an nx x ny grid in each region ('@regions'); one surface "
+                          "per region")
+    plate: Optional[useq.WellPlatePlan] = Field(
+        None, description="Measure at every selected well centre ('@plate'); one surface")
+    nx: int = Field(3, ge=1, description="Grid columns per region")
+    ny: int = Field(3, ge=1, description="Grid rows per region")
+    margin: float = Field(0.1, ge=0, lt=0.5, description="Grid inset from the region edge "
+                                                         "(fraction)")
+    min_points: int = Field(1, ge=1, description="Fail when fewer focus measurements succeed")
+
+
+class MoveToFocusSurfaceParams(_Params):
+    focus_map: FocusMapResource = Field(..., description="'@name' of a measured focus_map")
+    group: Optional[str] = Field(None, description="Surface to use; default the current "
+                                                   "region, well or position, else the only one")
 
 
 class MdaParams(_Params):
@@ -176,11 +222,17 @@ class ControlSpec:
 
 CONTROL_SPECS: Dict[str, ControlSpec] = {s.id: s for s in [
     ControlSpec("loop_positions", "Loop over positions", "Loops", LoopPositionsParams,
-                ("body",), loop=True, axis="p", ref_kinds={"source": ("positions",)}),
+                ("body",), loop=True, axis="p",
+                ref_kinds={"source": ("positions",), "focus_map": ("focus_map",)}),
     ControlSpec("loop_wells", "Loop over wells", "Loops", LoopWellsParams,
-                ("body",), loop=True, axis="p", ref_kinds={"plate": ("well_plate",)}),
+                ("body",), loop=True, axis="p",
+                ref_kinds={"plate": ("well_plate",), "focus_map": ("focus_map",)}),
+    ControlSpec("loop_regions", "Loop over regions", "Loops", LoopRegionsParams,
+                ("body",), loop=True, axis="p",
+                ref_kinds={"regions": ("regions",), "focus_map": ("focus_map",)}),
     ControlSpec("loop_grid", "Loop over tiles", "Loops", LoopGridParams,
-                ("body",), loop=True, axis="g", ref_kinds={"plan": ("grid",)}),
+                ("body",), loop=True, axis="g",
+                ref_kinds={"plan": ("grid",), "focus_map": ("focus_map",)}),
     ControlSpec("zstack", "Z-stack", "Loops", ZStackParams,
                 ("body",), loop=True, axis="z", ref_kinds={"plan": ("z_plan",)}),
     ControlSpec("loop_channels", "Loop over channels", "Loops", LoopChannelsParams,
@@ -197,6 +249,16 @@ CONTROL_SPECS: Dict[str, ControlSpec] = {s.id: s for s in [
     ControlSpec("capture", "Capture", "Acquisition", CaptureParams,
                 axis="c", ref_kinds={"channels": ("capture",)}),
     ControlSpec("mda", "useq sequence", "Acquisition", MdaParams),
+    ControlSpec("create_focus_map", "Create focus map", "Focus", CreateFocusMapParams,
+                ref_kinds={"focus_map": ("focus_map",), "autofocus": ("autofocus",),
+                           "points": ("positions",), "regions": ("regions",),
+                           "plate": ("well_plate",)},
+                description="Autofocus at points, region grids or wells and fit a surface; "
+                            "inside a region/well/position loop without a source it measures "
+                            "the current item"),
+    ControlSpec("move_to_focus_surface", "Move to focus surface", "Focus",
+                MoveToFocusSurfaceParams, ref_kinds={"focus_map": ("focus_map",)},
+                description="Move Z to the focus surface at the current XY"),
     ControlSpec("move_to_item", "Move to current item", "Acquisition", MoveToItemParams,
                 description="Move to the current position, well, tile or Z of a loop "
                             "that runs with move: false"),
@@ -215,4 +277,5 @@ CONTROL_SPECS: Dict[str, ControlSpec] = {s.id: s for s in [
 ]}
 
 LOOP_AXES = {s.id: s.axis for s in CONTROL_SPECS.values() if s.loop and s.axis}
-MOVING_LOOPS = ("loop_positions", "loop_wells", "loop_grid", "zstack")
+MOVING_LOOPS = ("loop_positions", "loop_wells", "loop_regions", "loop_grid", "zstack")
+POSITION_LOOPS = ("loop_positions", "loop_wells", "loop_regions")   # the items a grid tiles

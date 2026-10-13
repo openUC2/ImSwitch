@@ -201,7 +201,7 @@
     "Flatfield": null,
     "PixelCalibration": {
         "affineCalibrations": {
-            "1": {
+            "WidefieldCamera::1": {
                 "affine_matrix": [
                     [
                         -1.0,
@@ -221,8 +221,8 @@
                     "n_inliers": 9.0,
                     "n_outliers": 0.0,
                     "rotation_deg": 0.0,
-                    "scale_x_um_per_pixel": 1.0,
-                    "scale_y_um_per_pixel": 1.0,
+                    "scale_x_um_per_pixel": -1.0,
+                    "scale_y_um_per_pixel": -1.0,
                     "condition_number": 1.0,
                     "mean_correlation": 0.0,
                     "min_correlation": 0.0
@@ -233,7 +233,7 @@
                     "detector": "WidefieldCamera"
                 }
             },
-            "0": {
+            "WidefieldCamera::0": {
                 "affine_matrix": [
                     [
                         -1.0,
@@ -253,8 +253,8 @@
                     "n_inliers": 9.0,
                     "n_outliers": 0.0,
                     "rotation_deg": 0.0,
-                    "scale_x_um_per_pixel": 1.0,
-                    "scale_y_um_per_pixel": 1.0,
+                    "scale_x_um_per_pixel": -1.0,
+                    "scale_y_um_per_pixel": -1.0,
                     "condition_number": 1.0,
                     "mean_correlation": 0.0,
                     "min_correlation": 0.0
@@ -385,7 +385,7 @@
         "InLineHolo",
         "Temperature",
         "I2CSensor",
-        "Aufgaben"
+        "Aufgaben", "StageMap"
     ],
     "nonAvailableWidgets": [
         "STORMRecon",

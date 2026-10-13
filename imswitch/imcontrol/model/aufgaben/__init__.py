@@ -20,8 +20,9 @@ from pathlib import Path
 from . import primitives  # noqa: F401  (registers the v1 tasks)
 from .control import CONTROL_SPECS, ControlSpec
 from .document import SCHEMA_ID, CaptureChannel, Job, Node, Parameter, Storage
-from .hardware import CAPABILITIES, Microscope
-from .registry import REGISTRY, TaskContext, TaskFlags, TaskSpec, catalogue, task
+from .hardware import CAPABILITIES, DerivedImage, Microscope
+from .registry import (MEMORY_STRUCTURES, REGISTRY, TaskContext, TaskFlags, TaskSpec,
+                       catalogue, task)
 from .useq_bridge import NotExportable, job_from_sequence, sequence_from_job
 from .validate import Report, validate
 
@@ -68,8 +69,9 @@ def examples() -> dict:
 
 __all__ = [
     "SCHEMA_ID", "Job", "Node", "Parameter", "Storage", "CaptureChannel",
-    "CONTROL_SPECS", "ControlSpec", "REGISTRY", "TaskContext", "TaskFlags", "TaskSpec",
-    "catalogue", "task", "Microscope", "CAPABILITIES", "validate", "Report",
+    "CONTROL_SPECS", "ControlSpec", "MEMORY_STRUCTURES", "REGISTRY", "TaskContext",
+    "TaskFlags", "TaskSpec",
+    "catalogue", "task", "Microscope", "DerivedImage", "CAPABILITIES", "validate", "Report",
     "job_from_sequence", "sequence_from_job", "NotExportable",
     "job_json_schema", "load_job", "examples", "EXAMPLES_DIR",
 ]

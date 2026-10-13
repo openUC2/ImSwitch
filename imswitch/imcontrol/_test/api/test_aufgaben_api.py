@@ -92,3 +92,53 @@ def test_useq_import_and_export(api_server):
     assert job["tasks"][0]["task"] == "zstack"
     back = api_server.post(f"{API}/exportAufgabenUseq", json=job).json()
     assert back["z_plan"]["step"] == 1 and back["channels"][0]["config"] == "LED"
+
+
+def test_well_plate_plan_from_imswitch_labware(api_server):
+    name = "corning_96_wellplate_360ul_flat"
+    plan = api_server.get(f"{API}/getAufgabenWellPlate", params={
+        "load_name": name, "wells": "A1,B3", "offset_x_um": 1000, "offset_y_um": 500}).json()
+    labware = api_server.get("/imswitch/api/ExperimentController/getLabwareDefinition", params={
+        "load_name": name, "offset_x_um": 1000, "offset_y_um": 500}).json()
+    a1, b3 = labware["wells"]["A1"], labware["wells"]["B3"]
+    assert plan["a1_center_xy"] == [a1["x"], a1["y"]] and plan["selected_wells"] == [[0, 1], [0, 2]]
+    spacing = plan["plate"]["well_spacing"]
+    assert b3["x"] - a1["x"] == pytest.approx(2 * spacing[0] * 1000)
+    assert a1["y"] - b3["y"] == pytest.approx(spacing[1] * 1000)       # rows run towards -Y
+    missing = api_server.get(f"{API}/getAufgabenWellPlate", params={"load_name": "nope"})
+    assert missing.status_code == 404
+
+
+def test_region_job_with_focus_map_prescan_and_stitching(api_server):
+    zarr = pytest.importorskip("zarr")
+    models = pytest.importorskip("ome_zarr_models")
+    job = {"schema": "aufgaben.job/1", "name": "regions",
+           "resources": {
+               "regions": {"kind": "regions", "regions": [
+                   {"name": "ra", "min_x": 0, "max_x": 600, "min_y": 0, "max_y": 400}]},
+               "af": {"kind": "autofocus", "range_um": 40, "step_um": 2, "channel": "LED",
+                      "intensity": LED},
+               "surface": {"kind": "focus_map", "method": "constant"},
+               "bf": {"kind": "capture",
+                      "channels": [{"config": "LED", "intensity": LED, "exposure": 5}]}},
+           "storage": {"formats": ["ome-zarr"], "stitched_preview": True},
+           "tasks": [
+               {"id": "overview", "task": "stage_prescan", "params": {
+                   "x_min_um": 0, "x_max_um": 600, "y_min_um": 0, "y_max_um": 400,
+                   "line_step_um": 200, "speed_um_s": 2000, "timeout_s": 120}},
+               {"id": "map", "task": "create_focus_map", "params": {
+                   "focus_map": "@surface", "autofocus": "@af", "regions": "@regions",
+                   "nx": 2, "ny": 1}},
+               {"id": "reg", "task": "loop_regions", "params": {"regions": "@regions"}, "body": [
+                   {"id": "tile", "task": "loop_grid", "params": {"overlap": 0.2,
+                                                                  "focus_map": "@surface"},
+                    "body": [{"id": "img", "task": "capture", "params": {"channels": "@bf"}}]}]}]}
+    response = api_server.post(f"{API}/startAufgabenJob", json={"job": job})
+    assert response.status_code == 200, response.text
+    folder = Path(response.json()["folder"])
+    status = _wait_done(api_server, timeout=180)
+    assert status["state"] == "finished" and status["frames"] == 4, status
+    for name in ("ra_0000_img", "ra_img_stitched", "overview_overview"):
+        models.open_ome_zarr(zarr.open_group(str(folder / f"{name}.ome.zarr"), mode="r"))
+    stitched = zarr.open_group(str(folder / "ra_img_stitched.ome.zarr"), mode="r")["0"]
+    assert stitched.shape[3:] == (540, 720)   # 2 x 2 tiles of 300 x 400 px, 20 % overlap

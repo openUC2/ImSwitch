@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from .io_utils import _safe_scalar_float
+from .ome_writers.ome_tiff_metadata import build_ome_metadata_from_dict
 
 try:
     import tifffile as tiff
@@ -268,32 +269,10 @@ class BackgroundStorageWorker:
         os.makedirs(os.path.dirname(filepath), exist_ok=True) if os.path.dirname(filepath) else None
         if metadata:
             try:
-                # Try to build proper OME-XML metadata using ome_types
-                from imswitch.imcontrol.model.io.ome_writers.ome_tiff_metadata import (
-                    build_ome_metadata_from_dict, OME_TYPES_AVAILABLE
-                )
-                
-                if OME_TYPES_AVAILABLE:
-                    # Add image dimensions to metadata
-                    metadata_with_dims = metadata.copy()
-                    metadata_with_dims["height"] = data.shape[0]
-                    metadata_with_dims["width"] = data.shape[1] if data.ndim > 1 else 1
-                    metadata_with_dims["dtype"] = str(data.dtype)
-                    
-                    # Build OME-XML string
-                    ome_xml = build_ome_metadata_from_dict(metadata_with_dims)
-                    if ome_xml:
-                        tiff.imwrite(filepath, data, description=ome_xml.encode("ascii", "xmlcharrefreplace").decode("ascii"))
-                    else:
-                        # Fallback to simple metadata as ImageJ description
-                        import json
-                        desc_str = json.dumps(metadata, default=str)
-                        tiff.imwrite(filepath, data, description=desc_str)
-                else:
-                    # ome_types not available, use simple JSON description
-                    import json
-                    desc_str = json.dumps(metadata, default=str)
-                    tiff.imwrite(filepath, data, description=desc_str)
+                xml = build_ome_metadata_from_dict({
+                    **metadata, "height": data.shape[0], "width": data.shape[1],
+                    "dtype": str(data.dtype), "rgb": data.ndim == 3 and data.shape[-1] == 3})
+                tiff.imwrite(filepath, data, description=xml, metadata=None)
             except Exception as e:
                 logger.warning(f"Failed to write metadata to TIFF: {e}")
                 tiff.imwrite(filepath, data)
@@ -660,7 +639,7 @@ class RecordingService(SignalInterface):
         service.stop_video_recording()
         
         # Streaming to Zarr
-        service.start_streaming('/path/to/data.zarr', format=SaveFormat.OME_ZARR)
+        service.start_streaming('/path/to/session', detectorsManager)
         service.write_frame(detector_name, frame, metadata)
         service.stop_streaming()
     """
@@ -694,9 +673,6 @@ class RecordingService(SignalInterface):
         self._video_detector_name: Optional[str] = None  # Detector to capture from
 
         # Streaming recording state
-        self._is_streaming = False
-        self._streaming_format: Optional[SaveFormat] = None
-        self._streaming_writer = None
         self._streaming_frame_count = 0
         self._streaming_start_time: Optional[float] = None
         self._streaming_detector_names: List[str] = []
@@ -764,10 +740,6 @@ class RecordingService(SignalInterface):
         to sigNewFrame or sigUpdateImage signals.
         """
         self._comm_channel = comm_channel
-    
-    def set_streaming_adapter(self, adapter):
-        """Set the streaming adapter for continuous recordings."""
-        self._streaming_adapter = adapter
     
     # =========================================================================
     # Frame Callback for Continuous Recording
@@ -1279,94 +1251,76 @@ class RecordingService(SignalInterface):
     # Streaming Recording (OME-Zarr, OME-TIFF)
     # =========================================================================
     
-    def start_streaming(self, filepath: str, format: SaveFormat = SaveFormat.OME_ZARR,
-                        detector_contexts: Dict = None) -> bool:
-        """
-        Start streaming recording to OME-Zarr or OME-TIFF.
-        
+    def start_streaming(self, folder: str, detectors_manager, detector_names: List[str] = None,
+                        write_zarr: bool = True, write_tiff: bool = False,
+                        n_time_points: int = 1000, metadata_hub=None,
+                        auto_capture: bool = True) -> bool:
+        """Start a streaming recording (OME-Zarr and/or OME-TIFF per detector).
+
+        Frames arrive through ``write_streaming_frame`` or, with ``auto_capture``,
+        from the live stream (``sigUpdateImage``). T grows as frames come; the
+        writers trim and finalize on ``stop_streaming``.
+
         Args:
-            filepath: Output file/directory path
-            format: SaveFormat.OME_ZARR or SaveFormat.OME_TIFF
-            detector_contexts: Detector configuration for writers
-            
-        Returns:
-            True if started successfully
+            folder: Session folder.
+            detectors_manager: Supplies shape, dtype and pixel size per detector.
+            detector_names: Detectors to record; None records all.
+            write_zarr, write_tiff: Output formats.
+            n_time_points: Initial T allocation (grows when exceeded).
+            metadata_hub: Optional MetadataHub for per-frame metadata.
+            auto_capture: Record every live frame of the selected detectors.
         """
-        if self._is_streaming:
+        if self.is_streaming:
             self._logger.warning("Streaming already in progress")
             return False
-        
-        try:
-            from .writers import OMEZarrWriter, OMETiffWriter
-            from .session import SessionInfo
-            
-            # Create writer based on format
-            if format == SaveFormat.OME_ZARR:
-                self._streaming_writer = OMEZarrWriter(filepath)
-            elif format == SaveFormat.OME_TIFF:
-                self._streaming_writer = OMETiffWriter(filepath)
-            else:
-                raise ValueError(f"Unsupported streaming format: {format}")
-            
-            # Initialize writer with detector contexts
-            if detector_contexts:
-                self._streaming_writer.open(detector_contexts)
-            
-            self._is_streaming = True
-            self._streaming_format = format
-            self._streaming_frame_count = 0
-            self.sigRecordingStarted.emit()
-            self._logger.info(f"Streaming started: {filepath} ({format.name})")
-            return True
-            
-        except Exception as e:
-            self._logger.error(f"Failed to start streaming: {e}")
-            return False
-    
-    def write_streaming_frame(self, detector_name: str, frame: np.ndarray,
-                               metadata: Dict = None):
-        """Write a frame to the streaming output."""
-        if not self._is_streaming or self._streaming_writer is None:
+        from .adapters import StreamingDataStoreAdapter
+        adapter = StreamingDataStoreAdapter(
+            base_path=folder, detectors_manager=detectors_manager, metadata_hub=metadata_hub,
+            write_zarr=write_zarr, write_tiff=write_tiff, n_time_points=n_time_points)
+        adapter.open(detector_names)
+        self._streaming_adapter = adapter
+        self._streaming_start_time = time.time()
+        self._streaming_detector_names = list(detector_names or [])
+        self._streaming_frame_count = 0
+        if auto_capture:
+            self._connect_frame_callback()
+        self.sigRecordingStarted.emit()
+        self._logger.info(f"Streaming started: {folder}")
+        return True
+
+    def write_streaming_frame(self, detector_name: str, frame: np.ndarray) -> None:
+        """Write one frame of a detector to the open streaming session."""
+        if not self.is_streaming:
             return
-        
+        self._streaming_adapter.write_frame(detector_name, frame)
+        self._streaming_frame_count += 1
+        self.sigRecordingFrameNumUpdated.emit(self._streaming_frame_count)
+
+    def stop_streaming(self) -> Dict[str, Any]:
+        """Stop streaming, finalize the files and return the write statistics."""
+        adapter = self._streaming_adapter
+        if adapter is None:
+            return {}
+        self._disconnect_frame_callback()
+        self._streaming_adapter = None
+        stats = {"frames": self._streaming_frame_count}
         try:
-            self._streaming_writer.write_frame(detector_name, frame, metadata)
-            self._streaming_frame_count += 1
-            self.sigRecordingFrameNumUpdated.emit(self._streaming_frame_count)
+            stats.update(adapter.get_statistics())
+            adapter.close()
         except Exception as e:
-            self._logger.error(f"Failed to write streaming frame: {e}")
-    
-    def stop_streaming(self) -> int:
-        """
-        Stop streaming recording.
-        
-        Returns:
-            Number of frames recorded
-        """
-        if not self._is_streaming:
-            return 0
-        
-        frame_count = self._streaming_frame_count
-        
-        if self._streaming_writer is not None:
-            try:
-                self._streaming_writer.close()
-            except Exception as e:
-                self._logger.error(f"Error closing streaming writer: {e}")
-            self._streaming_writer = None
-        
-        self._is_streaming = False
-        self._streaming_format = None
+            self._logger.error(f"Error closing streaming session: {e}")
+        self._streaming_start_time = None
+        self._streaming_detector_names = []
         self._streaming_frame_count = 0
         self.sigRecordingEnded.emit()
-        
-        return frame_count
-    
+        return stats
+
     @property
     def is_streaming(self) -> bool:
-        """Check if streaming is in progress."""
-        return self._is_streaming
-    
+        """True while a streaming session is open."""
+        return self._streaming_adapter is not None and getattr(
+            self._streaming_adapter, "_is_open", False)
+
     @property
     def streaming_duration(self) -> float:
         """Get current streaming recording duration in seconds."""
@@ -1386,11 +1340,7 @@ class RecordingService(SignalInterface):
     @property
     def is_recording(self) -> bool:
         """Check if any recording (video or streaming) is in progress."""
-        return self.is_video_recording or self.is_streaming or (
-            self._streaming_adapter is not None and 
-            hasattr(self._streaming_adapter, '_is_open') and 
-            self._streaming_adapter._is_open
-        )
+        return self.is_video_recording or self.is_streaming
     
     @property
     def recording_duration(self) -> float:
@@ -1665,12 +1615,9 @@ class RecordingService(SignalInterface):
             format_type = SaveFormat.MP4
             filepath = self._video_writer.filepath if self._video_writer else None
             start_time = self._video_writer._start_time if self._video_writer else None
-        elif self._is_streaming:
-            format_type = self._streaming_format
-            filepath = None
-            start_time = self._streaming_start_time
-        elif self._streaming_adapter is not None:
-            format_type = SaveFormat.OME_ZARR
+        elif self.is_streaming:
+            format_type = SaveFormat.OME_ZARR if self._streaming_adapter.write_zarr \
+                else SaveFormat.OME_TIFF
             filepath = getattr(self._streaming_adapter, 'base_path', None)
             start_time = self._streaming_start_time
         else:

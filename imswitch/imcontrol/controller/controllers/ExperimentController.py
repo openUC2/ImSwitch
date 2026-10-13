@@ -17,7 +17,7 @@ from ..busy import busy_reasons
 from imswitch.imcontrol.model.io.frame_save_worker import FrameSaveWorker
 from imswitch.imcontrol.controller.controllers.experiment_controller import ExperimentPerformanceMode, ExperimentNormalMode, ExecutionContext, Experiment, ParameterValue
 from imswitch.imcontrol.controller.controllers.experiment_controller.scan_plan import resolve_channels, z_offsets, writer_flags, build_scan_regions, regions_to_areas
-from imswitch.imcontrol.model.focus_map import FocusMapManager
+from imswitch.imcontrol.model.aufgaben.focus_map import FocusMapManager
 
 
 from imswitch.imcontrol.controller.controllers.experiment_controller.labware_api import LabwareMixin

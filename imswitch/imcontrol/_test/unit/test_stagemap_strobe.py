@@ -836,3 +836,13 @@ def test_full_calibration_reports_when_no_window_lights_every_row():
     assert len(result["windowTries"]) == StageMapController.STROBE_CAL_WINDOW_TRIES
     assert ctrl.params.strobeDelayUs == -1.0               # nothing stored
     assert ctrl.params.strobeWindowMs == 3.0
+
+
+def test_virtual_stage_speed_stays_a_per_axis_dict():
+    """PositionerController reads speed[axis]; a scalar here kept it from starting."""
+    stage = virtual_stage()
+    assert set(stage.speed) == {"X", "Y", "Z", "A"}
+    stage.setSpeed(5000)
+    assert stage.speed["Z"] == 5000 and stage._travelSpeed == 5000
+    stage.setSpeed(200, axis="X")
+    assert stage.speed["X"] == 200 and stage.speed["Y"] == 5000

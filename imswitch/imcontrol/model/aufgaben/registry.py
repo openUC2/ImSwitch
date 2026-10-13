@@ -30,7 +30,7 @@ from typing import (Any, Callable, ClassVar, Dict, Iterable, List, Literal, Mapp
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
-from .hardware import Microscope
+from .hardware import DerivedImage, Microscope
 
 Effects = Literal["NONE", "REPEATABLE", "UNKNOWN", "IRREVERSIBLE"]
 
@@ -59,6 +59,10 @@ INJECTED_TYPES: Tuple[type, ...] = (Microscope, TaskContext)
 
 # Arkitekt uses "value" for a port's own value inside validators and effects.
 RESERVED_PARAM_NAMES = frozenset({"value"})
+
+# Types tasks return that an Arkitekt app declares before registering the tasks:
+# ``app.register_memory_structure(cls, identifier=...)`` (kept by the agent).
+MEMORY_STRUCTURES: Dict[type, str] = {DerivedImage: "aufgaben.derived_image"}
 
 
 @dataclass(frozen=True)

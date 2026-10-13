@@ -4,6 +4,10 @@ import threading
 import time
 
 class VirtualStageManager(PositionerManager):
+    # start_stage_scanning only moves: no camera triggers, so a firmware-timed
+    # stage scan would wait for frames forever. Aufgaben hides fast_stage_scan.
+    scanTriggersFrames = False
+
     def __init__(self, positionerInfo, name, **lowLevelManagers):
         super().__init__(positionerInfo, name, initialPosition={axis: 0 for axis in positionerInfo.axes})
         self.__logger = initLogger(self, instanceName=name)
@@ -39,7 +43,6 @@ class VirtualStageManager(PositionerManager):
 
         # get bootup position and write to GUI
         self._position = self.getPosition()
-        self._speed = None   # µm/s set by setSpeed; None: DEFAULT_SPEED_UM_S
 
     @property
     def combinedAxes(self):
@@ -95,7 +98,7 @@ class VirtualStageManager(PositionerManager):
                        for a in steps)
         if isinstance(speed, (tuple, list)):
             speed = max(speed)
-        speed = float(speed or self._speed or self.DEFAULT_SPEED_UM_S)
+        speed = float(speed or getattr(self, "_travelSpeed", None) or self.DEFAULT_SPEED_UM_S)
         time.sleep(min(self.MAX_MOVE_TIME_S, distance / max(speed, 1.0)))
 
     def getDevicePositionAxis(self, axis="X"):
@@ -127,7 +130,13 @@ class VirtualStageManager(PositionerManager):
         pass
 
     def setSpeed(self, speed, axis=None):
-        self._speed = max(speed) if isinstance(speed, (tuple, list)) else speed
+        """Travel speed of blocking moves (µm/s); ``speed`` shows it per axis."""
+        if speed is None:
+            return
+        value = float(max(speed) if isinstance(speed, (tuple, list)) else speed)
+        self._travelSpeed = value
+        for a in ([axis] if axis in self.axes else self.axes):
+            self._speed[a] = value
 
     def setPosition(self, value, axis):
         pass

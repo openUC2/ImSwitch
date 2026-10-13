@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 from pydantic import TypeAdapter, ValidationError
 
 from . import expressions
-from .control import CONTROL_SPECS, MOVING_LOOPS, ControlSpec
+from .control import CONTROL_SPECS, MOVING_LOOPS, POSITION_LOOPS, ControlSpec
 from .document import Job, Node, expression, resource_ref
 from .registry import REGISTRY, TaskSpec
 
@@ -211,6 +211,14 @@ class _Validator:
             targets = {a.id for a in ancestors if a.task in MOVING_LOOPS}
             if not targets or (p.get("loop") and p["loop"] not in targets):
                 self.err(node.id, "move_to_item needs an enclosing position/well/tile/Z loop")
+        if node.task == "loop_grid" and p.get("plan") is None and \
+                not any(a.task == "loop_regions" for a in ancestors):
+            self.err(node.id, "loop_grid without a plan needs an enclosing loop_regions")
+        if node.task == "create_focus_map" and not any(p.get(k) for k in
+                                                       ("points", "regions", "plate")) and \
+                not any(a.task in POSITION_LOOPS for a in ancestors):
+            self.err(node.id, "create_focus_map needs points, regions, a plate or an enclosing "
+                              "position/well/region loop")
         if node.task == "set_variable" and p.get("name") not in self.job.variables:
             self.err(node.id, f"set_variable: {p.get('name')!r} is not a declared variable")
         if node.task == "question" and p.get("store_as") and \
@@ -222,9 +230,13 @@ class _Validator:
         r = self.report
         if node.task in MOVING_LOOPS and node.params.get("move", True) is not False:
             r.moves_xy |= node.task != "zstack"
-            r.moves_z |= node.task in ("zstack", "loop_positions")
-        if node.task in ("capture", "loop_channels"):
+            r.moves_z |= node.task in ("zstack", "loop_positions") or \
+                node.params.get("focus_map") is not None
+        if node.task in ("capture", "loop_channels", "create_focus_map"):
             r.emits_light = True
+        if node.task in ("create_focus_map", "move_to_focus_surface"):
+            r.moves_z = True
+            r.moves_xy |= node.task == "create_focus_map"
         if tspec is None:
             return
         f = tspec.flags

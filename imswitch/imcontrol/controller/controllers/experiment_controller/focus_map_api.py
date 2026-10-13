@@ -11,7 +11,7 @@ import os
 from imswitch.imcommon.model import APIExport
 
 from imswitch.imcontrol.controller.controllers.experiment_controller import FocusMapConfig, FocusMapFromPointsRequest, ParameterValue
-from imswitch.imcontrol.model.focus_map import FocusMap, fit_quality_text
+from imswitch.imcontrol.model.aufgaben.focus_map import FocusMap, fit_quality_text
 
 
 def _sanitize_sample(sample: str) -> str:

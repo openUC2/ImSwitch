@@ -25,6 +25,7 @@ from imswitch.imcontrol.model.aufgaben.storage import OmeStore
 from ..basecontrollers import ImConWidgetController
 from ..busy import busy_reasons
 from .aufgaben import ImSwitchMicroscope
+from .aufgaben.host import register_labware
 
 ACTIVE = ("running", "paused")
 DEVICE_KINDS = ("illumination", "detector", "digital_output", "digital_input",
@@ -53,6 +54,15 @@ class AufgabenController(ImConWidgetController):
         self._lock = threading.Lock()
         self._last_node_event = 0.0
         self._jobs_dir = Path(dirtools.UserFileDirs.Root) / "aufgaben"
+        self._plates = []   # ImSwitch labware usable as useq plate names in jobs
+        if self._labware() is not None:
+            try:
+                self._plates = register_labware(self._labware())
+            except Exception as e:
+                self._logger.warning(f"Labware not registered as useq plates: {e}")
+
+    def _labware(self):
+        return getattr(self._master.getController("Experiment"), "labware_manager", None)
 
     # -- helpers --------------------------------------------------------------
     def _job(self, data: Dict[str, Any]) -> aufgaben.Job:
@@ -143,6 +153,37 @@ class AufgabenController(ImConWidgetController):
         """Errors, warnings, ask-first steps and whether the job moves or emits light."""
         return aufgaben.validate(self._job(job), capabilities=self._host.capabilities()).as_dict()
 
+    @APIExport()
+    def getAufgabenWellPlate(self, load_name: str, wells: str = "", offset_x_um: float = 0.0,
+                             offset_y_um: float = 0.0) -> dict:
+        """A useq well-plate plan for ImSwitch labware, in stage µm.
+
+        Args:
+            load_name: Labware name (getLabwareList); it must have a regular well grid.
+            wells: Comma-separated well names (A1,B3); empty selects every well.
+            offset_x_um: Stage X of the labware origin, as in getLabwareDefinition.
+            offset_y_um: Stage Y of the labware origin.
+
+        Returns the plan as JSON, ready for a job's well_plate resource. Rows run
+        towards -Y and columns towards +X in both ImSwitch labware and useq.
+        """
+        import useq
+        manager = self._labware()
+        if manager is None or load_name not in self._plates:
+            raise HTTPException(status_code=404,
+                                detail=f"No labware {load_name!r} with a regular well grid")
+        lab = manager.get_with_offset(load_name, offset_x_um, offset_y_um)
+        names = [w.strip() for w in wells.split(",") if w.strip()] or lab.well_names_flat
+        unknown = [w for w in names if w not in lab.wells]
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"Unknown wells: {unknown}")
+        rows = [lab.rows.index(lab.wells[w].row) for w in names]
+        cols = [lab.columns.index(lab.wells[w].column) for w in names]
+        a1 = lab.wells[f"{lab.rows[0]}{lab.columns[0]}"]
+        plan = useq.WellPlatePlan(plate=load_name, a1_center_xy=(a1.x, a1.y),
+                                  selected_wells=(rows, cols))
+        return plan.model_dump(mode="json")
+
     @APIExport(requestType="POST")
     def importAufgabenUseq(self, sequence: Dict[str, Any]) -> dict:
         """A job from a useq-schema MDASequence (nested loops when possible)."""
@@ -183,7 +224,9 @@ class AufgabenController(ImConWidgetController):
                 raise HTTPException(status_code=403, detail=str(e)) from e
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e)) from e
-            run.sink = OmeStore(folder, formats=job.storage.formats, layout=job.storage.layout)
+            run.sink = OmeStore(folder, formats=job.storage.formats, layout=job.storage.layout,
+                                stitch=job.storage.stitching if job.storage.stitched_preview
+                                else None)
             (folder / "job.json").write_text(job.to_json(indent=1))
             self._host.begin()
             self._run = run

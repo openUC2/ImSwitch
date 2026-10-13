@@ -30,7 +30,8 @@ import tifffile as tif
 import tifffile
 
 # Import from local writers module
-from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage
+from .ome_tiff_metadata import build_ome_metadata_from_dict
+from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage, ome_xml
 from .ome_tiff_stitcher import OmeTiffStitcher
 from .single_tiff_writer import SingleTiffWriter
 from .omero_uploader import (
@@ -411,8 +412,8 @@ class OMEWriter:
                 "Stitch offline from the individual tiles."
             )
 
-    def _setup_zarr_store(self):
-        """One NGFF image per writer: the stitched canvas of this region.
+    def _image_spec(self) -> ImageSpec:
+        """The canvas of this region (TCZYX) for both the OME-Zarr and the OME-TIFF.
 
         RGB tiles become three uint8 channels per illumination channel; the
         translation is the top-left pixel of the first tile.
@@ -423,7 +424,7 @@ class OMEWriter:
         if self.isRGB:
             names = [f"{n}_rgb_{c}" for n in names for c in "rgb"]
         px = cfg.pixel_size
-        spec = ImageSpec(
+        return ImageSpec(
             shape=(int(cfg.n_time_points), int(cfg.n_channels) * samples, int(cfg.n_z_planes),
                    int(self.ny * self.tile_h), int(self.nx * self.tile_w)),
             dtype="uint8" if self.isRGB else "uint16", pixel_size_um=px,
@@ -433,8 +434,11 @@ class OMEWriter:
             channel_names=names, channel_colors=[] if self.isRGB else list(cfg.channel_colors or []),
             name=self._image_name or os.path.basename(self.file_paths.base_dir),
             chunks_yx=(int(self.tile_h), int(self.tile_w)))
+
+    def _setup_zarr_store(self):
+        """One NGFF image per writer: the stitched canvas of this region."""
         self.store = str(self.file_paths.zarr_dir)
-        self.zarr_image = NgffImage.create(self.store, spec)
+        self.zarr_image = NgffImage.create(self.store, self._image_spec())
         self.canvas = self.zarr_image.array
         if self.well_metadata:   # custom attrs; NGFF plates come from Aufgaben
             wm = self.well_metadata
@@ -759,31 +763,17 @@ class OMEWriter:
         # being saved as grayscale. Grayscale tiles keep photometric=None (auto).
         photometric = "rgb" if (self.isRGB and frame.ndim == 3) else None
 
-        # Build OME-XML metadata for this individual TIFF
         try:
-            from .ome_tiff_metadata import build_ome_metadata_from_dict, OME_TYPES_AVAILABLE
-
-            if OME_TYPES_AVAILABLE:
-                # Prepare metadata dict with image dimensions and pixel info
-                ome_metadata = metadata.copy()
-                ome_metadata["height"] = frame.shape[0]
-                ome_metadata["width"] = frame.shape[1] if frame.ndim > 1 else 1
-                ome_metadata["dtype"] = str(frame.dtype)
-                ome_metadata["pixel_size"] = self.config.pixel_size
-                ome_metadata["channel_name"] = channel
-
-                # Build OME-XML string
-                ome_xml = build_ome_metadata_from_dict(ome_metadata)
-                if ome_xml:
-                    tif.imwrite(filepath, frame, description=ome_xml, photometric=photometric, **self.config.tiff_write_kwargs())
-                else:
-                    tif.imwrite(filepath, frame, photometric=photometric, **self.config.tiff_write_kwargs())
-            else:
-                tif.imwrite(filepath, frame, photometric=photometric, **self.config.tiff_write_kwargs())
-        except Exception as e:
+            xml = build_ome_metadata_from_dict({
+                **metadata, "height": frame.shape[0], "width": frame.shape[1],
+                "dtype": str(frame.dtype), "pixel_size": self.config.pixel_size,
+                "channel_name": channel, "rgb": photometric == "rgb"})
+        except Exception as e:   # metadata must never cost the tile
             if self.logger:
-                self.logger.warning(f"Failed to write OME metadata to individual TIFF: {e}")
-            tif.imwrite(filepath, frame, photometric=photometric, **self.config.tiff_write_kwargs())
+                self.logger.warning(f"OME-XML for individual TIFF failed: {e}")
+            xml = None
+        tif.imwrite(filepath, frame, photometric=photometric, description=xml, metadata=None,
+                    **self.config.tiff_write_kwargs())
 
     def _write_omero_tile(self, frame, metadata: Dict[str, Any]):
         """
@@ -892,10 +882,10 @@ class OMEWriter:
     def _finalize_ome_tiff(self):
         """Flush the accumulated mosaic to a single multi-dimensional OME-TIFF.
 
-        Produces a Fiji/Bio-Formats-readable hyperstack with the proper OME
-        metadata model: TCZYX axes (plus a trailing samples axis for RGB),
-        physical pixel sizes, Z-step, time increment and channel names. Written
-        via tifffile's native OME support (``ome=True``).
+        Produces a Fiji/Bio-Formats-readable hyperstack: TCZYX (plus a trailing
+        samples axis for RGB) with the OME-XML of the shared OME writer
+        (``ome_xml``: physical sizes, Z step, time increment, channel names,
+        plane positions), the same model the OME-Zarr canvas carries.
         """
         if self.tiff_mosaic is None:
             return
@@ -917,36 +907,11 @@ class OMEWriter:
 
         # RGB hyperstacks carry a trailing samples axis and must be tagged
         # photometric="rgb"; mono stacks stay minisblack.
-        axes = "TCZYXS" if self.isRGB else "TCZYX"
         photometric = "rgb" if self.isRGB else "minisblack"
-
-        # OME metadata model. tifffile maps these keys onto the OME-XML schema.
-        channel_names = list(self.config.channel_names or [])
-        ome_metadata = {
-            "axes": axes,
-            "PhysicalSizeX": float(self.config.pixel_size),
-            "PhysicalSizeXUnit": "µm",
-            "PhysicalSizeY": float(self.config.pixel_size),
-            "PhysicalSizeYUnit": "µm",
-            "PhysicalSizeZ": float(self.config.pixel_size_z),
-            "PhysicalSizeZUnit": "µm",
-            "TimeIncrement": float(self.config.time_interval),
-            "TimeIncrementUnit": "s",
-        }
-        if self._image_name:
-            ome_metadata["Name"] = self._image_name
-        if channel_names:
-            ome_metadata["Channel"] = {"Name": channel_names}
-
-        tif.imwrite(
-            out_path,
-            self.tiff_mosaic,
-            photometric=photometric,
-            metadata=ome_metadata,
-            ome=True,
-            bigtiff=True,
-            **self.config.tiff_write_kwargs(),
-        )
+        description = ome_xml(self._image_spec(), rgb=self.isRGB)
+        with tif.TiffWriter(out_path, bigtiff=True, ome=False) as writer:
+            writer.write(self.tiff_mosaic, photometric=photometric, description=description,
+                         metadata=None, **self.config.tiff_write_kwargs())
 
         # Release the buffer promptly — a full mosaic can be large.
         self.tiff_mosaic = None

@@ -13,6 +13,7 @@ from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger, dirtools
 from ..basecontrollers import LiveUpdatedController
 from imswitch.imcommon.model import APIExport
+from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage
 
 # Import pydantic models for parameter management
 try:
@@ -1569,71 +1570,23 @@ class STORMReconController(LiveUpdatedController):
         return [frames_chunk[i] for i in range(frames_chunk.shape[0])]
 
     def _initializeOMEZarrSaving(self, saveDirectory: str):
-        """Initialize simple OME-Zarr saving for time series without pyramids."""
-        try:
-            # Use standard data directory structure
-            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            drivePath = dirtools.UserFileDirs.getValidatedDataPath()
-            dirPath = os.path.join(drivePath, 'STORMController', timeStamp)
-            saveDirectory = os.path.join(dirPath, saveDirectory)
-
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(saveDirectory), exist_ok=True)
-
-            # Initialize simplified OME-Zarr store using MinimalZarrDataSource
-            from imswitch.imcontrol.model.io import MinimalZarrDataSource
-            self._ome_zarr_store = MinimalZarrDataSource(saveDirectory, mode="w")
-
-            # Get frame shape for configuration
-            sample_chunk = self.detector.getChunk()
-            if sample_chunk is not None:
-                sample_frames = self._normalizeFrameChunk(sample_chunk)
-                if sample_frames:
-                    sample_frame = sample_frames[0]
-                    if self._cropping_params is not None:
-                        crop = self._cropping_params
-                        shape_y, shape_x = crop['height'], crop['width']
-                    else:
-                        shape_y, shape_x = sample_frame.shape
-
-                    # Configure metadata for simple time-series OME-Zarr
-                    config = {
-                        'shape_t': 10000,  # Large number, will be trimmed later
-                        'shape_c': 1,
-                        'shape_z': 1,
-                        'shape_y': shape_y,
-                        'shape_x': shape_x,
-                        'dtype': sample_frame.dtype,
-                        "experiment": {
-                            "MicroscopeState": {
-                                "timepoints": 10000,
-                                "channels": {
-                                    "channel_1": {
-                                        "is_selected": True,
-                                        "name": "STORM Channel",
-                                        "color": "#FF0000"
-                                    }
-                                },
-                                "microscope_name": "storm_detector",
-                                "stack_cycling_mode": "per_stack"
-                            },
-                            "CameraParameters": {
-                                "storm_detector": {
-                                    "x_pixels": shape_x,
-                                    "y_pixels": shape_y
-                                }
-                            }
-                        }
-                    }
-                    self._ome_zarr_store.set_metadata_from_configuration_experiment(config)
-                    self._ome_zarr_store.new_position(pos_index=0, pos_name="STORM Position", pos_x=0, pos_y=0, pos_z=0)
-
-        except ImportError:
-            self._logger.warning("OME-Zarr dependencies not available, falling back to TIFF")
-            self._initializeTiffSaving(saveDirectory.replace('.zarr', '.tiff'))
-        except Exception as e:
-            self._logger.error(f"Failed to initialize OME-Zarr saving: {e}")
-            self._ome_zarr_store = None
+        """One OME-NGFF time series (T grows per frame) in the STORM data folder."""
+        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dirPath = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'STORMController',
+                               timeStamp)
+        os.makedirs(dirPath, exist_ok=True)
+        sample = self._normalizeFrameChunk(self.detector.getChunk())
+        if not sample:
+            raise RuntimeError("no frame from the camera to size the OME-Zarr store")
+        if self._cropping_params is not None:
+            shape_yx = (self._cropping_params['height'], self._cropping_params['width'])
+        else:
+            shape_yx = sample[0].shape[:2]
+        spec = ImageSpec(shape=(1, 1, 1) + tuple(shape_yx), dtype=str(sample[0].dtype),
+                         pixel_size_um=float(self.detector.pixelSizeUm[-1]),
+                         channel_names=["STORM"], name=os.path.basename(saveDirectory))
+        name = saveDirectory if saveDirectory.endswith(".zarr") else f"{saveDirectory}.ome.zarr"
+        self._ome_zarr_store = NgffImage.create(os.path.join(dirPath, name), spec)
 
     def _initializeTiffSaving(self, saveDirectory: str):
         """Initialize single TIFF saving following ExperimentController pattern."""
@@ -1654,8 +1607,7 @@ class STORMReconController(LiveUpdatedController):
         """Save frame to OME-Zarr store."""
         try:
             if self._ome_zarr_store is not None:
-                # Write frame to zarr store using the simple time-series approach
-                self._ome_zarr_store.write(frame, ti=frame_number, ci=0)
+                self._ome_zarr_store.write(frame, frame_number, 0, 0)
         except Exception as e:
             self._logger.error(f"Failed to save frame to Zarr: {e}")
 
@@ -1684,7 +1636,7 @@ class STORMReconController(LiveUpdatedController):
         try:
             # Close OME-Zarr store properly
             if self._ome_zarr_store is not None:
-                self._ome_zarr_store.close()
+                self._ome_zarr_store.finalize()
                 self._ome_zarr_store = None
 
             # Close single TIFF writer properly

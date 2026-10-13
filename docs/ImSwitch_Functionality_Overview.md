@@ -132,7 +132,12 @@
   - Configurable intervals
   - Multi-position support
 - **Aufgaben jobs** (`AufgabenController`, plan in `docs/AUFGABEN_ROADMAP.md`)
-  - A tree of loops, conditions, variables, captures and hardware tasks
+  - A tree of loops (positions, wells, regions, tiles, Z, channels, time), conditions, variables,
+    captures and hardware tasks
+  - Focus maps per region or well; tiles follow the focus surface
+  - Prescan overview (stage map) and firmware-timed fast stage scan as job steps
+  - Stitched image per position, at stage positions or registered with Ashlar
+  - Well plates from ImSwitch labware as useq plate plans
   - Pause, resume, finish, abort; operator questions
   - Import and export of useq-schema sequences
 - **Workflow automation**

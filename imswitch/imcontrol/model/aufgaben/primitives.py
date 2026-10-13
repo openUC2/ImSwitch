@@ -8,12 +8,13 @@ control nodes (``control.py``), not tasks.
 from __future__ import annotations
 
 import json
+import math
 import urllib.request
-from typing import Annotated, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
-from annotated_types import Gt
+from annotated_types import Ge, Gt, Lt
 
-from .hardware import Microscope
+from .hardware import DerivedImage, Microscope
 from .registry import TaskContext, TaskFlags, task
 
 STAGE_LOCK = ("stage",)
@@ -175,6 +176,87 @@ def set_objective(slot: Annotated[int, Gt(-1)], *, hw: Microscope) -> None:
         slot: Turret slot, starting at 0.
     """
     hw.set_objective(slot)
+
+
+# --------------------------------------------------------------------------- #
+# Scans run by the firmware or the stage map
+# --------------------------------------------------------------------------- #
+def _tiles(lo: float, hi: float, step: float) -> int:
+    """Tile count whose centres, step apart from ``lo``, reach ``hi``."""
+    return max(1, math.ceil((hi - lo) / step - 1e-9) + 1)
+
+
+@task(category="Stage scan", locks=STAGE_LOCK, effects="IRREVERSIBLE",
+      choices={"sources": "illumination"},
+      flags=TaskFlags(moves_xy=True, emits_light=True, needs=("stage_scan",)))
+def fast_stage_scan(x_min_um: float, x_max_um: float, y_min_um: float, y_max_um: float,
+                    sources: List[str], intensities: List[float],
+                    exposure_ms: Annotated[float, Gt(0)] = 50.0,
+                    settle_ms: Annotated[float, Ge(0)] = 90.0,
+                    overlap: Annotated[float, Ge(0), Lt(1)] = 0.1,
+                    timeout_s: Annotated[float, Gt(0)] = 600.0,
+                    *, hw: Microscope) -> str:
+    """Fast stage scan
+
+    Firmware-timed raster over a rectangle: the board moves the stage and triggers
+    camera and light at every tile, with no software round trip per tile.
+    ImSwitch writes the tiles to its own OME-Zarr mosaic; the result is its path.
+
+    Args:
+        x_min_um: Left edge of the rectangle of tile centres.
+        x_max_um: Right edge.
+        y_min_um: Lower edge.
+        y_max_um: Upper edge.
+        sources: Lasers to fire at each tile, as named in the setup.
+        intensities: One intensity per source.
+        exposure_ms: Exposure and light-on time per tile.
+        settle_ms: Wait after each step before the trigger.
+        overlap: Tile overlap as a fraction of the field of view.
+        timeout_s: Give up when the frames have not all arrived by then.
+    """
+    if len(sources) != len(intensities) or not sources:
+        raise ValueError("fast_stage_scan: give one intensity per source")
+    width, height = hw.fov_um()
+    step_x, step_y = width * (1 - overlap), height * (1 - overlap)
+    return hw.fast_stage_scan(x_min_um, y_min_um, _tiles(x_min_um, x_max_um, step_x),
+                              _tiles(y_min_um, y_max_um, step_y), step_x, step_y, sources,
+                              intensities, exposure_ms, settle_ms, timeout_s)
+
+
+@task(category="Stage scan", locks=STAGE_LOCK, effects="IRREVERSIBLE",
+      choices={"source": "illumination"},
+      flags=TaskFlags(moves_xy=True, emits_light=True, needs=("stage_map",)))
+def stage_prescan(x_min_um: float, x_max_um: float, y_min_um: float, y_max_um: float,
+                  line_step_um: Annotated[float, Gt(0)] = 500.0,
+                  speed_um_s: Annotated[float, Gt(0)] = 10000.0,
+                  source: Optional[str] = None, intensity: Optional[float] = None,
+                  timeout_s: Annotated[float, Gt(0)] = 600.0,
+                  *, hw: Microscope) -> DerivedImage:
+    """Prescan overview
+
+    Sweeps the stage line by line over a rectangle while the camera streams and
+    builds a low-resolution overview (the stage map's prescan). The overview is
+    saved with the run as an OME image in stage coordinates, e.g. to find regions.
+
+    Args:
+        x_min_um: Left edge of the rectangle.
+        x_max_um: Right edge.
+        y_min_um: Lower edge.
+        y_max_um: Upper edge.
+        line_step_um: Distance between sweep lines.
+        speed_um_s: Sweep speed along X.
+        source: Light switched on during the sweep and off afterwards; empty keeps it.
+        intensity: Its intensity; empty keeps the current value.
+        timeout_s: Give up when the sweep has not finished by then.
+    """
+    if source:
+        hw.set_illumination(source, intensity=intensity, on=True)
+    try:
+        return hw.stage_prescan(x_min_um, x_max_um, y_min_um, y_max_um, line_step_um,
+                                speed_um_s, timeout_s)
+    finally:
+        if source:
+            hw.set_illumination(source, on=False)
 
 
 # --------------------------------------------------------------------------- #

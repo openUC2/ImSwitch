@@ -89,9 +89,11 @@ def test_task_decorator_returns_the_function_unchanged():
 def test_arkitekt_accepts_every_primitive_unchanged():
     define = pytest.importorskip("arkitekt_spec.declare.definition.define")
     registry = pytest.importorskip("arkitekt_spec.declare.structures.registry")
+    structures = registry.StructureRegistry()
+    for cls, identifier in A.MEMORY_STRUCTURES.items():   # what an app declares once
+        structures.register_as_memory_structure(cls, identifier=identifier)
     for task_id, spec in A.REGISTRY.items():
-        definition = define.prepare_definition(spec.function, registry.StructureRegistry(),
-                                               omitkeys=["hw"])
+        definition = define.prepare_definition(spec.function, structures, omitkeys=["hw"])
         keys = [a.key for a in definition.args]
         assert keys == list(spec.params_model.model_fields), task_id
         assert "ctx" not in keys  # injected through the task marker

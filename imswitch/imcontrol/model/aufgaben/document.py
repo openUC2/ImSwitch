@@ -67,20 +67,40 @@ GridPlan = Union[
 ]
 
 
+class LedPattern(_Model):
+    """The LED-matrix pattern of a ring (dark field) or DPC (half field) channel."""
+
+    radius: Optional[int] = Field(None, ge=0, description="Ring radius in LEDs (ring)")
+    direction: Optional[Literal["top", "bottom", "left", "right"]] = Field(
+        None, description="Lit half (dpc)")
+    intensity_r: int = Field(255, ge=0, le=255)
+    intensity_g: int = Field(255, ge=0, le=255)
+    intensity_b: int = Field(255, ge=0, le=255)
+    settle_s: float = Field(0.05, ge=0, description="Wait after switching, before the exposure")
+
+
 class CaptureChannel(useq.Channel):
     """A useq ``Channel`` plus what ImSwitch needs to switch the light.
 
     ``config`` names the illumination source as configured in the setup (a
-    laser, LED or LED-matrix pattern). ``exposure`` is in ms, ``z_offset`` in
-    µm, as in useq. The extra fields are dropped on export to useq.
+    laser or LED) or, for ``kind`` ring/dpc, labels the LED-matrix pattern.
+    ``exposure`` is in ms, ``z_offset`` in µm, as in useq. The extra fields are
+    dropped on export to useq.
     """
 
     intensity: Optional[float] = Field(
         None, description="Source intensity in the source's own units; None keeps it")
     gain: Optional[float] = Field(None, description="Camera gain; None keeps it")
     kind: Literal["default", "ring", "dpc"] = "default"
-    led_pattern: Optional[Dict[str, Any]] = Field(
-        None, description="LED-matrix pattern parameters for kind ring/dpc")
+    led_pattern: Optional[LedPattern] = Field(
+        None, description="LED-matrix pattern for kind ring (radius) or dpc (direction)")
+
+    @model_validator(mode="after")
+    def _pattern_fits_kind(self) -> "CaptureChannel":
+        need = {"ring": "radius", "dpc": "direction"}.get(self.kind)
+        if need and getattr(self.led_pattern, need, None) is None:
+            raise ValueError(f"a {self.kind} channel needs led_pattern.{need}")
+        return self
 
 
 class PositionsResource(_Model):
@@ -157,11 +177,15 @@ class RegionsResource(_Model):
 
 
 class FocusMapResource(_Model):
-    """A focus surface, filled at run time by a create-focus-map task."""
+    """A focus surface, measured at run time by a ``create_focus_map`` node.
+
+    One surface per group: per region, per well or one for the whole sample.
+    Loops with ``focus_map`` and ``move_to_focus_surface`` read it.
+    """
 
     kind: Literal["focus_map"] = "focus_map"
     method: Literal["spline", "rbf", "constant"] = "spline"
-    z_offset_um: float = 0.0
+    z_offset_um: float = Field(0.0, description="Added to every surface Z (e.g. into the sample)")
 
 
 Resource = Annotated[
@@ -193,7 +217,12 @@ class Storage(_Model):
                     "plate (wells/fields). auto: plate when a well loop is used.")
     folder: Optional[str] = Field(
         None, description="Relative to the data folder; default by job name")
-    stitched_preview: bool = Field(False, description="Also write a stitched mosaic per region")
+    stitched_preview: bool = Field(
+        False, description="Also write one stitched image per position (or region) and "
+                           "capture node from its tiles")
+    stitching: Literal["stage", "ashlar"] = Field(
+        "stage", description="stage: place tiles at their stage positions; ashlar: refine the "
+                             "positions by registering the tile overlaps first")
 
 
 # --------------------------------------------------------------------------- #

@@ -394,7 +394,8 @@ Hardware focus lock (`FocusLockController`, astigmatism/reflection based):
 - `getFocusLockState()`, `getCurrentFocusValue()`
 - `getFocusLockParams` / `setFocusLockParams`, `getPIParameters` / `setPIParameters(kp, ki)`
 - `runFocusCalibrationDynamic(scan_range_um, num_steps, settle_time, …)` /
-  `stopFocusCalibration` / `getCalibrationStatus` / `getCalibrationResults`
+  `stopFocusCalibration` / `getCalibrationStatus` / `getCalibrationResults` — the calibration
+  moves Z; it is refused while an experiment, job, recording or stage-map scan runs
 - `setZStepLimit(limit_nm)` / `getZStepLimit` — **the safety clamp on lock-driven Z moves.
   Do not raise it to make the lock converge.**
 - `returnLastImage` / `returnLastCroppedImage` — the spot image, for diagnosing a bad lock
@@ -470,9 +471,11 @@ OMERO export: `getOMEROConfig` / `setOMEROConfig` / `isOMEROEnabled` /
 
 ### 4.9 Jobs, workflows and stage maps — `AufgabenController`, `WorkflowController`, `StageMapController`
 
-`AufgabenController` — composable acquisition jobs (loops, conditions, variables, capture,
-autofocus, digital I/O, temperature; plan and format in `docs/AUFGABEN_ROADMAP.md`). Output is
-standard OME-Zarr (NGFF 0.4) and OME-TIFF in `<data>/Aufgaben/<timestamp>_<job>/`:
+`AufgabenController` — composable acquisition jobs (loops over positions, wells, regions and
+tiles, conditions, variables, capture incl. LED-matrix ring/DPC channels, autofocus and focus maps,
+prescan and firmware stage scans, digital I/O, temperature; plan and format in
+`docs/AUFGABEN_ROADMAP.md`). Output is standard OME-Zarr (NGFF 0.4) and OME-TIFF in
+`<data>/Aufgaben/<timestamp>_<job>/`, optionally with stitched images per position:
 
 - `getAufgabenCatalog()` — control nodes and tasks this setup supports, with JSON schemas
 - `validateAufgabenJob(job)` (POST) — errors, warnings, ask-first steps, motion/light summary
@@ -483,14 +486,12 @@ standard OME-Zarr (NGFF 0.4) and OME-TIFF in `<data>/Aufgaben/<timestamp>_<job>/
 - `listAufgabenJobs`, `getAufgabenJob(name)`, `saveAufgabenJob(job)` (POST),
   `deleteAufgabenJob(name)`, `listAufgabenRuns(limit)`, `getAufgabenJobSchema()`
 - `importAufgabenUseq(sequence)` / `exportAufgabenUseq(job)` (POST) — useq-schema bridge
+- `getAufgabenWellPlate(load_name, wells, offset_x_um, offset_y_um)` — a useq well-plate plan
+  from ImSwitch labware (same convention: rows towards −Y), for a job's `well_plate` resource
 
 `WorkflowController` — generic step-based execution engine:
 
 - `uploadWorkflow(definition)`, `start_workflow_api(request)`
-- `start_xyz_histo_workflow(x_min, x_max, y_min, y_max, …)`,
-  `start_xyz_histo_workflow_by_list(req)`
-- `startWorkflowTileBasedByParameters(numberTilesX, numberTilesY, stepSizeX, stepSizeY,
-  nTimes, tPeriod, …)`
 - `pause_workflow` / `resume_workflow` / `stop_workflow` / `force_stop_workflow` /
   `workflow_status`, `getWorkflowStatus` / `setWorkflowStatus`
 - `computeOptimalScanStepSize2(overlap=0.75)` — derives step size from FOV and overlap; use
@@ -502,6 +503,9 @@ standard OME-Zarr (NGFF 0.4) and OME-TIFF in `<data>/Aufgaben/<timestamp>_<job>/
 - `getStageMapParams` / `setStageMapParams`, `getStageMapStatus`, `setStageMapChannel`
 - `getStageMapTiles(fromId, includePreviews)`, `gotoStagePosition(x, y, isAbsolute,
   isBlocking)`, `saveStitchedOmeTiff(filename)`
+- `startPrescan(minX, maxX, minY, maxY, dy, speedX, …)` (POST) / `stopPrescan` — fast
+  low-resolution sweep; refused, like `startStageMap`, while an experiment, job, recording or
+  calibration runs (`controller/busy.py`)
 
 ### 4.10 Metadata, storage and files
 

@@ -24,13 +24,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol
 
 import numpy as np
+import useq
 
 from . import expressions
-from .control import CONTROL_SPECS, MOVING_LOOPS
+from .control import CONTROL_SPECS, MOVING_LOOPS, POSITION_LOOPS
 from .document import CaptureChannel, Job, Node, Retry, expression, resource_ref
-from .hardware import Microscope
+from .focus_map import FocusMap
+from .hardware import DerivedImage, Microscope
 from .registry import REGISTRY, TaskSpec
-from .storage import FrameInfo
+from .storage import FrameInfo, ImageSpec, NgffImage
 from .validate import FROM_KEY, validate
 
 POLL_S = 0.2
@@ -78,6 +80,7 @@ class Loop:
     index: int = 0
     item: Any = None
     items: Optional[list] = None      # the items, when known up front
+    focus_map: Optional[str] = None   # resource whose surface sets Z at each item
 
     def view(self) -> dict:
         return {"index": self.index, "count": self.count, "item": self.item}
@@ -171,6 +174,7 @@ class Run:
         self.variables: Dict[str, Any] = dict(job.variables)
         self.results: Dict[str, Any] = {}
         self.last_frames: Dict[str, np.ndarray] = {}   # per capture node, for analysis tasks
+        self.surfaces: Dict[str, Dict[str, FocusMap]] = {}   # focus_map resource -> group -> fit
         self.loops: List[Loop] = []
         self.state, self.message, self.current = "idle", "", None
         self.frames = 0
@@ -183,6 +187,8 @@ class Run:
         self._thread: Optional[threading.Thread] = None
         self._ctx = _TaskContext(self)
         self._pixel_size: Optional[float] = None
+        self._bit_depth: Optional[int] = None
+        self._lit: Optional[tuple] = None     # (key, channel) of the light that is on
 
     # -- public control -------------------------------------------------------
     def prepare(self, confirmed: bool = False) -> None:
@@ -257,6 +263,7 @@ class Run:
                 traceback.format_exception(e.cause))})
         finally:
             self.current = None
+            self._lit = None
             self._try(self.hw.illumination_off)
             if self.sink is not None:
                 self._try(self.sink.close)
@@ -407,12 +414,36 @@ class Run:
         kwargs = {name: getattr(params, name) for name in task.params_model.model_fields}
         for name, kind in task.injected.items():
             kwargs[name] = self.hw if kind == "hw" else self._ctx
-        return task.function(**kwargs)
+        result = task.function(**kwargs)
+        return self._save_derived(node, result) if isinstance(result, DerivedImage) else result
+
+    def _save_derived(self, node: Node, image: DerivedImage) -> dict:
+        """Keep a task's image with the run (OME, stage coordinates) and describe it."""
+        data = np.asarray(image.data)
+        self.last_frames[node.id] = data
+        h, w = data.shape[:2]
+        info = {"shape": [h, w], "pixel_size_um": image.pixel_size_um,
+                "origin_um": list(image.origin_um), "path": None}
+        if self.run_dir is not None:
+            stem = f"{node.id}_{image.name}"
+            spec = ImageSpec(shape=(1, 1, 1, h, w), dtype=str(data.dtype),
+                             pixel_size_um=image.pixel_size_um,
+                             origin_um=(*image.origin_um, 0.0), channel_names=[image.name],
+                             name=stem)
+            out = NgffImage.create(self.run_dir / f"{stem}.ome.zarr", spec)
+            out.group.attrs["imswitch"] = {"node": node.id, "derived": image.name}
+            out.write(data, 0, 0, 0)
+            out.finalize()
+            if "ome-tiff" in self.job.storage.formats:
+                out.export_ome_tiff(self.run_dir / f"{stem}.ome.tif")
+            info["path"] = str(self.run_dir / f"{stem}.ome.zarr")
+        return info
 
     def _loop(self, node: Node, axis: Optional[str], items: Iterable[Any],
-              count: Optional[int], move: Optional[Callable[[Any], None]] = None) -> None:
+              count: Optional[int], move: Optional[Callable[[Any], None]] = None,
+              focus_map: Optional[str] = None) -> None:
         frame = Loop(node.id, node.task, axis, count,
-                     items=items if isinstance(items, list) else None)
+                     items=items if isinstance(items, list) else None, focus_map=focus_map)
         self.loops.append(frame)
         try:
             for index, item in enumerate(items):
@@ -435,16 +466,24 @@ class Run:
     def _innermost(self, *tasks: str) -> Optional[Loop]:
         return next((lp for lp in reversed(self.loops) if lp.task in tasks), None)
 
-    def _move_xy(self, item: dict) -> None:
+    def _move_item(self, item: dict, focus_map: Optional[str] = None) -> None:
+        """XY of a position/well/region/tile item; Z from the focus surface or the item."""
         target = {"X": item["x"], "Y": item["y"]}
-        if item.get("z") is not None:
-            target["Z"] = item["z"]
+        z = self._surface_z(focus_map, item["x"], item["y"]) if focus_map else item.get("z")
+        if z is not None:
+            target["Z"] = z
         self.hw.move(target)
+
+    def _xy_loop(self, node: Node, axis: str, items: list, p) -> None:
+        """Run a position-like loop: move to each item (following a focus map if given)."""
+        fm = resource_ref(node.params.get("focus_map")) if getattr(p, "focus_map", None) else None
+        move = (lambda item: self._move_item(item, fm)) if p.move else None
+        self._loop(node, axis, items, len(items), move, focus_map=fm)
 
     def _do_loop_positions(self, node, p):
         items = [{"name": pos.name or f"p{i:03d}", "x": pos.x, "y": pos.y, "z": pos.z}
                  for i, pos in enumerate(p.source)]
-        self._loop(node, "p", items, len(items), self._move_xy if p.move else None)
+        self._xy_loop(node, "p", items, p)
 
     def _do_loop_wells(self, node, p):
         ref = resource_ref(node.params.get("plate"))
@@ -454,28 +493,44 @@ class Run:
             if p.label is None or labels.get(pos.name) == p.label:
                 items.append({"name": pos.name, "x": pos.x, "y": pos.y, "z": None,
                               "row": int(row), "col": int(col), "label": labels.get(pos.name)})
-        self._loop(node, "p", items, len(items), self._move_xy if p.move else None)
+        self._xy_loop(node, "p", items, p)
+
+    def _do_loop_regions(self, node, p):
+        items = [{"name": r.name, "x": (r.min_x + r.max_x) / 2, "y": (r.min_y + r.max_y) / 2,
+                  "z": None, "min_x": r.min_x, "max_x": r.max_x, "min_y": r.min_y,
+                  "max_y": r.max_y, "label": r.label}
+                 for r in p.regions if p.label is None or r.label == p.label]
+        self._xy_loop(node, "p", items, p)
 
     def _do_loop_grid(self, node, p):
-        anchor = self._innermost("loop_positions", "loop_wells")
-        ax, ay = (anchor.item["x"], anchor.item["y"]) if anchor else \
-            (lambda pos: (pos["X"], pos["Y"]))(self.hw.get_position())
+        anchor = self._innermost(*POSITION_LOOPS)
         width, height = self.hw.fov_um()
         plan = p.plan
+        if plan is None:   # cover the current region
+            if anchor is None or "min_x" not in anchor.item:
+                raise ValueError("loop_grid without a plan needs an enclosing loop_regions")
+            r = anchor.item
+            plan = useq.GridFromEdges(top=r["max_y"], left=r["min_x"], bottom=r["min_y"],
+                                      right=r["max_x"], overlap=p.overlap * 100,
+                                      fov_width=width, fov_height=height)
         if hasattr(plan, "iter_grid_positions"):
             points = list(plan.iter_grid_positions(plan.fov_width or width,
                                                    plan.fov_height or height))
         else:
             points = list(plan)
-        offset = (ax, ay) if plan.is_relative else (0.0, 0.0)
-        items = [{"name": pt.name or f"{i:04d}", "x": offset[0] + pt.x, "y": offset[1] + pt.y,
+        if plan.is_relative:
+            ax, ay = (anchor.item["x"], anchor.item["y"]) if anchor else \
+                (lambda pos: (pos["X"], pos["Y"]))(self.hw.get_position())
+        else:
+            ax, ay = 0.0, 0.0
+        items = [{"name": pt.name or f"{i:04d}", "x": ax + pt.x, "y": ay + pt.y,
                   "z": None, "row": getattr(pt, "row", None), "col": getattr(pt, "col", None)}
                  for i, pt in enumerate(points)]
-        self._loop(node, "g", items, len(items), self._move_xy if p.move else None)
+        self._xy_loop(node, "g", items, p)
 
     def _do_zstack(self, node, p):
-        anchor_loop = self._innermost("loop_positions")
-        anchor = anchor_loop.item.get("z") if anchor_loop else None
+        anchor_loop = self._innermost(*POSITION_LOOPS, "loop_grid")
+        anchor = anchor_loop.item.get("z") if anchor_loop and not anchor_loop.focus_map else None
         if anchor is None:
             anchor = self.hw.get_position()["Z"]
         values = list(p.plan)
@@ -488,7 +543,10 @@ class Run:
             self.hw.move({"Z": anchor})   # back to where the stack started
 
     def _do_loop_channels(self, node, p):
-        self._loop(node, "c", p.channels, len(p.channels))
+        try:
+            self._loop(node, "c", p.channels, len(p.channels))
+        finally:
+            self._dark()   # a kept light stays on across the loop, not after it
 
     def _do_time_lapse(self, node, p):
         offsets = [float(o) for o in p.plan]
@@ -591,7 +649,17 @@ class Run:
         if loop.task == "zstack":
             self.hw.move({"Z": loop.item["z"]})
         else:
-            self._move_xy(loop.item)
+            self._move_item(loop.item, loop.focus_map)
+
+    def _keep_light(self, node: Node) -> bool:
+        """Whether the capture resource behind this capture keeps the light on."""
+        source = node
+        if node.params.get("channels") is None:   # inside loop_channels
+            loop = self._innermost("loop_channels")
+            source = next(n for n, _ in self.job.walk() if n.id == loop.node_id)
+        ref = resource_ref(source.params.get("channels"))
+        return bool(ref and getattr(self.job.resources[ref], "keep_light_on_between_channels",
+                                    False))
 
     def _do_capture(self, node, p):
         loop = self._innermost("loop_channels")
@@ -601,39 +669,133 @@ class Run:
         else:
             channels = [(loop.index, loop.item)]
             names = [c.config for c in loop.items]
+        keep = self._keep_light(node)
         stats = None
-        for c_index, channel in channels:
-            frame = self._acquire(channel)
-            self.last_frames[node.id] = frame
-            stats = {"mean": float(frame.mean()), "max": float(frame.max()),
-                     "shape": list(frame.shape)}
-            if p.save and self.sink is not None:
-                self.sink.write(frame, self._frame_info(node.id, c_index, names))
-                self.frames += 1
+        try:
+            for c_index, channel in channels:
+                frame = self._acquire(channel, keep_light=keep)
+                self.last_frames[node.id] = frame
+                stats = {"mean": float(frame.mean()), "max": float(frame.max()),
+                         "shape": list(frame.shape)}
+                if p.save and self.sink is not None:
+                    self.sink.write(frame, self._frame_info(node.id, c_index, names, channel))
+                    self.frames += 1
+        finally:
+            if keep and p.channels is not None:
+                self._dark()   # kept on between this capture's channels only
         return {"frames": len(channels), **(stats or {})}
 
-    def _acquire(self, channel: CaptureChannel) -> np.ndarray:
-        """Light on, camera set, Z offset, snap, back, light off."""
-        self._checkpoint()
+    def _light(self, channel: CaptureChannel) -> None:
+        """Switch to this channel's light; one light at a time, no repeat commands."""
+        key = (channel.kind, channel.config, channel.intensity, channel.led_pattern)
+        if self._lit is not None and self._lit[0] == key:
+            return
+        self._dark()
         if channel.kind == "default":
             self.hw.set_illumination(channel.config, intensity=channel.intensity, on=True)
         else:
-            self.hw.set_led_pattern(channel.kind, **(channel.led_pattern or {}))
-        self.hw.set_camera(exposure_ms=channel.exposure, gain=channel.gain,
-                           detector=channel.camera)
-        if channel.z_offset:
-            self.hw.move({"Z": channel.z_offset}, relative=True)
-        try:
-            return np.asarray(self.hw.snap(channel.camera))
-        finally:
-            if channel.z_offset:
-                self.hw.move({"Z": -channel.z_offset}, relative=True)
-            if channel.kind == "default":
-                self.hw.set_illumination(channel.config, on=False)
-            else:
-                self.hw.set_led_pattern("off")
+            self.hw.set_led_pattern(channel.kind, **channel.led_pattern.model_dump())
+        self._lit = (key, channel)
 
-    def _frame_info(self, node_id: str, c_index: int, channel_names: List[str]) -> FrameInfo:
+    def _dark(self) -> None:
+        if self._lit is None:
+            return
+        channel, self._lit = self._lit[1], None
+        if channel.kind == "default":
+            self.hw.set_illumination(channel.config, on=False)
+        else:
+            self.hw.set_led_pattern("off")
+
+    def _acquire(self, channel: CaptureChannel, keep_light: bool = False) -> np.ndarray:
+        """Light on, camera set, Z offset, snap, back; light off unless kept."""
+        self._checkpoint()
+        self._light(channel)
+        try:
+            self.hw.set_camera(exposure_ms=channel.exposure, gain=channel.gain,
+                               detector=channel.camera)
+            if channel.z_offset:
+                self.hw.move({"Z": channel.z_offset}, relative=True)
+            try:
+                return np.asarray(self.hw.snap(channel.camera))
+            finally:
+                if channel.z_offset:
+                    self.hw.move({"Z": -channel.z_offset}, relative=True)
+        finally:
+            if not keep_light:
+                self._dark()
+
+    # -- focus maps -----------------------------------------------------------
+    def _surface_z(self, name: str, x: float, y: float, group: Optional[str] = None) -> float:
+        surfaces = self.surfaces.get(name)
+        if not surfaces:
+            raise RuntimeError(f"focus map {name!r} was not measured (run create_focus_map first)")
+        if group is None:
+            current = [lp.item.get("name") for lp in reversed(self.loops)
+                       if lp.task in POSITION_LOOPS]
+            group = next((g for g in current + ["default"] if g in surfaces),
+                         next(iter(surfaces)) if len(surfaces) == 1 else None)
+        if group not in surfaces:
+            raise RuntimeError(f"focus map {name!r} has no surface for {group!r}")
+        return surfaces[group].interpolate(x, y)
+
+    def _focus_targets(self, p) -> Dict[str, list]:
+        """Measurement points per surface group: (x, y, z or None)."""
+        def grid(r: dict) -> list:
+            bounds = {"minX": r["min_x"], "maxX": r["max_x"], "minY": r["min_y"],
+                      "maxY": r["max_y"]}
+            return [(x, y, None) for x, y in FocusMap.generate_grid(
+                bounds, rows=p.ny, cols=p.nx, add_margin=p.margin > 0, margin_fraction=p.margin)]
+
+        if p.points:
+            return {"default": [(pt.x, pt.y, pt.z) for pt in p.points]}
+        if p.regions:
+            return {r.name: grid(r.model_dump()) for r in p.regions}
+        if p.plate:
+            return {"default": [(w.x, w.y, None) for w in p.plate.selected_well_positions]}
+        loop = self._innermost(*POSITION_LOOPS)
+        if loop is None:
+            raise ValueError("create_focus_map needs points, regions, a plate or an enclosing "
+                             "position/well/region loop")
+        item = loop.item
+        return {item["name"]: grid(item) if "min_x" in item else [(item["x"], item["y"],
+                                                                   item.get("z"))]}
+
+    def _do_create_focus_map(self, node, p):
+        name = resource_ref(node.params["focus_map"])
+        af = {k: v for k, v in p.autofocus.model_dump().items()
+              if k in self.tasks["autofocus"].params_model.model_fields}
+        surfaces = self.surfaces.setdefault(name, {})
+        result = {"groups": {}, "measured": 0, "failed": 0}
+        for group, points in self._focus_targets(p).items():
+            fmap = FocusMap(group_id=group, method=p.focus_map.method,
+                            z_offset=p.focus_map.z_offset_um)
+            for x, y, z in points:
+                self._checkpoint()
+                self.hw.move({"X": x, "Y": y, **({"Z": z} if z is not None else {})})
+                zf = self.tasks["autofocus"].function(**af, hw=self.hw, ctx=self._ctx)
+                if zf is None:
+                    result["failed"] += 1
+                else:
+                    fmap.add_point(x, y, zf)
+                    result["measured"] += 1
+            if fmap.n_points < p.min_points:
+                raise RuntimeError(f"{group}: {fmap.n_points} of {len(points)} focus "
+                                   f"measurements succeeded, {p.min_points} needed")
+            stats = fmap.fit()
+            surfaces[group] = fmap
+            result["groups"][group] = {
+                "points": fmap.n_points, "method": stats.method, "fallback": stats.fallback_reason,
+                "error_um": stats.mean_abs_error if stats.error_is_cross_validated else None}
+        return result
+
+    def _do_move_to_focus_surface(self, node, p):
+        pos = self.hw.get_position()
+        z = self._surface_z(resource_ref(node.params["focus_map"]), pos["X"], pos["Y"], p.group)
+        self.hw.move({"Z": z})
+        return z
+
+    def _loop_coordinates(self):
+        """useq index, axis sizes and position/tile/z/t details of the active loops."""
         index, sizes, info = {}, {}, {}
         for lp in self.loops:
             if lp.axis:
@@ -649,14 +811,23 @@ class Run:
         repeat = self._innermost("repeat")
         if "t" not in index and repeat is not None:   # repeats count as time points
             index["t"], sizes["t"] = repeat.index, repeat.count
+        return index, sizes, info
+
+    def _frame_info(self, node_id: str, c_index: int, channel_names: List[str],
+                    channel: Optional[CaptureChannel] = None) -> FrameInfo:
+        index, sizes, info = self._loop_coordinates()
         index["c"], sizes["c"] = c_index, len(channel_names)
-        if "position" not in info and "tile" not in info:
-            pos = self.hw.get_position()
-            info["stage_xy"] = (pos.get("X", 0.0), pos.get("Y", 0.0))
+        if "z_um" not in info or ("position" not in info and "tile" not in info):
+            pos = self.hw.get_position()          # where the frame really was taken
+            info.setdefault("z_um", pos.get("Z"))
+            if "position" not in info and "tile" not in info:
+                info["stage_xy"] = (pos.get("X", 0.0), pos.get("Y", 0.0))
         if self._pixel_size is None:
             self._pixel_size = self.hw.pixel_size_um()
+            self._bit_depth = self.hw.bit_depth()
         return FrameInfo(node_id=node_id, index=index, sizes=sizes, channel_names=channel_names,
-                         pixel_size_um=self._pixel_size, **info)
+                         pixel_size_um=self._pixel_size, bit_depth=self._bit_depth,
+                         exposure_ms=channel.exposure if channel is not None else None, **info)
 
     def _do_mda(self, node, p):
         """Run a useq MDASequence event by event (the useq import path)."""
@@ -688,10 +859,16 @@ class Run:
                 tile = {"name": f"{index['g']:04d}", **xy} if "g" in index else None
                 self.sink.write(frame, FrameInfo(
                     node_id=node.id, index=index, sizes=sizes, channel_names=names,
-                    pixel_size_um=self.hw.pixel_size_um(), tile=tile,
+                    pixel_size_um=self.hw.pixel_size_um(), tile=tile, exposure_ms=event.exposure,
+                    z_um=event.z_pos, z_step_um=_z_step(seq),
                     position={"name": event.pos_name or f"p{index.get('p', 0):03d}",
                               "z": event.z_pos, **xy}))
                 self.frames += 1
+
+
+def _z_step(seq: useq.MDASequence) -> Optional[float]:
+    zs = list(seq.z_plan) if seq.z_plan is not None else []
+    return abs(zs[1] - zs[0]) if len(zs) > 1 else None
 
 
 def _plain(value: Any) -> Any:

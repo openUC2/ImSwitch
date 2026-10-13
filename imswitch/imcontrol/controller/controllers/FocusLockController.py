@@ -12,6 +12,7 @@ import threading
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger, APIExport, dirtools
 from ..basecontrollers import ImConWidgetController
+from ..busy import busy_reasons
 
 # Import extracted modules
 from imswitch.imcontrol.controller.pidcontroller import PIDController
@@ -1497,6 +1498,9 @@ class FocusLockController(ImConWidgetController):
         # Start calibration (uses dynamic range automatically now)
         if hasattr(self, '_focusCalibThread') and self._focusCalibThread.isRunning():
             return {"error": "Calibration already running"}
+        reasons = busy_reasons(self._master, self._logger, ignore=("FocusLock",))
+        if reasons:   # the calibration moves Z
+            return {"error": f"Refused: {'; '.join(reasons)}."}
 
         self._focusCalibThread = FocusCalibThread(self, initial_z_position=initial_z_position)  # Pass initial_z_position to thread
         self._focusCalibThread.runThread()
@@ -1547,6 +1551,7 @@ class FocusCalibThread(object):
             self._thread.join(timeout=2.0)
 
     def runThread(self):
+        self._isRunning = True   # before start: the busy check must see it at once
         thread = threading.Thread(target=self.run, daemon=True)
         thread.start()
         self._thread = thread

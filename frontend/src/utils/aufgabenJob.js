@@ -249,6 +249,24 @@ export const RESOURCE_TEMPLATES = {
   focus_map: { kind: "focus_map", method: "spline" },
 };
 
+// Rename a resource and every "@name" reference to it in node parameters.
+export const renameResource = (job, name, newName) => {
+  const resources = job.resources || {};
+  if (!isValidId(newName) || resources[newName] || !resources[name]) return false;
+  job.resources = Object.fromEntries(
+    Object.entries(resources).map(([key, value]) => [key === name ? newName : key, value]),
+  );
+  const replace = (value) => {
+    if (value === `@${name}`) return `@${newName}`;
+    return Array.isArray(value) ? value.map(replace) : value;
+  };
+  for (const { node } of walk(job.tasks)) {
+    const params = node.params || {};
+    node.params = Object.fromEntries(Object.entries(params).map(([k, v]) => [k, replace(v)]));
+  }
+  return true;
+};
+
 export const resourcesOfKind = (job, kinds) =>
   Object.entries(job.resources || {})
     .filter(([, resource]) => !kinds || kinds.includes(resource.kind))

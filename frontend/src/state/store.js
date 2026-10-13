@@ -64,6 +64,7 @@ import onboardingReducer from "./slices/OnboardingSlice";
 import homingReducer from "./slices/HomingSlice";
 import firmwareUpdateReducer from "./slices/FirmwareUpdateSlice";
 import i2cReducer from "./slices/I2CSensorSlice";
+import aufgabenReducer from "./slices/AufgabenSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -142,6 +143,16 @@ const frame3DViewerPersistConfig = {
 };
 
 //#####################################################################################
+// Nested persist config for aufgabenState
+// Keep the job being edited across reloads; catalogue, validation and run
+// status are re-read from the backend.
+const aufgabenPersistConfig = {
+  key: "aufgaben",
+  storage,
+  whitelist: ["job"],
+};
+
+//#####################################################################################
 // Combine reducers
 const rootReducer = combineReducers({
   connectionSettingsState: connectionSettingsReducer,
@@ -204,6 +215,7 @@ const rootReducer = combineReducers({
   arkitektState: arkitektReducer, // runtime-only Arkitekt connection + remote-call log
   onboardingState: onboardingReducer,
   i2cState: i2cReducer,
+  aufgabenState: persistReducer(aufgabenPersistConfig, aufgabenReducer), // job draft persisted
 });
 
 //#####################################################################################

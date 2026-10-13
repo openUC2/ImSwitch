@@ -27,6 +27,7 @@ import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 import * as storageSlice from "../state/slices/StorageSlice.js";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
 import * as stageMapSlice from "../state/slices/StageMapSlice.js";
+import * as aufgabenSlice from "../state/slices/AufgabenSlice.js";
 import * as arkitektSlice from "../state/slices/ArkitektSlice.js";
 import { fetchAvailableControllers } from "../state/slices/BackendCapabilitiesSlice";
 
@@ -1148,6 +1149,18 @@ const WebSocketHandler = () => {
           }
         } catch (error) {
           console.error("Error in sigStageMapStatus handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigAufgabenEvent") {
+        // Aufgaben job engine: {type: state|node|log|question|task_progress,
+        // run_id, ...}; node events are throttled to 10 Hz by the backend
+        try {
+          const event = dataJson.args?.p0;
+          if (event?.type) {
+            dispatch(aufgabenSlice.aufgabenEvent(event));
+          }
+        } catch (error) {
+          console.error("Error in sigAufgabenEvent handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigArkitektStatus") {

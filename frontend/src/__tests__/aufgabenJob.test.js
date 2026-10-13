@@ -15,6 +15,7 @@ import {
   placeNode,
   removeNode,
   renameNode,
+  renameResource,
   catalogById,
 } from "../utils/aufgabenJob";
 
@@ -107,4 +108,13 @@ test("number inputs accept numbers, expressions and references", () => {
   expect(parseNumberInput("")).toBeUndefined();
   expect(parseNumberInput("${n * 2}")).toBe("${n * 2}");
   expect(parseNumberInput("@z")).toBe("@z");
+});
+
+test("renaming a resource rewrites its references", () => {
+  const job = sampleJob();
+  job.resources = { pts: { kind: "positions", positions: [] }, z: { kind: "z_plan", plan: {} } };
+  expect(renameResource(job, "pts", "z")).toBe(false);
+  expect(renameResource(job, "pts", "sites")).toBe(true);
+  expect(Object.keys(job.resources)).toEqual(["sites", "z"]);
+  expect(job.tasks[0].params.source).toBe("@sites");
 });

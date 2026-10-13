@@ -324,8 +324,9 @@ exist ([STREAMING_REVIEW.md](STREAMING_REVIEW.md), [STREAMING_4B_NOTES.md](STREA
 
 - [RecordingController.py](imswitch/imcontrol/controller/controllers/RecordingController.py) (9) — `snap`, `snapNumpy`, `start_streaming_recording`, `stop_streaming_recording`, `_start_frame_recording`, `_start_continuous_recording`, `_build_recording_response`, plus filename + per-detector attribute helpers. Uses a `RecordingService`.
 - [TriggerAcquisitionController.py](imswitch/imcontrol/controller/controllers/TriggerAcquisitionController.py) (4) — hardware-triggered stack with circular buffer (`fetchBuffer`).
-- Service + writers: [model/io/recording_service.py](imswitch/imcontrol/model/io/recording_service.py), [model/io/snap_service.py](imswitch/imcontrol/model/io/snap_service.py), [model/io/data_store.py](imswitch/imcontrol/model/io/data_store.py), [model/io/session.py](imswitch/imcontrol/model/io/session.py)
-- Writers in [model/writers/](imswitch/imcontrol/model/writers/): `ome_tiff_writer.py`, `ome_zarr_writer.py`, `omero_uploader.py`, `base.py`, `uuid_gen.py`, `registry.py` (writer registry by format)
+- Service + writers: [model/io/recording_service.py](imswitch/imcontrol/model/io/recording_service.py) (`save_snap_tiff`), [model/io/data_store.py](imswitch/imcontrol/model/io/data_store.py), [model/io/session.py](imswitch/imcontrol/model/io/session.py)
+- Every image file goes through the shared OME writer [model/aufgaben/storage.py](imswitch/imcontrol/model/aufgaben/storage.py) (`NgffImage`, `save_image`).
+- Writers in [model/writers/](imswitch/imcontrol/model/writers/): `ome_zarr_writer.py`, `omero_uploader.py`, `base.py`, `uuid_gen.py`, `registry.py` (writer registry by format)
 - OME writer subpackage: [model/io/ome_writers](imswitch/imcontrol/model/io/ome_writers)
 
 ### Frontend

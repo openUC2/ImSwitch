@@ -572,8 +572,19 @@ instrument lacks and offers its real device names as choices.
 - ExperimentController's `OMEWriter` and the recording `OMEZarrWriter` write through `NgffImage`
   too, so chunking, metadata and pyramids exist once (§7.3 lists what that fixed). Their file
   names, per-tile TIFFs and `_protocol.json` are unchanged.
-- Format: NGFF 0.4 on zarr v2 (`.zattrs`, "/" chunk keys, Blosc zstd with bit shuffle) by default,
-  NGFF 0.5 on zarr v3 as an option. RGB becomes three uint8 channels coloured red, green and blue;
+- `save_image(path, data, axes, ...)` writes one array in one call: `.ome.tif` → OME-TIFF,
+  `.ome.zarr` → OME-Zarr, with optional pixel size, stage origin, channels and `annotations` (an OME
+  `MapAnnotation` and `attrs["acquisition"]`). Snaps, experiment tiles, STORM, Lightsheet, DPC, SIM,
+  FlowStop, StageMap, MMCore, read-noise calibration, the workflow engine and the MDA manager all
+  use it. After Phase 2 this is the only image writer in ImSwitch; the deleted ones are listed in
+  §7.9. Only three flag-guarded debug dumps still call tifffile directly.
+- ExperimentController's `stitched.ome.tif` is the region canvas exported once at the end (one page
+  per channel and Z plane, with its pyramid). `write_tiff`, `write_stitched_tiff` and
+  `write_tiff_single` all request it; without `write_zarr` the canvas lives in a hidden temporary
+  store that is removed after the export.
+- Format: NGFF 0.4 on zarr v2 (`.zattrs`, "/" chunk keys, Zstd level 1) by default, NGFF 0.5 on
+  zarr v3 as an option. Zstd rather than Blosc: Fiji's N5 reader cannot decode Blosc on macOS
+  arm64. RGB becomes three uint8 channels coloured red, green and blue;
   thumbnails compose them back.
 - Metadata: axes with units; `scale [dt, 1, dz, py, px]` and `translation` at the top-left pixel
   corner in µm (stage position minus half the field of view); no multiscale-level transform; omero
@@ -591,7 +602,11 @@ instrument lacks and offers its real device names as choices.
   camera. The OME-TIFF export, ExperimentController's mosaic hyperstack and every single-plane TIFF
   (experiment tiles, snaps) use it.
 - OME-TIFF export (Phase 2): the pyramid goes into SubIFDs; planes are streamed tile by tile, so a
-  large image never sits in memory.
+  large image never sits in memory. The OME-XML is stored as UTF-8: with `&#181;` escapes
+  Bio-Formats does not recognise the file as OME-TIFF.
+- Readers checked: Fiji (Bio-Formats `ImageInfo` on the TIFF, the N5 OME-NGFF reader on the zarr;
+  `test_ome_fiji_compatibility.py` runs both when Fiji and Java are installed), napari through the
+  openUC2 plugin (`ome_layers`), ome-zarr-models and ome-types.
 - Orientation: frames reach the writer in stage orientation, because the pixel calibration's flips
   are applied in the camera (`setFlipImage`). Rotation and shear are not applied anywhere in
   ImSwitch; a rotated camera needs that first.
@@ -748,7 +763,7 @@ Verified on 2026-10-13:
 | 2.2 Focus | `create_focus_map` (points, region grids, wells, or the current loop item; one surface per group; fails below `min_points`), `focus_map` on position, well, region and tile loops, `move_to_focus_surface`, `z_offset_um` per map. |
 | 2.3 Well plates | Labware → useq plates (`register_labware`), `getAufgabenWellPlate`. NGFF plates were already in Phase 1. |
 | 2.4 Scans, stitching | `loop_regions`, region-covering `loop_grid`, `fast_stage_scan`, `stage_prescan` with derived images, `stitched_preview` with stage or Ashlar placement. |
-| 2.5 napari plugin | `processing/ngff.py`: OME-Zarr images become the plugin's tiles; all pixel reads go through one loader; Ashlar uses the built-in reader for them; the pixel size comes from the data. In `~/Downloads/napari-openuc2-processor`, uncommitted. |
+| 2.5 napari plugin | `processing/ngff.py`: OME-Zarr images become the plugin's tiles; all pixel reads go through one loader; Ashlar runs on its library API (`EdgeAligner`, `Mosaic`) for TIFF and OME-Zarr tiles; the pixel size comes from the data. `ome_layers` shows OME-Zarr and OME-TIFF in napari with scale, stage position, channels and pyramid, without napari-ome-zarr. Committed in `~/Downloads/napari-openuc2-processor`. |
 | 2.6 Equivalence | Imported sequences acquire the useq events in order: four axis orders, expanded and kept whole. |
 
 Verified on 2026-10-13:
@@ -766,7 +781,12 @@ Verified on 2026-10-13:
   (`skimage.restoration.uft`), unrelated to this change. Its `uv.lock` was already behind its
   `pyproject.toml` and is not regenerated here.
 - Not done: any run on real hardware (fast stage scan, LED-matrix channels and prescan on a real
-  stage are untested), opening the output in Fiji or a napari window.
+  stage are untested).
+
+After Phase 2 (single writer, §7.9): Fiji's Bio-Formats 8.1.1 reads our OME-TIFFs as OME-TIFF with
+channels, Z and three resolutions, and its N5 reader recognises the OME-Zarr stores; napari opens
+both through the plugin with the right scale and position (headless `ViewerModel`); the plugin's
+Ashlar mosaic matches a reference to 99.4 % of pixels. Not checked: a napari window, Fiji's GUI.
 
 ### Phase 3 — Aufgaben app (4–5 weeks; can start once 1.4 fixes the catalogue contract)
 
@@ -951,6 +971,17 @@ multi-experiment detection needs the default experiment name.
 | 36 | STORM wrote OME-Zarr through its own `MinimalZarrDataSource` | Shared `NgffImage`; T grows in doubling steps, trimmed at the end |
 | 37 | A focus-lock calibration set its running flag inside its thread, so a busy check right after the start missed it | Set before the thread starts |
 | 38 | WorkflowController's histo workflows wrote through a zarr stub that returned `None`; `startWorkflowTileBasedByParameters` did nothing | Removed |
+
+### 7.9 One writer (after Phase 2)
+
+| # | Problem | Fix |
+|---|---|---|
+| 39 | The OME-XML was ASCII with `&#181;` for µm; Bio-Formats rejected it and opened the file as a plain TIFF without channels or sizes | Written as UTF-8; Fiji test |
+| 40 | Blosc chunks could not be decoded by Fiji's N5 reader on macOS arm64 | Zstd level 1 |
+| 41 | Seven TIFF paths with their own metadata: `OmeTiffStitcher`, `SingleTiffWriter`, `OMETiffWriter`, `SnapService`, `ome_tiff_metadata` and direct `tifffile` calls in about fifteen controllers | Deleted; everything goes through `save_image` / `NgffImage`. `stitched.ome.tif` changed from a collection of tiles to the canvas |
+| 42 | The plugin's Ashlar mode handed its reader to `process_images`, which raised `NameError` (`BioformatsReader`); ashlarUC2 1.18.4 also broke on scikit-image 0.26 | `EdgeAligner` and `Mosaic` called directly; ashlarUC2 ≥ 1.18.5 |
+| 43 | The virtual strobe sweep made blocking moves, so it fell behind its own clock and the strobe test failed now and then | Non-blocking sweep steps |
+| 44 | Local OME-Zarr needed napari-ome-zarr, which the plugin cannot depend on (s3fs resolution on Python 3.13+) | The plugin's own OME reader |
 
 ---
 

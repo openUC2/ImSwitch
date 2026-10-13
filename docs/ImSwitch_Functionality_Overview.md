@@ -115,8 +115,10 @@
   - Multi-position
   - Multi-channel
 - **Storage formats:**
-  - TIFF and OME-TIFF
-  - OME-Zarr (NGFF 0.4 on zarr v2; one shared writer for experiments, recordings and Aufgaben jobs)
+  - OME-TIFF (UTF-8 OME-XML, SubIFD pyramid; opens in Fiji/Bio-Formats and napari)
+  - OME-Zarr (NGFF 0.4 on zarr v2, Zstd; opens in Fiji's N5 reader and napari)
+  - One shared writer (`model/aufgaben/storage.py`) for experiments, recordings, snaps,
+    Aufgaben jobs and every controller that saves images
   - MP4/AVI (video)
 - **Metadata embedding**
 

@@ -30,6 +30,7 @@ import {
   MenuBook as MenuBookIcon,
   Psychology as PsychologyIcon,
   Map as MapIcon,
+  AccountTree as AccountTreeIcon,
 } from "@mui/icons-material";
 
 /**
@@ -244,6 +245,30 @@ export const APP_REGISTRY = {
     ],
     pluginId: "StageMap",
     requiredControllers: ["StageMapController"],
+  },
+
+  aufgaben: {
+    id: "aufgaben",
+    name: "Aufgaben",
+    description:
+      "Build acquisition jobs from steps (loops over positions, wells, grids and time, captures, autofocus, conditions, questions), validate them and follow the run. Writes OME-Zarr and OME-TIFF.",
+    category: APP_CATEGORIES.APPS,
+    icon: AccountTreeIcon,
+    enabled: false,
+    essential: false,
+    keywords: [
+      "aufgaben",
+      "jobs",
+      "workflow",
+      "protocol",
+      "experiment",
+      "loop",
+      "timelapse",
+      "useq",
+      "mda",
+    ],
+    pluginId: "Aufgaben",
+    requiredControllers: ["AufgabenController"],
   },
 
   demoController: {

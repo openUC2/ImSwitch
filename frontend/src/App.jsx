@@ -45,6 +45,7 @@ import { JupyterProvider } from "./context/JupyterContext.js";
 import { PWAProvider } from "./context/PWAContext.js";
 import DemoController from "./components/DemoController.js";
 import StageMapController from "./components/StageMapController.jsx";
+import AufgabenController from "./components/aufgaben/AufgabenController.jsx";
 import ArkitektController from "./components/ArkitektController.jsx";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
 import GalvoScannerController from "./components/GalvoScannerController.jsx";
@@ -872,6 +873,7 @@ function App() {
               )}
               {selectedPlugin === "DemoController" && <DemoController />}
               {selectedPlugin === "StageMap" && <StageMapController />}
+              {selectedPlugin === "Aufgaben" && <AufgabenController />}
               {selectedPlugin === "Arkitekt" && <ArkitektController />}
               {selectedPlugin === "CompositeAcquisition" && (
                 <CompositeAcquisitionComponent />

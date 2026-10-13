@@ -13,6 +13,7 @@ from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
 from ..basecontrollers import ImConWidgetController
 from ..busy import busy_reasons
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 
 try:
     import cv2
@@ -871,16 +872,11 @@ class StageMapController(ImConWidgetController):
                     self._sessionPath, "raw",
                     f"tile_{tileId:05d}_{safeChannel}.tif",
                 )
-                tifffile.imwrite(
-                    rawPath,
-                    frame,
-                    metadata={
-                        "PositionX_um": position[0],
-                        "PositionY_um": position[1],
-                        "PixelSize_um": pixelSize,
-                        "Channel": channel,
-                    },
-                )
+                h, w = frame.shape[:2]
+                save_image(rawPath, frame, "YXS" if frame.ndim == 3 else "YX",
+                           pixel_size_um=pixelSize, channel_names=[channel],
+                           origin_um=(position[0] - w * pixelSize / 2,
+                                      position[1] - h * pixelSize / 2, None))
             except Exception as e:
                 self._logger.error(f"Could not save raw tile: {e}")
                 rawPath = ""
@@ -2656,25 +2652,9 @@ class StageMapController(ImConWidgetController):
         outPath = os.path.join(self._sessionPath, filename)
 
         try:
-            if isColor:
-                tifffile.imwrite(
-                    outPath, canvas, ome=True,
-                    metadata={
-                        "axes": "YXS",
-                        "PhysicalSizeX": pixelSize, "PhysicalSizeXUnit": "µm",
-                        "PhysicalSizeY": pixelSize, "PhysicalSizeYUnit": "µm",
-                    },
-                )
-            else:
-                tifffile.imwrite(
-                    outPath, stack, ome=True,
-                    metadata={
-                        "axes": "CYX",
-                        "Channel": {"Name": channels},
-                        "PhysicalSizeX": pixelSize, "PhysicalSizeXUnit": "µm",
-                        "PhysicalSizeY": pixelSize, "PhysicalSizeYUnit": "µm",
-                    },
-                )
+            save_image(outPath, canvas if isColor else stack, "YXS" if isColor else "CYX",
+                       pixel_size_um=pixelSize, origin_um=(minX, minY, None),
+                       channel_names=["RGB"] if isColor else channels)
         except Exception as e:
             self._logger.error(f"Could not write stitched OME-TIFF: {e}")
             return {"success": False, "error": str(e)}

@@ -77,7 +77,7 @@ class ImageSpec:
     pixel_size_um: Optional[float] = 1.0       # None: not calibrated, left out
     z_step_um: float = 1.0
     t_step_s: float = 1.0
-    origin_um: Optional[Tuple[float, float, float]] = (0.0, 0.0, 0.0)   # top-left pixel x, y, z
+    origin_um: Optional[Tuple[float, float, Optional[float]]] = (0.0, 0.0, 0.0)  # top-left x, y, z
     channel_names: Sequence[str] = ()
     channel_colors: Sequence[str] = ()      # hex RRGGBB; default from the names
     name: str = "image"
@@ -126,6 +126,7 @@ def _versioned(version: str, body: dict) -> dict:
 
 def _multiscales(spec: ImageSpec, levels: int, version: str) -> dict:
     ox, oy, oz = spec.origin_um or (0.0, 0.0, 0.0)
+    oz = oz or 0.0
     px = spec.pixel_size_um or 1.0
     unit = {"unit": "micrometer"} if spec.pixel_size_um else {}
     axes = [{"name": "t", "type": "time", "unit": "second"}, {"name": "c", "type": "channel"}] + \
@@ -164,9 +165,9 @@ def ome_xml(spec: ImageSpec, rgb: bool = False) -> str:
         if spec.origin_um is None:
             return {}
         ox, oy, oz = spec.origin_um
+        z = {} if oz is None else {"position_z": oz + zi * spec.z_step_um, "position_z_unit": "µm"}
         return {"position_x": ox, "position_x_unit": "µm", "position_y": oy,
-                "position_y_unit": "µm", "position_z": oz + zi * spec.z_step_um,
-                "position_z_unit": "µm"}
+                "position_y_unit": "µm", **z}
 
     planes = [Plane(the_t=ti, the_c=ci, the_z=zi, delta_t=ti * spec.t_step_s, delta_t_unit="s",
                     exposure_time=exposures[ci], exposure_time_unit="ms", **where(zi))
@@ -250,7 +251,8 @@ def _pyramid(array: np.ndarray, min_size: int = 256, max_levels: int = 5) -> lis
 
 def save_image(path, data: np.ndarray, axes: Optional[str] = None, *,
                pixel_size_um: Optional[float] = None, z_step_um: float = 1.0,
-               t_step_s: float = 1.0, origin_um: Optional[Tuple[float, float, float]] = None,
+               t_step_s: float = 1.0,
+               origin_um: Optional[Tuple[float, float, Optional[float]]] = None,
                channel_names: Sequence[str] = (), channel_colors: Sequence[str] = (),
                exposure_ms: Sequence[Optional[float]] = (), bit_depth: Optional[int] = None,
                name: Optional[str] = None, annotations: Optional[Dict[str, Any]] = None,
@@ -265,7 +267,8 @@ def save_image(path, data: np.ndarray, axes: Optional[str] = None, *,
         pixel_size_um: Pixel size; None when the camera is not calibrated.
         z_step_um: Z spacing.
         t_step_s: Time between time points.
-        origin_um: Stage position (x, y, z) of the top-left pixel; None when unknown.
+        origin_um: Stage position (x, y, z) of the top-left pixel; None when unknown
+            (z alone may be None).
         channel_names: One per channel (per C index).
         channel_colors: Hex RRGGBB per channel; default from the names.
         exposure_ms: Per channel.

@@ -276,7 +276,8 @@ class VirtualStageManager(PositionerManager):
             n += 1
             travelled = min(abs(distance), speed * (n - 1) * period)
             x = start + direction * travelled
-            self.move(value=x, axis=axis, is_absolute=True)
+            # the sweep keeps its own clock; a blocking move would add travel time per step
+            self.move(value=x, axis=axis, is_absolute=True, is_blocking=False)
             for listener in list(self.strobeTriggerListeners):
                 try:
                     listener(n, x)

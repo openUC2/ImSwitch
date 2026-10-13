@@ -142,6 +142,17 @@ class RS232Info:
 
 
 @dataclass(frozen=False)
+class PeripheralInfo:
+    """ A pump or valve: the manager that drives it and its properties. """
+
+    managerName: str
+    """ Manager class name, e.g. ``StepperPumpManager`` or ``DigitalOutValveManager``. """
+
+    managerProperties: Dict[str, Any] = field(default_factory=dict)
+    """ Properties to be read by the manager (see each manager's docstring). """
+
+
+@dataclass(frozen=False)
 class SLMInfo:
     monitorIdx: int
     """ Index of the monitor in the system list of monitors (indexing starts at
@@ -862,6 +873,15 @@ class SetupInfo:
     as a regular 2D detector from the backend (ExperimentController, autofocus,
     snap), add a ``FLIMLabsDetectorManager`` entry under ``detectors`` instead —
     see that manager's docstring for the property list. """
+
+    pumps: Dict[str, PeripheralInfo] = field(default_factory=dict)
+    """ Pumps by name (``StepperPumpManager``, ``VirtualPumpManager``). Volumes in
+    µL, rates in µL/min; Aufgaben jobs drive them with pump_volume / pump_run. """
+
+    valves: Dict[str, PeripheralInfo] = field(default_factory=dict)
+    """ Valves by name (``DigitalOutValveManager``, ``ServoValveManager``,
+    ``SerialValveManager``, ``VirtualValveManager``); ``managerProperties.positions``
+    names the positions a job can switch to. """
 
     rs232devices: Dict[str, RS232Info] = field(default_factory=dict)
     """ RS232 connections in this setup. This is a map from unique RS232

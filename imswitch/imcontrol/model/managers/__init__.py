@@ -9,6 +9,8 @@ from .LEDMatrixsManager import LEDMatrixsManager
 from .MultiManager import MultiManager
 from .NidaqManager import NidaqManager
 from .PositionersManager import PositionersManager
+from .PumpsManager import PumpsManager
+from .ValvesManager import ValvesManager
 from .GalvoScannersManager import GalvoScannersManager
 from .RS232sManager import RS232sManager
 # RecordingManager is deprecated - use RecordingService from io module

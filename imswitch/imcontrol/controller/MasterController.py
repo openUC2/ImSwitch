@@ -11,6 +11,8 @@ from imswitch.imcontrol.model import (
     LasersManager,
     MultiManager,
     PositionersManager,
+    PumpsManager,
+    ValvesManager,
     #RecordingManager,  # DEPRECATED - kept for backwards compatibility
     RS232sManager,
     SLMManager,
@@ -105,6 +107,8 @@ class MasterController:
         )
 
         self.LEDsManager = LEDsManager(self.__setupInfo.LEDs)
+        self.pumpsManager = PumpsManager(self.__setupInfo.pumps, **lowLevelManagers)
+        self.valvesManager = ValvesManager(self.__setupInfo.valves, **lowLevelManagers)
         
         # Initialize unified I/O service (RecordingService from io module)
         self.recordingService = RecordingService(self.detectorsManager)

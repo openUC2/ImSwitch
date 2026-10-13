@@ -64,3 +64,39 @@ def test_forced_abort_stops_the_pumps():
     run.join(5)
     assert run.state == "aborted"
     assert ("stop_pumps",) in sim.calls and ("stop_stage",) in sim.calls
+
+
+def test_serial_commands_ask_first_and_reach_plain_serial_devices():
+    from imswitch.imcontrol.model.SetupInfo import RS232Info
+    from imswitch.imcontrol.model.managers.RS232sManager import RS232sManager
+    from imswitch.imcontrol.model.aufgaben.simulated import SimulatedMicroscope
+    from imswitch.imcontrol.model.aufgaben.engine import Run
+
+    spec = aufgaben.REGISTRY["send_serial"]
+    assert spec.flags.ask_first and spec.flags.external
+
+    rs232 = RS232sManager({
+        "syringe": RS232Info(managerName="RS232Manager",
+                             managerProperties={"port": "NO_SUCH_PORT", "encoding": "ascii",
+                                                "recv_termination": "\r", "send_termination": "\r",
+                                                "baudrate": 9600, "bytesize": 8, "parity": "none",
+                                                "stopbits": 1, "rtscts": False, "dsrdtr": False,
+                                                "xonxoff": False}),
+        "ESP32": RS232Info(managerName="VirtualESP32Manager", managerProperties={}),
+    })
+    hw = ImSwitchMicroscope(SimpleNamespace(rs232sManager=rs232, getController=lambda n: None),
+                            logger=None)
+    assert hw.devices("serial") == ["syringe"] and "serial" in hw.capabilities()
+    hw.send_serial("syringe", "VER", read_reply=False)       # the mock port accepts it
+    with pytest.raises(ValueError, match="no serial device 'ESP32'"):
+        hw.send_serial("ESP32", "VER")
+    rs232.finalize()
+
+    job = aufgaben.Job.model_validate({"name": "j", "tasks": [
+        {"id": "ask", "task": "send_serial", "params": {"device": "syringe", "command": "VER"}}]})
+    sim = SimulatedMicroscope()
+    with pytest.raises(PermissionError):
+        Run(job, sim).run()
+    run = Run(job, sim)
+    assert run.run(confirmed=True) == "finished"
+    assert ("serial", "syringe", "VER") in sim.calls and run.results["ask"] == "OK"

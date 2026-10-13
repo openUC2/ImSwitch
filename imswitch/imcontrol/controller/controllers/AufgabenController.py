@@ -29,7 +29,7 @@ from .aufgaben.host import register_labware
 
 ACTIVE = ("running", "paused")
 DEVICE_KINDS = ("illumination", "detector", "digital_output", "digital_input",
-                "temperature", "pump", "valve")
+                "temperature", "pump", "valve", "serial")
 NODE_EVENT_PERIOD_S = 0.1
 
 

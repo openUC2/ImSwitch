@@ -44,7 +44,7 @@ class SimulatedMicroscope:
         return {"illumination": list(self.lights), "detector": ["camera"],
                 "digital_output": list(self.outputs), "digital_input": list(self.inputs),
                 "pump": list(self.pumped_ul), "valve": list(self.valves),
-                "temperature": ["heater"]}.get(kind, [])
+                "temperature": ["heater"], "serial": ["syringe"]}.get(kind, [])
 
     # -- stage ----------------------------------------------------------------
     def get_position(self) -> Dict[str, float]:
@@ -167,6 +167,10 @@ class SimulatedMicroscope:
 
     def stop_pumps(self) -> None:
         self._call("stop_pumps")
+
+    def send_serial(self, device, command, read_reply=True):
+        self._call("serial", device, command)
+        return "OK" if read_reply else None
 
     def set_valve(self, valve, position) -> None:
         self._call("valve", valve, position)

@@ -89,6 +89,14 @@ class ImSwitchMicroscope:
             raise ValueError(f"no {kind} {name!r}; this setup has {self.devices(kind)}")
         return self._group(kind)[name]
 
+    def _serial_devices(self) -> List[str]:
+        """rs232devices that are plain serial lines (not the UC2 board or a simulator)."""
+        from imswitch.imcontrol.model.managers.rs232.RS232Manager import RS232Manager
+        rs232 = getattr(self._master, "rs232sManager", None)
+        if rs232 is None:
+            return []
+        return rs232.getAllDeviceNames(lambda manager: isinstance(manager, RS232Manager))
+
     def _laser(self, source: str):
         if source not in self._master.lasersManager.getAllDeviceNames():
             raise ValueError(f"no light source {source!r}")
@@ -119,6 +127,7 @@ class ImSwitchMicroscope:
             "stage_map": self._get("StageMap") is not None,
             "pump": self._has("pumpsManager"),
             "valve": self._has("valvesManager"),
+            "serial": bool(self._serial_devices()),
         }
         return {cap for cap, present in checks.items() if present}
 
@@ -133,6 +142,8 @@ class ImSwitchMicroscope:
             return self._dio.inputs if self._dio is not None else []
         if kind == "temperature":
             return ["heater"] if "temperature" in self.capabilities() else []
+        if kind == "serial":
+            return self._serial_devices()
         if kind in ("pump", "valve"):
             return self._group(kind).getAllDeviceNames() if self._has(f"{kind}sManager") else []
         return []
@@ -286,6 +297,16 @@ class ImSwitchMicroscope:
 
     def set_valve(self, valve, position) -> None:
         self._device("valve", valve).set_position(position)
+
+    def send_serial(self, device, command, read_reply=True) -> Optional[str]:
+        if device not in self._serial_devices():
+            raise ValueError(f"no serial device {device!r}; this setup has "
+                             f"{self._serial_devices()}")
+        port = self._master.rs232sManager[device]
+        if read_reply:
+            return port.query(command)
+        port.write(command)
+        return None
 
     def set_temperature(self, target_c, sensor=None) -> None:
         controller = self._get("Temperature")

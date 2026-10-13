@@ -387,6 +387,24 @@ def read_temperature(sensor: Optional[str] = None, *, hw: Microscope) -> float:
 # --------------------------------------------------------------------------- #
 # Outside world
 # --------------------------------------------------------------------------- #
+@task(category="External", effects="UNKNOWN", choices={"device": "serial"},
+      flags=TaskFlags(external=True, confirm=True, needs=("serial",)))
+def send_serial(device: str, command: str, read_reply: bool = True,
+                *, hw: Microscope) -> Optional[str]:
+    """Send serial command
+
+    Sends a command to a serial device of the setup, e.g. a syringe pump or a
+    stage controller with its own protocol, and returns the reply. The text
+    goes to the device unchecked, so a run asks first.
+
+    Args:
+        device: Serial device as named in the setup (rs232devices).
+        command: Text to send; the driver adds the line ending.
+        read_reply: Wait for the reply and return it.
+    """
+    return hw.send_serial(device, command, read_reply)
+
+
 @task(category="External", effects="UNKNOWN", flags=TaskFlags(external=True))
 def http_request(url: str, method: Literal["GET", "POST", "PUT"] = "GET",
                  body_json: Optional[str] = None,

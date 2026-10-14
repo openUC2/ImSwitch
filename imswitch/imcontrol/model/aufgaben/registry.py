@@ -30,12 +30,13 @@ from typing import (Any, Callable, ClassVar, Dict, Iterable, List, Literal, Mapp
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
-from .hardware import DerivedImage, Microscope
+from .hardware import DerivedImage, Frame, Microscope
 
 Effects = Literal["NONE", "REPEATABLE", "UNKNOWN", "IRREVERSIBLE"]
 
 UNIT_SUFFIXES = (  # longest first
-    ("_ul_min", "µL/min"), ("_um_s", "µm/s"), ("_percent", "%"), ("_um", "µm"),
+    ("_ul_min", "µL/min"), ("_um_s", "µm/s"), ("_percent", "%"), ("_um2", "µm²"), ("_um", "µm"),
+    ("_px", "px"),
     ("_nm", "nm"), ("_ms", "ms"), ("_ul", "µL"), ("_hz", "Hz"), ("_c", "°C"), ("_s", "s"),
 )
 
@@ -54,8 +55,18 @@ class TaskContext(Protocol):
     def pausepoint(self) -> None: ...
     def check_cancelled(self) -> None: ...
 
+    # Only the Aufgaben engine provides these (analysis and script steps):
+    def frame(self, source: Optional[str] = None) -> "Frame":
+        """An image the run has seen: the last one of step ``source``, else the newest."""
+    variables: Dict[str, Any]          # the job's variables, writable
+    results: Dict[str, Any]            # what each step returned so far (a copy)
+
 
 INJECTED_TYPES: Tuple[type, ...] = (Microscope, TaskContext)
+
+# Steps of these categories read images the run has seen (ctx.frame) and return
+# mixed plain data, so only the Aufgaben engine runs them, not Arkitekt.
+FRAME_STEPS = ("Analysis", "Scripts")
 
 # Arkitekt uses "value" for a port's own value inside validators and effects.
 RESERVED_PARAM_NAMES = frozenset({"value"})

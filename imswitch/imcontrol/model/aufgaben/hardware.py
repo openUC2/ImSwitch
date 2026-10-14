@@ -22,7 +22,7 @@ import numpy as np
 CAPABILITIES = (
     "stage", "camera", "illumination", "led_matrix", "autofocus", "objective",
     "digital_io", "pump", "valve", "temperature", "sensors", "stage_scan", "stage_map",
-    "serial",
+    "serial", "scripting",
 )
 
 
@@ -38,6 +38,24 @@ class DerivedImage:
     data: np.ndarray
     pixel_size_um: float
     origin_um: Tuple[float, float]
+
+
+@dataclass
+class Frame:
+    """An image a run has seen (a capture or a derived image), with its place.
+
+    ``origin_um`` is the stage (x, y) of the top-left pixel; rows run towards
+    +Y, columns towards +X, like DerivedImage and the camera tiles. Analysis
+    steps convert pixel positions to stage µm with it.
+    """
+
+    data: np.ndarray
+    pixel_size_um: float
+    origin_um: Tuple[float, float]
+
+    def to_stage(self, row: float, col: float) -> Tuple[float, float]:
+        return (self.origin_um[0] + col * self.pixel_size_um,
+                self.origin_um[1] + row * self.pixel_size_um)
 
 
 class Microscope(Protocol):

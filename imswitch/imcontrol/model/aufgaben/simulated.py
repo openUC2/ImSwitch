@@ -1,12 +1,14 @@
 """A ``Microscope`` without hardware, for tests and dry runs.
 
 It records every call in ``calls``. Frames are small images whose value encodes
-the light and the stage position, so tests can check what was acquired.
+the light and the stage position, so tests can check what was acquired. With a
+``sample`` (disks at stage positions) the camera and the prescan also show
+those disks, for the analysis steps.
 """
 from __future__ import annotations
 
 import time
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
@@ -14,12 +16,17 @@ from .hardware import CAPABILITIES, DerivedImage
 
 
 class SimulatedMicroscope:
-    """``surface(x, y) -> z``: where autofocus finds focus (default: the current Z)."""
+    """``surface(x, y) -> z``: where autofocus finds focus (default: the current Z).
+    ``sample``: bright disks ``(x_um, y_um, radius_um)`` on the stage."""
+
+    SAMPLE_SIGNAL = 1000
 
     def __init__(self, capabilities: Optional[Set[str]] = None, frame_shape=(32, 48),
                  pixel_size_um: float = 1.0, sources=("LED", "Laser488"),
-                 surface: Optional[Callable[[float, float], float]] = None):
+                 surface: Optional[Callable[[float, float], float]] = None,
+                 sample: Sequence[Tuple[float, float, float]] = ()):
         self.surface = surface
+        self.sample = list(sample)
         self.caps = set(CAPABILITIES) if capabilities is None else set(capabilities)
         self.frame_shape, self.px = frame_shape, pixel_size_um
         self.position = {"X": 0.0, "Y": 0.0, "Z": 0.0}
@@ -97,7 +104,20 @@ class SimulatedMicroscope:
         lit = tuple(s for s in self.on if self.on[s])
         self._call("snap", light, dict(self.position), self.camera["exposure_ms"], lit)
         value = min(65535, int(light + abs(self.position["Z"])))
-        return np.full(self.frame_shape, value, dtype=np.uint16)
+        h, w = self.frame_shape
+        origin = (self.position["X"] - w / 2 * self.px, self.position["Y"] - h / 2 * self.px)
+        frame = self._render(self.frame_shape, origin, self.px) + value
+        return np.clip(frame, 0, 65535).astype(np.uint16)
+
+    def _render(self, shape, origin, px) -> np.ndarray:
+        """The sample's disks seen through a frame (top-left pixel at ``origin``)."""
+        img = np.zeros(shape, dtype=np.float64)
+        if self.sample:
+            rows, cols = np.mgrid[0:shape[0], 0:shape[1]]
+            x, y = origin[0] + cols * px, origin[1] + rows * px
+            for sx, sy, r in self.sample:
+                img[(x - sx) ** 2 + (y - sy) ** 2 <= r * r] += self.SAMPLE_SIGNAL
+        return img
 
     def pixel_size_um(self, detector=None) -> float:
         return self.px
@@ -128,7 +148,10 @@ class SimulatedMicroscope:
         um_per_px = 10.0
         shape = (max(1, int((y_max_um - y_min_um) / um_per_px)),
                  max(1, int((x_max_um - x_min_um) / um_per_px)))
-        data = np.arange(shape[0] * shape[1], dtype=np.uint8).reshape(shape)
+        if self.sample:
+            data = self._render(shape, (x_min_um, y_min_um), um_per_px).astype(np.uint16)
+        else:
+            data = np.arange(shape[0] * shape[1], dtype=np.uint8).reshape(shape)
         return DerivedImage("overview", data, um_per_px, (x_min_um, y_min_um))
 
     def set_objective(self, slot: int) -> None:

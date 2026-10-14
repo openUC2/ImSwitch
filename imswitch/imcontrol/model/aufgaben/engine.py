@@ -30,8 +30,8 @@ from . import expressions
 from .control import CONTROL_SPECS, MOVING_LOOPS, POSITION_LOOPS
 from .document import CaptureChannel, Job, Node, Retry, expression, resource_ref
 from .focus_map import FocusMap
-from .hardware import DerivedImage, Microscope
-from .registry import REGISTRY, TaskSpec
+from .hardware import DerivedImage, Frame, Microscope
+from .registry import FRAME_STEPS, REGISTRY, TaskSpec
 from .storage import FrameInfo, ImageSpec, NgffImage
 from .validate import FROM_KEY, validate
 
@@ -146,6 +146,23 @@ class _TaskContext:
         if self._run._stop.is_set():
             raise _Stop()
 
+    def frame(self, source: Optional[str] = None) -> Frame:
+        run = self._run
+        key = source or run._latest
+        if key is None:
+            raise ValueError("no image yet: put a capture step before this one")
+        if key not in run.seen:
+            raise ValueError(f"step {key!r} has not produced an image yet")
+        return run.seen[key]
+
+    @property
+    def variables(self) -> Dict[str, Any]:
+        return self._run.variables
+
+    @property
+    def results(self) -> Dict[str, Any]:
+        return dict(self._run.results)
+
 
 def _bool(value: Any) -> bool:
     if isinstance(value, str):
@@ -173,7 +190,12 @@ class Run:
         self.params = self._parameters(parameters or {})
         self.variables: Dict[str, Any] = dict(job.variables)
         self.results: Dict[str, Any] = {}
-        self.last_frames: Dict[str, np.ndarray] = {}   # per capture node, for analysis tasks
+        self.seen: Dict[str, Frame] = {}   # last image per capture/derived step, for analysis
+        self._latest: Optional[str] = None
+        self._locate = any(self.tasks.get(n.task) is not None and self.tasks[n.task].injected
+                           and "ctx" in self.tasks[n.task].injected.values()
+                           and self.tasks[n.task].category in FRAME_STEPS
+                           for n, _ in job.walk())
         self.surfaces: Dict[str, Dict[str, FocusMap]] = {}   # focus_map resource -> group -> fit
         self.loops: List[Loop] = []
         self.state, self.message, self.current = "idle", "", None
@@ -420,7 +442,7 @@ class Run:
     def _save_derived(self, node: Node, image: DerivedImage) -> dict:
         """Keep a task's image with the run (OME, stage coordinates) and describe it."""
         data = np.asarray(image.data)
-        self.last_frames[node.id] = data
+        self._remember(node.id, Frame(data, image.pixel_size_um, tuple(image.origin_um[:2])))
         h, w = data.shape[:2]
         info = {"shape": [h, w], "pixel_size_um": image.pixel_size_um,
                 "origin_um": list(image.origin_um), "path": None}
@@ -674,7 +696,7 @@ class Run:
         try:
             for c_index, channel in channels:
                 frame = self._acquire(channel, keep_light=keep)
-                self.last_frames[node.id] = frame
+                self._remember(node.id, self._located(frame))
                 stats = {"mean": float(frame.mean()), "max": float(frame.max()),
                          "shape": list(frame.shape)}
                 if p.save and self.sink is not None:
@@ -684,6 +706,22 @@ class Run:
             if keep and p.channels is not None:
                 self._dark()   # kept on between this capture's channels only
         return {"frames": len(channels), **(stats or {})}
+
+    def _remember(self, node_id: str, frame: Frame) -> None:
+        self.seen[node_id], self._latest = frame, node_id
+
+    def _located(self, data: np.ndarray) -> Frame:
+        """A camera frame with its place: centred on the stage position, read only
+        when the job has analysis steps (one position query per frame)."""
+        if self._pixel_size is None:
+            self._pixel_size = self.hw.pixel_size_um()
+            self._bit_depth = self.hw.bit_depth()
+        px, origin = self._pixel_size, (0.0, 0.0)
+        if self._locate:
+            pos = self.hw.get_position()
+            h, w = data.shape[:2]
+            origin = (pos.get("X", 0.0) - w / 2 * px, pos.get("Y", 0.0) - h / 2 * px)
+        return Frame(data, px, origin)
 
     def _light(self, channel: CaptureChannel) -> None:
         """Switch to this channel's light; one light at a time, no repeat commands."""

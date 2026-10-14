@@ -15,7 +15,7 @@ from pydantic import TypeAdapter, ValidationError
 from . import expressions
 from .control import CONTROL_SPECS, MOVING_LOOPS, POSITION_LOOPS, ControlSpec
 from .document import Job, Node, expression, resource_ref
-from .registry import REGISTRY, TaskSpec
+from .registry import FRAME_STEPS, REGISTRY, TaskSpec
 
 FROM_KEY = "$from"  # node param that pulls defaults from a resource
 
@@ -248,6 +248,13 @@ class _Validator:
         if self.caps is not None and not set(f.needs) <= self.caps:
             self.err(node.id, f"{node.task} needs {sorted(set(f.needs) - self.caps)}, "
                               "which this microscope does not have")
+        source = node.params.get("source")
+        if "source" in tspec.params_model.model_fields and isinstance(source, str) \
+                and source and not expression(source) and tspec.category in FRAME_STEPS:
+            if source not in self.ids:
+                self.err(node.id, f"source {source!r} is not a step of this job")
+            elif source == node.id:
+                self.err(node.id, "source must be an earlier step, not this one")
 
 
 def validate(job: Job, tasks: Optional[Mapping[str, TaskSpec]] = None,

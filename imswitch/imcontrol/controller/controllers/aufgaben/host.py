@@ -55,9 +55,10 @@ def register_labware(manager) -> List[str]:
 
 
 class ImSwitchMicroscope:
-    def __init__(self, master, logger):
+    def __init__(self, master, logger, allow_scripts: bool = False):
         self._master = master
         self._logger = logger
+        self._allow_scripts = allow_scripts   # setup option aufgaben.allowScripts
 
     # -- helpers --------------------------------------------------------------
     def _get(self, name):
@@ -137,6 +138,7 @@ class ImSwitchMicroscope:
             "pump": self._has("pumpsManager"),
             "valve": self._has("valvesManager"),
             "serial": bool(self._serial_devices()),
+            "scripting": self._allow_scripts,
         }
         return {cap for cap, present in checks.items() if present}
 

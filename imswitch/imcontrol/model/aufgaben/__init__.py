@@ -9,6 +9,7 @@ docs/AUFGABEN_ROADMAP.md). The ImSwitch side is a host adapter implementing
 - control:      loops, conditions and flow steps the engine runs itself
 - registry:     ``@task`` and the palette catalogue
 - primitives:   the v1 hardware tasks, written against ``Microscope``
+- analysis:     steps that measure captured images (``result.<id>``) and the script steps
 - hardware:     the ``Microscope`` protocol a host implements
 - expressions:  the safe expression language
 - validate:     checks a job before it runs
@@ -18,9 +19,10 @@ import json
 from pathlib import Path
 
 from . import primitives  # noqa: F401  (registers the v1 tasks)
+from . import analysis  # noqa: F401  (registers the analysis and script steps)
 from .control import CONTROL_SPECS, ControlSpec
 from .document import SCHEMA_ID, CaptureChannel, Job, Node, Parameter, Storage
-from .hardware import CAPABILITIES, DerivedImage, Microscope
+from .hardware import CAPABILITIES, DerivedImage, Frame, Microscope
 from .registry import (MEMORY_STRUCTURES, REGISTRY, TaskContext, TaskFlags, TaskSpec,
                        catalogue, task)
 from .useq_bridge import NotExportable, job_from_sequence, sequence_from_job

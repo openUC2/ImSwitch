@@ -7,7 +7,8 @@ from annotated_types import Gt
 
 from imswitch.imcontrol.model import aufgaben as A
 from imswitch.imcontrol.model.aufgaben.hardware import Microscope
-from imswitch.imcontrol.model.aufgaben.registry import TaskContext, build_spec, parse_docstring
+from imswitch.imcontrol.model.aufgaben.registry import (FRAME_STEPS, TaskContext, build_spec,
+                                                     parse_docstring)
 
 
 def test_docstring_args_with_continuations():
@@ -93,6 +94,8 @@ def test_arkitekt_accepts_every_primitive_unchanged():
     for cls, identifier in A.MEMORY_STRUCTURES.items():   # what an app declares once
         structures.register_as_memory_structure(cls, identifier=identifier)
     for task_id, spec in A.REGISTRY.items():
+        if spec.category in FRAME_STEPS:   # engine-only: read ctx.frame, return mixed data
+            continue
         definition = define.prepare_definition(spec.function, structures, omitkeys=["hw"])
         keys = [a.key for a in definition.args]
         assert keys == list(spec.params_model.model_fields), task_id

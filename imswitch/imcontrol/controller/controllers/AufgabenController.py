@@ -49,7 +49,9 @@ class AufgabenController(ImConWidgetController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
-        self._host = ImSwitchMicroscope(self._master, self._logger)
+        options = getattr(self._setupInfo, "aufgaben", None) or {}
+        self._host = ImSwitchMicroscope(self._master, self._logger,
+                                        allow_scripts=bool(options.get("allowScripts", False)))
         self._run: Optional[Run] = None
         self._lock = threading.Lock()
         self._last_node_event = 0.0

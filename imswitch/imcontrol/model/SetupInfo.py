@@ -901,6 +901,10 @@ class SetupInfo:
     channel), ``DigitalOutValveManager`` (board outputs), ``VirtualValveManager``;
     ``managerProperties.positions`` names the positions a job can switch to. """
 
+    aufgaben: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
+    """ Aufgaben options. ``{"allowScripts": true}`` offers the python_script and
+    external_process steps (unsandboxed code; a run with them must be confirmed). """
+
     digitalIO: Optional[DigitalIOInfo] = field(default_factory=lambda: None)
     """ Names for the board's digital outputs and inputs; without it jobs use the
     raw lines "1".."3". """

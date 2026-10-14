@@ -181,3 +181,44 @@ def test_sources_must_name_an_earlier_step():
     run = Run(job, _scope())
     run.run()
     assert run.state == "failed" and "no image yet" in run.message
+
+
+# --------------------------------------------------------------------------- #
+# The smart-microscopy templates on a simulated sample
+# --------------------------------------------------------------------------- #
+def _template(name, hw, **parameters):
+    run = Run(A.examples()[name], hw, parameters=parameters)
+    run.run(confirmed=True)
+    assert run.state == "finished", run.message
+    return run
+
+
+def test_skip_empty_wells_template():
+    # A1 at (0, 0), columns towards +X, rows towards -Y, 9 mm pitch (96-well)
+    hw = SimulatedMicroscope(frame_shape=(100, 120), sample=[(9000, 0, 8), (18000, -9000, 8)])
+    run = _template("skip_empty_wells", hw)
+    assert run.variables["skipped"] == 4
+    stacks = [c for c in hw.calls if c[0] == "snap" and c[3] == 100]   # Laser488 exposure
+    assert len(stacks) == 2 * 6                                       # two wells x 6 planes
+    assert {(round(c[2]["X"]), round(c[2]["Y"])) for c in stacks} == {(9000, 0), (18000, -9000)}
+
+
+def test_stop_after_n_cells_template():
+    # the region grid starts at the top-left tile, centred at (60, 2950)
+    cells = [(40 + 10 * i, 2940 + 6 * (i % 2), 3) for i in range(5)]
+    hw = SimulatedMicroscope(frame_shape=(100, 120), sample=cells, sources=("Laser405",))
+    run = _template("stop_after_n_cells", hw, target_cells=4)
+    assert run.variables["cells"] == 5 and run.message == "enough cells imaged"
+    assert sum(1 for c in hw.calls if c[0] == "snap") == 1          # stopped after one tile
+
+
+def test_overview_regions_template():
+    hw = SimulatedMicroscope(frame_shape=(100, 120),
+                             sample=[(5000, 5000, 100), (12000, 9000, 100)])
+    run = _template("overview_regions_zstack", hw)
+    regions = run.results["find"]["regions"]
+    assert len(regions) == 2
+    assert ("objective", 2) in hw.calls
+    xy = [(c[2]["X"], c[2]["Y"]) for c in hw.calls if c[0] == "snap"]
+    assert xy and all(any(r["min_x"] <= x <= r["max_x"] and r["min_y"] <= y <= r["max_y"]
+                          for r in regions) for x, y in xy)

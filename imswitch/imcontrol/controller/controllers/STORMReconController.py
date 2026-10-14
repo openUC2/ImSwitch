@@ -71,6 +71,7 @@ class STORMReconController(LiveUpdatedController):
         self._acquisition_thread = None
         self._cropping_params = None
         self._ome_zarr_store = None
+        self._zarr_path = None   # where the OME-Zarr store is created on the first frame
         self._current_session_id = None
         self._direct_saving_mode = False  # True when saving directly without generators
         self._save_format = "omezarr"
@@ -882,13 +883,13 @@ class STORMReconController(LiveUpdatedController):
     def _initializeSaving(self, saveDirectory: str, save_format: str):
         """One OME-NGFF time series; a TIFF is exported from it at the end."""
         self._tiff_save_path = None
+        self._ome_zarr_store = self._zarr_path = None
         try:
             if save_format.lower() not in ("omezarr", "tiff"):
                 raise ValueError(f"Unsupported save format: {save_format}")
             self._initializeOMEZarrSaving(saveDirectory, temporary=save_format.lower() == "tiff")
         except Exception as e:
             self._logger.error(f"Failed to initialize saving: {e}")
-            self._ome_zarr_store = None
 
     def _startDirectSavingAcquisition(self, max_frames: int = -1):
         """Start direct frame acquisition and saving in background thread.
@@ -902,13 +903,9 @@ class STORMReconController(LiveUpdatedController):
 
             while self._acquisition_active:
                 try:
-                    # Get all frames from detector since last call
-                    frames_chunk, frame_indices = self.detector.getChunk()
-
-                    if frames_chunk is not None:
-                        # Handle different chunk formats from different cameras
-                        frames_to_process = self._normalizeFrameChunk(frames_chunk)
-
+                    # All frames from the detector since the last call
+                    frames_to_process = self._chunkFrames(self.detector.getChunk())
+                    if frames_to_process:
                         for frame in frames_to_process:
                             if not self._acquisition_active:
                                 break
@@ -939,11 +936,11 @@ class STORMReconController(LiveUpdatedController):
                                 'local_processing': self._local_processing_enabled
                             }
 
-                            # Save frame based on format
-                            if self._ome_zarr_store is not None:
-                                self._saveFrameToZarr(frame, self._frame_count, metadata)
+                            if self._zarr_path is None:
+                                self._logger.error("Saving was not initialised; stopping")
                                 self._acquisition_active = False
                                 break
+                            self._saveFrameToZarr(frame, self._frame_count, metadata)
 
                             self._frame_count += 1
 
@@ -971,6 +968,14 @@ class STORMReconController(LiveUpdatedController):
         self._acquisition_thread.daemon = True
         self._acquisition_thread.start()
 
+    def _chunkFrames(self, chunk):
+        """The frames of a getChunk() result: most cameras return (frames, ids)."""
+        if isinstance(chunk, tuple) and len(chunk) == 2:
+            chunk = chunk[0]
+        if chunk is None or (hasattr(chunk, "__len__") and len(chunk) == 0):
+            return []
+        return self._normalizeFrameChunk(chunk)
+
     def _normalizeFrameChunk(self, frames_chunk):
         """
         Normalize frame chunk format from different camera implementations.
@@ -985,6 +990,10 @@ class STORMReconController(LiveUpdatedController):
         """
         if frames_chunk is None:
             return []
+
+        # A list or tuple of frames
+        if not isinstance(frames_chunk, np.ndarray):
+            return list(frames_chunk)
 
         # Handle single frame case
         if len(frames_chunk.shape) == 2:
@@ -1022,29 +1031,23 @@ class STORMReconController(LiveUpdatedController):
         dirPath = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'STORMController',
                                timeStamp)
         os.makedirs(dirPath, exist_ok=True)
-        sample = self._normalizeFrameChunk(self.detector.getChunk())
-        if not sample:
-            raise RuntimeError("no frame from the camera to size the OME-Zarr store")
-        if self._cropping_params is not None:
-            shape_yx = (self._cropping_params['height'], self._cropping_params['width'])
-        else:
-            shape_yx = sample[0].shape[:2]
-        spec = ImageSpec(shape=(1, 1, 1) + tuple(shape_yx), dtype=str(sample[0].dtype),
-                         pixel_size_um=float(self.detector.pixelSizeUm[-1]),
-                         channel_names=["STORM"], name=os.path.basename(saveDirectory))
         base = saveDirectory[:-5] if saveDirectory.endswith(".zarr") else saveDirectory
         if temporary:
             self._tiff_save_path = os.path.join(dirPath, f"{base}_{timeStamp}.ome.tif")
-            path = os.path.join(dirPath, f".{base}.ome.zarr")
+            self._zarr_path = os.path.join(dirPath, f".{base}.ome.zarr")
         else:
-            path = os.path.join(dirPath, f"{base}.ome.zarr")
-        self._ome_zarr_store = NgffImage.create(path, spec)
+            self._zarr_path = os.path.join(dirPath, f"{base}.ome.zarr")
 
     def _saveFrameToZarr(self, frame: np.ndarray, frame_number: int, metadata: dict):
-        """Save frame to OME-Zarr store."""
+        """Save frame to OME-Zarr store; the store is sized by the first (cropped) frame."""
         try:
-            if self._ome_zarr_store is not None:
-                self._ome_zarr_store.write(frame, frame_number, 0, 0)
+            if self._ome_zarr_store is None:
+                spec = ImageSpec(shape=(1, 1, 1) + tuple(frame.shape[:2]), dtype=str(frame.dtype),
+                                 pixel_size_um=float(self.detector.pixelSizeUm[-1]),
+                                 channel_names=["STORM"],
+                                 name=os.path.basename(self._zarr_path).split(".")[0] or "STORM")
+                self._ome_zarr_store = NgffImage.create(self._zarr_path, spec)
+            self._ome_zarr_store.write(frame, frame_number, 0, 0)
         except Exception as e:
             self._logger.error(f"Failed to save frame to Zarr: {e}")
 

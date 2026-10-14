@@ -20,6 +20,11 @@ import {
   Typography,
 } from "@mui/material";
 
+import AddOutlined from "@mui/icons-material/AddOutlined";
+import FileDownloadOutlined from "@mui/icons-material/FileDownloadOutlined";
+import FileOpenOutlined from "@mui/icons-material/FileOpenOutlined";
+import UploadFileOutlined from "@mui/icons-material/UploadFileOutlined";
+
 import * as A from "../../state/slices/AufgabenSlice";
 import { aufgabenErrorText } from "../../utils/aufgabenJob";
 import {
@@ -126,19 +131,23 @@ const AufgabenLibrary = ({ onOpened }) => {
   return (
     <Box>
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-        <Button variant="outlined" onClick={() => guard() && dispatch(A.newJob())}>
+        <Button variant="outlined" onClick={() => guard() && dispatch(A.newJob())} startIcon={<AddOutlined />}>
           {t("New job")}
         </Button>
-        <Button variant="outlined" onClick={() => fileInput.current?.click()}>
+        <Button variant="outlined" onClick={() => fileInput.current?.click()} startIcon={<FileOpenOutlined />}>
           {t("Open JSON file")}
         </Button>
-        <Button variant="outlined" onClick={() => download(`${fileName(job.name)}.json`, job)}>
+        <Button
+          variant="outlined"
+          onClick={() => download(`${fileName(job.name)}.json`, job)}
+          startIcon={<FileDownloadOutlined />}
+        >
           {t("Download JSON")}
         </Button>
-        <Button variant="outlined" onClick={() => setUseqOpen(true)}>
+        <Button variant="outlined" onClick={() => setUseqOpen(true)} startIcon={<UploadFileOutlined />}>
           {t("Import useq")}
         </Button>
-        <Button variant="outlined" onClick={exportUseq}>
+        <Button variant="outlined" onClick={exportUseq} startIcon={<FileDownloadOutlined />}>
           {t("Export useq")}
         </Button>
         <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={readFile} />

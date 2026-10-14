@@ -44,6 +44,7 @@ import {
   walk,
 } from "../../utils/aufgabenJob";
 import { CommitField, JsonField, ParamField, SectionTitle } from "./AufgabenFields";
+import { capabilityNames, stepIcon } from "./aufgabenIcons";
 import { useT } from "../../i18n";
 
 const ON_ERROR = ["abort", "skip", "continue_loop", "retry"];
@@ -201,13 +202,25 @@ const StepPanel = ({ node, entry, job, byId, validation }) => {
   };
   return (
     <Box>
-      <Typography variant="subtitle1">{t(entry?.title || node.task)}</Typography>
+      <Stack direction="row" spacing={1} alignItems="center">
+        {React.createElement(stepIcon(node.task, entry?.category), {
+          sx: { fontSize: 20, color: "text.secondary" },
+        })}
+        <Typography variant="subtitle1">{t(entry?.title || node.task)}</Typography>
+      </Stack>
       {entry?.description && (
         <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "pre-line" }}>
           {entry.description}
         </Typography>
       )}
-      {!entry && <Alert severity="error">{t("This microscope has no step '{task}'.", { task: node.task })}</Alert>}
+      {!entry && <Alert severity="error">{t("There is no step '{task}'.", { task: node.task })}</Alert>}
+      {entry?.available === false && (
+        <Alert severity="warning" sx={{ mt: 1 }}>
+          {t("Needs {what}, which this microscope does not have. The job can be edited here but not run.", {
+            what: capabilityNames(entry.missing),
+          })}
+        </Alert>
+      )}
       {issues.map((issue, i) => (
         <Alert key={i} severity={issue.level === "error" ? "error" : "warning"} sx={{ mt: 1, py: 0 }}>
           {issue.message}

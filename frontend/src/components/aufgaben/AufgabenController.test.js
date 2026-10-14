@@ -97,3 +97,14 @@ test("explains a microscope without the controller", async () => {
   mount();
   expect(await screen.findByText("This microscope does not run the AufgabenController.")).toBeInTheDocument();
 });
+
+test("steps this microscope cannot run stay out of the palette but are explained", async () => {
+  const store = mount();
+  await screen.findByText("Loop over positions");
+  expect(screen.queryByText("Pump volume")).not.toBeInTheDocument();
+  store.dispatch(A.loadJob({ name: "flow", tasks: [
+    { id: "pump", task: "pump_volume", params: { pump: "p", volume_ul: 5 } }] }));
+  expect(await screen.findByText("not on this microscope")).toBeInTheDocument();
+  fireEvent.click(screen.getByTestId("aufgaben-node-pump"));
+  expect(await screen.findByText(/Needs a pump, which this microscope does not have/)).toBeInTheDocument();
+});

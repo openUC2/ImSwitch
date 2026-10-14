@@ -7,6 +7,12 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Alert, Box, Button, Paper, Stack, Tab, Tabs, Typography } from "@mui/material";
+import EditOutlined from "@mui/icons-material/EditOutlined";
+import FactCheckOutlined from "@mui/icons-material/FactCheckOutlined";
+import LibraryBooksOutlined from "@mui/icons-material/LibraryBooksOutlined";
+import MonitorHeartOutlined from "@mui/icons-material/MonitorHeartOutlined";
+import PlayArrowOutlined from "@mui/icons-material/PlayArrowOutlined";
+import SaveOutlined from "@mui/icons-material/SaveOutlined";
 
 import * as A from "../../state/slices/AufgabenSlice";
 import { aufgabenErrorText } from "../../utils/aufgabenJob";
@@ -129,9 +135,18 @@ const AufgabenController = () => {
           )}
         </Typography>
         <Box sx={{ flex: 1 }} />
-        <Button onClick={validate}>{t("Validate")}</Button>
-        <Button onClick={save}>{t("Save")}</Button>
-        <Button variant="contained" onClick={start} disabled={active || !catalog.length}>
+        <Button onClick={validate} startIcon={<FactCheckOutlined />}>
+          {t("Validate")}
+        </Button>
+        <Button onClick={save} startIcon={<SaveOutlined />}>
+          {t("Save")}
+        </Button>
+        <Button
+          variant="contained"
+          onClick={start}
+          disabled={active || !catalog.length}
+          startIcon={<PlayArrowOutlined />}
+        >
           {t("Start")}
         </Button>
       </Stack>
@@ -146,13 +161,21 @@ const AufgabenController = () => {
         </Alert>
       )}
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ minHeight: 36, mb: 1 }}>
-        <Tab value="edit" label={t("Edit")} sx={{ minHeight: 36 }} />
+        <Tab value="edit" label={t("Edit")} icon={<EditOutlined fontSize="small" />} iconPosition="start" sx={{ minHeight: 36 }} />
         <Tab
           value="run"
           label={active ? t("Run ({state})", { state: t(status.state) }) : t("Run")}
+          icon={<MonitorHeartOutlined fontSize="small" />}
+          iconPosition="start"
           sx={{ minHeight: 36 }}
         />
-        <Tab value="library" label={t("Library")} sx={{ minHeight: 36 }} />
+        <Tab
+          value="library"
+          label={t("Library")}
+          icon={<LibraryBooksOutlined fontSize="small" />}
+          iconPosition="start"
+          sx={{ minHeight: 36 }}
+        />
       </Tabs>
       {tab === "edit" && (
         <Box

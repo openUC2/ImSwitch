@@ -27,6 +27,12 @@ import {
   Typography,
 } from "@mui/material";
 
+import BlockOutlined from "@mui/icons-material/BlockOutlined";
+import DoneAllOutlined from "@mui/icons-material/DoneAllOutlined";
+import PauseOutlined from "@mui/icons-material/PauseOutlined";
+import PlayArrowOutlined from "@mui/icons-material/PlayArrowOutlined";
+import StopOutlined from "@mui/icons-material/StopOutlined";
+
 import * as A from "../../state/slices/AufgabenSlice";
 import {
   apiAufgabenAbortJob,
@@ -323,21 +329,27 @@ export const RunMonitor = () => {
       )}
       <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
         {status.state === "paused" ? (
-          <Button variant="outlined" onClick={call(apiAufgabenResumeJob)}>
+          <Button variant="outlined" onClick={call(apiAufgabenResumeJob)} startIcon={<PlayArrowOutlined />}>
             {t("Resume")}
           </Button>
         ) : (
-          <Button variant="outlined" disabled={!active} onClick={call(apiAufgabenPauseJob)}>
+          <Button variant="outlined" disabled={!active} onClick={call(apiAufgabenPauseJob)} startIcon={<PauseOutlined />}>
             {t("Pause")}
           </Button>
         )}
-        <Button variant="outlined" disabled={!active} onClick={call(apiAufgabenFinishJob)}>
+        <Button variant="outlined" disabled={!active} onClick={call(apiAufgabenFinishJob)} startIcon={<DoneAllOutlined />}>
           {t("Finish")}
         </Button>
-        <Button variant="outlined" color="error" disabled={!active} onClick={call(() => apiAufgabenAbortJob(false))}>
+        <Button
+          variant="outlined"
+          color="error"
+          disabled={!active}
+          onClick={call(() => apiAufgabenAbortJob(false))}
+          startIcon={<StopOutlined />}
+        >
           {t("Abort")}
         </Button>
-        <Button color="error" disabled={!active} onClick={forceStop}>
+        <Button color="error" disabled={!active} onClick={forceStop} startIcon={<BlockOutlined />}>
           {t("Abort and stop hardware")}
         </Button>
       </Stack>

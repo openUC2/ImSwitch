@@ -27,6 +27,7 @@ import {
   paramSummary,
 } from "../../utils/aufgabenJob";
 import { DRAG_TASK } from "./AufgabenPalette";
+import { capabilityNames, stepIcon } from "./aufgabenIcons";
 import { useT } from "../../i18n";
 
 const DRAG_NODE = "application/x-aufgaben-node";
@@ -56,6 +57,13 @@ const Markers = ({ node, entry, issues }) => {
   const tip = (list) => list.map((i) => i.message).join("\n");
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, ml: "auto", pl: 1 }}>
+      {entry?.available === false && (
+        <Tooltip title={t("Needs {what}", { what: capabilityNames(entry.missing) })}>
+          <Typography variant="caption" color="text.disabled">
+            {t("not on this microscope")}
+          </Typography>
+        </Tooltip>
+      )}
       {flags.ask_first && (
         <Typography variant="caption" color="warning.main">
           {t("asks first")}
@@ -145,6 +153,9 @@ const NodeRow = ({ node, depth, parentId, branch, index, ctx }) => {
           "&:hover": { bgcolor: selected ? "action.selected" : "action.hover" },
         }}
       >
+        {React.createElement(stepIcon(node.task, entry?.category), {
+          sx: { fontSize: 16, color: "text.secondary", alignSelf: "center" },
+        })}
         <Typography variant="body2" sx={{ fontWeight: branches.length ? 600 : 400 }}>
           {node.label || t(entry?.title || node.task)}
         </Typography>

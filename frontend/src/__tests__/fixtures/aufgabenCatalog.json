@@ -512,7 +512,9 @@
     "stage"
    ],
    "ask_first": false
-  }
+  },
+  "available": true,
+  "missing": []
  },
  {
   "id": "home_axis",
@@ -556,7 +558,9 @@
     "stage"
    ],
    "ask_first": true
-  }
+  },
+  "available": true,
+  "missing": []
  },
  {
   "id": "set_illumination",
@@ -616,7 +620,9 @@
     "illumination"
    ],
    "ask_first": false
-  }
+  },
+  "available": true,
+  "missing": []
  },
  {
   "id": "autofocus",
@@ -728,6 +734,67 @@
     "autofocus"
    ],
    "ask_first": false
-  }
+  },
+  "available": true,
+  "missing": []
+ },
+ {
+  "id": "pump_volume",
+  "title": "Pump volume",
+  "category": "Fluidics",
+  "description": "Pumps a volume and waits until it is done. Negative volumes pump backwards.",
+  "kind": "task",
+  "schema": {
+   "additionalProperties": false,
+   "properties": {
+    "pump": {
+     "description": "Pump as named in the setup.",
+     "title": "Pump",
+     "type": "string",
+     "x-choices-from": "pump",
+     "enum": []
+    },
+    "volume_ul": {
+     "description": "Volume to move.",
+     "title": "Volume Ul",
+     "type": "number",
+     "x-unit": "\u00b5L"
+    },
+    "rate_ul_min": {
+     "default": 100.0,
+     "description": "Flow rate.",
+     "exclusiveMinimum": 0,
+     "title": "Rate Ul Min",
+     "type": "number",
+     "x-unit": "\u00b5L/min"
+    }
+   },
+   "required": [
+    "pump",
+    "volume_ul"
+   ],
+   "title": "pump_volume_params",
+   "type": "object"
+  },
+  "locks": [
+   "fluidics"
+  ],
+  "effects": "IRREVERSIBLE",
+  "flags": {
+   "moves_xy": false,
+   "moves_z": false,
+   "homes": false,
+   "emits_light": false,
+   "external": false,
+   "runs_code": false,
+   "needs": [
+    "pump"
+   ],
+   "ask_first": false
+  },
+  "available": false,
+  "missing": [
+   "pump"
+  ]
  }
 ]

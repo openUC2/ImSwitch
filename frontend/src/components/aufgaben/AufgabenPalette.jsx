@@ -1,11 +1,22 @@
 // src/components/aufgaben/AufgabenPalette.jsx
-// The steps this microscope can run (getAufgabenCatalog), by category.
+// The steps this microscope can run (getAufgabenCatalog), by category; steps
+// whose hardware is missing (available: false) are left out.
 // Click adds a step at the selection; drag drops it anywhere in the outline.
 import React, { useMemo, useState } from "react";
 import { useDispatch } from "react-redux";
-import { Box, List, ListItemButton, ListItemText, ListSubheader, TextField, Tooltip } from "@mui/material";
+import {
+  Box,
+  List,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  ListSubheader,
+  TextField,
+  Tooltip,
+} from "@mui/material";
 
 import { addNode } from "../../state/slices/AufgabenSlice";
+import { stepIcon } from "./aufgabenIcons";
 import { useT } from "../../i18n";
 
 export const DRAG_TASK = "application/x-aufgaben-task";
@@ -18,6 +29,7 @@ const AufgabenPalette = ({ catalog }) => {
     const needle = filter.trim().toLowerCase();
     const out = {};
     for (const entry of catalog) {
+      if (entry.available === false) continue;
       const text = `${entry.title} ${entry.id} ${entry.category}`.toLowerCase();
       if (needle && !text.includes(needle)) continue;
       (out[entry.category] ||= []).push(entry);
@@ -52,6 +64,9 @@ const AufgabenPalette = ({ catalog }) => {
                     onClick={() => dispatch(addNode(entry.id))}
                     sx={{ py: 0.25 }}
                   >
+                    <ListItemIcon sx={{ minWidth: 28, color: "text.secondary" }}>
+                      {React.createElement(stepIcon(entry.id, entry.category), { sx: { fontSize: 18 } })}
+                    </ListItemIcon>
                     <ListItemText
                       primary={t(entry.title)}
                       secondary={entry.flags?.ask_first ? t("asks first") : null}

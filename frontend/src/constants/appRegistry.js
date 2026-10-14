@@ -22,7 +22,6 @@ import {
   Hub as HubIcon,
   Speed as SpeedIcon,
   Thermostat as ThermostatIcon,
-  Insights as InsightsIcon,
   PhotoCamera as PhotoCameraIcon,
   Visibility as VisibilityIcon,
   ViewInAr as ViewInArIcon,
@@ -212,26 +211,6 @@ export const APP_REGISTRY = {
     essential: false,
     keywords: ["storm", "superresolution", "reconstruction", "singlemolecule"],
     pluginId: "STORMLocal",
-  },
-
-  stormArkitekt: {
-    id: "stormArkitekt",
-    name: "STORM Arkitekt",
-    description:
-      "Advanced STORM microscopy controller with Arkitekt integration. Cloud-based super-resolution image processing and workflow management.",
-    category: APP_CATEGORIES.APPS,
-    icon: InsightsIcon,
-    enabled: false,
-    essential: false,
-    keywords: [
-      "storm",
-      "arkitekt",
-      "superresolution",
-      "cloud",
-      "workflow",
-      "processing",
-    ],
-    pluginId: "STORMArkitekt",
   },
 
   arkitekt: {

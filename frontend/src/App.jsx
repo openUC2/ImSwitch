@@ -30,7 +30,6 @@ import ObjectiveController from "./components/ObjectiveController.js";
 import SocketView from "./components/SocketView.js";
 import MMCoreController from "./components/MMCoreController.jsx";
 
-import STORMControllerArkitekt from "./components/STORMControllerArkitekt.js";
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
 import STORMControllerLocal from "./components/STORMControllerLocal.js";
 import StresstestController from "./components/StresstestController.js";
@@ -777,9 +776,6 @@ function App() {
                 <ImJoyView sharedImage={sharedImage} />
               )}
               {selectedPlugin === "STORMLocal" && <STORMControllerLocal />}
-              {selectedPlugin === "STORMArkitekt" && (
-                <STORMControllerArkitekt />
-              )}
               {selectedPlugin === "FRAMESettings" && (
                 <FRAMESettingsController />
               )}

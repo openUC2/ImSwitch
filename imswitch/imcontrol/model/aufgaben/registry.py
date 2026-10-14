@@ -240,7 +240,12 @@ def task(**options: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 def catalogue(capabilities: Optional[Iterable[str]] = None,
               providers: Optional[Mapping[str, Callable[[], Iterable[str]]]] = None) -> List[dict]:
-    """Palette entries for registered tasks the host can run, plus control nodes."""
+    """Palette entries for the control nodes and every registered task.
+
+    A task whose ``needs`` the host lacks is listed with ``available: false`` and
+    ``missing`` (the capabilities it lacks), so an editor can still show the
+    step of a job written for other hardware; the validator refuses to run it.
+    """
     from .control import CONTROL_SPECS
     caps = set(capabilities) if capabilities is not None else None
     entries = []
@@ -252,7 +257,6 @@ def catalogue(capabilities: Optional[Iterable[str]] = None,
             "expr_fields": list(spec.expr_fields), "schema": spec.params.model_json_schema(),
         })
     for spec in REGISTRY.values():
-        if caps is not None and not set(spec.flags.needs) <= caps:
-            continue
-        entries.append(spec.entry(providers))
+        missing = sorted(set(spec.flags.needs) - caps) if caps is not None else []
+        entries.append({**spec.entry(providers), "available": not missing, "missing": missing})
     return entries

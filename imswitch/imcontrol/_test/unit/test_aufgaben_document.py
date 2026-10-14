@@ -137,10 +137,12 @@ def test_safety_summary():
     assert report.moves_z and report.emits_light
 
 
-def test_capabilities_hide_unavailable_tasks():
+def test_capabilities_mark_unavailable_tasks():
     job = _job([{"id": "p", "task": "pump_volume", "params": {"pump": "p1", "volume_ul": 10}}])
     assert A.validate(job).ok
     report = A.validate(job, capabilities={"stage", "camera"})
     assert any("needs ['pump']" in i.message for i in report.errors)
-    ids = {e["id"] for e in A.catalogue(capabilities={"stage", "camera"})}
-    assert "move_to_position" in ids and "pump_volume" not in ids and "zstack" in ids
+    entries = {e["id"]: e for e in A.catalogue(capabilities={"stage", "camera"})}
+    assert entries["move_to_position"]["available"] and "zstack" in entries
+    assert entries["pump_volume"]["available"] is False
+    assert entries["pump_volume"]["missing"] == ["pump"]

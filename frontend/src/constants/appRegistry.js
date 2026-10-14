@@ -127,6 +127,30 @@ export const APP_REGISTRY = {
     pluginId: "AppManager",
   },
 
+  aufgaben: {
+    id: "aufgaben",
+    name: "Aufgaben",
+    description:
+      "Build acquisition jobs from steps (loops over positions, wells, grids and time, captures, autofocus, conditions, questions), validate them and follow the run. Writes OME-Zarr and OME-TIFF.",
+    category: APP_CATEGORIES.ESSENTIALS,
+    icon: AccountTreeIcon,
+    enabled: true,
+    essential: true,
+    keywords: [
+      "aufgaben",
+      "jobs",
+      "workflow",
+      "protocol",
+      "experiment",
+      "loop",
+      "timelapse",
+      "useq",
+      "mda",
+    ],
+    pluginId: "Aufgaben",
+    requiredControllers: ["AufgabenController"],
+  },
+
   // === APPS - Optional microscopy applications ===
   mmCore: {
     id: "mmCore",
@@ -245,30 +269,6 @@ export const APP_REGISTRY = {
     ],
     pluginId: "StageMap",
     requiredControllers: ["StageMapController"],
-  },
-
-  aufgaben: {
-    id: "aufgaben",
-    name: "Aufgaben",
-    description:
-      "Build acquisition jobs from steps (loops over positions, wells, grids and time, captures, autofocus, conditions, questions), validate them and follow the run. Writes OME-Zarr and OME-TIFF.",
-    category: APP_CATEGORIES.APPS,
-    icon: AccountTreeIcon,
-    enabled: false,
-    essential: false,
-    keywords: [
-      "aufgaben",
-      "jobs",
-      "workflow",
-      "protocol",
-      "experiment",
-      "loop",
-      "timelapse",
-      "useq",
-      "mda",
-    ],
-    pluginId: "Aufgaben",
-    requiredControllers: ["AufgabenController"],
   },
 
   demoController: {

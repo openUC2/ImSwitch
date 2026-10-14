@@ -209,7 +209,7 @@ const resolve = (schema, prop) => {
 // One form field per parameter of a catalogue entry:
 // {name, title, kind, required, unit, choices, default, description, resourceKinds}
 // kind: "number" | "integer" | "boolean" | "choice" | "string" | "expression"
-//       | "strings" | "resource" | "json"
+//       | "strings" | "code" | "resource" | "json"
 export const paramFields = (entry) => {
   const schema = (entry && entry.schema) || {};
   const required = new Set(schema.required || []);
@@ -234,6 +234,7 @@ export const paramFields = (entry) => {
     };
     const choices = prop.enum || raw.enum;
     if (exprFields.has(name)) field.kind = "expression";
+    else if ((prop["x-widget"] || raw["x-widget"]) === "code") field.kind = "code";
     else if (choices) Object.assign(field, { kind: "choice", choices });
     else if (prop.type === "boolean") field.kind = "boolean";
     else if (prop.type === "integer") field.kind = "integer";

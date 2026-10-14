@@ -130,3 +130,11 @@ test("duplicating copies children with fresh ids", () => {
   expect(copy.body[0].id).toBe("img_2");
   expect(paramSummary({ source: "@pts", n: 3, plan: { a: 1 } })).toBe("source=@pts  n=3  plan");
 });
+
+test("a code parameter gets the code editor", () => {
+  const entry = {
+    id: "python_script",
+    schema: { properties: { code: { type: "string", "x-widget": "code" } }, required: ["code"] },
+  };
+  expect(paramFields(entry)[0]).toMatchObject({ name: "code", kind: "code", required: true });
+});

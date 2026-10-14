@@ -198,6 +198,19 @@ export const ParamField = ({ field, value, job, onChange, onCreateResource }) =>
           onCommit={(text) => onChange(text === "" ? undefined : text)}
         />
       );
+    case "code":
+      return (
+        <CommitField
+          label={label(field)}
+          value={value}
+          multiline
+          minRows={6}
+          maxRows={24}
+          helperText={t("Python; assign the result to output")}
+          InputProps={{ sx: mono }}
+          onCommit={(text) => onChange(text === "" ? undefined : text)}
+        />
+      );
     case "strings":
       return (
         <CommitField

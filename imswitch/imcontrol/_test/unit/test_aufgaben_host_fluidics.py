@@ -100,3 +100,23 @@ def test_serial_commands_ask_first_and_reach_plain_serial_devices():
     run = Run(job, sim)
     assert run.run(confirmed=True) == "finished"
     assert ("serial", "syringe", "VER") in sim.calls and run.results["ask"] == "OK"
+
+
+def test_laser_channels_that_drive_pumps_or_valves_are_not_light_sources():
+    class Devices(dict):
+        def getAllDeviceNames(self):
+            return list(self)
+
+    laser = SimpleNamespace(valueRangeMax=1023, setValue=lambda v: None,
+                            setEnabled=lambda e: None)
+    lasers = Devices(LED=laser, PumpPWM=laser, ValvePWM=laser)
+    setup = SetupInfo.from_dict({
+        "pumps": {"p": {"managerName": "LaserPumpManager",
+                        "managerProperties": {"laser": "PumpPWM"}}},
+        "valves": {"v": {"managerName": "LaserValveManager",
+                         "managerProperties": {"laser": "ValvePWM",
+                                               "positions": {"closed": 0, "open": 1}}}}})
+    master = SimpleNamespace(lasersManager=lasers, getController=lambda name: None,
+                             pumpsManager=PumpsManager(setup.pumps, lasersManager=lasers),
+                             valvesManager=ValvesManager(setup.valves, lasersManager=lasers))
+    assert ImSwitchMicroscope(master, logger=None).devices("illumination") == ["LED"]

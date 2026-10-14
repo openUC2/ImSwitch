@@ -146,7 +146,7 @@ class PeripheralInfo:
     """ A pump or valve: the manager that drives it and its properties. """
 
     managerName: str
-    """ Manager class name, e.g. ``StepperPumpManager`` or ``DigitalOutValveManager``. """
+    """ Manager class name, e.g. ``LaserPumpManager`` or ``LaserValveManager``. """
 
     managerProperties: Dict[str, Any] = field(default_factory=dict)
     """ Properties to be read by the manager (see each manager's docstring). """
@@ -892,13 +892,14 @@ class SetupInfo:
     see that manager's docstring for the property list. """
 
     pumps: Dict[str, PeripheralInfo] = field(default_factory=dict)
-    """ Pumps by name (``StepperPumpManager``, ``VirtualPumpManager``). Volumes in
-    µL, rates in µL/min; Aufgaben jobs drive them with pump_volume / pump_run. """
+    """ Pumps by name: ``LaserPumpManager`` (speed as a PWM value on a laser channel),
+    ``PositionerPumpManager`` (a stepper axis of a positioner), ``VirtualPumpManager``.
+    Volumes in µL, rates in µL/min; Aufgaben jobs drive them with pump_volume / pump_run. """
 
     valves: Dict[str, PeripheralInfo] = field(default_factory=dict)
-    """ Valves by name (``DigitalOutValveManager``, ``ServoValveManager``,
-    ``SerialValveManager``, ``VirtualValveManager``); ``managerProperties.positions``
-    names the positions a job can switch to. """
+    """ Valves by name: ``LaserValveManager`` (a PWM value per position on a laser
+    channel), ``DigitalOutValveManager`` (board outputs), ``VirtualValveManager``;
+    ``managerProperties.positions`` names the positions a job can switch to. """
 
     digitalIO: Optional[DigitalIOInfo] = field(default_factory=lambda: None)
     """ Names for the board's digital outputs and inputs; without it jobs use the

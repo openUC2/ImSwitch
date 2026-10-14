@@ -89,6 +89,15 @@ class ImSwitchMicroscope:
             raise ValueError(f"no {kind} {name!r}; this setup has {self.devices(kind)}")
         return self._group(kind)[name]
 
+    def _fluidics_lasers(self) -> Set[str]:
+        """Laser channels that drive a pump or a valve, so not light sources."""
+        names = set()
+        for group in ("pumpsManager", "valvesManager"):
+            if self._has(group):
+                names |= {n for n in getattr(self._master, group).execOnAll(
+                    lambda device: getattr(device, "laserName", None)).values() if n}
+        return names
+
     def _serial_devices(self) -> List[str]:
         """rs232devices that are plain serial lines (not the UC2 board or a simulator)."""
         from imswitch.imcontrol.model.managers.rs232.RS232Manager import RS232Manager
@@ -133,7 +142,8 @@ class ImSwitchMicroscope:
 
     def devices(self, kind: str) -> List[str]:
         if kind == "illumination":
-            return list(self._master.lasersManager.getAllDeviceNames())
+            used = self._fluidics_lasers()
+            return [n for n in self._master.lasersManager.getAllDeviceNames() if n not in used]
         if kind == "detector":
             return list(self._master.detectorsManager.getAllDeviceNames())
         if kind == "digital_output":

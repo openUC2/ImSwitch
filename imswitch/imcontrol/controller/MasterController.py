@@ -108,8 +108,11 @@ class MasterController:
         )
 
         self.LEDsManager = LEDsManager(self.__setupInfo.LEDs)
-        self.pumpsManager = PumpsManager(self.__setupInfo.pumps, **lowLevelManagers)
-        self.valvesManager = ValvesManager(self.__setupInfo.valves, **lowLevelManagers)
+        # Pumps and valves drive a laser channel (PWM) or a positioner axis.
+        fluidicsDevices = dict(lasersManager=self.lasersManager,
+                               positionersManager=self.positionersManager, **lowLevelManagers)
+        self.pumpsManager = PumpsManager(self.__setupInfo.pumps, **fluidicsDevices)
+        self.valvesManager = ValvesManager(self.__setupInfo.valves, **fluidicsDevices)
         self.digitalIOManager = DigitalIOManager(self.__setupInfo.digitalIO, **lowLevelManagers)
         
         # Initialize unified I/O service (RecordingService from io module)

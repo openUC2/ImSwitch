@@ -321,18 +321,31 @@ class Positioner:
 
 
 class Illuminator:
+    """One intensity per light channel; the sample sees their sum.
+
+    A single shared value let switching one source off darken another (the
+    LED went dark whenever the laser was switched off after it).
+    """
+
     def __init__(self, parent):
         self._parent = parent
-        self.intensity = 0
+        self._intensities = {}
         self.lock = threading.Lock()
 
     def set_intensity(self, channel=1, intensity=0):
         with self.lock:
-            self.intensity = intensity
+            self._intensities[channel] = intensity
 
-    def get_intensity(self, channel):
+    def get_intensity(self, channel=None):
+        """One channel's intensity, or with no channel the total light on the sample."""
         with self.lock:
-            return self.intensity
+            if channel is None:
+                return sum(self._intensities.values())
+            return self._intensities.get(channel, 0)
+
+    @property
+    def intensity(self):
+        return self.get_intensity()
 
 
 class VirtualMicroscopy:
@@ -764,7 +777,7 @@ class Camera:
         """Update cached parameters from parent to minimize locking overhead"""
         try:
             self._cached_position = self._parent.positioner.get_position()
-            self._cached_intensity = self._parent.illuminator.get_intensity(1)
+            self._cached_intensity = self._parent.illuminator.get_intensity()
             self._cached_psf = np.squeeze(self._parent.positioner.get_psf())
         except Exception:
             # In case parent doesn't have these methods yet
@@ -893,12 +906,17 @@ class Camera:
         return np.array(out)
 
     def getLast(self, returnFrameNumber=False):
-        """Get the latest frame from the queue or generate one if acquisition not active"""
-        # Try to get frame from queue if acquisition is active
-        now = time.time()
+        """The newest frame from the producer queue, or one generated now when it
+        is not running. Older queued frames are dropped: they may show a stage
+        position or light from before the caller's last change."""
         if self.acquisition_active:
             try:
                 frame, frame_number = self.frame_queue.get(timeout=0.02)
+                while True:   # newest wins
+                    try:
+                        frame, frame_number = self.frame_queue.get_nowait()
+                    except Empty:
+                        break
                 if frame is None:
                     return None
                 self.frame = frame
@@ -916,7 +934,7 @@ class Camera:
         # Fallback: generate frame directly (legacy behavior for non-acquisition mode)
         position = self._parent.positioner.get_position()
         defocusPSF = np.squeeze(self._parent.positioner.get_psf())
-        intensity = self._parent.illuminator.get_intensity(1)
+        intensity = self._parent.illuminator.get_intensity()
         self.frameNumber += 1
 
         frame = self.produce_frame(

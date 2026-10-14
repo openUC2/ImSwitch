@@ -494,8 +494,14 @@ prescan and firmware stage scans, digital I/O, temperature; plan and format in
 - Frontend: the "Aufgaben" app (`frontend/src/components/aufgaben/`) edits, validates, starts and
   follows jobs; `sigAufgabenEvent` carries state, step, log, question and task-progress events.
 - Peripherals for jobs: the `pumps`, `valves` and `digitalIO` setup blocks (managers in
-  `model/managers/pumps|valves/`, `DigitalIOManager.py`); `send_serial` talks to plain
-  `RS232Manager` devices and is ask-first. The virtual setup has a pump and a valve.
+  `model/managers/pumps|valves/`, `DigitalIOManager.py`). Pumps and valves drive a laser channel
+  (PWM) or a positioner axis; those laser channels are not light sources for jobs. `send_serial`
+  talks to plain `RS232Manager` devices and is ask-first. The virtual setup has a pump and a valve.
+- Analysis steps (`measure_intensity`, `count_objects`, `focus_metric`, `detect_background`,
+  `points_from_mask`, `regions_from_overview`) read an earlier step's image and return
+  `result.<id>.*`; positions and regions come back in stage µm. `python_script` and
+  `external_process` exist only when the setup sets `"aufgaben": {"allowScripts": true}` and are
+  ask-first.
 - `getAufgabenWellPlate(load_name, wells, offset_x_um, offset_y_um)` — a useq well-plate plan
   from ImSwitch labware (same convention: rows towards −Y), for a job's `well_plate` resource
 

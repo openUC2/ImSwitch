@@ -147,6 +147,8 @@
     procedure of FlowStop is a bundled job
   - The "Aufgaben" app: palette, outline editor, schema forms, start confirmation, run
     monitor, job library
+  - Analysis steps that feed back into the job: intensity, focus metric, empty-field
+    detection, object counts, points and regions from an image (smart microscopy templates)
 - **Workflow automation**
   - Sequential operations
   - Conditional logic

@@ -649,7 +649,9 @@ check (`runPrescan`), because the job already holds the instrument.
 ### 4.7 Frontend app (built in Phase 3)
 
 `frontend/src/components/aufgaben/`, registered as the app "Aufgaben" (`appRegistry.js`,
-`requiredControllers: ["AufgabenController"]`, `App.jsx`). Without the controller the page says so.
+`requiredControllers: ["AufgabenController"]`, `App.jsx`). Since 2026-10-14 it is an essential app,
+in the drawer by default, and every step has an outlined MUI icon (`aufgabenIcons.js`). Without the
+controller the page says so.
 
 - Wiring: `backendapi/apiAufgabenController.js` (one function per endpoint),
   `state/slices/AufgabenSlice.js` (catalogue, the job being edited, persisted across reloads,
@@ -685,24 +687,34 @@ Three setup blocks, read by `MasterController`; jobs see the names as device cho
 
 ```json
 "pumps": {
-  "peristaltic": {"managerName": "StepperPumpManager",
-                  "managerProperties": {"axis": "B", "stepsPerUl": 80, "maxRateUlMin": 1500}}
+  "peristaltic": {"managerName": "LaserPumpManager",
+                  "managerProperties": {"laser": "PumpPWM", "maxRateUlMin": 1500}},
+  "syringe": {"managerName": "PositionerPumpManager",
+              "managerProperties": {"positioner": "ESP32Stage", "axis": "B", "stepsPerUl": 80,
+                                    "maxRateUlMin": 600}}
 },
 "valves": {
-  "inlet": {"managerName": "DigitalOutValveManager",
-            "managerProperties": {"positions": {"sample": {"1": 1, "2": 0}, "waste": {"1": 0, "2": 1}}}}
+  "inlet": {"managerName": "LaserValveManager",
+            "managerProperties": {"laser": "ValvePWM", "positions": {"waste": 0, "sample": 1023}}}
 },
 "digitalIO": {"outputs": {"shutter": 1}, "inputs": {"door_open": 2}, "invert": ["door_open"]}
 ```
 
-- Pumps (`model/managers/pumps/`): µL and µL/min, negative values backwards, bounded by
-  `maxRateUlMin`. `StepperPumpManager` runs a UC2 stepper axis (`stepsPerUl`; volumes are converted
-  with that axis' `stepSize`, because uc2rest moves in physical units); `pump_volume` blocks on the
-  board and `stop()` from another thread ends it. `VirtualPumpManager` takes the time the volume
-  needs, divided by `speedup`, and counts what it moved.
-- Valves (`model/managers/valves/`): named positions. `DigitalOutValveManager` (one or several board
-  outputs), `ServoValveManager` (`laser.set_servo`), `SerialValveManager` (a command per position to
-  an `RS232Manager` device), `VirtualValveManager`.
+- Pumps (`model/managers/pumps/`) and valves (`model/managers/valves/`) drive devices ImSwitch already
+  manages (revised 2026-10-14, as Bene asked: a pump is a PWM channel or a stepper axis, a valve a
+  PWM value for now). They get `lasersManager` and `positionersManager` from `MasterController`.
+- Pumps: µL and µL/min, bounded by `maxRateUlMin`.
+  - `LaserPumpManager` sets a laser value proportional to the rate (`valueAtMaxRate`, default the
+    laser's maximum); PWM runs one way, so negative volumes are refused; the volume is timed.
+  - `PositionerPumpManager` moves a positioner axis: positioner units = steps × that axis'
+    `stepSize`, speeds in steps/s, both from `stepsPerUl`. `pump_volume` blocks until the move is
+    done; `stop()` from another thread stops the axis. The axis needs its soft limits off.
+  - `VirtualPumpManager` takes the time the volume needs, divided by `speedup`, and counts it.
+- Valves: named positions. `LaserValveManager` (one laser value per position; 0 switches the
+  channel off), `DigitalOutValveManager` (board outputs, the GPIO route), `VirtualValveManager`.
+- Laser channels that drive a pump or a valve are not offered to jobs as light sources. They still
+  appear in the other illumination lists (live view, ExperimentController); hiding them there is
+  open.
 - `DigitalIOManager`: names for the board's outputs and inputs, active-low lines read and write as
   logical levels. Without the block the raw lines 1–3 are offered, as before.
 - Tasks: `pump_volume`, `pump_run`, `pump_stop`, `set_valve`, the digital I/O tasks, and
@@ -857,12 +869,29 @@ stop-flow example ran over HTTP on the virtual microscope (heater, valve, three 
 cycles, flush); the typed endpoints convert and reject over HTTP. No pump, valve or servo was driven
 on hardware.
 
-### Phase 5 — feedback and analysis (2–3 weeks)
+### Phase 5 — feedback and analysis — **done 2026-10-14**
 
-Tasks that read captured frames: intensity, object count, focus metric, background detection;
-`points_from_mask` through the pixel calibration affine; `regions_from_overview`; a `python_script`
-task on the `DebugController` script context (unsandboxed, flagged ask-first, off unless the setup
-enables it). Templates: skip empty wells, stop after N cells, overview → regions → high-mag z-stack.
+- The engine keeps the last image of every capture and derived-image step as a `Frame` (pixels,
+  pixel size, stage position of the top-left pixel). Steps read it through `ctx.frame(source)`;
+  `source` names a step (validated) or is empty for the newest image.
+- `model/aufgaben/analysis.py`: `measure_intensity`, `focus_metric` (Laplacian, Tenengrad,
+  normalised variance), `detect_background` (contrast after smoothing), `count_objects`,
+  `points_from_mask`, `regions_from_overview` (Otsu unless a threshold is set; scipy and
+  scikit-image). Results are plain data (`result.<id>.count`); positions and regions come back in
+  stage µm and feed loops directly: `"source": "${result.find.positions}"`. Pixel → stage uses the
+  pixel size and the stage position (no rotation), not the calibration affine.
+- `python_script` (names `np`, `hw`, `frame()`, `var`, `result`, `log`; `output` is the result)
+  and `external_process` (no shell, timeout, exit code): unsandboxed, ask-first, and only offered
+  when the setup sets `"aufgaben": {"allowScripts": true}`. Not on the DebugController context.
+- Analysis and script steps are engine-only: they return mixed dicts, which Arkitekt cannot declare.
+- Templates: `skip_empty_wells`, `stop_after_n_cells`, `overview_regions_zstack`.
+- The simulated microscope can carry a sample of disks, which its camera and prescan render.
+- The catalogue lists tasks the setup cannot run (`available: false`, `missing`), so a job written
+  for other hardware shows its steps with a "Needs a pump" note instead of bare task ids.
+
+Verified on 2026-10-14: 12 unit tests (synthetic frames; the three templates and the closed loops on
+the simulated sample) and an API test on the virtual microscope (count objects in a brightfield
+frame, visit three of them). The virtual microscope needed two fixes for that (§7.11).
 
 ### Phase 6 — operator mode, results, consolidation (3–4 weeks)
 
@@ -880,7 +909,7 @@ users move to Aufgaben. ExperimentController stays (D3).
 | 2 | done |
 | 3 | done (resource editors from the ExperimentDesigner still open) |
 | 4 | done |
-| 5 | 2–3 |
+| 5 | done |
 | 6 | 3–4 |
 
 ```
@@ -1047,6 +1076,20 @@ multi-experiment detection needs the default experiment name.
 | 45 | `UC2ConfigController.setTrigger(trigger1=false)` received the string `"false"`, which is truthy, so a disabled trigger was enabled; output ids reached the board as strings | Typed parameters on the GPIO and trigger endpoints |
 | 46 | `TemperatureController.set_temperature` over HTTP: `target + sensorOffset` raised `TypeError` (`"37" + 3`), `active=false` switched the heater on | Typed parameters; returns the state |
 | 47 | `pump_volume`, `pump_run`, `pump_stop` and `set_valve` raised `NotImplementedError` on a real setup | Pump and valve managers (§4.8) |
+
+### 7.11 Fixed in Phase 5
+
+| # | Problem | Fix |
+|---|---|---|
+| 48 | STORM direct saving stopped after the first frame since the writer consolidation (e00543c5): an old error branch's stop-and-break ended up under the save | Saves every frame; test |
+| 49 | STORM's store set-up passed `getChunk()`'s `(frames, ids)` tuple on and failed; a list of frames failed in the normaliser; the worker could start before the acquisition flag was set | Store created from the first frame; chunks unpacked; flag set first |
+| 50 | The STORM controller's Arkitekt startup hook used the old rekuest signature; wherever `arkitekt_next` was installed the controller did not load and every STORM endpoint returned 404 | Arkitekt service and app removed; see `docs/STORM_INLOOP_ANALYSIS.md` |
+| 51 | The virtual illuminator kept one intensity for all channels: switching the laser off darkened the LED, so jobs captured black frames | One value per channel; the camera sees the sum |
+| 52 | The virtual camera returned the oldest of up to five queued frames, from before the caller's light or stage change | Newest frame |
+| 53 | The catalogue left out tasks the setup lacked, so the editor showed bare task ids for them | Listed with `available: false` and what is missing |
+
+Analyses for the next round: `docs/SYNCHRONIZED_ILLUMINATION_ANALYSIS.md` (light only during the
+exposure) and `docs/STORM_INLOOP_ANALYSIS.md` (in-the-loop localisation with webSMLM).
 
 ---
 

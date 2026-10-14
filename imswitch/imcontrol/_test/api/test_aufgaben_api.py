@@ -1,4 +1,5 @@
 """AufgabenController over HTTP on the virtual microscope."""
+import json
 import time
 from pathlib import Path
 
@@ -157,3 +158,32 @@ def test_stop_flow_template_runs_on_the_virtual_fluidics(api_server):
     status = _wait_done(api_server)
     assert status["state"] == "finished", status
     assert status["frames"] == 2 and status["variables"]["images"] == 2
+
+
+def test_smart_microscopy_demo_on_the_virtual_sample(api_server):
+    """Count objects in a brightfield frame of the virtual sample, then visit three of them."""
+    job = {"schema": "aufgaben.job/1", "name": "find and visit",
+           "resources": {"bf": {"kind": "capture", "channels": [
+               {"config": "LED", "intensity": 200, "exposure": 5}]}},
+           "tasks": [   # a bright part of the virtual sample, where the stage starts
+               {"id": "start", "task": "move_to_position",
+                "params": {"x_um": 0, "y_um": -1000, "z_um": 0}},
+               {"id": "look", "task": "capture", "params": {"channels": "@bf"}},
+               {"id": "light", "task": "measure_intensity", "params": {"source": "look"}},
+               {"id": "cells", "task": "count_objects",
+                "params": {"source": "look", "min_area_um2": 50, "smooth_um": 2}},
+               {"id": "find", "task": "points_from_mask",
+                "params": {"source": "look", "min_area_um2": 50, "smooth_um": 2, "max_points": 3}},
+               {"id": "visit", "task": "loop_positions",
+                "params": {"source": "${result.find.positions}"},
+                "body": [{"id": "zoom", "task": "capture", "params": {"channels": "@bf"}}]}]}
+    response = api_server.post(f"{API}/startAufgabenJob", json={"job": job})
+    assert response.status_code == 200, response.text
+    status = _wait_done(api_server)
+    assert status["state"] == "finished", status
+    assert status["frames"] == 4                     # the look and three visits
+    folder = Path(response.json()["folder"])
+    results = {line["node"]: line["result"] for line in map(json.loads, (folder / "run.jsonl")
+               .read_text().splitlines()) if line.get("event") == "node"}
+    assert results["light"]["mean"] > 20             # the LED lights the sample
+    assert results["cells"]["count"] >= 3 and results["find"]["count"] == 3

@@ -101,5 +101,8 @@ docker/HIK/cheatsheet.txt
 docker/HIK/cheatsheet.txt
 main2.py
 /LepmonOS_update
-/imswitch/_data
+# runtime output written next to the bundled defaults
+/imswitch/_data/ExperimentController/
+/imswitch/_data/OverviewRegistration/
+/imswitch/_data/recordings/
 imswitch/imcontrol/model/interfaces/toupcamsdk/lib/mac/libtoupcam.dylib

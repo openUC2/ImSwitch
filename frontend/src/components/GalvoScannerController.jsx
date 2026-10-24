@@ -278,7 +278,11 @@ const GalvoScannerController = () => {
   const parkNow = useCallback(async () => {
     if (!selectedScanner) return;
     try {
-      await apiParkGalvo(hostIP, hostPort, selectedScanner);
+      const data = await apiParkGalvo(hostIP, hostPort, selectedScanner);
+      if (data.error) {
+        dispatch(setError(`Failed to park: ${data.error}`));
+        return;
+      }
       dispatch(setStatusMessage('Beam parked'));
       setTimeout(() => dispatch(clearStatusMessage()), 2000);
     } catch (err) {

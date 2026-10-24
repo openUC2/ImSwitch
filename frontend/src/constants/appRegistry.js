@@ -298,6 +298,20 @@ export const APP_REGISTRY = {
     pluginId: "LightSheet",
   },
 
+  opm: {
+    id: "opm",
+    name: "dvOPM",
+    description:
+      "Oblique-plane microscope: digital twin of the launch and stages, light-sheet optics trace, and stage-scan volume acquisition with deskew.",
+    category: APP_CATEGORIES.APPS,
+    icon: ViewInArIcon,
+    enabled: false,
+    essential: false,
+    keywords: ["opm", "oblique", "dvopm", "lightsheet", "twin", "deskew", "volume"],
+    pluginId: "OPM",
+    requiredControllers: ["OPMController"],
+  },
+
   flowStop: {
     id: "flowStop",
     name: "Flow Stop",

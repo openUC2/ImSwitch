@@ -564,6 +564,8 @@ Safe to read:
 - `checkFirmwareUpdates(timeout, probe_range)` — installed vs server firmware version per
   board (reads `<server>/version.json`; runs a CAN scan on a master). See
   `docs/FIRMWARE_VERSIONING.md`.
+- `getOTAFirmwareServer()` — the firmware source: local server URL or a GitHub release;
+  `listFirmwareReleases(repo, limit)` — GitHub releases of the firmware repo with their image count
 - `getRecommendedFirmware(port)` — the server image that fits a board, from its `/state_get`
   identity. Empty port = ImSwitch's own board over the open link; another port is opened and
   may reset that board.
@@ -590,7 +592,9 @@ Confirm before calling:
   `cancelUSBFlash`, `sendCanAddress`, `testDeviceAction` (moves a freshly flashed motor),
   `reassignCANId(new_id, mac, target)`, `startCANStreamingOTA(can_id, firmware_url, baud)`,
   `startMultipleCANStreamingOTA`, `cancelCANStreamingOTA`, `setOTAFirmwareServer`,
-  `clearOTAFirmwareCache`, `startFirmwareUpdate(can_ids, include_master)` (flashes every
+  `clearOTAFirmwareCache`, `setOTAFirmwareRelease(release, repo)` (images from a GitHub release
+  instead of the local server, sha256-checked against the asset digests),
+  `startFirmwareUpdate(can_ids, include_master)` (flashes every
   listed board, master last over USB), `cancelFirmwareUpdate`, `setFirmwareCheckOnConnect`
   (writes the setup JSON)
 
@@ -615,6 +619,7 @@ Present only when the setup enables them. Discover with `getAvailableControllers
 | `DPCController` | Differential phase contrast (LED-matrix halves) |
 | `InLineHoloController`, `OffAxisHoloController`, `HoloController` | Digital holography |
 | `LightsheetController` | Light-sheet scanning |
+| `OPMController` | dvOPM digital twin (`model/opm`, model axes linked to stage axes by setup `opm.axisMap`; `moveOPMAxes(virtual=True)` shifts the drawing onto the real sheet without moving, `setOPMReference` resets it), launch ray trace, sample-X stage scan placed by the measured speed and camera frame counter, optional deskew. `moveOPMAxes` / `setOPMMedium` move linked axes: **ask first** on hardware; `force=True` skips only the twin's own travel check, never the stage's soft limits |
 | `GalvoScannerController` | Galvo scanning, incl. FLIM Labs bridge |
 | `FLIMLabsController` | FLIM acquisition |
 | `FlowStopController` | Flow-cell / imaging-flow-cytometry |

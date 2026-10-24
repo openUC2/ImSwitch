@@ -63,6 +63,42 @@ images. It is written by `tools/write_fw_manifest.py` in the `build-server-ctr-i
 Only images built by that run are listed. A `.bin` copied into the server by hand has no entry, so it
 has no known version and its download is not verified.
 
+## A GitHub release instead of the firmware server
+
+ImSwitch can also take the images from a GitHub release of `youseetoo/uc2-esp32`. Use this when no
+`firmware-image-server` container runs next to ImSwitch. The ImSwitch host then needs internet
+access. `FirmwareServer` builds the same `version.json` from the GitHub API:
+
+| `version.json` field | From the release |
+|---|---|
+| `version` | `tag_name`. A tagged build bakes the bare tag in as `UC2_FW_VERSION` (`fw-version` job in `build-frame.yaml`) |
+| `files.<name>.size` / `.sha256` | the asset's `size` and `digest`. Assets uploaded before GitHub published digests have none, so only their size is checked |
+| `commit_time` / `run_url` | `published_at` / `html_url` |
+
+- **Which assets.** Only the `esp32_<env>[_mot<axis>][_merged].bin` images that `build-frame.yaml`
+  uploads are used. The web-flasher images from `build-and-release.yaml` (`<id>.bin` next to
+  `<id>-manifest.json`, such as `can-hat-master-v2.bin`) are left out. They are merged images without
+  the `_merged` suffix, so ImSwitch would flash them at the app offset, and their names match no
+  board.
+  - Releases before `v2026.0.0-alpha.8` (including `v2026.01.19-3`) have only web-flasher images.
+    They are listed with `image_count: 0` and refused.
+- **`latest`.** The newest non-draft release that has images, pre-releases included. GitHub's own
+  "latest" skips pre-releases, and so far every CANopen image is in a pre-release.
+- **Rate limit.** The API allows 60 requests per hour per IP without a token, so answers are cached
+  for 5 minutes. Set `GITHUB_TOKEN` in ImSwitch's environment for a higher limit. Downloads
+  (`github.com/<repo>/releases/download/<tag>/<file>`) are not rate-limited.
+- **Unchanged.** Download verification, the image choice and the update flow are the same for both
+  sources.
+
+| Endpoint | What it does |
+|---|---|
+| `getOTAFirmwareServer()` | `{source: "local"\|"github", firmware_server_url, github_repo, github_release}`; asks no server |
+| `setOTAFirmwareServer(server_url)` | Use the local server (checked first) |
+| `setOTAFirmwareRelease(release="latest", repo)` | Use a GitHub release (checked first); refused when the release is missing or has no `esp32_*.bin` |
+| `listFirmwareReleases(repo, limit=20)` | `{releases: [{tag, name, prerelease, published_at, url, image_count}]}` |
+
+None of these is persisted. For startup, use the setup JSON (see below).
+
 ## ImSwitch
 
 The logic lives in **`imswitch/imcontrol/model/canbus`**, a package without ImSwitch imports. It needs
@@ -172,7 +208,8 @@ check and post-flash verification.
 ### Setup JSON options (`uc2Config`)
 
 ```json
-"uc2Config": {"checkFirmwareOnConnect": true, "firmwareServerUrl": "http://host.docker.internal/firmware"}
+"uc2Config": {"checkFirmwareOnConnect": true, "firmwareServerUrl": "http://host.docker.internal/firmware",
+              "firmwareRelease": null, "firmwareGithubRepo": null}
 ```
 
 - **`checkFirmwareOnConnect`** (default `false`): 20 s after startup, if the board is connected and
@@ -180,6 +217,9 @@ check and post-flash verification.
   `sigFirmwareUpdatesAvailable` and keeps the result for `getFirmwareUpdatePrompt`. It is read-only.
 - **`firmwareServerUrl`** (default: the Docker URL above): needed for the check after connect outside
   Docker. `setOTAFirmwareServer` still changes it at runtime, but does not persist it.
+- **`firmwareRelease`** (default `null` = the firmware server): `"latest"` or a tag such as
+  `"v2026.0.0-beta.4"` takes the images from that GitHub release of **`firmwareGithubRepo`**
+  (default `youseetoo/uc2-esp32`).
 
 ## Frontend
 
@@ -187,13 +227,14 @@ One **Update firmware** dialog (`FirmwareUpdateDialog.jsx`) first asks for the m
 
 - **Over the CAN bus.** Every board on the bus is updated through the master ImSwitch is connected
   to, and the master itself last over its USB link. It needs a connected master.
-  - It shows the version table and preselects outdated boards. It also offers the firmware-server
-    setting, *Change ID* per node (by MAC) and a deep scan for boards without a CAN route.
+  - It shows the version table and preselects outdated boards. It also offers the firmware source
+    (*Local server* URL or *GitHub release*, `FirmwareSourcePicker.jsx`), *Change ID* per node (by
+    MAC) and a deep scan for boards without a CAN route.
   - It drives `startFirmwareUpdate` and follows `getFirmwareUpdateStatus`, with the live transfer
     bar from `sigOTAStatusUpdate` / `sigUSBFlashStatusUpdate`.
   - The state lives in the backend, so reopening the dialog during an update shows it again.
 - **Over a USB cable.** One board on its own port: flash any image, assign a CAN address, test it
-  (`UsbFlashWizard.jsx`, rendered inside the dialog). This works without a connected master, for
+  (`UsbFlashWizard.jsx`, rendered inside the dialog). Its first step is the same source picker. This works without a connected master, for
   recovery.
 
 Entry points:

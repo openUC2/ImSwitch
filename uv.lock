@@ -1918,7 +1918,7 @@ requires-dist = [
     { name = "smbus", marker = "extra == 'lepmon'" },
     { name = "smbus2", marker = "extra == 'lepmon'" },
     { name = "tifffile", specifier = ">=2020.11.26" },
-    { name = "uc2-rest", specifier = ">=0.2.0.41" },
+    { name = "uc2-rest", specifier = ">=0.2.0.43" },
     { name = "uc2canopen", specifier = ">=0.1.4" },
     { name = "unitelabs-cdk" },
     { name = "unitelabs-sila" },
@@ -5377,16 +5377,16 @@ wheels = [
 
 [[package]]
 name = "uc2-rest"
-version = "0.2.0.41"
+version = "0.2.0.43"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "pyserial" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/c7/38ff7f7331d306523a28626445ff7fb6af899179394e760aea77120ac6a6/uc2_rest-0.2.0.41.tar.gz", hash = "sha256:038d41f2afc4953889953f2c6b07910a0afc9ab0fe5747ac6d46bdfa730f86c9", size = 90188, upload-time = "2026-09-30T14:21:13.511Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5c/f4/940abdc45a81d50c2189036fa6d271d0414dbc110adc9ea1d84a5b1464b9/uc2_rest-0.2.0.43.tar.gz", hash = "sha256:34fa84dff32591b03973043c640d04964d62d1d681c59006d079fbd54ef6282f", size = 91074, upload-time = "2026-10-14T18:20:10.442Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/2f/aba6217e65c50c8dc931ebe3e33be862ad3acc53d465ec4c0211de2f4042/uc2_rest-0.2.0.41-py3-none-any.whl", hash = "sha256:22a0762ebc9a83619feb8d44d44e6867943ff2f9ffc5bcf5bd689eb20fcdbff7", size = 100742, upload-time = "2026-09-30T14:21:12.075Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/41/7b2e724c1e836a8d104622b10e45df67493399b97c305d3d91071fddc3f1/uc2_rest-0.2.0.43-py3-none-any.whl", hash = "sha256:956dae5c7159d5ba7bf00840cd7256c6d4484d50f9db7345eb45dc12e32645e7", size = 100471, upload-time = "2026-10-14T18:20:09.128Z" },
 ]
 
 [[package]]

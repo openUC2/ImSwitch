@@ -14,6 +14,7 @@ from pathlib import Path
 from imswitch.imcommon.model import APIExport
 from imswitch.imcontrol.controller.busy import busy_reasons
 from imswitch.imcontrol.model.canbus import CanNetwork, UpdateHooks, device_mapping
+from imswitch.imcontrol.model.canbus.firmware_server import DEFAULT_GITHUB_REPO
 # The module, not the package attribute: imswitch.imcontrol.model re-exports the
 # SetupInfo *class* under the module's name.
 from imswitch.imcontrol.model.SetupInfo import UC2ConfigInfo
@@ -59,7 +60,8 @@ class CanNetworkApiMixin:
             hooks=UpdateHooks(usb_info=self.getFirmwareInfo, blockers=self._hardware_busy_reasons,
                               before_update=self._lasers_off, motor_restarted=self._rearm_homing),
             emit_ota=self.sigOTAStatusUpdate.emit, emit_usb=self.sigUSBFlashStatusUpdate.emit,
-            logger=self._logger)
+            logger=self._logger, firmware_release=getattr(uc2, "firmwareRelease", None),
+            github_repo=getattr(uc2, "firmwareGithubRepo", None))
         self._fw_prompt = None  # result of the check after connect
         self._register_can_scan_callback()
         if self._check_firmware_on_connect():
@@ -111,13 +113,34 @@ class CanNetworkApiMixin:
 
     @APIExport(runOnUIThread=False)
     def setOTAFirmwareServer(self, server_url=DEFAULT_FIRMWARE_URL):
-        """Use *server_url* as firmware server (checked first). Not persisted —
-        for startup use the setup JSON's uc2Config.firmwareServerUrl."""
+        """Take the firmware from the local firmware server *server_url*
+        (checked first). Not persisted — for startup use the setup JSON's
+        uc2Config.firmwareServerUrl."""
         return self._can_network.server.set_url(server_url)
 
     @APIExport(runOnUIThread=False)
+    def setOTAFirmwareRelease(self, release: str = "latest", repo: str = DEFAULT_GITHUB_REPO):
+        """Take the firmware from GitHub release *release* of *repo* instead of
+        the local server: "latest" (newest release with images, pre-releases
+        included) or a tag. Checked first: refused when the release does not
+        exist or has no esp32_*.bin images. Needs internet access on the
+        ImSwitch host. Not persisted — for startup use the setup JSON's
+        uc2Config.firmwareRelease. Returns {status, message, server_url,
+        release, release_tag, firmware_files, count}."""
+        return self._can_network.server.set_release(release, repo)
+
+    @APIExport(runOnUIThread=False)
+    def listFirmwareReleases(self, repo: str = DEFAULT_GITHUB_REPO, limit: int = 20):
+        """Releases of *repo* to choose from, newest first: {status, repo,
+        releases: [{tag, name, prerelease, published_at, url, image_count}]}.
+        image_count 0 = only web-flasher images, nothing ImSwitch can flash."""
+        return self._can_network.server.releases(repo, limit)
+
+    @APIExport(runOnUIThread=False)
     def getOTAFirmwareServer(self):
-        return {"firmware_server_url": self._can_network.server.url}
+        """The configured firmware source: {source: "local"|"github",
+        firmware_server_url, github_repo, github_release}."""
+        return self._can_network.server.source()
 
     @APIExport(runOnUIThread=False)
     def listAllFirmwareFiles(self):

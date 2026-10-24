@@ -72,7 +72,7 @@ dependencies = [
     "msgpack>=1.0.4",
     "esptool",
     "av==13.1.0",
-    "uc2-rest>=0.2.0.41",  # fwVersion/fwImage, CAN OTA reconnect fixes
+    "uc2-rest>=0.2.0.43",  # named stepper ids (axes beyond XYZA)
     "unitelabs-sila",
     "unitelabs-cdk",
     "mikro-next>=1",

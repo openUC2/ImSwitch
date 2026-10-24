@@ -208,6 +208,16 @@ class UC2ConfigInfo:
     """ Firmware server (serves the images + version.json). None = the
     Docker default http://host.docker.internal/firmware. """
 
+    firmwareRelease: Optional[str] = None
+    """ Take the firmware from a GitHub release of firmwareGithubRepo instead
+    of the firmware server: "latest" (newest release with images,
+    pre-releases included) or a tag such as "v2026.0.0-beta.4". None = the
+    firmware server. """
+
+    firmwareGithubRepo: Optional[str] = None
+    """ Repository whose releases firmwareRelease refers to. None =
+    youseetoo/uc2-esp32. """
+
 
 @dataclass(frozen=False)
 class SIMInfo:
@@ -304,6 +314,35 @@ class ROIScanInfo:
 @dataclass(frozen=False)
 class LightsheetInfo:
     pass
+
+
+def _opmDefaultAxisMap():
+    return {"sample.X": "X",  "sample.Z": "Y", "launch.x": "Z", "launch.z": "A"}
+
+
+@dataclass(frozen=False)
+class OPMInfo:
+    """ dvOPM digital twin (OPMController). Every field is optional. """
+
+    positioner: Optional[str] = None
+    """ Positioner for axes given without a name; default the first one. """
+
+    detector: Optional[str] = None
+    """ Camera for the scan; default the first one. """
+
+    axisMap: Dict[str, str] = field(default_factory=_opmDefaultAxisMap)
+    """ Model axis -> stage axis: "X", "-X" (opposite direction), "LaunchStage.Z" or ""
+    (set by hand). Model axes: sample.X/Y/Z, launch.x/y/z/phi_deg/focus. """
+
+    detection: Dict[str, float] = field(default_factory=dict)
+    """ Overrides of the detection model: M, alpha_deg, pixel_um (sensor pitch times
+    binning), sensor_tilted_mm, sensor_flat_mm. """
+
+    dish: Dict[str, float] = field(default_factory=dict)
+    """ Overrides of the dish model: n_glass, t_glass_mm, G0_mm. """
+
+    tiltedAxis: int = 0
+    """ Image axis along the tilted sensor direction: 0 rows, 1 columns. """
 
 
 @dataclass(frozen=False)
@@ -940,6 +979,9 @@ class SetupInfo:
 
     lightsheet: Optional[LightsheetInfo] = field(default_factory=lambda: None)
     """ lighthseet settings. Required to be defined to use Lightsheet functionality. """
+
+    opm: Optional[OPMInfo] = field(default_factory=lambda: None)
+    """ dvOPM digital twin settings (OPMController); defaults apply when missing. """
 
     webrtc: Optional[WebRTCInfo] = field(default_factory=lambda: None)
     """ WebRTC settings. Required to be defined to use WebRTC functionality. """

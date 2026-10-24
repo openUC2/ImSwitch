@@ -87,14 +87,36 @@ back to `musl` (Alpine) automatically.
 - **TEC models** additionally expose `temperature` (read-only),
   `target_temperature` and `fan_speed` parameters. The target is re-applied
   after a reconnect, so the sensor stays at the requested temperature.
+- **The stream of a TEC model is never stopped while the camera is open.**
+  `Toupcam_Stop()` cuts the TEC drive: on an MTR3CMOS09000KMA (fw
+  4.6.7.20221118) the TEC voltage fell from 5.8 V to 0 V within a minute of
+  `Stop()`, while `TOUPCAM_OPTION_TEC` still read 1 and the target read back
+  correctly. Snaps that start and stop the stream every few seconds took the
+  sensor from -30 C to +6 C in two minutes. So the stream is started once, at
+  open, and "stopping" (`stop_live` / `suspend_live`, i.e. live view off, the
+  end of a snap) *parks* it in software-trigger mode with nothing triggered:
+  no exposures, no frames, cooler driven. `start_live` switches back to the
+  requested trigger mode; frames that arrive within one exposure of that were
+  started before it and are dropped. Through the same snap cycle the parked
+  sensor stayed within 1 C. Conversion gain, low-noise mode, pixel
+  format and ROI still restart the stream (the SDK only picks them up between
+  streams), but only when the value actually changes - re-applying the same
+  settings before every run costs nothing. `close()` stops it for real.
+  Models without a TEC, or without software trigger, start and stop as before.
+- **Cooling headroom**: with the sensor powered (stream running) the TEC of the
+  MTR3CMOS09000KMA runs at its 6.1 V maximum and levels off around -25 C at
+  ~21 C room temperature, so a -30 C target is not held during acquisition. A
+  saturated cooler does not regulate - the sensor then follows the room - so
+  for a constant temperature choose a target a few degrees warmer than what it
+  reaches at full power. `tec_voltage_v` / `tec_voltage_max_v` in the camera
+  status (and the stall warning) show when it is at full power.
 - **Temperature monitor**: a background thread polls the sensor temperature
   every 5 s for as long as the camera is open (the cooler runs then too, so the
   check cannot wait for an acquisition).
   - **TEC keep-alive**: the target is re-written to the camera every 60 s.
-    One write is not reliable on this family - the camera reports the target
-    back correctly, with the cooler on, and can still sit at ambient for hours
-    (seen in a real log at a -40 C target). Re-asserting it costs one register
-    write a minute and gets the regulation going again by itself.
+    Before the stream was kept running, a camera could report the target and
+    the cooler as on and still sit at ambient (the `Stop()` effect above). The
+    re-write is kept as a cheap safeguard.
   - **Target range**: `set_temperature()` clamps to the model's own range
     (`TOUPCAM_OPTION_TECTARGET_RANGE`, logged at startup) and warns when it
     has to. An out-of-range target is accepted by the SDK and read back
@@ -114,9 +136,10 @@ back to `musl` (Alpine) automatically.
     after that it stays off until a target temperature is set again, which is
     also the manual override. `tec_over_temperature` in the camera status says
     whether the cutoff is currently tripped.
-  - **Log** (`"readSaveTemperature": true`): while the camera is armed (live
-    view or a snap in progress) the sensor temperature, TEC target and state,
-    fan, heater, exposure and the cutoff flag are appended every 5 s to
+  - **Log** (`"readSaveTemperature": true`): while the stream runs - acquiring
+    or parked, so on a TEC model the whole time the camera is open - the sensor
+    temperature, TEC target, state and voltage, fan, heater, exposure, the
+    streaming/parked state and the cutoff flag are appended every 5 s to
     `recordings/<YYYY-MM-DD>/toupcam_temperature_log.csv` in the data folder -
     the same folder the day's snaps go to. Off by default.
 - **Window heater** is **off** unless the setup asks for it (`"heat": 5`, or

@@ -21,6 +21,28 @@
             "forAcquisition": true,
             "forFocusLock": false,
             "defaultStreamSettings": {}
+        },
+        "ObservationCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "OpenCVCamManager",
+            "managerProperties": {
+                "cameraListIndex": 0,
+                "cameraListIndexWIN": 0,
+                "isRGB": true,
+                "cameraEffPixelsize": 12.2,
+                "opencvcam": {
+                    "exposure": 0,
+                    "gain": 0,
+                    "blacklevel": 100,
+                    "image_width": 1000,
+                    "image_height": 1000,
+                    "pixel_format": "Mono12"
+                }
+            },
+            "forAcquisition": false,
+            "forFocusLock": false,
+            "defaultStreamSettings": {}
         }
     },
     "lasers": {
@@ -144,12 +166,12 @@
                 "backlashYOld": 40,
                 "backlashX": 0,
                 "backlashY": 0,
-                "homeEndstoppolarityA": 0,
-                "homeEndstoppolarityX": 0,
-                "homeEndstoppolarityY": 0,
-                "homeEndstoppolarityZ": 0,
+                "homeEndstoppolarityA": 1,
+                "homeEndstoppolarityX": 1,
+                "homeEndstoppolarityY": 1,
+                "homeEndstoppolarityZ": 1,
                 "homeDirectionX": -1,
-                "homeDirectionY": 1,
+                "homeDirectionY": -1,
                 "homeDirectionZ": 1,
                 "homeDirectionA": -1,
                 "homeXenabled": 1,
@@ -163,7 +185,29 @@
                 "initialSpeedX": 15000,
                 "initialSpeedY": 15000,
                 "initialSpeedZ": 15000,
-                "initialSpeedA": 15000
+                "initialSpeedA": 15000,
+                "maxSpeedX": 10000,
+                "homeEndposReleaseX": 0,
+                "homeTimeoutX": 20000,
+                "maxSpeedY": 10000,
+                "homeEndposReleaseY": 0,
+                "homeTimeoutY": 20000,
+                "maxSpeedZ": 10000,
+                "backlashZ": 0,
+                "homeEndposReleaseZ": 0,
+                "homeTimeoutZ": 20000,
+                "maxSpeedA": 10000,
+                "backlashA": 0,
+                "homeEndposReleaseA": 0,
+                "homeTimeoutA": 20000,
+                "joystickInvertedX": false,
+                "joystickInvertedY": false,
+                "joystickInvertedZ": false,
+                "joystickInvertedA": false,
+                "speedMultiplierX": 1,
+                "speedMultiplierY": 1,
+                "speedMultiplierZ": 1,
+                "speedMultiplierA": 1
             },
             "axes": [
                 "X",
@@ -176,8 +220,8 @@
             "forScanning": true,
             "resetOnClose": true,
             "stageOffsets": {
-                "stageOffsetPositionX": -73209.49587275067,
-                "stageOffsetPositionY": -59536.264573228305,
+                "stageOffsetPositionX": -8167.07436801133,
+                "stageOffsetPositionY": -75051.38169419709,
                 "stageOffsetPositionZ": 0.0,
                 "stageOffsetPositionA": 0.0
             }
@@ -185,6 +229,10 @@
     },
     "galvoScanners": {},
     "flimLabs": null,
+    "pumps": {},
+    "valves": {},
+    "aufgaben": null,
+    "digitalIO": null,
     "rs232devices": {
         "ESP32": {
             "managerName": "ESP32Manager",
@@ -240,14 +288,11 @@
     },
     "roiscan": null,
     "lightsheet": null,
+    "opm": null,
     "webrtc": null,
-    "hypha": null,
     "mockxx": null,
     "jetsonnano": null,
     "Stresstest": null,
-    "HistoScan": {
-        "PreviewCamera": null
-    },
     "Workflow": null,
     "FlowStop": null,
     "Lepmon": null,
@@ -344,6 +389,10 @@
         "I2CSensor",
         "LiveView"
     ],
+    "hypha": null,
+    "HistoScan": {
+        "PreviewCamera": null
+    },
     "stageOffsets": {},
     "mct": {
         "tWait": null

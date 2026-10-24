@@ -25,6 +25,7 @@ CHECKS = {
     "Aufgaben": ("an Aufgaben job is running", lambda c: c.isAufgabenRunning()),
     "StageMap": ("the stage map or its prescan is running", lambda c: c.isStageMapBusy()),
     "FocusLock": ("a focus-lock calibration is running", lambda c: c.isCalibrationRunning()),
+    "OPM": ("an OPM scan is running", lambda c: c.isOPMScanRunning()),
 }
 
 

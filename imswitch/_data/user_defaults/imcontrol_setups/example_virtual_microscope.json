@@ -397,7 +397,7 @@
         "InLineHolo",
         "Temperature",
         "I2CSensor",
-        "Aufgaben", "StageMap"
+        "Aufgaben", "StageMap", "OPM"
     ],
     "nonAvailableWidgets": [
         "STORMRecon",

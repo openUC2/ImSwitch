@@ -346,9 +346,12 @@ class ESP32StageManager(PositionerManager):
             return
         if not is_absolute and all(v == 0 for v in values):
             return
+        # Targets are fixed before the command goes out: uc2rest already counts the move into
+        # its position and a board message that arrives meanwhile pushes that into
+        # self._position, so adding v afterwards counted a relative move twice.
+        targets = {ax: v if is_absolute else self._position.get(ax, 0) + v for ax, v in zip(axes, values)}
         # don't move to invalid positions (check both min and max limits)
-        for ax, v in zip(axes, values):
-            target = v if is_absolute else self._position.get(ax, 0) + v
+        for ax, target in targets.items():
             if self.limitEnabled[ax] and not self.minPos[ax] <= target <= self.maxPos[ax]:
                 self.__logger.warning(f"{ax} move blocked: target {target} outside [{self.minPos[ax]}, {self.maxPos[ax]}]")
                 return
@@ -356,8 +359,7 @@ class ESP32StageManager(PositionerManager):
         device = {ax: v + self.stageOffsetPositions[ax] if is_absolute else v for ax, v in zip(axes, values)}
         self._moveDevice(device, dict(zip(axes, speeds)), dict(zip(axes, accelerations)), is_absolute=is_absolute,
                          is_blocking=is_blocking, isEnable=isEnable, timeout=timeout, is_reduced=is_reduced)
-        for ax, v in zip(axes, values):
-            self._position[ax] = v if is_absolute else self._position.get(ax, 0) + v
+        self._position.update(targets)
 
     def _moveDevice(self, targets, speed, acceleration=None, is_absolute=False, is_blocking=True, isEnable=None, timeout=gTIMEOUT, is_reduced=False):
         """One move in device coordinates (no offsets, no soft limits).

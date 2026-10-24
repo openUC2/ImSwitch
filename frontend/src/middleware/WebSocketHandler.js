@@ -860,6 +860,12 @@ const WebSocketHandler = () => {
               }).filter(([_, value]) => value !== undefined),
             );
 
+            // axes beyond X/Y/Z/A (e.g. a satellite stage with B-E)
+            const extra = Object.fromEntries(
+              Object.entries(correctedPositions).filter(([k]) => !["X", "Y", "Z", "A"].includes(k)),
+            );
+            if (Object.keys(extra).length) positionUpdate.extra = extra;
+
             //update redux state
             dispatch(positionSlice.setPosition(positionUpdate));
           }

@@ -40,6 +40,7 @@
         "serialport_": "COM3",
         "serialport": "COM3",
         "baudrate":115200, 
+        "baudrate_":921600, 
         "debug":1
        }
     }
@@ -153,7 +154,25 @@
     "n": 1.0,
     "rotations": [0, 180, 90, 270]
   },
-  "webrtc":{},
+  "galvoScanners": {
+    "ESP32Galvo": {
+      "managerName": "ESP32GalvoScannerManager",
+      "managerProperties": {
+        "rs232device": "ESP32",
+        "nx": 256,
+        "ny": 256,
+        "x_min": 500,
+        "x_max": 3500,
+        "y_min": 500,
+        "y_max": 3500,
+        "sample_period_us": 1,
+        "frame_count": 0,
+        "bidirectional": false
+      },
+      "analogChannel": null,
+      "digitalLine": null
+    }
+  },
   "PixelCalibration": {},
   "availableWidgets": [
     "Settings",
@@ -164,7 +183,9 @@
     "Laser",
     "UC2Config",
     "LEDMatrix",
-    "Lightsheet" 
+    "Lightsheet", 
+    "OPM",
+    "GalvoScanner"
     ],
   "nonAvailableWidgets":[
     "STORMRecon",

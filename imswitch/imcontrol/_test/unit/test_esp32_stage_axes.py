@@ -94,3 +94,19 @@ def test_custom_letters_need_an_id():
     stage, parent, _ = make_stage(["Q"], axisIds={"Q": 8})
     stage.move(5, "Q")
     assert ids(parent.last("motor")) == [8]
+
+
+def test_relative_move_is_counted_once_when_the_board_reports_meanwhile():
+    """uc2rest counts a move into its position before sending it; a status message that
+    arrives during the send pushed that into the stage, and move() added the step again."""
+    stage, parent, _ = make_stage(["X", "Y", "Z", "A"])
+    send = parent.post_json
+
+    def post_json(path, payload, **kwargs):
+        parent.motor._callback_motor_status({"steppers": [{"stepperid": 0, "position": 0}]})
+        return send(path, payload, **kwargs)
+    parent.post_json = post_json
+    stage.move(1000, "Z", is_blocking=False)
+    assert stage.position["Z"] == 1000
+    stage.move(1000, "Z", is_blocking=False)
+    assert stage.position["Z"] == 2000

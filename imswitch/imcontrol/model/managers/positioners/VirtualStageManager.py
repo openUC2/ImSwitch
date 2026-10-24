@@ -85,12 +85,11 @@ class VirtualStageManager(PositionerManager):
                 y=self.stepsizeY*((value[1]+oy) if is_absolute else value[1]),
                 is_absolute=is_absolute,
             )
-        for axes in ["A","X","Y","Z"]:
-            self._position[axes] = self._positioner.position[axes]
         if is_blocking:   # a blocking move takes as long as the real stage would
             self._wait_for_travel(before, speed)
 
-        self.getPosition() # update position in GUI
+        # user frame, as at startup and as ESP32StageManager keeps it; also updates the GUI
+        self._position.update(self.getPosition())
 
     def _wait_for_travel(self, before, speed):
         steps = {"X": self.stepsizeX, "Y": self.stepsizeY, "Z": self.stepsizeZ, "A": self.stepsizeA}

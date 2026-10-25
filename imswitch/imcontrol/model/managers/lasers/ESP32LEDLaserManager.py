@@ -136,7 +136,8 @@ class ESP32LEDLaserManager(LaserManager):
             return None
 
     def sendTrigger(self, triggerId):
-        self._esp32.digital.sendTrigger(triggerId)
+        # uc2rest exposes the trigger on .digitalout; there is no .digital.
+        return self._esp32.digitalout.sendTrigger(triggerId)
 
     def setGalvo(self,channel=1, frequency=1, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1):
         self._rs232manager._esp32.galvo.set_dac(

@@ -1,26 +1,14 @@
-import dataclasses
 try:
     from importlib.metadata import entry_points
 except ImportError:
     entry_points = None
-import h5py
-from imswitch.imcommon.controller import MainController, PickDatasetsController
-from imswitch.imcommon.model import (
-    ostools,
-    initLogger,
-    generateAPI,
-    generateUI,
-    generateShortcuts,
-    SharedAttributes,
-)
+from imswitch.imcommon.controller import MainController
+from imswitch.imcommon.model import initLogger, generateAPI, generateUI
 from .server import ImSwitchServer
-from imswitch.imcontrol.model import configfiletools
-from imswitch.imcontrol.view import guitools
 
 # from . import controllers
 from .CommunicationChannel import CommunicationChannel
 from .MasterController import MasterController
-from .PickSetupController import PickSetupController
 from .basecontrollers import ImConWidgetControllerFactory
 import threading
 import importlib
@@ -298,65 +286,6 @@ class ImConMainController(MainController):
     @property
     def api(self):
         return self.__api
-
-    @property
-    def shortcuts(self):
-        return self.__shortcuts
-
-    def loadParamsFromHDF5(self):
-        """Set detector, positioner, laser etc. params from values saved in a
-        user-picked HDF5 snap/recording."""
-
-        filePath = guitools.askForFilePath(
-            self.__mainView, "Open HDF5 file", nameFilter="*.hdf5"
-        )
-        if not filePath:
-            return
-
-        with h5py.File(filePath) as file:
-            datasetsInFile = file.keys()
-            if len(datasetsInFile) < 1:
-                # File does not contain any datasets
-                return
-            elif len(datasetsInFile) == 1:
-                datasetToLoad = list(datasetsInFile)[0]
-            else:
-                # File contains multiple datasets
-                self.pickDatasetsController.setDatasets(filePath, datasetsInFile)
-                if not self.__mainView.showPickDatasetsDialogBlocking():
-                    return
-
-                datasetsSelected = self.pickDatasetsController.getSelectedDatasets()
-                if len(datasetsSelected) != 1:
-                    return
-
-                datasetToLoad = datasetsSelected[0]
-
-            attrs = SharedAttributes.fromHDF5File(file, datasetToLoad)
-            self.__commChannel.sharedAttrs.update(attrs)
-
-    def pickSetup(self):
-        """Let the user change which setup is used."""
-
-        options, _ = configfiletools.loadOptions()
-
-        self.pickSetupController.setSetups(configfiletools.getSetupList())
-        self.pickSetupController.setSelectedSetup(options.setupFileName)
-        if not self.__mainView.showPickSetupDialogBlocking():
-            return
-        setupFileName = self.pickSetupController.getSelectedSetup()
-        if not setupFileName:
-            return
-
-        proceed = guitools.askYesNoQuestion(
-            self.__mainView, "Warning", "The software will restart. Continue?"
-        )
-        if not proceed:
-            return
-
-        options = dataclasses.replace(options, setupFileName=setupFileName)
-        configfiletools.saveOptions(options)
-        ostools.restartSoftware()
 
     def closeEvent(self):
         self.__logger.debug("Shutting down")

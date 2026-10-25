@@ -1,0 +1,25 @@
+{
+  "schema": "aufgaben.job/1",
+  "name": "Stop after N cells",
+  "description": "Tiles a region and counts the cells in every tile; the run finishes as soon as enough cells are imaged. Bright objects above the automatic (Otsu) threshold count as cells; set dark_objects for brightfield.",
+  "parameters": {
+    "target_cells": {"type": "integer", "default": 500, "minimum": 1, "title": "Cells to image", "ui": "runtime"}
+  },
+  "variables": {"cells": 0},
+  "resources": {
+    "area": {"kind": "regions", "regions": [{"name": "area", "min_x": 0, "max_x": 4000, "min_y": 0, "max_y": 3000}]},
+    "nuclei": {"kind": "capture", "channels": [{"config": "Laser405", "exposure": 50, "intensity": 400}]}
+  },
+  "storage": {"formats": ["ome-zarr"]},
+  "tasks": [
+    {"id": "region", "task": "loop_regions", "params": {"regions": "@area"}, "body": [
+      {"id": "tile", "task": "loop_grid", "params": {"overlap": 0.05}, "body": [
+        {"id": "img", "task": "capture", "params": {"channels": "@nuclei"}},
+        {"id": "count", "task": "count_objects", "params": {"source": "img", "min_area_um2": 20}},
+        {"id": "add", "task": "set_variable", "params": {"name": "cells", "value": "${cells + result.count.count}"}},
+        {"id": "enough", "task": "condition", "params": {"expr": "cells >= param.target_cells"}, "body": [
+          {"id": "done", "task": "finish", "params": {"message": "enough cells imaged"}}]}
+      ]}
+    ]}
+  ]
+}

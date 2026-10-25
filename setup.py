@@ -73,7 +73,7 @@ setup(
         "msgpack>=1.0.4",
         "esptool", 
         "omero-py",
-        "uc2-rest>=0.2.0.41",
+        "uc2-rest>=0.2.0.43",
         "unitelabs-sila", 
         "unitelabs-cdk",
         "ashlarUC2>=1.18.5",
@@ -93,11 +93,6 @@ setup(
             [
             "arkitekt==0.7.8",
             "arkitekt_next>=0.35.0"
-        ],
-        'imjoy':[
-            "imjoy-rpc==0.5.59",
-            "imjoy_rpc",
-            "imjoy",
         ],
         # Test dependencies for API testing
         'testing': [

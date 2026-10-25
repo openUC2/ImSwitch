@@ -12,6 +12,7 @@ import os
 import time
 import json
 import logging
+import shutil
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -25,7 +26,6 @@ from .writers import (
     SessionContext,
     WriterDetectorContext,
     WriterFrameEvent,
-    OMETiffWriter,
     OMEZarrWriter,
     convert_detector_context,
     convert_frame_event,
@@ -121,7 +121,6 @@ class AcquisitionDataStore:
                  write_tiff: bool = False,
                  write_individual_tiffs: bool = False,
                  zarr_chunk_size: tuple = (1, 1, 1, 256, 256),  # (t, c, z, y, x)
-                 tiff_bigtiff: bool = True,
                  background_writes: bool = True,
                  on_write_complete: Optional[Callable[[str, int], None]] = None):
         """
@@ -135,7 +134,6 @@ class AcquisitionDataStore:
             write_tiff: Write OME-TIFF format
             write_individual_tiffs: Write individual TIFF files per position
             zarr_chunk_size: Chunk size for Zarr arrays
-            tiff_bigtiff: Use BigTIFF format
             background_writes: Enable background thread for writes
             on_write_complete: Callback(detector_name, frame_number) when write completes
         """
@@ -148,7 +146,6 @@ class AcquisitionDataStore:
         self.write_tiff = write_tiff
         self.write_individual_tiffs = write_individual_tiffs
         self.zarr_chunk_size = zarr_chunk_size
-        self.tiff_bigtiff = tiff_bigtiff
         self.background_writes = background_writes
         self.on_write_complete = on_write_complete
         
@@ -159,7 +156,6 @@ class AcquisitionDataStore:
         
         # Writers
         self._zarr_writer: Optional[WriterBase] = None
-        self._tiff_writer: Optional[WriterBase] = None
         
         # Detector contexts (writer format)
         self._detector_contexts: Dict[str, WriterDetectorContext] = {}
@@ -262,9 +258,12 @@ class AcquisitionDataStore:
             z_step_um=self.session_info.z_step_um,
         )
         
-        # Open writers
-        if self.write_zarr:
-            zarr_path = self._session_path / SessionManager.ZARR_DIR
+        # One OME-Zarr image per detector; the OME-TIFFs are exported from it at
+        # close. Without write_zarr the store is temporary.
+        if self.write_zarr or self.write_tiff:
+            zarr_path = self._session_path / (SessionManager.ZARR_DIR if self.write_zarr
+                                              else ".recording.ome.zarr")
+            self._zarr_store = zarr_path
             zarr_ctx = SessionContext(
                 session_id=session_ctx.session_id,
                 start_time=session_ctx.start_time,
@@ -279,10 +278,6 @@ class AcquisitionDataStore:
             )
             self._zarr_writer = OMEZarrWriter(zarr_ctx, chunk_size=self.zarr_chunk_size)
             self._zarr_writer.open(self._detector_contexts)
-        
-        if self.write_tiff:
-            self._tiff_writer = OMETiffWriter(session_ctx, bigtiff=self.tiff_bigtiff)
-            self._tiff_writer.open(self._detector_contexts)
         
         # Start background thread if enabled
         if self.background_writes:
@@ -383,8 +378,6 @@ class AcquisitionDataStore:
                 self._zarr_writer.write(detector_name, frame, events=[event] if event else None)
             
             # Write to TIFF
-            if self._tiff_writer:
-                self._tiff_writer.write(detector_name, frame, events=[event] if event else None)
             
             # Update statistics
             with self._lock:
@@ -457,6 +450,18 @@ class AcquisitionDataStore:
         """Get the session directory path."""
         return self._session_path
     
+    def _export_tiffs(self) -> None:
+        """One OME-TIFF per detector, exported from its OME-Zarr image."""
+        session_id = self.session_info.session_id
+        for detector_name, image in self._zarr_writer.images.items():
+            path = self._session_path / f"{session_id}_{detector_name}.ome.tiff"
+            try:
+                image.export_ome_tiff(path)
+            except Exception as e:
+                logger.error(f"OME-TIFF export for {detector_name} failed: {e}")
+        if not self.write_zarr:
+            shutil.rmtree(self._zarr_store, ignore_errors=True)
+
     def get_zarr_path(self) -> Optional[Path]:
         """Get the OME-Zarr store path."""
         if self._session_path:
@@ -488,12 +493,8 @@ class AcquisitionDataStore:
             except Exception as e:
                 logger.error(f"Error closing Zarr writer: {e}")
         
-        if self._tiff_writer:
-            try:
-                self._tiff_writer.finalize()
-                self._tiff_writer.close()
-            except Exception as e:
-                logger.error(f"Error closing TIFF writer: {e}")
+        if self._zarr_writer and self.write_tiff:
+            self._export_tiffs()
         
         # Update session info
         self.session_info.status = "completed"

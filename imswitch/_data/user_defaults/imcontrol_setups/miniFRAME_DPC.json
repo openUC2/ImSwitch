@@ -1,0 +1,405 @@
+{
+    "detectors": {
+        "WidefieldCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "HikCamManager",
+            "managerProperties": {
+                "cameraListIndex": 1,
+                "cameraEffPixelsize": 0.12,
+                "hikcam": {
+                    "exposure": 20,
+                    "gain": 0,
+                    "blacklevel": 10,
+                    "image_width": 1000,
+                    "image_height": 1000
+                }
+            },
+            "forAcquisition": true,
+            "forFocusLock": true,
+            "defaultStreamSettings": {}
+        }
+    },
+    "lasers": {
+        "LEDRing": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDLaserManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "channel_index": "LED"
+            },
+            "valueRangeMin": 0,
+            "valueRangeMax": 1023,
+            "wavelength": 635,
+            "freqRangeMin": 0,
+            "freqRangeMax": 0,
+            "freqRangeInit": 0,
+            "valueRangeStep": 1.0
+        },
+        "LED": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDLaserManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "channel_index": 4
+            },
+            "valueRangeMin": 0,
+            "valueRangeMax": 1023,
+            "wavelength": 1024,
+            "freqRangeMin": 0,
+            "freqRangeMax": 0,
+            "freqRangeInit": 0,
+            "valueRangeStep": 1.0
+        },
+        "635": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDLaserManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "channel_index": 1
+            },
+            "valueRangeMin": 0,
+            "valueRangeMax": 1023,
+            "wavelength": 635,
+            "freqRangeMin": 0,
+            "freqRangeMax": 0,
+            "freqRangeInit": 0,
+            "valueRangeStep": 1.0
+        },
+        "488": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDLaserManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "channel_index": 2
+            },
+            "valueRangeMin": 0,
+            "valueRangeMax": 1023,
+            "wavelength": 1024,
+            "freqRangeMin": 0,
+            "freqRangeMax": 0,
+            "freqRangeInit": 0,
+            "valueRangeStep": 1.0
+        }
+    },
+    "LEDs": {},
+    "LEDMatrixs": {
+        "ESP32 LEDMatrix": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDMatrixManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "Nx": 4,
+                "Ny": 4,
+                "wavelength": 488,
+                "valueRangeMin": 0,
+                "valueRangeMax": 32768
+            }
+        }
+    },
+    "positioners": {
+        "ESP32Stage": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32StageManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "isEnable": true,
+                "enableauto": false,
+                "stepsizeXDocu": "200*16 per revolution at 1.27 pitch",
+                "stepsizeX": 0.396,
+                "stepsizeY": 0.396,
+                "stepsizeA": 0.396,
+                "stepsizeZ": 0.3125,
+                "homeSpeedX": 10000,
+                "homeSpeedY": 10000,
+                "homeSpeedZ": 10000,
+                "homeSpeedA": 10000,
+                "isDualaxis": false,
+                "backlashXOld": 15,
+                "backlashYOld": 40,
+                "backlashX": 0,
+                "backlashY": 0,
+                "homeEndstoppolarityX": 1,
+                "homeEndstoppolarityY": -1,
+                "homeEndstoppolarityZ": -1,
+                "homeEndstoppolarityA": 1,
+                "homeDirectionX": -1,
+                "homeDirectionY": -1,
+                "homeDirectionZ": 1,
+                "homeDirectionA": -1,
+                "homeXenabled": 0,
+                "homeYenabled": 0,
+                "homeZenabled": 0,
+                "homeAenabled": 0,
+                "homeOnStartX": 0,
+                "homeOnStartY": 0,
+                "homeOnStartZ": 0,
+                "homeOnStartA": 0,
+                "initialSpeed": {
+                    "X": 15000,
+                    "Y": 15000,
+                    "Z": 15000,
+                    "A": 15000
+                }
+            },
+            "axes": [
+                "X",
+                "Y",
+                "Z",
+                "A"
+            ],
+            "isPositiveDirection": true,
+            "forPositioning": true,
+            "forScanning": true,
+            "resetOnClose": true,
+            "stageOffsets": {
+                "stageOffsetPositionX": -86630.08306943314,
+                "stageOffsetPositionY": -172676.22787180654,
+                "stageOffsetPositionZ": 0.0,
+                "stageOffsetPositionA": 0.0
+            }
+        }
+    },
+    "galvoScanners": {},
+    "flimLabs": null,
+    "rs232devices": {
+        "ESP32": {
+            "managerName": "ESP32Manager",
+            "managerProperties": {
+                "host_": "192.168.43.129",
+                "serialport": "/dev/ttyUSB0",
+                "baudrate": 115200,
+                "debug": true
+            }
+        }
+    },
+    "mmcoreSettings": null,
+    "slm": null,
+    "sim": null,
+    "dpc": null,
+    "objective": {
+        "pixelsizes": [
+            0.2,
+            0
+        ],
+        "NAs": [
+            0.5,
+            0
+        ],
+        "magnifications": [
+            10,
+            0
+        ],
+        "objectiveNames": [
+            "10x",
+            ""
+        ],
+        "objectivePositions": [
+            0,
+            1
+        ],
+        "zPositions": [
+            0,
+            0
+        ],
+        "homeDirection": -1,
+        "homePolarity": 1,
+        "homeSpeed": 20000,
+        "homeAcceleration": 20000,
+        "moveSpeed": 20000,
+        "calibrateOnStart": true,
+        "active": true
+    },
+    "nidaq": {
+        "timerCounterChannel": null,
+        "startTrigger": false
+    },
+    "roiscan": null,
+    "lightsheet": null,
+    "webrtc": null,
+    "hypha": null,
+    "mockxx": null,
+    "jetsonnano": null,
+    "Stresstest": null,
+    "HistoScan": null,
+    "Workflow": null,
+    "FlowStop": null,
+    "Lepmon": null,
+    "PixelCalibration": {
+        "affineCalibrations": {
+            "WidefieldCamera::0": {
+                "affine_matrix": [
+                    [
+                        -6.217068551126578,
+                        0.2822482699080428,
+                        0.0
+                    ],
+                    [
+                        0.5651880501024287,
+                        12.136675606045548,
+                        0.0
+                    ]
+                ],
+                "metrics": {
+                    "scale_x_um_per_pixel": 12.149831432343476,
+                    "scale_y_um_per_pixel": -6.22346639094897,
+                    "rotation_deg": 90.04644053935242,
+                    "rmse_um": 1.1415770737997113e-13,
+                    "quality": "manual",
+                    "method": "manual_four_point",
+                    "condition_number": 1.9522611144833126,
+                    "determinant": -75.61406757488501,
+                    "point_a1": [
+                        560.6347798711121,
+                        315.9787774950561
+                    ],
+                    "point_a2": [
+                        520.5077373931172,
+                        317.8474378787297
+                    ],
+                    "point_b1": [
+                        478.51432084637827,
+                        234.69205080525563
+                    ],
+                    "point_b2": [
+                        479.44750788075027,
+                        255.24731502566493
+                    ],
+                    "movement_distance_x_um": 1000.0,
+                    "movement_distance_y_um": 1000.0,
+                    "pixel_shift_x": [
+                        -160.50816991197962,
+                        7.474641534694456
+                    ],
+                    "pixel_shift_y": [
+                        3.732748137487988,
+                        82.2210568816372
+                    ]
+                },
+                "timestamp": "2026-09-16T13:47:24",
+                "detector_name": "WidefieldCamera",
+                "objective_id": "0"
+            }
+        },
+        "defaultAffineMatrix": [
+            [
+                1.0,
+                0.0,
+                0.0
+            ],
+            [
+                0.0,
+                1.0,
+                0.0
+            ]
+        ]
+    },
+    "experiment": null,
+    "uc2Config": null,
+    "ism": null,
+    "focusLock": {
+        "camera": "WidefieldCamera",
+        "positioner": "ESP32StageManager",
+        "updateFreq": 4,
+        "cropCenter": null,
+        "cropSize": null,
+        "piKp": null,
+        "piKi": null,
+        "focusLockMetric": null,
+        "laserName": null,
+        "laserValue": null,
+        "fovWidth": 512,
+        "fovCenter": [
+            null,
+            null
+        ],
+        "calibrationData": null,
+        "piKd": 0.0,
+        "setPoint": 0.0,
+        "fovHeight": null,
+        "scaleUmPerUnit": 100.0,
+        "minStepThreshold": 2.0,
+        "safetyMoveLimit": 50.0,
+        "safetyDistanceLimit": 500.0,
+        "safetyMotionActive": false,
+        "integralLimit": 100.0,
+        "outputLowpassAlpha": 0.0,
+        "measLowpassAlpha": 0.0
+    },
+    "arkitekt": null,
+    "sila2": null,
+    "fovLock": null,
+    "autofocus": {
+        "camera": "WidefieldCamera",
+        "positioner": "ESP32Stage",
+        "updateFreq": 10,
+        "frameCropx": 780,
+        "frameCropy": 400,
+        "frameCropw": 500,
+        "frameCroph": 100
+    },
+    "scan": null,
+    "etSTED": null,
+    "rotators": null,
+    "microscopeStand": null,
+    "storage": null,
+    "instrument": null,
+    "overviewRegistration": null,
+    "pulseStreamer": {
+        "ipAddress": null
+    },
+    "rois": {},
+    "ledPresets": {},
+    "defaultLEDPresetForScan": null,
+    "laserPresets": {},
+    "defaultLaserPresetForScan": null,
+    "availableWidgets": [
+        "Settings",
+        "View",
+        "Recording",
+        "Image",
+        "Laser",
+        "Positioner",
+        "Autofocus",
+        "MCT",
+        "UC2Config",
+        "PixelCalibration",
+        "HistoScan",
+        "Joystick",
+        "Flatfield",
+        "Histogramm",
+        "ROIScan",
+        "Objective",
+        "Experiment",
+        "LEDMatrix",
+        "DPC"
+    ],
+    "mct": {
+        "monitorIdx": 2,
+        "width": 1080,
+        "height": 1920,
+        "wavelength": 0,
+        "pixelSize": 0,
+        "angleMount": 0,
+        "patternsDirWin": "C:\\Users\\wanghaoran\\Documents\\ImSwitchConfig\\imcontrol_slm\\488\\",
+        "patternsDir": "/users/bene/ImSwitchConfig/imcontrol_sim/488"
+    },
+    "nonAvailableWidgets": [
+        "STORMRecon",
+        "imswitch_arkitekt_next",
+        "DPC",
+        "Holo",
+        "FFT",
+        "Hypha",
+        "FocusLock",
+        "HistoScan",
+        "FocusLock",
+        "FOVLock"
+    ]
+}

@@ -142,6 +142,34 @@ class RS232Info:
 
 
 @dataclass(frozen=False)
+class PeripheralInfo:
+    """ A pump or valve: the manager that drives it and its properties. """
+
+    managerName: str
+    """ Manager class name, e.g. ``LaserPumpManager`` or ``LaserValveManager``. """
+
+    managerProperties: Dict[str, Any] = field(default_factory=dict)
+    """ Properties to be read by the manager (see each manager's docstring). """
+
+
+@dataclass(frozen=False)
+class DigitalIOInfo:
+    """ Names for the UC2 board's digital lines (see ``DigitalIOManager``). """
+
+    outputs: Dict[str, int] = field(default_factory=dict)
+    """ Output name -> board output id (1..3), e.g. ``{"shutter": 1}``. """
+
+    inputs: Dict[str, int] = field(default_factory=dict)
+    """ Input name -> board input id (1..3), e.g. ``{"door": 2}``. """
+
+    invert: List[str] = field(default_factory=list)
+    """ Names of active-low lines; they read and write as logical levels. """
+
+    rs232device: str = "ESP32"
+    """ The board's ``rs232devices`` entry. """
+
+
+@dataclass(frozen=False)
 class SLMInfo:
     monitorIdx: int
     """ Index of the monitor in the system list of monitors (indexing starts at
@@ -179,6 +207,16 @@ class UC2ConfigInfo:
     firmwareServerUrl: Optional[str] = None
     """ Firmware server (serves the images + version.json). None = the
     Docker default http://host.docker.internal/firmware. """
+
+    firmwareRelease: Optional[str] = None
+    """ Take the firmware from a GitHub release of firmwareGithubRepo instead
+    of the firmware server: "latest" (newest release with images,
+    pre-releases included) or a tag such as "v2026.0.0-beta.4". None = the
+    firmware server. """
+
+    firmwareGithubRepo: Optional[str] = None
+    """ Repository whose releases firmwareRelease refers to. None =
+    youseetoo/uc2-esp32. """
 
 
 @dataclass(frozen=False)
@@ -278,6 +316,35 @@ class LightsheetInfo:
     pass
 
 
+def _opmDefaultAxisMap():
+    return {"sample.X": "X",  "sample.Z": "Y", "launch.x": "Z", "launch.z": "A"}
+
+
+@dataclass(frozen=False)
+class OPMInfo:
+    """ dvOPM digital twin (OPMController). Every field is optional. """
+
+    positioner: Optional[str] = None
+    """ Positioner for axes given without a name; default the first one. """
+
+    detector: Optional[str] = None
+    """ Camera for the scan; default the first one. """
+
+    axisMap: Dict[str, str] = field(default_factory=_opmDefaultAxisMap)
+    """ Model axis -> stage axis: "X", "-X" (opposite direction), "LaunchStage.Z" or ""
+    (set by hand). Model axes: sample.X/Y/Z, launch.x/y/z/phi_deg/focus. """
+
+    detection: Dict[str, float] = field(default_factory=dict)
+    """ Overrides of the detection model: M, alpha_deg, pixel_um (sensor pitch times
+    binning), sensor_tilted_mm, sensor_flat_mm. """
+
+    dish: Dict[str, float] = field(default_factory=dict)
+    """ Overrides of the dish model: n_glass, t_glass_mm, G0_mm. """
+
+    tiltedAxis: int = 0
+    """ Image axis along the tilted sensor direction: 0 rows, 1 columns. """
+
+
 @dataclass(frozen=False)
 class GalvoScannerInfo(DeviceInfo):
     """
@@ -341,20 +408,11 @@ class WebRTCInfo:
     pass
 
 @dataclass(frozen=False)
-class HyphaInfo:
-    pass
-
-@dataclass(frozen=False)
 class MockXXInfo:
     pass
 
 @dataclass(frozen=False)
 class JetsonNanoInfo:
-    pass
-
-@dataclass(frozen=False)
-class HistoScanInfo:
-    PreviewCamera: str = None
     pass
 
 @dataclass(frozen=False)
@@ -872,6 +930,24 @@ class SetupInfo:
     snap), add a ``FLIMLabsDetectorManager`` entry under ``detectors`` instead —
     see that manager's docstring for the property list. """
 
+    pumps: Dict[str, PeripheralInfo] = field(default_factory=dict)
+    """ Pumps by name: ``LaserPumpManager`` (speed as a PWM value on a laser channel),
+    ``PositionerPumpManager`` (a stepper axis of a positioner), ``VirtualPumpManager``.
+    Volumes in µL, rates in µL/min; Aufgaben jobs drive them with pump_volume / pump_run. """
+
+    valves: Dict[str, PeripheralInfo] = field(default_factory=dict)
+    """ Valves by name: ``LaserValveManager`` (a PWM value per position on a laser
+    channel), ``DigitalOutValveManager`` (board outputs), ``VirtualValveManager``;
+    ``managerProperties.positions`` names the positions a job can switch to. """
+
+    aufgaben: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
+    """ Aufgaben options. ``{"allowScripts": true}`` offers the python_script and
+    external_process steps (unsandboxed code; a run with them must be confirmed). """
+
+    digitalIO: Optional[DigitalIOInfo] = field(default_factory=lambda: None)
+    """ Names for the board's digital outputs and inputs; without it jobs use the
+    raw lines "1".."3". """
+
     rs232devices: Dict[str, RS232Info] = field(default_factory=dict)
     """ RS232 connections in this setup. This is a map from unique RS232
     connection names to RS232Info objects. Some detector/laser/positioner
@@ -904,11 +980,11 @@ class SetupInfo:
     lightsheet: Optional[LightsheetInfo] = field(default_factory=lambda: None)
     """ lighthseet settings. Required to be defined to use Lightsheet functionality. """
 
+    opm: Optional[OPMInfo] = field(default_factory=lambda: None)
+    """ dvOPM digital twin settings (OPMController); defaults apply when missing. """
+
     webrtc: Optional[WebRTCInfo] = field(default_factory=lambda: None)
     """ WebRTC settings. Required to be defined to use WebRTC functionality. """
-
-    hypha: Optional[HyphaInfo] = field(default_factory=lambda: None)
-    """ Hypha settings. Required to be defined to use Hypha functionality. """
 
     mockxx: Optional[MockXXInfo] = field(default_factory=lambda: None)
     """ MockXX settings. Required to be defined to use MockXX functionality."""
@@ -918,9 +994,6 @@ class SetupInfo:
 
     Stresstest: Optional[StresstestInfo] = field(default_factory=lambda: None)
     """ Stresstest settings. Required to be defined to use Stresstest functionality. """
-
-    HistoScan: Optional[HistoScanInfo] = field(default_factory=lambda: None)
-    """ HistoScan settings. Required to be defined to use HistoScan functionality. """
 
     Workflow: Optional[WorkflowInfo] = field(default_factory=lambda: None)
     """ Workflow settings. Required to be defined to use Workflow functionality. """

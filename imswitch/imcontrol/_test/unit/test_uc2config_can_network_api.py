@@ -62,7 +62,9 @@ def make_controller(controllers=None, positioners=None, scan=None):
 def test_routes_delegate_and_keep_their_shapes():
     c = make_controller(scan={"master": {"canId": 1}, "scan": [
         {"canId": 12, "deviceTypeStr": "motor", "statusStr": "idle"}]})
-    assert c.getOTAFirmwareServer() == {"firmware_server_url": "http://fw/firmware"}
+    assert c.getOTAFirmwareServer() == {"source": "local", "firmware_server_url": "http://fw/firmware",
+                                        "github_repo": "youseetoo/uc2-esp32",
+                                        "github_release": None}
     assert c.get_canbus_devices() == [12]
     assert c.getOTADeviceMapping()["mapping"]["motors"]["Y"] == 12
     assert c.getUSBFlashStatus()["status"] == "idle"

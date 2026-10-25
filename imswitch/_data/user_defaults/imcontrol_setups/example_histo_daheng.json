@@ -123,9 +123,6 @@
           "h":1200
        }
     },
-    "HistoScan":{
-       "PreviewCamera1":"ESP32Cam"
-    },
     "autofocus":{
        "camera":"WidefieldCamera",
        "positioner":"ESP32Stage",
@@ -197,17 +194,13 @@
        "UC2Config",
        "ImSwitchServer",
        "PixelCalibration",
-       "HistoScan",
-       "Hypha",
        "LEDMatrix",
-       "Joystick",
-       "ROIScan"
+       "Joystick"
     ],
     "nonAvailableWidgets":[
        "STORMRecon",
        "DPC",
        "FocusLock",
-       "HistoScan",
        "FocusLock"
     ]
  }

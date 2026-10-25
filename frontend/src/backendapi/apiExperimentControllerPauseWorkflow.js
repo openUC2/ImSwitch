@@ -1,29 +1,17 @@
-// src/api/apiExperimentControllerPauseWorkflow.js
+// src/backendapi/apiExperimentControllerPauseWorkflow.js
 import createAxiosInstance from "./createAxiosInstance";
 
+// Pauses a running ExperimentController run (normal mode). The backend answers
+// 200 with {status: "error", message} when it cannot pause (performance mode,
+// nothing running), so that case is turned into a rejection for the caller.
 const apiExperimentControllerPauseWorkflow = async () => {
-  try {
-    const axiosInstance = createAxiosInstance(); // Create Axios instance
-    const response = await axiosInstance.get("/WorkflowController/pause_workflow"); // Send GET request
-    return response.data; // Return the data from the response
-  } catch (error) {
-    console.error("Error pausing workflow:", error);
-    throw error; // Throw error to be handled by the caller
+  const axiosInstance = createAxiosInstance();
+  const response = await axiosInstance.get("/ExperimentController/pauseWorkflow");
+  const data = response.data;
+  if (data && data.status === "error") {
+    throw new Error(data.message || "Experiment could not be paused");
   }
+  return data;
 };
 
 export default apiExperimentControllerPauseWorkflow;
-
-/*
-// Example usage:
-
-const pauseWorkflow = () => {
-  apiExperimentControllerPauseWorkflow()
-    .then((data) => {
-      setWorkflowStatus(data); // Handle success response
-    })
-    .catch((err) => {
-      setError("Failed to pause workflow"); // Handle the error
-    });
-};
-*/

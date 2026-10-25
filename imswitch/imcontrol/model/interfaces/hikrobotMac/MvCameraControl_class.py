@@ -1,6 +1,7 @@
 # -- coding: utf-8 --
 
 import ctypes
+import os
 
 from ctypes import *
 from imswitch.imcontrol.model.interfaces.hikrobotMac.CameraParams_const import *
@@ -33,6 +34,9 @@ elif platform == "darwin":
         #   CONDA_SUBDIR=osx-64 mamba create -n intel_env python=3.11
         #   conda activate intel_env && conda config --env --set subdir osx-64
         #   pip install -e . && arch -x86_64 python main.py
+        # MVS SDK >= 4.7 ships a universal framework (native arm64, no Rosetta needed);
+        # the old x86_64-only /Library/MVS_SDK layout is the fallback.
+        _framework = "/Library/Frameworks/MvCameraControl.framework/MvCameraControl"
         _sdk_lib_dir = "/Library/MVS_SDK/lib/"
         # Load in dependency order: low-level → GenApi → transport → main SDK
         _sdk_deps = [
@@ -49,13 +53,15 @@ elif platform == "darwin":
             "libMVGigEVisionSDK.dylib",
             "libMVU3VisionSDK.dylib",
         ]
-        for _dep in _sdk_deps:
+        _legacy = os.path.isdir(_sdk_lib_dir) and not os.path.exists(_framework)
+        for _dep in _sdk_deps if _legacy else []:
             try:
                 ctypes.CDLL(_sdk_lib_dir + _dep, ctypes.RTLD_GLOBAL)
             except OSError as e:
                 print(f"HIK SDK dep load warning: {_dep}: {e}")
 
         _mv_lib_paths = [
+            _framework,
             "/Library/MVS_SDK/lib/libMvCameraControl.dylib",
             "/usr/local/lib/libMvCameraControl.dylib",
         ]

@@ -205,9 +205,9 @@ const ExperimentComponent = () => {
         // English comment: 'data' should contain the relative path like "/recordings/...ome.zarr"
         const lastZarrPath = data || "";
         // English comment: build the final URL for VTK viewer
-        // Determine protocol based on current page or use http as default for local development
-        const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
-        const viewerURL = `https://hms-dbmi.github.io/vizarr/?source=${protocol}://${connectionSettingsState.ip}:${connectionSettingsState.apiPort}/imswitch/data${lastZarrPath}`;
+        // connectionSettingsState.ip already carries the protocol
+        const source = `${connectionSettingsState.ip}:${connectionSettingsState.apiPort}/imswitch/data${lastZarrPath}`;
+        const viewerURL = `https://hms-dbmi.github.io/vizarr/?source=${encodeURIComponent(source)}`;
         console.log("Opening Vizarr with URL:", viewerURL);
         window.open(viewerURL, "_blank");
       })

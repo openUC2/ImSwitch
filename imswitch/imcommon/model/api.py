@@ -4,19 +4,32 @@ from imswitch.imcommon.framework import Mutex, Signal, SignalInterface
 
 
 class APIExport:
-    """ Decorator for methods that should be exported to API. """
+    """ Decorator for methods that should be exported to API.
 
-    def __init__(self, *, runOnUIThread=False, asyncExecution=False, requestType="GET"):
+    ``runInThreadpool``: run a synchronous GET export in the server's worker
+    threadpool instead of on its asyncio event loop. Synchronous GET exports
+    run on the event loop by default, so while one of them blocks, the whole
+    HTTP server (and the Socket.IO stream on the same loop) stands still. Set
+    this on GET exports that can block for long, e.g. a snap that waits out a
+    camera exposure. Synchronous POST exports always run in the threadpool and
+    ``asyncExecution`` exports are awaited on the loop; the flag changes
+    neither.
+    """
+
+    def __init__(self, *, runOnUIThread=False, asyncExecution=False, requestType="GET",
+                 runInThreadpool=False):
         self._APIExport = True
         self._APIRunOnUIThread = runOnUIThread
         self._APIAsyncExecution = asyncExecution
         self._APIRequestType = requestType
+        self._APIRunInThreadpool = runInThreadpool
 
     def __call__(self, func):
         func._APIExport = self._APIExport
         func._APIRunOnUIThread = self._APIRunOnUIThread
         func._APIAsyncExecution = self._APIAsyncExecution
         func._APIRequestType = self._APIRequestType
+        func._APIRunInThreadpool = self._APIRunInThreadpool
         return func
 
 

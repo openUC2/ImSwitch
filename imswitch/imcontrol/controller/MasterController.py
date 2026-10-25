@@ -43,6 +43,7 @@ from imswitch.imcontrol.model import (
 
 # New unified I/O service
 from imswitch.imcontrol.model.io import RecordingService
+from imswitch.imcontrol.model.managers.detectors.DetectorManager import getDetectorExposureMs
 
 
 class MasterController:
@@ -268,11 +269,9 @@ class MasterController:
                 )
                 
                 # Try to get additional properties if available
-                try:
-                    if hasattr(detector, 'parameters') and 'exposure' in detector.parameters:
-                        context.exposure_ms = detector.parameters['exposure'].value
-                except Exception:
-                    pass
+                exposure_ms = getDetectorExposureMs(detector)
+                if exposure_ms > 0:
+                    context.exposure_ms = exposure_ms
                 
                 try:
                     if hasattr(detector, 'parameters') and 'gain' in detector.parameters:

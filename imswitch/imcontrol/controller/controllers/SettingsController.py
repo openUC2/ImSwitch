@@ -1,6 +1,6 @@
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Optional, Tuple
 
-import numpy as np
+from fastapi import Query
 from pydantic import BaseModel
 
 from imswitch.imcommon.model import APIExport
@@ -12,6 +12,55 @@ class SetDetectorParameterRequest(BaseModel):
     detectorName: Optional[str] = None
     name: str
     value: Any
+
+
+# Sensors want ROI offsets and sizes in multiples of this many pixels.
+_ROI_ALIGNMENT = 4
+
+
+def computeCropWindow(fullShape, frameStart, shape,
+                      alignment: int = _ROI_ALIGNMENT) -> Tuple[int, int, int, int]:
+    """ Validate an ROI against the full frame and align it for the sensor.
+
+    ``fullShape`` is ``(width, height)`` of the full frame, ``frameStart`` is
+    ``(x0, y0)`` and ``shape`` is ``(width, height)`` of the requested region,
+    all in the same pixels. Returns ``(hpos, vpos, hsize, vsize)`` for
+    ``DetectorManager.crop()``: the region widened outwards to multiples of
+    ``alignment`` and clipped to the frame, so it always contains the request
+    and never leaves the sensor. A size that ends at the sensor edge is kept as
+    is even if it is not a multiple of ``alignment``.
+
+    Raises ValueError if the region is malformed, empty or not inside the
+    full frame.
+    """
+    try:
+        fullWidth, fullHeight = (int(v) for v in fullShape[:2])
+        x0, y0 = (int(v) for v in frameStart)
+        width, height = (int(v) for v in shape)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f'frameStart and shape must be two integers each, got {frameStart!r} and {shape!r}'
+        )
+    if width <= 0 or height <= 0:
+        raise ValueError(f'ROI size must be positive, got {width}x{height}')
+    if x0 < 0 or y0 < 0:
+        raise ValueError(f'ROI start must not be negative, got ({x0}, {y0})')
+    if x0 + width > fullWidth or y0 + height > fullHeight:
+        raise ValueError(
+            f'ROI ({x0}, {y0}) {width}x{height} does not fit the full frame '
+            f'{fullWidth}x{fullHeight}'
+        )
+
+    step = max(1, int(alignment))
+
+    def align(start, size, limit):
+        lo = (start // step) * step
+        hi = min(-(-(start + size) // step) * step, limit)
+        return lo, hi - lo
+
+    hpos, hsize = align(x0, width, fullWidth)
+    vpos, vsize = align(y0, height, fullHeight)
+    return hpos, vpos, hsize, vsize
 
 
 class SettingsController(ImConWidgetController):
@@ -582,22 +631,71 @@ class SettingsController(ImConWidgetController):
         }
 
     @APIExport(runOnUIThread=True)
-    def setDetectorROI(self, detectorName: str, frameStart: Tuple[int, int],
-                       shape: Tuple[int, int]) -> None:
-        """ Sets the ROI for the specified detector. frameStart is a tuple
-        (x0, y0) and shape is a tuple (width, height). """
+    def setDetectorROI(self, detectorName: Optional[str] = None,
+                       frameStart: Annotated[Optional[Tuple[int, int]], Query()] = None,
+                       shape: Annotated[Optional[Tuple[int, int]], Query()] = None,
+                       fullFrame: bool = False) -> Dict[str, Any]:
+        """ Crops the detector read-out to a region of interest.
 
-        detector = self._master.detectorsManager[detectorName]
-        binning = int(detector.binning or 1)
+        ``frameStart`` is ``(x0, y0)`` and ``shape`` is ``(width, height)``, in
+        pixels of the detector's full frame (``fullShape`` in
+        ``getCameraStatus``: ``sensorWidth`` x ``sensorHeight``). Cameras whose
+        full frame shrinks with binning (Hik, Toupcam, Allied Vision) take
+        binned pixels. The window is widened to multiples of 4, which sensors
+        need, and clipped to the sensor edge; it always contains the requested
+        region. ``fullFrame=true``, or leaving out both ``frameStart`` and
+        ``shape``, restores the full sensor.
 
-        def up4(v):   # sensors want offsets and sizes in multiples of 4
-            return int(4 * np.ceil(binning * v / 4))
+        Over HTTP each tuple is passed as a repeated query parameter::
 
-        detector.crop(up4(frameStart[0]), up4(frameStart[1]), up4(shape[0]), up4(shape[1]))
+            GET /api/SettingsController/setDetectorROI?frameStart=100&frameStart=200&shape=512&shape=512
+            GET /api/SettingsController/setDetectorROI?fullFrame=true
+
+        Returns ``status`` ("ok"/"error"), the ``frameStart`` and ``shape``
+        the detector reports after cropping, and its ``fullShape``.
+        """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+
+        def error(message):
+            self._logger.warning(f"setDetectorROI({detectorName}): {message}")
+            return {'status': 'error', 'detectorName': detectorName, 'error': message}
+
+        try:
+            detector = self._master.detectorsManager[detectorName]
+        except Exception:
+            return error(f'Unknown detector "{detectorName}"')
+        if not detector.croppable:
+            return error('Detector does not support cropping')
+
+        fullShape = (int(detector.fullShape[0]), int(detector.fullShape[1]))
+        if fullFrame or (frameStart is None and shape is None):
+            window = (0, 0, fullShape[0], fullShape[1])
+        elif frameStart is None or shape is None:
+            return error('Pass both frameStart and shape, or fullFrame=true')
+        else:
+            try:
+                window = computeCropWindow(fullShape, frameStart, shape)
+            except ValueError as e:
+                return error(str(e))
+
+        try:
+            detector.crop(*window)
+        except Exception as e:
+            self._logger.error(f"Cropping '{detectorName}' to {window} failed", exc_info=True)
+            return error(f'Crop failed: {e}')
+
         if detectorName == self._master.detectorsManager.getCurrentDetectorName():
             self._commChannel.sigAdjustFrame.emit(detector.shape)
         self.updateSharedAttrs()
         self._emit_detector_parameters_if_changed(force=True)
+        return {
+            'status': 'ok',
+            'detectorName': detectorName,
+            'frameStart': [int(v) for v in detector.frameStart[:2]],
+            'shape': [int(v) for v in detector.shape[:2]],
+            'fullShape': list(fullShape),
+        }
 
     def _coerceDetectorParamValue(self, detectorName: str, parameterName: str, value: Any) -> Any:
         """Convert a query-string value to the type the detector declares.

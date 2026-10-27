@@ -2,8 +2,8 @@
 
 One check for everything that must not start while something else runs: an
 Aufgaben job, an experiment, a recording, a workflow, the stage map or its
-prescan, a focus-lock calibration, Arkitekt actions, an unattended firmware
-update. A check that fails is logged and does not block.
+prescan, a focus-lock calibration, an SLM sequence acquisition, Arkitekt
+actions, an unattended firmware update. A check that fails is logged and does not block.
 """
 BUSY_STATES = ("running", "paused", "stopping")
 
@@ -26,6 +26,7 @@ CHECKS = {
     "StageMap": ("the stage map or its prescan is running", lambda c: c.isStageMapBusy()),
     "FocusLock": ("a focus-lock calibration is running", lambda c: c.isCalibrationRunning()),
     "OPM": ("an OPM scan is running", lambda c: c.isOPMScanRunning()),
+    "SLM": ("an SLM sequence acquisition or calibration is running", lambda c: c.isSLMBusy()),
 }
 
 

@@ -165,9 +165,14 @@
             }
         }
     },
-    "slm": null,
-    "sim": null,
-    "dpc": null,
+    "slm": {
+    "display": "framebuffer",
+    "displayIndex": 0,
+    "width": 1920,
+    "height": 1080,
+    "settleTimeMs": 50,
+    "calibrationDetector": null
+    },
     "objective": {
         "pixelsizes": [
             1.0,
@@ -397,7 +402,7 @@
         "InLineHolo",
         "Temperature",
         "I2CSensor",
-        "Aufgaben", "StageMap", "OPM"
+        "Aufgaben", "StageMap", "OPM", "SLM"
     ],
     "nonAvailableWidgets": [
         "STORMRecon",

@@ -621,6 +621,7 @@ Present only when the setup enables them. Discover with `getAvailableControllers
 | `LightsheetController` | Light-sheet scanning |
 | `OPMController` | dvOPM digital twin (`model/opm`, model axes linked to stage axes by setup `opm.axisMap`; `moveOPMAxes(virtual=True)` shifts the drawing onto the real sheet without moving, `setOPMReference` resets it), launch ray trace, sample-X stage scan placed by the measured speed and camera frame counter, optional deskew. `moveOPMAxes` / `setOPMMedium` move linked axes: **ask first** on hardware; `force=True` skips only the twin's own travel check, never the stage's soft limits |
 | `GalvoScannerController` | Galvo scanning, incl. FLIM Labs bridge |
+| `SLMController` | SLM / DMD on an external display conjugate to the sample (`docs/SLM.md`): `showSLMPattern` / `showSLMImage` / `showSLMCameraMask` (mask drawn over the camera, warped with the camera→display affine), `runSLMAutoCalibration` / `computeSLMAffine`, `uploadSLMSequence` + `startSLMSequenceAcquisition` (one software-triggered camera frame per pattern, OME-TIFF). On hardware every `show*` is illumination: **ask first** like a laser |
 | `FLIMLabsController` | FLIM acquisition |
 | `FlowStopController` | Flow-cell / imaging-flow-cytometry |
 | `PixelCalibrationController`, `StageCenterCalibrationController` | Pixel size and stage/camera affine calibration |

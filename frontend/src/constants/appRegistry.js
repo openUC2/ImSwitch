@@ -30,6 +30,7 @@ import {
   Psychology as PsychologyIcon,
   Map as MapIcon,
   AccountTree as AccountTreeIcon,
+  Texture as TextureIcon,
 } from "@mui/icons-material";
 
 /**
@@ -198,6 +199,21 @@ export const APP_REGISTRY = {
     essential: false,
     keywords: ["galvo", "scanner", "laser", "scanning", "mirrors", "imaging"],
     pluginId: "GalvoScannerController",
+  },
+
+  // SLMController
+  slm: {
+    id: "slm",
+    name: "SLM / DMD",
+    description:
+      "Spatial light modulator or DMD on an external display conjugate to the sample: static patterns, light where you draw on the camera image, camera-display calibration and pattern sequences synchronised with the camera.",
+    category: APP_CATEGORIES.APPS,
+    icon: TextureIcon,
+    enabled: false,
+    essential: false,
+    keywords: ["slm", "dmd", "pattern", "structured", "illumination", "photostimulation", "projector", "display"],
+    pluginId: "SLM",
+    requiredControllers: ["SLMController"],
   },
 
   stormLocal: {

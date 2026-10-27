@@ -470,6 +470,31 @@ const SettingsMenu = ({ onNavigate }) => {
           />
         </MenuItem>
 
+        {/* Laser Settings - firmware PWM parameters per laser */}
+        <MenuItem
+          onClick={() => handleNavigationClick("LaserSettings")}
+          disabled={!allowAccess}
+          sx={{
+            opacity: allowAccess ? 1 : 0.5,
+            "&.Mui-disabled": {
+              opacity: 0.5,
+            },
+          }}
+        >
+          <ListItemIcon>
+            <Tune
+              fontSize="small"
+              color={allowAccess ? "inherit" : "disabled"}
+            />
+          </ListItemIcon>
+          <ListItemText
+            primary="Laser Settings"
+            secondary={
+              allowAccess ? "PWM max value, resolution, frequency" : "Requires backend connection"
+            }
+          />
+        </MenuItem>
+
         {/* ImSwitch Backend Settings */}
         <MenuItem
           onClick={() => handleNavigationClick("UC2")}

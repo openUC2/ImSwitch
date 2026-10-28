@@ -748,7 +748,7 @@ class UC2CANOpenStageManager(PositionerManager):
     def register_stagescan_callback(self, on_stagescan_complete_fct):
         self._stagescan_callback = on_stagescan_complete_fct
 
-    def unregister_stagescan_callback(self):
+    def unregister_stagescan_callback(self, on_stagescan_complete_fct=None):
         self._stagescan_callback = None
 
     def reset_stagescan_complete(self):

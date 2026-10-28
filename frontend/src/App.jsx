@@ -8,7 +8,6 @@ import useDeviceProfile from "./hooks/useDeviceProfile";
 import TouchKeypadHost from "./components/touch/TouchKeypadHost.jsx";
 
 import AboutPage from "./components/AboutPage.js";
-import BlocklyController from "./components/BlocklyController.js";
 import ConnectionSettings from "./components/ConnectionSettings.jsx";
 import DesktopAppSettings from "./components/DesktopAppSettings.jsx";
 import DetectorTriggerController from "./components/DetectorTriggerController.js";
@@ -27,13 +26,11 @@ import LightsheetController from "./components/LightsheetController.jsx";
 import LiveView from "./components/LiveView.js";
 import MazeGameController from "./components/MazeGameController.js";
 import MotorSettingsController from "./components/MotorSettingsController.jsx";
+import LaserSettingsController from "./components/LaserSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
-import LargeFovScanController from "./components/OpenLayers.js";
 import SocketView from "./components/SocketView.js";
 import MMCoreController from "./components/MMCoreController.jsx";
 
-import TimelapseController from "./components/TimelapseController.js";
-import STORMControllerArkitekt from "./components/STORMControllerArkitekt.js";
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
 import STORMControllerLocal from "./components/STORMControllerLocal.js";
 import StresstestController from "./components/StresstestController.js";
@@ -48,9 +45,12 @@ import { JupyterProvider } from "./context/JupyterContext.js";
 import { PWAProvider } from "./context/PWAContext.js";
 import DemoController from "./components/DemoController.js";
 import StageMapController from "./components/StageMapController.jsx";
+import OPMController from "./components/OPMController.jsx";
+import AufgabenController from "./components/aufgaben/AufgabenController.jsx";
 import ArkitektController from "./components/ArkitektController.jsx";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
 import GalvoScannerController from "./components/GalvoScannerController.jsx";
+import SLMController from "./components/SLMController.jsx";
 import ShitScopeComponent from "./components/ShitScopeComponent.js";
 
 // ImSwitch Navigation Drawer
@@ -770,6 +770,7 @@ function App() {
               {selectedPlugin === "GalvoScannerController" && (
                 <GalvoScannerController />
               )}
+              {selectedPlugin === "SLM" && <SLMController />}
               {selectedPlugin === "ShitScope" && (
                 <ShitScopeComponent
                   onOpenFileManager={handleFileManagerInitialPathChange}
@@ -779,9 +780,6 @@ function App() {
                 <ImJoyView sharedImage={sharedImage} />
               )}
               {selectedPlugin === "STORMLocal" && <STORMControllerLocal />}
-              {selectedPlugin === "STORMArkitekt" && (
-                <STORMControllerArkitekt />
-              )}
               {selectedPlugin === "FRAMESettings" && (
                 <FRAMESettingsController />
               )}
@@ -806,15 +804,14 @@ function App() {
               {selectedPlugin === "GoniometerController" && (
                 <GoniometerController />
               )}
-              {selectedPlugin === "Infinity Scanning" && (
-                <LargeFovScanController />
-              )}
-              {selectedPlugin === "Blockly" && <BlocklyController />}
               {selectedPlugin === "Objective" && <ObjectiveController />}
               {selectedPlugin === "About" && <AboutPage />}
               {selectedPlugin === "SystemSettings" && <SystemSettings />}
               {selectedPlugin === "MotorSettings" && (
                 <MotorSettingsController />
+              )}
+              {selectedPlugin === "LaserSettings" && (
+                <LaserSettingsController />
               )}
               {selectedPlugin === "FileManager" && (
                 <div
@@ -866,7 +863,6 @@ function App() {
                 <AppManagerPage onNavigateToApp={handlePluginChange} />
               )}
               {selectedPlugin === "LightSheet" && <LightsheetController />}
-              {selectedPlugin === "Timelapse" && <TimelapseController />}
               {selectedPlugin === "MMCore" && <MMCoreController />}
 
               {selectedPlugin === "WiFi" && <WiFiController />}
@@ -880,6 +876,8 @@ function App() {
               )}
               {selectedPlugin === "DemoController" && <DemoController />}
               {selectedPlugin === "StageMap" && <StageMapController />}
+              {selectedPlugin === "OPM" && <OPMController />}
+              {selectedPlugin === "Aufgaben" && <AufgabenController />}
               {selectedPlugin === "Arkitekt" && <ArkitektController />}
               {selectedPlugin === "CompositeAcquisition" && (
                 <CompositeAcquisitionComponent />

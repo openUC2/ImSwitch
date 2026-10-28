@@ -7,12 +7,12 @@ import threading
 from datetime import datetime
 from dataclasses import dataclass, asdict
 from typing import Optional, Dict, Any, Tuple
-import tifffile as tif
 import cv2
 
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.framework import Signal
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 
 
 pi    = np.pi
@@ -715,13 +715,13 @@ class DPCProcessor(object):
 
                 # Save qDPC reconstruction
                 filename_recon = os.path.join(self.save_directory, f"{date}_DPC_Reconstruction.tif")
-                tif.imwrite(filename_recon, qdpc_result)
+                save_image(filename_recon, qdpc_result, name="qDPC reconstruction")
 
                 # Save gradient images
                 filename_lr = os.path.join(self.save_directory, f"{date}_DPC_LeftRight.tif")
                 filename_tb = os.path.join(self.save_directory, f"{date}_DPC_TopBottom.tif")
-                tif.imwrite(filename_lr, dpc_result_2.astype(np.float32))
-                tif.imwrite(filename_tb, dpc_result_1.astype(np.float32))
+                save_image(filename_lr, dpc_result_2.astype(np.float32), name="DPC left-right")
+                save_image(filename_tb, dpc_result_1.astype(np.float32), name="DPC top-bottom")
 
                 self._logger.info(f"Saved DPC results to {self.save_directory}")
 

@@ -50,8 +50,6 @@ import * as usbFlashSlice from "../state/slices/usbFlashSlice";
 // API functions
 import apiUC2ConfigControllerListSerialPorts from "../backendapi/apiUC2ConfigControllerListSerialPorts";
 import apiUC2ConfigControllerFlashMasterFirmwareUSB from "../backendapi/apiUC2ConfigControllerFlashMasterFirmwareUSB";
-import apiUC2ConfigControllerGetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerGetOTAFirmwareServer";
-import apiUC2ConfigControllerSetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerSetOTAFirmwareServer";
 import apiUC2ConfigControllerListAllFirmwareFiles from "../backendapi/apiUC2ConfigControllerListAllFirmwareFiles";
 import apiUC2ConfigControllerSendCanAddress from "../backendapi/apiUC2ConfigControllerSendCanAddress";
 import apiUC2ConfigControllerProbeDeviceState from "../backendapi/apiUC2ConfigControllerProbeDeviceState";
@@ -59,6 +57,7 @@ import apiUC2ConfigControllerTestDeviceAction from "../backendapi/apiUC2ConfigCo
 import apiUC2ConfigControllerCancelUSBFlash from "../backendapi/apiUC2ConfigControllerCancelUSBFlash";
 import apiUC2ConfigControllerGetRecommendedFirmware from "../backendapi/apiUC2ConfigControllerGetRecommendedFirmware";
 import { FIRMWARE_STATUS, firmwareUpdateStatus } from "./firmwareStatus";
+import FirmwareSourcePicker, { applyFirmwareSource, loadFirmwareSource } from "./FirmwareSourcePicker";
 
 // Firmware filenames that ship the *master* (CAN HAT) image. When the user
 // picks one of these we should disconnect ImSwitch first and reconnect after.
@@ -68,7 +67,7 @@ const isMasterFirmwareName = (filename) =>
   !!filename && MASTER_FIRMWARE_REGEX.test(filename);
 
 const steps = [
-  "Firmware Server",
+  "Firmware Source",
   "Select Firmware",
   "Port & Options",
   "Flash Device",
@@ -109,11 +108,14 @@ const getDeviceHint = (port) => {
 /**
  * USB Flash Wizard Component
  * Wizard for flashing ESP32 firmware via USB/esptool.
- * The user configures the firmware server, picks any .bin file, selects a port, then flashes.
+ * The user picks the firmware source (local server or GitHub release), any .bin file, a
+ * port, then flashes.
  */
 const UsbFlashWizard = ({ open, onClose }) => {
   const dispatch = useDispatch();
   const usbFlashState = useSelector(usbFlashSlice.getUsbFlashState);
+
+  const [firmwareSource, setFirmwareSource] = React.useState(null); // see FirmwareSourcePicker
 
   // Local UI state for the device validation panel (completion step)
   const [testBaud, setTestBaud] = React.useState(115200);
@@ -153,49 +155,46 @@ const UsbFlashWizard = ({ open, onClose }) => {
 
   const loadInitialData = async () => {
     try {
-      // Load firmware server URL from backend
-      const firmwareServer = await apiUC2ConfigControllerGetOTAFirmwareServer();
-      dispatch(usbFlashSlice.setFirmwareServerUrl(firmwareServer.firmware_server_url || ""));
-      dispatch(usbFlashSlice.setDefaultFirmwareServerUrl(firmwareServer.firmware_server_url || ""));
+      setFirmwareSource(await loadFirmwareSource());
     } catch (error) {
       console.error("Error loading initial data:", error);
       dispatch(usbFlashSlice.setError("Failed to load firmware server configuration"));
     }
   };
 
-  // --- Firmware server ---
+  // --- Firmware source ---
+  // Make the backend use the chosen source, then list its images. true when
+  // the list loaded.
   const handleLoadFirmwareFiles = async () => {
     try {
       dispatch(usbFlashSlice.setIsLoadingFirmware(true));
       dispatch(usbFlashSlice.clearMessages());
 
-      // Save server URL to backend first
-      if (usbFlashState.firmwareServerUrl) {
-        try {
-          await apiUC2ConfigControllerSetOTAFirmwareServer(usbFlashState.firmwareServerUrl);
-        } catch (_) {
-          // Non-fatal - the URL might already be set
-        }
+      const applied = await applyFirmwareSource(firmwareSource);
+      if (applied?.status !== "success") {
+        dispatch(usbFlashSlice.setError(applied?.message || "The firmware source did not answer"));
+        return false;
       }
 
       const result = await apiUC2ConfigControllerListAllFirmwareFiles();
       if (result.status === "success") {
         dispatch(usbFlashSlice.setFirmwareFiles(result.files || []));
         if (!result.files || result.files.length === 0) {
-          dispatch(usbFlashSlice.setError("No .bin firmware files found on the server"));
+          dispatch(usbFlashSlice.setError("No .bin firmware files found"));
         } else if (!usbFlashState.detectPort) {
           // Reading the board ImSwitch is connected to opens no port: do it unasked
           detectBoard("", { replaceSelection: false });
         }
-      } else {
-        dispatch(usbFlashSlice.setError(result.message || "Failed to load firmware list"));
+        return true;
       }
+      dispatch(usbFlashSlice.setError(result.message || "Failed to load firmware list"));
     } catch (error) {
       console.error("Error loading firmware files:", error);
-      dispatch(usbFlashSlice.setError("Failed to load firmware list from server"));
+      dispatch(usbFlashSlice.setError(`Failed to load the firmware list: ${error.message}`));
     } finally {
       dispatch(usbFlashSlice.setIsLoadingFirmware(false));
     }
+    return false;
   };
 
   // --- Board identification ---
@@ -242,12 +241,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
     dispatch(usbFlashSlice.clearMessages());
 
     if (step === 0) {
-      // Firmware server - validate URL and load files
-      if (!usbFlashState.firmwareServerUrl) {
-        dispatch(usbFlashSlice.setError("Please enter a firmware server URL"));
-        return;
-      }
-      await handleLoadFirmwareFiles();
+      // Firmware source - apply it and load the files
+      if (!(await handleLoadFirmwareFiles())) return;
     } else if (step === 1) {
       // Select firmware - validate selection
       if (!usbFlashState.selectedFirmware) {
@@ -512,37 +507,26 @@ const UsbFlashWizard = ({ open, onClose }) => {
     }
   };
 
-  // --- Step 0: Firmware Server ---
+  // --- Step 0: Firmware Source ---
   const renderFirmwareServer = () => (
     <Box sx={{ mt: 2 }}>
       <Typography variant="h6" gutterBottom>
         <DownloadIcon sx={{ mr: 1, verticalAlign: "middle" }} />
-        Firmware Server Configuration
+        Firmware Source
       </Typography>
       <Typography variant="body2" color="text.secondary" gutterBottom>
-        Enter the URL of the firmware server that hosts the .bin files.
+        Take the .bin files from the local firmware server or from a GitHub release.
       </Typography>
 
       <Box sx={{ mt: 3 }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <TextField
-            fullWidth
-            label="Firmware Server URL"
-            value={usbFlashState.firmwareServerUrl}
-            onChange={(e) => dispatch(usbFlashSlice.setFirmwareServerUrl(e.target.value))}
-            margin="normal"
-            placeholder="https://example.com/firmware/latest"
-            helperText={
-              usbFlashState.defaultFirmwareServerUrl
-                ? "Default: " + usbFlashState.defaultFirmwareServerUrl
-                : "Set the URL where firmware .bin files are hosted"
-            }
-          />
-          <Tooltip title="Reload firmware files from server">
+        <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
+          <FirmwareSourcePicker value={firmwareSource} onChange={setFirmwareSource}
+                                disabled={usbFlashState.isLoadingFirmware} />
+          <Tooltip title="Load the firmware files">
             <IconButton
               onClick={handleLoadFirmwareFiles}
-              disabled={usbFlashState.isLoadingFirmware || !usbFlashState.firmwareServerUrl}
-              sx={{ mt: 1 }}
+              disabled={usbFlashState.isLoadingFirmware || !firmwareSource}
+              sx={{ mt: 5 }}
             >
               {usbFlashState.isLoadingFirmware ? (
                 <CircularProgress size={24} />
@@ -556,7 +540,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
         {usbFlashState.firmwareFiles.length > 0 && (
           <Paper sx={{ mt: 2, p: 2 }}>
             <Typography variant="subtitle2" gutterBottom>
-              {usbFlashState.firmwareFiles.length} firmware file(s) found on server
+              {usbFlashState.firmwareFiles.length} firmware file(s) found
             </Typography>
           </Paper>
         )}
@@ -803,7 +787,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
         </Box>
       ) : (
         <Alert severity="warning" sx={{ mt: 2 }}>
-          No firmware files found. Go back and check the firmware server URL.
+          No firmware files found. Go back and check the firmware source.
         </Alert>
       )}
     </Box>
@@ -1626,7 +1610,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
 
   const isNextDisabled = () => {
     const step = usbFlashState.currentStep;
-    if (step === 0 && !usbFlashState.firmwareServerUrl) return true;
+    if (step === 0 && !firmwareSource) return true;
     if (step === 1 && !usbFlashState.selectedFirmware) return true;
     if (step === 3 && usbFlashState.isFlashing) return true;
     if (step === 4 && usbFlashState.isFlashing) return true;

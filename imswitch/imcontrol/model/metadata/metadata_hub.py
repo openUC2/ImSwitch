@@ -12,27 +12,6 @@ import time
 import threading
 import numpy as np
 
-try:
-    from ome_types import OME
-    from ome_types.model import Image, Pixels, Channel, Plane
-    from ome_types.model import Instrument, Objective as OMEObjective
-    from ome_types.model.simple_types import UnitsLength, UnitsTime
-    from ome_types.model import PixelsType
-    HAS_OME_TYPES = True
-except ImportError:
-    HAS_OME_TYPES = False
-    # Set all to None for consistency
-    OME = None
-    Image = None
-    Pixels = None
-    Channel = None
-    Plane = None
-    Instrument = None
-    OMEObjective = None
-    UnitsLength = None
-    UnitsTime = None
-    PixelsType = None
-
 from .schema import SharedAttrValue, MetadataSchema
 
 
@@ -127,79 +106,6 @@ class DetectorContext:
             'last_update': self.last_update,
         }
     
-    def to_ome_pixels(self, size_z: int = 1, size_t: int = 1, size_c: int = 1) -> 'Pixels':
-        """
-        Generate OME Pixels object for this detector.
-        
-        Args:
-            size_z: Number of Z planes
-            size_t: Number of time points
-            size_c: Number of channels
-        
-        Returns:
-            OME Pixels object
-        """
-        if not HAS_OME_TYPES:
-            raise ImportError("ome-types is required for OME metadata generation")
-        
-        # Map numpy dtype to OME PixelsType
-        dtype_map = {
-            'uint8': PixelsType.UINT8,
-            'uint16': PixelsType.UINT16,
-            'uint32': PixelsType.UINT32,
-            'int8': PixelsType.INT8,
-            'int16': PixelsType.INT16,
-            'int32': PixelsType.INT32,
-            'float32': PixelsType.FLOAT,
-            'float64': PixelsType.DOUBLE,
-        }
-        pixel_type = dtype_map.get(self.dtype, PixelsType.UINT16)
-        
-        # Create Pixels with physical dimensions
-        pixels = Pixels(
-            id=f"Pixels:{self.name}",
-            dimension_order="XYZCT",  # Standard order
-            type=pixel_type,
-            size_x=self.shape_px[0],
-            size_y=self.shape_px[1],
-            size_z=size_z,
-            size_c=size_c,
-            size_t=size_t,
-            physical_size_x=self.pixel_size_um,
-            physical_size_x_unit=UnitsLength.MICROMETER,
-            physical_size_y=self.pixel_size_um,
-            physical_size_y_unit=UnitsLength.MICROMETER,
-        )
-        
-        # Add channels
-        for c in range(size_c):
-            channel = Channel(
-                id=f"Channel:{self.name}:{c}",
-                name=self.channel_name if size_c == 1 else f"{self.channel_name}_{c}",
-                samples_per_pixel=1,
-            )
-            if self.channel_color:
-                # Parse hex color to RGB with validation
-                try:
-                    # Ensure it's a valid 6-character hex string
-                    color_str = str(self.channel_color).lstrip('#')
-                    if len(color_str) == 6 and all(c in '0123456789ABCDEFabcdef' for c in color_str):
-                        color_int = int(color_str, 16)
-                        channel.color = color_int
-                    else:
-                        # Invalid color format, skip silently
-                        pass
-                except (ValueError, TypeError) as e:
-                    # Log warning but don't fail
-                    import logging
-                    logging.getLogger(__name__).warning(f"Invalid channel color format: {self.channel_color}, error: {e}")
-                    pass
-            if self.wavelength_nm:
-                channel.emission_wavelength = self.wavelength_nm
-                channel.emission_wavelength_unit = UnitsLength.NANOMETER
-            pixels.channels.append(channel)
-        
-        return pixels
 
 
 @dataclass
@@ -239,49 +145,6 @@ class FrameEvent:
             'laser_power_mw': self.laser_power_mw,
             'metadata': self.metadata,
         }
-    
-    def to_ome_plane(self, the_z: int = 0, the_c: int = 0, the_t: int = 0) -> 'Plane':
-        """
-        Generate OME Plane object for this frame.
-        
-        Args:
-            the_z: Z index
-            the_c: Channel index
-            the_t: Time index
-        
-        Returns:
-            OME Plane object
-        """
-        if not HAS_OME_TYPES:
-            raise ImportError("ome-types is required for OME metadata generation")
-        
-        plane = Plane(
-            the_z=the_z,
-            the_c=the_c,
-            the_t=the_t,
-        )
-        
-        # Add positional metadata
-        if self.stage_x_um is not None:
-            plane.position_x = self.stage_x_um
-            plane.position_x_unit = UnitsLength.MICROMETER
-        if self.stage_y_um is not None:
-            plane.position_y = self.stage_y_um
-            plane.position_y_unit = UnitsLength.MICROMETER
-        if self.stage_z_um is not None:
-            plane.position_z = self.stage_z_um
-            plane.position_z_unit = UnitsLength.MICROMETER
-        
-        # Add timing
-        if self.timestamp:
-            plane.delta_t = self.timestamp
-            plane.delta_t_unit = UnitsTime.SECOND
-        
-        if self.exposure_ms is not None:
-            plane.exposure_time = self.exposure_ms / 1000.0  # Convert to seconds
-            plane.exposure_time_unit = UnitsTime.SECOND
-        
-        return plane
 
 
 class MetadataHub:
@@ -656,51 +519,6 @@ class MetadataHub:
                 'frame_counts': dict(self._frame_counters),
             }
             return json.dumps(data, default=json_serializer, indent=2)
-    
-    def to_ome(self, detector_names: Optional[List[str]] = None) -> Optional['OME']:
-        """
-        Generate OME metadata object for registered detectors.
-        
-        Args:
-            detector_names: List of detector names (None = all)
-        
-        Returns:
-            OME object or None if ome-types not available
-        """
-        if not HAS_OME_TYPES:
-            return None
-        
-        with self._lock:
-            if detector_names is None:
-                detector_names = list(self._detector_contexts.keys())
-            
-            ome = OME()
-            
-            # Create an image for each detector
-            for det_name in detector_names:
-                if det_name not in self._detector_contexts:
-                    continue
-                
-                context = self._detector_contexts[det_name]
-                
-                # Create image
-                image = Image(
-                    id=f"Image:{det_name}",
-                    name=det_name,
-                )
-                
-                # Add pixels
-                image.pixels = context.to_ome_pixels()
-                
-                # Add planes from frame events if available
-                events = self.peek_frame_events(det_name)
-                for event in events:
-                    plane = event.to_ome_plane(the_t=event.frame_number)
-                    image.pixels.planes.append(plane)
-                
-                ome.images.append(image)
-            
-            return ome
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

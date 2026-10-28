@@ -9,6 +9,9 @@ from .LEDMatrixsManager import LEDMatrixsManager
 from .MultiManager import MultiManager
 from .NidaqManager import NidaqManager
 from .PositionersManager import PositionersManager
+from .PumpsManager import PumpsManager
+from .DigitalIOManager import DigitalIOManager
+from .ValvesManager import ValvesManager
 from .GalvoScannersManager import GalvoScannersManager
 from .RS232sManager import RS232sManager
 # RecordingManager is deprecated - use RecordingService from io module
@@ -21,13 +24,10 @@ from .RotatorsManager import RotatorsManager
 from .UC2ConfigManager import UC2ConfigManager
 from .SIMManager import SIMManager
 from .DPCManager import DPCManager
-from .TimelapseManager import TimelapseManager
 from .ExperimentManager import ExperimentManager
 from .ROIScanManager import ROIScanManager
 from .LightsheetManager import LightsheetManager
 from .WebRTCManager import WebRTCManager
-from .HyphaManager import HyphaManager
-from .HistoScanManager import HistoScanManager
 from .StresstestManager import StresstestManager
 from .ObjectiveManager import ObjectiveManager
 from .WorkflowManager import WorkflowManager

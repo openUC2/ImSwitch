@@ -4,9 +4,14 @@ import datetime
 from imswitch.imcommon.model import APIExport, initLogger, dirtools, ostools
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 from .uc2config.can_network_api import CanNetworkApiMixin
-import tifffile as tif
 
+
+
+def _one_frame(image):
+    """A camera frame for saving: (Y, X) or RGB (Y, X, 3); a frame stack gives its first."""
+    return image if image.ndim == 2 or image.shape[-1] == 3 else image[0]
 
 class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
     """Linked to UC2ConfigWidget."""
@@ -98,12 +103,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             filePath = os.path.join(dirPath, fileName)
             self.__logger.debug(f"Saving image to {filePath}.tif")
             if mImage is not None:
-                if mImage.ndim == 2:
-                    tif.imwrite(filePath + ".tif", mImage)
-                elif mImage.ndim == 3:
-                    tif.imwrite(filePath + ".tif", mImage[0])
-                else:
-                    self.__logger.error("Image is not 2D or 3D")
+                save_image(filePath + ".tif", _one_frame(mImage))
             else:
                 self.__logger.error("Image is None")
 
@@ -344,7 +344,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             os.makedirs(dirPath, exist_ok=True)
             filePath = os.path.join(dirPath, fileName)
             if mImage is not None:
-                tif.imwrite(filePath + ".tif", mImage[0] if mImage.ndim == 3 else mImage)
+                save_image(filePath + ".tif", _one_frame(mImage))
                 self._commChannel.sigUpdateImage.emit('Image', mImage, True, 1, False)
             return {"ok": True, "action": "snap", "path": filePath + ".tif"}
         except Exception as e:
@@ -1200,7 +1200,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
 
     # Digital Input/Output API Methods
     @APIExport(runOnUIThread=False)
-    def getDigitalIn(self, digitalinid=1, timeout=1, is_blocking=True):
+    def getDigitalIn(self, digitalinid: int = 1, timeout: float = 1, is_blocking: bool = True):
         """
         Get the current value of a digital input.
         
@@ -1210,6 +1210,8 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
         :return: Response from the device containing digitalin status
         """
         try:
+            digitalinid = int(digitalinid)
+            timeout = float(timeout)
             return self._master.UC2ConfigManager._digitalIn.get_digitalin(
                 digitalinid=digitalinid,
                 timeout=timeout,
@@ -1220,7 +1222,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def actDigitalIn(self, timeout=1, is_blocking=False):
+    def actDigitalIn(self, timeout: float = 1, is_blocking: bool = False):
         """
         Trigger the digitalin act function.
         
@@ -1238,7 +1240,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def getDigitalOut(self, digitaloutid=1, timeout=1, is_blocking=True):
+    def getDigitalOut(self, digitaloutid: int = 1, timeout: float = 1, is_blocking: bool = True):
         """
         Get the current value and pin of a digital output.
         
@@ -1258,7 +1260,8 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def setDigitalOut(self, digitaloutid=1, digitaloutval=0, timeout=1, is_blocking=False):
+    def setDigitalOut(self, digitaloutid: int = 1, digitaloutval: int = 0, timeout: float = 1,
+                      is_blocking: bool = False):
         """
         Set the value of a digital output. Use digitaloutval=-1 to trigger a pulse (HIGH->LOW).
         
@@ -1280,7 +1283,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def setupDigitalOutPin(self, digitaloutid=1, pin=4):
+    def setupDigitalOutPin(self, digitaloutid: int = 1, pin: int = 4):
         """
         Setup the pin for a digital output.
         
@@ -1311,9 +1314,9 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def setTrigger(self, trigger1=False, delayOn1=0, delayOff1=0, 
-                   trigger2=False, delayOn2=0, delayOff2=0,
-                   trigger3=False, delayOn3=0, delayOff3=0):
+    def setTrigger(self, trigger1: bool = False, delayOn1: float = 0, delayOff1: float = 0,
+                   trigger2: bool = False, delayOn2: float = 0, delayOff2: float = 0,
+                   trigger3: bool = False, delayOn3: float = 0, delayOff3: float = 0):
         """
         Set up a trigger table with 3 triggers.
         
@@ -1339,7 +1342,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             return {"error": str(e)}
 
     @APIExport(runOnUIThread=False)
-    def sendTrigger(self, triggerId=0):
+    def sendTrigger(self, triggerId: int = 0):
         """
         Send a trigger pulse on the specified digital output.
         
@@ -1567,25 +1570,24 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
         This is useful after making multiple setting changes to push
         all changes to the hardware at once.
         
-        :param axis: Specific axis to apply (X, Y, Z, A), or None for all axes
+        :param axis: Specific axis to apply (e.g. X, B), or None for all axes of the stage
         :return: Result dictionary
         """
         try:
             if self.stages is None:
                 return {"error": "No stages configured", "success": False}
             
-            axes_to_apply = [axis.upper()] if axis else ['X', 'Y', 'Z', 'A']
+            axisSettings = self.stages.getMotorSettings()['axes']
+            axes_to_apply = [axis.upper()] if axis else list(axisSettings)
             results = {}
             
             for ax in axes_to_apply:
                 try:
                     # Re-apply motor setup
-                    minPos = getattr(self.stages, f'min{ax}', float('-inf'))
-                    maxPos = getattr(self.stages, f'max{ax}', float('inf'))
-                    stepSize = self.stages.stepSizes.get(ax, 1)
-                    backlash = getattr(self.stages, f'backlash{ax}', 0)
-                    
-                    self.stages.setupMotor(minPos, maxPos, stepSize, backlash, ax)
+                    motion = axisSettings[ax]['motion']
+                    minPos = motion['minPos'] if motion.get('minPos') is not None else float('-inf')
+                    maxPos = motion['maxPos'] if motion.get('maxPos') is not None else float('inf')
+                    self.stages.setupMotor(minPos, maxPos, motion['stepSize'], motion.get('backlash', 0), ax)
                     results[ax] = {"success": True}
                 except Exception as e:
                     results[ax] = {"success": False, "error": str(e)}
@@ -1613,49 +1615,26 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
 
             positionerName = self.stages._name
             
-            # Build motor settings dict from current manager state
-            axes = ["X", "Y", "Z", "A"]
+            # Build motor settings dict from current manager state (any axis names)
+            axisSettings = self.stages.getMotorSettings()['axes']
             motorSettings = {}
-            
-            # Save step sizes
-            for ax in axes:
-                motorSettings[f'stepsize{ax}'] = self.stages.stepSizes.get(ax, 1)
-            
-            # Save max speeds
-            for ax in axes:
-                motorSettings[f'maxSpeed{ax}'] = self.stages.maxSpeed.get(ax, 10000)
-            
-            # Save initial speeds (current speeds)
-            for ax in axes:
-                motorSettings[f'initialSpeed{ax}'] = self.stages._speed.get(ax, 10000)
-            
-            # Save min/max positions
-            motorSettings['minX'] = self.stages.minX if self.stages.minX != float('-inf') else None
-            motorSettings['maxX'] = self.stages.maxX if self.stages.maxX != float('inf') else None
-            motorSettings['minY'] = self.stages.minY if self.stages.minY != float('-inf') else None
-            motorSettings['maxY'] = self.stages.maxY if self.stages.maxY != float('inf') else None
-            motorSettings['minZ'] = self.stages.minZ if self.stages.minZ != float('-inf') else None
-            motorSettings['maxZ'] = self.stages.maxZ if self.stages.maxZ != float('inf') else None
-            motorSettings['minA'] = self.stages.minA if self.stages.minA != float('-inf') else None
-            motorSettings['maxA'] = self.stages.maxA if self.stages.maxA != float('inf') else None
-            
-            # Save backlash
-            motorSettings['backlashX'] = self.stages.backlashX
-            motorSettings['backlashY'] = self.stages.backlashY
-            motorSettings['backlashZ'] = self.stages.backlashZ
-            motorSettings['backlashA'] = self.stages.backlashA
-            
-            # Save homing parameters
-            for ax in axes:
-                motorSettings[f'homeSpeed{ax}'] = getattr(self.stages, f'homeSpeed{ax}', 15000)
-                motorSettings[f'homeDirection{ax}'] = getattr(self.stages, f'homeDirection{ax}', -1)
-                motorSettings[f'homeEndstoppolarity{ax}'] = getattr(self.stages, f'homeEndstoppolarity{ax}', 1)
-                motorSettings[f'homeEndposRelease{ax}'] = getattr(self.stages, f'homeEndposRelease{ax}', 1)
-                motorSettings[f'homeTimeout{ax}'] = getattr(self.stages, f'homeTimeout{ax}', 20000)
+            for ax, current in axisSettings.items():
+                motion, homing = current.get('motion', {}), current.get('homing', {})
+                motorSettings[f'stepsize{ax}'] = motion.get('stepSize', 1)
+                motorSettings[f'maxSpeed{ax}'] = motion.get('maxSpeed', 10000)
+                motorSettings[f'initialSpeed{ax}'] = motion.get('speed', 10000)  # current speed
+                motorSettings[f'min{ax}'] = motion.get('minPos')  # None (= no limit) is not saved
+                motorSettings[f'max{ax}'] = motion.get('maxPos')
+                motorSettings[f'backlash{ax}'] = motion.get('backlash', 0)
+                motorSettings[f'homeSpeed{ax}'] = homing.get('speed', 15000)
+                motorSettings[f'homeDirection{ax}'] = homing.get('direction', -1)
+                motorSettings[f'homeEndstoppolarity{ax}'] = homing.get('endstopPolarity', 1)
+                motorSettings[f'homeEndposRelease{ax}'] = homing.get('endposRelease', 1)
+                motorSettings[f'homeTimeout{ax}'] = homing.get('timeout', 20000)
             
             # Save TMC settings if requested (fetch from device)
             if includeTMC:
-                for ax in axes:
+                for ax in axisSettings:
                     try:
                         tmc_result = self.stages.getTMCSettingsForAxis(ax)
                         if tmc_result.get('success') and 'settings' in tmc_result:

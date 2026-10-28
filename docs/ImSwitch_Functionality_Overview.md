@@ -66,8 +66,10 @@
 
 ### Additional Hardware
 - **Galvo scanners** (for laser scanning)
+- **SLM / DMD displays** (patterns on a display conjugate to the sample; `docs/SLM.md`)
 - **Temperature control**
-- **Flow control** (microfluidics)
+- **Flow control** (microfluidics): pumps (UC2 stepper, virtual) and valves (board outputs,
+  servo, serial, virtual) as setup blocks; named digital lines (`digitalIO`)
 
 ##  Autofocus 
 - usable in other controllers
@@ -93,10 +95,8 @@
 - **Holography**
   - Off-axis holography
   - Inline holography
-  - HoliSheet (combined holography + lightsheet)
 - **SIM** (Structured Illumination Microscopy)
 - **DPC** (Differential Phase Contrast)
-- **ISM** (Image Scanning Microscopy)
 - **STORM reconstruction**
 - **Composite imaging** (multi-modal combinations)
   - ExperimentController where we provide a protocol for multi dimensional acquisitions (xyz, multi channel, autofocus )
@@ -117,13 +117,14 @@
   - Multi-position
   - Multi-channel
 - **Storage formats:**
-  - TIFF
-  - Zarr (for large datasets)
+  - OME-TIFF (UTF-8 OME-XML, SubIFD pyramid; opens in Fiji/Bio-Formats and napari)
+  - OME-Zarr (NGFF 0.4 on zarr v2, Zstd; opens in Fiji's N5 reader and napari)
+  - One shared writer (`model/aufgaben/storage.py`) for experiments, recordings, snaps,
+    Aufgaben jobs and every controller that saves images
   - MP4/AVI (video)
 - **Metadata embedding**
 
 ### Scan Types
-- **ROI scanning** (Region of Interest, Click/Select and go back to that position/timelapse)
 - **Tile scanning** (large area mosaics)
 - **Stage scan acquisition**
 - **Well plate scanning** (keep annotations e.g. A1, B2, etc.)
@@ -131,9 +132,24 @@
 ## Automation & Workflows
 
 ### Experiment Management
-- **Timelapse experiments**
+- **Timelapse experiments** (through ExperimentController)
   - Configurable intervals
   - Multi-position support
+- **Aufgaben jobs** (`AufgabenController`, plan in `docs/AUFGABEN_ROADMAP.md`)
+  - A tree of loops (positions, wells, regions, tiles, Z, channels, time), conditions, variables,
+    captures and hardware tasks
+  - Focus maps per region or well; tiles follow the focus surface
+  - Prescan overview (stage map) and firmware-timed fast stage scan as job steps
+  - Stitched image per position, at stage positions or registered with Ashlar
+  - Well plates from ImSwitch labware as useq plate plans
+  - Pause, resume, finish, abort; operator questions
+  - Import and export of useq-schema sequences
+  - Pumps, valves, digital I/O, temperature and serial commands as steps; the stop-flow
+    procedure of FlowStop is a bundled job
+  - The "Aufgaben" app: palette, outline editor, schema forms, start confirmation, run
+    monitor, job library
+  - Analysis steps that feed back into the job: intensity, focus metric, empty-field
+    detection, object counts, points and regions from an image (smart microscopy templates)
 - **Workflow automation**
   - Sequential operations
   - Conditional logic
@@ -164,7 +180,6 @@
 ### API & Integration
 - **REST HTTP API** for remote control
 - **Python scripting interface**
-- **Hypha integration** (distributed computing)
 - **Arkitekt integration**: bind the microscope to an Arkitekt server by device-code login; stage, illumination, camera, frame and tile-scan actions; images to mikro (see `docs/ARKITEKT.md`)
 
 ### Configuration

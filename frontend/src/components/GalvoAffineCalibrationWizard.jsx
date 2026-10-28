@@ -75,9 +75,12 @@ const GalvoAffineCalibrationWizard = () => {
         dwell_us: 10000,
         laser_intensity: 255,
       }];
-      await apiSetArbitraryPoints(
+      const data = await apiSetArbitraryPoints(
         hostIP, hostPort, selectedScanner, singlePoint, 'HIGH', false
       );
+      if (data.error) {
+        dispatch(setError(`Failed to move galvo: ${data.error}`));
+      }
     } catch (err) {
       dispatch(setError(`Failed to move galvo: ${err.message}`));
     }

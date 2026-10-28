@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 760" width="920" height="760" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
+    </marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/>
+    </marker>
+    <style>
+      .box  { fill:#f4f6f8; stroke:#8a94a0; stroke-width:1; }
+      .head { fill:#2c3e50; stroke:none; }
+      .act  { fill:#fff4e0; stroke:#e0a030; stroke-width:1.2; }
+      .ok   { fill:#e6f5ea; stroke:#3c9a5a; stroke-width:1.5; }
+      .ci   { fill:#eef3fb; stroke:#5b7fbf; stroke-width:1.2; stroke-dasharray:5 3; }
+      .ln   { stroke:#555; stroke-width:1.4; fill:none; marker-end:url(#a); }
+      .t    { fill:#1d252c; }
+      .w    { fill:#ffffff; }
+      .s    { fill:#5a6570; font-size:11.5px; }
+      .m    { font-family: Menlo, Consolas, monospace; font-size:12px; }
+    </style>
+  </defs>
+
+  <rect width="920" height="760" fill="#ffffff"/>
+
+  <text x="20" y="30" font-size="18" font-weight="600" class="t">FRAME e2e / hardware-in-the-loop tests: the two ways to run them</text>
+  <text x="20" y="50" class="s">Same pytest suite (imswitch/imcontrol/_test/e2e). A tests the stack that is already running. B swaps a new version in, tests it, then swaps the old one back.</text>
+
+  <!-- ===== Column A: run_all.sh ===== -->
+  <rect class="head" x="20" y="150" width="400" height="44" rx="6"/>
+  <text x="34" y="169" font-weight="600" class="w">A · ./run_all.sh  (quick check)</text>
+  <text x="34" y="186" font-size="11.5" class="w" opacity="0.85">from your laptop · tests whatever ImSwitch already runs</text>
+
+  <rect class="box" x="20" y="214" width="400" height="40" rx="5"/>
+  <text x="34" y="238" class="t m">ssh $PI_HOST → container imswitch-server-1</text>
+  <rect class="box" x="20" y="268" width="400" height="40" rx="5"/>
+  <text x="34" y="292" class="t m">tar e2e/ → container:/tmp/e2e</text>
+  <rect class="act" x="20" y="322" width="400" height="40" rx="5"/>
+  <text x="34" y="346" class="t m">ci/sync_firmware.py --yes   ⚡ flashes</text>
+  <rect class="act" x="20" y="376" width="400" height="40" rx="5"/>
+  <text x="34" y="400" class="t m">motor/move_to_transport.py  ⚡ parks stage</text>
+  <rect class="box" x="20" y="430" width="400" height="40" rx="5"/>
+  <text x="34" y="454" class="t m">camera/start_live_view.py   (frames on)</text>
+  <rect class="act" x="20" y="484" width="400" height="40" rx="5"/>
+  <text x="34" y="508" class="t m">pytest /tmp/e2e[/folder…]   ⚡ moves, light</text>
+  <rect class="ok" x="20" y="538" width="400" height="40" rx="5"/>
+  <text x="34" y="562" class="t">Result in your terminal · nothing to restore</text>
+
+  <path class="ln" d="M220,194 V212"/>
+  <path class="ln" d="M220,254 V266"/>
+  <path class="ln" d="M220,308 V320"/>
+  <path class="ln" d="M220,362 V374"/>
+  <path class="ln" d="M220,416 V428"/>
+  <path class="ln" d="M220,470 V482"/>
+  <path class="ln" d="M220,524 V536"/>
+
+  <text x="20" y="606" class="s">Each folder also has its own runner, e.g. motor/run_motor_test.sh.</text>
+  <text x="20" y="624" class="s">FIRMWARE_UPDATE=off skips the flash step.</text>
+
+  <!-- ===== Column B: hil-run.sh ===== -->
+  <rect class="ci" x="470" y="66" width="410" height="66" rx="6"/>
+  <text x="484" y="86" font-weight="600" class="t">GitHub Actions · os-rpi hardware-test.yml</text>
+  <text x="484" y="104" class="s">manual dispatch, or PR labelled "hardware-test" → runner [uc2-rig]</text>
+  <text x="484" y="121" class="s">or by hand:  ssh -t pi@rig ~/hil-e2e/ci/hil-run.sh … --yes</text>
+  <path class="ln" d="M675,132 V148"/>
+
+  <rect class="head" x="470" y="150" width="410" height="44" rx="6"/>
+  <text x="484" y="169" font-weight="600" class="w">B · ci/hil-run.sh  (full HIL run)</text>
+  <text x="484" y="186" font-size="11.5" class="w" opacity="0.85">runs ON the Pi · swap in → test → swap back</text>
+
+  <rect class="box" x="470" y="214" width="410" height="40" rx="5"/>
+  <text x="484" y="238" class="t m">flock /tmp/hil-run.lock  (one run per rig)</text>
+  <rect class="box" x="470" y="268" width="410" height="40" rx="5"/>
+  <text x="484" y="292" class="t m">swap-in checks: ≥15 GB disk, board, no stale state</text>
+
+  <rect class="box" x="470" y="322" width="200" height="40" rx="5"/>
+  <text x="482" y="339" class="t m">--image &lt;tag&gt;</text>
+  <text x="482" y="355" class="s">compose override, ImSwitch only</text>
+  <rect class="box" x="680" y="322" width="200" height="40" rx="5"/>
+  <text x="692" y="339" class="t m">--pallet repo@sha</text>
+  <text x="692" y="355" class="s">forklift switch + stage apply</text>
+
+  <rect class="box" x="470" y="376" width="410" height="40" rx="5"/>
+  <text x="484" y="400" class="t m">wait: API ≤180 s, each detector ≤300 s</text>
+  <rect class="box" x="470" y="430" width="410" height="40" rx="5"/>
+  <text x="484" y="454" class="t m">ship suite → container:/tmp/e2e</text>
+  <rect class="act" x="470" y="484" width="410" height="40" rx="5"/>
+  <text x="484" y="508" class="t m">sync_firmware.py --yes        ⚡ flashes</text>
+  <rect class="act" x="470" y="538" width="410" height="40" rx="5"/>
+  <text x="484" y="562" class="t m">pytest --junitxml → ci/reports/  ⚡</text>
+  <rect class="ok" x="470" y="592" width="410" height="40" rx="5"/>
+  <text x="484" y="616" font-weight="600" class="t">hil-setup.py restore: ALWAYS runs (trap EXIT)</text>
+  <rect class="box" x="470" y="646" width="410" height="40" rx="5"/>
+  <text x="484" y="670" class="t m">exit 0 pass · 1 test failed · 2 rig/run broke</text>
+
+  <path class="ln" d="M675,194 V212"/>
+  <path class="ln" d="M675,254 V266"/>
+  <path class="ln" d="M570,308 V320"/>
+  <path class="ln" d="M780,308 V320"/>
+  <path class="ln" d="M570,362 V374"/>
+  <path class="ln" d="M780,362 V374"/>
+  <path class="ln" d="M675,416 V428"/>
+  <path class="ln" d="M675,470 V482"/>
+  <path class="ln" d="M675,524 V536"/>
+  <path class="ln" d="M675,578 V590"/>
+  <path class="ln" d="M675,632 V644"/>
+
+  <!-- failure path straight to restore -->
+  <path d="M880,288 H902 V612 H884" fill="none" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#r)"/>
+  <text x="912" y="450" font-size="11" fill="#c0392b" transform="rotate(90 912 450)" text-anchor="middle">any failure / Ctrl+C / timeout</text>
+
+  <!-- ===== Legend ===== -->
+  <rect class="act" x="20" y="712" width="16" height="12" rx="2"/>
+  <text x="42" y="722" class="s">touches the hardware (flash, move, light): keep hands clear, put a sample on the stage</text>
+  <rect class="ok" x="580" y="712" width="16" height="12" rx="2"/>
+  <text x="602" y="722" class="s">safe end state</text>
+  <rect class="ci" x="700" y="712" width="16" height="12" rx="2"/>
+  <text x="722" y="722" class="s">trigger</text>
+</svg>

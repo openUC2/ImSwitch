@@ -3,6 +3,8 @@
 Tests against a running ImSwitch on the real rig, over its HTTP API only.
 Sits alongside `../unit/` (no server) and `../api/` (headless server).
 
+New here? Start with [QUICKSTART.md](QUICKSTART.md).
+
 | Folder | What | Hardware |
 |---|---|---|
 | [`board/`](board/) | UC2 board connected, right master firmware | reads |

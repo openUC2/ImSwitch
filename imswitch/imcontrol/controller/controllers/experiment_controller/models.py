@@ -40,7 +40,6 @@ AutoFocusSoftwareMethod = Literal["scan", "hillClimbing"]
 #                         and apply the measured focus as a global Z offset to
 #                         all positions of that round (assumes drift is global,
 #                         e.g. thermal — cheaper and less photobleaching).
-AutoFocusScope = Literal["everyPosition", "firstPositionOnly"]
 TriggerMode = Literal["hardware", "software"]
 FocusFitMethod = Literal["spline", "rbf", "constant"]
 FocusAlgorithm = Literal["LAPE", "GLVA", "JPEG"]
@@ -209,12 +208,14 @@ class ParameterValue(BaseModel):
     autoFocusHillClimbingMaxIterations: int = 50
     autofocus_target_focus_setpoint: Optional[float] = None
     autofocus_max_attempts: int = 2
-    # --- Autofocus scheduling (see AutoFocusScope) ------------------------
-    autoFocusScope: AutoFocusScope = Field(
-        "everyPosition",
-        description="Where autofocus runs within a round: 'everyPosition' "
-                    "(per XY tile) or 'firstPositionOnly' (once per round at "
-                    "the first tile, applied as a global Z offset).",
+    # --- Autofocus scheduling --------------------------------------------
+    autoFocusEveryNFovs: int = Field(
+        1,
+        ge=1,
+        description="Run autofocus every Nth field of view within a round "
+                    "(1 = every FOV). Replaces the old everyPosition / "
+                    "firstPositionOnly pair, which were just N=1 and "
+                    "N=all-FOVs written as an enum.",
     )
     autoFocusPeriodRounds: int = Field(
         1,
@@ -353,6 +354,28 @@ class ParameterValue(BaseModel):
         """Number of illumination channels with intensity > 0."""
         return sum(1 for v in (self.illuIntensities or []) if v and v > 0)
 
+    def autofocus_kwargs(self) -> Dict[str, Any]:
+        """The autofocus settings, as ExperimentController.autofocus() takes them.
+
+        This is the ONE place the app defines them. The focus map used to carry
+        its own parallel copy (FocusMapConfig.af_*) with its own UI, so which
+        settings reached the hardware depended on whether a run went through the
+        focus-map phase or the per-point autofocus step.
+        """
+        return {
+            "mode": self.autoFocusMode,
+            "af_range": abs(self.autoFocusMax - self.autoFocusMin) / 2.0 or 100.0,
+            "af_resolution": self.autoFocusStepSize or 10.0,
+            "illuminationChannel": self.autoFocusIlluminationChannel or "",
+            "max_attempts": self.autofocus_max_attempts,
+            "target_focus_setpoint": self.autofocus_target_focus_setpoint,
+            "af_software_method": self.autoFocusSoftwareMethod,
+            "af_hc_initial_step": self.autoFocusHillClimbingInitialStep,
+            "af_hc_min_step": self.autoFocusHillClimbingMinStep,
+            "af_hc_step_reduction": self.autoFocusHillClimbingStepReduction,
+            "af_hc_max_iterations": self.autoFocusHillClimbingMaxIterations,
+        }
+
     def resolve_keep_illumination_on(self) -> bool:
         """Resolve the auto/on/off setting to a concrete bool."""
         if self.keepIlluminationOn == "on":
@@ -391,24 +414,15 @@ class FocusMapConfig(BaseModel):
     store_debug_artifacts: bool = Field(True, description="Store focus points + fit stats as JSON")
     channel_offsets: Optional[Dict[str, float]] = Field(default=None, description="Per-illumination-channel Z offset (µm)")
 
-    # Autofocus parameters – passed through to doAutofocusBackground
-    af_range: float = Field(100.0, description="Autofocus Z range (±µm from current Z)")
-    af_resolution: float = Field(10.0, description="Autofocus step size (µm)")
-    af_cropsize: int = Field(2048, description="Crop size for focus quality algorithm")
-    af_algorithm: FocusAlgorithm = Field("LAPE", description="Focus quality algorithm: LAPE, GLVA, JPEG")
-    af_settle_time: float = Field(0.1, description="Settle time (s) after each Z step")
-    af_static_offset: float = Field(0.0, description="Static Z offset applied after autofocus (µm)")
-    af_two_stage: bool = Field(False, description="Use two-stage autofocus (coarse + fine)")
-    af_n_gauss: int = Field(0, description="Gaussian kernel size for focus algorithm")
-    af_illumination_channel: str = Field("", description="Illumination channel for autofocus")
-    af_mode: AutoFocusMode = Field("software", description="Autofocus mode: software (Z-sweep) or hardware (FocusLock)")
-    af_software_method: AutoFocusSoftwareMethod = Field("scan", description="Software AF method: scan (Z-sweep) or hillClimbing")
-    af_hc_initial_step: float = Field(20.0, description="Hill climbing initial step size (µm)")
-    af_hc_min_step: float = Field(1.0, description="Hill climbing minimum step size (µm)")
-    af_hc_step_reduction: float = Field(0.5, description="Hill climbing step reduction factor")
-    af_hc_max_iterations: int = Field(50, description="Hill climbing max iterations")
-    af_max_attempts: int = Field(2, description="Max retry attempts for hardware autofocus")
-    af_target_setpoint: Optional[float] = Field(None, description="Target focus setpoint for hardware AF")
+    # Autofocus settings deliberately do NOT live here as fields of their own.
+    # This carries the SAME ParameterValue the rest of the experiment uses, so
+    # the two cannot drift; a focus map is autofocus at N positions, not a
+    # different instrument. Omitted => the model defaults.
+    autofocus: Optional["ParameterValue"] = Field(
+        default=None,
+        description="Autofocus settings for the mapping pass "
+                    "(the experiment's own ParameterValue).",
+    )
 
     # Scan areas – passed from the frontend so that computeFocusMap knows the
     # correct XY bounds even when no experiment has been started yet.

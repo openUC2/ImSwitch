@@ -6,7 +6,7 @@ import { createSlice } from "@reduxjs/toolkit";
  */
 
 const initialState = {
-  // Wizard step navigation (0: Firmware Server, 1: Select Firmware, 2: Port & Options, 3: Flash Progress, 4: CAN Address, 5: Complete)
+  // Wizard step navigation (0: Firmware Source, 1: Select Firmware, 2: Port & Options, 3: Flash Progress, 4: CAN Address, 5: Complete)
   currentStep: 0,
   isWizardOpen: false,
 
@@ -17,8 +17,6 @@ const initialState = {
   portMatch: "HAT", // Substring to identify HAT in port metadata
 
   // Firmware server configuration
-  firmwareServerUrl: "",
-  defaultFirmwareServerUrl: "",
   isLoadingFirmware: false,
 
   // Available firmware files (flat list from server)
@@ -26,6 +24,12 @@ const initialState = {
   selectedFirmware: null, // { filename, size, mod_time, url }
   firmwareSearchQuery: "", // search/filter text for firmware list
   showMergedFirmware: false, // merged binaries are hidden by default; user must opt-in
+
+  // Board identification (getRecommendedFirmware): what the board's firmware
+  // reports over serial, and the server image that fits it
+  detectPort: "", // "" = the board ImSwitch is connected to
+  isDetectingBoard: false,
+  boardDetection: null, // { source, port, chip, identity, recommended } | { status: "error", message }
 
   // Flash options
   baudRate: 921600,
@@ -91,6 +95,8 @@ const usbFlashSlice = createSlice({
       state.firmwareSearchQuery = "";
       state.showMergedFirmware = false;
       state.firmwareFiles = [];
+      state.boardDetection = null;
+      state.isDetectingBoard = false;
       state.isFlashing = false;
       state.eraseFlash = false;
       state.chipType = "auto";
@@ -114,12 +120,6 @@ const usbFlashSlice = createSlice({
     },
 
     // Firmware
-    setFirmwareServerUrl: (state, action) => {
-      state.firmwareServerUrl = action.payload;
-    },
-    setDefaultFirmwareServerUrl: (state, action) => {
-      state.defaultFirmwareServerUrl = action.payload;
-    },
     setFirmwareFiles: (state, action) => {
       state.firmwareFiles = action.payload;
     },
@@ -134,6 +134,15 @@ const usbFlashSlice = createSlice({
     },
     setIsLoadingFirmware: (state, action) => {
       state.isLoadingFirmware = action.payload;
+    },
+    setDetectPort: (state, action) => {
+      state.detectPort = action.payload;
+    },
+    setIsDetectingBoard: (state, action) => {
+      state.isDetectingBoard = action.payload;
+    },
+    setBoardDetection: (state, action) => {
+      state.boardDetection = action.payload;
     },
 
     // Flash options
@@ -217,13 +226,14 @@ export const {
   setSelectedPort,
   setIsLoadingPorts,
   setPortMatch,
-  setFirmwareServerUrl,
-  setDefaultFirmwareServerUrl,
   setFirmwareFiles,
   setSelectedFirmware,
   setIsLoadingFirmware,
   setFirmwareSearchQuery,
   setShowMergedFirmware,
+  setDetectPort,
+  setIsDetectingBoard,
+  setBoardDetection,
   setBaudRate,
   setReconnectAfter,
   setEraseFlash,

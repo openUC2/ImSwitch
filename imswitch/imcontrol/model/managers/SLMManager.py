@@ -1,541 +1,438 @@
-import enum
-import glob
-import math
+"""Spatial light modulator / DMD shown as a display in a plane conjugate to the sample.
+
+The manager owns the output (see ``slm_display``), the camera->display affine
+calibration, the built-in test patterns and the pattern sequences on disk.
+Everything is in *display pixels* (x right, y down, origin top-left) unless a
+name says camera. Camera pixels are full-sensor pixels of the calibrated camera.
+
+Files: ``~/ImSwitchConfig/slm/slm_affine_<name>.json`` and
+``~/ImSwitchConfig/slm/sequences/<sequence>/NNNN_<frame>.png``.
+"""
+from __future__ import annotations
+
+import json
 import os
+import re
+import shutil
+import threading
+import time
+from typing import Dict, List, Optional, Sequence, Tuple
 
+import cv2
 import numpy as np
-from PIL import Image
-
 
 from imswitch.imcommon.framework import Signal, SignalInterface
-from imswitch.imcommon.model import initLogger
+from imswitch.imcommon.model import dirtools, initLogger
+from .galvoscanners.GalvoScannerManager import AffineTransform
+from .slm_display import FramebufferDisplay, VirtualDisplay, WindowDisplay, open_display
 
+# Display positions (fractions of width/height) for the calibration spots, in
+# the order they are used; nPoints=5 gives the centre plus the inner corners.
+_CAL_FRACTIONS = [(0.5, 0.5), (0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75),
+                  (0.5, 0.25), (0.5, 0.75), (0.25, 0.5), (0.75, 0.5)]
+
+
+# ───────────────────────────── patterns ─────────────────────────────
+
+def pattern_blank(w: int, h: int, value: int = 0, **_) -> np.ndarray:
+    return np.full((h, w), np.clip(int(value), 0, 255), np.uint8)
+
+
+def pattern_checkerboard(w: int, h: int, period: float = 64, value: int = 255,
+                         **_) -> np.ndarray:
+    half = max(1, int(round(period / 2)))
+    y, x = np.mgrid[0:h, 0:w]
+    return (((x // half) + (y // half)) % 2 * int(value)).astype(np.uint8)
+
+
+def pattern_grating(w: int, h: int, period: float = 32, angle: float = 0, duty: float = 0.5,
+                    value: int = 255, phase: float = 0, sinusoidal: bool = False,
+                    **_) -> np.ndarray:
+    """Binary (or sinusoidal) line grating; ``angle`` in degrees, ``phase`` in periods."""
+    period = max(2.0, float(period))
+    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
+    t = np.deg2rad(float(angle))
+    proj = (x * np.cos(t) + y * np.sin(t)) / period + float(phase)
+    if sinusoidal:
+        img = 0.5 + 0.5 * np.cos(2 * np.pi * proj)
+    else:
+        img = (proj % 1.0) < float(duty)
+    return np.round(img * int(value)).astype(np.uint8)
+
+
+def pattern_disk(w: int, h: int, cx: float = -1, cy: float = -1, radius: float = 20,
+                 value: int = 255, **_) -> np.ndarray:
+    img = np.zeros((h, w), np.uint8)
+    cx = w / 2 if cx < 0 else cx
+    cy = h / 2 if cy < 0 else cy
+    cv2.circle(img, (int(round(cx)), int(round(cy))), max(1, int(round(radius))),
+               int(value), -1, lineType=cv2.LINE_8)
+    return img
+
+
+def pattern_grid(w: int, h: int, nx: int = 3, ny: int = 3, radius: float = 10,
+                 value: int = 255, **_) -> np.ndarray:
+    img = np.zeros((h, w), np.uint8)
+    for i in range(max(1, int(nx))):
+        for j in range(max(1, int(ny))):
+            cx = int(round((i + 0.5) * w / max(1, int(nx))))
+            cy = int(round((j + 0.5) * h / max(1, int(ny))))
+            cv2.circle(img, (cx, cy), max(1, int(round(radius))), int(value), -1)
+    return img
+
+
+PATTERNS = {"blank": pattern_blank, "checkerboard": pattern_checkerboard,
+            "grating": pattern_grating, "disk": pattern_disk, "grid": pattern_grid}
+
+
+def make_pattern(kind: str, w: int, h: int, **params) -> np.ndarray:
+    if kind not in PATTERNS:
+        raise ValueError(f"unknown pattern {kind!r}; one of {sorted(PATTERNS)}")
+    return PATTERNS[kind](int(w), int(h), **params)
+
+
+def fit_frame(frame: np.ndarray, size: Tuple[int, int], mode: str = "center") -> np.ndarray:
+    """Bring a uint8 image to the display size: ``center`` keeps 1:1 pixels (pad/crop),
+    ``stretch`` resizes with nearest neighbour (binary stays binary)."""
+    w, h = size
+    f = np.asarray(frame)
+    if f.dtype != np.uint8:
+        f = np.clip(f, 0, 255).astype(np.uint8)
+    if f.shape[0] == h and f.shape[1] == w:
+        return f
+    if mode == "stretch":
+        return cv2.resize(f, (w, h), interpolation=cv2.INTER_NEAREST)
+    out = np.zeros((h, w) + f.shape[2:], np.uint8)
+    fh, fw = f.shape[:2]
+    sy, sx = max(0, (fh - h) // 2), max(0, (fw - w) // 2)
+    dy, dx = max(0, (h - fh) // 2), max(0, (w - fw) // 2)
+    ch, cw = min(h, fh), min(w, fw)
+    out[dy:dy + ch, dx:dx + cw] = f[sy:sy + ch, sx:sx + cw]
+    return out
+
+
+def decode_image(data: bytes) -> np.ndarray:
+    """Any image file (PNG, BMP, TIFF, JPEG, ...) as uint8 grey."""
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise ValueError("not a decodable image")
+    return img
+
+
+def encode_png(frame: np.ndarray, max_size: int = 0) -> bytes:
+    f = np.asarray(frame)
+    if f.dtype != np.uint8:
+        lo, hi = float(np.min(f)), float(np.max(f))
+        f = ((f - lo) / (hi - lo) * 255).astype(np.uint8) if hi > lo \
+            else np.zeros(f.shape, np.uint8)
+    if max_size and max(f.shape[:2]) > max_size:
+        s = max_size / max(f.shape[:2])
+        f = cv2.resize(f, (max(1, int(f.shape[1] * s)), max(1, int(f.shape[0] * s))),
+                       interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".png", f)
+    if not ok:
+        raise RuntimeError("PNG encoding failed")
+    return buf.tobytes()
+
+
+def spot_centroid(frame: np.ndarray, dark: Optional[np.ndarray] = None,
+                  min_snr: float = 5.0) -> Optional[Tuple[float, float, float]]:
+    """(x, y, snr) of one bright spot, or None when there is no clear spot.
+
+    ``dark`` is a frame with the display blank; subtracting it removes ambient
+    light and hot pixels. The spot is the connected bright region above half
+    the peak after a Gaussian blur; its intensity-weighted centroid is returned.
+    """
+    f = np.asarray(frame, np.float32)
+    if f.ndim == 3:
+        f = f.mean(axis=2)
+    if dark is not None and np.asarray(dark).size == f.size:
+        f = f - np.asarray(dark, np.float32).reshape(f.shape)
+    f = cv2.GaussianBlur(f, (0, 0), 3)
+    med = float(np.median(f))
+    mad = float(np.median(np.abs(f - med))) * 1.4826 + 1e-6
+    peak = float(f.max())
+    snr = (peak - med) / mad
+    if snr < min_snr:
+        return None
+    mask = (f > med + 0.5 * (peak - med)).astype(np.uint8)
+    n, labels = cv2.connectedComponents(mask)
+    if n > 2:  # keep the component holding the peak
+        py, px = np.unravel_index(int(np.argmax(f)), f.shape)
+        mask = (labels == labels[py, px]).astype(np.uint8)
+    weights = (f - med) * mask
+    m = cv2.moments(weights, binaryImage=False)
+    if m["m00"] <= 0:
+        return None
+    return m["m10"] / m["m00"], m["m01"] / m["m00"], snr
+
+
+def calibration_points(n: int, size: Tuple[int, int]) -> List[Tuple[int, int]]:
+    """Display positions of the calibration spots (3..9)."""
+    n = max(3, min(len(_CAL_FRACTIONS), int(n)))
+    w, h = size
+    return [(int(round(fx * w)), int(round(fy * h))) for fx, fy in _CAL_FRACTIONS[:n]]
+
+
+_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_name(name: str) -> str:
+    name = _NAME_RE.sub("_", str(name or "")).strip("._")
+    if not name:
+        raise ValueError("empty name")
+    return name[:80]
+
+
+# ───────────────────────────── manager ─────────────────────────────
 
 class SLMManager(SignalInterface):
+    """One SLM/DMD display plus its camera mapping. See the module docstring."""
 
-    def __init__(self, slmInfo, *args, **kwargs):
+    sigSLMFrameShown = Signal(object)  # {"seq": int, "source": str}
+
+    def __init__(self, slmInfo, name: str = "SLM", *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.sigSLMMaskUpdated = Signal(object)  # (maskCombined)
-        self.__logger = initLogger(self)
-
-        if slmInfo is None:
-            return
-
-        self.__slmInfo = slmInfo
-        self.__wavelength = self.__slmInfo.wavelength
-        self.__pixelsize = self.__slmInfo.pixelSize
-        self.__slmSize = (self.__slmInfo.width, self.__slmInfo.height)
-        self.__correctionPatternsDir = self.__slmInfo.correctionPatternsDir
-        self.__maskLeft = Mask(self.__slmSize[1], int(self.__slmSize[0] / 2), self.__wavelength)
-        self.__maskRight = Mask(self.__slmSize[1], int(self.__slmSize[0] / 2), self.__wavelength)
-        self.__masks = [self.__maskLeft, self.__maskRight]
-
-        #self.initCorrectionMask()
-        self.initTiltMask()
-        self.initAberrationMask()
-
-        self.__masksAber = [self.__maskAberLeft, self.__maskAberRight]
-        self.__masksTilt = [self.__maskTiltLeft, self.__maskTiltRight]
-
-        self.update(maskChange=True, tiltChange=True, aberChange=True)
-
-    def saveState(self, state_general=None, state_pos=None, state_aber=None):
-        if state_general is not None:
-            self.state_general = state_general
-        if state_pos is not None:
-            self.state_pos = state_pos
-        if state_aber is not None:
-            self.state_aber = state_aber
-
-    def initCorrectionMask(self):
-        # Add correction mask with correction pattern
-        self.__maskCorrection = Mask(self.__slmSize[1], int(self.__slmSize[0]), self.__wavelength)
-        bmpsCorrection = glob.glob(os.path.join(self.__correctionPatternsDir, "*.bmp"))
-
-        if len(bmpsCorrection) < 1:
-            self.__logger.error(
-                'No BMP files found in correction patterns directory, cannot initialize correction'
-                ' mask.'
-            )
-            return
-
-        wavelengthCorrection = [int(x[-9: -6]) for x in bmpsCorrection]
-        # Find the closest correction pattern within the list of patterns available
-        wavelengthCorrectionLoad = min(wavelengthCorrection,
-                                       key=lambda x: abs(x - self.__wavelength))
-        self.__maskCorrection.loadBMP("CAL_LSH0701153_" + str(wavelengthCorrectionLoad) + "nm",
-                                      self.__correctionPatternsDir)
-
-    def initTiltMask(self):
-        # Add blazed grating tilting mask
-        self.__maskTiltLeft = Mask(self.__slmSize[1], int(self.__slmSize[0] / 2),
-                                   self.__wavelength)
-        self.__maskTiltLeft.setTilt(self.__pixelsize)
-        self.__maskTiltRight = Mask(self.__slmSize[1], int(self.__slmSize[0] / 2),
-                                    self.__wavelength)
-        self.__maskTiltRight.setTilt(self.__pixelsize)
-
-    def initAberrationMask(self):
-        # Add blazed grating tilting mask
-        self.__maskAberLeft = Mask(self.__slmSize[1], int(self.__slmSize[0] / 2),
-                                   self.__wavelength)
-        self.__maskAberLeft.setBlack()
-        self.__maskAberRight = Mask(self.__slmSize[1], int(self.__slmSize[0] / 2),
-                                    self.__wavelength)
-        self.__maskAberRight.setBlack()
-
-    def setMask(self, mask, maskMode):
-        if self.__masks[mask].mask_type == MaskMode.Black and maskMode != MaskMode.Black:
-            self.__masksTilt[mask].setTilt(self.__pixelsize)
-        if maskMode == maskMode.Donut:
-            self.__masks[mask].setDonut()
-        elif maskMode == maskMode.Tophat:
-            self.__masks[mask].setTophat()
-        elif maskMode == maskMode.Half:
-            self.__masks[mask].setHalf()
-        elif maskMode == maskMode.Gauss:
-            self.__masks[mask].setGauss()
-        elif maskMode == maskMode.Hex:
-            self.__masks[mask].setHex()
-        elif maskMode == maskMode.Quad:
-            self.__masks[mask].setQuad()
-        elif maskMode == maskMode.Split:
-            self.__masks[mask].setSplit()
-        elif maskMode == maskMode.Black:
-            self.__masks[mask].setBlack()
-            self.__masksTilt[mask].setBlack()
-            self.__masksAber[mask].setBlack()
-
-    def moveMask(self, mask, direction, amount):
-        if direction == direction.Up:
-            move_v = np.array([-1, 0]) * amount
-        elif direction == direction.Down:
-            move_v = np.array([1, 0]) * amount
-        elif direction == direction.Left:
-            move_v = np.array([0, -1]) * amount
-        elif direction == direction.Right:
-            move_v = np.array([0, 1]) * amount
-
-        self.__masks[mask].moveCenter(move_v)
-        self.__masksTilt[mask].moveCenter(move_v)
-        self.__masksAber[mask].moveCenter(move_v)
-
-    def getCenters(self):
-        centerCoords = {"left": self.__masks[0].getCenter(),
-                        "right": self.__masks[1].getCenter()}
-        return centerCoords
-
-    def setCenters(self, centerCoords):
-        for idx, (mask, masktilt, maskaber) in enumerate(zip(self.__masks, self.__masksTilt,
-                                                             self.__masksAber)):
-            if idx == 0:
-                center = (centerCoords["left"]["xcenter"], centerCoords["left"]["ycenter"])
-            elif idx == 1:
-                center = (centerCoords["right"]["xcenter"], centerCoords["right"]["ycenter"])
-            mask.setCenter(center)
-            masktilt.setCenter(center)
-            maskaber.setCenter(center)
-
-    def setGeneral(self, general_info):
-        self.setRadius(general_info["radius"])
-        self.setSigma(general_info["sigma"])
-        self.setRotationAngle(general_info["rotationAngle"])
-        self.setTiltAngle(general_info["tiltAngle"])
-
-    def setAberrationFactors(self, aber_info):
-        lAberFactors = aber_info["left"]
-        self.__masksAber[0].setAberrationFactors(lAberFactors)
-        rAberFactors = aber_info["right"]
-        self.__masksAber[1].setAberrationFactors(rAberFactors)
-
-    def setAberrations(self, aber_info, mask):
-        if mask == 0 or mask == None:
-            lAberFactors = aber_info["left"]
-            self.__masksAber[0].setAberrationFactors(lAberFactors)
-            self.__masksAber[0].setAberrations()
-        if mask == 1 or mask == None:
-            rAberFactors = aber_info["right"]
-            self.__masksAber[1].setAberrationFactors(rAberFactors)
-            self.__masksAber[1].setAberrations()
-
-    def setRadius(self, radius):
-        for mask, masktilt, maskaber in zip(self.__masks, self.__masksTilt, self.__masksAber):
-            mask.setRadius(radius)
-            masktilt.setRadius(radius)
-            maskaber.setRadius(radius)
-
-    def setSigma(self, sigma):
-        for mask in self.__masks:
-            mask.setSigma(sigma)
-
-    def setRotationAngle(self, rotation_angle):
-        for mask in self.__masks:
-            mask.setRotationAngle(rotation_angle)
-
-    def setTiltAngle(self, tilt_angle):
-        inverts = [1,-1]
-        for idx, mask in enumerate(self.__masksTilt):
-            mask.setTiltAngle(tilt_angle, inverts[idx])
-
-    def update(self, maskChange=False, tiltChange=False, aberChange=False):
-        if maskChange:
-            self.maskDouble = self.__masks[0].concat(self.__masks[1])
-        if tiltChange:
-            self.maskTilt = self.__masksTilt[0].concat(self.__masksTilt[1])
-        if aberChange:
-            self.maskAber = self.__masksAber[0].concat(self.__masksAber[1])
-        self.maskCombined = self.maskDouble + self.maskAber + self.maskTilt #+ self.__maskCorrection
-        self.sigSLMMaskUpdated.emit(self.maskCombined)
-
-        returnmask = self.maskDouble + self.maskAber
-        return returnmask.image()
-
-
-class Mask:
-    """Class creating a mask to be displayed by the SLM."""
-
-    def __init__(self, height: int, width: int, wavelength: int):
-        """initiates the mask as an empty array
-        n,m corresponds to the width,height of the created image
-        wavelength is the illumination wavelength in nm"""
-        self.__logger = initLogger(self, tryInheritParent=True)
-        self.zeroimg = np.zeros((height, width), dtype=np.uint8)
-        self.img = np.zeros((height, width), dtype=np.uint8)
-        self.height = height
-        self.width = width
-        self.value_max = 255
-        self.centerx = self.height // 2
-        self.centery = self.width // 2
-        self.radius = 100
-        self.sigma = 35
-        self.wavelength = wavelength
-        self.mask_type = MaskMode.Black
-        self.angle_rotation = 0
-        self.angle_tilt = 0
-        self.pixelSize = 0
-        if wavelength == 561:
-            self.value_max = 148
-        elif wavelength == 491:
-            self.value_max = 129
-        elif wavelength < 780 and wavelength > 800:
-            # Here we infer the value of the maximum with a linear approximation from the ones
-            # provided by the manufacturer
-            # Better ask them in case you need another wavelength
-            self.value_max = int(wavelength * 0.45 - 105)
-            self.__logger.warning("Caution: a linear approximation has been made")
-
-    def concat(self, maskOther):
-        for mask in [self, maskOther]:
-            mask.updateImage()
-            mask.setCircular()
-        maskCombined = Mask(self.height, self.width * 2, self.wavelength)
-        imgCombined = np.concatenate((self.img, maskOther.img), axis=1)
-        maskCombined.loadArray(imgCombined)
-        return maskCombined
-
-    def loadArray(self, mask):
-        self.img = mask
-
-    def image(self):
-        return self.img
-
-    def loadBMP(self, filename, path):
-        """Loads a .bmp image as the img of the mask."""
-        with Image.open(os.path.join(path, filename + ".bmp")) as data:
-            imgLoad = np.array(data)
-        heightLoad, widthLoad = imgLoad.shape
-        if heightLoad > self.height:
-            diff = heightLoad - self.height
-            imgLoad = imgLoad[(diff // 2): (self.height + diff // 2), :]
-        if widthLoad > self.width:
-            diff = widthLoad - self.width
-            imgLoad = imgLoad[:, diff // 2: self.width + diff // 2]
-
-        if heightLoad <= self.height and widthLoad <= self.width:
-            result = np.zeros((self.height, self.width))
-            diffx = (self.width - widthLoad) // 2
-            diffy = (self.height - heightLoad) // 2
-            result[diffy: heightLoad + diffy, diffx: widthLoad + diffx] = imgLoad
-            imgLoad = result
-
-        self.height, self.width = imgLoad.shape
-        self.img[:, :] = imgLoad[:, :]
-        self.scaleToLut()
-
-    def scaleToLut(self):
-        """Scales the values of the pixels according to the LUT"""
-        self.img = self.img.astype("float")
-        self.img *= self.value_max / np.max(self.img)
-        self.img = self.img.astype("uint8")
-
-    def pi2uint8(self):
-        """Method converting a phase image (values from 0 to 2Pi) into a uint8
-        image"""
-        self.img *= self.value_max / (2 * math.pi)
-        self.img = np.round(self.img).astype(np.uint8)
-
-    def load(self, img):
-        """Initiates the mask with an existing image."""
-        tp = img.dtype
-        if tp != np.uint8:
-            max_val = np.max(img)
-            self.__logger.warning("Input image is not of format uint8")
-            if max_val != 0:
-                img = self.value_max * img.astype('float64') / np.max(img)
-            img = img.astype('uint8')
-        self.img = img
-        return
-
-    def setCircular(self):
-        """This method sets to 0 all the values within Mask except the ones
-        included in a circle centered in (centerx,centery) with a radius r"""
-        x, y = np.ogrid[-self.centerx: self.height - self.centerx,
-                        -self.centery: self.width - self.centery]
-        mask_bin = x * x + y * y <= self.radius * self.radius
-        result = np.zeros((self.height, self.width))
-        result[mask_bin] = self.img[mask_bin]
-        self.img = result
-
-    def setTilt(self, pixelsize=None):
-        """Creates a tilt mask, blazed grating, for off-axis holography."""
-        if pixelsize:
-            self.pixelSize = pixelsize
-        wavelength = self.wavelength * 10 ** -6  # conversion to mm
-        mask = np.indices((self.height, self.width), dtype="float")[1, :, :]
-        # Spatial frequency, round to avoid aliasing
-        f_spat = np.round(wavelength / (self.pixelSize * np.sin(self.angle_tilt)))
-        if np.absolute(f_spat) < 3:
-            self.__logger.debug(f"Spatial frequency: {f_spat} pixels")
-        period = 2 * math.pi / f_spat  # period
-        mask *= period  # getting a mask that is time along x-axis with a certain period
-        from scipy import signal as sg
-        tilt = sg.sawtooth(mask) + 1  # creating the blazed grating
-        tilt *= self.value_max / 2  # normalizing it to range of [0 value_max]
-        tilt = np.round(tilt).astype(np.uint8)  # getting it in np.uint8 type
-        self.img = tilt
-        self.mask_type = MaskMode.Tilt
-
-    def setAberrationFactors(self, aber_params_info):
-        self.aber_params_info = aber_params_info
-
-    def setAberrations(self):
-        fTilt = self.aber_params_info["tilt"]
-        fTip = self.aber_params_info["tip"]
-        fDefoc = self.aber_params_info["defocus"]
-        fSph = self.aber_params_info["spherical"]
-        fVertComa = self.aber_params_info["verticalComa"]
-        fHozComa = self.aber_params_info["horizontalComa"]
-        fVertAst = self.aber_params_info["verticalAstigmatism"]
-        fOblAst = self.aber_params_info["obliqueAstigmatism"]
-
-        mask = np.fromfunction(lambda i, j: fTilt * 2 * np.sqrt(((i - self.centerx) / self.radius)**2 + ((j - self.centery) / self.radius)**2) * np.sin(np.arctan2(((j - self.centery) / self.radius), ((i - self.centerx) / self.radius))), (self.height, self.width), dtype="float")
-        mask += np.fromfunction(lambda i, j: fTip * 2 * np.sqrt(((i - self.centerx) / self.radius)**2 + ((j - self.centery) / self.radius)**2) * np.cos(np.arctan2(((j - self.centery) / self.radius), ((i - self.centerx) / self.radius))), (self.height, self.width), dtype="float")
-        mask += np.fromfunction(lambda i, j: fDefoc * np.sqrt(3) * (2 * (((i - self.centerx) / self.radius)**2 + ((j - self.centery) / self.radius)**2) - 1), (self.height, self.width), dtype="float")
-        mask += np.fromfunction(lambda i, j: fSph * np.sqrt(5) * (6 * (((i - self.centerx) / self.radius)**2 + ((j - self.centery) / self.radius)**2)**4 - 6 * (((i - self.centerx) / self.radius)**2 + ((j - self.centery) / self.radius)**2) + 1), (self.height, self.width), dtype="float")
-        mask += np.fromfunction(lambda i, j: fVertComa * np.sqrt(8) * np.sin(np.arctan2(((j - self.centery) / self.radius), ((i - self.centerx) / self.radius))) * (3 * (np.sqrt(((i - self.centerx) / self.radius)**2 + ((j - self.centery) / self.radius)**2))**3 - 2 * np.sqrt(((i - self.centerx) / self.radius)**2 + ((j - self.centery) / self.radius)**2)), (self.height, self.width), dtype="float")
-        mask += np.fromfunction(lambda i, j: fHozComa * np.sqrt(8) * np.cos(np.arctan2(((j - self.centery) / self.radius), ((i - self.centerx) / self.radius))) * (3 * (np.sqrt(((i - self.centerx) / self.radius)**2 + ((j - self.centery) / self.radius)**2))**3 - 2 * np.sqrt(((i - self.centerx) / self.radius)**2 + ((j - self.centery) / self.radius)**2)), (self.height, self.width), dtype="float")
-        mask += np.fromfunction(lambda i, j: fVertAst * np.sqrt(6) * np.cos(2 * np.arctan2(((j - self.centery) / self.radius), ((i - self.centerx) / self.radius))) * ((np.sqrt(((i - self.centerx) / self.radius)**2 + ((j - self.centery) / self.radius)**2))**2), (self.height, self.width), dtype="float")
-        mask += np.fromfunction(lambda i, j: fOblAst * np.sqrt(6) * np.sin(2 * np.arctan2(((j - self.centery) / self.radius), ((i - self.centerx) / self.radius))) * ((np.sqrt(((i - self.centerx) / self.radius)**2 + ((j - self.centery) / self.radius)**2))**2), (self.height, self.width), dtype="float")
-
-        mask %= 2 * math.pi
-        self.img = mask
-        self.pi2uint8()
-        self.mask_type = MaskMode.Aber
-
-    def getCenter(self):
-        return (self.centerx, self.centery)
-
-    def setCenter(self, setCoords):
-        self.centerx, self.centery = setCoords
-
-    def setRadius(self, radius):
-        self.radius = radius
-
-    def setSigma(self, sigma):
-        self.sigma = sigma
-
-    def setRotationAngle(self, rotation_angle):
-        self.angle_rotation = rotation_angle
-
-    def setTiltAngle(self, tilt_angle, invert):
-        self.angle_tilt = invert * tilt_angle * math.pi / 180
-
-    def moveCenter(self, move_v):
-        self.centerx = self.centerx + move_v[0]
-        self.centery = self.centery + move_v[1]
-
-    def setBlack(self):
-        self.img = self.zeroimg
-        self.mask_type = MaskMode.Black
-
-    def setGauss(self):
-        self.img = np.ones((self.height, self.width), dtype=np.uint8) * self.value_max // 2
-        self.mask_type = MaskMode.Gauss
-
-    def setDonut(self, rotation=True):
-        """This function generates a donut mask, with the center defined in the
-        mask object."""
-        mask = np.zeros((self.height, self.width), dtype="float")
-        x, y = np.ogrid[-self.centerx: self.height - self.centerx,
-                        -self.centery: self.width - self.centery]
-        theta = np.arctan2(x, y)
-
-        mask = theta % (2 * np.pi)
-        if rotation:
-            mask = np.ones((self.height, self.width), dtype="float") * (2 * np.pi) - mask
-
-        self.img = mask
-        self.pi2uint8()
-        self.mask_type = MaskMode.Donut
-
-    def setTophat(self):
-        """This function generates a tophat mask with a mid-radius defined by
-        sigma, and with the center defined in the mask object."""
-        mask = np.zeros((self.height, self.width), dtype="float")
-        x, y = np.ogrid[-self.centerx: self.height - self.centerx,
-                        -self.centery: self.width - self.centery]
-        d = x ** 2 + y ** 2
-
-        mid_radius = self.sigma * np.sqrt(
-            2 * np.log(2 / (1 + np.exp(-self.radius ** 2 / (2 * self.sigma ** 2))))
-        )
-        tophat_bool = (d > mid_radius ** 2)
-        mask[tophat_bool] = np.pi
-
-        self.img = mask
-        self.pi2uint8()
-        self.mask_type = MaskMode.Tophat
-
-    def setHalf(self):
-        """Sets the current masks to half masks, with the same center,
-        for accurate center position determination."""
-        mask = np.zeros((self.height, self.width), dtype="float")
-        x, y = np.ogrid[-self.centerx: self.height - self.centerx,
-                        -self.centery: self.width - self.centery]
-        theta = np.arctan2(x, y) + self.angle_rotation
-
-        half_bool = (abs(theta) < np.pi / 2)
-        mask[half_bool] = np.pi
-
-        self.img = mask
-        self.pi2uint8()
-        self.mask_type = MaskMode.Half
-
-    def setQuad(self):
-        """Transforms the current mask in a quadrant pattern mask for testing
-        aberrations."""
-        mask = np.zeros((self.height, self.width), dtype="float")
-        x, y = np.ogrid[-self.centerx: self.height - self.centerx,
-                        -self.centery: self.width - self.centery]
-        theta = np.arctan2(x, y) + self.angle_rotation
-
-        quad_bool = (theta < np.pi) * (theta > np.pi / 2) + (theta < 0) * (theta > -np.pi / 2)
-        mask[quad_bool] = np.pi
-
-        self.img = mask
-        self.pi2uint8()
-        self.mask_type = MaskMode.Quad
-
-    def setHex(self):
-        """Transforms the current mask in a hex pattern mask for testing
-        aberrations."""
-        mask = np.zeros((self.height, self.width), dtype="float")
-        x, y = np.ogrid[-self.centerx: self.height - self.centerx,
-                        -self.centery: self.width - self.centery]
-        theta = np.arctan2(x, y) + self.angle_rotation
-
-        hex_bool = ((theta < np.pi / 3) * (theta > 0) +
-                    (theta > -2 * np.pi / 3) * (theta < -np.pi / 3) +
-                    (theta > 2 * np.pi / 3) * (theta < np.pi))
-        mask[hex_bool] = np.pi
-
-        self.img = mask
-        self.pi2uint8()
-        self.mask_type = MaskMode.Hex
-
-    def setSplit(self):
-        """Transforms the current mask in a split bullseye pattern mask for
-        testing aberrations."""
-        mask = np.zeros((self.height, self.width), dtype="float")
-        mask1 = np.zeros((self.height, self.width), dtype="float")
-        mask2 = np.zeros((self.height, self.width), dtype="float")
-        x, y = np.ogrid[-self.centerx: self.height - self.centerx,
-                        -self.centery: self.width - self.centery]
-        theta = np.arctan2(x, y) + self.angle_rotation
-
-        radius_factor = 0.6
-        mid_radius = radius_factor * self.radius
-        d = x ** 2 + y ** 2
-        ring = (d > mid_radius ** 2)
-        mask1[ring] = np.pi
-        midLine = (abs(theta) < np.pi / 2)
-        mask2[midLine] = np.pi
-        mask = (mask1 + mask2) % (2 * np.pi)
-
-        self.img = mask
-        self.pi2uint8()
-        self.mask_type = MaskMode.Split
-
-    def updateImage(self):
-        if self.mask_type == MaskMode.Black:
-            self.setBlack()
-        elif self.mask_type == MaskMode.Gauss:
-            self.setGauss()
-        elif self.mask_type == MaskMode.Donut:
-            self.setDonut()
-        elif self.mask_type == MaskMode.Tophat:
-            self.setTophat()
-        elif self.mask_type == MaskMode.Half:
-            self.setHalf()
-        elif self.mask_type == MaskMode.Quad:
-            self.setQuad()
-        elif self.mask_type == MaskMode.Hex:
-            self.setHex()
-        elif self.mask_type == MaskMode.Split:
-            self.setSplit()
-        elif self.mask_type == MaskMode.Tilt:
-            self.setTilt()
-        elif self.mask_type == MaskMode.Aber:
-            self.setAberrations()
-
-    def __str__(self):
-        return "image of the mask"
-
-    def __add__(self, other):
-        if self.height == other.height and self.width == other.width:
-            out = Mask(self.height, self.width, self.wavelength)
-            out.load(((self.image() + other.image()) % (self.value_max + 1)).astype(np.uint8))
-            return out
-        else:
-            raise TypeError("Cannot add two masks with different shapes")
-
-
-class MaskMode(enum.Enum):
-    Donut = 1
-    Tophat = 2
-    Black = 3
-    Gauss = 4
-    Half = 5
-    Hex = 6
-    Quad = 7
-    Split = 8
-    Tilt = 9
-    Aber = 10
-
-
-class Direction(enum.Enum):
-    Up = 1
-    Down = 2
-    Left = 3
-    Right = 4
-
-
-class MaskChoice(enum.Enum):
-    Left = 0
-    Right = 1
-
-
-# Copyright (C) 2020-2024 ImSwitch developers
+        self._logger = initLogger(self)
+        self.name = name
+        self.info = slmInfo
+        self.backend = getattr(slmInfo, "display", "virtual") or "virtual"
+        self.displayIndex = int(getattr(slmInfo, "displayIndex", 0) or 0)
+        self._requested = (int(getattr(slmInfo, "width", 1920) or 1920),
+                           int(getattr(slmInfo, "height", 1080) or 1080))
+        self.settleTimeS = float(getattr(slmInfo, "settleTimeMs", 50.0) or 0) / 1000.0
+        self.calibrationDetector = getattr(slmInfo, "calibrationDetector", None)
+        self._lock = threading.Lock()
+        self._seq = 0
+        self.current: Optional[np.ndarray] = None
+        self.currentSource = ""
+        self.display = None
+        self.error = ""
+        self.affine = AffineTransform()
+        self.calibration: Dict = {}
+        self._load_affine()
+        self.open()
+
+    # ── output ──
+    @property
+    def size(self) -> Tuple[int, int]:
+        return self.display.size if self.display is not None else self._requested
+
+    @property
+    def connected(self) -> bool:
+        return self.display is not None and not isinstance(self.display, VirtualDisplay) \
+            or self.backend == "virtual" and self.display is not None
+
+    def open(self, backend: Optional[str] = None, index: Optional[int] = None) -> bool:
+        """(Re)open the output. On failure the manager keeps working on a virtual
+        display of the configured size and ``error`` says why."""
+        self.close()
+        if backend:
+            self.backend = backend
+        if index is not None:
+            self.displayIndex = int(index)
+        try:
+            self.display = open_display(self.backend, *self._requested, self.displayIndex)
+            self.error = ""
+            self._logger.info(f"SLM display {self.backend}[{self.displayIndex}] "
+                              f"{self.size[0]}x{self.size[1]}")
+            if self.current is None:
+                self.show(pattern_blank(*self.size), source="init", settle=0)
+            return True
+        except Exception as e:
+            self.error = f"{type(e).__name__}: {e}"
+            self._logger.warning(f"SLM display {self.backend} unavailable, virtual fallback: {e}")
+            self.display = VirtualDisplay(*self._requested)
+            return False
+
+    def close(self) -> None:
+        if self.display is not None:
+            try:
+                self.display.close()
+            except Exception as e:
+                self._logger.debug(f"closing SLM display: {e}")
+            self.display = None
+
+    def list_displays(self) -> list:
+        if self.backend == "window":
+            return WindowDisplay.list_displays()
+        if self.backend == "framebuffer":
+            return FramebufferDisplay.list_devices()
+        return []
+
+    def show(self, frame: np.ndarray, source: str = "pattern", fit: str = "center",
+             settle: Optional[float] = None) -> int:
+        """Put ``frame`` on the display, wait ``settle`` seconds (default the
+        configured settle time) and return the frame sequence number."""
+        f = fit_frame(frame, self.size, fit)
+        with self._lock:
+            self.display.show(f)
+            self._seq += 1
+            self.current, self.currentSource = f, source
+            seq = self._seq
+        time.sleep(self.settleTimeS if settle is None else max(0.0, settle))
+        self.sigSLMFrameShown.emit({"seq": seq, "source": source})
+        return seq
+
+    def show_pattern(self, kind: str, **params) -> int:
+        return self.show(make_pattern(kind, *self.size, **params), source=f"pattern:{kind}")
+
+    def preview_png(self, max_size: int = 512) -> bytes:
+        frame = self.current if self.current is not None else pattern_blank(*self.size)
+        return encode_png(frame, max_size)
+
+    # ── camera mapping ──
+    def camera_mask_to_display(self, mask: np.ndarray, camera_size: Tuple[int, int],
+                               value: int = 255, invert: bool = False) -> np.ndarray:
+        """Warp a mask drawn over the camera image (any resolution, nonzero = on)
+        into display pixels with the calibrated affine. ``camera_size`` is the
+        (width, height) the mask's extent corresponds to, in camera pixels."""
+        m = np.asarray(mask)
+        if m.ndim == 3:
+            m = m.max(axis=2)
+        mh, mw = m.shape
+        cw, ch = camera_size
+        sx, sy = cw / mw, ch / mh
+        # pixel centres: mask pixel i spans camera [i*s, (i+1)*s), centre (i+0.5)*s-0.5
+        scale = np.array([[sx, 0, (sx - 1) / 2], [0, sy, (sy - 1) / 2], [0, 0, 1]], float)
+        A = np.vstack([self.affine.to_matrix(), [0, 0, 1]])
+        M = (A @ scale)[:2]
+        w, h = self.size
+        warped = cv2.warpAffine((m > 0).astype(np.uint8), M, (w, h),
+                                flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT,
+                                borderValue=0)
+        on = warped == 0 if invert else warped > 0
+        return (on * np.clip(int(value), 0, 255)).astype(np.uint8)
+
+    def camera_to_display(self, x: float, y: float) -> Tuple[float, float]:
+        return self.affine.transform_point(x, y)
+
+    def display_to_camera(self, x: float, y: float) -> Tuple[float, float]:
+        inv = cv2.invertAffineTransform(self.affine.to_matrix())
+        return (float(inv[0, 0] * x + inv[0, 1] * y + inv[0, 2]),
+                float(inv[1, 0] * x + inv[1, 1] * y + inv[1, 2]))
+
+    def compute_affine(self, camera_points: Sequence[Sequence[float]],
+                       display_points: Sequence[Sequence[float]]) -> Dict:
+        """Fit camera->display from >=3 pairs, keep it and save it. Returns the
+        transform with the RMS residual in display pixels."""
+        cam = [tuple(map(float, p)) for p in camera_points]
+        disp = [tuple(map(float, p)) for p in display_points]
+        if len(cam) != len(disp) or len(cam) < 3:
+            raise ValueError("need at least 3 camera/display point pairs")
+        self.affine = AffineTransform.compute_from_point_pairs(cam, disp)
+        err = [np.hypot(*(np.subtract(self.affine.transform_point(*c), d)))
+               for c, d in zip(cam, disp)]
+        self.calibration = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "n_points": len(cam),
+                            "residual_px": float(np.sqrt(np.mean(np.square(err)))),
+                            "camera_points": cam, "display_points": disp}
+        self.save_affine()
+        return self.affine_dict()
+
+    def affine_dict(self) -> Dict:
+        return {"affine": self.affine.to_dict(), "calibrated": bool(self.calibration),
+                "calibration": self.calibration}
+
+    def set_affine(self, **coeffs) -> Dict:
+        d = self.affine.to_dict()
+        d.update({k: float(v) for k, v in coeffs.items() if v is not None and k in d})
+        self.affine = AffineTransform.from_dict(d)
+        self.calibration = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "manual": True}
+        self.save_affine()
+        return self.affine_dict()
+
+    def reset_affine(self) -> Dict:
+        self.affine = AffineTransform()
+        self.calibration = {}
+        self.save_affine()
+        return self.affine_dict()
+
+    def _slm_dir(self) -> str:
+        path = os.path.join(dirtools.UserFileDirs.Root, "slm")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _affine_path(self) -> str:
+        return os.path.join(self._slm_dir(), f"slm_affine_{safe_name(self.name)}.json")
+
+    def save_affine(self) -> str:
+        path = self._affine_path()
+        with open(path, "w") as f:
+            json.dump({"affine_transform": self.affine.to_dict(), "calibration": self.calibration,
+                       "display_size": list(self.size)}, f, indent=2)
+        return path
+
+    def _load_affine(self) -> None:
+        try:
+            with open(self._affine_path()) as f:
+                data = json.load(f)
+            self.affine = AffineTransform.from_dict(data.get("affine_transform", {}))
+            self.calibration = data.get("calibration", {}) or {}
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            self._logger.warning(f"Could not load SLM affine: {e}")
+
+    # ── sequences on disk ──
+    def _sequences_dir(self) -> str:
+        path = os.path.join(self._slm_dir(), "sequences")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def save_sequence(self, name: str, frames: Sequence[Tuple[str, np.ndarray]]) -> Dict:
+        """Store frames as ``NNNN_<name>.png`` (grey uint8), replacing the sequence."""
+        if not frames:
+            raise ValueError("a sequence needs at least one frame")
+        folder = os.path.join(self._sequences_dir(), safe_name(name))
+        shutil.rmtree(folder, ignore_errors=True)
+        os.makedirs(folder)
+        for i, (fname, img) in enumerate(frames):
+            stem = os.path.splitext(os.path.basename(fname or f"frame{i}"))[0]
+            cv2.imwrite(os.path.join(folder, f"{i:04d}_{safe_name(stem)}.png"),
+                        np.asarray(img, np.uint8))
+        return self.sequence_info(safe_name(name))
+
+    def sequence_info(self, name: str) -> Dict:
+        folder = os.path.join(self._sequences_dir(), safe_name(name))
+        files = sorted(f for f in os.listdir(folder) if f.lower().endswith(".png"))
+        size = None
+        if files:
+            first = cv2.imread(os.path.join(folder, files[0]), cv2.IMREAD_GRAYSCALE)
+            size = [int(first.shape[1]), int(first.shape[0])] if first is not None else None
+        return {"name": safe_name(name), "count": len(files), "size": size,
+                "frames": [f[5:-4] for f in files]}
+
+    def list_sequences(self) -> List[Dict]:
+        root = self._sequences_dir()
+        return [self.sequence_info(d) for d in sorted(os.listdir(root))
+                if os.path.isdir(os.path.join(root, d))]
+
+    def load_sequence(self, name: str) -> List[Tuple[str, np.ndarray]]:
+        folder = os.path.join(self._sequences_dir(), safe_name(name))
+        if not os.path.isdir(folder):
+            raise FileNotFoundError(f"no SLM sequence {name!r}")
+        out = []
+        for f in sorted(os.listdir(folder)):
+            if f.lower().endswith(".png"):
+                img = cv2.imread(os.path.join(folder, f), cv2.IMREAD_GRAYSCALE)
+                if img is not None:
+                    out.append((f[5:-4], img))
+        return out
+
+    def delete_sequence(self, name: str) -> None:
+        shutil.rmtree(os.path.join(self._sequences_dir(), safe_name(name)), ignore_errors=True)
+
+    # ── status ──
+    def status(self) -> Dict:
+        w, h = self.size
+        return {"name": self.name, "backend": self.backend, "displayIndex": self.displayIndex,
+                "width": w, "height": h, "connected": self.connected, "error": self.error,
+                "seq": self._seq, "source": self.currentSource,
+                "settleTimeMs": self.settleTimeS * 1000.0,
+                "calibrationDetector": self.calibrationDetector, **self.affine_dict()}
+
+
+# Copyright (C) 2020-2026 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

@@ -31,19 +31,25 @@ const JupyterExecutor = () => {
           `${hostIP}:${hostPort}/imswitch/api/jupyternotebookurl`,
         );
         const data = await response.json();
-        const notebookUrl = data["url"]; // e.g., http://192.168.1.100:8888/jupyter/
+        const notebookUrl = data["url"]; // e.g. http://192.168.1.100:8888/jupyter/
+        const serverUrl = new URL(notebookUrl);
+        const jupyterPath = data["path"] || serverUrl.pathname; // e.g. /jupyter/
+        const jupyterPort = data["port"] || serverUrl.port; // e.g. 8888
 
-        // Extract the path from the notebook URL
-        const urlObj = new URL(notebookUrl);
-        const jupyterPath = urlObj.pathname; // e.g., /jupyter/
-        // Construct both possible URLs:
-        // 1. Proxied URL through the ImSwitch API server (Caddy reverse proxy in Docker) e.g. http://localhost:80/jupyter/
-        const proxiedUrl = `${hostIP}:${hostPort}${jupyterPath}`;
+        // The server only knows its own address, which the browser may not be
+        // able to reach, so rebuild the URL against the host we are already
+        // talking to and take the first candidate that answers:
+        //   1. proxied on the API port  - Docker/Caddy, e.g. http://192.168.178.76:80/jupyter/
+        //   2. direct on the Jupyter port - local instance, e.g. http://100.100.43.118:8888/jupyter/
+        //   3. whatever the server reported - browser running on the server itself
+        const candidates = [
+          `${hostIP}:${hostPort}${jupyterPath}`,
+          `${hostIP}:${jupyterPort}${jupyterPath}`,
+          notebookUrl,
+        ];
 
-        console.log("Using proxied Jupyter URL:", proxiedUrl);
-
-        setJupyterUrl(proxiedUrl);
-        setEditableUrl(proxiedUrl);
+        setJupyterUrl(candidates[0]);
+        setEditableUrl(candidates[0]);
 
         const validateUrl = async (url) => {
           const controller = new AbortController();
@@ -61,21 +67,20 @@ const JupyterExecutor = () => {
           }
         };
 
-        const proxiedOk = await validateUrl(proxiedUrl);
-        if (!proxiedOk) {
-          const directOk = await validateUrl(notebookUrl);
-          if (directOk) {
+        for (const candidate of candidates) {
+          if (!(await validateUrl(candidate))) continue;
+          if (candidate !== candidates[0]) {
             dispatch(
               setNotification({
-                message:
-                  "Proxied Jupyter URL not reachable. Falling back to direct URL.",
+                message: `Proxied Jupyter URL not reachable. Using ${candidate}`,
                 type: "warning",
               }),
             );
-            console.log("Using Jupyter URL:", notebookUrl);
-            setJupyterUrl(notebookUrl);
-            setEditableUrl(notebookUrl);
           }
+          console.log("Using Jupyter URL:", candidate);
+          setJupyterUrl(candidate);
+          setEditableUrl(candidate);
+          break;
         }
       } catch (error) {
         console.error("Error fetching Jupyter URL:", error);

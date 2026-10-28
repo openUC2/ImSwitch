@@ -53,6 +53,7 @@ from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport, initLogger, dirtools
 
 from ..basecontrollers import ImConWidgetController
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 
 
 def _convert_to_native(obj):
@@ -219,12 +220,40 @@ class ReadNoiseCalibrationController(ImConWidgetController):
             arr = arr.mean(axis=2)
         return arr
 
-    def _grab_stack(self, detector, count: int, phase: str) -> np.ndarray:
-        """Capture ``count`` frame-synced frames, abortable, updating progress."""
+    def _exposure_seconds(self, detector) -> float:
+        """Current exposure in seconds (0.0 if the detector does not report one)."""
+        for read in (lambda: detector.getParameter("exposure"),
+                     lambda: detector.parameters["exposure"].value):
+            try:
+                return max(float(read()), 0.0) / 1000.0
+            except Exception:
+                continue
+        return 0.0
+
+    def _frame_timeout(self, detector) -> float:
+        """How long to wait for one frame before accepting a duplicate.
+
+        A frame cannot arrive faster than one exposure, so the budget has to
+        follow it: the previous fixed 5 s filled every stack above ~5 s exposure
+        with duplicates of the same stale frame instead of real captures.
+        """
+        return 5.0 + 3.0 * self._exposure_seconds(detector)
+
+    def _grab_stack(self, detector, count: int, phase: str, warmup: int = 1) -> np.ndarray:
+        """Capture ``count`` frame-synced frames, abortable, updating progress.
+
+        The first ``warmup`` frames are dropped: the frame in flight when the
+        exposure/gain was last changed still carries the old settings.
+        """
         frames = []
         last_fn = None
         supports_fn = True
-        per_frame_timeout = 5.0
+        per_frame_timeout = self._frame_timeout(detector)
+        try:
+            detector.flushBuffer()
+        except Exception:
+            pass
+        remaining_warmup = max(int(warmup), 0)
         while len(frames) < count:
             if self._abort.is_set():
                 raise _AcquisitionAborted()
@@ -254,6 +283,10 @@ class ReadNoiseCalibrationController(ImConWidgetController):
             arr = np.asarray(new_frame)
             if arr.ndim > 2:
                 arr = arr.mean(axis=2)
+            if remaining_warmup:
+                remaining_warmup -= 1
+                self._progress.update({"message": f"Discarding warm-up {phase} frame"})
+                continue
             frames.append(arr)
             self._progress.update(
                 {"step": len(frames), "total": count,
@@ -517,7 +550,7 @@ class ReadNoiseCalibrationController(ImConWidgetController):
             os.makedirs(subdir, exist_ok=True)
             path = os.path.join(subdir, f"{kind}_stack.tif")
             save_stack = stack.astype(np.float32) if np.issubdtype(stack.dtype, np.floating) else stack
-            tifffile.imwrite(path, save_stack)
+            save_image(path, save_stack, "TYX", name=f"{kind} frames")
             self._session[f"{kind}Count"] = int(stack.shape[0])
             self._session["status"] = f"{kind}_done"
             self._write_session()

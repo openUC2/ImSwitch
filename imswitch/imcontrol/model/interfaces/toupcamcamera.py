@@ -1,7 +1,10 @@
 import collections
+import csv
+import datetime
+import os
 import threading
 import time
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -32,6 +35,57 @@ LONG_EXPOSURE_THRESHOLD_MS = 2000.0
 UI_GAIN_MIN = 0
 UI_GAIN_MAX = 23
 
+# Sensor temperature monitor. The polling thread runs for as long as the
+# camera object exists -- not only while acquiring -- because the cooler runs
+# the whole time too. It does two jobs:
+#   * safety: above TEMPERATURE_SHUTDOWN_C the cooler and the window heater are
+#     switched off. A TEC dumps its own dissipation into the camera body, so a
+#     stalled fan or a failing cooler keeps driving the sensor hotter, and
+#     nothing else in the stack would notice.
+#   * logging (readSaveTemperature): one CSV row per interval while the camera
+#     is armed, appended to this file in the per-day recordings folder (the
+#     same folder the snaps go to).
+TEMPERATURE_LOG_INTERVAL_S = 5.0
+TEMPERATURE_LOG_FILENAME = "toupcam_temperature_log.csv"
+TEMPERATURE_LOG_COLUMNS = (
+    "timestamp", "unix_time_s", "camera", "sensor_temperature_c",
+    "tec_target_c", "tec_on", "fan_speed", "heat", "exposure_ms", "streaming",
+    "over_temperature", "tec_voltage_v", "parked",
+)
+# Sensor temperature at which the cooler is cut out, the temperature it has to
+# fall back to before it is re-armed, and how many consecutive samples either
+# decision needs -- one bogus reading must neither trip nor clear the cutoff.
+TEMPERATURE_SHUTDOWN_C = 30.0
+TEMPERATURE_RECOVERY_C = TEMPERATURE_SHUTDOWN_C - 5.0
+TEMPERATURE_SHUTDOWN_SAMPLES = 2
+# How often the monitor re-arms the cooler on its own. A camera that keeps
+# running hot has a hardware fault that power-cycling the TEC cannot fix, so
+# after this many recoveries the cooler stays off until a target is set again.
+TEMPERATURE_RECOVERY_ATTEMPTS = 3
+# The TEC target is re-written to the camera at this interval. One write is not
+# always enough: the camera can report the target back correctly, with the
+# cooler switched on, and still leave the sensor sitting at ambient for hours.
+# Re-asserting it costs one register write a minute and gets the regulation
+# going again without anyone having to notice and fix it by hand.
+TEMPERATURE_REASSERT_INTERVAL_S = 60.0
+# A cooler that is regulating gets within a few degrees of its target in a
+# minute or two. Staying this far above it for this long means it is not
+# working: a target outside the model's range, a dead TEC, or no heat path.
+TEMPERATURE_STALL_MARGIN_C = 5.0
+TEMPERATURE_STALL_AFTER_S = 300.0
+# Toupcam_Stop() cuts the TEC drive. Measured on an MTR3CMOS09000KMA (fw
+# 4.6.7.20221118): 5.8 V while the stream runs, 0.7 V right after Stop() and
+# 0 V a minute later, while TOUPCAM_OPTION_TEC still reads 1 and the target
+# still reads back correctly. Snaps that start and stop the stream every few
+# seconds walked the sensor from -30 to +6 °C. So on TEC models the stream is
+# started once and never stopped while the camera is open: "stopping" parks it
+# in software-trigger mode with nothing triggered (no exposures, no frames),
+# and "starting" switches back to the requested trigger mode. Parked like
+# this the sensor stayed within 1 °C through the same snap cycle.
+# Only settings the SDK picks up between streams (conversion gain, low noise,
+# pixel format, ROI) still restart it, and only when the value changes.
+PARK_TRIGGER_MODE = 1
+
 
 class CameraToupcam:
     """ToupTek (Toupcam) camera wrapper that grabs frames via the SDK's
@@ -51,9 +105,9 @@ class CameraToupcam:
     """
 
     def __init__(self, cameraNo=None, exposure_time=100, gain=0, frame_rate=-1,
-                 blacklevel=0, isRGB=False, binning=1, flipImage=(False, False),
-                 heat=True, lowNoise=True, conversionGain="HCG",
-                 blacklevelAutoAdjust=None):
+                 blacklevel=200, isRGB=False, binning=1, flipImage=(False, False),
+                 heat=False, lowNoise=True, conversionGain="HCG",
+                 blacklevelAutoAdjust=None, readSaveTemperature=True):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -74,8 +128,11 @@ class CameraToupcam:
         # Low-noise / long-exposure configuration. Each is applied only if the
         # camera advertises the corresponding capability flag; pass None to
         # leave the camera's own default alone.
-        #   heat            -- window heater, keeps a cooled camera from
-        #                      fogging up during long exposures (True = max level)
+        #   heat            -- window heater against condensation on a cooled
+        #                      sensor (True = max level). Off by default: it
+        #                      heats the camera from the inside, which works
+        #                      against the cooler and the sensor temperature
+        #                      that long exposures actually care about
         #   lowNoise        -- slower readout, higher SNR
         #   conversionGain  -- "LCG" / "HCG" / "HDR"; HCG gives the lower read
         #                      noise (at reduced full-well), which is what you
@@ -88,6 +145,30 @@ class CameraToupcam:
         self.conversionGain = conversionGain
         self.blacklevelAutoAdjust = blacklevelAutoAdjust
         self.exposure_time = exposure_time  # ms (UI convention, like CameraHIK)
+        # Cooling request, cached so a reopened handle (USB replug, failed
+        # StartPullMode) gets the same TEC target back instead of the camera's
+        # power-on default -- which is how a -30 °C sensor quietly warms up.
+        self.targetTemperature = -30.0  # °C
+        self.fanSpeed = 1  # -1 = the camera's default speed
+        # readSaveTemperature: poll the sensor temperature every
+        # TEMPERATURE_LOG_INTERVAL_S while the camera is armed and append it to
+        # a CSV in the day's recordings folder -- the record that tells whether
+        # a long exposure was actually taken at the requested TEC target.
+        self.readSaveTemperature = bool(readSaveTemperature)
+        self._tempMonitorThread: Optional[threading.Thread] = None
+        self._tempMonitorStop = threading.Event()
+        self._tempLogErrorLogged = False
+        self._tempMonitorErrorLogged = False
+        # Over-temperature cutoff state (see _checkTemperatureSafety).
+        self._tecOverTemp = False
+        self._tempOverSamples = 0
+        self._tempRecoverySamples = 0
+        self._tecRecoveryAttempts = 0
+        self._tecRecoveryExhaustedLogged = False
+        # TEC keep-alive / stall detection (see _maintainTecTarget).
+        self._lastTecReassert = 0.0
+        self._tecStallSince = None
+        self._tecStallLogged = False
         self.gain = gain
         self.frame_rate = frame_rate
         self.cameraNo = cameraNo if cameraNo is not None else 0
@@ -121,6 +202,15 @@ class CameraToupcam:
         self._reconnecting = False
         self._resume_stream_after_reconnect = False
         self._streamStats = self._newStreamStats()
+        # SDK stream state, separate from is_streaming (what ImSwitch sees):
+        # _sdkRunning = StartPullMode called and not stopped since; _parked =
+        # running but held in PARK_TRIGGER_MODE (see keepsStreamRunning).
+        self._sdkRunning = False
+        self._parked = False
+        self._triggerMode = 0  # requested TOUPCAM_OPTION_TRIGGER value
+        # Frames arriving before this host time were exposed (at least partly)
+        # before the stream was resumed and are dropped.
+        self._acceptFramesAfter = 0.0
 
         self._open_camera(self.cameraNo)
 
@@ -136,8 +226,8 @@ class CameraToupcam:
                 self.setBinning(binning)
             self.set_frame_rate(frame_rate)
             # set temperature/fan/TEC state if supported, otherwise ignore
-            self.set_temperature(-10)  # °C
-            self.set_fan_speed(True)
+            self.set_temperature(self.targetTemperature)
+            self.set_fan_speed(self.fanSpeed)
             # Low-noise long-exposure configuration. Applied before the stream
             # starts because conversion gain and low-noise mode change the
             # sensor readout, which the SDK only picks up between streams.
@@ -153,6 +243,14 @@ class CameraToupcam:
 
         except Exception as e:
             self.__logger.warning(f"Applying initial camera settings failed: {e}")
+
+        # TEC models run the stream parked from here on (see PARK_TRIGGER_MODE).
+        self._startParked()
+
+        # Started here rather than with the stream: the over-temperature cutoff
+        # is a safety function, not a logging option, and the cooler is already
+        # running at this point.
+        self._startTemperatureMonitor()
 
     # ---------------------------------------------------------------------
     # Camera discovery / opening
@@ -177,6 +275,10 @@ class CameraToupcam:
         # capabilities from the model flag
         flag = self._deviceFlags
         self._hasTEC = bool(flag & toupcam.TOUPCAM_FLAG_TEC_ONOFF)
+        # Settable TEC target range in °C. A target outside it is accepted by
+        # the SDK and read back unchanged, but the camera may then not regulate
+        # at all, so set_temperature() clamps to this.
+        self._tecTargetRange = None
         self._hasGetTemperature = bool(flag & toupcam.TOUPCAM_FLAG_GETTEMPERATURE)
         self._hasFan = bool(flag & toupcam.TOUPCAM_FLAG_FAN)
         self._hasBlacklevel = bool(flag & toupcam.TOUPCAM_FLAG_BLACKLEVEL)
@@ -213,6 +315,13 @@ class CameraToupcam:
             self._maxBitDepth = int(self.hcam.MaxBitDepth())
         except Exception:
             self._maxBitDepth = 8
+        if self._hasTEC:
+            try:
+                low, high = self.hcam.get_TecTargetRange()
+                self._tecTargetRange = (low / 10.0, high / 10.0)
+            except Exception:
+                self.__logger.debug("TEC target range not reported by this model")
+
         # Heater levels are model-specific; TOUPCAM_OPTION_HEAT_MAX reports the
         # top of the range, and heat=True means "that level".
         self._heatMax = 0
@@ -318,6 +427,9 @@ class CameraToupcam:
             f"swTrigger={self._hasSoftwareTrigger}, extTrigger={self._hasExternalTrigger}, "
             f"heat={self._hasHeat}, lowNoise={self._hasLowNoise}, "
             f"conversionGain={self._hasCG}{' (+HDR)' if self._hasCGHDR else ''}"
+            + (f", tecTarget {self._tecTargetRange[0]:.1f}.."
+               f"{self._tecTargetRange[1]:.1f} °C"
+               if self._tecTargetRange else "")
         )
         self.__logger.info(
             f"{self.deviceName} ranges: sensor bit depth={self._maxBitDepth} "
@@ -329,6 +441,7 @@ class CameraToupcam:
         self.is_connected = True
 
     def reconnectCamera(self):
+        self._stopTemperatureMonitor()
         if self.hcam is not None:
             try:
                 self.hcam.Close()
@@ -336,9 +449,12 @@ class CameraToupcam:
                 self.__logger.error(f"Error while closing camera handle: {e}")
             self.hcam = None
         self.is_streaming = False
+        self._sdkRunning = False
+        self._parked = False
         try:
             self._open_camera(self.cameraNo)
             self._reapply_settings()
+            self._startTemperatureMonitor()
             self.__logger.debug("Camera reconnected successfully.")
         except Exception as e:
             self.__logger.error(f"Failed to reconnect camera: {e}")
@@ -356,6 +472,10 @@ class CameraToupcam:
                 self.setBinning(self.binning)
             self.set_frame_rate(self.frame_rate)
             self.setTriggerSource(self.trigger_source)
+            # Same for the cooler: a fresh handle does not remember the TEC
+            # target, and nothing else would notice that the sensor is warming.
+            self.set_temperature(self.targetTemperature)
+            self.set_fan_speed(self.fanSpeed)
             # A reopened handle comes up with the camera's own defaults, so the
             # low-noise configuration has to be pushed again or a long
             # acquisition silently continues at LCG / normal-noise mode.
@@ -392,6 +512,8 @@ class CameraToupcam:
                         if self.is_connected:
                             if self._resume_stream_after_reconnect:
                                 self.start_live()
+                            else:
+                                self._startParked()
                             return
                     except Exception as e:
                         self.__logger.debug(f"Reconnect attempt failed: {e}")
@@ -439,6 +561,9 @@ class CameraToupcam:
             except toupcam.HRESULTException as ex:
                 self.__logger.error(f"PullImageV3 failed hr=0x{ex.hr & 0xffffffff:x}")
                 return
+            # Pulled either way, so the SDK queue does not fill up.
+            if self._parked or t_entry < self._acceptFramesAfter:
+                return
 
             w = self._frame_info.width
             h = self._frame_info.height
@@ -477,11 +602,65 @@ class CameraToupcam:
         if self.is_streaming:
             return
         self.flushBuffer()
+        # The SDK numbers frames per stream, so a snap after a snap sees seq 1
+        # again. Reset our counter too, so a caller that reads getFrameNumber()
+        # before arming and waits for it to advance recognises the very first
+        # frame of the new stream as fresh instead of sitting out a second
+        # exposure (RecordingController._waitForFreshFrame).
+        self.frameNumber = -1
         if self.hcam is None:
             self.reconnectCamera()
         if self.hcam is None:
             raise RuntimeError("No Toupcam camera handle available")
         self._streamStats = self._newStreamStats()
+        if not (self._parked and self._resumeParked()):
+            self._startSdkStream(
+                self._triggerMode if self.keepsStreamRunning else None)
+        self.is_streaming = True
+        self._startTemperatureMonitor()
+        if self.readSaveTemperature:
+            # One row right at the start, so even a short acquisition leaves a
+            # temperature on record instead of waiting out the first interval.
+            self._writeTemperatureSample(self.get_temperature())
+
+    def stop_live(self):
+        if not self.is_streaming:
+            return
+        self.is_streaming = False
+        if self._sdkRunning and self.keepsStreamRunning:
+            self._parked = True
+            if self._putTriggerMode(PARK_TRIGGER_MODE):
+                return
+            self.__logger.warning(
+                "Could not park the stream; stopping it (the cooler stops too)")
+        self._hardStop()
+
+    def suspend_live(self):
+        self.stop_live()
+
+    def prepare_live(self):
+        pass
+
+    @property
+    def keepsStreamRunning(self) -> bool:
+        """True for TEC models: the stream is parked, never stopped (see
+        PARK_TRIGGER_MODE). Needs software-trigger support to park."""
+        return bool(getattr(self, "_hasTEC", False)
+                    and getattr(self, "_hasSoftwareTrigger", False))
+
+    def _putTriggerMode(self, mode: int) -> bool:
+        try:
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_TRIGGER, int(mode))
+            return True
+        except toupcam.HRESULTException as ex:
+            self.__logger.error(
+                f"Set trigger mode {mode} failed hr=0x{ex.hr & 0xffffffff:x}")
+            return False
+
+    def _startSdkStream(self, triggerMode=None):
+        """StartPullMode (in ``triggerMode`` if given), reconnecting once on failure."""
+        if triggerMode is not None:
+            self._putTriggerMode(triggerMode)
         try:
             self.hcam.StartPullModeWithCallback(self._eventCallback, self)
         except toupcam.HRESULTException as ex:
@@ -491,27 +670,67 @@ class CameraToupcam:
             self.reconnectCamera()
             if self.hcam is None:
                 raise RuntimeError("StartPullMode failed and reconnect did not recover")
+            if triggerMode is not None:
+                self._putTriggerMode(triggerMode)
             self.hcam.StartPullModeWithCallback(self._eventCallback, self)
-        self.is_streaming = True
+        self._sdkRunning = True
+        self._parked = False
 
-    def stop_live(self):
-        if not self.is_streaming:
+    def _startParked(self):
+        """Start the stream parked, so a TEC model's cooler is driven while idle.
+        No-op on other models or when the stream already runs."""
+        if not self.keepsStreamRunning or self.hcam is None or self._sdkRunning:
             return
+        try:
+            self._startSdkStream(PARK_TRIGGER_MODE)
+            self._parked = True
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not start the parked stream: {e}. The cooler only runs "
+                f"while the camera acquires.")
+
+    def _resumeParked(self) -> bool:
+        """Switch a parked stream back to the requested trigger mode."""
+        if not self._putTriggerMode(self._triggerMode):
+            self._hardStop()
+            return False
+        # Anything that arrives within one exposure was started before this
+        # point (an exposure cut short by the park, or queued in the camera).
+        exposure = self.getExposureSeconds()
+        self._acceptFramesAfter = time.time() + exposure - min(0.5, 0.1 * exposure)
+        self._parked = False
+        return True
+
+    def _hardStop(self):
+        """Really stop the SDK stream (this also cuts a TEC model's cooler)."""
+        self._parked = False
+        if not self._sdkRunning:
+            return
+        self._sdkRunning = False
         try:
             self.hcam.Stop()
         except Exception as e:
             self.__logger.warning(f"Stop() failed: {e}")
+
+    def _reconfigureStopped(self, apply):
+        """Run ``apply()`` with the stream stopped, for settings the SDK only
+        picks up between streams, then bring the stream back as it was."""
+        wasStreaming = self.is_streaming
+        wasRunning = self._sdkRunning
         self.is_streaming = False
-
-    def suspend_live(self):
-        self.stop_live()
-
-    def prepare_live(self):
-        pass
+        self._hardStop()
+        try:
+            return apply()
+        finally:
+            if wasStreaming:
+                self.start_live()
+            elif wasRunning:
+                self._startParked()
 
     def close(self):
-        if self.is_streaming:
-            self.stop_live()
+        self.is_streaming = False
+        self._hardStop()
+        self._stopTemperatureMonitor()
         if self.hcam is not None:
             try:
                 if self._hasFan:
@@ -605,33 +824,49 @@ class CameraToupcam:
         vpos = int(vpos) & ~1 if vpos is not None else 0
         hsize = int(hsize) & ~1 if hsize is not None else 0
         vsize = int(vsize) & ~1 if vsize is not None else 0
+        if self._sdkRunning:
+            try:
+                current = tuple(self.hcam.get_Roi())
+                wanted = (hpos, vpos, hsize or self.SensorWidth,
+                          vsize or self.SensorHeight)
+                if current == wanted:
+                    return current
+            except Exception:
+                pass
 
-        wasStreaming = self.is_streaming
-        if wasStreaming:
-            self.suspend_live()
-        try:
-            self.hcam.put_Roi(hpos, vpos, hsize, vsize)
-            x, y, w, h = self.hcam.get_Roi()
-            self.shape = (h, w)
-            self.__logger.debug(f"ROI set to {w}x{h} at {x},{y}")
-            return x, y, w, h
-        except toupcam.HRESULTException as ex:
-            self.__logger.error(
-                f"put_Roi({hpos},{vpos},{hsize},{vsize}) failed "
-                f"hr=0x{ex.hr & 0xffffffff:x}"
-            )
-            return hpos, vpos, hsize, vsize
-        finally:
-            if wasStreaming:
-                self.start_live()
+        def apply():
+            try:
+                self.hcam.put_Roi(hpos, vpos, hsize, vsize)
+                x, y, w, h = self.hcam.get_Roi()
+                self.shape = (h, w)
+                self.__logger.debug(f"ROI set to {w}x{h} at {x},{y}")
+                return x, y, w, h
+            except toupcam.HRESULTException as ex:
+                self.__logger.error(
+                    f"put_Roi({hpos},{vpos},{hsize},{vsize}) failed "
+                    f"hr=0x{ex.hr & 0xffffffff:x}"
+                )
+                return hpos, vpos, hsize, vsize
+
+        return self._reconfigureStopped(apply)
 
     def setBinning(self, binning=1):
         """Digital binning; averaged (0x80 | n) to keep the bit depth."""
         if self.hcam is None:
             return
         value = 1 if binning <= 1 else (0x80 | int(binning))
-        try:
+
+        def put():
             self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BINNING, value)
+
+        try:
+            try:
+                put()
+            except toupcam.HRESULTException:
+                # E_UNEXPECTED: not changeable while the (parked) stream runs.
+                if not self._sdkRunning:
+                    raise
+                self._reconfigureStopped(put)
             self.binning = binning
             self.__logger.debug(f"Binning set to {binning}x{binning}")
         except toupcam.HRESULTException as ex:
@@ -906,21 +1141,24 @@ class CameraToupcam:
                 "Camera has no HDR/MCG conversion gain; keeping HCG")
             value = 1
 
+        name = {0: "LCG", 1: "HCG", 2: "HDR"}[value]
+        if self._sdkRunning and self.get_conversion_gain() == name:
+            # Already set: skip the stream restart, it stops the cooler.
+            self.conversionGain = name
+            return
+
         # Conversion gain switches the sensor's readout chain; do it while the
         # stream is down so the SDK reconfigures cleanly.
-        wasStreaming = self.is_streaming
-        if wasStreaming:
-            self.suspend_live()
-        try:
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_CG, value)
-            self.conversionGain = {0: "LCG", 1: "HCG", 2: "HDR"}[value]
-            self.__logger.info(f"Conversion gain set to {self.conversionGain}")
-        except toupcam.HRESULTException as ex:
-            self.__logger.error(
-                f"Set conversion gain failed hr=0x{ex.hr & 0xffffffff:x}")
-        finally:
-            if wasStreaming:
-                self.start_live()
+        def apply():
+            try:
+                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_CG, value)
+                self.conversionGain = name
+                self.__logger.info(f"Conversion gain set to {self.conversionGain}")
+            except toupcam.HRESULTException as ex:
+                self.__logger.error(
+                    f"Set conversion gain failed hr=0x{ex.hr & 0xffffffff:x}")
+
+        self._reconfigureStopped(apply)
 
     def get_conversion_gain(self):
         """Current conversion gain as "LCG"/"HCG"/"HDR", or None."""
@@ -937,20 +1175,21 @@ class CameraToupcam:
         if not self._hasLowNoise:
             self.__logger.debug("Camera does not support low noise mode")
             return
-        wasStreaming = self.is_streaming
-        if wasStreaming:
-            self.suspend_live()
-        try:
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_LOW_NOISE,
-                                 1 if enable else 0)
+        if self._sdkRunning and self.get_low_noise() == bool(enable):
             self.lowNoise = bool(enable)
-            self.__logger.info(f"Low noise mode {'on' if enable else 'off'}")
-        except toupcam.HRESULTException as ex:
-            self.__logger.error(
-                f"Set low noise mode failed hr=0x{ex.hr & 0xffffffff:x}")
-        finally:
-            if wasStreaming:
-                self.start_live()
+            return
+
+        def apply():
+            try:
+                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_LOW_NOISE,
+                                     1 if enable else 0)
+                self.lowNoise = bool(enable)
+                self.__logger.info(f"Low noise mode {'on' if enable else 'off'}")
+            except toupcam.HRESULTException as ex:
+                self.__logger.error(
+                    f"Set low noise mode failed hr=0x{ex.hr & 0xffffffff:x}")
+
+        self._reconfigureStopped(apply)
 
     def get_low_noise(self):
         """Current low-noise state, or None if unsupported."""
@@ -1026,28 +1265,33 @@ class CameraToupcam:
         if self.isRGB or format is None:
             return
         fmt = str(format).lower()
-        wasStreaming = self.is_streaming
-        if wasStreaming:
-            self.suspend_live()
-        try:
-            if fmt in ("mono8", "8", "raw8"):
-                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BITDEPTH, 0)
-                self._bits, self._bytesPerPixel, self._npDtype = 8, 1, np.uint8
-                self.max_adu = 255
-            elif fmt in ("mono10", "mono12", "mono14", "mono16", "16", "raw16"):
-                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BITDEPTH, 1)
-                self._bits, self._bytesPerPixel, self._npDtype = 16, 2, np.uint16
-                try:
-                    self.max_adu = (1 << self.hcam.MaxBitDepth()) - 1
-                except toupcam.HRESULTException:
-                    self.max_adu = 65535
-            else:
-                self.__logger.warning(f"Unknown pixel format {format}")
-        except toupcam.HRESULTException as ex:
-            self.__logger.error(f"Set pixel format failed hr=0x{ex.hr & 0xffffffff:x}")
-        finally:
-            if wasStreaming:
-                self.start_live()
+        if fmt in ("mono8", "8", "raw8"):
+            bits = 8
+        elif fmt in ("mono10", "mono12", "mono14", "mono16", "16", "raw16"):
+            bits = 16
+        else:
+            self.__logger.warning(f"Unknown pixel format {format}")
+            return
+        if self._sdkRunning and bits == self._bits:
+            return
+
+        def apply():
+            try:
+                if bits == 8:
+                    self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BITDEPTH, 0)
+                    self._bits, self._bytesPerPixel, self._npDtype = 8, 1, np.uint8
+                    self.max_adu = 255
+                else:
+                    self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BITDEPTH, 1)
+                    self._bits, self._bytesPerPixel, self._npDtype = 16, 2, np.uint16
+                    try:
+                        self.max_adu = (1 << self.hcam.MaxBitDepth()) - 1
+                    except toupcam.HRESULTException:
+                        self.max_adu = 65535
+            except toupcam.HRESULTException as ex:
+                self.__logger.error(f"Set pixel format failed hr=0x{ex.hr & 0xffffffff:x}")
+
+        self._reconfigureStopped(apply)
 
     # ---------------------------------------------------------------------
     # Temperature / fan (TEC models)
@@ -1061,24 +1305,396 @@ class CameraToupcam:
         except Exception:
             return None
 
+    def _applyTecTarget(self, temperature_c, quiet: bool = False) -> bool:
+        """Switch the cooler on and push ``temperature_c`` (no safety checks).
+
+        ``quiet`` drops the log line to debug, for the periodic keep-alive that
+        would otherwise write an INFO line every minute.
+        """
+        try:
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_TEC, 1)
+            self.hcam.put_Temperature(int(round(temperature_c * 10)))
+            self._lastTecReassert = time.time()
+            message = (f"TEC on, target {temperature_c:.1f} °C "
+                       f"(sensor now {self.get_temperature()} °C)")
+            if quiet:
+                self.__logger.debug(f"Re-asserted: {message}")
+            else:
+                self.__logger.info(message)
+            return True
+        except Exception as e:
+            self.__logger.error(f"Set temperature failed: {e}")
+            return False
+
+    def _disableTec(self, reason: str) -> bool:
+        """Switch the cooler off, keeping the cached target for a later re-arm."""
+        try:
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_TEC, 0)
+            self.__logger.warning(f"TEC switched off: {reason}")
+            return True
+        except Exception as e:
+            self.__logger.error(f"Switching the TEC off failed: {e}")
+            return False
+
     def set_temperature(self, temperature_c):
-        """TEC target temperature in °C (TEC models only)."""
+        """TEC target temperature in °C (TEC models only); also switches the
+        cooler on. Logged at INFO because an unexpected warm-up is otherwise
+        impossible to trace back to whoever changed the target.
+
+        An explicit call is also the override for a tripped over-temperature
+        cutoff, so it clears it. The cooler is still left off while the sensor
+        is at or above TEMPERATURE_SHUTDOWN_C; the monitor applies this target
+        once the camera has cooled down.
+        """
         if not self._hasTEC:
             self.__logger.debug("Camera has no controllable TEC")
             return
         try:
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_TEC, 1)
-            self.hcam.put_Temperature(int(temperature_c * 10))
-        except toupcam.HRESULTException as ex:
-            self.__logger.error(f"Set temperature failed hr=0x{ex.hr & 0xffffffff:x}")
+            temperature_c = float(temperature_c)
+        except (TypeError, ValueError):
+            self.__logger.warning(f"Ignoring invalid TEC target {temperature_c!r}")
+            return
+
+        if self._tecTargetRange is not None:
+            low, high = self._tecTargetRange
+            clamped = max(low, min(high, temperature_c))
+            if clamped != temperature_c:
+                self.__logger.warning(
+                    f"TEC target {temperature_c:.1f} °C is outside this "
+                    f"camera's {low:.1f}..{high:.1f} °C range, using "
+                    f"{clamped:.1f} °C instead. An out-of-range target is "
+                    f"accepted by the SDK and read back unchanged, but the "
+                    f"cooler may then not regulate at all and the sensor "
+                    f"stays at ambient.")
+                temperature_c = clamped
+
+        # Cached either way, so a reconnect or a cutoff recovery re-applies what
+        # was last asked for rather than the camera's power-on default.
+        self.targetTemperature = temperature_c
+        self._tecOverTemp = False
+        self._tempOverSamples = 0
+        self._tempRecoverySamples = 0
+        self._tecRecoveryAttempts = 0
+        self._tecRecoveryExhaustedLogged = False
+        self._tecStallSince = None
+        self._tecStallLogged = False
+
+        current = self.get_temperature()
+        if current is not None and current >= TEMPERATURE_SHUTDOWN_C:
+            self._tecOverTemp = True
+            self.__logger.warning(
+                f"Sensor at {current:.1f} °C is at or above the "
+                f"{TEMPERATURE_SHUTDOWN_C:.0f} °C cutoff: target "
+                f"{temperature_c:.1f} °C stored, but the cooler stays off "
+                f"until the camera drops below {TEMPERATURE_RECOVERY_C:.0f} °C")
+            self._disableTec("over temperature")
+            return
+        self._applyTecTarget(temperature_c)
+
+    def get_target_temperature(self):
+        """TEC target in °C as the camera reports it, or None if unsupported."""
+        if not self._hasTEC:
+            return None
+        try:
+            return self.hcam.get_Option(toupcam.TOUPCAM_OPTION_TECTARGET) / 10.0
+        except Exception:
+            return None
+
+    def get_tec_enabled(self):
+        """True/False for the cooler state, or None if unsupported."""
+        if not self._hasTEC:
+            return None
+        try:
+            return bool(self.hcam.get_Option(toupcam.TOUPCAM_OPTION_TEC))
+        except Exception:
+            return None
 
     def set_fan_speed(self, speed):
+        """Fan speed: 0 = off, 1..max, -1 = the camera's default speed."""
         if not self._hasFan:
             return
         try:
             self.hcam.put_Option(toupcam.TOUPCAM_OPTION_FAN, int(speed))
+            self.fanSpeed = int(speed)
         except toupcam.HRESULTException as ex:
             self.__logger.error(f"Set fan speed failed hr=0x{ex.hr & 0xffffffff:x}")
+
+    def get_fan_speed(self):
+        """Current fan speed as the camera reports it, or None if unsupported."""
+        if not self._hasFan:
+            return None
+        try:
+            return int(self.hcam.get_Option(toupcam.TOUPCAM_OPTION_FAN))
+        except Exception:
+            return None
+
+    def get_tec_voltage(self):
+        """(current, maximum) TEC drive voltage in V, or (None, None).
+
+        The direct check that the cooler is working: about 0 V means it is not
+        driven at all, a value near the maximum means it is at full power and
+        the target is out of reach at this ambient temperature.
+        """
+        if not self._hasTEC or self.hcam is None:
+            return None, None
+        try:
+            volt = self.hcam.get_Option(toupcam.TOUPCAM_OPTION_TEC_VOLTAGE) / 10.0
+        except Exception:
+            return None, None
+        try:
+            vmax = self.hcam.get_Option(toupcam.TOUPCAM_OPTION_TEC_VOLTAGE_MAX) / 10.0
+        except Exception:
+            vmax = None
+        return volt, vmax
+
+    # ---------------------------------------------------------------------
+    # Temperature monitor: over-temperature cutoff + optional CSV log
+    # ---------------------------------------------------------------------
+    def _temperatureLogPath(self) -> str:
+        """CSV path in today's recordings folder (created on demand).
+
+        Resolved per sample rather than once at start so a log that runs past
+        midnight continues in the new day's folder, next to that day's snaps.
+        """
+        from imswitch.imcommon.model import dirtools
+        day = datetime.date.today().strftime("%Y-%m-%d")
+        folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(),
+                              "recordings", day)
+        os.makedirs(folder, exist_ok=True)
+        return os.path.join(folder, TEMPERATURE_LOG_FILENAME)
+
+    def _setAsideOldLogFormat(self, path: str) -> None:
+        """Rename a day's log written with other columns, so new rows are
+        never appended under a header that does not describe them."""
+        if getattr(self, "_tempLogHeaderChecked", None) == path:
+            return
+        self._tempLogHeaderChecked = path
+        if not os.path.exists(path) or os.path.getsize(path) == 0:
+            return
+        with open(path, newline="") as f:
+            header = next(csv.reader(f), None)
+        if header is not None and tuple(header) != TEMPERATURE_LOG_COLUMNS:
+            stem, ext = os.path.splitext(path)
+            older = f"{stem}_{datetime.datetime.now():%H%M%S}{ext}"
+            os.replace(path, older)
+            self.__logger.info(
+                f"Temperature log columns changed; earlier rows kept in {older}")
+
+    def _writeTemperatureSample(self, temperature) -> bool:
+        """Append one row to the CSV. Returns False if nothing was written.
+
+        ``temperature`` is passed in rather than read here so the monitor's
+        safety check and the log row describe the very same sample.
+        """
+        if temperature is None:
+            # Handle gone (reconnecting) or read failed -- no point in a row
+            # of blanks.
+            return False
+        target = self.get_target_temperature()
+        tecOn = self.get_tec_enabled()
+        fan = self.get_fan_speed()
+        heat = self.get_heat()
+        tecVoltage, _ = self.get_tec_voltage()
+        now = datetime.datetime.now()
+        row = (
+            now.isoformat(timespec="seconds"),
+            f"{now.timestamp():.1f}",
+            getattr(self, "deviceName", self.model),
+            f"{temperature:.1f}",
+            "" if target is None else f"{target:.1f}",
+            "" if tecOn is None else int(tecOn),
+            "" if fan is None else fan,
+            "" if heat is None else heat,
+            f"{float(self.exposure_time):.3f}",
+            int(self.is_streaming),
+            int(self._tecOverTemp),
+            "" if tecVoltage is None else f"{tecVoltage:.1f}",
+            int(self._parked),
+        )
+        try:
+            path = self._temperatureLogPath()
+            self._setAsideOldLogFormat(path)
+            writeHeader = not os.path.exists(path) or os.path.getsize(path) == 0
+            with open(path, "a", newline="") as f:
+                writer = csv.writer(f)
+                if writeHeader:
+                    writer.writerow(TEMPERATURE_LOG_COLUMNS)
+                writer.writerow(row)
+            self._tempLogErrorLogged = False
+            return True
+        except Exception as e:
+            # Once per failure streak: a full disk or a vanished folder would
+            # otherwise repeat every 5 s for the whole acquisition.
+            if not self._tempLogErrorLogged:
+                self.__logger.error(f"Temperature log write failed: {e}")
+                self._tempLogErrorLogged = True
+            return False
+
+    def _checkTemperatureSafety(self, temperature: float) -> None:
+        """Cut the cooler out above TEMPERATURE_SHUTDOWN_C, re-arm when cooled.
+
+        The sensor of a cooled camera sits well below ambient in normal
+        operation, so a reading this high means the heat is not getting out
+        (fan stalled, ventilation blocked, TEC failing) -- and from there the
+        cooler's own dissipation only makes it worse. The window heater is
+        switched off with it for the same reason.
+        """
+        if not self._hasTEC:
+            return
+
+        if temperature >= TEMPERATURE_SHUTDOWN_C:
+            self._tempRecoverySamples = 0
+            self._tempOverSamples += 1
+            if (self._tecOverTemp
+                    or self._tempOverSamples < TEMPERATURE_SHUTDOWN_SAMPLES):
+                return
+            self._tecOverTemp = True
+            self.__logger.error(
+                f"Sensor temperature {temperature:.1f} °C reached the "
+                f"{TEMPERATURE_SHUTDOWN_C:.0f} °C limit: switching the cooler "
+                f"off. Check the fan and the ventilation.")
+            self._disableTec(f"sensor at {temperature:.1f} °C")
+            if self._hasHeat and (self.get_heat() or 0) > 0:
+                self.set_heat(0)
+            return
+
+        self._tempOverSamples = 0
+        if not self._tecOverTemp or temperature > TEMPERATURE_RECOVERY_C:
+            return
+
+        self._tempRecoverySamples += 1
+        if self._tempRecoverySamples < TEMPERATURE_SHUTDOWN_SAMPLES:
+            return
+        self._tempRecoverySamples = 0
+        if self._tecRecoveryAttempts >= TEMPERATURE_RECOVERY_ATTEMPTS:
+            if not self._tecRecoveryExhaustedLogged:
+                self.__logger.error(
+                    f"Cooler tripped on temperature "
+                    f"{TEMPERATURE_RECOVERY_ATTEMPTS} times; leaving it off. "
+                    f"Fix the cooling, then set the target temperature again.")
+                self._tecRecoveryExhaustedLogged = True
+            return
+        self._tecRecoveryAttempts += 1
+        self._tecOverTemp = False
+        self.__logger.info(
+            f"Sensor back down to {temperature:.1f} °C, re-arming the cooler "
+            f"at {self.targetTemperature:.1f} °C (attempt "
+            f"{self._tecRecoveryAttempts}/{TEMPERATURE_RECOVERY_ATTEMPTS})")
+        self._applyTecTarget(self.targetTemperature)
+
+    def _maintainTecTarget(self, temperature: float) -> None:
+        """Re-assert the TEC target periodically and warn when it is not working.
+
+        Writing the target once is not reliable: the camera can report the
+        requested target back on a read, with the cooler on, and still leave
+        the sensor at ambient indefinitely. Re-writing it every
+        TEMPERATURE_REASSERT_INTERVAL_S is what gets it regulating again.
+
+        Skipped while the over-temperature cutoff is tripped: there the cooler
+        is off deliberately and _checkTemperatureSafety owns it.
+        """
+        if not self._hasTEC or self._tecOverTemp:
+            return
+
+        now = time.time()
+        if now - self._lastTecReassert >= TEMPERATURE_REASSERT_INTERVAL_S:
+            self._applyTecTarget(self.targetTemperature, quiet=True)
+
+        if temperature <= self.targetTemperature + TEMPERATURE_STALL_MARGIN_C:
+            self._tecStallSince = None
+            if self._tecStallLogged:
+                self.__logger.info(
+                    f"Cooler is regulating again: sensor {temperature:.1f} °C, "
+                    f"target {self.targetTemperature:.1f} °C")
+                self._tecStallLogged = False
+            return
+
+        if self._tecStallSince is None:
+            self._tecStallSince = now
+            return
+        if (self._tecStallLogged
+                or now - self._tecStallSince < TEMPERATURE_STALL_AFTER_S):
+            return
+        self._tecStallLogged = True
+        rangeHint = ""
+        if self._tecTargetRange is not None:
+            rangeHint = (f" This model accepts {self._tecTargetRange[0]:.1f}.."
+                         f"{self._tecTargetRange[1]:.1f} °C.")
+        volt, vmax = self.get_tec_voltage()
+        if volt is not None and vmax and volt >= 0.9 * vmax:
+            rangeHint += (f" The TEC runs at full power ({volt:.1f} of {vmax:.1f} V): "
+                          f"the target is out of reach at this ambient temperature, "
+                          f"so the sensor follows the room. Set a warmer target "
+                          f"that holds steady.")
+        elif volt is not None and volt < 0.5:
+            rangeHint += (f" The TEC is not driven ({volt:.1f} V) although it "
+                          f"reports on.")
+        self.__logger.warning(
+            f"Cooler is not regulating: the sensor has been at "
+            f"{temperature:.1f} °C for "
+            f"{(now - self._tecStallSince) / 60.0:.0f} min with the TEC on and "
+            f"a target of {self.targetTemperature:.1f} °C (the camera reports "
+            f"{self.get_target_temperature()}). Check the target, the fan and "
+            f"the heat path.{rangeHint}")
+
+    def _temperatureMonitorLoop(self):
+        while True:
+            try:
+                temperature = self.get_temperature()
+                if temperature is not None:
+                    self._checkTemperatureSafety(temperature)
+                    self._maintainTecTarget(temperature)
+                    # While acquiring, and while parked: on a TEC model the
+                    # temperature between snaps matters as much as during them.
+                    if self.readSaveTemperature and (self.is_streaming
+                                                     or self._sdkRunning):
+                        self._writeTemperatureSample(temperature)
+            except Exception as e:
+                # Never let one bad sample end the thread -- it is what keeps
+                # the over-temperature cutoff alive. Loud once, quiet after.
+                if not self._tempMonitorErrorLogged:
+                    self.__logger.error(f"Temperature monitor sample failed: {e}")
+                    self._tempMonitorErrorLogged = True
+                else:
+                    self.__logger.debug(f"Temperature monitor sample failed: {e}")
+            else:
+                self._tempMonitorErrorLogged = False
+            if self._tempMonitorStop.wait(TEMPERATURE_LOG_INTERVAL_S):
+                return
+
+    def _startTemperatureMonitor(self):
+        """Start the polling thread (no-op on models without a temperature
+        sensor, or when it is already running).
+
+        Independent of readSaveTemperature: the over-temperature cutoff has to
+        work whether or not anybody asked for a log.
+        """
+        if not self._hasGetTemperature:
+            return
+        if (self._tempMonitorThread is not None
+                and self._tempMonitorThread.is_alive()):
+            return
+        self._tempMonitorStop.clear()
+        self._tempMonitorThread = threading.Thread(
+            target=self._temperatureMonitorLoop,
+            name="ToupcamTemperatureMonitor", daemon=True)
+        self._tempMonitorThread.start()
+        self.__logger.info(
+            f"Monitoring sensor temperature every "
+            f"{TEMPERATURE_LOG_INTERVAL_S:.0f} s; cooler off above "
+            f"{TEMPERATURE_SHUTDOWN_C:.0f} °C")
+        if self.readSaveTemperature:
+            self.__logger.info(
+                f"Logging it while armed to {self._temperatureLogPath()}")
+
+    def _stopTemperatureMonitor(self):
+        thread = self._tempMonitorThread
+        if thread is None:
+            return
+        self._tempMonitorStop.set()
+        if thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        self._tempMonitorThread = None
 
     # ---------------------------------------------------------------------
     # Trigger handling
@@ -1126,7 +1742,10 @@ class CameraToupcam:
             else:
                 self.__logger.warning(f"Unknown trigger source: {trigger_source}")
                 return False
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_TRIGGER, mode)
+            # A parked stream keeps PARK_TRIGGER_MODE; start_live applies this.
+            if not self._parked:
+                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_TRIGGER, mode)
+            self._triggerMode = mode
             self.trigger_source = trigger_source
             self.__logger.info(f"Trigger source set to {trigger_source} (mode {mode})")
             return True
@@ -1239,6 +1858,10 @@ class CameraToupcam:
             return self.trigger_source
         elif property_name == "temperature":
             return self.get_temperature()
+        elif property_name == "target_temperature":
+            return self.get_target_temperature()
+        elif property_name == "fan_speed":
+            return self.get_fan_speed()
         elif property_name == "binning":
             return self.binning
         elif property_name == "pixel_format":
@@ -1298,6 +1921,18 @@ class CameraToupcam:
             temp = self.get_temperature()
             if temp is not None:
                 params["temperature_c"] = temp
+            if self._hasTEC:
+                params["tec_on"] = self.get_tec_enabled()
+                params["tec_target_c"] = self.get_target_temperature()
+                params["tec_over_temperature"] = self._tecOverTemp
+                params["tec_shutdown_c"] = TEMPERATURE_SHUTDOWN_C
+                params["tec_target_range_c"] = self._tecTargetRange
+                params["tec_stalled"] = self._tecStallLogged
+                params["tec_voltage_v"], params["tec_voltage_max_v"] = \
+                    self.get_tec_voltage()
+                params["stream_parked"] = self._parked
+            if self._hasFan:
+                params["fan_speed"] = self.get_fan_speed()
         except Exception:
             pass
         # Low-noise configuration, read back from the device rather than from

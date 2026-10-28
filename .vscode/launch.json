@@ -32,7 +32,7 @@
             "console": "integratedTerminal",
             "justMyCode": false, 
             "subProcess": true,
-            "python": "${workspaceFolder}/.venv_x86_311//bin/python"
+            "python": "${workspaceFolder}/.vscode/python-x86.sh"
         },
         {
             "name": "Python: Pytest",

@@ -41,6 +41,23 @@ import apiPositionerControllerCancelFrameHoming from "../../backendapi/apiPositi
 
 const XY_STEPS = [1, 10, 100, 1000];
 const Z_STEPS = [1, 10, 100];
+// Jog speeds in µm/s; "auto" sends no speed, so each axis keeps its configured one.
+// Z stops at 10 mm/s — a fast focus move into the sample is the costly mistake.
+const XY_SPEEDS = ["auto", 100, 1000, 10000, 80000];
+const Z_SPEEDS = ["auto", 100, 1000, 10000];
+const SPEED_STORAGE_KEY = "imswitch-mobile-stage-speeds";
+const formatSpeed = (s) => (s === "auto" ? "Auto" : s >= 1000 ? `${s / 1000}k` : `${s}`);
+const loadSpeeds = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SPEED_STORAGE_KEY)) || {};
+    return {
+      xy: XY_SPEEDS.includes(saved.xy) ? saved.xy : "auto",
+      z: Z_SPEEDS.includes(saved.z) ? saved.z : "auto",
+    };
+  } catch {
+    return { xy: "auto", z: "auto" };
+  }
+};
 const Z_VIEW_HALF_RANGE = 100; // µm shown above/below the re-center point
 
 const JOG_BTN_SX = {
@@ -58,7 +75,16 @@ const MobileStagePage = () => {
   const xyStep = positionState.stepSizes?.X ?? 100;
   const zStep = positionState.stepSizes?.Z ?? 10;
 
+  const [speeds, setSpeeds] = useState(loadSpeeds);
   const [zCenter, setZCenter] = useState(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SPEED_STORAGE_KEY, JSON.stringify(speeds));
+    } catch {
+      // storage unavailable (private mode) — speeds just won't persist
+    }
+  }, [speeds]);
   const [homingDialogOpen, setHomingDialogOpen] = useState(false);
 
   // Anchor the Z visualization window the first time we render (and via the
@@ -69,19 +95,24 @@ const MobileStagePage = () => {
     }
   }, [positionState.z, zCenter]);
 
-  const jog = useCallback((deltas) => {
+  const jog = useCallback((deltas, speed) => {
     apiPositionerControllerMovePositionerXYZ({
       ...deltas,
       isAbsolute: false,
+      speed: speed === "auto" ? undefined : speed,
     }).catch(() => enqueueSnackbar("Stage move failed", { variant: "error" }));
   }, []);
 
-  const moveToZ = useCallback((zAbs) => {
-    apiPositionerControllerMovePositionerXYZ({
-      z: zAbs,
-      isAbsolute: true,
-    }).catch(() => enqueueSnackbar("Z move failed", { variant: "error" }));
-  }, []);
+  const moveToZ = useCallback(
+    (zAbs) => {
+      apiPositionerControllerMovePositionerXYZ({
+        z: zAbs,
+        isAbsolute: true,
+        speed: speeds.z === "auto" ? undefined : speeds.z,
+      }).catch(() => enqueueSnackbar("Z move failed", { variant: "error" }));
+    },
+    [speeds.z],
+  );
 
   const handleStop = () => {
     apiPositionerControllerStopAllAxes()
@@ -160,11 +191,11 @@ const MobileStagePage = () => {
             }}
           >
             <Box />
-            <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ y: xyStep })}>
+            <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ y: xyStep }, speeds.xy)}>
               <ArrowUpwardRoundedIcon />
             </Button>
             <Box />
-            <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ x: -xyStep })}>
+            <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ x: -xyStep }, speeds.xy)}>
               <ArrowBackRoundedIcon />
             </Button>
             <Box
@@ -181,11 +212,11 @@ const MobileStagePage = () => {
                 {xyStep >= 1000 ? `${xyStep / 1000} mm` : `${xyStep} µm`}
               </Typography>
             </Box>
-            <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ x: xyStep })}>
+            <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ x: xyStep }, speeds.xy)}>
               <ArrowForwardRoundedIcon />
             </Button>
             <Box />
-            <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ y: -xyStep })}>
+            <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ y: -xyStep }, speeds.xy)}>
               <ArrowDownwardRoundedIcon />
             </Button>
             <Box />
@@ -199,6 +230,19 @@ const MobileStagePage = () => {
             {XY_STEPS.map((s) => (
               <ToggleButton key={s} value={s}>
                 {s >= 1000 ? `${s / 1000}mm` : `${s}µm`}
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
+          <SectionLabel sx={{ mt: 2, mb: 1 }}>Speed (µm/s)</SectionLabel>
+          <ToggleButtonGroup
+            exclusive
+            fullWidth
+            value={speeds.xy}
+            onChange={(e, v) => v !== null && setSpeeds((s) => ({ ...s, xy: v }))}
+          >
+            {XY_SPEEDS.map((s) => (
+              <ToggleButton key={s} value={s} sx={{ minHeight: 48 }}>
+                {formatSpeed(s)}
               </ToggleButton>
             ))}
           </ToggleButtonGroup>
@@ -216,7 +260,7 @@ const MobileStagePage = () => {
                 justifyContent: "center",
               }}
             >
-              <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ z: zStep })}>
+              <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ z: zStep }, speeds.z)}>
                 <ArrowUpwardRoundedIcon />
               </Button>
               <ToggleButtonGroup
@@ -231,7 +275,7 @@ const MobileStagePage = () => {
                   </ToggleButton>
                 ))}
               </ToggleButtonGroup>
-              <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ z: -zStep })}>
+              <Button variant="contained" sx={JOG_BTN_SX} onClick={() => jog({ z: -zStep }, speeds.z)}>
                 <ArrowDownwardRoundedIcon />
               </Button>
             </Box>
@@ -256,6 +300,19 @@ const MobileStagePage = () => {
               </Button>
             </Box>
           </Box>
+          <SectionLabel sx={{ mt: 2, mb: 1 }}>Z speed (µm/s)</SectionLabel>
+          <ToggleButtonGroup
+            exclusive
+            fullWidth
+            value={speeds.z}
+            onChange={(e, v) => v !== null && setSpeeds((s) => ({ ...s, z: v }))}
+          >
+            {Z_SPEEDS.map((s) => (
+              <ToggleButton key={s} value={s} sx={{ minHeight: 48 }}>
+                {formatSpeed(s)}
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
         </Paper>
 
         {/* Position + homing */}

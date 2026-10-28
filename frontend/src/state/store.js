@@ -20,7 +20,6 @@ import objectiveReducer from "./slices/ObjectiveSlice";
 import LEDMatrixReducer from "./slices/LEDMatrixSlice";
 import experimentStateReducer from "./slices/ExperimentStateSlice";
 import liveViewReducer from "./slices/LiveViewSlice";
-import histoScanReducer from "./slices/HistoScanSlice";
 import widgetReducer from "./slices/WidgetSlice";
 import lepmonReducer from "./slices/LepmonSlice";
 import uc2Reducer from "./slices/UC2Slice";
@@ -28,13 +27,13 @@ import flowStopReducer from "./slices/FlowStopSlice";
 import lightsheetReducer from "./slices/LightsheetSlice";
 import zarrinitialZarrReducer from "./slices/OmeZarrTileStreamSlice";
 import stresstestReducer from "./slices/StresstestSlice";
-import workflowReducer from "./slices/WorkflowSlice";
 import stormReducer from "./slices/STORMSlice";
 import focusLockReducer from "./slices/FocusLockSlice";
 import demoReducer from "./slices/DemoSlice";
 import mazeGameReducer from "./slices/MazeGameSlice";
 import themeReducer from "./slices/ThemeSlice";
 import languageReducer from "./slices/LanguageSlice";
+import uiPreferencesReducer from "./slices/UIPreferencesSlice";
 import notificationReducer from "./slices/NotificationSlice";
 import autofocusReducer from "./slices/AutofocusSlice";
 import opticalFlowReducer from "./slices/OpticalFlowSlice";
@@ -60,9 +59,12 @@ import goniometerReducer from "./slices/GoniometerSlice";
 import detectorParametersReducer from "./slices/DetectorParametersSlice";
 import backendCapabilitiesReducer from "./slices/BackendCapabilitiesSlice";
 import stageMapReducer from "./slices/StageMapSlice";
+import arkitektReducer from "./slices/ArkitektSlice";
 import onboardingReducer from "./slices/OnboardingSlice";
 import homingReducer from "./slices/HomingSlice";
+import firmwareUpdateReducer from "./slices/FirmwareUpdateSlice";
 import i2cReducer from "./slices/I2CSensorSlice";
+import aufgabenReducer from "./slices/AufgabenSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -141,6 +143,16 @@ const frame3DViewerPersistConfig = {
 };
 
 //#####################################################################################
+// Nested persist config for aufgabenState
+// Keep the job being edited across reloads; catalogue, validation and run
+// status are re-read from the backend.
+const aufgabenPersistConfig = {
+  key: "aufgaben",
+  storage,
+  whitelist: ["job"],
+};
+
+//#####################################################################################
 // Combine reducers
 const rootReducer = combineReducers({
   connectionSettingsState: connectionSettingsReducer,
@@ -154,10 +166,10 @@ const rootReducer = combineReducers({
   objectiveState: objectiveReducer,
   position: positionReducer,
   homing: homingReducer, // runtime-only frame-homing progress (not persisted)
+  firmwareUpdate: firmwareUpdateReducer, // runtime-only firmware-check prompt (not persisted)
   LEDMatrixState: LEDMatrixReducer,
   experimentWorkflowState: experimentStateReducer,
   liveViewState: persistReducer(liveViewPersistConfig, liveViewReducer), // Nested persist
-  histoScanState: histoScanReducer,
   widgetState: widgetReducer,
   lepmon: lepmonReducer,
   uc2State: uc2Reducer,
@@ -165,13 +177,13 @@ const rootReducer = combineReducers({
   lightsheet: persistReducer(lightsheetPersistConfig, lightsheetReducer), // Nested persist for axis config
   omeZarrState: zarrinitialZarrReducer,
   stresstestState: stresstestReducer,
-  workflowState: workflowReducer,
   storm: stormReducer,
   focusLockState: focusLockReducer,
   demoState: demoReducer,
   mazeGameState: mazeGameReducer,
   themeState: themeReducer,
   languageState: languageReducer,
+  uiPreferencesState: uiPreferencesReducer,
   notification: notificationReducer,
   autofocusState: autofocusReducer,
   opticalFlowState: opticalFlowReducer,
@@ -200,8 +212,10 @@ const rootReducer = combineReducers({
   detectorParametersState: detectorParametersReducer,
   backendCapabilities: backendCapabilitiesReducer,
   stageMapState: stageMapReducer, // runtime-only stage map tiles (not persisted)
+  arkitektState: arkitektReducer, // runtime-only Arkitekt connection + remote-call log
   onboardingState: onboardingReducer,
   i2cState: i2cReducer,
+  aufgabenState: persistReducer(aufgabenPersistConfig, aufgabenReducer), // job draft persisted
 });
 
 //#####################################################################################
@@ -216,9 +230,9 @@ const persistConfig = {
     "experimentState",
     "wellSelectorState",
     "position", // Persist step sizes
-    "workflowState",
     "themeState",
     "languageState", // Persist the UI language choice
+    "uiPreferencesState", // Persist touch mode / on-screen keypad choice
     "mazeGameState",
     "appManager", // Persist user's app preferences
     "onboardingState", // Persist the "intro tour was done" flag (first-run UX)
@@ -232,53 +246,19 @@ const persistConfig = {
 const persistedReducer = persistReducer(persistConfig, rootReducer);
 
 //#####################################################################################
-// Action creator for syncing the state across tabs
-const SYNC_STATE = "SYNC_STATE";
-
-// Action creator for syncing the state across tabs
-const syncStateAction = (updatedState) => ({
-  type: SYNC_STATE,
-  payload: updatedState,
-});
-
-// Handle SYNC_STATE action to merge updated state from other tabs
-const rootReducerWithSync = (state, action) => {
-  // If SYNC_STATE action is dispatched, replace the state with the updated state
-  if (action.type === SYNC_STATE) {
-    return { ...state, ...action.payload }; // Merge updated state
-  }
-
-  // Use the persistedReducer otherwise
-  return persistedReducer(state, action);
-};
+// NOTE: there is deliberately no cross-tab state sync here.
+// A "storage" listener used to replace whole slices (experimentState,
+// wellSelectorState, position) with another tab's copy whenever redux-persist
+// wrote — which is on nearly every state change. Two open tabs therefore
+// overwrote each other's point lists continuously, which is what made a second
+// tab (or a second laptop) lose the operator's selections. Each tab now owns
+// its own state; persistence to localStorage is unaffected.
 
 //#####################################################################################
-// Sync state across tabs
-const syncStateAcrossTabs = () => {
-  window.addEventListener("storage", (event) => {
-    if (event.key === "persist:root") {
-      console.log("State change from another tab detected!");
-      const updatedState = JSON.parse(event.newValue);
-      // Check if any slice is stringified and needs parsing
-      Object.keys(updatedState).forEach((sliceKey) => {
-        if (typeof updatedState[sliceKey] === "string") {
-          updatedState[sliceKey] = JSON.parse(updatedState[sliceKey]);
-        }
-      });
-      // Dispatch SYNC_STATE action with updated state
-      store.dispatch(syncStateAction(updatedState));
-    }
-  });
-};
-
-// Activate the sync function
-syncStateAcrossTabs();
-
-//#####################################################################################
-// Create the Redux store with the sync logic
+// Create the Redux store
 // Disable expensive development middlewares for high-frequency WebSocket updates
 const store = configureStore({
-  reducer: rootReducerWithSync, // Use rootReducerWithSync to manage the state
+  reducer: persistedReducer,
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
       // Disable serializable check - our state contains some non-serializable data

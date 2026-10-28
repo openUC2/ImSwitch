@@ -110,8 +110,54 @@ class ESP32LEDLaserManager(LaserManager):
                                 despecklePeriod = self.laser_despeckle_period,
                                 is_blocking=getReturn)
 
+    def setStrobe(self, enable, delayUs=0, widthUs=20):
+        """Flash this channel on every CANopen SYNC instead of lighting it via PWM.
+
+        ``delayUs`` is the time from SYNC reception to LED on and ``widthUs``
+        the flash length, both in µs (the firmware clamps the width to its
+        safety limit). While strobing, the firmware ignores normal intensity
+        writes for this channel; ``enable=False`` hands the pin back to PWM.
+
+        Returns the firmware response dict (``{"strobe": {"supported": ...}}``)
+        or None when the firmware did not answer (old firmware) or the
+        installed uc2rest has no ``Laser.set_strobe``.
+        """
+        setStrobe = getattr(self._laser, "set_strobe", None)
+        if setStrobe is None:
+            self.__logger.warning(
+                "uc2rest has no Laser.set_strobe; update UC2-REST for strobe support")
+            return None
+        try:
+            return setStrobe(self.channel_index, enable=bool(enable),
+                             delay_us=int(round(float(delayUs))),
+                             width_us=int(round(float(widthUs))))
+        except Exception as e:
+            self.__logger.error(f"setStrobe on channel {self.channel_index} failed: {e}")
+            return None
+
+    def getPWMSettings(self):
+        """Firmware PWM parameters of this channel from /laser_get, e.g.
+        {"LASERid":1,"LASERval":0,"LASERmax":1024,"LASERRes":10,"LASERFreq":5000,...};
+        None when the firmware or the installed uc2rest does not report them."""
+        getLaser = getattr(self._laser, "get_laser", None)
+        if getLaser is None:
+            self.__logger.warning("uc2rest has no Laser.get_laser; update UC2-REST")
+            return None
+        try:
+            return getLaser(self.channel_index)
+        except Exception as e:
+            self.__logger.error(f"getPWMSettings on channel {self.channel_index} failed: {e}")
+            return None
+
+    def setPWMSettings(self, frequency=None, resolution=None):
+        """Change PWM frequency (Hz) and/or resolution (bits); the firmware
+        switches the channel off while doing so (on-board lasers only)."""
+        self._laser.set_laser_pwm(self.channel_index, frequency=frequency, resolution=resolution)
+        return self.getPWMSettings()
+
     def sendTrigger(self, triggerId):
-        self._esp32.digital.sendTrigger(triggerId)
+        # uc2rest exposes the trigger on .digitalout; there is no .digital.
+        return self._esp32.digitalout.sendTrigger(triggerId)
 
     def setGalvo(self,channel=1, frequency=1, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1):
         self._rs232manager._esp32.galvo.set_dac(

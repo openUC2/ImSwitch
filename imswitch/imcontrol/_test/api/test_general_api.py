@@ -351,6 +351,24 @@ def test_api_endpoint_consistency(api_server):
     print(f"Total controllers found: {len(controller_endpoints)}")
 
 
+def test_react_shell_is_never_not_modified(api_server):
+    """A browser revalidating index.html must always get the real file.
+
+    Starlette's mtime+size ETag / If-Modified-Since fallback answered 304 after a frontend
+    rebuild, so browsers kept an index.html naming bundles that no longer exist (blank page).
+    """
+    first = api_server.get("/imswitch/ui/index.html")
+    if first.status_code == 404:
+        pytest.skip("React build not present at imswitch/_data/static/imswitch")
+    assert first.status_code == 200
+    assert "no-cache" in first.headers["cache-control"]
+
+    # what Chrome sends on reload, using the validators of its cached copy
+    revalidate = {"If-None-Match": first.headers["etag"],
+                  "If-Modified-Since": first.headers["last-modified"]}
+    assert api_server.get("/imswitch/ui/index.html", headers=revalidate).status_code == 200
+
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

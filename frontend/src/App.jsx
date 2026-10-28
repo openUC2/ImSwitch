@@ -3,9 +3,11 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 // ImSwitch Themes
 import { darkTheme, lightTheme } from "./themes";
+import { withTouchOverrides } from "./themes/touchTheme";
+import useDeviceProfile from "./hooks/useDeviceProfile";
+import TouchKeypadHost from "./components/touch/TouchKeypadHost.jsx";
 
 import AboutPage from "./components/AboutPage.js";
-import BlocklyController from "./components/BlocklyController.js";
 import ConnectionSettings from "./components/ConnectionSettings.jsx";
 import DesktopAppSettings from "./components/DesktopAppSettings.jsx";
 import DetectorTriggerController from "./components/DetectorTriggerController.js";
@@ -24,13 +26,11 @@ import LightsheetController from "./components/LightsheetController.jsx";
 import LiveView from "./components/LiveView.js";
 import MazeGameController from "./components/MazeGameController.js";
 import MotorSettingsController from "./components/MotorSettingsController.jsx";
+import LaserSettingsController from "./components/LaserSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
-import LargeFovScanController from "./components/OpenLayers.js";
 import SocketView from "./components/SocketView.js";
 import MMCoreController from "./components/MMCoreController.jsx";
 
-import TimelapseController from "./components/TimelapseController.js";
-import STORMControllerArkitekt from "./components/STORMControllerArkitekt.js";
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
 import STORMControllerLocal from "./components/STORMControllerLocal.js";
 import StresstestController from "./components/StresstestController.js";
@@ -45,8 +45,12 @@ import { JupyterProvider } from "./context/JupyterContext.js";
 import { PWAProvider } from "./context/PWAContext.js";
 import DemoController from "./components/DemoController.js";
 import StageMapController from "./components/StageMapController.jsx";
+import OPMController from "./components/OPMController.jsx";
+import AufgabenController from "./components/aufgaben/AufgabenController.jsx";
+import ArkitektController from "./components/ArkitektController.jsx";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
 import GalvoScannerController from "./components/GalvoScannerController.jsx";
+import SLMController from "./components/SLMController.jsx";
 import ShitScopeComponent from "./components/ShitScopeComponent.js";
 
 // ImSwitch Navigation Drawer
@@ -57,6 +61,7 @@ import MobileApp from "./mobile/MobileApp";
 import { useMobileRoute } from "./mobile/mobileRoutes";
 import AppManagerPage from "./components/AppManagerPage.jsx";
 import OnboardingTour from "./components/OnboardingTour.jsx";
+import FirmwareUpdatePrompt from "./components/FirmwareUpdatePrompt";
 
 //axon
 import AxonTabComponent from "./axon/AxonTabComponent.js";
@@ -97,6 +102,7 @@ import {
   Box,
   Button,
   CssBaseline,
+  GlobalStyles,
   Dialog,
   DialogActions,
   DialogContent,
@@ -183,9 +189,20 @@ function App() {
   // instead of the full desktop layout (see mobile/mobileRoutes.js).
   const { page: mobileKioskPage } = useMobileRoute();
 
+  // Touchscreen / small-screen profile (see hooks/useDeviceProfile.js). The
+  // touch UI swaps in larger hit targets; the compact layout gives the
+  // content the space (dense top bar, collapsed drawer).
+  const deviceProfile = useDeviceProfile();
+  const { touchUI, compactLayout } = deviceProfile;
+  const topBarHeight = compactLayout ? 48 : 64;
+
   // Hook to detect mobile screens
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
-  const [sidebarVisible, setSidebarVisible] = useState(window.innerWidth > 768); // Sidebar visibility state - hidden by default on mobile
+  // Expanded drawer only where it does not eat the screen: on a 800 px Pi
+  // display the 240 px drawer left barely half the width for the stream.
+  const [sidebarVisible, setSidebarVisible] = useState(
+    window.innerWidth > 1100 && window.innerHeight >= 560,
+  );
   const [prevIsMobile, setPrevIsMobile] = useState(window.innerWidth <= 768);
 
   useEffect(() => {
@@ -207,13 +224,25 @@ function App() {
     return () => window.removeEventListener("resize", handleResize);
   }, [prevIsMobile]);
 
+  // Compact layouts (phones, the 800x480 Pi touchscreen, narrow windows) get
+  // an overlay drawer opened from the top bar instead of the permanent 90 px
+  // rail, so the stream and controls can use the full width.
+  const navOverlay = isMobile || compactLayout;
+  useEffect(() => {
+    if (navOverlay) setSidebarVisible(false);
+  }, [navOverlay]);
+
   const drawerWidth = sidebarVisible
     ? isMobile
       ? "100%"
-      : 240
-    : isMobile
+      : navOverlay
+        ? 280
+        : 240
+    : navOverlay
       ? 0
       : 90; // Collapsed sidebar width on desktop
+  // An overlay drawer floats above the content instead of pushing it.
+  const contentOffset = navOverlay ? 0 : drawerWidth;
 
   const hostIP = connectionSettingsState.ip;
   const apiPort = connectionSettingsState.apiPort;
@@ -480,7 +509,7 @@ function App() {
   // Helper: handle menu click, close drawer on mobile
   const handlePluginChange = (plugin) => {
     setSelectedPlugin(plugin);
-    if (isMobile) setSidebarVisible(false);
+    if (navOverlay) setSidebarVisible(false);
   };
 
   // Refresh files whenever the FileManager view is opened
@@ -586,6 +615,7 @@ function App() {
           <SnackbarProvider maxSnack={6} dense>
             <ReduxNotificationBridge />
             <WebSocketHandler />
+            <TouchKeypadHost />
             <MobileApp />
           </SnackbarProvider>
         </ThemeProvider>
@@ -593,14 +623,29 @@ function App() {
     );
   }
 
+  const baseTheme = isDarkMode ? darkTheme : lightTheme;
+  const appTheme = touchUI ? withTouchOverrides(baseTheme) : baseTheme;
+
   return (
     <PWAProvider>
-      <ThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>
+      <ThemeProvider theme={appTheme}>
         <SnackbarProvider maxSnack={6} dense>
           <ReduxNotificationBridge />
           <WebSocketHandler />
+          <TouchKeypadHost />
           <OnboardingTour selectedPlugin={selectedPlugin} />
+          <FirmwareUpdatePrompt />
           <CssBaseline />
+          {touchUI && (
+            <GlobalStyles
+              styles={{
+                body: {
+                  WebkitTapHighlightColor: "transparent",
+                  overscrollBehavior: "none",
+                },
+              }}
+            />
+          )}
 
           <Dialog
             open={napariCommandDialog.open}
@@ -666,7 +711,7 @@ function App() {
             <NavigationDrawer
               sidebarVisible={sidebarVisible}
               setSidebarVisible={setSidebarVisible}
-              isMobile={isMobile}
+              isMobile={navOverlay}
               drawerWidth={drawerWidth}
               selectedPlugin={selectedPlugin}
               handlePluginChange={handlePluginChange}
@@ -674,18 +719,19 @@ function App() {
             />
 
             <TopBar
-              isMobile={isMobile}
+              isMobile={navOverlay}
               sidebarVisible={sidebarVisible}
               setSidebarVisible={setSidebarVisible}
               selectedPlugin={selectedPlugin}
               onSettingsNavigate={handlePluginChange} // Pass existing navigation handler
               onStorageChange={handleStorageChange}
+              dense={compactLayout}
             />
 
             <Box
               component="main"
               sx={{
-                top: 64,
+                top: topBarHeight,
                 flexGrow: 1,
                 display: "flex",
                 position: "absolute",
@@ -693,19 +739,19 @@ function App() {
                   selectedPlugin === "JupyterNotebook" ||
                   selectedPlugin === "ImJoy"
                     ? 0
-                    : isMobile
+                    : isMobile || compactLayout
                       ? 1
                       : 3,
-                left: drawerWidth,
-                width: "calc(100% - " + drawerWidth + "px)",
-                height: "calc(100vh - 64px)",
+                left: contentOffset,
+                width: "calc(100% - " + contentOffset + "px)",
+                height: `calc(100vh - ${topBarHeight}px)`,
                 marginLeft: !isMobile && sidebarVisible ? 0 : 0,
                 transition: (theme) =>
                   theme.transitions.create(["margin", "padding"], {
                     easing: theme.transitions.easing.sharp,
                     duration: theme.transitions.duration.leavingScreen,
                   }),
-                minHeight: "calc(100vh - 64px)",
+                minHeight: `calc(100vh - ${topBarHeight}px)`,
                 overflow:
                   selectedPlugin === "JupyterNotebook" ||
                   selectedPlugin === "ImJoy"
@@ -724,6 +770,7 @@ function App() {
               {selectedPlugin === "GalvoScannerController" && (
                 <GalvoScannerController />
               )}
+              {selectedPlugin === "SLM" && <SLMController />}
               {selectedPlugin === "ShitScope" && (
                 <ShitScopeComponent
                   onOpenFileManager={handleFileManagerInitialPathChange}
@@ -733,9 +780,6 @@ function App() {
                 <ImJoyView sharedImage={sharedImage} />
               )}
               {selectedPlugin === "STORMLocal" && <STORMControllerLocal />}
-              {selectedPlugin === "STORMArkitekt" && (
-                <STORMControllerArkitekt />
-              )}
               {selectedPlugin === "FRAMESettings" && (
                 <FRAMESettingsController />
               )}
@@ -760,15 +804,14 @@ function App() {
               {selectedPlugin === "GoniometerController" && (
                 <GoniometerController />
               )}
-              {selectedPlugin === "Infinity Scanning" && (
-                <LargeFovScanController />
-              )}
-              {selectedPlugin === "Blockly" && <BlocklyController />}
               {selectedPlugin === "Objective" && <ObjectiveController />}
               {selectedPlugin === "About" && <AboutPage />}
               {selectedPlugin === "SystemSettings" && <SystemSettings />}
               {selectedPlugin === "MotorSettings" && (
                 <MotorSettingsController />
+              )}
+              {selectedPlugin === "LaserSettings" && (
+                <LaserSettingsController />
               )}
               {selectedPlugin === "FileManager" && (
                 <div
@@ -807,7 +850,7 @@ function App() {
                 </div>
               )}
               {selectedPlugin === "VizarrViewer" && (
-                <Box sx={{ width: "100%", height: "calc(100vh - 64px)" }}>
+                <Box sx={{ width: "100%", height: `calc(100vh - ${topBarHeight}px)` }}>
                   <VizarrViewer
                     zarrUrl={vizarrViewerState.currentUrl}
                     onClose={handleCloseVizarr}
@@ -820,7 +863,6 @@ function App() {
                 <AppManagerPage onNavigateToApp={handlePluginChange} />
               )}
               {selectedPlugin === "LightSheet" && <LightsheetController />}
-              {selectedPlugin === "Timelapse" && <TimelapseController />}
               {selectedPlugin === "MMCore" && <MMCoreController />}
 
               {selectedPlugin === "WiFi" && <WiFiController />}
@@ -834,6 +876,9 @@ function App() {
               )}
               {selectedPlugin === "DemoController" && <DemoController />}
               {selectedPlugin === "StageMap" && <StageMapController />}
+              {selectedPlugin === "OPM" && <OPMController />}
+              {selectedPlugin === "Aufgaben" && <AufgabenController />}
+              {selectedPlugin === "Arkitekt" && <ArkitektController />}
               {selectedPlugin === "CompositeAcquisition" && (
                 <CompositeAcquisitionComponent />
               )}

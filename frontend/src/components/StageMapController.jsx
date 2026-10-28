@@ -21,6 +21,7 @@ import {
 import {
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
   Divider,
@@ -46,6 +47,7 @@ import React, {
 import { useDispatch, useSelector } from "react-redux";
 
 import {
+  apiStageMapCalibrateStrobe,
   apiStageMapClear,
   apiStageMapGetParams,
   apiStageMapGetStatus,
@@ -99,7 +101,7 @@ const StageMapController = () => {
 
   const stageMapState = useSelector(stageMapSlice.getStageMapState);
   const positionState = useSelector(positionSlice.getPositionState);
-  const { tiles, channels, isMapping, status } = stageMapState;
+  const { tiles, channels, isMapping, status, strobeCalibration } = stageMapState;
 
   // View transform lives in a ref so pan/zoom does not re-render React.
   const viewRef = useRef({ cx: 0, cy: 0, scale: 0.2, flipY: false, initialized: false });
@@ -113,6 +115,7 @@ const StageMapController = () => {
   const [flipY, setFlipY] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [calibratingStrobe, setCalibratingStrobe] = useState(false);
   const [settingsAnchor, setSettingsAnchor] = useState(null);
   const [params, setParams] = useState(null);
   const [channelInput, setChannelInput] = useState("");
@@ -656,6 +659,31 @@ const StageMapController = () => {
     [params, notify],
   );
 
+  // Full strobe calibration with the stage still: delay, flash width and a
+  // frame check at the prescan's frame rate. The backend stores and persists
+  // the result, so the params are reloaded afterwards.
+  const handleCalibrateStrobe = useCallback(async () => {
+    setCalibratingStrobe(true);
+    try {
+      const result = await apiStageMapCalibrateStrobe();
+      dispatch(stageMapSlice.setStrobeCalibration(result));
+      if (result?.success) {
+        apiStageMapGetParams().then(setParams).catch(() => {});
+        notify(
+          (result.hints && result.hints[0]) ||
+            `Strobe calibrated: delay ${Math.round(result.bestDelayUs)} µs`,
+          result.matched ? "success" : "warning",
+        );
+      } else {
+        notify(`Strobe calibration failed: ${result?.error || "unknown"}`, "error");
+      }
+    } catch (e) {
+      notify("Strobe calibration request failed", "error");
+    } finally {
+      setCalibratingStrobe(false);
+    }
+  }, [dispatch, notify]);
+
   const channelEntries = useMemo(() => Object.entries(channels), [channels]);
 
   // ------------------------------------------------------------------
@@ -927,6 +955,88 @@ const StageMapController = () => {
                   handleParamChange({ pixelSizeUm: Math.max(0, Number(e.target.value) || 0) })
                 }
               />
+
+              <Divider />
+              <Typography variant="subtitle2">Prescan</Typography>
+              <Tooltip title="One LED flash per frame, timed by the firmware: sharp frames placed where they were taken. Needs strobe-capable firmware; otherwise the prescan runs free as before.">
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={Boolean(params.prescanStrobe)}
+                      onChange={(e) =>
+                        handleParamChange({ prescanStrobe: e.target.checked })
+                      }
+                    />
+                  }
+                  label="Strobed sweep"
+                />
+              </Tooltip>
+              <TextField
+                size="small"
+                type="number"
+                label="Flash width (µs)"
+                inputProps={{ step: 1, min: 1 }}
+                value={params.strobeWidthUs ?? 20}
+                onChange={(e) =>
+                  handleParamChange({ strobeWidthUs: Math.max(1, Number(e.target.value) || 20) })
+                }
+              />
+              <TextField
+                size="small"
+                type="number"
+                label="Flash delay (µs)"
+                placeholder="auto"
+                helperText="Empty = auto, near the end of the window"
+                InputLabelProps={{ shrink: true }}
+                inputProps={{ step: 100, min: 0 }}
+                value={params.strobeDelayUs >= 0 ? params.strobeDelayUs : ""}
+                onChange={(e) =>
+                  handleParamChange({
+                    strobeDelayUs:
+                      e.target.value === "" ? -1 : Math.max(0, Number(e.target.value) || 0),
+                  })
+                }
+              />
+              <TextField
+                size="small"
+                type="number"
+                label="Window (ms, camera exposure while strobing)"
+                inputProps={{ step: 1, min: 0.1 }}
+                value={params.strobeWindowMs ?? 30}
+                onChange={(e) =>
+                  handleParamChange({
+                    strobeWindowMs: Math.max(0.1, Number(e.target.value) || 30),
+                  })
+                }
+              />
+              <Tooltip title="Stage stays still. Finds the flash delay that lights every sensor row, sets the flash width, and checks that each trigger gives one evenly lit frame. Results are saved.">
+                <span>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    fullWidth
+                    onClick={handleCalibrateStrobe}
+                    disabled={calibratingStrobe}
+                    startIcon={calibratingStrobe ? <CircularProgress size={16} /> : null}
+                  >
+                    Calibrate strobe
+                  </Button>
+                </span>
+              </Tooltip>
+              {strobeCalibration && (
+                <Typography
+                  variant="caption"
+                  color={strobeCalibration.success ? "text.secondary" : "error"}
+                >
+                  {strobeCalibration.success
+                    ? `Delay ${Math.round(strobeCalibration.bestDelayUs)} µs` +
+                      (strobeCalibration.widthUs !== undefined
+                        ? ` · width ${Math.round(strobeCalibration.widthUs)} µs`
+                        : "") +
+                      (strobeCalibration.hints?.length ? ` · ${strobeCalibration.hints[0]}` : "")
+                    : strobeCalibration.error || "Calibration failed"}
+                </Typography>
+              )}
             </Stack>
           ) : (
             <Typography variant="body2" color="text.secondary">

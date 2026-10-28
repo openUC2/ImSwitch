@@ -10,7 +10,7 @@ import {
   ViewInAr as ViewInArIcon,
 } from "@mui/icons-material";
 import { Divider, Drawer, List, useTheme } from "@mui/material";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSelector } from "react-redux";
 import { getSidebarColors } from "../../constants/sidebarColors.js";
 import { selectEnabledApps } from "../../state/slices/appManagerSlice.js";
@@ -103,6 +103,25 @@ const NavigationDrawer = ({
       return next;
     });
   };
+
+  // Open the group of the app on screen, e.g. after a shared ?app=holo link:
+  // on a fresh browser "Apps" starts collapsed, so the app just pinned there
+  // was invisible. Only fires when the app's group changes, so the user can
+  // still collapse it afterwards; Essentials (Live View on every load) is left
+  // as the user set it.
+  const selectedCategory = Object.values(APP_REGISTRY).find(
+    (app) => app.pluginId === selectedPlugin,
+  )?.category;
+  useEffect(() => {
+    if (
+      selectedCategory &&
+      selectedCategory !== APP_CATEGORIES.ESSENTIALS &&
+      !groupsOpen[selectedCategory]
+    ) {
+      toggleGroup(selectedCategory);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCategory]);
 
   // Render enabled apps for a specific category
   const renderAppsForCategory = (category, color) => {

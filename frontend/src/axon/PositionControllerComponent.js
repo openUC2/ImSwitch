@@ -11,6 +11,7 @@ import {
 
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
 import apiPositionerControllerMovePositionerForever from "../backendapi/apiPositionerControllerMovePositionerForever.js";
+import useStageJog from "../hooks/useStageJog.js";
 
 const validXYStepSizes = [10, 100, 1000];
 const validZStepSizes = [50, 100, 500];
@@ -43,8 +44,6 @@ const PositionControllerComponent = () => {
     }
   });
 
-  const keyMoveDistance = 100; // Distance for keyboard single press
-  const zCoarseDistance = 500; // Coarse step for Z axis (PageUp/Down)
   const continuousMoveSpeed = 5000; // Speed for continuous movement
 
   useEffect(() => {
@@ -72,15 +71,9 @@ const PositionControllerComponent = () => {
   const keyPressedRef = useRef({});
   const continuousModeTriggeredRef = useRef({}); // Track if continuous mode was activated
 
-  // Button long-press state: { timer, continuousMode, active, axis, speed, singleDist }
-  const buttonPressRef = useRef({
-    timer: null,
-    continuousMode: false,
-    active: false,
-    axis: null,
-    speed: 0,
-    singleDist: 0,
-  });
+  // On-screen buttons: step on press, continuous travel after a 1 s hold,
+  // stop on release (state is kept per axis inside the hook).
+  const { jogHandlers } = useStageJog({ holdDelayMs: 1000 });
 
   //##################################################################################
   const movePositioner = (axis, dist) => {
@@ -114,48 +107,6 @@ const PositionControllerComponent = () => {
       .catch((error) => {
         console.log(`Move forever ${axis} error:`, error);
       });
-  };
-
-  //##################################################################################
-  // Generic button long-press handlers (short press = single step, long press = move forever)
-  const handleButtonDown = (axis, speed, singleDist) => {
-    const bp = buttonPressRef.current;
-    bp.active = true;
-    bp.continuousMode = false;
-    bp.axis = axis;
-    bp.speed = speed;
-    bp.singleDist = singleDist;
-    if (bp.timer) clearTimeout(bp.timer);
-
-    bp.timer = setTimeout(() => {
-      bp.continuousMode = true;
-      bp.timer = null;
-      movePositionerForever(axis, speed, false);
-    }, 1000);
-  };
-
-  const handleButtonUp = () => {
-    const bp = buttonPressRef.current;
-    if (!bp.active) {
-      return;
-    }
-
-    if (bp.timer) {
-      clearTimeout(bp.timer);
-      bp.timer = null;
-    }
-
-    if (bp.continuousMode) {
-      movePositionerForever(bp.axis, bp.speed, true); // stop
-      bp.continuousMode = false;
-    } else {
-      movePositioner(bp.axis, bp.singleDist);
-    }
-
-    bp.active = false;
-    bp.axis = null;
-    bp.speed = 0;
-    bp.singleDist = 0;
   };
 
   //##################################################################################
@@ -237,33 +188,34 @@ const PositionControllerComponent = () => {
       return;
     }
 
+    // Keyboard steps use the same selectors as the on-screen buttons.
     let axis = null;
-    let dist = keyMoveDistance;
+    let dist = xyStepSize;
 
     switch (event.key) {
       case "ArrowLeft":
         axis = "X";
-        dist = -keyMoveDistance;
+        dist = -xyStepSize;
         break;
       case "ArrowRight":
         axis = "X";
-        dist = keyMoveDistance;
+        dist = xyStepSize;
         break;
       case "ArrowUp":
         axis = "Y";
-        dist = keyMoveDistance;
+        dist = xyStepSize;
         break;
       case "ArrowDown":
         axis = "Y";
-        dist = -keyMoveDistance;
+        dist = -xyStepSize;
         break;
       case "PageUp":
         axis = "Z";
-        dist = zCoarseDistance;
+        dist = zStepSize;
         break;
       case "PageDown":
         axis = "Z";
-        dist = -zCoarseDistance;
+        dist = -zStepSize;
         break;
       default:
         keyPressedRef.current[event.key] = false;
@@ -295,17 +247,13 @@ const PositionControllerComponent = () => {
   };
 
   //##################################################################################
+  // Keys are handled on this pad's own element (see onKeyDown/onKeyUp below),
+  // not on window: the wrapper mounts a pad in both the PiP window and the
+  // camera viewport, and two window listeners moved the stage twice per press.
   useEffect(() => {
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-
+    const keyTimers = keyTimersRef.current;
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-
-      Object.values(keyTimersRef.current).forEach((timer) =>
-        clearTimeout(timer),
-      );
+      Object.values(keyTimers).forEach((timer) => clearTimeout(timer));
       keyTimersRef.current = {};
       keyPressedRef.current = {};
       continuousModeTriggeredRef.current = {};
@@ -326,7 +274,12 @@ const PositionControllerComponent = () => {
   };
 
   return (
-    <Box>
+    <Box
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      onKeyUp={handleKeyUp}
+      sx={{ outline: "none" }}
+    >
       <Box
         sx={{
           display: "flex",
@@ -406,96 +359,60 @@ const PositionControllerComponent = () => {
       >
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)
-          }
-          onMouseUp={handleButtonUp}
-          onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("Z", -continuousMoveSpeed, -zStepSize)
-          }
-          onTouchEnd={handleButtonUp}
-          onTouchCancel={handleButtonUp}
+          {...jogHandlers("Z", {
+            dist: -zStepSize,
+            speed: -continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           Z-
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)
-          }
-          onMouseUp={handleButtonUp}
-          onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("Y", -continuousMoveSpeed, -xyStepSize)
-          }
-          onTouchEnd={handleButtonUp}
-          onTouchCancel={handleButtonUp}
+          {...jogHandlers("Y", {
+            dist: -xyStepSize,
+            speed: -continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           Y↑
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("Z", continuousMoveSpeed, zStepSize)
-          }
-          onMouseUp={handleButtonUp}
-          onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("Z", continuousMoveSpeed, zStepSize)
-          }
-          onTouchEnd={handleButtonUp}
-          onTouchCancel={handleButtonUp}
+          {...jogHandlers("Z", {
+            dist: zStepSize,
+            speed: continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           Z+
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)
-          }
-          onMouseUp={handleButtonUp}
-          onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("X", -continuousMoveSpeed, -xyStepSize)
-          }
-          onTouchEnd={handleButtonUp}
-          onTouchCancel={handleButtonUp}
+          {...jogHandlers("X", {
+            dist: -xyStepSize,
+            speed: -continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           X←
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("Y", continuousMoveSpeed, xyStepSize)
-          }
-          onMouseUp={handleButtonUp}
-          onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("Y", continuousMoveSpeed, xyStepSize)
-          }
-          onTouchEnd={handleButtonUp}
-          onTouchCancel={handleButtonUp}
+          {...jogHandlers("Y", {
+            dist: xyStepSize,
+            speed: continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           Y↓
         </Button>
         <Button
           variant="contained"
-          onMouseDown={() =>
-            handleButtonDown("X", continuousMoveSpeed, xyStepSize)
-          }
-          onMouseUp={handleButtonUp}
-          onMouseLeave={handleButtonUp}
-          onTouchStart={() =>
-            handleButtonDown("X", continuousMoveSpeed, xyStepSize)
-          }
-          onTouchEnd={handleButtonUp}
-          onTouchCancel={handleButtonUp}
+          {...jogHandlers("X", {
+            dist: xyStepSize,
+            speed: continuousMoveSpeed,
+          })}
           sx={buttonStyle}
         >
           X→

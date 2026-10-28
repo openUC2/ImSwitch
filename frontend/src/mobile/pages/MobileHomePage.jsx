@@ -1,9 +1,21 @@
 // Kiosk home: live 3D render of the FRAME (static, driven by real stage
 // positions) plus a Formlabs-style status column and quick-nav shortcuts.
-import { useEffect, useState } from "react";
+// "Live view" swaps the render for the MJPEG camera stream on demand — nothing
+// here starts a stream on its own.
+import { useEffect, useRef, useState } from "react";
 import { useSelector } from "react-redux";
-import { Box, Chip, LinearProgress, Paper, Typography, Divider } from "@mui/material";
+import {
+  Box,
+  Button,
+  Chip,
+  LinearProgress,
+  Paper,
+  Typography,
+  Divider,
+} from "@mui/material";
 import OpenWithRoundedIcon from "@mui/icons-material/OpenWithRounded";
+import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import StopRoundedIcon from "@mui/icons-material/StopRounded";
 import FlareRoundedIcon from "@mui/icons-material/FlareRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
 import CenterFocusStrongRoundedIcon from "@mui/icons-material/CenterFocusStrongRounded";
@@ -17,6 +29,9 @@ import * as frame3DViewerSlice from "../../state/slices/Frame3DViewerSlice";
 import { getUc2State } from "../../state/slices/UC2Slice";
 import { getStorageState } from "../../state/slices/StorageSlice";
 import { getHomingState } from "../../state/slices/HomingSlice";
+import { getConnectionSettingsState } from "../../state/slices/ConnectionSettingsSlice";
+import { getBackendCapabilitiesState } from "../../state/slices/BackendCapabilitiesSlice";
+import apiLiveViewControllerStopLiveView from "../../backendapi/apiLiveViewControllerStopLiveView";
 import apiUC2ConfigControllerGetMicroscopeStandName from "../../backendapi/apiUC2ConfigControllerGetMicroscopeStandName";
 import apiUC2ConfigControllerGetBoardTemperature from "../../backendapi/apiUC2ConfigControllerGetBoardTemperature";
 import ConnectionDot from "../components/ConnectionDot";
@@ -46,9 +61,38 @@ const MobileHomePage = ({ navigate }) => {
   const uc2State = useSelector(getUc2State);
   const storageState = useSelector(getStorageState);
   const homingState = useSelector(getHomingState);
+  const connectionSettings = useSelector(getConnectionSettingsState);
+  const capabilities = useSelector(getBackendCapabilitiesState);
 
   const [standName, setStandName] = useState("openUC2 FRAME");
   const [boardTemp, setBoardTemp] = useState(null);
+  // The live view is never started for us — the kiosk must not hold the camera
+  // just because the home screen is showing. Start/stop is explicit.
+  const [live, setLive] = useState(false);
+  const [nonce, setNonce] = useState(0);
+  const liveRef = useRef(false);
+  liveRef.current = live;
+
+  const canStream =
+    !capabilities.lastUpdated ||
+    capabilities.availableControllers.includes("LiveViewController");
+
+  // mjpeg_stream?startStream=true starts the live view itself, so the <img> is
+  // the whole start path; dropping it plus stopLiveView is the whole stop path.
+  const streamUrl = `${connectionSettings.ip}:${connectionSettings.apiPort}/imswitch/api/LiveViewController/mjpeg_stream?startStream=true&t=${nonce}`;
+
+  const stopLive = () => {
+    setLive(false);
+    apiLiveViewControllerStopLiveView().catch(() => {});
+  };
+
+  // Leaving the home page must not leave the camera streaming.
+  useEffect(
+    () => () => {
+      if (liveRef.current) apiLiveViewControllerStopLiveView().catch(() => {});
+    },
+    [],
+  );
 
   useEffect(() => {
     apiUC2ConfigControllerGetMicroscopeStandName()
@@ -121,6 +165,30 @@ const MobileHomePage = ({ navigate }) => {
         <Typography variant="h4" sx={{ flex: 1, textTransform: "uppercase" }} noWrap>
           {standName}
         </Typography>
+        {canStream &&
+          (live ? (
+            <Button
+              color="error"
+              variant="contained"
+              startIcon={<StopRoundedIcon />}
+              onClick={stopLive}
+              sx={{ minHeight: 40 }}
+            >
+              Stop live
+            </Button>
+          ) : (
+            <Button
+              variant="contained"
+              startIcon={<PlayArrowRoundedIcon />}
+              onClick={() => {
+                setNonce((n) => n + 1);
+                setLive(true);
+              }}
+              sx={{ minHeight: 40 }}
+            >
+              Live view
+            </Button>
+          ))}
         <Chip
           label={statusLabel}
           color={statusColor}
@@ -150,22 +218,38 @@ const MobileHomePage = ({ navigate }) => {
             position: "relative",
           }}
         >
-          <Frame3DViewer
-            positions={{
-              x: positionState.x,
-              y: positionState.y,
-              z: positionState.z,
-              a: positionState.a,
-            }}
-            axisConfig={frame3DState.axisConfig}
-            visibility={frame3DState.visibility}
-            width="100%"
-            height="100%"
-            interactive={false}
-            showAxes={false}
-            background={kioskColors.surface}
-            sx={{ border: "none", borderRadius: 0 }}
-          />
+          {live ? (
+            <Box
+              component="img"
+              src={streamUrl}
+              alt="Live camera stream"
+              onError={stopLive}
+              sx={{
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+                bgcolor: "#000",
+                display: "block",
+              }}
+            />
+          ) : (
+            <Frame3DViewer
+              positions={{
+                x: positionState.x,
+                y: positionState.y,
+                z: positionState.z,
+                a: positionState.a,
+              }}
+              axisConfig={frame3DState.axisConfig}
+              visibility={frame3DState.visibility}
+              width="100%"
+              height="100%"
+              interactive={false}
+              showAxes={false}
+              background={kioskColors.surface}
+              sx={{ border: "none", borderRadius: 0 }}
+            />
+          )}
           <Typography
             variant="caption"
             sx={{
@@ -175,7 +259,9 @@ const MobileHomePage = ({ navigate }) => {
               color: "text.disabled",
             }}
           >
-            Live digital twin — positions update in real time
+            {live
+              ? "Live camera — MJPEG stream"
+              : "Live digital twin — positions update in real time"}
           </Typography>
         </Paper>
 

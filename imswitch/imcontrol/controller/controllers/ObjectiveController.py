@@ -113,16 +113,20 @@ class ObjectiveController(LiveUpdatedController):
                 self._moveMotorToSlot(0)
                 self._currentObjective = 0
             else:
-                # Assume we're at slot 0 if not calibrating
+                # Take the slot the motor already sits at; otherwise home and go to slot 0.
+                # calibrateObjective() clears _currentObjective, so it must be set again
+                # here, or pixel size / FOV stay None until the user picks a slot.
                 mPositionObjective = self._positioner.getPosition().get("A", 0)
-                if mPositionObjective == self._objectivePositions[0]:
+                slotTolerance = 10  # µm, positions come back as floats
+                if abs(mPositionObjective - self._objectivePositions[0]) <= slotTolerance:
                     self._currentObjective = 0
-                elif mPositionObjective == self._objectivePositions[1]:
+                elif abs(mPositionObjective - self._objectivePositions[1]) <= slotTolerance:
                     self._currentObjective = 1
                 else:
                     self.calibrateObjective()
                     self._moveMotorToSlot(0)
-                self._logger.info("Skipping calibration, assuming objective slot 0")
+                    self._currentObjective = 0
+                self._logger.info(f"Skipping calibration, objective at slot {self._currentObjective}")
         else:
             # No motor, just set default slot
             self._currentObjective = 0

@@ -1,0 +1,35 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../uc2-ESP"
+		},
+		{
+			"path": "../../UC2-REST"
+		},
+		{
+			"path": "../../UC2-REST-CANOPEN"
+		},
+		{
+			"path": "../../../../../../Downloads/arkitekt"
+		},
+		{
+			"path": "../../../../../../Downloads/os-rpi"
+		}
+	],
+	"settings": {
+		"terminal.integrated.profiles.osx": {
+			"x86 bash": {
+				"path": "/usr/bin/arch",
+				"args": [
+					"-arch",
+					"x86_64",
+					"/bin/bash"
+				]
+			}
+		},
+		"terminal.integrated.defaultProfile.osx": "x86 bash"
+	}
+}

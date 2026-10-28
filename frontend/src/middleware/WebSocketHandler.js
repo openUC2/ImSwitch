@@ -8,6 +8,7 @@ import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as tileStreamSlice from "../state/slices/TileStreamSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
 import * as homingSlice from "../state/slices/HomingSlice.js";
+import * as firmwareUpdateSlice from "../state/slices/FirmwareUpdateSlice.js";
 import * as notificationSlice from "../state/slices/NotificationSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
@@ -26,6 +27,8 @@ import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 import * as storageSlice from "../state/slices/StorageSlice.js";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
 import * as stageMapSlice from "../state/slices/StageMapSlice.js";
+import * as aufgabenSlice from "../state/slices/AufgabenSlice.js";
+import * as arkitektSlice from "../state/slices/ArkitektSlice.js";
 import { fetchAvailableControllers } from "../state/slices/BackendCapabilitiesSlice";
 
 import { io } from "socket.io-client";
@@ -857,6 +860,12 @@ const WebSocketHandler = () => {
               }).filter(([_, value]) => value !== undefined),
             );
 
+            // axes beyond X/Y/Z/A (e.g. a satellite stage with B-E)
+            const extra = Object.fromEntries(
+              Object.entries(correctedPositions).filter(([k]) => !["X", "Y", "Z", "A"].includes(k)),
+            );
+            if (Object.keys(extra).length) positionUpdate.extra = extra;
+
             //update redux state
             dispatch(positionSlice.setPosition(positionUpdate));
           }
@@ -894,6 +903,11 @@ const WebSocketHandler = () => {
         } catch (error) {
           console.error("Error in sigDiskFull handler:", error);
         }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigFirmwareUpdatesAvailable") {
+        // Opt-in check after startup found outdated boards: FirmwareUpdatePrompt asks the user.
+        const info = dataJson.args?.p0;
+        if (info) dispatch(firmwareUpdateSlice.setFirmwarePrompt(info));
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateLaserPower") {
         // Handle laser power/enabled state updates from backend
@@ -946,7 +960,8 @@ const WebSocketHandler = () => {
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigOTAStatusUpdate") {
-        // Handle CAN OTA status updates (both WiFi OTA and CAN streaming formats)
+        // CAN streaming OTA status (backend canbus.CanOta): status is a string;
+        // final states are "success" and "error".
         console.log("sigOTAStatusUpdate received:", dataJson);
         try {
           const otaStatus = dataJson.args?.p0;
@@ -954,37 +969,9 @@ const WebSocketHandler = () => {
           if (otaStatus && otaStatus.canId !== undefined) {
             const { canId, status, message, progress } = otaStatus;
 
-            // Determine status string and progress.
-            // CAN streaming sends status as a string ("uploading", "success", "error", "initializing")
-            // WiFi OTA sends status as a number (0=completed, 1=wifi_failed, 2=ota_failed)
-            let statusString;
-            let progressValue;
-
-            if (typeof status === "number") {
-              // Legacy WiFi OTA format
-              if (status === 0) {
-                statusString = "completed";
-                progressValue = 100;
-              } else if (status === 1) {
-                statusString = "wifi_failed";
-                progressValue = 0;
-              } else if (status === 2) {
-                statusString = "ota_failed";
-                progressValue = 50;
-              } else {
-                statusString = otaStatus.success ? "completed" : "failed";
-                progressValue = otaStatus.success ? 100 : 0;
-              }
-            } else {
-              // CAN streaming format – status is a descriptive string
-              statusString = status || "in_progress";
-              progressValue = progress ?? 0;
-            }
-
-            const displayMessage =
-              message || otaStatus.statusMsg || "Status update received";
-
-            // Update Redux state with OTA progress
+            const statusString = status || "in_progress";
+            const progressValue = progress ?? 0;
+            const displayMessage = message || "Status update received";
             dispatch(
               canOtaSlice.setUpdateProgress({
                 canId: canId,
@@ -994,29 +981,6 @@ const WebSocketHandler = () => {
                 timestamp: new Date().toISOString(),
               }),
             );
-
-            // If update is completed or failed, check if all updates are done
-            const terminalStates = [
-              "completed",
-              "success",
-              "failed",
-              "error",
-              "wifi_failed",
-              "ota_failed",
-            ];
-            if (terminalStates.includes(statusString)) {
-              const state = store.getState();
-              const canOtaState = state.canOtaState;
-              const totalDevices = canOtaState.selectedDeviceIds.length;
-              const completedCount = canOtaState.completedUpdateCount;
-              const failedCount = canOtaState.failedUpdateCount;
-
-              // If all devices are done, stop updating state
-              if (completedCount + failedCount >= totalDevices) {
-                dispatch(canOtaSlice.setIsUpdating(false));
-              }
-            }
-
             console.log(
               `OTA update for device ${canId}: ${statusString} (${progressValue}%) - ${displayMessage}`,
             );
@@ -1170,6 +1134,18 @@ const WebSocketHandler = () => {
           console.error("Error in sigStageMapTileAdded handler:", error);
         }
         //----------------------------------------------
+      } else if (dataJson.name === "sigStageMapTilesRemoved") {
+        // The backend discarded tiles, e.g. the previous prescan overlay when
+        // a new prescan starts: {ids: [...], kind: "prescan"}
+        try {
+          const removed = dataJson.args?.p0;
+          if (removed?.ids?.length) {
+            dispatch(stageMapSlice.removeTiles(removed));
+          }
+        } catch (error) {
+          console.error("Error in sigStageMapTilesRemoved handler:", error);
+        }
+        //----------------------------------------------
       } else if (dataJson.name === "sigStageMapStatus") {
         // Stage map runtime status (isRunning, tileCount, channels, FOV, ...)
         try {
@@ -1179,6 +1155,52 @@ const WebSocketHandler = () => {
           }
         } catch (error) {
           console.error("Error in sigStageMapStatus handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigAufgabenEvent") {
+        // Aufgaben job engine: {type: state|node|log|question|task_progress,
+        // run_id, ...}; node events are throttled to 10 Hz by the backend
+        try {
+          const event = dataJson.args?.p0;
+          if (event?.type) {
+            dispatch(aufgabenSlice.aufgabenEvent(event));
+          }
+        } catch (error) {
+          console.error("Error in sigAufgabenEvent handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigArkitektStatus") {
+        // ArkitektManager connection state; during a login it carries the
+        // device code (userCode) and the approval link (approveUrl)
+        try {
+          const arkitektStatus = dataJson.args?.p0;
+          if (arkitektStatus) {
+            dispatch(arkitektSlice.setStatus(arkitektStatus));
+          }
+        } catch (error) {
+          console.error("Error in sigArkitektStatus handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigArkitektActivity") {
+        // One remote call from Arkitekt, as it starts, streams and ends
+        try {
+          const entry = dataJson.args?.p0;
+          if (entry?.id != null) {
+            dispatch(arkitektSlice.upsertActivity(entry));
+          }
+        } catch (error) {
+          console.error("Error in sigArkitektActivity handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigArkitektUpload") {
+        // An image the microscope stored in Arkitekt (with a JPEG thumbnail)
+        try {
+          const upload = dataJson.args?.p0;
+          if (upload?.id != null) {
+            dispatch(arkitektSlice.addUpload(upload));
+          }
+        } catch (error) {
+          console.error("Error in sigArkitektUpload handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateOMEZarrStore") {

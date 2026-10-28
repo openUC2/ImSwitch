@@ -1,0 +1,800 @@
+[
+ {
+  "id": "loop_positions",
+  "title": "Loop over positions",
+  "category": "Loops",
+  "kind": "control",
+  "description": "",
+  "branches": [
+   "body"
+  ],
+  "loop": true,
+  "axis": "p",
+  "ref_kinds": {
+   "source": [
+    "positions"
+   ],
+   "focus_map": [
+    "focus_map"
+   ]
+  },
+  "expr_fields": [],
+  "schema": {
+   "$defs": {
+    "AbsolutePosition": {
+     "title": "AbsolutePosition",
+     "type": "object"
+    },
+    "FocusMapResource": {
+     "title": "FocusMapResource",
+     "type": "object"
+    }
+   },
+   "additionalProperties": false,
+   "properties": {
+    "source": {
+     "description": "Positions to visit, or '@name' of a positions resource",
+     "items": {
+      "$ref": "#/$defs/AbsolutePosition"
+     },
+     "title": "Source",
+     "type": "array"
+    },
+    "move": {
+     "default": true,
+     "description": "Move to each position (XY and its Z, if set)",
+     "title": "Move",
+     "type": "boolean"
+    },
+    "focus_map": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/FocusMapResource"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "'@name' of a focus_map resource: Z follows its surface at every item"
+    },
+    "split_storage": {
+     "default": false,
+     "description": "One output per position",
+     "title": "Split Storage",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "source"
+   ],
+   "title": "LoopPositionsParams",
+   "type": "object"
+  }
+ },
+ {
+  "id": "zstack",
+  "title": "Z-stack",
+  "category": "Loops",
+  "kind": "control",
+  "description": "",
+  "branches": [
+   "body"
+  ],
+  "loop": true,
+  "axis": "z",
+  "ref_kinds": {
+   "plan": [
+    "z_plan"
+   ]
+  },
+  "expr_fields": [],
+  "schema": {
+   "$defs": {
+    "ZAboveBelow": {
+     "title": "ZAboveBelow",
+     "type": "object"
+    },
+    "ZAbsolutePositions": {
+     "title": "ZAbsolutePositions",
+     "type": "object"
+    },
+    "ZRangeAround": {
+     "title": "ZRangeAround",
+     "type": "object"
+    },
+    "ZRelativePositions": {
+     "title": "ZRelativePositions",
+     "type": "object"
+    },
+    "ZTopBottom": {
+     "title": "ZTopBottom",
+     "type": "object"
+    }
+   },
+   "additionalProperties": false,
+   "properties": {
+    "plan": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/ZTopBottom"
+      },
+      {
+       "$ref": "#/$defs/ZAboveBelow"
+      },
+      {
+       "$ref": "#/$defs/ZRangeAround"
+      },
+      {
+       "$ref": "#/$defs/ZAbsolutePositions"
+      },
+      {
+       "$ref": "#/$defs/ZRelativePositions"
+      }
+     ],
+     "description": "Z positions; relative plans are relative to the Z where the loop starts",
+     "title": "Plan"
+    },
+    "move": {
+     "default": true,
+     "title": "Move",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "plan"
+   ],
+   "title": "ZStackParams",
+   "type": "object"
+  }
+ },
+ {
+  "id": "time_lapse",
+  "title": "Time lapse",
+  "category": "Loops",
+  "kind": "control",
+  "description": "",
+  "branches": [
+   "body",
+   "idle"
+  ],
+  "loop": true,
+  "axis": "t",
+  "ref_kinds": {
+   "plan": [
+    "time_plan"
+   ]
+  },
+  "expr_fields": [
+   "until"
+  ],
+  "schema": {
+   "$defs": {
+    "MultiPhaseTimePlan": {
+     "title": "MultiPhaseTimePlan",
+     "type": "object"
+    },
+    "TDurationLoops": {
+     "title": "TDurationLoops",
+     "type": "object"
+    },
+    "TIntervalDuration": {
+     "title": "TIntervalDuration",
+     "type": "object"
+    },
+    "TIntervalLoops": {
+     "title": "TIntervalLoops",
+     "type": "object"
+    }
+   },
+   "additionalProperties": false,
+   "properties": {
+    "plan": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/MultiPhaseTimePlan"
+      },
+      {
+       "$ref": "#/$defs/TIntervalDuration"
+      },
+      {
+       "$ref": "#/$defs/TIntervalLoops"
+      },
+      {
+       "$ref": "#/$defs/TDurationLoops"
+      }
+     ],
+     "description": "Interval and count or duration",
+     "title": "Plan"
+    },
+    "on_overrun": {
+     "default": "run_now",
+     "description": "When a round ends after the next start time: start the next round at once, or skip the missed start times",
+     "enum": [
+      "run_now",
+      "skip"
+     ],
+     "title": "On Overrun",
+     "type": "string"
+    },
+    "until": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Stop early when this expression is true",
+     "title": "Until"
+    },
+    "split_storage": {
+     "default": false,
+     "title": "Split Storage",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "plan"
+   ],
+   "title": "TimeLapseParams",
+   "type": "object"
+  }
+ },
+ {
+  "id": "condition",
+  "title": "If",
+  "category": "Flow",
+  "kind": "control",
+  "description": "",
+  "branches": [
+   "body",
+   "orelse"
+  ],
+  "loop": false,
+  "axis": null,
+  "ref_kinds": {},
+  "expr_fields": [
+   "expr"
+  ],
+  "schema": {
+   "additionalProperties": false,
+   "properties": {
+    "expr": {
+     "title": "Expr",
+     "type": "string"
+    }
+   },
+   "required": [
+    "expr"
+   ],
+   "title": "ConditionParams",
+   "type": "object"
+  }
+ },
+ {
+  "id": "capture",
+  "title": "Capture",
+  "category": "Acquisition",
+  "kind": "control",
+  "description": "",
+  "branches": [],
+  "loop": false,
+  "axis": "c",
+  "ref_kinds": {
+   "channels": [
+    "capture"
+   ]
+  },
+  "expr_fields": [],
+  "schema": {
+   "$defs": {
+    "CaptureChannel": {
+     "title": "CaptureChannel",
+     "type": "object"
+    }
+   },
+   "additionalProperties": false,
+   "properties": {
+    "channels": {
+     "anyOf": [
+      {
+       "items": {
+        "$ref": "#/$defs/CaptureChannel"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "'@name' of a capture resource; omitted inside loop_channels, where the loop's current channel is taken",
+     "title": "Channels"
+    },
+    "save": {
+     "default": true,
+     "description": "False keeps the frames for analysis tasks only",
+     "title": "Save",
+     "type": "boolean"
+    }
+   },
+   "title": "CaptureParams",
+   "type": "object"
+  }
+ },
+ {
+  "id": "wait",
+  "title": "Wait",
+  "category": "Flow",
+  "kind": "control",
+  "description": "",
+  "branches": [],
+  "loop": false,
+  "axis": null,
+  "ref_kinds": {},
+  "expr_fields": [],
+  "schema": {
+   "additionalProperties": false,
+   "properties": {
+    "seconds": {
+     "minimum": 0,
+     "title": "Seconds",
+     "type": "number"
+    }
+   },
+   "required": [
+    "seconds"
+   ],
+   "title": "WaitParams",
+   "type": "object"
+  }
+ },
+ {
+  "id": "question",
+  "title": "Question",
+  "category": "Flow",
+  "kind": "control",
+  "description": "",
+  "branches": [],
+  "loop": false,
+  "axis": null,
+  "ref_kinds": {},
+  "expr_fields": [],
+  "schema": {
+   "additionalProperties": false,
+   "properties": {
+    "text": {
+     "title": "Text",
+     "type": "string"
+    },
+    "buttons": {
+     "items": {
+      "type": "string"
+     },
+     "minItems": 1,
+     "title": "Buttons",
+     "type": "array"
+    },
+    "store_as": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Variable that receives the button text",
+     "title": "Store As"
+    },
+    "timeout_s": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Timeout S"
+    }
+   },
+   "required": [
+    "text"
+   ],
+   "title": "QuestionParams",
+   "type": "object"
+  }
+ },
+ {
+  "id": "log",
+  "title": "Log",
+  "category": "Flow",
+  "kind": "control",
+  "description": "",
+  "branches": [],
+  "loop": false,
+  "axis": null,
+  "ref_kinds": {},
+  "expr_fields": [],
+  "schema": {
+   "additionalProperties": false,
+   "properties": {
+    "message": {
+     "title": "Message",
+     "type": "string"
+    },
+    "level": {
+     "default": "info",
+     "enum": [
+      "info",
+      "warning",
+      "error"
+     ],
+     "title": "Level",
+     "type": "string"
+    }
+   },
+   "required": [
+    "message"
+   ],
+   "title": "LogParams",
+   "type": "object"
+  }
+ },
+ {
+  "id": "move_relative",
+  "title": "Move by",
+  "category": "Stage",
+  "description": "Moves by the given distances and waits until the stage arrives.",
+  "kind": "task",
+  "schema": {
+   "additionalProperties": false,
+   "properties": {
+    "dx_um": {
+     "default": 0.0,
+     "description": "Distance in X.",
+     "title": "Dx Um",
+     "type": "number",
+     "x-unit": "\u00b5m"
+    },
+    "dy_um": {
+     "default": 0.0,
+     "description": "Distance in Y.",
+     "title": "Dy Um",
+     "type": "number",
+     "x-unit": "\u00b5m"
+    },
+    "dz_um": {
+     "default": 0.0,
+     "description": "Distance in Z. Positive Z direction depends on the stand.",
+     "title": "Dz Um",
+     "type": "number",
+     "x-unit": "\u00b5m"
+    },
+    "speed_um_s": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Speed; empty uses the stage default.",
+     "title": "Speed Um S",
+     "x-unit": "\u00b5m/s"
+    }
+   },
+   "title": "move_relative_params",
+   "type": "object"
+  },
+  "locks": [
+   "stage"
+  ],
+  "effects": "IRREVERSIBLE",
+  "flags": {
+   "moves_xy": true,
+   "moves_z": true,
+   "homes": false,
+   "emits_light": false,
+   "external": false,
+   "runs_code": false,
+   "needs": [
+    "stage"
+   ],
+   "ask_first": false
+  },
+  "available": true,
+  "missing": []
+ },
+ {
+  "id": "home_axis",
+  "title": "Home axis",
+  "category": "Stage",
+  "description": "Drives the axis to its endstop and sets the reference.",
+  "kind": "task",
+  "schema": {
+   "additionalProperties": false,
+   "properties": {
+    "axis": {
+     "description": "Axis to home.",
+     "enum": [
+      "X",
+      "Y",
+      "Z",
+      "A"
+     ],
+     "title": "Axis",
+     "type": "string"
+    }
+   },
+   "required": [
+    "axis"
+   ],
+   "title": "home_axis_params",
+   "type": "object"
+  },
+  "locks": [
+   "stage"
+  ],
+  "effects": "IRREVERSIBLE",
+  "flags": {
+   "moves_xy": true,
+   "moves_z": true,
+   "homes": true,
+   "emits_light": false,
+   "external": false,
+   "runs_code": false,
+   "needs": [
+    "stage"
+   ],
+   "ask_first": true
+  },
+  "available": true,
+  "missing": []
+ },
+ {
+  "id": "set_illumination",
+  "title": "Set illumination",
+  "category": "Illumination",
+  "description": "",
+  "kind": "task",
+  "schema": {
+   "additionalProperties": false,
+   "properties": {
+    "source": {
+     "description": "Light source as named in the setup.",
+     "title": "Source",
+     "type": "string",
+     "x-choices-from": "illumination",
+     "enum": [
+      "LED",
+      "Laser488"
+     ]
+    },
+    "intensity": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Value in the source's own range; empty keeps the current value.",
+     "title": "Intensity"
+    },
+    "on": {
+     "default": true,
+     "description": "Switch the source on or off.",
+     "title": "On",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "source"
+   ],
+   "title": "set_illumination_params",
+   "type": "object"
+  },
+  "locks": [],
+  "effects": "REPEATABLE",
+  "flags": {
+   "moves_xy": false,
+   "moves_z": false,
+   "homes": false,
+   "emits_light": true,
+   "external": false,
+   "runs_code": false,
+   "needs": [
+    "illumination"
+   ],
+   "ask_first": false
+  },
+  "available": true,
+  "missing": []
+ },
+ {
+  "id": "autofocus",
+  "title": "Autofocus",
+  "category": "Focus",
+  "description": "Focuses at the current XY and returns the focused Z, or nothing if it failed.",
+  "kind": "task",
+  "schema": {
+   "additionalProperties": false,
+   "properties": {
+    "mode": {
+     "default": "software",
+     "description": "software sweeps Z and scores images; hardware uses the focus lock.",
+     "enum": [
+      "software",
+      "hardware"
+     ],
+     "title": "Mode",
+     "type": "string"
+    },
+    "range_um": {
+     "default": 50.0,
+     "description": "Half range around the current Z (software mode).",
+     "exclusiveMinimum": 0,
+     "title": "Range Um",
+     "type": "number",
+     "x-unit": "\u00b5m"
+    },
+    "step_um": {
+     "default": 5.0,
+     "description": "Z step (software mode).",
+     "exclusiveMinimum": 0,
+     "title": "Step Um",
+     "type": "number",
+     "x-unit": "\u00b5m"
+    },
+    "channel": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Light switched on while focusing, and off afterwards; empty keeps the light as it is.",
+     "title": "Channel",
+     "x-choices-from": "illumination",
+     "enum": [
+      "LED",
+      "Laser488"
+     ]
+    },
+    "intensity": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Intensity of that light; empty keeps its current value.",
+     "title": "Intensity"
+    },
+    "algorithm": {
+     "default": "LAPE",
+     "description": "Focus metric (software mode).",
+     "enum": [
+      "LAPE",
+      "GLVA",
+      "JPEG"
+     ],
+     "title": "Algorithm",
+     "type": "string"
+    },
+    "settle_s": {
+     "default": 0.1,
+     "description": "Wait after each Z step.",
+     "title": "Settle S",
+     "type": "number",
+     "x-unit": "s"
+    },
+    "max_attempts": {
+     "default": 2,
+     "description": "Attempts before giving up.",
+     "exclusiveMinimum": 0,
+     "title": "Max Attempts",
+     "type": "integer"
+    }
+   },
+   "title": "autofocus_params",
+   "type": "object"
+  },
+  "locks": [
+   "stage"
+  ],
+  "effects": "IRREVERSIBLE",
+  "flags": {
+   "moves_xy": false,
+   "moves_z": true,
+   "homes": false,
+   "emits_light": true,
+   "external": false,
+   "runs_code": false,
+   "needs": [
+    "autofocus"
+   ],
+   "ask_first": false
+  },
+  "available": true,
+  "missing": []
+ },
+ {
+  "id": "pump_volume",
+  "title": "Pump volume",
+  "category": "Fluidics",
+  "description": "Pumps a volume and waits until it is done. Negative volumes pump backwards.",
+  "kind": "task",
+  "schema": {
+   "additionalProperties": false,
+   "properties": {
+    "pump": {
+     "description": "Pump as named in the setup.",
+     "title": "Pump",
+     "type": "string",
+     "x-choices-from": "pump",
+     "enum": []
+    },
+    "volume_ul": {
+     "description": "Volume to move.",
+     "title": "Volume Ul",
+     "type": "number",
+     "x-unit": "\u00b5L"
+    },
+    "rate_ul_min": {
+     "default": 100.0,
+     "description": "Flow rate.",
+     "exclusiveMinimum": 0,
+     "title": "Rate Ul Min",
+     "type": "number",
+     "x-unit": "\u00b5L/min"
+    }
+   },
+   "required": [
+    "pump",
+    "volume_ul"
+   ],
+   "title": "pump_volume_params",
+   "type": "object"
+  },
+  "locks": [
+   "fluidics"
+  ],
+  "effects": "IRREVERSIBLE",
+  "flags": {
+   "moves_xy": false,
+   "moves_z": false,
+   "homes": false,
+   "emits_light": false,
+   "external": false,
+   "runs_code": false,
+   "needs": [
+    "pump"
+   ],
+   "ask_first": false
+  },
+  "available": false,
+  "missing": [
+   "pump"
+  ]
+ }
+]

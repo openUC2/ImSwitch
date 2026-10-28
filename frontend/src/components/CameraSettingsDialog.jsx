@@ -185,6 +185,9 @@ const ParameterField = React.memo(function ParameterField({
         setDraft(e.target.value);
         setDirty(true);
       }}
+      // Chrome changes a focused number input on mouse wheel; scrolling the
+      // dialog would then silently commit e.g. a new TEC target on blur.
+      onWheel={(e) => e.target.blur()}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === "Enter") {

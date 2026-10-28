@@ -240,7 +240,6 @@ class InLineHoloController(LiveUpdatedController):
         # This is the standard pattern used by HistogrammController, FFTController, etc.
         self._commChannel.sigUpdateImage.connect(self.update)
 
-        # Legacy GUI setup
         self._logger.info("InLineHoloController initialized successfully")
 
     def __del__(self):
@@ -1442,28 +1441,6 @@ class InLineHoloController(LiveUpdatedController):
     def _emit_state_changed(self):
         """Emit state changed signal"""
         self.sigHoloStateChanged.emit(self._state.to_dict())
-
-    # =========================
-    # Legacy GUI compatibility (if not headless)
-    # =========================
-    def setShowInLineHolo(self, enabled):
-        """Legacy: Show or hide inline hologram processing"""
-        if enabled:
-            self.start_processing()
-        else:
-            self.stop_processing()
-
-    def changeRate(self, updateRate):
-        """Legacy: Change update rate"""
-        if updateRate == "" or updateRate <= 0:
-            updateRate = 1
-        self.set_parameters_inlineholo({"update_freq": updateRate})
-
-    def inLineValueChanged(self, magnitude):
-        """Legacy: Change inline propagation distance"""
-        dz = magnitude * 1e-3  # Convert to meters
-        self.set_dz(dz)
-
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

@@ -71,7 +71,6 @@ const initialState = {
     save_directory: "STORM",
     save_format: "tiff",
     process_locally: true,
-    process_arkitekt: false,
     processing_parameters: null
   },
   
@@ -199,9 +198,6 @@ const stormSlice = createSlice({
     setProcessLocally: (state, action) => {
       state.acquisitionParameters.process_locally = action.payload;
     },
-    setProcessArkitekt: (state, action) => {
-      state.acquisitionParameters.process_arkitekt = action.payload;
-    },
     
     // Reconstruction status actions
     setIsReconstructing: (state, action) => {
@@ -268,7 +264,6 @@ export const {
   setSaveDirectory,
   setSaveFormat,
   setProcessLocally,
-  setProcessArkitekt,
   setIsReconstructing,
   setReconstructedImage,
   addLocalizations,

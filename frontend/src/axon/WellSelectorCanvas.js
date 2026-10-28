@@ -28,8 +28,12 @@ import {
   DialogContentText,
   DialogTitle,
   Button,
+  IconButton,
+  Paper,
 } from "@mui/material";
-import { X } from "@mui/icons-material";
+import ZoomInIcon from "@mui/icons-material/ZoomIn";
+import ZoomOutIcon from "@mui/icons-material/ZoomOut";
+import FitScreenIcon from "@mui/icons-material/FitScreen";
 
 //##################################################################################
 
@@ -48,6 +52,20 @@ export const Shape = Object.freeze({
 });
 
 //##################################################################################
+// The polygon being drawn is canvas-local until CONVERT puts it in redux, and
+// the canvas unmounts whenever the user leaves the page. Keep the draft here
+// so leaving and coming back does not throw away a half-traced outline.
+const freehandDraft = { points: [], closed: false };
+
+// Map zoom limits (wheel, pinch and the zoom buttons share them).
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 10;
+const clampZoom = (s) => Math.min(Math.max(s, ZOOM_MIN), ZOOM_MAX);
+
+// Touch gesture thresholds.
+const LONG_PRESS_MS = 550; // hold this long without moving -> context menu
+const TAP_SLOP_PX = 10; // finger travel still counted as a tap
+
 const WellSelectorCanvas = forwardRef((props, ref) => {
   const canvasRef = useRef(null);
   const parentRef = useRef(null);
@@ -84,11 +102,23 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   const [dragPointIndex, setDragPointIndex] = useState(-1);
 
   //mode: freehand draw – polygon vertices in physical (µm) coordinates
-  const [freehandPoints, setFreehandPoints] = useState([]);
+  const [freehandPoints, setFreehandPoints] = useState(() => freehandDraft.points);
   const [isFreehandDrawing, setIsFreehandDrawing] = useState(false);
-  const [freehandClosed, setFreehandClosed] = useState(false);
+  const [freehandClosed, setFreehandClosed] = useState(() => freehandDraft.closed);
+  useEffect(() => {
+    freehandDraft.points = freehandPoints;
+    freehandDraft.closed = freehandClosed;
+  }, [freehandPoints, freehandClosed]);
+  // Did the pointer actually move between press and release? Distinguishes a
+  // click (append a vertex) from a drag (trace and close).
+  const freehandDragRef = useRef(false);
   // Throttle: minimum stage distance between recorded freehand points (µm).
   const FREEHAND_MIN_STEP_UM = 500;
+
+  // Touch gesture state (see handleTouchStart): mode is null | "single" |
+  // "pinch" | "menu" | "ignore".
+  const touchRef = useRef({ mode: null, longPressTimer: null });
+  useEffect(() => () => clearTimeout(touchRef.current.longPressTimer), []);
 
   //##################################################################################
 
@@ -149,39 +179,61 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
       setIsFreehandDrawing(false);
       setFreehandClosed(false);
     },
+    /** Append a vertex at an absolute stage position (µm). */
+    addFreehandVertex: ({ x, y }) => {
+      setFreehandPoints((prev) => (freehandClosed ? [{ x, y }] : [...prev, { x, y }]));
+      setFreehandClosed(false);
+    },
+    /** Close the polygon being built (needs at least 3 vertices). */
+    closeFreehand: () => {
+      setIsFreehandDrawing(false);
+      setFreehandClosed(freehandPoints.length >= 3);
+      return freehandPoints.length >= 3;
+    },
+    /**
+     * Build the polygon as the convex hull of the current point list, so a
+     * handful of points dropped around the tissue become a region to scan.
+     * Monotone chain; returns the number of hull vertices.
+     */
+    wrapPointsIntoFreehand: () => {
+      const pts = (experimentState.pointList || []).map((p) => ({ x: p.x, y: p.y }));
+      if (pts.length < 3) return 0;
+      const sorted = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
+      const cross = (o, a, b) =>
+        (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+      const half = (input) => {
+        const out = [];
+        for (const p of input) {
+          while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) {
+            out.pop();
+          }
+          out.push(p);
+        }
+        out.pop();
+        return out;
+      };
+      const hull = [...half(sorted), ...half([...sorted].reverse())];
+      if (hull.length < 3) return 0;
+      setFreehandPoints(hull);
+      setIsFreehandDrawing(false);
+      setFreehandClosed(true);
+      return hull.length;
+    },
+    freehandVertexCount: () => freehandPoints.length,
     /**
      * Generate scan positions inside the closed freehand polygon using
      * the current objective FOV (with optional overlap).
      * Returns an array of {x, y} in physical (µm) coordinates.
      */
-    generateFreehandScanPositions: (overlap = 0) => {
-      const polygon = freehandPoints;
-      if (!polygon || polygon.length < 3) return [];
-      const fovX = objectiveState?.fovX || 0;
-      const fovY = objectiveState?.fovY || 0;
-      if (fovX <= 0 || fovY <= 0) return [];
-      const stepX = fovX * (1 - overlap);
-      const stepY = fovY * (1 - overlap);
-      let minX = Infinity,
-        minY = Infinity,
-        maxX = -Infinity,
-        maxY = -Infinity;
-      polygon.forEach((p) => {
-        if (p.x < minX) minX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y > maxY) maxY = p.y;
-      });
-      const positions = [];
-      for (let y = minY; y <= maxY; y += stepY) {
-        for (let x = minX; x <= maxX; x += stepX) {
-          if (wsUtils.isPointInPolygon({ x, y }, polygon)) {
-            positions.push({ x, y });
-          }
-        }
-      }
-      return positions;
-    },
+    generateFreehandScanPositions: (overlap = 0) =>
+      wsUtils.generatePolygonScanPositions(
+        freehandPoints,
+        objectiveState?.fovX || 0,
+        objectiveState?.fovY || 0,
+        overlap,
+      ),
+    /** The closed freehand polygon as drawn, in physical (µm) coordinates. */
+    getFreehandPolygon: () => freehandPoints.map((p) => ({ x: p.x, y: p.y })),
   }));
 
   //##################################################################################
@@ -230,10 +282,26 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   }, [positionState.x, positionState.y]);
 
   //##################################################################################
+  // renderCanvas repaints everything (wells, every tile, overlays, stage-map
+  // images). Mouse moves change state far faster than the screen refreshes, and
+  // repainting once per state change made drawing crawl. Coalesce to at most
+  // one repaint per animation frame, always with the latest closure.
+  const renderCanvasRef = useRef(null);
+  useEffect(() => {
+    renderCanvasRef.current = renderCanvas; // after render: renderCanvas is declared below
+  });
+  const renderFrameRef = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(renderFrameRef.current), []);
   useEffect(() => {
     // Draw canvas content when state changed
-    renderCanvas();
+    if (renderFrameRef.current) return;
+    renderFrameRef.current = requestAnimationFrame(() => {
+      renderFrameRef.current = 0;
+      if (canvasRef.current) renderCanvasRef.current();
+    });
   }, [
+    freehandPoints,
+    freehandClosed,
     scale,
     offset,
     wellSelectorState,
@@ -398,7 +466,6 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
   //##################################################################################
   const renderCanvas = () => {
-    console.log("renderCanvas");
 
     //------------ create canvas
 
@@ -1037,6 +1104,13 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     ctx.save();
     ctx.globalAlpha = 0.9;
 
+    // Drop decoded bitmaps for tiles that are gone: the cache is one Image per
+    // tile and a long mapping session would otherwise hold them all.
+    const liveIds = new Set(tiles.map((t) => t.id));
+    Object.keys(stageMapTileImagesRef.current).forEach((id) => {
+      if (!liveIds.has(Number(id))) delete stageMapTileImagesRef.current[id];
+    });
+
     tiles.forEach((tile) => {
       if (tile.x == null || tile.y == null || !tile.image) return;
       // Respect the channel visibility toggles from the StageMap app
@@ -1243,13 +1317,8 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     const canvasY = (mouseY - offset.y) / scale;
 
     // Calculate the new scale
-    const zoomMin = 0.5;
-    const zoomMax = 10;
     const zoomFactor = 0.5; // Zoom sensitivity – higher = faster zoom
-    const newScale = Math.min(
-      Math.max(scale - e.deltaY * zoomFactor * 0.01, zoomMin),
-      zoomMax
-    );
+    const newScale = clampZoom(scale - e.deltaY * zoomFactor * 0.01);
 
     // Adjust the offset so the zoom centers around the mouse position
     const scaleChange = newScale / scale;
@@ -1264,76 +1333,152 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   };
 
   //##################################################################################
-  // Touch event helpers to normalize touch and mouse events
-  const getEventPosition = (e) => {
-    if (e.touches && e.touches.length > 0) {
-      // Touch event
-      return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
-    } else {
-      // Mouse event
-      return { clientX: e.clientX, clientY: e.clientY };
+  // Touch. One finger behaves like the left mouse button (press, drag,
+  // release; a tap is also a click), a long press opens the context menu
+  // (there is no right button), and two fingers pinch-zoom and pan the map
+  // (there is no Ctrl+wheel / Ctrl+drag).
+  //
+  // touchend calls preventDefault, so the browser does not emulate mouse
+  // events afterwards; the click is dispatched here instead, for taps only —
+  // a finger dragged across the map must not drive the stage (Move mode).
+  const fakeMouseEvent = (touch) => ({
+    button: 0,
+    clientX: touch.clientX,
+    clientY: touch.clientY,
+    preventDefault: () => {},
+    ctrlKey: false,
+    shiftKey: false,
+  });
+
+  const clearLongPress = () => {
+    clearTimeout(touchRef.current.longPressTimer);
+    touchRef.current.longPressTimer = null;
+  };
+
+  // A press that turns into a pinch or a long press must not leave anything
+  // behind: no point drag, no area on release, no stray freehand vertex.
+  const cancelSingleTouch = () => {
+    const t = touchRef.current;
+    clearLongPress();
+    if (t.mode !== "single") return;
+    setMouseDownFlag(false);
+    setDragPointIndex(-1);
+    if (wellSelectorState.mode == Mode.FREEHAND_DRAW && t.freehandBefore) {
+      setFreehandPoints(t.freehandBefore.points);
+      setFreehandClosed(t.freehandBefore.closed);
+      setIsFreehandDrawing(false);
     }
   };
 
-  const getLocalTouchPosition = (e) => {
-    const touch = e.touches[0] || e.changedTouches[0];
-    const rect = canvasRef.current.getBoundingClientRect();
-    return {
-      x: touch.clientX - rect.left,
-      y: touch.clientY - rect.top,
-    };
+  const openContextMenuAt = (clientX, clientY) => {
+    const bounds = canvasRef.current.getBoundingClientRect();
+    const local = getLocalMousePosition({ clientX, clientY });
+    setMenuPosition({ x: clientX - bounds.left, y: clientY - bounds.top });
+    setMenuPositionLocal(local);
+    // The menu looks for a point under the pointer; touch has no hover.
+    setMouseMovePosition(local);
+    setShowMenu(true);
   };
 
-  //##################################################################################
-  // Touch event handlers that reuse mouse logic
   const handleTouchStart = (e) => {
-    e.preventDefault(); // Prevent default touch behaviors
-    console.log("handleTouchStart");
-    
-    if (e.touches.length === 1) {
-      // Single touch - treat as mouse down
-      const fakeMouseEvent = {
-        button: 0, // Left button
-        clientX: e.touches[0].clientX,
-        clientY: e.touches[0].clientY,
-        preventDefault: () => e.preventDefault(),
-        ctrlKey: false, // Touch doesn't have ctrl key
-        shiftKey: false,
+    const t = touchRef.current;
+    if (e.touches.length >= 2) {
+      cancelSingleTouch();
+      const rect = canvasRef.current.getBoundingClientRect();
+      const [a, b] = [e.touches[0], e.touches[1]];
+      t.mode = "pinch";
+      t.pinch = {
+        distance: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY) || 1,
+        // map point under the fingers' midpoint, in unscaled canvas units
+        anchor: {
+          x: ((a.clientX + b.clientX) / 2 - rect.left - offset.x) / scale,
+          y: ((a.clientY + b.clientY) / 2 - rect.top - offset.y) / scale,
+        },
+        scale,
       };
-      handleMouseDown(fakeMouseEvent);
+      return;
     }
+    if (e.touches.length !== 1 || t.mode === "pinch") return;
+    if (showMenu) {
+      // A tap next to the open menu only closes it.
+      setShowMenu(false);
+      t.mode = "ignore";
+      return;
+    }
+    const touch = e.touches[0];
+    t.mode = "single";
+    t.start = { x: touch.clientX, y: touch.clientY };
+    t.moved = false;
+    t.freehandBefore = { points: freehandPoints, closed: freehandClosed };
+    handleMouseDown(fakeMouseEvent(touch));
+    clearLongPress();
+    t.longPressTimer = setTimeout(() => {
+      t.longPressTimer = null;
+      if (t.mode !== "single" || t.moved) return;
+      cancelSingleTouch();
+      t.mode = "menu";
+      openContextMenuAt(touch.clientX, touch.clientY);
+    }, LONG_PRESS_MS);
   };
 
   const handleTouchMove = (e) => {
-    e.preventDefault(); // Prevent scrolling
-    console.log("handleTouchMove");
-    
-    if (e.touches.length === 1) {
-      // Single touch - treat as mouse move
-      const fakeMouseEvent = {
-        clientX: e.touches[0].clientX,
-        clientY: e.touches[0].clientY,
-        preventDefault: () => e.preventDefault(),
-        ctrlKey: false,
-        shiftKey: false,
-      };
-      handleMouseMove(fakeMouseEvent);
+    const t = touchRef.current;
+    if (t.mode === "pinch") {
+      if (e.touches.length < 2) return;
+      const rect = canvasRef.current.getBoundingClientRect();
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const distance = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY) || 1;
+      const newScale = clampZoom((t.pinch.scale * distance) / t.pinch.distance);
+      const midX = (a.clientX + b.clientX) / 2 - rect.left;
+      const midY = (a.clientY + b.clientY) / 2 - rect.top;
+      setScale(newScale);
+      setOffset({
+        x: midX - t.pinch.anchor.x * newScale,
+        y: midY - t.pinch.anchor.y * newScale,
+      });
+      return;
     }
+    if (t.mode !== "single" || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    if (
+      !t.moved &&
+      Math.hypot(touch.clientX - t.start.x, touch.clientY - t.start.y) > TAP_SLOP_PX
+    ) {
+      t.moved = true;
+      clearLongPress();
+    }
+    handleMouseMove(fakeMouseEvent(touch));
   };
 
   const handleTouchEnd = (e) => {
-    e.preventDefault();
-    console.log("handleTouchEnd");
-    
-    // Treat as mouse up
-    const fakeMouseEvent = {
-      clientX: e.changedTouches[0]?.clientX || 0,
-      clientY: e.changedTouches[0]?.clientY || 0,
-      preventDefault: () => e.preventDefault(),
-      ctrlKey: false,
-      shiftKey: false,
-    };
-    handleMouseUp(fakeMouseEvent);
+    e.preventDefault(); // no emulated mousedown/mouseup/click afterwards
+    const t = touchRef.current;
+    clearLongPress();
+    if (e.touches.length > 0) return; // wait until every finger is up
+    const mode = t.mode;
+    t.mode = null;
+    if (mode !== "single") return;
+    const fake = fakeMouseEvent(e.changedTouches[0]);
+    handleMouseUp(fake);
+    if (!t.moved) handleClick(fake);
+  };
+
+  const handleTouchCancel = () => {
+    cancelSingleTouch();
+    touchRef.current.mode = null;
+  };
+
+  // Zoom buttons (touch has no Ctrl+wheel): zoom around the canvas centre.
+  const zoomBy = (factor) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const newScale = clampZoom(scale * factor);
+    setScale(newScale);
+    setOffset({
+      x: cx - ((cx - offset.x) / scale) * newScale,
+      y: cy - ((cy - offset.y) / scale) * newScale,
+    });
   };
 
   //##################################################################################
@@ -1348,6 +1493,8 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     const newMousePosition = getLocalMousePosition(e);
     setMouseDownFlag(true);
     setMouseDownPosition(newMousePosition);
+    // A finger has no hover, so the last move position is stale on touch.
+    setMouseMovePosition(newMousePosition);
 
     // Allow dragging only if Ctrl is pressed
     if (e.ctrlKey) {
@@ -1364,10 +1511,10 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     if (wellSelectorState.mode == Mode.SINGLE_SELECT) {
       //for each point
       experimentState.pointList.forEach((itPoint, index) => {
-        //check if mouse is over point
+        //check if the press is on the point
         if (
           wsUtils.isPointInsideRect(
-            mouseMovePosition,
+            newMousePosition,
             calcPhyPoint2PxPoint(itPoint),
             getRasterWidthAsPx(),
             getRasterHeightAsPx()
@@ -1381,12 +1528,17 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
       });
     }
 
-    // Freehand drawing: start a new polygon (or restart after closing one)
+    // Freehand: a press APPENDS a vertex to the polygon being built. Dragging
+    // still traces a continuous outline (handleMouseMove); releasing without
+    // having dragged leaves the vertex in place, so a boundary can be built one
+    // tap at a time. Every press used to discard the polygon so far, which is
+    // why tracing round a slide meant one unbroken drag or nothing.
     if (wellSelectorState.mode == Mode.FREEHAND_DRAW) {
       const phy = calcPxPoint2PhyPoint(newMousePosition);
-      setFreehandPoints([phy]);
+      setFreehandPoints((prev) => (freehandClosed ? [phy] : [...prev, phy]));
       setIsFreehandDrawing(true);
       setFreehandClosed(false);
+      freehandDragRef.current = false;
     }
   };
 
@@ -1430,6 +1582,7 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
         const dx = phy.x - last.x;
         const dy = phy.y - last.y;
         if (Math.hypot(dx, dy) >= FREEHAND_MIN_STEP_UM) {
+          freehandDragRef.current = true;
           setFreehandPoints([...freehandPoints, phy]);
         }
       }
@@ -1445,17 +1598,20 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
   //##################################################################################
   const handleMouseUp = (e) => {
-    console.log("handleMouseUp");
 
     //handle mode single select
     if (wellSelectorState.mode == Mode.SINGLE_SELECT) {
       setDragPointIndex(-1);
     }
 
-    // Freehand drawing: close the polygon on mouse-up
+    // Freehand: a drag closes the polygon on release, exactly as before. A
+    // click (no movement) leaves it open so the next click adds another vertex;
+    // "Close region" finishes it.
     if (wellSelectorState.mode == Mode.FREEHAND_DRAW && isFreehandDrawing) {
       setIsFreehandDrawing(false);
-      if (freehandPoints.length >= 3) setFreehandClosed(true);
+      if (freehandDragRef.current && freehandPoints.length >= 3) {
+        setFreehandClosed(true);
+      }
     }
 
     //handle mode cup select
@@ -1705,13 +1861,13 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     event.preventDefault();
     //prevent menu on ctrl
     if (event.ctrlKey) return;
-    //show menu
-    const canvasBounds = canvasRef.current.getBoundingClientRect();
-    const xPos = event.clientX - canvasBounds.left;
-    const yPos = event.clientY - canvasBounds.top;
-    setMenuPosition({ x: xPos, y: yPos });
-    setMenuPositionLocal(getLocalMousePosition(event));
-    setShowMenu(true);
+    // Some touchscreens also fire contextmenu on a long press; treat it like
+    // our own long-press timer so the press leaves nothing behind.
+    if (touchRef.current.mode === "single") {
+      cancelSingleTouch();
+      touchRef.current.mode = "menu";
+    }
+    openContextMenuAt(event.clientX, event.clientY);
   };
 
   //##################################################################################
@@ -1877,9 +2033,10 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
         onMouseMove={handleMouseMove} // Handle dragging movement
         onMouseUp={handleMouseUp} // Stop dragging
         onMouseLeave={handleMouseUp} // Stop dragging if mouse leaves canvas
-        onTouchStart={handleTouchStart} // Touch start
-        onTouchMove={handleTouchMove} // Touch move
-        onTouchEnd={handleTouchEnd} // Touch end
+        onTouchStart={handleTouchStart} // tap / drag / long press / pinch
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchCancel}
         onClick={handleClick} // Log local position on click
         onKeyDown={handleKeyDown}
         onKeyUp={handleKeyUp}
@@ -1895,24 +2052,80 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
       />
       {/* canvas end */}
 
-      {/* context menu */}
+      {/* zoom controls — the only way to zoom without Ctrl+wheel or a pinch */}
+      <Paper
+        elevation={3}
+        sx={{
+          position: "absolute",
+          top: 8,
+          right: 8,
+          zIndex: 4,
+          display: "flex",
+          flexDirection: "column",
+          borderRadius: 2,
+          opacity: 0.92,
+        }}
+      >
+        <IconButton aria-label="Zoom in" onClick={() => zoomBy(1.4)} disabled={scale >= ZOOM_MAX}>
+          <ZoomInIcon />
+        </IconButton>
+        <IconButton aria-label="Zoom out" onClick={() => zoomBy(1 / 1.4)} disabled={scale <= ZOOM_MIN}>
+          <ZoomOutIcon />
+        </IconButton>
+        <IconButton
+          aria-label="Reset view"
+          onClick={() => {
+            setScale(1);
+            setOffset({ x: 0, y: 0 });
+          }}
+        >
+          <FitScreenIcon />
+        </IconButton>
+      </Paper>
+
+      {/* context menu (right-click or long press) */}
       {showMenu && (
-        <div
-          style={{
+        <Paper
+          elevation={8}
+          sx={{
             position: "absolute",
-            top: menuPosition.y,
-            left: menuPosition.x,
-            background: "",
+            top: Math.max(
+              0,
+              Math.min(menuPosition.y, (parentRef.current?.clientHeight || 0) - 170),
+            ),
+            left: Math.max(
+              0,
+              Math.min(menuPosition.x, (parentRef.current?.clientWidth || 0) - 250),
+            ),
+            zIndex: 5,
             display: "flex",
             flexDirection: "column",
+            minWidth: 240,
+            py: 0.5,
           }}
         >
           {createContextMenuActionList().map((action, index) => (
-            <button key={index} onClick={action.action}>
+            <Button
+              key={index}
+              onClick={action.action}
+              sx={{ justifyContent: "flex-start", px: 2, minHeight: 44, textTransform: "none" }}
+            >
               {action.label}
-            </button>
+            </Button>
           ))}
-        </div>
+          <Button
+            onClick={() => setShowMenu(false)}
+            sx={{
+              justifyContent: "flex-start",
+              px: 2,
+              minHeight: 44,
+              textTransform: "none",
+              color: "text.secondary",
+            }}
+          >
+            Cancel
+          </Button>
+        </Paper>
       )}
       {/* context menu end */}
 

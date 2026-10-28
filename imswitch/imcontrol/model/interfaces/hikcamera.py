@@ -2,10 +2,10 @@ import numpy as np
 import time
 from imswitch.imcommon.model import initLogger
 from skimage.filters import gaussian, median
-from typing import List
-import sys
+from typing import List, Optional
 from ctypes import *
 import collections
+import threading
 
 from sys import platform
 try:
@@ -83,10 +83,39 @@ CALLBACK_SIG = CFUNCTYPE(
     c_void_p                        # pUser (void*)
 )
 # ----------------------------------------------------------------------------
+def _cameraCandidates(number, checksums, claimed, logger):
+    """Indices of the enumerated cameras to try, in order, for ``cameraListIndex``.
+
+    ``number`` <= 9 is a list index (out of range -> 0). Anything larger is a
+    serial checksum (sum of the serial number's bytes, logged at startup as
+    "Unique Serial Number of HIK Camera"). If no camera has that checksum --
+    the camera was swapped or the setup file is stale -- every camera that no
+    other detector of this process holds is a candidate.
+    """
+    if number <= 9:
+        if number >= len(checksums):
+            logger.warning(
+                f"Requested camera index {number} out of range (only {len(checksums)} "
+                f"cameras available). Falling back to camera index 0.")
+            return [0]
+        return [number]
+    matches = [i for i, c in enumerate(checksums) if c == number]
+    if matches:
+        return matches
+    logger.warning(
+        f"No camera with serial checksum {number}; falling back to the first free one. "
+        f"Set cameraListIndex to its checksum in the setup file to pin it.")
+    return [i for i, c in enumerate(checksums) if c not in claimed]
+
+
 class CameraHIK:
     """Minimal wrapper that grabs frames via SDK callback (no polling)."""
 
-    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=1, flipImage=(False, False)):
+    # Serial checksums of the cameras this process has open, so a detector
+    # whose configured checksum matches nothing does not take a sibling's camera.
+    _claimedChecksums = set()
+
+    def __init__(self,cameraNo=None, exposure_time = None, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=1, flipImage=(False, False)):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -106,6 +135,18 @@ class CameraHIK:
         self.NBuffer = 3
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
+        # nTriggerIndex of every buffered frame, in lock-step with the two
+        # deques above (same maxlen, appended/cleared together under
+        # _bufferLock) so frame k always pairs with trigger k.
+        self.triggerindex_buffer = collections.deque(maxlen=self.NBuffer)
+        # Host arrival time (time.time() at the SDK callback) of every buffered
+        # frame, same lock-step. In trigger mode the camera produces a frame
+        # only for a trigger it accepted, so the spacing of arrivals, in
+        # trigger periods, says how many pulses lie between two frames — the
+        # fallback for pairing frames with pulses when nTriggerIndex is not
+        # reported (this model leaves it at 0).
+        self.arrival_buffer = collections.deque(maxlen=self.NBuffer)
+        self._bufferLock = threading.Lock()
         # Live-stream latency instrumentation (see getStreamDiagnostics()).
         self._streamStats = self._newStreamStats()
         self._nodeNumRet = None       # hex return of MV_CC_SetImageNodeNum
@@ -128,6 +169,10 @@ class CameraHIK:
         self._sdk_convert_works = (platform == "darwin")
 
         self._open_camera(self.cameraNo)
+        # exposure_time is in ms like set_exposure_time(); None keeps the
+        # camera's current value (what HikCamManager relies on).
+        if exposure_time is not None:
+            self.set_exposure_time(exposure_time)
 
         # use the parameter passed to __init__, or fall back to auto-detect
         if isRGB is not None:
@@ -236,65 +281,36 @@ class CameraHIK:
         if not infos:
             raise RuntimeError("No suitable Hik cameras found.")
 
-        # If camera number > 9, treat it as a unique identifier (serial number checksum)
-        if number > 9:
-            self.__logger.info(f"Camera number {number} > 9, treating as unique identifier (serial checksum)")
-            camera_index = None
-            serial_checksums = []
-            # Search for camera with matching serial number checksum
-            for i, info in enumerate(infos):
-                serial_checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
-                serial_checksums.append(serial_checksum)
-                self.__logger.info(f"Camera {i} serial checksum: {serial_checksum}")
-                if serial_checksum == number:
-                    camera_index = i
-                    self.__logger.info(f"Found camera with matching serial checksum {number} at index {i}")
-                    break
+        # A reconnect re-opens our own camera, which must not count as taken.
+        CameraHIK._claimedChecksums.discard(getattr(self, '_serial_checksum', None))
+        checksums = [int(np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)) for info in infos]
+        self.__logger.info(f"Serial checksums of the cameras found: {checksums}")
 
-            if camera_index is None:
-                # Fallback: use the first available camera if requested checksum not found
-                # This handles the case where camera order may have changed or camera was replaced
-                self.__logger.warning(
-                    f"No camera found with serial checksum {number}. "
-                    f"Falling back to first available camera (index 0)."
-                )
-                # Log available cameras for diagnostic purposes
-                # TODO: Fallback -> We need to open another camera, but there may be a conflict with another instance needing that camera, currently we don't have any way to catch this/read this from the config
-                # FIXME: For now: iterate through list and check if opened, if not, use that index
-                for i, info in enumerate(infos):
-                    tmpCamera = MvCamera()
-                    tmpCamera.MV_CC_CreateHandle(info)
-                    ret = tmpCamera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
-                    if ret == 0:
-                        serial_checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
-                        self.__logger.info(f"Camera {i} serial checksum is available and will be used: {serial_checksum}")
-                        camera_index = i                
-                        tmpCamera.MV_CC_CloseDevice()
-                        tmpCamera.MV_CC_DestroyHandle()
-                        del tmpCamera
-                        break
-            number = camera_index  # Use the found index for the rest of the function
+        # Try the chosen camera; if it cannot be opened, the next candidate.
+        # The old checksum-mismatch path test-opened every camera and then
+        # indexed infos[None] when none of those probes succeeded, which sent
+        # a perfectly connected camera to the mock.
+        candidates = _cameraCandidates(number, checksums, CameraHIK._claimedChecksums,
+                                       self.__logger)
+        for number in candidates:
+            camera = MvCamera()
+            ret = camera.MV_CC_CreateHandle(infos[number])
+            if ret == 0:
+                ret = camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
+            if ret == 0:
+                break
+            camera.MV_CC_DestroyHandle()
+            self.__logger.warning(
+                f"Opening camera {number} (serial checksum {checksums[number]}) failed 0x{ret:x}")
         else:
-            # Traditional index-based selection
-            if number >= len(infos):
-                self.__logger.warning(
-                    f"Requested camera index {number} out of range (only {len(infos)} cameras available). "
-                    f"Falling back to camera index 0."
-                )
-                number = 0
+            raise RuntimeError(
+                f"Could not open a Hik camera for cameraListIndex {self.cameraNo} "
+                f"(serial checksums found: {checksums})")
 
-        self.__logger.info(f"Opening camera {number} out of {len(infos)} available cameras")
-
-        # Track the serial checksum of the camera we're opening
-        self._serial_checksum = np.sum(infos[number].SpecialInfo.stUsb3VInfo.chSerialNumber)
-
-        self.camera = MvCamera()
-        ret = self.camera.MV_CC_CreateHandle(infos[number])
-        if ret != 0:
-            raise RuntimeError(f"CreateHandle failed 0x{ret:x}")
-        ret = self.camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
-        if ret != 0:
-            raise RuntimeError(f"OpenDevice failed 0x{ret:x}")
+        self.camera = camera
+        self._serial_checksum = checksums[number]
+        CameraHIK._claimedChecksums.add(self._serial_checksum)
+        self.__logger.info(f"Opened camera {number} out of {len(infos)} available cameras")
 
         # optimise packet size for GigE
         if infos[number].nTLayerType == MV_GIGE_DEVICE:
@@ -302,8 +318,8 @@ class CameraHIK:
             if psize > 0:
                 self.camera.MV_CC_SetIntValue("GevSCPSPacketSize", psize)
                 self.__logger.debug(f"Set packet size to {psize} for GigE camera")
-        # print unique ID: # TODO: We should make the cameraNo persistent based on this ID
-        self.__logger.info(f"Unique Serial Number of HIK Camera: {np.sum(infos[number].SpecialInfo.stUsb3VInfo.chSerialNumber)}")
+        # Put this number in the setup file as cameraListIndex to pin this camera
+        self.__logger.info(f"Unique Serial Number of HIK Camera: {self._serial_checksum}")
         # get available parameters
         self.mParameters = self.get_camera_parameters()
         self.__logger.info(f"Camera parameters: model={self.mParameters.get('model_name', 'Unknown')}, isRGB={self.mParameters.get('isRGB', False)}")
@@ -323,9 +339,15 @@ class CameraHIK:
             if ret != 0:
                 self.__logger.debug("Set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
             ret = self.camera.MV_CC_SetFloatValue("AcquisitionFrameRate", self.frame_rate)
+            # Only claim success when the write succeeded: this line used to be
+            # unconditional with the failure logged at DEBUG, so the log read
+            # "Set frame rate to 30 fps" for a rate the camera never took.
             if ret != 0:
-                self.__logger.debug("Set AcquisitionFrameRate fail! ret[0x%x]" % ret)
-            self.__logger.info(f"Set frame rate to {self.frame_rate} fps")
+                self.__logger.warning(
+                    f"Set AcquisitionFrameRate to {self.frame_rate} fps FAILED ret[0x{ret:x}] "
+                    f"— the camera keeps its previous rate")
+            else:
+                self.__logger.info(f"Set frame rate to {self.frame_rate} fps")
         else:
             stBool.value = False
             ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", stBool)
@@ -333,8 +355,8 @@ class CameraHIK:
                 self.__logger.debug("Set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
         ret = self.camera.MV_CC_SetEnumValue("TriggerMode", MV_TRIGGER_MODE_OFF)
         if ret != 0:
-            self.__logger.debug("Set trigger mode fail! ret[0x%x]" % ret)
-            sys.exit()
+            # Used to sys.exit() here, which took the whole server down.
+            self.__logger.warning(f"Set trigger mode to continuous failed ret[0x{ret:x}]")
 
         # setup sensor size
         mWidth = MVCC_INTVALUE()
@@ -399,7 +421,8 @@ class CameraHIK:
     # ---------------------------------------------------------------------
     # C callback factory ---------------------------------------------------
     # ---------------------------------------------------------------------
-    def _on_frame(self, frame: np.ndarray, fid: int, ts: int):
+    def _on_frame(self, frame: np.ndarray, fid: int, ts: int, trigger_index: int = -1,
+                  arrival: Optional[float] = None):
         # CRITICAL: `frame` is a zero-copy NumPy view over the SDK's capture
         # buffer (see `_wrap_cb`), which the SDK overwrites in place for every
         # subsequent frame. Storing the view directly makes every entry in the
@@ -408,8 +431,12 @@ class CameraHIK:
         # recently — not the frame acquired at this fid. This is what made grabs
         # appear "out of sync" with the stage unless the settle time was large.
         # Store an owned, contiguous copy (NBuffer is small, so this is cheap).
-        self.frame_buffer.append(np.array(frame, copy=True))
-        self.frameid_buffer.append(fid)
+        frame = np.array(frame, copy=True)
+        with self._bufferLock:
+            self.frame_buffer.append(frame)
+            self.frameid_buffer.append(fid)
+            self.triggerindex_buffer.append(trigger_index)
+            self.arrival_buffer.append(time.time() if arrival is None else float(arrival))
         self.frameNumber = fid
         self.timestamp   = ts
         if self.DEBUG:
@@ -429,6 +456,10 @@ class CameraHIK:
             pix    = int(info.enPixelType)
             fid    = info.nFrameNum
             ts     = self._hw_timestamp(info)        # ← fixed
+            # Trigger counter of the camera; only meaningful in trigger mode
+            # (and on some models only with the embedded frame info enabled,
+            # see setTriggerIndexEmbedding). -1 when the binding lacks it.
+            trig   = int(getattr(info, "nTriggerIndex", -1))
             src_buf = (c_ubyte * nSize).from_address(addressof(pData.contents))
 
             if not getattr(self, '_pix_logged', False):
@@ -576,7 +607,7 @@ class CameraHIK:
                 self.__logger.debug(f"Frame {fid} received with pixel format 0x{pix:x}, shape {frame.shape}")
 
             # pass to user callback
-            user_cb(frame, fid, ts)
+            user_cb(frame, fid, ts, trigger_index=trig, arrival=t_entry)
 
             # Latency instrumentation: cheap dict updates only (runs on the SDK
             # delivery thread). nHostTimeStamp is the host-driver receive time
@@ -587,6 +618,7 @@ class CameraHIK:
                 getattr(info, "nHostTimeStamp", 0),
                 fid,
                 getattr(info, "nLostPacket", 0),
+                dev_ts=ts,
             )
 
         return _cb
@@ -718,6 +750,10 @@ class CameraHIK:
 
         # Fresh latency stats for this streaming session.
         self._streamStats = self._newStreamStats()
+        # What the camera itself expects to deliver (exposure/bandwidth-limited).
+        # If the callback fps ends up BELOW this, the surplus is piling up in the
+        # camera's on-board memory (see cam_lag_ms_* in the stream stats).
+        self._refreshResultingFrameRate()
 
         try:
             ret = self.camera.MV_CC_StartGrabbing()
@@ -769,6 +805,7 @@ class CameraHIK:
 
         self.camera.MV_CC_CloseDevice()
         self.camera.MV_CC_DestroyHandle()
+        CameraHIK._claimedChecksums.discard(getattr(self, '_serial_checksum', None))
 
     def set_exposure_time(self, exposure_time):
         self.exposure_time = exposure_time
@@ -793,12 +830,94 @@ class CameraHIK:
         self.camera.MV_CC_SetFloatValue("Gain", self.gain)
 
     def set_frame_rate(self, frame_rate):
+        """Cap the acquisition rate; ``frame_rate <= 0`` means "no cap".
+
+        Returns the rate the camera actually ended up with (``-1`` when the
+        limiter is off), which is NOT necessarily what was asked for.
+
+        Three things used to go wrong here and each one hid the next:
+
+        * ``frame_rate`` arrives as a *string* from the REST API (the query
+          parameter is typed ``Any``), and ``c_float("25")`` raises TypeError
+          before the SDK is ever called — so setting the rate from the UI
+          silently did nothing at all.
+        * "no cap" is expressed as ``-1`` in the setup file, but that was
+          written straight into the node; the SDK rejects it with
+          MV_E_GC_RANGE (0x80000102) and LEAVES THE PREVIOUS CAP IN FORCE.
+          Disabling AcquisitionFrameRateEnable is how you actually free-run.
+        * ``self.frame_rate`` was never updated, so ``getPropertyValue`` kept
+          reporting the requested value while the camera ran at another rate.
+
+        A cap set above what the link can carry is the root of the growing
+        live-view latency: the sensor keeps producing, the host drains slower,
+        and the surplus queues in the camera's on-board memory (watch
+        ``cam_lag_ms_*`` in getStreamDiagnostics).
+        """
+        try:
+            frame_rate = float(frame_rate)
+        except (TypeError, ValueError):
+            self.__logger.error(
+                f"set_frame_rate: {frame_rate!r} is not a number; frame rate left unchanged")
+            return self.frame_rate
+
+        # <= 0 means free-run: turn the limiter OFF instead of writing a
+        # negative value that the SDK will reject.
+        if frame_rate <= 0:
+            ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", False)
+            if ret != 0:
+                self.__logger.error(f"Disable AcquisitionFrameRateEnable failed 0x{ret:x}")
+                return self.frame_rate
+            self.frame_rate = -1
+            self.__logger.info("Frame rate limiter disabled (free-run)")
+            self._refreshResultingFrameRate()
+            return self.frame_rate
+
         ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", True)
         if ret != 0:
-            self.__logger.error("set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
+            self.__logger.error(f"Enable AcquisitionFrameRateEnable failed 0x{ret:x}")
+
+        # Clamp into the node's writable range, so an out-of-range request
+        # lands on the nearest legal rate instead of being dropped.
+        stRate = MVCC_FLOATVALUE()
+        if self.camera.MV_CC_GetFloatValue("AcquisitionFrameRate", stRate) == 0:
+            lo, hi = float(stRate.fMin), float(stRate.fMax)
+            if frame_rate < lo or frame_rate > hi:
+                clamped = min(max(frame_rate, lo), hi)
+                self.__logger.warning(
+                    f"Frame rate {frame_rate:.3f} fps outside the camera range "
+                    f"[{lo:.3f}, {hi:.3f}] — using {clamped:.3f} fps")
+                frame_rate = clamped
+
         ret = self.camera.MV_CC_SetFloatValue("AcquisitionFrameRate", frame_rate)
         if ret != 0:
-            self.__logger.error("set AcquisitionFrameRate fail! ret[0x%x]" % ret)
+            self.__logger.error(f"set AcquisitionFrameRate fail! ret[0x{ret:x}]")
+            return self.frame_rate
+
+        # Read back: the camera may quantise the value.
+        applied = frame_rate
+        if self.camera.MV_CC_GetFloatValue("AcquisitionFrameRate", stRate) == 0:
+            applied = float(stRate.fCurValue)
+        self.frame_rate = applied
+        self.__logger.info(f"Frame rate set to {applied:.3f} fps (requested {frame_rate:.3f})")
+        self._refreshResultingFrameRate()
+        return applied
+
+    def _refreshResultingFrameRate(self):
+        """Record what the camera says it will now deliver.
+
+        ResultingFrameRate folds in exposure and link bandwidth. Compare it
+        against ``fps_callback``: if the host drains slower than this, the
+        difference is what piles up inside the camera.
+        """
+        try:
+            stFps = MVCC_FLOATVALUE()
+            for node in ("ResultingFrameRate", "AcquisitionResultingFrameRate"):
+                if self.camera.MV_CC_GetFloatValue(node, stFps) == 0:
+                    self._streamStats["resulting_fps"] = float(stFps.fCurValue)
+                    self.__logger.info(f"Camera ResultingFrameRate is now {stFps.fCurValue:.3f} fps")
+                    return
+        except Exception as e:
+            self.__logger.debug(f"ResultingFrameRate read failed: {e}")
 
     def set_blacklevel(self, blacklevel):
         self.blacklevel = blacklevel
@@ -903,8 +1022,13 @@ class CameraHIK:
                 self.camera.MV_CC_ClearImageBuffer()
         except Exception as e:
             self.__logger.debug(f"MV_CC_ClearImageBuffer failed: {e}")
-        self.frameid_buffer.clear()
-        self.frame_buffer.clear()
+        # Never call into the SDK while holding _bufferLock: the SDK holds its
+        # own handle lock while it runs our callback, which takes _bufferLock.
+        with self._bufferLock:
+            self.frameid_buffer.clear()
+            self.frame_buffer.clear()
+            self.triggerindex_buffer.clear()
+            self.arrival_buffer.clear()
         self.lastFrameFromBuffer = None
         self.lastFrameId = -1
 
@@ -917,45 +1041,84 @@ class CameraHIK:
         self.lastFrameFromBuffer = frames[-1] if frames else None
         return np.array(frames), np.array(ids)
 
-    def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):
+    def getLastChunkWithTriggerIndex(self):
+        """Return *and clear* the ring-buffer as (frames, frame_ids, trigger_indices, arrivals).
 
+        Like getLastChunk, but with the camera's ``nTriggerIndex`` of every
+        frame, so a caller that counts the trigger pulses it sent can tell
+        which pulse produced which frame even when frames were lost — and the
+        host arrival time (seconds, time.time()) of each frame, which tells
+        the same thing from the spacing of frames when the camera reports no
+        trigger index.
+
+        The three buffers are read and cleared in one step under the buffer
+        lock, so they stay paired even while the SDK delivers frames. Unlike
+        getLastChunk this leaves the SDK's own queue alone: it is meant to be
+        polled every few milliseconds while triggers arrive, and clearing
+        that queue would discard frames that are already on their way.
+        """
+        with self._bufferLock:
+            frames = list(self.frame_buffer)
+            ids = list(self.frameid_buffer)
+            trigs = list(self.triggerindex_buffer)
+            arrivals = list(self.arrival_buffer)
+            self.frame_buffer.clear()
+            self.frameid_buffer.clear()
+            self.triggerindex_buffer.clear()
+            self.arrival_buffer.clear()
+        # Same fallback bookkeeping as getLastChunk (via flushBuffer).
+        self.lastFrameFromBuffer = frames[-1] if frames else None
+        self.lastFrameId = -1
+        return (np.array(frames), np.array(ids), np.array(trigs, dtype=np.int64),
+                np.array(arrivals, dtype=np.float64))
+
+    def getResultingFrameRate(self):
+        """Frames per second the camera says it can deliver right now, or None.
+
+        ResultingFrameRate folds in the exposure and the sensor readout (a
+        rolling shutter cannot start an exposure before the last row of the
+        previous one is read out) and the frame-rate cap, so 1 / this is the
+        shortest trigger period the camera honours at the current exposure;
+        a trigger that comes sooner is ignored.
+        """
+        if self.camera is None:
+            return None
+        try:
+            stFps = MVCC_FLOATVALUE()
+            for node in ("ResultingFrameRate", "AcquisitionResultingFrameRate"):
+                if self.camera.MV_CC_GetFloatValue(node, stFps) == 0 and stFps.fCurValue > 0:
+                    return float(stFps.fCurValue)
+        except Exception as e:
+            self.__logger.debug(f"ResultingFrameRate read failed: {e}")
+        return None
+
+    def setROI(self, hpos=None, vpos=None, hsize=None, vsize=None):
+        """Set sensor ROI; arguments left as None are unchanged.
+
+        The camera rejects a width/height that does not fit the *current*
+        offset, so offsets are zeroed before resizing and applied afterwards.
+        The SDK reports failures as return codes, not exceptions: a rejected
+        value is logged as an error and not recorded as applied.
+        """
+        def _set(node, value, attr):
+            ret = self.camera.MV_CC_SetIntValue(node, int(value))
+            if ret != 0:
+                self.__logger.error(f"setROI: {node}={value} rejected ret[0x{ret:x}]")
+                return
+            setattr(self, attr, value)
+
+        if hsize is not None or vsize is not None:
+            _set("OffsetX", 0, "ROI_hpos")
+            _set("OffsetY", 0, "ROI_vpos")
         if hsize is not None:
-            try:
-                c_width = self.camera.MV_CC_SetIntValue("Width",int(hsize))
-                self.ROI_width = hsize
-                self.__logger.debug(f"Width set to {self.ROI_width}")
-            except Exception as e:
-                self.__logger.error(e)
-                self.__logger.debug("Width is not implemented or not writable")
-
+            _set("Width", hsize, "ROI_width")
         if vsize is not None:
-            try:
-                c_height = self.camera.MV_CC_SetIntValue("Height",int(vsize))
-                self.ROI_height = vsize
-                self.__logger.debug(f"Height set to {self.ROI_height}")
-            except Exception as e:
-                self.__logger.error(e)
-                self.__logger.debug("Height is not implemented or not writable")
-
+            _set("Height", vsize, "ROI_height")
         if hpos is not None:
-            try:
-                c_offsetx = self.camera.MV_CC_SetIntValue("OffsetX",int(hpos))
-                self.ROI_hpos = hpos
-                self.__logger.debug(f"OffsetX set to {self.ROI_hpos}")
-            except Exception as e:
-                self.__logger.error(e)
-                self.__logger.debug("OffsetX is not implemented or not writable")
-
+            _set("OffsetX", hpos, "ROI_hpos")
         if vpos is not None:
-            try:
-                c_offsety = self.camera.MV_CC_SetIntValue("OffsetY",int(vpos))
-                self.ROI_vpos = vpos
-                self.__logger.debug(f"OffsetY set to {self.ROI_vpos}")
-            except Exception as e:
-                self.__logger.error(e)
-                self.__logger.debug("OffsetY is not implemented or not writable")
-
-        return hpos,vpos,hsize,vsize
+            _set("OffsetY", vpos, "ROI_vpos")
+        return hpos, vpos, hsize, vsize
 
     def setPropertyValue(self, property_name, property_value):
         if property_name == "gain":
@@ -1014,6 +1177,15 @@ class CameraHIK:
         elif property_name == "roi_size":
             return self.roi_size
         elif property_name == "frame_rate":
+            # Report what the camera holds, not what was last requested: a
+            # rejected or clamped write must be visible in the UI.
+            stEnable = c_bool(False)
+            if self.camera.MV_CC_GetBoolValue("AcquisitionFrameRateEnable", stEnable) == 0 \
+                    and not stEnable.value:
+                return -1
+            stRate = MVCC_FLOATVALUE()
+            if self.camera.MV_CC_GetFloatValue("AcquisitionFrameRate", stRate) == 0:
+                return float(stRate.fCurValue)
             return self.frame_rate
         elif property_name == "trigger_source":
             return self.trigger_source
@@ -1049,6 +1221,9 @@ class CameraHIK:
             elif tlow.find("ext")>=0 or tlow in ("external trigger", "hardware", "line0"):
                 self.camera.MV_CC_SetEnumValue("TriggerMode",  MV_TRIGGER_MODE_ON)
                 self.camera.MV_CC_SetEnumValue("TriggerSource", MV_TRIGGER_SOURCE_LINE0)
+                # TriggerActivation is left as the camera has it (existing
+                # setups may rely on a saved edge); the strobed prescan sets
+                # and restores it explicitly.
                 self.__logger.info("Trigger source set to external trigger (LINE0)")
 
             else:
@@ -1067,6 +1242,118 @@ class CameraHIK:
         ret = self.camera.MV_CC_SetCommandValue("TriggerSoftware")
         if ret != 0:
             self.__logger.error(f"Software trigger failed! ret [0x{ret:x}]")
+            return False
+        return True
+
+    # GenICam enum entries used when the binding cannot set enums by string.
+    _TRIGGER_ACTIVATION_VALUES = {"RisingEdge": 0, "FallingEdge": 1,
+                                  "LevelHigh": 2, "LevelLow": 3}
+
+    def _setEnumByString(self, node, value, numeric=None):
+        """Set an enum node by its entry name; returns the SDK code (0 = ok).
+
+        Falls back to the numeric value when the binding has no
+        MV_CC_SetEnumValueByString. Never raises: a model without the node
+        answers with an error code, and an exception becomes -1.
+        """
+        try:
+            if hasattr(self.camera, "MV_CC_SetEnumValueByString"):
+                ret = self.camera.MV_CC_SetEnumValueByString(node, value)
+                if ret == 0 or numeric is None:
+                    return ret
+            if numeric is not None:
+                return self.camera.MV_CC_SetEnumValue(node, numeric)
+            return -1
+        except Exception as e:
+            self.__logger.debug(f"{node}={value} raised {e}")
+            return -1
+
+    def setTriggerActivation(self, edge: str = "RisingEdge") -> bool:
+        """Which edge (or level) of the trigger line starts an exposure.
+
+        ``edge`` is a GenICam TriggerActivation entry: RisingEdge,
+        FallingEdge, LevelHigh or LevelLow. Returns False (and logs) when the
+        camera refuses; nothing raises.
+        """
+        ret = self._setEnumByString("TriggerActivation", str(edge),
+                                    self._TRIGGER_ACTIVATION_VALUES.get(str(edge)))
+        if ret != 0:
+            self.__logger.warning(
+                f"Set TriggerActivation={edge} failed ret[0x{ret & 0xffffffff:x}]")
+            return False
+        return True
+
+    def getTriggerActivation(self):
+        """Current TriggerActivation entry name (e.g. "RisingEdge"), or None if unreadable."""
+        try:
+            st = MVCC_ENUMVALUE()
+            ret = self.camera.MV_CC_GetEnumValue("TriggerActivation", st)
+            if ret != 0:
+                return None
+            names = {v: k for k, v in self._TRIGGER_ACTIVATION_VALUES.items()}
+            return names.get(int(st.nCurValue))
+        except Exception as e:
+            self.__logger.debug(f"Get TriggerActivation raised {e}")
+            return None
+
+    def setTriggerDelayUs(self, us: float) -> bool:
+        """Delay between the trigger edge and the start of exposure, in µs.
+
+        Returns False (and logs) when the camera has no TriggerDelay node or
+        rejects the value.
+        """
+        try:
+            ret = self.camera.MV_CC_SetFloatValue("TriggerDelay", float(us))
+        except Exception as e:
+            self.__logger.warning(f"Set TriggerDelay={us} us raised {e}")
+            return False
+        if ret != 0:
+            self.__logger.warning(f"Set TriggerDelay={us} us failed ret[0x{ret & 0xffffffff:x}]")
+            return False
+        return True
+
+    # Feature names under which cameras expose the shutter mode.
+    _SHUTTER_MODE_NODES = ("SensorShutterMode", "ShutterMode")
+
+    def setShutterMode(self, mode: str) -> bool:
+        """Select the sensor shutter mode, e.g. "Rolling" or "GlobalReset".
+
+        Global reset release opens every row at once, so a short flash
+        needs only a short exposure window. Many models have no such node;
+        then this returns False and the camera is unchanged.
+        """
+        for node in self._SHUTTER_MODE_NODES:
+            if self._setEnumByString(node, str(mode)) == 0:
+                self.__logger.info(f"{node} set to {mode}")
+                return True
+        self.__logger.warning(f"Shutter mode {mode} not supported by this camera")
+        return False
+
+    def setTriggerIndexEmbedding(self, enable: bool = True) -> bool:
+        """Ask the camera to report its trigger counter with every frame.
+
+        Some HIK models fill ``nTriggerIndex`` only when the embedded frame
+        info for the external trigger count is switched on. That info
+        overwrites the first bytes of each image, which is why it is only
+        switched on while it is needed. Returns False when unsupported.
+        """
+        was_streaming = self.is_streaming
+        if was_streaming:
+            self.suspend_live()
+        try:
+            ret = self._setEnumByString("FrameSpecInfoSelector", "ExtTriggerCount")
+            if ret == 0:
+                ret = self.camera.MV_CC_SetBoolValue("FrameSpecInfo", bool(enable))
+        except Exception as e:
+            self.__logger.warning(f"Trigger index embedding raised {e}")
+            ret = -1
+        finally:
+            if was_streaming:
+                self.start_live()
+        if ret != 0:
+            self.__logger.warning(
+                f"Trigger index embedding {'on' if enable else 'off'} failed "
+                f"ret[0x{ret & 0xffffffff:x}]; nTriggerIndex may not be reported")
             return False
         return True
 
@@ -1111,16 +1398,55 @@ class CameraHIK:
             "sdk_lag_ms_max": None,
             "frame_gaps": 0,           # frames the SDK dropped (nFrameNum jumps)
             "lost_packets": 0,         # GigE packet loss reported by the driver
+            # Camera-side latency: (host receive time - device exposure time),
+            # relative to the first frame of the session. GROWING => frames are
+            # being held BEFORE the host driver sees them, i.e. in the camera's
+            # on-board frame memory (sensor faster than the link/host drains).
+            # sdk_lag_ms_* cannot see this: nHostTimeStamp is stamped on arrival.
+            "cam_lag_ms_now": None,
+            "cam_lag_ms_max": None,
+            "dev_tick_hz": None,       # device timestamp tick rate (estimated, snapped)
+            "resulting_fps": None,     # camera's own ResultingFrameRate node at start
+            "_dev_ts0": None,
+            "_host_ts0": None,
+            "_cam_lag0": None,
             "_last_frame_num": None,
             "_last_entry_t": None,
             "_started": time.time(),
         }
 
-    def _updateStreamStats(self, t_entry, host_ts_ms, frame_num, lost_packets):
+    _DEV_TICK_CANDIDATES_HZ = (1e9, 5e8, 2.5e8, 1.25e8, 1e8, 6.25e7, 1e7, 1e6, 1e5, 1e3)
+
+    def _updateStreamStats(self, t_entry, host_ts_ms, frame_num, lost_packets, dev_ts=0):
         """Update EMA latency stats; runs on the SDK callback thread (keep cheap)."""
         s = self._streamStats
         a = 0.05  # EMA weight
         s["frames"] += 1
+        # Camera-side buffering: compare the device (exposure) clock against the
+        # host receive clock. The tick rate of the device clock is not exposed
+        # by this binding, so estimate it from the first ~2 s and snap it to the
+        # nearest conventional rate; the drift we look for is seconds, not
+        # the few percent that snapping tolerates.
+        if dev_ts and host_ts_ms:
+            if s["_dev_ts0"] is None:
+                s["_dev_ts0"], s["_host_ts0"] = dev_ts, float(host_ts_ms)
+            elif s["dev_tick_hz"] is None:
+                d_host = (float(host_ts_ms) - s["_host_ts0"]) / 1000.0
+                d_dev = dev_ts - s["_dev_ts0"]
+                if d_host >= 2.0 and d_dev > 0:
+                    raw = d_dev / d_host
+                    s["dev_tick_hz"] = min(self._DEV_TICK_CANDIDATES_HZ,
+                                           key=lambda c: abs(np.log(c) - np.log(raw)))
+                    self.__logger.info(
+                        f"HIK device clock: ~{raw:.3g} ticks/s, using {s['dev_tick_hz']:.3g} Hz")
+            else:
+                dev_ms = (dev_ts - s["_dev_ts0"]) * 1000.0 / s["dev_tick_hz"]
+                lag = (float(host_ts_ms) - s["_host_ts0"]) - dev_ms
+                if s["_cam_lag0"] is None:
+                    s["_cam_lag0"] = lag
+                lag -= s["_cam_lag0"]
+                s["cam_lag_ms_now"] = lag
+                s["cam_lag_ms_max"] = lag if s["cam_lag_ms_max"] is None else max(s["cam_lag_ms_max"], lag)
         cb_ms = (time.time() - t_entry) * 1000.0
         s["callback_ms_avg"] = cb_ms if s["frames"] == 1 else (1 - a) * s["callback_ms_avg"] + a * cb_ms
         if cb_ms > s["callback_ms_max"]:
@@ -1148,9 +1474,14 @@ class CameraHIK:
                 f"HIK stream: n={s['frames']} fps={s['fps_callback']:.1f} "
                 f"cb={s['callback_ms_avg']:.1f}/{s['callback_ms_max']:.0f}ms "
                 f"sdk_lag(now/avg/max)={fmt(s['sdk_lag_ms_now'])}/{fmt(s['sdk_lag_ms_avg'])}/{fmt(s['sdk_lag_ms_max'])}ms "
+                f"cam_lag(now/max)={fmt(s['cam_lag_ms_now'])}/{fmt(s['cam_lag_ms_max'])}ms "
+                f"cam_fps={fmt(s['resulting_fps'])} "
                 f"gaps={s['frame_gaps']} lost_pkts={s['lost_packets']}"
             )
-            if s["sdk_lag_ms_avg"] is not None and s["sdk_lag_ms_avg"] > 300:
+            if s["cam_lag_ms_now"] is not None and s["cam_lag_ms_now"] > 300:
+                self.__logger.warning(line + "  <-- frames held in the CAMERA before the host sees them "
+                                      "(sensor outruns the link/host; cap AcquisitionFrameRate below cam_fps)")
+            elif s["sdk_lag_ms_avg"] is not None and s["sdk_lag_ms_avg"] > 300:
                 self.__logger.warning(line + "  <-- frame backlog building upstream of Python (SDK/driver queue)")
             else:
                 self.__logger.info(line)
@@ -1159,8 +1490,13 @@ class CameraHIK:
         """Snapshot of the streaming pipeline health (poll while live view runs).
 
         How to read it:
+        * ``cam_lag_ms_*`` growing over time  -> frames are held INSIDE the camera
+          (on-board memory) because the sensor runs faster than the USB/GigE
+          link or host drains it; ``fps_callback`` < ``resulting_fps`` says the
+          same thing. Only a stream stop/start empties that memory. Fix: cap
+          AcquisitionFrameRate below the sustained callback rate.
         * ``sdk_lag_ms_*`` growing over time  -> backlog in the SDK/driver queue
-          (before Python). Flat & small -> camera side is real-time.
+          (before Python). Flat & small -> SDK side is real-time.
         * ``latest_frame_age_ms`` small       -> Python has a fresh frame; if the
           browser still lags, the buildup is in encode/socket/frontend.
         * ``frame_gaps`` growing              -> SDK drops frames when its queue is

@@ -133,6 +133,7 @@ class FLIMLabsDetectorManager(DetectorManager):
         width = int(props.get('imageWidth', 256))
         height = int(props.get('imageHeight', 256))
         self._pixelSizeUm = float(props.get('pixelSizeUm', 1.0))
+        self._pixelSizeUmStatic = self._pixelSizeUm
         # Scanner -> sample calibration. The galvo is commanded in DAC counts
         # (0..DAC_FULL_SCALE-1); how much sample that spans depends on galvo
         # gain, scan lens and objective, so it has to be measured once (grid
@@ -140,8 +141,12 @@ class FLIMLabsDetectorManager(DetectorManager):
         # umPerDacUnit{X,Y} directly, or fovUmFullScale{X,Y} (the µm spanned by
         # the FULL DAC range) and let it be derived. With neither, pixelSizeUm
         # stays the static setup value and nothing below changes behaviour.
-        self._umPerDac = [
+        self._umPerDacStatic = [
             self._resolveUmPerDac(props, 'X'), self._resolveUmPerDac(props, 'Y')]
+        self._umPerDac = list(self._umPerDacStatic)
+        # Where the active value came from: 'setup' (managerProperties),
+        # 'affine' (camera<->scanner calibration, see setUmPerDac) or None.
+        self._umPerDacSource = 'setup' if None not in self._umPerDac else None
         # Derived per-axis pixel size (x, y); falls back to the static value.
         self._pixelSizeUmXY = (self._pixelSizeUm, self._pixelSizeUm)
 
@@ -270,6 +275,42 @@ class FLIMLabsDetectorManager(DetectorManager):
             return float(fov) / cls.DAC_FULL_SCALE
         return None
 
+    def setUmPerDac(self, umPerDacX=None, umPerDacY=None,
+                    source: str = 'affine') -> dict:
+        """Override the scanner calibration at runtime.
+
+        The camera<->galvo affine calibration (GalvoScannerController) gives
+        how many camera pixels - hence µm at the sample - one DAC count moves
+        the spot. A freshly measured value beats the static setup number, so
+        it takes over; passing None for both reverts to the setup values.
+        Pixel size / FOV are re-derived from the current scan range.
+        """
+        if umPerDacX is None and umPerDacY is None:
+            self._umPerDac = list(self._umPerDacStatic)
+            self._umPerDacSource = 'setup' if None not in self._umPerDac else None
+            if None in self._umPerDac:
+                # Nothing left to derive from: back to the setup pixel size
+                self._pixelSizeUm = self._pixelSizeUmStatic
+                self._pixelSizeUmXY = (self._pixelSizeUmStatic, self._pixelSizeUmStatic)
+        else:
+            self._umPerDac = [
+                float(umPerDacX) if umPerDacX else self._umPerDacStatic[0],
+                float(umPerDacY) if umPerDacY else self._umPerDacStatic[1]]
+            self._umPerDacSource = source
+        self._syncGeometryFromGalvo()
+        self.__logger.info(
+            f'FLIM scanner calibration ({self._umPerDacSource}): '
+            f'{self._umPerDac[0]} x {self._umPerDac[1]} um/DAC')
+        return self.umPerDacInfo
+
+    @property
+    def umPerDacInfo(self) -> dict:
+        """Active µm-per-DAC-count calibration and where it came from."""
+        return {'umPerDacX': self._umPerDac[0], 'umPerDacY': self._umPerDac[1],
+                'source': self._umPerDacSource,
+                'setupUmPerDacX': self._umPerDacStatic[0],
+                'setupUmPerDacY': self._umPerDacStatic[1]}
+
     # -- Galvo coupling ---------------------------------------------------
     def setGalvoScanner(self, scanner) -> None:
         """Bind the galvo scanner manager that produces the trigger pattern.
@@ -377,8 +418,10 @@ class FLIMLabsDetectorManager(DetectorManager):
             return {'error': 'No galvo scanner bound to this detector'}
         umPerDacX, umPerDacY = self._umPerDac
         if (fovUmX and umPerDacX is None) or (fovUmY and umPerDacY is None):
-            return {'error': 'Scanner is not calibrated: set umPerDacUnitX/Y '
-                             'or fovUmFullScaleX/Y in the detector properties'}
+            return {'error': 'Scanner is not calibrated: run the camera<->scanner '
+                             'affine wizard (Galvo > Arbitrary Points) or set '
+                             'umPerDacUnitX/Y / fovUmFullScaleX/Y in the detector '
+                             'properties'}
         try:
             cfg = self._galvoScanner.config
         except Exception as e:

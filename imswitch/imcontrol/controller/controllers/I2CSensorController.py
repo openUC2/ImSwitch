@@ -39,6 +39,11 @@ class I2CSensorController(ImConWidgetController):
         self.node = None               # GPIO-slave CAN node (None = default)
         self.enableSHT45 = True
         self.enableTSL2591 = True
+        # A sensor that does not answer costs a full serial timeout (~1 s)
+        # per read and stalls every other ESP32 command meanwhile. After a
+        # failed read it is skipped until this many seconds have passed.
+        self.absentRetryPeriod = 300.0
+        self._absentUntil = {'sht45': 0.0, 'tsl2591': 0.0}
 
         # ── Runtime state ───────────────────────────────────────────────
         self._buffer = deque(maxlen=self.bufferSize)
@@ -103,22 +108,40 @@ class I2CSensorController(ImConWidgetController):
         if self._i2c is None:
             return r
         with self._devLock:
-            try:
-                if self.enableSHT45:
-                    th = self._i2c.read_sht45(node=self.node)
-                    if th:
-                        r['temperature_c'] = round(float(th['temperature_c']), 3)
-                        r['humidity_pct'] = round(float(th['humidity_pct']), 3)
-                if self.enableTSL2591:
-                    lt = self._i2c.read_tsl2591(node=self.node)
-                    if lt:
-                        r['lux'] = None if lt.get('lux') is None else round(float(lt['lux']), 3)
-                        r['ch0_full'] = lt.get('ch0_full')
-                        r['ch1_ir'] = lt.get('ch1_ir')
-                r['ok'] = True
-            except Exception as e:
-                self._logger.error(f"I2C sensor read failed: {e}")
+            if self.enableSHT45 and self._sensorDue('sht45', now):
+                th = self._readSensor('sht45', lambda: self._i2c.read_sht45(node=self.node, timeout=1))
+                if th:
+                    r['temperature_c'] = round(float(th['temperature_c']), 3)
+                    r['humidity_pct'] = round(float(th['humidity_pct']), 3)
+                    r['ok'] = True
+            if self.enableTSL2591 and self._sensorDue('tsl2591', now):
+                lt = self._readSensor('tsl2591', lambda: self._i2c.read_tsl2591(node=self.node, timeout=1))
+                if lt:
+                    r['lux'] = None if lt.get('lux') is None else round(float(lt['lux']), 3)
+                    r['ch0_full'] = lt.get('ch0_full')
+                    r['ch1_ir'] = lt.get('ch1_ir')
+                    r['ok'] = True
         return r
+
+    def _sensorDue(self, name, now):
+        return now >= self._absentUntil[name]
+
+    def _readSensor(self, name, read):
+        """Run one sensor read; on no answer, back off for absentRetryPeriod."""
+        try:
+            value = read()
+        except Exception as e:
+            self._logger.debug(f"I2C {name} read failed: {e}")
+            value = None
+        if value:
+            self._absentUntil[name] = 0.0
+        else:
+            if self._absentUntil[name] == 0.0:
+                self._logger.warning(
+                    f"I2C sensor {name} did not answer; skipping it for "
+                    f"{self.absentRetryPeriod:.0f} s")
+            self._absentUntil[name] = time.time() + self.absentRetryPeriod
+        return value
 
     # ────────────────────────────────────────────────────────────────────
     # Polling loop
@@ -181,8 +204,10 @@ class I2CSensorController(ImConWidgetController):
         """Enable/disable individual sensors (skips them on read)."""
         if sht45 is not None:
             self.enableSHT45 = bool(sht45)
+            self._absentUntil['sht45'] = 0.0
         if tsl2591 is not None:
             self.enableTSL2591 = bool(tsl2591)
+            self._absentUntil['tsl2591'] = 0.0
         return {'enableSHT45': self.enableSHT45, 'enableTSL2591': self.enableTSL2591}
 
     @APIExport(runOnUIThread=False)

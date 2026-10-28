@@ -1,6 +1,18 @@
 const { ModuleFederationPlugin } = require("webpack").container;
 
 module.exports = {
+  // uuid (and a few other deps) ship ESM only; CRA's jest transform skips
+  // node_modules by default, so importing anything that reaches them fails to
+  // parse. Allow-list them so the modules under test can actually be loaded.
+  jest: {
+    configure: (config) => {
+      config.transformIgnorePatterns = [
+        "[/\\\\]node_modules[/\\\\](?!(uuid|nanoid|axios)[/\\\\])",
+        "^.+\\.module\\.(css|sass|scss)$",
+      ];
+      return config;
+    },
+  },
   webpack: {
     configure: (config) => {
       config.output.publicPath = "/imswitch/ui/";

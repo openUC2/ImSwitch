@@ -3,11 +3,9 @@
 // Each app has metadata for display, categorization, and management
 
 import {
-  AccessTime as AccessTimeIcon,
   AutoFixHigh as AutoFixHighIcon,
   Cable as CableIcon,
   Dashboard as DashboardIcon,
-  Extension as ExtensionIcon,
   Folder as FolderIcon,
   GridOn as GridOnIcon,
   GridView as GridViewIcon,
@@ -21,9 +19,9 @@ import {
   Tune as TuneIcon,
   NetworkCheck as NetworkCheckIcon,
   DeviceHub as DeviceHubIcon,
+  Hub as HubIcon,
   Speed as SpeedIcon,
   Thermostat as ThermostatIcon,
-  Insights as InsightsIcon,
   PhotoCamera as PhotoCameraIcon,
   Visibility as VisibilityIcon,
   ViewInAr as ViewInArIcon,
@@ -31,6 +29,8 @@ import {
   MenuBook as MenuBookIcon,
   Psychology as PsychologyIcon,
   Map as MapIcon,
+  AccountTree as AccountTreeIcon,
+  Texture as TextureIcon,
 } from "@mui/icons-material";
 
 /**
@@ -127,6 +127,30 @@ export const APP_REGISTRY = {
     pluginId: "AppManager",
   },
 
+  aufgaben: {
+    id: "aufgaben",
+    name: "Aufgaben",
+    description:
+      "Build acquisition jobs from steps (loops over positions, wells, grids and time, captures, autofocus, conditions, questions), validate them and follow the run. Writes OME-Zarr and OME-TIFF.",
+    category: APP_CATEGORIES.ESSENTIALS,
+    icon: AccountTreeIcon,
+    enabled: true,
+    essential: true,
+    keywords: [
+      "aufgaben",
+      "jobs",
+      "workflow",
+      "protocol",
+      "experiment",
+      "loop",
+      "timelapse",
+      "useq",
+      "mda",
+    ],
+    pluginId: "Aufgaben",
+    requiredControllers: ["AufgabenController"],
+  },
+
   // === APPS - Optional microscopy applications ===
   mmCore: {
     id: "mmCore",
@@ -177,6 +201,21 @@ export const APP_REGISTRY = {
     pluginId: "GalvoScannerController",
   },
 
+  // SLMController
+  slm: {
+    id: "slm",
+    name: "SLM / DMD",
+    description:
+      "Spatial light modulator or DMD on an external display conjugate to the sample: static patterns, light where you draw on the camera image, camera-display calibration and pattern sequences synchronised with the camera.",
+    category: APP_CATEGORIES.APPS,
+    icon: TextureIcon,
+    enabled: false,
+    essential: false,
+    keywords: ["slm", "dmd", "pattern", "structured", "illumination", "photostimulation", "projector", "display"],
+    pluginId: "SLM",
+    requiredControllers: ["SLMController"],
+  },
+
   stormLocal: {
     id: "stormLocal",
     name: "STORM Local",
@@ -190,24 +229,18 @@ export const APP_REGISTRY = {
     pluginId: "STORMLocal",
   },
 
-  stormArkitekt: {
-    id: "stormArkitekt",
-    name: "STORM Arkitekt",
+  arkitekt: {
+    id: "arkitekt",
+    name: "Arkitekt",
     description:
-      "Advanced STORM microscopy controller with Arkitekt integration. Cloud-based super-resolution image processing and workflow management.",
-    category: APP_CATEGORIES.APPS,
-    icon: InsightsIcon,
+      "Bind this microscope to an Arkitekt server (cloud or a local one, e.g. on a NAS) so notebooks, apps and workflows can drive it. Shows the login, what is offered, remote calls and the images sent.",
+    category: APP_CATEGORIES.SYSTEM,
+    icon: HubIcon,
     enabled: false,
     essential: false,
-    keywords: [
-      "storm",
-      "arkitekt",
-      "superresolution",
-      "cloud",
-      "workflow",
-      "processing",
-    ],
-    pluginId: "STORMArkitekt",
+    keywords: ["arkitekt", "remote", "workflow", "server", "nas", "mikro", "login", "bind"],
+    pluginId: "Arkitekt",
+    requiredControllers: ["ArkitektController"],
   },
 
   stageMap: {
@@ -268,26 +301,6 @@ export const APP_REGISTRY = {
     pluginId: "FRAMESettings",
   },
 
-  infinityScanning: {
-    id: "infinityScanning",
-    name: "Infinity Scanning",
-    description:
-      "Large field-of-view scanning microscopy with OpenLayers integration. Create stitched panoramic images from multiple high-resolution tiles.",
-    category: APP_CATEGORIES.APPS,
-    icon: CropFreeIcon,
-    enabled: false,
-    essential: false,
-    keywords: [
-      "infinity",
-      "scanning",
-      "largefov",
-      "panoramic",
-      "stitching",
-      "openlayers",
-    ],
-    pluginId: "Infinity Scanning",
-  },
-
   lightsheet: {
     id: "lightsheet",
     name: "LightSheet",
@@ -301,31 +314,32 @@ export const APP_REGISTRY = {
     pluginId: "LightSheet",
   },
 
-  timelapse: {
-    id: "timelapse",
-    name: "Timelapse",
+  opm: {
+    id: "opm",
+    name: "dvOPM",
     description:
-      "Time-lapse microscopy with automated image acquisition. Schedule multi-position experiments over time.",
+      "Oblique-plane microscope: digital twin of the launch and stages, light-sheet optics trace, and stage-scan volume acquisition with deskew.",
     category: APP_CATEGORIES.APPS,
-    icon: AccessTimeIcon,
+    icon: ViewInArIcon,
     enabled: false,
     essential: false,
-    keywords: ["timelapse", "time", "automated", "acquisition", "scheduling"],
-    pluginId: "Timelapse",
-    requiredControllers: ["TimelapseController"],
+    keywords: ["opm", "oblique", "dvopm", "lightsheet", "twin", "deskew", "volume"],
+    pluginId: "OPM",
+    requiredControllers: ["OPMController"],
   },
 
   flowStop: {
     id: "flowStop",
     name: "Flow Stop",
     description:
-      "Control flow stop mechanisms for microfluidics experiments. Manage fluid flow and timing.",
+      "Flow-cell imaging for plankton and particles: live preview, pump and focus control, EcoTaxa sample metadata, timed acquisition and gallery.",
     category: APP_CATEGORIES.APPS,
     icon: DeviceHubIcon,
     enabled: false,
     essential: false,
-    keywords: ["flow", "stop", "microfluidics", "fluid", "timing"],
+    keywords: ["flow", "stop", "microfluidics", "fluid", "plankton", "planktoscope", "ecotaxa"],
     pluginId: "FlowStop",
+    requiredControllers: ["FlowStopController"],
   },
 
   lepmon: {
@@ -355,19 +369,6 @@ export const APP_REGISTRY = {
   },
 
   // === CODING - Development and debugging tools ===
-  blockly: {
-    id: "blockly",
-    name: "Blockly Controller",
-    description:
-      "Visual programming interface for creating custom microscopy workflows. Drag-and-drop programming for experiments.",
-    category: APP_CATEGORIES.CODING,
-    icon: ExtensionIcon,
-    enabled: false,
-    essential: false,
-    keywords: ["blockly", "visual", "programming", "workflow", "experiments"],
-    pluginId: "Blockly",
-  },
-
   imjoy: {
     id: "imjoy",
     name: "ImJoy Integration",
@@ -654,7 +655,7 @@ export const APP_REGISTRY = {
     id: "shitScope",
     name: "ShitScope",
     description:
-      "Dedicated single-button paving scan application with fixed 50x30mm scan area, live view, stage homing, and overview canvas.",
+      "Dedicated tile scan for the ShitScope: live mosaic, tile registration and stitching at measured positions, placement-error report.",
     category: APP_CATEGORIES.APPS,
     icon: CropFreeIcon,
     enabled: false,
@@ -666,8 +667,10 @@ export const APP_REGISTRY = {
       "single",
       "dedicated",
       "customer",
+      "stitching",
     ],
     pluginId: "ShitScope",
+    requiredControllers: ["ShitScopeController"],
   },
 
   socketView: {

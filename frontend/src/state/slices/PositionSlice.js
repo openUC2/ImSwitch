@@ -7,6 +7,7 @@ const initialPosition = {
   y: 0,
   z: 0,
   a: 0,
+  extra: {}, // axes beyond X/Y/Z/A, e.g. {B: 12, C: 0}
   stepSizes: {
     X: 100,
     Y: 100,
@@ -35,6 +36,7 @@ const positionSlice = createSlice({
       state.y = action.payload.y ?? state.y;
       state.z = action.payload.z ?? state.z;
       state.a = action.payload.a ?? state.a;
+      if (action.payload.extra) state.extra = { ...state.extra, ...action.payload.extra };
       console.log("State after update:", {
         x: state.x,
         y: state.y,

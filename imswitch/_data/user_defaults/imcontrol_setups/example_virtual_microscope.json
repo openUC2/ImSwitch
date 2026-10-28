@@ -74,6 +74,18 @@
         }
     },
     "LEDs": {},
+    "pumps": {
+        "peristaltic": {
+            "managerName": "VirtualPumpManager",
+            "managerProperties": {"maxRateUlMin": 2000, "speedup": 60}
+        }
+    },
+    "valves": {
+        "inlet": {
+            "managerName": "VirtualValveManager",
+            "managerProperties": {"positions": {"sample": 1, "waste": 0}}
+        }
+    },
     "LEDMatrixs": {},
     "positioners": {
         "VirtualStage": {
@@ -136,11 +148,31 @@
                     "offset": 0.0
                 }
             }
+        },
+        "ESP32": {
+            "managerName": "VirtualESP32Manager",
+            "managerProperties": {
+                "ambientC": 22.0,
+                "heaterTauS": 60.0,
+                "heaterMaxRiseC": 30.0,
+                "noiseC": 0.02,
+                "humidityPct": 45.0,
+                "lux": 120.0,
+                "digitalIn": {
+                    "1": {"mirrorOut": 1},
+                    "2": {"schedule": [[30, 1], [60, 0]]}
+                }
+            }
         }
     },
-    "slm": null,
-    "sim": null,
-    "dpc": null,
+    "slm": {
+    "display": "framebuffer",
+    "displayIndex": 0,
+    "width": 1920,
+    "height": 1080,
+    "settleTimeMs": 50,
+    "calibrationDetector": null
+    },
     "objective": {
         "pixelsizes": [
             1.0,
@@ -177,18 +209,16 @@
     "roiscan": null,
     "lightsheet": null,
     "webrtc": null,
-    "hypha": null,
     "mockxx": null,
     "jetsonnano": null,
     "Stresstest": {},
-    "HistoScan": null,
     "Workflow": null,
     "FlowStop": null,
     "Lepmon": null,
     "Flatfield": null,
     "PixelCalibration": {
         "affineCalibrations": {
-            "1": {
+            "WidefieldCamera::1": {
                 "affine_matrix": [
                     [
                         -1.0,
@@ -208,8 +238,8 @@
                     "n_inliers": 9.0,
                     "n_outliers": 0.0,
                     "rotation_deg": 0.0,
-                    "scale_x_um_per_pixel": 1.0,
-                    "scale_y_um_per_pixel": 1.0,
+                    "scale_x_um_per_pixel": -1.0,
+                    "scale_y_um_per_pixel": -1.0,
                     "condition_number": 1.0,
                     "mean_correlation": 0.0,
                     "min_correlation": 0.0
@@ -220,7 +250,7 @@
                     "detector": "WidefieldCamera"
                 }
             },
-            "0": {
+            "WidefieldCamera::0": {
                 "affine_matrix": [
                     [
                         -1.0,
@@ -240,8 +270,8 @@
                     "n_inliers": 9.0,
                     "n_outliers": 0.0,
                     "rotation_deg": 0.0,
-                    "scale_x_um_per_pixel": 1.0,
-                    "scale_y_um_per_pixel": 1.0,
+                    "scale_x_um_per_pixel": -1.0,
+                    "scale_y_um_per_pixel": -1.0,
                     "condition_number": 1.0,
                     "mean_correlation": 0.0,
                     "min_correlation": 0.0
@@ -352,13 +382,10 @@
         "Positioner",
         "Autofocus",
         "MCT",
-        "ROIScan",
-        "HistoScan",
         "ImSwitchServer",
         "Lightsheet",
         "Workflow",
         "Experiment",
-        "Timelapse",
         "UC2Config",
         "Objective",
         "Stresstest",
@@ -372,12 +399,14 @@
         "Arkitekt",
         "LiveView", 
         "Composite",
-        "InLineHolo"
+        "InLineHolo",
+        "Temperature",
+        "I2CSensor",
+        "Aufgaben", "StageMap", "OPM", "SLM"
     ],
     "nonAvailableWidgets": [
         "STORMRecon",
         "Lepmon",
-        "Hypha",
         "Histogramm",
         "imswitch_lightsheet",
         "imswitch_arkitekt_next",
@@ -388,7 +417,6 @@
         "DPC",
         "FOVLock",
         "Temperature",
-        "HistoScan",
         "PixelCalibration",
         "WebRTC",
         "Flatfield",

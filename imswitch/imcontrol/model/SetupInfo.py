@@ -142,37 +142,79 @@ class RS232Info:
 
 
 @dataclass(frozen=False)
+class PeripheralInfo:
+    """ A pump or valve: the manager that drives it and its properties. """
+
+    managerName: str
+    """ Manager class name, e.g. ``LaserPumpManager`` or ``LaserValveManager``. """
+
+    managerProperties: Dict[str, Any] = field(default_factory=dict)
+    """ Properties to be read by the manager (see each manager's docstring). """
+
+
+@dataclass(frozen=False)
+class DigitalIOInfo:
+    """ Names for the UC2 board's digital lines (see ``DigitalIOManager``). """
+
+    outputs: Dict[str, int] = field(default_factory=dict)
+    """ Output name -> board output id (1..3), e.g. ``{"shutter": 1}``. """
+
+    inputs: Dict[str, int] = field(default_factory=dict)
+    """ Input name -> board input id (1..3), e.g. ``{"door": 2}``. """
+
+    invert: List[str] = field(default_factory=list)
+    """ Names of active-low lines; they read and write as logical levels. """
+
+    rs232device: str = "ESP32"
+    """ The board's ``rs232devices`` entry. """
+
+
+@dataclass(frozen=False)
 class SLMInfo:
-    monitorIdx: int
-    """ Index of the monitor in the system list of monitors (indexing starts at
-    0). """
+    """A spatial light modulator or DMD driven as a display (HDMI) in a plane
+    conjugate to the sample. Enabled with "SLM" in availableWidgets; see docs/SLM.md."""
 
-    width: int
-    """ Width of SLM, in pixels. """
+    display: str = "virtual"
+    """ Output backend: "virtual" (nothing shown; tests and the virtual microscope),
+    "framebuffer" (Linux /dev/fb<displayIndex>, the Raspberry Pi HDMI output, no X needed)
+    or "window" (fullscreen window on monitor displayIndex; needs pygame-ce). """
 
-    height: int
-    """ Height of SLM, in pixels. """
+    displayIndex: int = 0
+    """ Framebuffer number or monitor index (0 = primary, 1 = first external). """
 
-    wavelength: int
-    """ Wavelength of the laser line used with the SLM. """
+    width: int = 1920
+    """ Pattern width in pixels. Once the output is open its real size wins. """
 
-    pixelSize: float
-    """ Pixel size or pixel pitch of the SLM, in millimetres. """
+    height: int = 1080
+    """ Pattern height in pixels. """
 
-    angleMount: float
-    """ The angle of incidence and reflection of the laser line that is shaped
-    by the SLM, in radians. For adding a blazed grating to create off-axis
-    holography. """
+    settleTimeMs: float = 50.0
+    """ Wait after a new frame before the camera is triggered: display latency plus the
+    DMD/SLM refresh. Too short and the previous pattern is imaged. """
 
-    correctionPatternsDir: str
-    """ Directory of .bmp images provided by Hamamatsu for flatness correction
-    at various wavelengths. A combination will be chosen based on the
-    wavelength. """
+    calibrationDetector: Optional[str] = None
+    """ Camera used for the automatic camera<->display calibration; None = the current one. """
 
 
 @dataclass(frozen=False)
 class UC2ConfigInfo:
-    pass
+    checkFirmwareOnConnect: bool = False
+    """ Compare the boards' firmware with the firmware server once after
+    startup and offer an update (never flashes on its own). """
+
+    firmwareServerUrl: Optional[str] = None
+    """ Firmware server (serves the images + version.json). None = the
+    Docker default http://host.docker.internal/firmware. """
+
+    firmwareRelease: Optional[str] = None
+    """ Take the firmware from a GitHub release of firmwareGithubRepo instead
+    of the firmware server: "latest" (newest release with images,
+    pre-releases included) or a tag such as "v2026.0.0-beta.4". None = the
+    firmware server. """
+
+    firmwareGithubRepo: Optional[str] = None
+    """ Repository whose releases firmwareRelease refers to. None =
+    youseetoo/uc2-esp32. """
 
 
 @dataclass(frozen=False)
@@ -272,6 +314,35 @@ class LightsheetInfo:
     pass
 
 
+def _opmDefaultAxisMap():
+    return {"sample.X": "X",  "sample.Z": "Y", "launch.x": "Z", "launch.z": "A"}
+
+
+@dataclass(frozen=False)
+class OPMInfo:
+    """ dvOPM digital twin (OPMController). Every field is optional. """
+
+    positioner: Optional[str] = None
+    """ Positioner for axes given without a name; default the first one. """
+
+    detector: Optional[str] = None
+    """ Camera for the scan; default the first one. """
+
+    axisMap: Dict[str, str] = field(default_factory=_opmDefaultAxisMap)
+    """ Model axis -> stage axis: "X", "-X" (opposite direction), "LaunchStage.Z" or ""
+    (set by hand). Model axes: sample.X/Y/Z, launch.x/y/z/phi_deg/focus. """
+
+    detection: Dict[str, float] = field(default_factory=dict)
+    """ Overrides of the detection model: M, alpha_deg, pixel_um (sensor pitch times
+    binning), sensor_tilted_mm, sensor_flat_mm. """
+
+    dish: Dict[str, float] = field(default_factory=dict)
+    """ Overrides of the dish model: n_glass, t_glass_mm, G0_mm. """
+
+    tiltedAxis: int = 0
+    """ Image axis along the tilted sensor direction: 0 rows, 1 columns. """
+
+
 @dataclass(frozen=False)
 class GalvoScannerInfo(DeviceInfo):
     """
@@ -335,20 +406,11 @@ class WebRTCInfo:
     pass
 
 @dataclass(frozen=False)
-class HyphaInfo:
-    pass
-
-@dataclass(frozen=False)
 class MockXXInfo:
     pass
 
 @dataclass(frozen=False)
 class JetsonNanoInfo:
-    pass
-
-@dataclass(frozen=False)
-class HistoScanInfo:
-    PreviewCamera: str = None
     pass
 
 @dataclass(frozen=False)
@@ -650,19 +712,37 @@ class ArkitektInfo:
     """ Whether Arkitekt integration is enabled. """
 
     appName: str = "imswitch"
-    """ Application name for Arkitekt registration. """
+    """ App identifier this microscope registers as (lower-cased, spaces become
+    dashes). One agent per machine: the server tells microscopes apart by
+    their device id. """
+
+    url: str = "https://go.arkitekt.live"
+    """ Arkitekt server to bind to, e.g. ``http://nas.local`` for a local
+    deployment. Set from the Arkitekt panel when binding. """
 
     redeemToken: str = ""
-    """ Redeem token for Arkitekt authentication. """
+    """ Provisioning token for an unattended login (no browser approval).
+    It is a credential: keep it out of setup files that are shared. """
 
-    url: str = "http://go.arkitekt.io"
-    """ Arkitekt server URL. """
+    autoConnect: bool = True
+    """ Reconnect at startup when this microscope was bound before (stored
+    login or redeem token). Never starts a browser login by itself. """
+
+    allowInsecureTransport: bool = False
+    """ Allow the login over plain http to a server that is not localhost
+    (a NAS without TLS). Anyone on the network path can read the session. """
+
+    useMikro: bool = True
+    """ Offer the image actions (acquire frame, tile scan), which store images
+    in the server's mikro service. Turn off for a server without mikro. """
 
     syncInAsync: bool = True
-    """ Enable sync-in-async mode for Koil. """
+    """ Unused since the move from arkitekt_next to arkitekt; kept so older
+    setup files load. """
 
-    deconvolveActionHash: str = "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"
-    """ Hash of the deconvolution action in Arkitekt. """
+    deconvolveActionHash: str = ""
+    """ Unused since the move from arkitekt_next to arkitekt (actions are no
+    longer looked up by hash); kept so older setup files load. """
 
 
 @dataclass(frozen=False)
@@ -848,6 +928,24 @@ class SetupInfo:
     snap), add a ``FLIMLabsDetectorManager`` entry under ``detectors`` instead —
     see that manager's docstring for the property list. """
 
+    pumps: Dict[str, PeripheralInfo] = field(default_factory=dict)
+    """ Pumps by name: ``LaserPumpManager`` (speed as a PWM value on a laser channel),
+    ``PositionerPumpManager`` (a stepper axis of a positioner), ``VirtualPumpManager``.
+    Volumes in µL, rates in µL/min; Aufgaben jobs drive them with pump_volume / pump_run. """
+
+    valves: Dict[str, PeripheralInfo] = field(default_factory=dict)
+    """ Valves by name: ``LaserValveManager`` (a PWM value per position on a laser
+    channel), ``DigitalOutValveManager`` (board outputs), ``VirtualValveManager``;
+    ``managerProperties.positions`` names the positions a job can switch to. """
+
+    aufgaben: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
+    """ Aufgaben options. ``{"allowScripts": true}`` offers the python_script and
+    external_process steps (unsandboxed code; a run with them must be confirmed). """
+
+    digitalIO: Optional[DigitalIOInfo] = field(default_factory=lambda: None)
+    """ Names for the board's digital outputs and inputs; without it jobs use the
+    raw lines "1".."3". """
+
     rs232devices: Dict[str, RS232Info] = field(default_factory=dict)
     """ RS232 connections in this setup. This is a map from unique RS232
     connection names to RS232Info objects. Some detector/laser/positioner
@@ -880,11 +978,11 @@ class SetupInfo:
     lightsheet: Optional[LightsheetInfo] = field(default_factory=lambda: None)
     """ lighthseet settings. Required to be defined to use Lightsheet functionality. """
 
+    opm: Optional[OPMInfo] = field(default_factory=lambda: None)
+    """ dvOPM digital twin settings (OPMController); defaults apply when missing. """
+
     webrtc: Optional[WebRTCInfo] = field(default_factory=lambda: None)
     """ WebRTC settings. Required to be defined to use WebRTC functionality. """
-
-    hypha: Optional[HyphaInfo] = field(default_factory=lambda: None)
-    """ Hypha settings. Required to be defined to use Hypha functionality. """
 
     mockxx: Optional[MockXXInfo] = field(default_factory=lambda: None)
     """ MockXX settings. Required to be defined to use MockXX functionality."""
@@ -894,9 +992,6 @@ class SetupInfo:
 
     Stresstest: Optional[StresstestInfo] = field(default_factory=lambda: None)
     """ Stresstest settings. Required to be defined to use Stresstest functionality. """
-
-    HistoScan: Optional[HistoScanInfo] = field(default_factory=lambda: None)
-    """ HistoScan settings. Required to be defined to use HistoScan functionality. """
 
     Workflow: Optional[WorkflowInfo] = field(default_factory=lambda: None)
     """ Workflow settings. Required to be defined to use Workflow functionality. """

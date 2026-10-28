@@ -95,20 +95,23 @@ const AxonTabComponent = () => {
         flexDirection: "column",
       }}
     >
-      {/* PiP toggle button – always visible in the top-right corner */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          padding: "2px 8px 0 0",
-          flexShrink: 0,
-        }}
-      >
-        <PiPToggleButton
-          active={pipVisible}
-          onClick={() => setPipVisible((v) => !v)}
-        />
-      </div>
+      {/* PiP toggle button – top-right corner. The new layout hosts it in
+          its own header row, which saves a full row on short touchscreens. */}
+      {!USE_NEW_WELLPLATE_LAYOUT && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            padding: "2px 8px 0 0",
+            flexShrink: 0,
+          }}
+        >
+          <PiPToggleButton
+            active={pipVisible}
+            onClick={() => setPipVisible((v) => !v)}
+          />
+        </div>
+      )}
 
       {/* Floating PiP overlay */}
       <PictureInPicture
@@ -118,7 +121,14 @@ const AxonTabComponent = () => {
 
       {USE_NEW_WELLPLATE_LAYOUT ? (
         /* Renovated layout: viewport tab strip + always-on experiment inspector */
-        <WellPlateWorkspace />
+        <WellPlateWorkspace
+          headerAction={
+            <PiPToggleButton
+              active={pipVisible}
+              onClick={() => setPipVisible((v) => !v)}
+            />
+          }
+        />
       ) : (
         /* Legacy layout: two competing tab bars (kept for rollback) */
         <div style={{ display: "flex" }}>

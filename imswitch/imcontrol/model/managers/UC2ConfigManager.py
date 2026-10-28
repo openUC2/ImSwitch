@@ -56,9 +56,9 @@ class UC2ConfigManager(SignalInterface):
     def getFirmwareInfo(self, timeout=2):
         """Identity of the USB-connected ESP32 master.
 
-        Returns {name, version, date, author, pindef, isMaster, connected,
-        serialport}. The build date and pindef are the fields that matter for
-        telling boards apart. Best-effort: returns a mostly-empty dict if the
+        Returns {name, version, fwVersion, date, author, pindef, isMaster,
+        connected, serialport}. fwVersion (the release the firmware was built
+        from) and pindef are the fields that matter for telling boards apart. Best-effort: returns a mostly-empty dict if the
         firmware/serial layer is unavailable.
         """
         info = {}

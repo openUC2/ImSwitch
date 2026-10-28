@@ -47,6 +47,8 @@ with them.
   `moveToSampleLoadingPosition`, `moveToTransportPosition` — these drive to mechanical
   endstops at speed.
 - Turning a laser on (`setLaserActive`, `setLaserValue`) or raising an existing power.
+- Pumping or switching a valve on a real instrument (`pump_volume`, `pump_run`, `set_valve` in a
+  job): fluid ends up on optics and electronics when a tube is off.
 - Anything in [§4.11 Board, firmware and OTA](#411-board-firmware-and-ota): OTA flashing,
   `flashMasterFirmwareUSB`, `reassignCANId`, `espRestart`, `restartCANDevice`, `setBusPower`.
 - `stopImSwitch` / `restartImSwitch`, `setSetupFileName`, `writeNewSetupFile` — these change
@@ -101,8 +103,14 @@ Always discover, never assume ([§3.3](#33-discovery)).
 ### Starting the server
 
 ```bash
-python main.py --headless --http-port 8001
+python -m imswitch --http-port 8001
 ```
+
+Use `python -m imswitch`, **not** `python main.py`. `main.py` calls `main(ssl=0)`, and `main()` parses
+the command line only when it gets no arguments, so `python main.py --config-file X ...` silently
+ignores every flag. It then starts the user's default setup from
+`~/ImSwitchConfig/config/imcontrol_options.json` against real hardware. There is no `--headless` flag;
+the server is always headless.
 
 Flags (`imswitch/__main__.py`):
 
@@ -119,8 +127,12 @@ Flags (`imswitch/__main__.py`):
 Hardware-free session for agents:
 
 ```bash
-python main.py --headless --no-ssl --http-port 8001 --config-file ~/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json
+python -m imswitch --no-ssl --http-port 8001 --config-file ~/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json
 ```
+
+Add `--config-folder` / `--data-folder` pointing at a scratch directory to keep a test session out of
+the user's config. Startup writes `config/imcontrol_options.json`, `modules.json` and overview
+registration files into the config folder.
 
 ---
 
@@ -141,6 +153,13 @@ imswitch/
       detectors/               cameras (Hik, Toupcam, Basler, PiCam, Virtual, MMCore, …)
       positioners/             stages (ESP32Stage, UC2CANOpen, MMCore, Virtual, …)
       lasers/ LEDs/ LEDMatrixs/ rotators/ galvoscanners/ rs232/
+      pumps/ valves/           fluidics (setup blocks "pumps", "valves"); DigitalIOManager.py
+                               names the board's lines (setup block "digitalIO")
+    model/canbus/              UC2 CAN network + firmware (no ImSwitch imports; endpoints in
+                               controllers/uc2config/can_network_api.py)
+    model/aufgaben/            Aufgaben job format, tasks, validator, useq bridge (no ImSwitch
+                               imports; plan in docs/AUFGABEN_ROADMAP.md); storage.py is the one
+                               OME-Zarr/OME-TIFF writer for all of ImSwitch (save_image, NgffImage)
     model/SetupInfo.py         setup-JSON schema (dataclasses)
     model/io/recording_service.py   SaveFormat / RecMode enums, writers
     _test/                     unit + api tests
@@ -320,6 +339,9 @@ Backends live in `model/managers/detectors/`: `HikCamManager`, `ToupCamManager`,
 - `getLaserActive` / `setLaserActive(laserName, active)`
 - `setLaserChannelIndex` / `getLaserChannelIndex`
 
+`LEDController` covers the simple `LEDs` block: `getLEDNames`, `getLEDValueRange(ledName)`,
+`setLEDValue(ledName, value)`, `setLEDActive(ledName, active)`.
+
 `LEDMatrixController` drives the UC2 8×8 RGB matrix:
 
 - `setAllLEDOn` / `setAllLEDOff` / `setAllLED(state, intensity, intensity_r/g/b)`
@@ -377,7 +399,8 @@ Hardware focus lock (`FocusLockController`, astigmatism/reflection based):
 - `getFocusLockState()`, `getCurrentFocusValue()`
 - `getFocusLockParams` / `setFocusLockParams`, `getPIParameters` / `setPIParameters(kp, ki)`
 - `runFocusCalibrationDynamic(scan_range_um, num_steps, settle_time, …)` /
-  `stopFocusCalibration` / `getCalibrationStatus` / `getCalibrationResults`
+  `stopFocusCalibration` / `getCalibrationStatus` / `getCalibrationResults` — the calibration
+  moves Z; it is refused while an experiment, job, recording or stage-map scan runs
 - `setZStepLimit(limit_nm)` / `getZStepLimit` — **the safety clamp on lock-driven Z moves.
   Do not raise it to make the lock converge.**
 - `returnLastImage` / `returnLastCroppedImage` — the spot image, for diagnosing a bad lock
@@ -425,7 +448,8 @@ Running:
 useq-schema MDA:
 
 - `get_mda_capabilities()`, `get_mda_sequence_info(request)`,
-  `start_mda_experiment(request: MDASequenceRequest)`, `run_native_mda_sequence(sequence_dict)`
+  `start_mda_experiment(request: MDASequenceRequest)`, `run_native_mda_sequence(sequence_dict)`,
+  `stop_native_mda_sequence()`
 - Examples in `examples/mda_demo.py`, `examples/native_useq_mda_example.py`; docs in
   `docs/REST_API_MDA.md`, `docs/NATIVE_USEQ_MDA.md`
 
@@ -450,15 +474,40 @@ Overview / slide registration and stitching:
 OMERO export: `getOMEROConfig` / `setOMEROConfig` / `isOMEROEnabled` /
 `getOMEROConnectionParams` / `getOMEWriterConfig`.
 
-### 4.9 Workflows and tiling — `WorkflowController`, `StageMapController`, `TilingController`
+### 4.9 Jobs, workflows and stage maps — `AufgabenController`, `WorkflowController`, `StageMapController`
+
+`AufgabenController` — composable acquisition jobs (loops over positions, wells, regions and
+tiles, conditions, variables, capture incl. LED-matrix ring/DPC channels, autofocus and focus maps,
+prescan and firmware stage scans, digital I/O, temperature; plan and format in
+`docs/AUFGABEN_ROADMAP.md`). Output is standard OME-Zarr (NGFF 0.4) and OME-TIFF in
+`<data>/Aufgaben/<timestamp>_<job>/`, optionally with stitched images per position:
+
+- `getAufgabenCatalog()` — control nodes and tasks this setup supports, with JSON schemas
+- `validateAufgabenJob(job)` (POST) — errors, warnings, ask-first steps, motion/light summary
+- `startAufgabenJob(request{job, parameters, confirmed})` (POST) — refused while anything else
+  drives the microscope; homing/objective steps need `confirmed`. **Ask first** on hardware.
+- `getAufgabenStatus()`, `pauseAufgabenJob`, `resumeAufgabenJob`, `finishAufgabenJob`,
+  `abortAufgabenJob(force)`, `answerAufgabenQuestion(answer)`
+- `listAufgabenJobs`, `getAufgabenJob(name)`, `saveAufgabenJob(job)` (POST),
+  `deleteAufgabenJob(name)`, `listAufgabenRuns(limit)`, `getAufgabenJobSchema()`
+- `importAufgabenUseq(sequence)` / `exportAufgabenUseq(job)` (POST) — useq-schema bridge
+- Frontend: the "Aufgaben" app (`frontend/src/components/aufgaben/`) edits, validates, starts and
+  follows jobs; `sigAufgabenEvent` carries state, step, log, question and task-progress events.
+- Peripherals for jobs: the `pumps`, `valves` and `digitalIO` setup blocks (managers in
+  `model/managers/pumps|valves/`, `DigitalIOManager.py`). Pumps and valves drive a laser channel
+  (PWM) or a positioner axis; those laser channels are not light sources for jobs. `send_serial`
+  talks to plain `RS232Manager` devices and is ask-first. The virtual setup has a pump and a valve.
+- Analysis steps (`measure_intensity`, `count_objects`, `focus_metric`, `detect_background`,
+  `points_from_mask`, `regions_from_overview`) read an earlier step's image and return
+  `result.<id>.*`; positions and regions come back in stage µm. `python_script` and
+  `external_process` exist only when the setup sets `"aufgaben": {"allowScripts": true}` and are
+  ask-first.
+- `getAufgabenWellPlate(load_name, wells, offset_x_um, offset_y_um)` — a useq well-plate plan
+  from ImSwitch labware (same convention: rows towards −Y), for a job's `well_plate` resource
 
 `WorkflowController` — generic step-based execution engine:
 
 - `uploadWorkflow(definition)`, `start_workflow_api(request)`
-- `start_xyz_histo_workflow(x_min, x_max, y_min, y_max, …)`,
-  `start_xyz_histo_workflow_by_list(req)`
-- `startWorkflowTileBasedByParameters(numberTilesX, numberTilesY, stepSizeX, stepSizeY,
-  nTimes, tPeriod, …)`
 - `pause_workflow` / `resume_workflow` / `stop_workflow` / `force_stop_workflow` /
   `workflow_status`, `getWorkflowStatus` / `setWorkflowStatus`
 - `computeOptimalScanStepSize2(overlap=0.75)` — derives step size from FOV and overlap; use
@@ -470,6 +519,9 @@ OMERO export: `getOMEROConfig` / `setOMEROConfig` / `isOMEROEnabled` /
 - `getStageMapParams` / `setStageMapParams`, `getStageMapStatus`, `setStageMapChannel`
 - `getStageMapTiles(fromId, includePreviews)`, `gotoStagePosition(x, y, isAbsolute,
   isBlocking)`, `saveStitchedOmeTiff(filename)`
+- `startPrescan(minX, maxX, minY, maxY, dy, speedX, …)` (POST) / `stopPrescan` — fast
+  low-resolution sweep; refused, like `startStageMap`, while an experiment, job, recording or
+  calibration runs (`controller/busy.py`)
 
 ### 4.10 Metadata, storage and files
 
@@ -509,6 +561,16 @@ Safe to read:
   `listPtzActions()`
 - `getDataPath()`, `isImSwitchRunning()`, `getOTAStatus`, `getOTADeviceMapping`,
   `listAvailableFirmware`, `listAllFirmwareFiles`, `getUSBFlashStatus`
+- `checkFirmwareUpdates(timeout, probe_range)` — installed vs server firmware version per
+  board (reads `<server>/version.json`; runs a CAN scan on a master). See
+  `docs/FIRMWARE_VERSIONING.md`.
+- `getOTAFirmwareServer()` — the firmware source: local server URL or a GitHub release;
+  `listFirmwareReleases(repo, limit)` — GitHub releases of the firmware repo with their image count
+- `getRecommendedFirmware(port)` — the server image that fits a board, from its `/state_get`
+  identity. Empty port = ImSwitch's own board over the open link; another port is opened and
+  may reset that board.
+- `getFirmwareUpdateStatus`, `getFirmwareUpdatePrompt`, `getFirmwareCheckOnConnect`
+- `getPalletUpgradeStatus()` — systemd state + terminal output of the OS pallet upgrade
 
 Confirm before calling:
 
@@ -523,20 +585,28 @@ Confirm before calling:
   `resetTriggerTable`, `getDigitalIn`, `actDigitalIn`
 - Lifecycle: `espRestart`, `restartCANDevice`, `stopImSwitch`, `restartImSwitch`,
   `moveToSampleMountingPosition`
+- **OS upgrade (experimental, openUC2 OS only):** `startPalletUpgrade()` starts the host unit
+  `imswitch-pallet-upgrade.service` over the mounted D-Bus socket, which runs
+  `forklift plt upgrade --force && forklift stage apply` and recreates the ImSwitch container
 - **Firmware — highest risk:** `flashMasterFirmwareUSB(port, match, baud, firmware_filename)`,
-  `cancelUSBFlash`, `sendCanAddress`, `reassignCANId(new_id, mac, target)`,
-  `startSingleDeviceOTA(can_id, ssid, password, timeout)`, `startMultipleDeviceOTA`,
-  `startCANStreamingOTA(can_id, firmware_url, baud)`, `startMultipleCANStreamingOTA`,
-  `cancelCANStreamingOTA`, `setOTAWiFiCredentials`, `setOTAFirmwareServer`,
-  `clearOTAFirmwareCache`
+  `cancelUSBFlash`, `sendCanAddress`, `testDeviceAction` (moves a freshly flashed motor),
+  `reassignCANId(new_id, mac, target)`, `startCANStreamingOTA(can_id, firmware_url, baud)`,
+  `startMultipleCANStreamingOTA`, `cancelCANStreamingOTA`, `setOTAFirmwareServer`,
+  `clearOTAFirmwareCache`, `setOTAFirmwareRelease(release, repo)` (images from a GitHub release
+  instead of the local server, sha256-checked against the asset digests),
+  `startFirmwareUpdate(can_ids, include_master)` (flashes every
+  listed board, master last over USB), `cancelFirmwareUpdate`, `setFirmwareCheckOnConnect`
+  (writes the setup JSON)
 
 Setup files (defined directly on the server, not via `@APIExport`):
 `returnAvailableSetups`, `getCurrentSetupFilename`, `readSetupFile(setupFileName)`,
 `writeNewSetupFile(...)` (POST), `setSetupFileName(setupFileName, restartSoftware)`,
 `getDiskUsage`, `is_connected`.
 
-Firmware/OTA background: `docs/CAN_OTA_UPDATE_GUIDE.md`, `docs/OTA_API_QUICKREF.md`,
-`docs/CAN_OTA_FIRMWARE_SERVER.md`.
+The CAN-network and firmware endpoints are thin wrappers
+(`controllers/uc2config/can_network_api.py`) around `imswitch/imcontrol/model/canbus`, which has no
+ImSwitch imports: bus scan, node ids, CAN streaming OTA, esptool flashing, the verified update. Firmware
+background: `docs/FIRMWARE_VERSIONING.md`. WiFi OTA (the device downloads over WiFi) was removed.
 
 ### 4.12 Specialised imaging modes
 
@@ -547,18 +617,24 @@ Present only when the setup enables them. Discover with `getAvailableControllers
 | `SIMController` | Structured illumination microscopy |
 | `STORMReconController` | Single-molecule localisation / STORM |
 | `DPCController` | Differential phase contrast (LED-matrix halves) |
-| `InLineHoloController`, `OffAxisHoloController`, `HoloController`, `HoliSheetController` | Digital holography |
+| `InLineHoloController`, `OffAxisHoloController`, `HoloController` | Digital holography |
 | `LightsheetController` | Light-sheet scanning |
+| `OPMController` | dvOPM digital twin (`model/opm`, model axes linked to stage axes by setup `opm.axisMap`; `moveOPMAxes(virtual=True)` shifts the drawing onto the real sheet without moving, `setOPMReference` resets it), launch ray trace, sample-X stage scan placed by the measured speed and camera frame counter, optional deskew. `moveOPMAxes` / `setOPMMedium` move linked axes: **ask first** on hardware; `force=True` skips only the twin's own travel check, never the stage's soft limits |
 | `GalvoScannerController` | Galvo scanning, incl. FLIM Labs bridge |
+| `SLMController` | SLM / DMD on an external display conjugate to the sample (`docs/SLM.md`): `showSLMPattern` / `showSLMImage` / `showSLMCameraMask` (mask drawn over the camera, warped with the camera→display affine), `runSLMAutoCalibration` / `computeSLMAffine`, `uploadSLMSequence` + `startSLMSequenceAcquisition` (one software-triggered camera frame per pattern, OME-TIFF). On hardware every `show*` is illumination: **ask first** like a laser |
 | `FLIMLabsController` | FLIM acquisition |
-| `ISMController` | Image scanning microscopy |
 | `FlowStopController` | Flow-cell / imaging-flow-cytometry |
 | `PixelCalibrationController`, `StageCenterCalibrationController` | Pixel size and stage/camera affine calibration |
 | `ReadNoiseCalibrationController` | Camera noise characterisation |
-| `TimelapseController`, `RotationScanController`, `ROIScanController`, `TriggerAcquisitionController` | Acquisition patterns |
+| `TriggerAcquisitionController` | Hardware/software trigger acquisition |
 | `MMCoreController` | Micro-Manager device layer |
-| `WellPlateController` (`moveToXY(wellID)`), `SquidStageScanController`, `StageScanAcquisitionController` | Plate/stage scanning |
-| `HyphaController`, `ArkitektController`, `SiLa2Controller`, `WebRTCController` | External integrations |
+| `ArkitektController`, `SiLa2Controller` | External integrations |
+
+`ArkitektController` (`docs/ARKITEKT.md`): `getArkitektStatus`, `bindArkitekt(url)` (device-code
+login, returns at once), `cancelArkitekt`, `unbindArkitekt` (forgets the stored login),
+`setArkitektSettings`, `getArkitektUploads`. Binding is network-only, but once connected the server
+can call the declared actions, which move the stage and switch illumination. **Ask first** before
+binding a real instrument.
 | `StresstestController`, `DebugController`, `DemoController`, `AcceptanceTestController` | Diagnostics and self-test |
 
 ---
@@ -613,6 +689,9 @@ role with physical consequences.
     signals; expose a status endpoint and a stop endpoint for anything long-running.
   - Signals broadcast to the frontend through `imcommon/framework/noqt.py`. Adding a signal
     means adding traffic — throttle high-rate ones.
+  - Image files go through `model/aufgaben/storage.py` (`save_image` for one array, `NgffImage`
+    for a growing one) so they open in Fiji, napari and OMERO. Do not call `tifffile` or zarr
+    writers directly.
 - **Always:** verify against `example_virtual_microscope.json` before claiming a change works.
 - **Ask first:** changing an existing endpoint's name, path, or response shape (the React SPA
   and external clients depend on it); adding a dependency to `pyproject.toml`.

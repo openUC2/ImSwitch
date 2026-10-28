@@ -23,7 +23,8 @@ const initialObjectiveState = {
   availableObjectiveNAs: [0, 0],
   availableObjectivePixelSizes: [0, 0],
   slotConfigured: [true, true],
-  
+  hasMotor: null, // false: no A axis, switching is software-only
+
   // Additional state for ObjectiveController
   currentA: "",
   currentZ: "",
@@ -137,6 +138,9 @@ const objectiveSlice = createSlice({
     setSlotConfigured: (state, action) => {
       state.slotConfigured = action.payload;
     },
+    setHasMotor: (state, action) => {
+      state.hasMotor = action.payload;
+    },
 
     resetState: (state) => {
       console.log("resetState");
@@ -174,6 +178,7 @@ export const {
   setAvailableObjectiveNAs,
   setAvailableObjectivePixelSizes,
   setSlotConfigured,
+  setHasMotor,
   resetState,
 } = objectiveSlice.actions;
 

@@ -1,8 +1,7 @@
-from typing import List, Union
-from imswitch.imcommon.framework import Signal
+from typing import List, Optional, Union
 from imswitch.imcommon.model import APIExport, initLogger
 from imswitch.imcontrol.model import configfiletools
-from imswitch.imcontrol.view import guitools
+from imswitch.imcontrol.view.guitools.ViewSetupInfo import LaserPresetInfo
 from ..basecontrollers import ImConWidgetController
 
 
@@ -18,12 +17,6 @@ class LaserController(ImConWidgetController):
 
         # Set up lasers
         for lName, lManager in self._master.lasersManager:
-            self.laserModules = {}
-            self.addLaser(lName, lManager.valueUnits, lManager.valueDecimals, lManager.wavelength,
-            (lManager.valueRangeMin, lManager.valueRangeMax) if not lManager.isBinary else None,
-            lManager.valueRangeStep if lManager.valueRangeStep is not None else None,
-            (lManager.freqRangeMin, lManager.freqRangeMax, lManager.freqRangeInit) if lManager.isModulated else (0, 0, 0))
-
             # Set wavelength metadata (static property from config)
             if lManager.wavelength:
                 self.setSharedAttr(lName, _wavelengthAttr, lManager.wavelength)
@@ -34,10 +27,8 @@ class LaserController(ImConWidgetController):
         # Connect CommunicationChannel signals
         self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
         self._commChannel.sigScanStarting.connect(lambda: self.scanChanged(True))
-        self._commChannel.sigScanBuilt.connect(self.scanBuilt)
         self._commChannel.sigScanEnded.connect(lambda: self.scanChanged(False))
 
-        # Load presets
     def closeEvent(self):
         self._master.lasersManager.execOnAll(lambda l: l.setScanModeActive(False))
         self._master.lasersManager.execOnAll(lambda l: l.setValue(0))
@@ -67,108 +58,13 @@ class LaserController(ImConWidgetController):
         self._master.lasersManager[laserName].setModulationDutyCycle(dutyCycle)
         self.setSharedAttr(laserName, _dcAttr, dutyCycle)
 
-    def presetSelected(self, presetName):
-        """ Handles what happens when a preset is selected in the preset list.
-        """
-    def loadPreset(self):
-        """ Handles what happens when the user requests the selected preset to
-        be loaded. """
-        presetToLoad = self._widget.getCurrentPreset()
-        if not presetToLoad:
-            return
-
-        if presetToLoad not in self._setupInfo.laserPresets:
-            return
-
-        # Load values
-        self.applyPreset(self._setupInfo.laserPresets[presetToLoad])
-
-    def savePreset(self, name=None):
-        """ Saves current values to a preset. If the name parameter is None,
-        the values will be saved to the currently selected preset. """
-
-        if not name:
-            name = self._widget.getCurrentPreset()
-            if not name:
-                return
-
-        # Set in setup info
-        self._setupInfo.setLaserPreset(name, self.makePreset())
-        configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
-
-        # Add in GUI
-        if name not in self._setupInfo.laserPresets:
-            self._widget.addPreset(name)
-
-        # Update selected preset in GUI
-        self._widget.setCurrentPreset(name)
-
-    def savePresetAs(self):
-        """ Handles what happens when the user requests the current laser
-        values to be saved as a new preset. """
-
-        name = guitools.askForTextInput(self._widget, 'Add laser preset',
-                                        'Enter a name for this preset:')
-
-        if not name:  # No name provided
-            return
-
-        add = True
-        if name in self._setupInfo.laserPresets:
-            add = guitools.askYesNoQuestion(
-                self._widget,
-                'Laser preset already exists',
-                f'A preset with the name "{name}" already exists. Do you want to overwrite it"?'
-            )
-
-        if add:
-            self.savePreset(name)
-
-    def deletePreset(self):
-        """ Handles what happens when the user requests the selected preset to
-        be deleted. """
-
-        presetToDelete = self._widget.getCurrentPreset()
-        if not presetToDelete:
-            return
-
-        confirmationResult = guitools.askYesNoQuestion(
-            self._widget,
-            'Delete laser preset?',
-            f'Are you sure you want to delete the preset "{presetToDelete}"?'
-        )
-
-        if confirmationResult:
-            # Remove in GUI
-            self._widget.removePreset(presetToDelete)
-
-            # Remove from setup info
-            self._setupInfo.removeLaserPreset(presetToDelete)
-            configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
-
-    def presetScanDefaultToggled(self):
-        """ Handles what happens when the user requests the "default for
-        scanning" state of the selected preset to be toggled. """
-
-        currentPresetName = self._widget.getCurrentPreset()
-        if not currentPresetName:
-            return
-
-        enabling = self._setupInfo.defaultLaserPresetForScan != currentPresetName
-
-        # Set in setup info
-        self._setupInfo.setDefaultLaserPresetForScan(currentPresetName if enabling else None)
-        configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
-
-        # Update in GUI
-        self._widget.setScanDefaultPreset(currentPresetName if enabling else None)
-        self._widget.setScanDefaultPresetActive(enabling)
-
     def makePreset(self):
         """ Returns a preset object corresponding to the current laser values.
         """
-        return {lName: guitools.LaserPresetInfo(value=self._widget.getValue(lName))
-                for lName, lManager in self._master.lasersManager if not lManager.isBinary}
+        attrs = self._commChannel.sharedAttrs
+        return {lName: LaserPresetInfo(value=attrs[(_attrCategory, lName, _valueAttr)])
+                for lName, lManager in self._master.lasersManager
+                if not lManager.isBinary and (_attrCategory, lName, _valueAttr) in attrs}
 
     def applyPreset(self, laserPreset):
         """ Loads a preset object into the current values. """
@@ -177,8 +73,6 @@ class LaserController(ImConWidgetController):
 
     def scanChanged(self, isScanning):
         """ Handles what happens when a scan is started/stopped. """
-        for lName, _ in self._master.lasersManager:
-            self._widget.setLaserEditable(lName, not isScanning)
         self._master.lasersManager.execOnAll(lambda l: l.setScanModeActive(isScanning))
 
         defaultScanPresetName = self._setupInfo.defaultLaserPresetForScan
@@ -191,11 +85,6 @@ class LaserController(ImConWidgetController):
                 # Scan finished, restore the values that were set before the scan started
                 self.applyPreset(self.presetBeforeScan)
                 self.presetBeforeScan = None
-
-    def scanBuilt(self, deviceList):
-        for lName, _ in self._master.lasersManager:
-            if lName not in deviceList:
-                self._widget.setLaserEditable(lName, True)
 
     def attrChanged(self, key, value):
         if self.settingAttr or len(key) != 3 or key[0] != _attrCategory:
@@ -253,19 +142,35 @@ class LaserController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def setLaserActive(self, laserName: str, active: bool) -> None:
         """ Sets whether the specified laser is powered on. """
-        self.toggleLaser(laserName, active) #TODO: !!! self.laserModules[laserName].sigEnableChanged.emit(laserName, active)
+        self.toggleLaser(laserName, active)
 
 
     @APIExport(runOnUIThread=True)
     def setLaserValue(self, laserName: str, value: Union[int, float]) -> None:
         """ Sets the value of the specified laser, in the units that the laser
         uses. """
-        self.valueChanged(laserName, value) #TODO: !!!
+        self.valueChanged(laserName, value)
+
+    @APIExport()
+    def getLaserPWMSettings(self, laserName: str) -> Optional[dict]:
+        """ Returns the firmware PWM parameters of the laser (LASERval,
+        LASERmax, LASERRes, LASERFreq, ...), or None if its manager or
+        firmware cannot report them. """
+        getter = getattr(self._master.lasersManager[laserName], "getPWMSettings", None)
+        return getter() if getter else None
+
+    @APIExport()
+    def setLaserPWMSettings(self, laserName: str, frequency: Optional[int] = None,
+                            resolution: Optional[int] = None) -> Optional[dict]:
+        """ Sets PWM frequency (Hz) and/or resolution (bits) of the laser on
+        the device. The laser is switched off. Returns the new settings. """
+        setter = getattr(self._master.lasersManager[laserName], "setPWMSettings", None)
+        return setter(frequency=frequency, resolution=resolution) if setter else None
 
     @APIExport()
     def changeScanPower(self, laserName, laserValue):
         defaultPreset = self._setupInfo.laserPresets[self._setupInfo.defaultLaserPresetForScan]
-        defaultPreset[laserName] = guitools.LaserPresetInfo(value=laserValue)
+        defaultPreset[laserName] = LaserPresetInfo(value=laserValue)
 
     @APIExport()
     def setLaserChannelIndex(self, laserName: str, channelIndex: Union[int, str]) -> bool:
@@ -344,52 +249,6 @@ class LaserController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error getting channel_index for laser '{laserName}': {str(e)}")
             return None
-
-    def addLaser(self, laserName, valueUnits, valueDecimals, wavelength, valueRange=None,
-                valueRangeStep=1, frequencyRange=(0, 0, 0)):
-        """ Adds a laser module widget. valueRange is either a tuple
-        (min, max), or None (if the laser can only be turned on/off).
-        frequencyRange is either a tuple (min, max, initVal)
-        or (0, 0, 0) (if the laser is not modulated in frequency)"""
-
-        control = LaserModule(
-            valueUnits=valueUnits, valueDecimals=valueDecimals, valueRange=valueRange,
-            tickInterval=5, singleStep=valueRangeStep,
-            initialPower=valueRange[0] if valueRange is not None else 0,
-            frequencyRange=frequencyRange
-        )
-
-        control.sigEnableChanged = Signal(str, bool)
-        control.sigValueChanged = Signal(str, float)
-
-
-        if all(num > 0 for num in frequencyRange):
-            control.sigModEnabledChanged.connect(
-                lambda enabled: self.sigModEnabledChanged.emit(laserName, enabled)
-            )
-            control.sigFreqChanged.connect(
-                lambda frequency: self.sigFreqChanged.emit(laserName, frequency)
-            )
-            control.sigDutyCycleChanged.connect(
-                lambda dutyCycle: self.sigDutyCycleChanged.emit(laserName, dutyCycle)
-            )
-
-        self.laserModules[laserName] = control
-
-
-class LaserModule(object):
-    """ Module to handle a single laser without GUI. """
-    from imswitch.imcommon.framework import Signal
-    sigEnableChanged = Signal(bool)  # (enabled)
-    sigValueChanged = Signal(float)  # (value)
-    sigModEnabledChanged = Signal(bool) # (modulation enabled)
-    sigFreqChanged = Signal(int)        # (frequency)
-    sigDutyCycleChanged = Signal(int)   # (duty cycle)
-
-    def __init__(self, valueUnits, valueDecimals, valueRange, tickInterval, singleStep,
-                 initialPower, frequencyRange, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.valueDecimals = valueDecimals
 
 _attrCategory = 'Laser'
 _enabledAttr = 'Enabled'

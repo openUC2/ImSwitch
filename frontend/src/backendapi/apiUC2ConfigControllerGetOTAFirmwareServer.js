@@ -5,7 +5,7 @@ const apiUC2ConfigControllerGetOTAFirmwareServer = async () => {
   try {
     const axiosInstance = createAxiosInstance();
     const response = await axiosInstance.get("/UC2ConfigController/getOTAFirmwareServer");
-    return response.data; // { firmware_server_url: "http://localhost:9000" }
+    return response.data; // { source: "local"|"github", firmware_server_url, github_repo, github_release }
   } catch (error) {
     console.error("Error fetching OTA firmware server:", error);
     throw error;

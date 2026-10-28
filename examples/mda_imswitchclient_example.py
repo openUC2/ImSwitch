@@ -282,7 +282,7 @@ def example_4_integration_with_imswitchclient():
     print("from useq import MDASequence, Channel, ZRangeAround")
     print()
     print("# Connect to ImSwitch")
-    print("client = ImSwitchClient('localhost', 8000)")
+    print("client = ImSwitchClient('http://localhost:8001/imswitch/api')")
     print()
     print("# Create MDA sequence")
     print("sequence = MDASequence(")

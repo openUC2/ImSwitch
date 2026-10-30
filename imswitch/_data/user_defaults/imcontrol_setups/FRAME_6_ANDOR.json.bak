@@ -1,0 +1,326 @@
+{
+    "detectors": {
+        "Andor": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "MMCoreDetectorManager",
+            "managerProperties": {
+                "adapterName": "Andor",
+                "deviceName": "Andor",
+                "deviceLabel": "Andor"
+            },
+            "forAcquisition": true,
+            "forFocusLock": false,
+            "defaultStreamSettings": {}
+        },
+        "ObservationCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "OpenCVCamManager",
+            "managerProperties": {
+                "cameraListIndex": 0,
+                "cameraListIndexWIN": 0,
+                "isRGB": true,
+                "cameraEffPixelsize": 12.2,
+                "opencvcam": {
+                    "exposure": 0,
+                    "gain": 0,
+                    "blacklevel": 100,
+                    "image_width": 1000,
+                    "image_height": 1000,
+                    "pixel_format": "Mono12"
+                }
+            },
+            "forAcquisition": false,
+            "forFocusLock": false,
+            "defaultStreamSettings": {}
+        }
+    },
+    "lasers": {
+        "LED": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDLaserManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "channel_index": 4
+            },
+            "valueRangeMin": 0,
+            "valueRangeMax": 1023,
+            "wavelength": 1024,
+            "freqRangeMin": 0,
+            "freqRangeMax": 0,
+            "freqRangeInit": 0,
+            "valueRangeStep": 1.0
+        }
+    },
+    "LEDs": {},
+    "LEDMatrixs": {
+        "ESP32 LEDMatrix": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDMatrixManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "Nx": 4,
+                "Ny": 4,
+                "wavelength": 488,
+                "valueRangeMin": 0,
+                "valueRangeMax": 32768
+            }
+        }
+    },
+    "positioners": {
+        "ESP32Stage": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32StageManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "isEnable": true,
+                "enableauto": false,
+                "stepsizeXDocu": "200*16 per revolution at 1 pitch",
+                "stepsizeX": 0.3125,
+                "stepsizeY": -0.3125,
+                "stepsizeA": 0.3125,
+                "stepsizeZ": 0.3125,
+                "homeSpeedX": 20000,
+                "homeSpeedY": 20000,
+                "homeSpeedZ": 10000,
+                "homeSpeedA": 20000,
+                "isDualaxis": false,
+                "backlashXOld": 15,
+                "backlashYOld": 40,
+                "backlashX": 0,
+                "backlashY": 0,
+                "homeEndstoppolarityA": 1,
+                "homeEndstoppolarityX": 1,
+                "homeEndstoppolarityY": 1,
+                "homeEndstoppolarityZ": 1,
+                "homeDirectionA": -1,
+                "homeDirectionX": -1,
+                "homeDirectionY": -1,
+                "homeDirectionZ": 1,
+                "homeXenabled": 1,
+                "homeYenabled": 1,
+                "homeZenabled": 1,
+                "homeAenabled": 1,
+                "homeOnStartX": 0,
+                "homeOnStartY": 0,
+                "homeOnStartZ": 0,
+                "homeOnStartA": 0,
+                "safePositionZHoming": -5000,
+                "initialSpeedX": 10000,
+                "initialSpeedY": 10000,
+                "initialSpeedZ": 10000,
+                "initialSpeedA": 10000,
+                "frameHomeOnStart": 0,
+                "maxSpeedX": 10000,
+                "maxSpeedY": 10000,
+                "maxSpeedZ": 10000,
+                "maxSpeedA": 10000,
+                "backlashZ": 0,
+                "backlashA": 0,
+                "homeEndposReleaseX": 0,
+                "homeTimeoutX": 20000,
+                "homeEndposReleaseY": 0,
+                "homeTimeoutY": 20000,
+                "homeEndposReleaseZ": -10000,
+                "homeTimeoutZ": 20000,
+                "homeEndposReleaseA": 0,
+                "homeTimeoutA": 20000,
+                "joystickInvertedA": false,
+                "joystickInvertedX": false,
+                "joystickInvertedY": false,
+                "joystickInvertedZ": false
+            },
+            "axes": [
+                "X",
+                "Y",
+                "Z",
+                "A"
+            ],
+            "isPositiveDirection": true,
+            "forPositioning": true,
+            "forScanning": true,
+            "resetOnClose": true,
+            "stageOffsets": {
+                "stageOffsetPositionX": -2296.910324039186,
+                "stageOffsetPositionY": -79556.43801771794,
+                "stageOffsetPositionZ": 0.0,
+                "stageOffsetPositionA": 0.0
+            }
+        }
+    },
+    "galvoScanners": {},
+    "rs232devices": {
+        "ESP32": {
+            "managerName": "ESP32Manager",
+            "managerProperties": {
+                "host_": "192.168.43.129",
+                "serialport": "/dev/cu.usbmodem101",
+                "baudrate_": 115200,
+                "baudrate": 921600,
+                "debug": true
+            }
+        }
+    },
+    "mmcoreSettings": {
+        "savedProperties": {
+            "Andor": {
+                "Advanced | Snap Image Additional Delay (ms)": 0.0,
+                "BaselineClamp": "Disabled",
+                "Binning": "8",
+                "CCDTemperatureSetPoint": -100.0,
+                "CountConvertWavelength": 0.0,
+                "Exposure": 90000.0,
+                "Gain": 1000.0,
+                "ReadoutMode": "1.000 MHz",
+                "Shutter Closing Time": 27.0,
+                "Shutter Opening Time": 27.0,
+                "SpuriousNoiseFilterThreshold": 0.0,
+                "TimeOut": 10000.0
+            }
+        }
+    },
+    "slm": null,
+    "sim": null,
+    "dpc": null,
+    "objective": {
+        "pixelsizes": [
+            0.53,
+            0.265
+        ],
+        "NAs": [
+            0.1,
+            0.75
+        ],
+        "magnifications": [
+            10,
+            20
+        ],
+        "objectiveNames": [
+            "4x",
+            "20x"
+        ],
+        "objectivePositions": [
+            1000.0,
+            31300.0
+        ],
+        "zPositions": [
+            0,
+            0
+        ],
+        "homeDirection": 1,
+        "homePolarity": 0,
+        "homeSpeed": 20000,
+        "homeAcceleration": 200000,
+        "moveSpeed": 20000,
+        "calibrateOnStart": false,
+        "active": true
+    },
+    "nidaq": {
+        "timerCounterChannel": null,
+        "startTrigger": false
+    },
+    "roiscan": null,
+    "lightsheet": null,
+    "webrtc": null,
+    "hypha": null,
+    "mockxx": null,
+    "jetsonnano": null,
+    "Stresstest": {},
+    "HistoScan": null,
+    "Workflow": null,
+    "FlowStop": null,
+    "Lepmon": null,
+    "PixelCalibration": {
+        "affineCalibrations": {
+            "Andor::1": {
+                "affine_matrix": [
+                    [
+                        13.0,
+                        0.0,
+                        0.0
+                    ],
+                    [
+                        0.0,
+                        13.0,
+                        0.0
+                    ]
+                ],
+                "metrics": {
+                    "scale_x_um_per_pixel": 13,
+                    "scale_y_um_per_pixel": 13,
+                    "rotation_deg": 0,
+                    "method": "manual_edit",
+                    "quality": "manual"
+                },
+                "timestamp": "2026-07-11T19:49:15",
+                "detector_name": "Andor",
+                "objective_id": "1"
+            }
+        },
+        "defaultAffineMatrix": [
+            [
+                1.0,
+                0.0,
+                0.0
+            ],
+            [
+                0.0,
+                1.0,
+                0.0
+            ]
+        ]
+    },
+    "experiment": null,
+    "uc2Config": null,
+    "ism": null,
+    "focusLock": null,
+    "arkitekt": null,
+    "sila2": null,
+    "fovLock": null,
+    "autofocus": null,
+    "scan": null,
+    "etSTED": null,
+    "rotators": null,
+    "microscopeStand": null,
+    "storage": null,
+    "instrument": null,
+    "overviewRegistration": null,
+    "pulseStreamer": {
+        "ipAddress": null
+    },
+    "rois": {},
+    "ledPresets": {},
+    "defaultLEDPresetForScan": null,
+    "laserPresets": {},
+    "defaultLaserPresetForScan": null,
+    "availableWidgets": [
+        "Settings",
+        "View",
+        "Recording",
+        "Image",
+        "Laser",
+        "Positioner",
+        "Autofocus",
+        "UC2Config",
+        "PixelCalibration",
+        "Objective",
+        "Experiment",
+        "LiveView",
+        "LEDMatrix",
+        "StageCenterCalibration",
+        "MMCore",
+        "Experiment",
+        "Objective",
+        "I2CSensor"
+    ],
+    "stageOffsets": {},
+    "mct": null,
+    "Flatfield": null,
+    "pyroServerInfo": null,
+    "nonAvailableWidgets": [],
+    "designerId": null
+}

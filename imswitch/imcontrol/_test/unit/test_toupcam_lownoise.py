@@ -91,6 +91,11 @@ def _make_camera(hcam=None, *, bits=16, maxBitDepth=14, heat=True,
     cam._hasCGHDR = cghdr
     cam._hasBlacklevel = blacklevel
     cam._hasTEC = False
+    cam._hasSoftwareTrigger = False
+    cam._sdkRunning = False
+    cam._parked = False
+    cam._triggerMode = 0
+    cam._acceptFramesAfter = 0.0
     cam._hasGetTemperature = False
     cam._hasFan = False
     cam.targetTemperature = -10.0

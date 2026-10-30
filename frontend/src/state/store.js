@@ -20,7 +20,6 @@ import objectiveReducer from "./slices/ObjectiveSlice";
 import LEDMatrixReducer from "./slices/LEDMatrixSlice";
 import experimentStateReducer from "./slices/ExperimentStateSlice";
 import liveViewReducer from "./slices/LiveViewSlice";
-import histoScanReducer from "./slices/HistoScanSlice";
 import widgetReducer from "./slices/WidgetSlice";
 import lepmonReducer from "./slices/LepmonSlice";
 import uc2Reducer from "./slices/UC2Slice";
@@ -28,7 +27,6 @@ import flowStopReducer from "./slices/FlowStopSlice";
 import lightsheetReducer from "./slices/LightsheetSlice";
 import zarrinitialZarrReducer from "./slices/OmeZarrTileStreamSlice";
 import stresstestReducer from "./slices/StresstestSlice";
-import workflowReducer from "./slices/WorkflowSlice";
 import stormReducer from "./slices/STORMSlice";
 import focusLockReducer from "./slices/FocusLockSlice";
 import demoReducer from "./slices/DemoSlice";
@@ -66,6 +64,7 @@ import onboardingReducer from "./slices/OnboardingSlice";
 import homingReducer from "./slices/HomingSlice";
 import firmwareUpdateReducer from "./slices/FirmwareUpdateSlice";
 import i2cReducer from "./slices/I2CSensorSlice";
+import aufgabenReducer from "./slices/AufgabenSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -144,6 +143,16 @@ const frame3DViewerPersistConfig = {
 };
 
 //#####################################################################################
+// Nested persist config for aufgabenState
+// Keep the job being edited across reloads; catalogue, validation and run
+// status are re-read from the backend.
+const aufgabenPersistConfig = {
+  key: "aufgaben",
+  storage,
+  whitelist: ["job"],
+};
+
+//#####################################################################################
 // Combine reducers
 const rootReducer = combineReducers({
   connectionSettingsState: connectionSettingsReducer,
@@ -161,7 +170,6 @@ const rootReducer = combineReducers({
   LEDMatrixState: LEDMatrixReducer,
   experimentWorkflowState: experimentStateReducer,
   liveViewState: persistReducer(liveViewPersistConfig, liveViewReducer), // Nested persist
-  histoScanState: histoScanReducer,
   widgetState: widgetReducer,
   lepmon: lepmonReducer,
   uc2State: uc2Reducer,
@@ -169,7 +177,6 @@ const rootReducer = combineReducers({
   lightsheet: persistReducer(lightsheetPersistConfig, lightsheetReducer), // Nested persist for axis config
   omeZarrState: zarrinitialZarrReducer,
   stresstestState: stresstestReducer,
-  workflowState: workflowReducer,
   storm: stormReducer,
   focusLockState: focusLockReducer,
   demoState: demoReducer,
@@ -208,6 +215,7 @@ const rootReducer = combineReducers({
   arkitektState: arkitektReducer, // runtime-only Arkitekt connection + remote-call log
   onboardingState: onboardingReducer,
   i2cState: i2cReducer,
+  aufgabenState: persistReducer(aufgabenPersistConfig, aufgabenReducer), // job draft persisted
 });
 
 //#####################################################################################
@@ -222,7 +230,6 @@ const persistConfig = {
     "experimentState",
     "wellSelectorState",
     "position", // Persist step sizes
-    "workflowState",
     "themeState",
     "languageState", // Persist the UI language choice
     "uiPreferencesState", // Persist touch mode / on-screen keypad choice

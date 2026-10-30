@@ -11,7 +11,7 @@ import os
 from imswitch.imcommon.model import APIExport
 
 from imswitch.imcontrol.controller.controllers.experiment_controller import FocusMapConfig, FocusMapFromPointsRequest, ParameterValue
-from imswitch.imcontrol.model.focus_map import FocusMap, fit_quality_text
+from imswitch.imcontrol.model.aufgaben.focus_map import FocusMap, fit_quality_text
 
 
 def _sanitize_sample(sample: str) -> str:
@@ -177,6 +177,7 @@ class FocusMapMixin:
                         group_name="Combined (single-FOV areas)",
                         bounds=combined_bounds,
                         config=config,
+                        af_kwargs=af_kwargs,
                     )
                 # Assign the combined map to each degenerate area
                 combined_fm = self.focus_map_manager.get(combined_gid)

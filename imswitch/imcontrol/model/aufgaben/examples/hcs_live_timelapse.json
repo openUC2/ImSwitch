@@ -1,0 +1,41 @@
+{
+  "schema": "aufgaben.job/1",
+  "name": "Live-cell plate, 4 channels, z-stack, every 30 min",
+  "description": "JOBS use case 1 (UCSD NIC): selected wells, 3 sites per well, a z-stack in 4 channels every 30 min for 16 h. Hardware autofocus once per well on every second round.",
+  "parameters": {
+    "rounds": {"type": "integer", "default": 32, "minimum": 1, "ui": "runtime", "title": "Rounds (30 min apart)"},
+    "zstack": {"type": "boolean", "default": true, "ui": "wizard", "title": "Acquire z-stacks"}
+  },
+  "resources": {
+    "plate": {"kind": "well_plate",
+              "plan": {"plate": "384-well", "a1_center_xy": [0.0, 0.0],
+                       "selected_wells": [[1, 1, 2, 2, 3, 3], [1, 2, 1, 2, 1, 2]]},
+              "labels": {"B2": "control", "B3": "control", "C2": "treated", "C3": "treated"}},
+    "sites": {"kind": "grid", "plan": {"rows": 1, "columns": 3, "fov_width": 650, "fov_height": 650, "overlap": [-50, 0]}},
+    "z": {"kind": "z_plan", "plan": {"range": 6.0, "step": 1.0}},
+    "time": {"kind": "time_plan", "plan": {"interval": 1800, "loops": 32}},
+    "channels": {"kind": "capture", "channels": [
+      {"config": "Laser405", "exposure": 50, "intensity": 400},
+      {"config": "Laser488", "exposure": 100, "intensity": 600},
+      {"config": "Laser561", "exposure": 100, "intensity": 600},
+      {"config": "Laser640", "exposure": 150, "intensity": 600}]}
+  },
+  "storage": {"formats": ["ome-zarr"], "layout": "plate"},
+  "tasks": [
+    {"id": "rounds", "task": "time_lapse", "params": {"plan": "@time", "until": "loop.rounds.index >= param.rounds - 1"},
+     "body": [
+       {"id": "wells", "task": "loop_wells", "params": {"plate": "@plate"},
+        "body": [
+          {"id": "af", "task": "autofocus", "params": {"mode": "hardware"},
+           "every": {"nth": 2, "of": "rounds", "include_first": true}},
+          {"id": "site", "task": "loop_grid", "params": {"plan": "@sites"},
+           "body": [
+             {"id": "stack", "task": "zstack", "params": {"plan": "@z"}, "enabled": "param.zstack",
+              "body": [{"id": "img", "task": "capture", "params": {"channels": "@channels"}}]},
+             {"id": "img_flat", "task": "capture", "params": {"channels": "@channels"}, "enabled": "not param.zstack"}
+           ]}
+        ]}
+     ],
+     "idle": [{"id": "dark", "task": "illumination_off"}]}
+  ]
+}

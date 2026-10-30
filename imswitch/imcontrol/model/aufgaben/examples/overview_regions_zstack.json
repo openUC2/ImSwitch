@@ -1,0 +1,26 @@
+{
+  "schema": "aufgaben.job/1",
+  "name": "Overview, regions, high-mag Z-stacks",
+  "description": "A fast prescan maps the slide at low resolution; regions_from_overview turns every piece of sample into a rectangle (pieces closer than the margin merge). The objective is then switched and each region is tiled with Z-stacks. Check the prescan area and the objective slot before running.",
+  "parameters": {
+    "objective_slot": {"type": "integer", "default": 2, "minimum": 1, "title": "High-mag objective slot", "ui": "wizard"}
+  },
+  "resources": {
+    "z": {"kind": "z_plan", "plan": {"range": 8.0, "step": 1.0}},
+    "bf": {"kind": "capture", "channels": [{"config": "LED", "exposure": 10, "intensity": 300}]}
+  },
+  "storage": {"formats": ["ome-zarr"], "stitched_preview": true},
+  "tasks": [
+    {"id": "overview", "task": "stage_prescan", "params": {"x_min_um": 0, "x_max_um": 20000, "y_min_um": 0, "y_max_um": 15000, "line_step_um": 400, "source": "LED", "intensity": 300}},
+    {"id": "find", "task": "regions_from_overview", "params": {"source": "overview", "min_area_um2": 20000, "margin_um": 100, "max_regions": 10}},
+    {"id": "nothing", "task": "condition", "params": {"expr": "result.find.count == 0"}, "body": [
+      {"id": "stop", "task": "finish", "params": {"message": "no sample found in the overview"}}]},
+    {"id": "high_mag", "task": "set_objective", "params": {"slot": "${param.objective_slot}"}},
+    {"id": "region", "task": "loop_regions", "params": {"regions": "${result.find.regions}"}, "body": [
+      {"id": "tile", "task": "loop_grid", "params": {"overlap": 0.1}, "body": [
+        {"id": "stack", "task": "zstack", "params": {"plan": "@z"}, "body": [
+          {"id": "img", "task": "capture", "params": {"channels": "@bf"}}]}
+      ]}
+    ]}
+  ]
+}

@@ -86,7 +86,7 @@ class FrameSavingMixin:
 
     @APIExport()
     def getLastScanAsOMEZARR(self):
-        """ Returns the last OME-Zarr folder as a zipped file for download. """
+        """Path of the last scan's OME-Zarr below the data folder, or null if none yet."""
         try:
             return self.getOmeZarrUrl()
         except Exception as e:
@@ -320,10 +320,8 @@ class FrameSavingMixin:
         self._logger.info(f"OME-Zarr URL set to: {self._omeZarrUrl}")
 
     def getOmeZarrUrl(self):
-        """Get the OME-Zarr URL for the experiment."""
-        if self._omeZarrUrl is None:
-            return -1
-        return self._omeZarrUrl
+        """Get the OME-Zarr URL for the experiment (None before the first scan)."""
+        return getattr(self, "_omeZarrUrl", None)
 
     # -------------------------------------------------------------------------
     # public API

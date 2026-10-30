@@ -30,32 +30,24 @@ It provides unified access to all recording operations with MetadataHub integrat
     service.add_video_frame(frame)
     service.stop_video_recording()
     
-    # Streaming to OME-Zarr
-    service.start_streaming('/path/to/data.zarr', format=SaveFormat.OME_ZARR)
-    service.write_streaming_frame(detector_name, frame, metadata)
-    service.stop_streaming()
+    # Streaming to OME-Zarr (one NGFF image per detector in the session folder)
+    service.start_streaming('/path/to/session', detectorsManager, auto_capture=False)
+    service.write_streaming_frame(detector_name, frame)
+    stats = service.stop_streaming()
 
 Alternative APIs:
 =================
 
-1. SnapService - Lightweight snap-only service
-       from imswitch.imcontrol.model.io import get_snap_service
-       snap_service = get_snap_service()
-       results = snap_service.snap(savepath='/data/snap', format='tiff')
-
-2. AcquisitionDataStore - Low-level streaming with full control
+1. AcquisitionDataStore - Low-level streaming with full control
        from imswitch.imcontrol.model.io import AcquisitionDataStore, SessionInfo
        store = AcquisitionDataStore(session, hub_snapshot, write_zarr=True)
        store.open(detector_contexts)
        store.write_frame(detector_name, frame, frame_event)
        store.close()
 
-3. OmeTiffStitcher - For mosaic/tile acquisitions
-       from imswitch.imcontrol.model.io import OmeTiffStitcher
-       stitcher = OmeTiffStitcher('/path/to/mosaic.ome.tif')
-       stitcher.start()
-       stitcher.add_image(image, pos_x, pos_y, index_x, index_y, pixel_size)
-       stitcher.stop()
+2. save_image - one image to an OME-TIFF or OME-Zarr file
+       from imswitch.imcontrol.model.aufgaben.storage import save_image
+       save_image('/data/snap.ome.tif', frame, pixel_size_um=0.65)
 
 """
 
@@ -64,19 +56,12 @@ from .session import SessionInfo, SessionManager, SessionFileLock
 from .writers import (
     WriterBase,
     OMEZarrWriter,
-    OMETiffWriter,
     get_writer,
     convert_detector_context,
     convert_frame_event,
     list_available_writers,
 )
 from .adapters import DataStoreAdapter, StreamingDataStoreAdapter
-from .snap_service import (
-    SnapService,
-    SnapResult as SnapServiceResult,
-    get_snap_service,
-    shutdown_snap_service,
-)
 from .recording_service import (
     RecordingService,
     SaveMode,
@@ -94,10 +79,7 @@ from .ome_writers import (
     OMEWriter,
     OMEWriterConfig,
     OMEFileStorePaths,
-    OmeTiffStitcher,
-    SingleTiffWriter,
     MinimalMetadata,
-    MinimalZarrDataSource,
     # OMERO uploader
     OMEROUploader,
     OMEROConnectionParams,
@@ -136,7 +118,6 @@ __all__ = [
     # === Base Writers ===
     'WriterBase',
     'OMEZarrWriter',
-    'OMETiffWriter',
     'get_writer',
     'convert_detector_context',
     'convert_frame_event',
@@ -146,19 +127,11 @@ __all__ = [
     'DataStoreAdapter',
     'StreamingDataStoreAdapter',
     
-    # === Snap service (lightweight alternative) ===
-    'SnapService',
-    'get_snap_service',
-    'shutdown_snap_service',
-    
     # === OME Writers (migrated from experiment_controller) ===
     'OMEWriter',
     'OMEWriterConfig',
     'OMEFileStorePaths',
-    'OmeTiffStitcher',
-    'SingleTiffWriter',
     'MinimalMetadata',
-    'MinimalZarrDataSource',
     # OMERO uploader
     'OMEROUploader',
     'OMEROConnectionParams',

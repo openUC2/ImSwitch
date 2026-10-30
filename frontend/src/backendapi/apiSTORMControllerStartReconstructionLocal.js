@@ -35,7 +35,6 @@ const startReconstructionLocal = () => {
       save_directory: "STORM",
       save_format: "tiff",
       process_locally: true,
-      process_arkitekt: false,
       processing_parameters: null
     },
     processing_parameters: {

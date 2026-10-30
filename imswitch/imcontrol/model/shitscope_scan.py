@@ -6,7 +6,8 @@ positions are recovered from the images (tile_registration, ~3 µm) and the
 mosaic is stitched at the measured positions. Stage-specific behaviour
 (one approach direction, settle, speed cap) lives in the stage manager.
 
-No ImSwitch imports: `detector` needs getLatestFrame([returnFrameNumber]) and
+Images are written with the shared OME writer (aufgaben.storage, itself free of
+ImSwitch imports); no other ImSwitch imports: `detector` needs getLatestFrame([returnFrameNumber]) and
 optionally flushBuffer(s); `stage` needs move(value=(x, y), axis="XY",
 is_absolute=True, is_blocking=True) and getPosition() -> {"X", "Y"}.
 """
@@ -21,6 +22,7 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 
 from . import tile_registration
+from .aufgaben.storage import save_image
 
 PREVIEW_MAX_PX = 1200          # live preview width/height budget
 ANALYSIS_MAX_PX = 768          # registration works on tiles no larger than this (sub-px anyway)
@@ -173,7 +175,6 @@ class ShitScopeScan:
 
     # ------------------------------------------------------------ scan
     def _run(self):
-        import tifffile
         try:
             start = self.stage.getPosition()
             if self._home is not None:
@@ -196,7 +197,7 @@ class ShitScopeScan:
                     time.sleep(self.settle_s)
                 raw = np.asarray(self._fresh_frame())       # saved as delivered (colour stays colour)
                 path = os.path.join("tiles", f"tile_{k:04d}.tif")
-                tifffile.imwrite(os.path.join(self.out_dir, path), raw)
+                save_image(os.path.join(self.out_dir, path), raw, pixel_size_um=self.um_per_px)
                 frame = to_gray(raw)                         # registration and preview work on gray
                 pos = self.stage.getPosition()
                 with self._lock:
@@ -305,9 +306,7 @@ def stitch(out_dir: str, records: List[Dict], xy_um, sign, um_per_px: float, ds:
         out[y:y + H, x:x + W] = tile(read(r))
     path = os.path.join(out_dir, name)
     size_um = um_per_px * ds
-    tifffile.imwrite(path, out, bigtiff=out.nbytes > 2 ** 31, photometric="rgb" if out.ndim == 3 else None,
-                     resolution=(1e4 / size_um, 1e4 / size_um), resolutionunit="CENTIMETER",
-                     metadata={"PhysicalSizeX": size_um, "PhysicalSizeY": size_um})
+    save_image(path, out, pixel_size_um=size_um)
     return {"path": path, "shape": list(out.shape), "umPerPx": size_um, "sizeMB": round(out.nbytes / 1e6, 1)}
 
 

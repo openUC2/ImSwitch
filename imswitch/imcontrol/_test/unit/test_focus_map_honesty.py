@@ -17,7 +17,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
-from imswitch.imcontrol.model.focus_map import FocusMap, fit_quality_text  # noqa: E402
+from imswitch.imcontrol.model.aufgaben.focus_map import FocusMap, fit_quality_text  # noqa: E402
 
 
 def _fit(points, method="spline", **kwargs):

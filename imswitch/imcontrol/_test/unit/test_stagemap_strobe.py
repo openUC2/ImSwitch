@@ -207,7 +207,10 @@ def esp32_stage(motor, offsetX=0.0):
     stage.stageOffsetPositions = {"X": offsetX, "Y": 0, "Z": 0, "A": 0}
     stage._strobeAxis, stage._strobeCallbacks = "X", {}
     stage._speed = {"X": 1000, "Y": 1000, "Z": 1000, "A": 1000}
-    stage.limitXenabled, stage.minX, stage.maxX = False, -np.inf, np.inf
+    stage._axes, stage.axisIds = ["X", "Y", "Z", "A"], {"A": 0, "X": 1, "Y": 2, "Z": 3}
+    stage.limitEnabled = {ax: False for ax in stage._axes}
+    stage.minPos = {ax: -np.inf for ax in stage._axes}
+    stage.maxPos = {ax: np.inf for ax in stage._axes}
     return stage
 
 
@@ -233,7 +236,7 @@ def test_esp32_stage_sweeps_in_the_user_frame():
 def test_esp32_stage_respects_the_soft_limits():
     motor = FakeMotor()
     stage = esp32_stage(motor)
-    stage.limitXenabled, stage.minX, stage.maxX = True, 0.0, 5000.0
+    stage.limitEnabled["X"], stage.minPos["X"], stage.maxPos["X"] = True, 0.0, 5000.0
     assert stage.startStrobeSweep(axis="X", target=6000.0, speed=1000) is False
     assert motor.started == []
 
@@ -386,7 +389,11 @@ class TriggeredCamera:
             t = (n - 1) * req["period_us"] * 1e-6 + delay * 1e-6
             frame = self.render(self._start + np.sign(dist) * min(abs(dist), req["speed"] * t))
         if n == 1:
-            self._lastN = None
+            self._lastN, self._arrival0 = None, time.time()
+        # Arrival on the trigger clock, as with a firmware timer: the virtual
+        # sweep thread catches up after a stall (busy CI runner) and would
+        # otherwise stamp two kept frames with the same trigger period.
+        arrival = self._arrival0 + (n - 1) * req["period_us"] * 1e-6
         if self.minPeriodUs and self._lastN is not None and \
                 (n - self._lastN) * req["period_us"] < self.minPeriodUs:
             return                      # still reading out: the trigger is ignored
@@ -396,7 +403,7 @@ class TriggeredCamera:
             return                      # lost between camera and host
         trig = 0 if self.trig0 is None else self.trig0 + n
         with self._lock:
-            self._buffer.append((frame, self.frameNum, trig, time.time()))
+            self._buffer.append((frame, self.frameNum, trig, arrival))
 
 
 class Lasers(dict):
@@ -833,3 +840,13 @@ def test_full_calibration_reports_when_no_window_lights_every_row():
     assert len(result["windowTries"]) == StageMapController.STROBE_CAL_WINDOW_TRIES
     assert ctrl.params.strobeDelayUs == -1.0               # nothing stored
     assert ctrl.params.strobeWindowMs == 3.0
+
+
+def test_virtual_stage_speed_stays_a_per_axis_dict():
+    """PositionerController reads speed[axis]; a scalar here kept it from starting."""
+    stage = virtual_stage()
+    assert set(stage.speed) == {"X", "Y", "Z", "A"}
+    stage.setSpeed(5000)
+    assert stage.speed["Z"] == 5000 and stage._travelSpeed == 5000
+    stage.setSpeed(200, axis="X")
+    assert stage.speed["X"] == 200 and stage.speed["Y"] == 5000

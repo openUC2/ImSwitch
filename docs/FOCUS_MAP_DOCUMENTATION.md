@@ -197,7 +197,7 @@ imswitch/imcontrol/
 
 #### Core Classes
 
-##### `FocusMap` (model/focus_map.py)
+##### `FocusMap` (model/aufgaben/focus_map.py; shared with Aufgaben)
 
 Core data structure and algorithms for focus mapping.
 

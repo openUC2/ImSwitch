@@ -63,7 +63,6 @@ function Component() {
 - [ ] `StageOffsetCalibrationController.jsx` - Uses WebSocketContext
 - [ ] `SelectSetupController.js` - Uses WebSocketContext
 - [ ] `FlowStopController.js` - Uses WebSocketContext
-- [ ] `TimelapseController.js` - Uses WebSocketContext
 - [ ] `JoystickController.js` - Uses WebSocketContext
 - [ ] `STORMController.js` - Uses WebSocketContext
 

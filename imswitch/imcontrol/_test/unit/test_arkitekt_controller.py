@@ -373,7 +373,10 @@ def private_state_dir(tmp_path, monkeypatch):
     # That module moved between releases (5.x: app.fakts, 6.x: app.sessions),
     # and CI resolves "arkitekt>=5.0.1" to whatever is newest.
     for name in ("arkitekt.app.fakts", "arkitekt.app.sessions"):
-        module = importlib.import_module(name)
+        try:
+            module = importlib.import_module(name)
+        except ModuleNotFoundError:
+            continue
         if hasattr(module, "user_state_dir"):
             monkeypatch.setattr(module, "user_state_dir", private)
     # Fail loudly rather than write test logins into the real state directory

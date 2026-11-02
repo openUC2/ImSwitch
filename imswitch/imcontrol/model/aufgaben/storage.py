@@ -178,7 +178,9 @@ def ome_xml(spec: ImageSpec, rgb: bool = False) -> str:
         "physical_size_y_unit": "µm", "physical_size_z": spec.z_step_um,
         "physical_size_z_unit": "µm"}
     pixels = Pixels(
-        dimension_order="XYZCT", type=str(np.dtype(spec.dtype)), significant_bits=spec.bit_depth,
+        dimension_order="XYZCT", significant_bits=spec.bit_depth,
+        type={"float32": "float", "float64": "double", "complex64": "complex",  # OME names
+              "complex128": "double-complex"}.get(str(np.dtype(spec.dtype)), str(np.dtype(spec.dtype))),
         size_x=x, size_y=y, size_z=z, size_c=c, size_t=t, **sizes,
         time_increment=spec.t_step_s, time_increment_unit="s",
         channels=[Channel(name=name.removesuffix("_rgb_r") if rgb else name,
@@ -235,7 +237,9 @@ def _write_ome_tiff(path, levels, spec: ImageSpec, rgb: bool = False) -> Path:
                 else {"subfiletype": 1}
             tif.write(_tiff_tiles(level, planes, tile), shape=(len(planes), y, x) + samples,
                       dtype=spec.dtype, tile=tile, metadata=None, **first,
-                      **{**_TIFF_OPTIONS, "photometric": "rgb" if rgb else "minisblack"})
+                      **{**_TIFF_OPTIONS, "photometric": "rgb" if rgb else "minisblack",
+                         # tifffile's float predictor needs imagecodecs: integers only
+                         "predictor": np.dtype(spec.dtype).kind in "iu"})
     return path
 
 

@@ -27,6 +27,7 @@ CHECKS = {
     "FocusLock": ("a focus-lock calibration is running", lambda c: c.isCalibrationRunning()),
     "OPM": ("an OPM scan is running", lambda c: c.isOPMScanRunning()),
     "SLM": ("an SLM sequence acquisition or calibration is running", lambda c: c.isSLMBusy()),
+    "FrameCalibration": ("a FRAME calibration is running", lambda c: c.isFrameCalibrationRunning()),
 }
 
 

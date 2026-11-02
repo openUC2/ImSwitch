@@ -32,6 +32,7 @@ import SocketView from "./components/SocketView.js";
 import MMCoreController from "./components/MMCoreController.jsx";
 
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
+import FrameCalibrationApp from "./components/FrameCalibrationApp.jsx";
 import STORMControllerLocal from "./components/STORMControllerLocal.js";
 import StresstestController from "./components/StresstestController.js";
 import SystemSettings from "./components/SystemSettings.js";
@@ -878,6 +879,7 @@ function App() {
               {selectedPlugin === "StageMap" && <StageMapController />}
               {selectedPlugin === "OPM" && <OPMController />}
               {selectedPlugin === "Aufgaben" && <AufgabenController />}
+              {selectedPlugin === "FrameCalibration" && <FrameCalibrationApp />}
               {selectedPlugin === "Arkitekt" && <ArkitektController />}
               {selectedPlugin === "CompositeAcquisition" && (
                 <CompositeAcquisitionComponent />

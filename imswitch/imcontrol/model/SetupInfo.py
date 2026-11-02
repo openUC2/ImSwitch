@@ -297,6 +297,9 @@ class ObjectiveInfo:
     objectiveNames: List
     objectivePositions: List
     zPositions: List = field(default_factory=lambda: [0, 0])
+    xyOffsets: List = field(default_factory=lambda: [[0, 0], [0, 0]])
+    """ Parcentricity per slot (µm, stage XY). Switching slots moves XY by the
+    difference, together with the relative Z move (i.e. unless skipZ). """
     homeDirection: int = -1
     homePolarity: int = 1
     homeSpeed: int = 20000
@@ -1056,6 +1059,10 @@ class SetupInfo:
     overviewRegistration: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
     """ Overview-camera slide registration config (per camera/layout, including
     stage XYZ positions and homographies). Persisted by ExperimentController. """
+
+    frameCalibration: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
+    """ One-button FRAME calibration: {"settings": {...}, "result": {...}}
+    (overview homography, placement, last report). Persisted by FrameCalibrationController. """
 
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """

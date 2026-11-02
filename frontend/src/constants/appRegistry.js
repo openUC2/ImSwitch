@@ -301,6 +301,20 @@ export const APP_REGISTRY = {
     pluginId: "FRAMESettings",
   },
 
+  frameCalibration: {
+    id: "frameCalibration",
+    name: "FRAME Calibration",
+    description:
+      "One-button calibration with the FRAME calibration plate: homing, pixel size, rotation and shear per objective, stage offset, parfocality/parcentricity of the objectives, plate placement and overview camera.",
+    category: APP_CATEGORIES.CALIBRATION,
+    icon: AutoFixHighIcon,
+    enabled: true,
+    essential: false,
+    keywords: ["frame", "calibration", "plate", "pixel", "affine", "offset", "objective", "homing", "overview"],
+    pluginId: "FrameCalibration",
+    requiredControllers: ["FrameCalibrationController"],
+  },
+
   lightsheet: {
     id: "lightsheet",
     name: "LightSheet",

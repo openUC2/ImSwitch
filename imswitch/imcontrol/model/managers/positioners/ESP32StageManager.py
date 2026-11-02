@@ -241,7 +241,10 @@ class ESP32StageManager(PositionerManager):
         # Apply hard-limit settings to hardware for all axes
         try:
             for _axis in self._axes:
-                self._motor.set_hard_limits(axis=self.axisIds[_axis], enabled=self.hardLimitsEnabled[_axis])
+                # same physical signal as the home endstop: send its polarity, else the
+                # firmware's persisted polarity is reset to 0 until the first homing
+                self._motor.set_hard_limits(axis=self.axisIds[_axis], enabled=self.hardLimitsEnabled[_axis],
+                                            polarity=int(self.homeParams[_axis]["endstoppolarity"]))
         except Exception as _e:
             self.__logger.warning(f"Could not apply hard limits on startup: {_e}")
 
@@ -468,10 +471,13 @@ class ESP32StageManager(PositionerManager):
     def doHome(self, axis, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None, hardHome=None):
         hp = self.homeParams.get(axis)
         if hp and (hp["enabled"] or abs(hp["steps"]) > 0):
-            self._homeAxis(axis, isBlocking, hardHome)
+            return self._homeAxis(axis, isBlocking, hardHome)
 
     def _homeAxis(self, axis, isBlocking=False, hardHome=None):
+        """Home one axis. Blocking: returns the uc2rest reply (frames list whose last
+        frame carries home.status "done"/"timeout", or an error string); else the qid."""
         hp = self.homeParams[axis]
+        r = "done"
         # move z prior to homing X/Y?
         if axis in ("X", "Y") and self._safeDistanceZHoming != 0 and "Z" in self.homeParams:
             self.move(value=self._zPositionPriorHoming + self._safeDistanceZHoming, speed=self.homeParams["Z"]["speed"], axis="Z", is_absolute=True, is_blocking=True)
@@ -483,27 +489,31 @@ class ESP32StageManager(PositionerManager):
             self.setPositionOnDevice(value=0, axis=axis)
         elif hp["enabled"]:
             hard = hp["hard"] if hardHome is None else hardHome
-            self._homeModule.home(axis=self.axisIds[axis], speed=hp["speed"], direction=hp["direction"],
-                                  endstoppolarity=hp["endstoppolarity"], endposrelease=hp["endposrelease"],
-                                  endstoptimeout=hp["timeout"], isBlocking=isBlocking, hardhome=bool(hard))
+            # Python wait (ms) must outlast the firmware homing timeout, else a blocking
+            # call returns while the MCU is still homing
+            r = self._homeModule.home(axis=self.axisIds[axis], speed=hp["speed"], direction=hp["direction"],
+                                      endstoppolarity=hp["endstoppolarity"], endposrelease=hp["endposrelease"],
+                                      endstoptimeout=hp["timeout"], timeout=(hp["timeout"] or 20000) + 5000,
+                                      isBlocking=isBlocking, hardhome=bool(hard))
         else:
             self.__logger.info(f"No homing parameters set for {axis} axis or not enabled in settings.")
-            return
+            return None
         if axis == "Z":
             self._zPositionPriorHoming = 0
+        return r
 
     # per-axis shortcuts used by other controllers
     def home_x(self, isBlocking=False, *args, **kwargs):
-        self._homeAxis("X", isBlocking)
+        return self._homeAxis("X", isBlocking)
 
     def home_y(self, isBlocking=False, *args, **kwargs):
-        self._homeAxis("Y", isBlocking)
+        return self._homeAxis("Y", isBlocking)
 
     def home_z(self, isBlocking=False, *args, hardHome=None, **kwargs):
-        self._homeAxis("Z", isBlocking, hardHome)
+        return self._homeAxis("Z", isBlocking, hardHome)
 
     def home_a(self, isBlocking=False, *args, **kwargs):
-        self._homeAxis("A", isBlocking)
+        return self._homeAxis("A", isBlocking)
 
     def startStageScanning(self, nStepsLine=100, dStepsLine=1, nTriggerLine=1, nStepsPixel=100, dStepsPixel=1, nTriggerPixel=1, delayTimeStep=10, nFrames=5, isBlocking=False):
         self._motor.startStageScanning(nStepsLine=nStepsLine, dStepsLine=dStepsLine, nTriggerLine=nTriggerLine,
@@ -707,7 +717,8 @@ class ESP32StageManager(PositionerManager):
 
             try:
                 # Step 1: store current Z so we can return to it afterwards
-                self._zPositionPriorHoming = self.getPosition()["Z"]
+                # local copy: home_z() resets _zPositionPriorHoming to 0
+                zPrior = self._zPositionPriorHoming = self.getPosition()["Z"]
                 if aborted():
                     return
 
@@ -754,7 +765,7 @@ class ESP32StageManager(PositionerManager):
 
                 # Step 7: restore Z to its previous height
                 self._emitHomingState(phase="restoring_z", message="Restoring Z position")
-                self.move(value=self._zPositionPriorHoming, speed=self.homeParams["Z"]["speed"], axis="Z",
+                self.move(value=zPrior, speed=self.homeParams["Z"]["speed"], axis="Z",
                           is_absolute=True, is_blocking=True)
 
                 self._emitHomingState(phase="done", active=False, message="Frame homing complete")

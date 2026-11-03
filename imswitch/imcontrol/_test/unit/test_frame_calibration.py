@@ -123,6 +123,7 @@ def test_frame_calibration_recovers_simulated_frame():
         objective=SimpleNamespace(magnifications=[4], zPositions=[0], pixelsizes=[PS], xyOffsets=[[0, 0], [0, 0]]))
     ctrl._logger = SimpleNamespace(info=print, warning=print, error=lambda *a, **k: print(*a))
     ctrl._abort, ctrl._continue, ctrl._thread, ctrl._ctx = threading.Event(), threading.Event(), None, {}
+    ctrl._figures, ctrl._diskReport = [], None
     ctrl._status = ctrl._newStatus("running")
     ctrl._saveSetup = lambda: None
     ctrl._writeReport = lambda: None
@@ -144,16 +145,19 @@ def test_frame_calibration_recovers_simulated_frame():
     assert res["verifyUm"] < 3.0
     assert abs(res["focus"]["0"]["z"] - Z_FOCUS) <= 20, res["focus"]
     assert cam.parameters["exposure"].value == 40.0          # restored after the via work
+    # report: figures with expected vs measured, as JPEG, and the PDF built from them
+    titles = [f["title"] for f in ctrl._figures]
+    for t in ("Main camera at the start", "Focus sweep, objective 0", "Via search: candidate 1",
+              "Via centred and 3x3 grid, objective 0", "Plate placement: rect hole edges", "Via re-found by its plate coordinates"):
+        assert t in titles, titles
+    assert all(f["jpg"][:2] == b"\xff\xd8" and f["expected"] and f["measured"] for f in ctrl._figures)
+    assert st["nFigures"] == len(ctrl._figures) and ctrl.getFrameCalibrationFigures()[0]["id"] == "01"
+    assert ctrl.getFrameCalibrationReportPdf().body[:5] == b"%PDF-"
 
 
-def test_pixel_size_from_stage_moves():
-    """The configured magnification can be far off (Pi 2026-11-02: the "20x" is 2.5x the
-    4x, not 5x). The pixel size is measured from stage moves tracked by image correlation:
-    right from a 2.5x wrong guess over 2-D texture (the via), refused over 1-D texture
-    (ray edges only) instead of returning a distorted value."""
+def _bare_controller(stage, cam):
+    """Controller wired to the simulated stage and camera, without a run."""
     from imswitch.imcontrol.controller.controllers.FrameCalibrationController import DEFAULT_SETTINGS
-    stage = Stage()
-    cam = Camera(stage)
     ctrl = FrameCalibrationController.__new__(FrameCalibrationController)
     ctrl._master = SimpleNamespace(
         positionersManager=type("PM", (), {"getAllDeviceNames": lambda s: ["S"], "__getitem__": lambda s, k: stage})(),
@@ -161,12 +165,50 @@ def test_pixel_size_from_stage_moves():
     ctrl._logger = SimpleNamespace(info=print, warning=print, error=print)
     ctrl._abort = threading.Event()
     ctrl._status = ctrl._newStatus("running")
-    ctrl._ctx = {"s": {**DEFAULT_SETTINGS, "settleS": 0.0}, "det": "Cam"}
+    ctrl._figures, ctrl._diskReport = [], None
+    ctrl._ctx = {"s": {**DEFAULT_SETTINGS, "settleS": 0.0}, "det": "Cam", "images": {}}
     stage.move(Z_FOCUS, "Z")
+    return ctrl
+
+
+def test_via_search_goes_on_after_a_false_candidate():
+    """A disc that cannot be centred (10x, Pi 2026-11-03: a ray tip at the frame edge) is
+    not the via: the search continues, and gives up with a clear message after five."""
+    import pytest
+    from imswitch.imcontrol.controller.controllers.FrameCalibrationController import StepError
+    stage = Stage()
+    ctrl = _bare_controller(stage, Camera(stage))
+    R = np.array([[math.cos(THETA), -math.sin(THETA)], [math.sin(THETA), math.cos(THETA)]])
+    via = D0 + R @ fct.PLATE["via"]
+    tries = []
+
+    def centre_on(x, y, hit, img):
+        tries.append((x, y))
+        if len(tries) == 1:
+            raise StepError("lost the via")       # the first candidate is a false one
+        return "fit"
+    assert ctrl._searchVia(via, 600, 300, fct.PLATE["viaDiameter"] / PS, centre_on) == "fit"
+    assert len(tries) == 2 and tries[0] != tries[1]
+    assert sum(f["title"].startswith("Via search: candidate") for f in ctrl._figures) == 2
+
+    def never(x, y, hit, img):
+        raise StepError("lost the via")
+    with pytest.raises(StepError, match="5 via candidates could not be centred"):
+        ctrl._searchVia(via, 2000, 150, fct.PLATE["viaDiameter"] / PS, never)
+
+
+def test_pixel_size_from_stage_moves():
+    """The configured magnification can be far off (Pi 2026-11-02: the "20x" is 2.5x the
+    4x, not 5x). The pixel size is measured from stage moves tracked by image correlation:
+    right from a 2.5x wrong guess over 2-D texture (the via), refused over 1-D texture
+    (ray edges only) instead of returning a distorted value."""
+    stage = Stage()
+    ctrl = _bare_controller(stage, Camera(stage))
     R = np.array([[math.cos(THETA), -math.sin(THETA)], [math.sin(THETA), math.cos(THETA)]])
     via = D0 + R @ fct.PLATE["via"]                       # device = user here (offset 0)
     fov_wrong = min(H, W) * 2.5 * PS
     ps = ctrl._measurePixelSize(0, via, fov_wrong)
     assert ps is not None and abs(ps / PS - 1) < 0.02, ps
+    assert ctrl._figures[-1]["ok"] and "2.50x the configured" in ctrl._figures[-1]["measured"], ctrl._figures[-1]
     rays = D0 + R @ (np.array(fct.PLATE["via"]) + [1700.0, 0.0])   # inside one ray: parallel edges only
     assert ctrl._measurePixelSize(0, rays, fov_wrong) is None

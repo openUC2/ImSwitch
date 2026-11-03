@@ -12,6 +12,7 @@ overview-camera homography. Everything is written to the setup JSON.
 Geometry, detectors and fits: frame_calibration_tools.py. Plan:
 docs/FRAME_AUTOCALIBRATION_PLAN.md
 """
+import io
 import json
 import math
 import os
@@ -25,6 +26,7 @@ import numpy as np
 from imswitch.imcommon.model import APIExport, initLogger
 from ..basecontrollers import ImConWidgetController
 from ..busy import busy_reasons
+from . import frame_calibration_report as fcr
 from . import frame_calibration_tools as fct
 
 _REPORT_DIR = os.path.join(os.path.expanduser("~"), "imswitch_calibrations", "frame_calibration")
@@ -34,6 +36,8 @@ DEFAULT_SETTINGS = {
     "overviewCamera": "",        # "" = experiment.overviewCameraName, else ObservationCamera
     "illumination": "LED",       # transmission light switched on at start ("" = leave as is)
     "illuminationValue": 0,      # 0 = keep its current value
+    "maxGain": True,             # main camera at its maximum gain during the run (short exposures; restored after)
+    "autoExposure": True,        # main camera exposure set on the plate (else only a clearly wrong one is corrected)
     "overviewIlluminationValue": 60,  # overview frames by room light first (open rig); the LED is practically off below ~100
     "overviewExposureMs": 10.0,  # else full LED, overview camera at this manual exposure (then /2, x2): auto exposure saturates the holes
     "homeTurret": True,
@@ -86,6 +90,8 @@ class FrameCalibrationController(ImConWidgetController):
         self._continue = threading.Event()
         self._thread = None
         self._ctx = {}
+        self._figures = []           # report figures of the running/last run: expected vs measured
+        self._diskReport = None      # after a restart: the newest report on disk
         self._status = self._newStatus("idle")
         self._status["result"] = self._fc().get("result")
 
@@ -113,6 +119,41 @@ class FrameCalibrationController(ImConWidgetController):
     def getFrameCalibrationStatus(self) -> dict:
         return self._status
 
+    @APIExport()
+    def getFrameCalibrationFigures(self) -> list:
+        """Report figures of the running or last run: what was expected, what was measured."""
+        return [{k: f.get(k) for k in ("id", "step", "title", "expected", "measured", "ok")} for f in self._lastReport()[2]]
+
+    @APIExport(runOnUIThread=False)
+    def getFrameCalibrationFigure(self, figureId: str = ""):
+        """One report figure as JPEG (yellow = expected, green = measured)."""
+        from fastapi.responses import Response
+        f = next((f for f in self._lastReport()[2] if f["id"] == figureId), None)
+        if f is None:
+            return {"success": False, "error": f"no report figure {figureId!r}"}
+        return Response(content=f["jpg"], media_type="image/jpeg")
+
+    @APIExport(runOnUIThread=False)
+    def getFrameCalibrationReportPdf(self):
+        """The report of the running or last run as PDF: summary, steps, figures."""
+        from fastapi.responses import Response
+        status, settings, figures = self._lastReport()
+        buf = io.BytesIO()
+        fcr.write_pdf(buf, status, settings, figures)
+        name = "frame_calibration_" + "".join(ch for ch in str(status.get("startedAt") or "") if ch.isalnum()) + ".pdf"
+        return Response(content=buf.getvalue(), media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    @APIExport(runOnUIThread=False)
+    def getFrameCalibrationReportZip(self):
+        """The last report folder as ZIP: report.json, raw 16-bit frames, figures, PDF."""
+        from fastapi.responses import Response
+        d = self._status.get("reportDir") or self._latestReportDir()
+        if not d or not os.path.isdir(d):
+            return {"success": False, "error": "no calibration report written yet"}
+        return Response(content=fcr.zip_dir(d), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="frame_calibration_{os.path.basename(d)}.zip"'})
+
     @APIExport(requestType="POST")
     def startFrameCalibration(self) -> dict:
         if self.isFrameCalibrationRunning():
@@ -122,6 +163,7 @@ class FrameCalibrationController(ImConWidgetController):
             return {"success": False, "error": f"Busy: {', '.join(busy)}."}
         self._abort.clear()
         self._continue.clear()
+        self._figures, self._diskReport = [], None
         self._status = self._newStatus("running")
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -174,7 +216,9 @@ class FrameCalibrationController(ImConWidgetController):
                 finally:
                     step["seconds"] = round(time.time() - t0, 1)
             st["state"] = "finished"
-            st["message"] = "Calibration complete" + (" (with warnings)" if any(x["warnings"] for x in st["steps"]) else "")
+            failed = [x["title"] for x in st["steps"] if x["status"] == "failed"]       # optional steps
+            st["message"] = "Calibration complete" + (f" - failed: {'; '.join(failed)}" if failed else
+                                                      " (with warnings)" if any(x["warnings"] for x in st["steps"]) else "")
         except _Aborted:
             st["state"], st["message"] = "aborted", "Aborted by user"
         except Exception as e:
@@ -201,6 +245,9 @@ class FrameCalibrationController(ImConWidgetController):
         try:
             self._ctx["expBase"] = self._ctx.get("exp0")
             self._exposure(1.0)
+            if self._ctx.get("gain0") is not None:
+                self._master.detectorsManager[self._ctx["det"]].setParameter("gain", self._ctx["gain0"])
+            self._cameraStatus("restored to the values before the run")
         except Exception:
             pass
         pc = self._master.getController("PixelCalibration")
@@ -225,7 +272,24 @@ class FrameCalibrationController(ImConWidgetController):
             m.lasersManager[name].setEnabled(True)
             self._ctx["lightMain"] = getattr(m.lasersManager[name], "power", value)
         self._ctx["acq"] = m.detectorsManager.startAcquisition()
+        det = m.detectorsManager[self._ctx["det"]]
+        params = getattr(det, "parameters", {}) or {}
+        if "exposure" in params:
+            self._ctx["exp0"] = float(params["exposure"].value)
+        if "gain" in params:                         # restored after the run
+            self._ctx["gain0"] = float(params["gain"].value)
+            gmax = getattr(params["gain"], "valueMax", None)
+            if s["maxGain"] and gmax:                # independent of the user's gain (gain 1 after a restart: black)
+                det.setParameter("gain", float(gmax))
+                time.sleep(0.3)
+        self._cameraStatus("start: " + ("maximum gain, " if s["maxGain"] else "") + "your exposure")
         img = self._grab()
+        g = fct.gray(img)
+        self._figure("Main camera at the start", img, expected="light reaches the camera: the brightest pixels clearly "
+                     "above the black level (the stage may sit over dark plate)",
+                     measured=f"mean {g.mean():.0f}, 99.5th percentile {np.percentile(g, 99.5):.0f}, "
+                              f"black level {np.percentile(g, 0.1):.0f} counts; exposure {self._ctx.get('exp0')} ms, "
+                              f"gain {(self._status.get('camera') or {}).get('gainDb')} dB")
         pc = m.getController("PixelCalibration")
         if pc is not None:
             ok, why = pc._validateCameraIntensity(self._ctx["det"])
@@ -238,14 +302,13 @@ class FrameCalibrationController(ImConWidgetController):
                 self._warn(f"{self._ctx['det']}: {why} at the start position - continuing")
             pc._resetDetectorFlip(self._ctx["det"])     # measure on the raw sensor; flips are re-applied on save
             self._ctx["flipReset"] = True
-        params = getattr(m.detectorsManager[self._ctx["det"]], "parameters", {})
-        if "exposure" in params:
-            self._ctx["exp0"] = float(params["exposure"].value)
         out = [f"{self._ctx['det']} {img.shape[1]}x{img.shape[0]}"]
         if self._ctx["ov"]:
             try:
                 ov = self._grab(self._ctx["ov"])
                 out.append(f"overview {ov.shape[1]}x{ov.shape[0]}")
+                self._figure("Overview camera at the start", ov, expected="the plate in view",
+                             measured=f"{ov.shape[1]}x{ov.shape[0]} px")
             except StepError as e:
                 self._warn(f"{e}; continuing without overview camera")
                 self._ctx["ov"] = None
@@ -303,21 +366,41 @@ class FrameCalibrationController(ImConWidgetController):
                 if p0 is not None:
                     self._ctx["ovMode"] = mode
                     break
+            roi = [("circle", self._ctx["ovAxis"], self._ctx["ovRadius"], fcr.OTHER, True),
+                   ("cross", self._ctx["ovAxis"], 10, fcr.EXPECTED)]
+            exp_pair = ("two dark holes, the round one and the larger rect one, inside the search region (cyan) "
+                        "around the LED glare (yellow cross, near the optical axis)")
             if p0 is None:
-                raise StepError("the overview camera does not see the plate holes with the stage at the round hole - "
+                self._figure("Overview: no hole pair found", self._ctx.get("lastOv"), roi, expected=exp_pair,
+                             measured=f"no pair in {len(self._overviewModes(s))} light/exposure settings", ok=False)
+                raise StepError("the overview camera does not see the plate holes with the stage between them - "
                                 "plate missing or not seated, or the camera moved")
+            mode = self._ctx["ovMode"]
+            self._ctx["ovRefImg"] = self._ctx["lastOv"]
+            self._figure("Overview: hole pair at the reference position", self._ctx["ovRefImg"],
+                         roi + [("circle", p0["round"], 14, fcr.MEASURED), ("text", np.add(p0["round"], (16, -8)), "round", fcr.MEASURED),
+                                ("circle", p0["rect"], 16, fcr.MEASURED), ("text", np.add(p0["rect"], (18, 4)), "rect", fcr.MEASURED)],
+                         expected=exp_pair,
+                         measured=f"round {np.round(p0['round']).tolist()} px, rect {np.round(p0['rect']).tolist()} px; "
+                                  f"LED {mode[0]}, exposure {f'{mode[1]:g} ms' if mode[1] else 'auto'}", ok=True)
             r0 = np.asarray(p0["round"])
             reach = 0.4 * float(np.linalg.norm(np.asarray(p0["rect"]) - r0))     # less than half way to the rect hole
             self._ctx["ovRef"] = {"u": ref.tolist(), "round": r0.tolist(), "reach": reach}
-            shifts = {}
+            shifts, seen = {}, {}
             for i, ax in enumerate("XY"):
                 for sign in (1, -1):
                     t = ref.copy()
                     t[i] += sign * step
+                    key = ("+" if sign > 0 else "-") + ax
                     p = self._holesAt(t, near=r0, max_px=reach)
                     if p is None:
+                        self._figure(f"Overview: round hole lost after {key} {step:.0f} µm", self._ctx["lastOv"],
+                                     [("circle", r0, reach, fcr.EXPECTED, True), ("cross", r0, 8, fcr.EXPECTED)],
+                                     expected=f"the round hole within {reach:.0f} px of its reference position (yellow)",
+                                     measured="no hole-sized dark blob there", ok=False)
                         raise StepError(f"round hole lost in the overview image after {sign * step:+.0f} µm in {ax}")
-                    shifts[("+" if sign > 0 else "-") + ax] = np.asarray(p["round"]) - r0
+                    seen[key] = np.asarray(p["round"])
+                    shifts[key] = seen[key] - r0
         finally:
             self._overviewMode(self._ctx.get("lightMain"), None)
         J, problems = fct.axes_check(shifts, step, min_px=2.0)
@@ -327,6 +410,16 @@ class FrameCalibrationController(ImConWidgetController):
             if change > 25:
                 problems.append(f"image directions changed by {change:.0f}° since the last calibration - "
                                 "axis/sign config changed or the overview camera moved")
+        marks, k = [("circle", r0, 8, fcr.MEASURED)], 3.0          # shifts drawn 3x: ~11 px at 640 px
+        for key, q in seen.items():
+            opposite = ("-" if key[0] == "+" else "+") + key[1]
+            marks += [("arrow", r0, r0 + k * (q - r0), fcr.MEASURED), ("text", r0 + k * 1.15 * (q - r0) + (-8, 5), key, fcr.MEASURED),
+                      ("circle", r0 - k * (seen[opposite] - r0), 5, fcr.EXPECTED, True)]
+        self._figure(f"Overview: round hole for +/-{step:.0f} µm moves", self._ctx["ovRefImg"], marks,
+                     expected="each move and its opposite shift the hole by equal and opposite amounts (yellow: the "
+                              "mirror of the opposite move); X and Y in clearly different directions. Shifts drawn 3x.",
+                     measured="; ".join(f"{k} ({v[0]:+.1f}, {v[1]:+.1f}) px" for k, v in shifts.items())
+                              + ("" if not problems else " - " + "; ".join(problems)), ok=not problems)
         if problems:
             raise StepError("; ".join(problems))
         self._ctx["overviewJ"] = J.tolist()           # stored (reference for the next run) only when consistent
@@ -372,6 +465,8 @@ class FrameCalibrationController(ImConWidgetController):
             t["x"], t["y"] = t["x"] + shift[0], t["y"] + shift[1]
         for r in self._ctx["obj"].values():
             r["u"] = (np.asarray(r["u"]) + shift).tolist()
+        if "ovRef" in self._ctx:                     # the overview grid is placed around it
+            self._ctx["ovRef"]["u"] = (np.asarray(self._ctx["ovRef"]["u"]) + shift).tolist()
         found = np.asarray(r0["u"]) - np.array(fct.PLATE["via"])   # where the old offset expected it
         self._ctx["offset"] = {"offset": new.tolist(), "viaFoundAtUm": (found - shift).tolist()}
         return (f"offset ({new[0]:.0f}, {new[1]:.0f}) µm; the via was "
@@ -393,7 +488,7 @@ class FrameCalibrationController(ImConWidgetController):
             raise StepError(f"rectangular hole not at its nominal position - plate is {found or 'not seated or not the FRAME plate'}. "
                             "Insert it well-label side up with the A1 notch in the stage-origin corner.")
         w, h = fct.PLATE["rectHoleSize"]
-        edges = []
+        edges, views = [], []
         for dx, dy, k in ((-w / 2, 0, 0), (w / 2, 0, 0), (0, -h / 2, 1), (0, h / 2, 1)):
             u = (rect[0] + dx, rect[1] + dy)
             self._move(*u)                     # verified target, not a fresh read (firmware reports A under X)
@@ -404,9 +499,23 @@ class FrameCalibrationController(ImConWidgetController):
                 raise StepError(f"no hole edge seen at ({u[0]:.0f}, {u[1]:.0f}) µm")
             edges.append(float(np.median(fct.px_to_plate(pts, J, u, img.shape[:2])[:, k])))
             self._trace(rect[0] + dx, rect[1] + dy, "edge")
+            views.append((img, u, k, edges[-1], rect[k] + (dx if k == 0 else dy)))
         rc = [(edges[0] + edges[1]) / 2, (edges[2] + edges[3]) / 2]
         pl = fct.placement(fct.PLATE["via"], rc)
         pl["rectSize"] = [edges[1] - edges[0], edges[3] - edges[2]]
+        tiles = []
+        for img, u, k, e, nominal in views:
+            c = np.array([(img.shape[1] - 1) / 2, (img.shape[0] - 1) / 2])
+            L = 0.4 * min(img.shape[:2]) * r0["metrics"]["scale_x_um_per_pixel"]
+            px = lambda P: c - np.asarray(J) @ (np.asarray(P, float) - np.asarray(u, float))
+            seg = lambda v: [px((v, u[1] - L)), px((v, u[1] + L))] if k == 0 else [px((u[0] - L, v)), px((u[0] + L, v))]
+            tiles.append(fcr.annotate(img, [("line", *seg(nominal), fcr.EXPECTED), ("line", *seg(e), fcr.MEASURED)], width=480))
+        self._figure("Plate placement: rect hole edges", annotated=fcr.montage(tiles),
+                     expected=f"edges of the {w:.0f} x {h:.0f} µm hole at their nominal plate positions (yellow); "
+                              "order: left, right, top, bottom",
+                     measured=f"edges (green) {', '.join(f'{e:.0f}' for e in edges)} µm: size {pl['rectSize'][0]:.0f} x "
+                              f"{pl['rectSize'][1]:.0f} µm, rotation {pl['rotationDeg']:+.2f}°",
+                     ok=abs(pl["rotationDeg"]) <= s["maxRotationDeg"])
         self._ctx["placement"] = pl
         if abs(pl["rotationDeg"]) > s["maxRotationDeg"]:
             self._warn(f"plate is rotated {pl['rotationDeg']:.2f}° in the holder - push it into the A1 corner "
@@ -446,7 +555,7 @@ class FrameCalibrationController(ImConWidgetController):
         # back on the via with the first objective: absolute repeatability after the long moves
         self._move(*fct.PLATE["via"])
         self._ctx["repeatUm"] = self._residualUm(r0)
-        self._move(z=self._pos()["Z"] + s["zRetreatUm"])
+        self._move(z=self._at("Z") + s["zRetreatUm"])
         try:
             r = self._calibrateObjective(k, s, fct.PLATE["via"], s["searchRadius2Um"])
         except Exception:
@@ -464,6 +573,7 @@ class FrameCalibrationController(ImConWidgetController):
         self._selectObjective(k0, skipZ=False)
         time.sleep(0.5)
         self._ctx["switchBackUm"] = self._residualUm(r0)
+        self._viaFigure(f"Back on objective {k0} with the stored offsets", r0, self._ctx["switchBackUm"], 10)
         if self._ctx["switchBackUm"] > 10:
             self._warn(f"after switching back the via is {self._ctx['switchBackUm']:.1f} µm off centre")
         return (self._objSummary(k, r) + f"; parcentricity ({offs[k][0]:+.1f}, {offs[k][1]:+.1f}) µm; "
@@ -494,6 +604,19 @@ class FrameCalibrationController(ImConWidgetController):
             raise StepError(f"round hole seen in only {len(samples)} overview frames (need 4)")
         self._ctx["overview"] = {"camera": self._ctx["ov"], "H": H.tolist(), "rmsPx": rms, "nPoints": n,
                                  "opticalAxisPx": self._ctx["ovAxis"]}
+        u0 = np.asarray(ref["u"])
+        proj = lambda P: fct.plate_to_overview_px(H, P, u0)
+        outline = [proj(P) for P in fct.PLATE["outline"]]
+        rc, (rw, rh) = fct.PLATE["rectHole"], fct.PLATE["rectHoleSize"]
+        rect = [proj((rc[0] + sx * rw / 2, rc[1] + sy * rh / 2)) for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        marks = [("line", a, b, fcr.EXPECTED) for poly in (outline, rect) for a, b in zip(poly, poly[1:] + poly[:1])]
+        marks += [("cross", proj(fct.PLATE["roundHole"]), 8, fcr.EXPECTED)]
+        for (u, P, o) in samples:     # where each tracked hole was seen, against the fitted mapping
+            marks += [("circle", o, 4, fcr.MEASURED), ("cross", fct.plate_to_overview_px(H, P, u), 4, fcr.EXPECTED)]
+        self._figure("Overview camera mapping", self._ctx.get("ovRefImg"), marks,
+                     expected="the plate outline, the rect hole and the round hole (yellow) on the plate seen at the "
+                              "reference position; every tracked hole position on the fitted mapping (yellow crosses)",
+                     measured=f"{n} of {len(samples)} positions used, residual {rms:.2f} px", ok=rms <= 3)
         if rms > 3:
             self._warn(f"overview mapping residual {rms:.1f} px")
         return f"homography from {n} points, residual {rms:.2f} px"
@@ -502,6 +625,7 @@ class FrameCalibrationController(ImConWidgetController):
         k0 = self._ctx["slot0"]
         self._move(*fct.PLATE["via"])
         self._ctx["verifyUm"] = self._residualUm(self._ctx["obj"][k0])
+        self._viaFigure("Via re-found by its plate coordinates", self._ctx["obj"][k0], self._ctx["verifyUm"], 20)
         pc = self._master.getController("PixelCalibration")
         for slot, r in self._ctx["obj"].items():
             m = fct.J_metrics(np.asarray(r["J"]))
@@ -535,19 +659,52 @@ class FrameCalibrationController(ImConWidgetController):
         ps = self._measurePixelSize(slot, centre, min(img.shape[:2]) * ps0) or ps0
         fov = min(img.shape[:2]) * ps
         d_px = fct.PLATE["viaDiameter"] / ps
-        self._exposure(s["viaExposureFactor"])
-        hit = self._searchVia(centre, radius, 0.7 * fov, d_px)    # overlap: some tile shows the via 0.4 r from its edge
-        if hit is None:
+        r0 = self._ctx["obj"].get(k0) if slot != k0 else None
+        if r0 and r0.get("viaExposureMs"):
+            # the via's brightness per pixel goes with 1/magnification^2: from the first objective's via
+            # exposure, not from this objective's plate (10x, Pi 2026-11-03: the dark plate gave 10 ms
+            # instead of ~0.3 ms, and ray tips came out as four false via candidates)
+            e = r0["viaExposureMs"] * (r0["metrics"]["scale_x_um_per_pixel"] / ps) ** 2
+            self._master.detectorsManager[self._ctx["det"]].setParameter("exposure", e)
+            time.sleep(0.2)
+            self._cameraStatus(f"via work at objective {k0}'s via exposure x (magnification ratio)^2")
+        else:
+            self._exposure(s["viaExposureFactor"])
+        via_exposure = (self._status.get("camera") or {}).get("exposureMs")
+
+        def centre_on(x, y, hit, img):
+            self._viaSaturate(img, hit, via_exposure)
+            try:
+                return self._centreAndFit(d_px, fov, s, np.array([x, y], float))
+            except StepError:
+                self._setExposure(via_exposure, "via search")      # not the via: search on, rays dark
+                raise
+        fit = self._searchVia(centre, radius, 0.7 * fov, d_px, centre_on)   # overlap: some tile shows the via 0.4 r from its edge
+        if fit is None:
             raise StepError(f"centre via not found within {radius:.0f} µm of ({centre[0]:.0f}, {centre[1]:.0f}) - "
                             "plate seated with the A1 notch at the stage origin? light on? try a larger search radius")
-        J, rms, u, plate_level, d_px = self._centreAndFit(d_px, fov, s)
+        J, rms, u, plate_level, d_px = fit
+        img, disc = self._ctx["lastImg"], self._ctx["lastDisc"]
+        c = ((img.shape[1] - 1) / 2, (img.shape[0] - 1) / 2)
+        S, Pp = (np.asarray(a, float) for a in self._ctx["grid"])
+        pred = Pp.mean(axis=0) + (J @ (S - S.mean(axis=0)).T).T
+        m = fct.J_metrics(J)
+        self._figure(f"Via centred and 3x3 grid, objective {slot}", img,
+                     [("cross", c, 40, fcr.EXPECTED), ("circle", (disc["x"], disc["y"]), disc["r"], fcr.MEASURED)]
+                     + [("circle", q, 12, fcr.MEASURED) for q in Pp] + [("cross", q, 16, fcr.EXPECTED) for q in pred],
+                     expected="the via at the image centre (yellow cross); its positions on the 3x3 stage grid on the "
+                              "fitted affine (yellow crosses)",
+                     measured=f"{m['scale_x_um_per_pixel']:.4f} x {m['scale_y_um_per_pixel']:.4f} µm/px, rotation "
+                              f"{m['rotation_deg']:+.2f}°, shear {m['shear_deg']:.2f}°, fit residual {rms:.2f} px, "
+                              f"via ⌀ {d_px:.0f} px", ok=True)
         if oc is not None:
             self._saveZ(oc, slot, z)
         # positions from the verified move targets (u, z), not from a fresh read (see _step_offset)
         dev = [u[0] + self._stageManager().getStageOffsetAxis(axis="X"),
                u[1] + self._stageManager().getStageOffsetAxis(axis="Y")]
         r = {"J": J.tolist(), "rmsPx": rms, "u": list(u), "dev": dev, "z": z, "plateLevel": plate_level,
-             "discPx": d_px, "metrics": fct.J_metrics(J)}
+             "discPx": d_px, "metrics": fct.J_metrics(J), "viaExposureMs": via_exposure,
+             "centreExposureMs": (self._status.get("camera") or {}).get("exposureMs")}
         nominal = ps0 if slot == k0 else self._ctx["obj"][k0]["metrics"]["scale_x_um_per_pixel"] * f
         measured = r["metrics"]["scale_x_um_per_pixel"]
         if not 0.67 < measured / nominal < 1.5:
@@ -563,6 +720,11 @@ class FrameCalibrationController(ImConWidgetController):
         step = 0.1 * fov
         self._move(*u)
         ref = self._grab()
+        c = np.array([(ref.shape[1] - 1) / 2, (ref.shape[0] - 1) / 2])
+        expect = f"+/-{step:.0f} µm moves shift the image by {step * min(ref.shape[:2]) / fov:.0f} px (yellow circle) " \
+                 f"at the configured {fov / min(ref.shape[:2]):.4f} µm/px"
+        marks = lambda sh: [("circle", c, step * min(ref.shape[:2]) / fov, fcr.EXPECTED, True)] + \
+            [m for k, v in sh.items() for m in (("arrow", c, c + v, fcr.MEASURED), ("text", c + 1.1 * v, k, fcr.MEASURED))]
         shifts = {}
         for i, ax in enumerate("XY"):
             for sign in (1, -1):
@@ -572,6 +734,8 @@ class FrameCalibrationController(ImConWidgetController):
                 sh, resp = fct.image_shift(ref, self._grab())
                 if resp < 0.05:
                     self._warn(f"objective {slot}: pixel size not measured (no image correlation) - using the configured value")
+                    self._figure(f"Pixel size from stage moves, objective {slot}", ref, marks(shifts), expected=expect,
+                                 measured=f"no image correlation after {sign * step:+.0f} µm in {ax}", ok=False)
                     return None
                 shifts[("+" if sign > 0 else "-") + ax] = sh
         self._move(*u)
@@ -583,16 +747,26 @@ class FrameCalibrationController(ImConWidgetController):
                             f"shear {m['shear_deg']:.1f}° - too little texture")
         if problems:
             self._warn(f"objective {slot}: pixel size not measured ({'; '.join(problems)}) - using the configured value")
+            self._figure(f"Pixel size from stage moves, objective {slot}", ref, marks(shifts), expected=expect,
+                         measured="; ".join(problems), ok=False)
             return None
         ps = (m["scale_x_um_per_pixel"] + m["scale_y_um_per_pixel"]) / 2
         self._ctx.setdefault("pixelSizeMeasured", {})[str(slot)] = ps
+        ps0 = fov / min(ref.shape[:2])
+        self._figure(f"Pixel size from stage moves, objective {slot}", ref, marks(shifts), expected=expect,
+                     measured=f"{ps:.4f} µm/px, {ps0 / ps:.2f}x the configured magnification", ok=True)
         return ps
 
     def _holePairMid(self):
         return (np.array(fct.PLATE["roundHole"], float) + np.array(fct.PLATE["rectHole"], float)) / 2
 
-    def _searchVia(self, centre, radius, step, d_px):
+    def _searchVia(self, centre, radius, step, d_px, centre_on):
+        """Spiral of tiles around ``centre``. A disc found is the via only if it can be
+        centred (``centre_on(x, y, hit, img)`` returns the fit): a ray tip cut by the frame edge looks
+        like a disc too (10x, Pi 2026-11-03: 9x the plate vs 35x for the via), so a candidate
+        that cannot be centred is reported and the search goes on."""
         self._ctx.pop("brightestTile", None)
+        rejected = []
         for dx, dy in fct.spiral(radius, step):
             x, y = centre[0] + dx, centre[1] + dy
             self._move(x, y, approach=0)
@@ -606,15 +780,33 @@ class FrameCalibrationController(ImConWidgetController):
             if hit:
                 self._trace(x, y, "via")
                 self._ctx["images"].setdefault("via_found", self._ctx.get("lastSearchImg"))
-                return x, y, hit
+                h = (hit["x"], hit["y"])
+                self._figure(f"Via search: candidate {len(rejected) + 1}", img,
+                             [("circle", h, hit["r"], fcr.MEASURED), ("circle", h, d_px / 2, fcr.EXPECTED, True)],
+                             expected=f"a bright disc of ⌀ {d_px:.0f} px (yellow; {fct.PLATE['viaDiameter']} µm drill)",
+                             measured=f"⌀ {2 * hit['r']:.0f} px at ({hit['x']:.0f}, {hit['y']:.0f}) px, "
+                                      f"{hit['contrast']:.0f}x the plate; stage ({x:.0f}, {y:.0f}) µm")
+                try:
+                    return centre_on(x, y, hit, img)
+                except StepError as e:
+                    rejected.append(f"({x:.0f}, {y:.0f})")
+                    self._warn(f"via candidate at ({x:.0f}, {y:.0f}) µm could not be centred ({e}) - not the via, searching on")
+                    if len(rejected) >= 5:
+                        raise StepError(f"{len(rejected)} via candidates could not be centred: {', '.join(rejected)} µm - "
+                                        "focus, exposure, or the search radius?")
         if "brightestTile" in self._ctx:      # report: the tile most likely to show the via
-            self._ctx["images"]["via_search_brightest"] = self._ctx.pop("brightestTile")[1]
+            img = self._ctx["images"]["via_search_brightest"] = self._ctx.pop("brightestTile")[1]
+            self._figure("Via search: brightest tile (no via found)", img,
+                         [("circle", ((img.shape[1] - 1) / 2, (img.shape[0] - 1) / 2), d_px / 2, fcr.EXPECTED, True)],
+                         expected=f"a bright disc of ⌀ {d_px:.0f} px (yellow) in one of the tiles",
+                         measured=f"none within {radius:.0f} µm of ({centre[0]:.0f}, {centre[1]:.0f}) µm", ok=False)
         return None
 
-    def _centreAndFit(self, d_px, fov, s):
+    def _centreAndFit(self, d_px, fov, s, u):
+        """From the search tile u (its verified position; a fresh read once gave X -26 instead
+        of 63910, Pi 2026-11-03): centre the via, then J from a 3x3 grid."""
         step = s["gridStepFov"] * fov
-        p = self._pos()
-        u = self._roughCentre(np.array([p["X"], p["Y"]]), d_px, fov)
+        u = self._roughCentre(u, d_px, fov)
         self._disc(d_px, u)
         d_px = self._ctx["lastDisc"]["r"] * 2       # measured size from here on
         img = self._ctx["lastImg"]
@@ -635,6 +827,7 @@ class FrameCalibrationController(ImConWidgetController):
                 pix.append(self._disc(d_px, us))
                 stage.append(us)
         J, rms = fct.fit_J(stage, pix)
+        self._ctx["grid"] = (stage, pix)
         self._disc(d_px, u)                          # back to the centre
         img = self._ctx["lastImg"]
         hit = self._ctx["lastDisc"]
@@ -686,14 +879,45 @@ class FrameCalibrationController(ImConWidgetController):
         img = self._grab()
         hit = fct.find_bright_disc(img, d_px)
         if hit is None:
-            p = self._pos()
+            x, y = self._at("X"), self._at("Y")
             self._ctx["images"]["via_lost"] = img
-            raise StepError(f"lost the via at ({p['X']:.0f}, {p['Y']:.0f}) µm - grid step too large or focus lost")
+            self._figure("Via lost", img, [("cross", ((img.shape[1] - 1) / 2, (img.shape[0] - 1) / 2), 40, fcr.EXPECTED)],
+                         expected=f"a bright disc of ⌀ {d_px:.0f} px in the frame", ok=False,
+                         measured=f"no disc at stage ({x:.0f}, {y:.0f}) µm")
+            raise StepError(f"lost the via at ({x:.0f}, {y:.0f}) µm - grid step too large or focus lost")
         self._ctx["lastImg"], self._ctx["lastDisc"] = img, hit
         return np.array([hit["x"], hit["y"]])
 
+    def _viaFigure(self, title, r, residual_um, limit_um):
+        img, d = self._ctx["lastImg"], self._ctx["lastDisc"]
+        c = ((img.shape[1] - 1) / 2, (img.shape[0] - 1) / 2)
+        self._figure(title, img, [("cross", c, 40, fcr.EXPECTED), ("circle", (d["x"], d["y"]), d["r"], fcr.MEASURED)],
+                     expected=f"the via at the image centre (yellow cross), within {limit_um} µm",
+                     measured=f"{residual_um:.1f} µm from the centre", ok=residual_um <= limit_um)
+
+    def _setExposure(self, e, note):
+        self._master.detectorsManager[self._ctx["det"]].setParameter("exposure", float(e))
+        time.sleep(0.2)
+        self._cameraStatus(note)
+
+    def _viaSaturate(self, img, hit, e):
+        """Centring and the grid run on a saturated via, ~5x full scale from the candidate's
+        core brightness (at most the plate exposure): its edge is then the hole wall. The core
+        is not flat; unsaturated, the 10x via came out 799 px wide with a 25 px circle-fit error
+        instead of 1000 px and 6 px (Pi 2026-11-03). The search itself stays short: rays dark."""
+        g = fct.gray(img)
+        full = 255.0 if img.dtype == np.uint8 else (4095.0 if img.max() < 4096 else 65535.0)
+        yy, xx = np.ogrid[:g.shape[0], :g.shape[1]]
+        core = g[(xx - hit["x"]) ** 2 + (yy - hit["y"]) ** 2 < (0.5 * hit["r"]) ** 2]
+        med = float(np.median(core)) if core.size else full
+        e_c = min(e * max(1.0, 5 * full / max(med, 1.0)), self._ctx.get("expBase") or e)
+        self._setExposure(e_c, f"via centring at {e_c / e:.1f}x the search exposure (via saturated, sharp edge)")
+        return e_c
+
     def _residualUm(self, r):
         """Distance (µm) of the via from the image centre at the current position."""
+        if r.get("centreExposureMs"):          # the exposure the via was centred and measured at
+            self._setExposure(r["centreExposureMs"], "via check at the objective's centring exposure")
         p = self._disc(r["discPx"])
         img = self._ctx["lastImg"]
         c = np.array([(img.shape[1] - 1) / 2, (img.shape[0] - 1) / 2])
@@ -711,11 +935,16 @@ class FrameCalibrationController(ImConWidgetController):
         tries = [(hint + 25 * step, 50)] if hint is not None else []
         if slot == self._ctx.get("slot0", slot):     # never with the second (short working distance) objective
             tries.append((top, int(s["focusSearchUm"] / step)))
+        curves = []
         for z0, n in tries:
             zs, vals = self._sweepZ(min(z0, top), -step, n, stop_at_peak=True)
+            curves.append((zs, vals, f"coarse from {min(z0, top):.0f}"))
             if fct.focus_peaked(vals):
                 break
         else:
+            self._figure(f"Focus sweep, objective {slot}", annotated=fcr.plot_curves(curves, "Z (µm)", "focus metric"),
+                         expected="one clear peak of the focus metric (the rays around the via come into focus)",
+                         measured="no clear peak", ok=False)
             if not s["manualFocusFallback"]:
                 raise StepError("no focus found: the focus metric shows no clear peak (light, exposure, plate?)")
             self._waitUser("No clear focus found. Focus on the plate (the rays around the centre via) with the "
@@ -724,6 +953,11 @@ class FrameCalibrationController(ImConWidgetController):
         zc = zs[int(np.argmax(vals))]
         zs, vals = self._sweepZ(zc + step, -step / 5, 11)
         zb = zs[int(np.argmax(vals))]
+        self._figure(f"Focus sweep, objective {slot}",
+                     annotated=fcr.plot_curves(curves + [(zs, vals, "fine")], "Z (µm)", "focus metric", mark_x=zb),
+                     expected="one clear peak of the focus metric (the rays around the via come into focus)",
+                     measured=f"focus at Z {zb:.0f} µm (coarse step {step:.0f} µm, fine {step / 5:.0f} µm); "
+                              f"exposure {self._ctx.get('expBase', 0):.2f} ms", ok=True)
         self._move(z=zb + step)
         self._move(z=zb)
         self._ctx.setdefault("focus", {})[str(slot)] = {"z": zb, "stepUm": step}
@@ -767,26 +1001,30 @@ class FrameCalibrationController(ImConWidgetController):
         if e:
             self._master.detectorsManager[self._ctx["det"]].setParameter("exposure", e * factor)
             time.sleep(0.2)
+            if factor != 1:
+                self._cameraStatus(f"via work at {factor:g}x the plate exposure (the via is ~100x brighter)")
 
     def _autoExposure(self):
-        """Exposure for focusing: only corrected when the plate and rays (95th percentile)
-        are clearly too dark (< 5 % of full scale) or too bright (> 90 %); then towards 30 %,
-        at most 100 ms (long exposures stalled the Hik stream). The via work runs at
-        viaExposureFactor of it; gain is left alone."""
+        """Exposure for focusing, set on the plate and rays: their 95th percentile towards 30 %
+        of full scale (autoExposure), else only corrected when clearly too dark (< 5 %) or too
+        bright (> 90 %). At most 100 ms (long exposures stalled the Hik stream). The via work
+        runs at viaExposureFactor of it."""
         e = self._ctx.get("exp0")
         if not e:
             return
+        lo, hi = (0.2, 0.45) if self._ctx["s"].get("autoExposure", True) else (0.05, 0.9)
         det = self._master.detectorsManager[self._ctx["det"]]
-        for _ in range(6):
+        for _ in range(8):
             det.setParameter("exposure", e)
             time.sleep(0.2)
             raw = self._grab()
             full = 255.0 if raw.dtype == np.uint8 else (4095.0 if raw.max() < 4096 else 65535.0)
             p95 = float(np.percentile(fct.gray(raw), 95))
-            if 0.05 * full < p95 < 0.9 * full or (e >= 100 and p95 <= 0.05 * full):
+            if lo * full < p95 < hi * full or (e >= 100 and p95 <= lo * full) or (e <= 0.05 and p95 >= hi * full):
                 break
             e = float(np.clip(e * np.clip(0.3 * full / max(p95, 1.0), 0.1, 10), 0.05, 100))
         self._ctx["expBase"] = e
+        self._cameraStatus(f"exposure set on the plate: 95th percentile at {100 * p95 / full:.0f} % of full scale")
 
     def _pixelSizeGuess(self, slot, mags):
         k0 = self._ctx.get("slot0")
@@ -841,6 +1079,11 @@ class FrameCalibrationController(ImConWidgetController):
             time.sleep(0.2)
         return p
 
+    def _at(self, ax):
+        """Where the stage is: the last verified move target (a fresh read can carry another
+        axis's position, UC2 firmware 2026-11-02), else a read."""
+        return self._ctx.get("at", {}).get(ax, self._pos()[ax])
+
     def _move(self, x=None, y=None, z=None, approach=None, tol=3.0):
         """Blocking absolute move, one axis at a time, verified by reading the position back.
         ``approach`` (default: settings) > 0 arrives at X/Y from the negative side, so the
@@ -858,6 +1101,7 @@ class FrameCalibrationController(ImConWidgetController):
                 stage.move(value=float(v), axis=ax, is_absolute=True, is_blocking=True)
                 got = self._pos()[ax]
                 if abs(got - v) <= tol:
+                    self._ctx.setdefault("at", {})[ax] = float(v)    # verified: later steps use this, not a fresh read
                     break
                 self._logger.warning(f"{ax} reads {got:.1f} after a move to {v:.1f} (attempt {attempt})")
             else:
@@ -898,7 +1142,7 @@ class FrameCalibrationController(ImConWidgetController):
         (px) only the round hole followed from there. Returns {"round": [x, y], ...} or None;
         keeps (device position, round-hole px) as homography samples."""
         self._move(*u, approach=0)
-        img = self._grab(self._ctx["ov"])
+        img = self._ctx["lastOv"] = self._grab(self._ctx["ov"])
         if near is None:
             holes = fct.find_plate_holes(img, self._ctx["ovAxis"], self._ctx["ovRadius"])
         else:
@@ -915,11 +1159,12 @@ class FrameCalibrationController(ImConWidgetController):
 
     def _overviewModes(self, s):
         """(LED value, overview exposure in ms or None = camera auto) to try for the hole
-        frames: room light with the LED dimmed (open rig, Mac 2026-10-30), then the full LED
-        at a short manual exposure (dark enclosure, Pi 2026-11-02: the LED is off up to
-        ~100 and nearly full from ~120, and auto exposure saturates its cone over the holes)."""
+        frames: the full LED at a short manual exposure (dark enclosure, Pi 2026-11-02: the
+        LED is off up to ~100 and nearly full from ~120, and auto exposure saturates its cone
+        over the holes), then room light with the LED dimmed (open rig, Mac 2026-10-30)."""
         e = float(s["overviewExposureMs"])
-        return [(s["overviewIlluminationValue"], None)] + [(self._ctx.get("lightMain"), x) for x in (e, e / 2, 2 * e) if x > 0]
+        # room light last: in daylight it showed silkscreen wells as a hole pair (Pi 2026-11-03)
+        return [(self._ctx.get("lightMain"), x) for x in (e, e / 2, 2 * e) if x > 0] + [(s["overviewIlluminationValue"], None)]
 
     def _overviewMode(self, light, exposureMs):
         """Set the LED and the overview camera exposure (None = auto). False when the camera
@@ -948,6 +1193,7 @@ class FrameCalibrationController(ImConWidgetController):
     def _newStatus(self, state):
         return {"state": state, "step": "", "message": "", "startedAt": datetime.now().isoformat(timespec="seconds"),
                 "finishedAt": None, "trace": [], "result": self._status.get("result") if hasattr(self, "_status") else None,
+                "camera": None, "nFigures": 0,
                 "steps": [{"name": n, "title": t, "critical": c, "status": "pending", "detail": "", "warnings": [],
                            "seconds": None} for n, t, c in STEPS]}
 
@@ -1013,5 +1259,66 @@ class FrameCalibrationController(ImConWidgetController):
                     img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
                 cv2.imwrite(os.path.join(d, f"{name}.png"), img)      # raw counts (16-bit PNG for 12-bit cameras)
             self._status["reportDir"] = d
+            meta = []
+            for f in self._figures:
+                with open(os.path.join(d, f"fig_{f['id']}.jpg"), "wb") as fh:
+                    fh.write(f["jpg"])
+                meta.append({k: f.get(k) for k in ("id", "step", "title", "expected", "measured", "ok")})
+            with open(os.path.join(d, "figures.json"), "w") as fh:
+                json.dump(meta, fh, indent=2)
+            with open(os.path.join(d, "report.json"), "w") as fh:     # again, now with reportDir
+                json.dump({"status": self._status, "settings": self._ctx.get("s")}, fh, indent=2, default=str)
+            fcr.write_pdf(os.path.join(d, "report.pdf"), self._status, self._ctx.get("s"), self._figures)
         except Exception as e:
             self._logger.warning(f"Could not write the calibration report: {e}")
+
+    def _latestReportDir(self):
+        try:
+            names = sorted(n for n in os.listdir(_REPORT_DIR) if os.path.isdir(os.path.join(_REPORT_DIR, n)))
+            return os.path.join(_REPORT_DIR, names[-1]) if names else None
+        except OSError:
+            return None
+
+    def _lastReport(self):
+        """(status, settings, figures) of the running or last run; after a restart the newest
+        report on disk."""
+        if self._figures or self._status.get("state") != "idle":
+            return self._status, self._ctx.get("s"), self._figures
+        if self._diskReport is None:
+            self._diskReport = (self._status, None, [])
+            d = self._latestReportDir()
+            try:
+                with open(os.path.join(d, "report.json")) as fh:
+                    rep = json.load(fh)
+                figs = []
+                if os.path.exists(os.path.join(d, "figures.json")):
+                    with open(os.path.join(d, "figures.json")) as fh:
+                        for m in json.load(fh):
+                            with open(os.path.join(d, f"fig_{m['id']}.jpg"), "rb") as fj:
+                                figs.append({**m, "jpg": fj.read()})
+                self._diskReport = ({**rep["status"], "reportDir": d}, rep.get("settings"), figs)
+            except Exception:
+                pass
+        return self._diskReport
+
+    def _figure(self, title, img=None, marks=(), expected="", measured="", ok=None, annotated=None):
+        """Add a report figure (never breaks the run): yellow = expected, green = measured."""
+        try:
+            disp = annotated if annotated is not None else fcr.annotate(img, marks)
+            self._figures.append({"id": f"{len(self._figures) + 1:02d}", "step": self._status.get("step") or "",
+                                  "title": title, "expected": expected, "measured": measured, "ok": ok,
+                                  "jpg": fcr.jpeg(disp)})
+            self._status["nFigures"] = len(self._figures)
+        except Exception as e:
+            self._logger.warning(f"report figure '{title}' failed: {e}")
+
+    def _cameraStatus(self, note):
+        """What the main camera is set to, for the UI."""
+        try:
+            p = self._master.detectorsManager[self._ctx["det"]].parameters
+            self._status["camera"] = {"exposureMs": float(p["exposure"].value) if "exposure" in p else None,
+                                      "gainDb": float(p["gain"].value) if "gain" in p else None, "note": note,
+                                      "auto": bool(self._ctx["s"].get("autoExposure")),
+                                      "maxGain": bool(self._ctx["s"].get("maxGain"))}
+        except Exception:
+            pass

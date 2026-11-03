@@ -11,8 +11,11 @@ import {
   Alert,
   Box,
   Button,
+  Card,
+  CardContent,
   Checkbox,
   Chip,
+  Dialog,
   FormControlLabel,
   Grid,
   LinearProgress,
@@ -30,7 +33,11 @@ import CameraSettingsDialog from "./CameraSettingsDialog";
 import * as positionSlice from "../state/slices/PositionSlice";
 import {
   apiFrameCalibrationContinue,
+  apiFrameCalibrationGetFigure,
+  apiFrameCalibrationGetFigures,
   apiFrameCalibrationGetPlate,
+  apiFrameCalibrationGetReportPdf,
+  apiFrameCalibrationGetReportZip,
   apiFrameCalibrationGetSettings,
   apiFrameCalibrationGetStatus,
   apiFrameCalibrationSetSettings,
@@ -55,6 +62,8 @@ const FIELDS = [
   ["overviewExposureMs", "Overview exposure at full light (ms)"],
 ];
 const FLAGS = [
+  ["maxGain", "Maximum camera gain during the run"],
+  ["autoExposure", "Set the camera exposure automatically"],
   ["homeTurret", "Home turret"],
   ["secondObjective", "Second objective"],
   ["placementCheck", "Placement check"],
@@ -133,6 +142,73 @@ function PlateMap({ plate, trace, stage, placement }) {
 
 const fmt = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : "–");
 
+// Report figures of the running or last run: the image with what was expected (yellow)
+// and what was measured (green). Refetched when the backend adds figures or a run starts.
+function ReportFigures({ nFigures, runKey, onError }) {
+  const [figures, setFigures] = useState([]);
+  const [urls, setUrls] = useState({});
+  const [open, setOpen] = useState(null);
+  const urlsRef = useRef({});
+
+  useEffect(() => {           // new run: drop the old images
+    Object.values(urlsRef.current).forEach((u) => URL.revokeObjectURL(u));
+    urlsRef.current = {};
+    setUrls({});
+    setFigures([]);
+  }, [runKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await apiFrameCalibrationGetFigures();
+        if (cancelled) return;
+        setFigures(list || []);
+        for (const f of list || []) {
+          if (urlsRef.current[f.id]) continue;
+          const blob = await apiFrameCalibrationGetFigure(f.id);
+          if (cancelled) return;
+          urlsRef.current[f.id] = URL.createObjectURL(blob);
+          setUrls({ ...urlsRef.current });
+        }
+      } catch (e) {
+        onError(`Report figures not available: ${e.message || e}`);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [nFigures, runKey, onError]);
+
+  if (!figures.length) return <Typography variant="body2" color="text.secondary">No figures yet - they appear while the calibration runs.</Typography>;
+  const shown = figures.find((f) => f.id === open);
+  return (
+    <>
+      <Grid container spacing={1}>
+        {figures.map((f) => (
+          <Grid item xs={12} sm={6} lg={4} key={f.id}>
+            <Card variant="outlined" sx={{ height: "100%" }}>
+              {urls[f.id] && (
+                <Box component="img" src={urls[f.id]} alt={f.title} onClick={() => setOpen(f.id)}
+                  sx={{ width: "100%", display: "block", cursor: "zoom-in", bgcolor: "black" }} />
+              )}
+              <CardContent sx={{ p: 1, "&:last-child": { pb: 1 } }}>
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+                  {f.ok != null && <Chip size="small" label={f.ok ? "ok" : "failed"} color={f.ok ? "success" : "error"} />}
+                  <Typography variant="subtitle2">{f.title}</Typography>
+                </Stack>
+                {f.expected && <Typography variant="caption" display="block" sx={{ color: "#b58900" }}>Expected: {f.expected}</Typography>}
+                {f.measured && <Typography variant="caption" display="block" sx={{ color: "success.main" }}>Measured: {f.measured}</Typography>}
+              </CardContent>
+            </Card>
+          </Grid>
+        ))}
+      </Grid>
+      <Dialog open={!!shown} onClose={() => setOpen(null)} maxWidth="lg">
+        {shown && urls[shown.id] && <Box component="img" src={urls[shown.id]} alt={shown.title} sx={{ maxWidth: "100%" }} onClick={() => setOpen(null)} />}
+      </Dialog>
+    </>
+  );
+}
+
 function Results({ result }) {
   if (!result) return <Typography variant="body2" color="text.secondary">No calibration stored yet.</Typography>;
   const rows = [];
@@ -202,6 +278,26 @@ export default function FrameCalibrationApp() {
     }
   };
 
+  const download = async (fetcher, name) => {
+    try {
+      const blob = await fetcher();
+      if (blob.type && blob.type.includes("json")) {      // the backend answered with an error
+        setError(JSON.parse(await blob.text()).error || "Download failed");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (e) {
+      setError(`Download failed: ${e.message || e}`);
+    }
+  };
+  const runName = `frame_calibration_${(status?.startedAt || "").replace(/[^0-9]/g, "")}`;
+  const onFigureError = useCallback((msg) => setError(msg), []);
+
   const start = async () => {
     setError("");
     const r = await apiFrameCalibrationStart();
@@ -227,7 +323,7 @@ export default function FrameCalibrationApp() {
       </Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
       {status && ["finished", "failed", "aborted"].includes(status.state) && (
-        <Alert severity={status.state === "finished" ? (status.message.includes("warnings") ? "warning" : "success") : "error"} sx={{ mb: 2 }}
+        <Alert severity={status.state === "finished" ? (/warnings|failed/.test(status.message) ? "warning" : "success") : "error"} sx={{ mb: 2 }}
           action={preflightFailed ? cameraButton : undefined}>
           {status.message}{status.reportDir ? ` — report: ${status.reportDir}` : ""}
         </Alert>
@@ -256,6 +352,12 @@ export default function FrameCalibrationApp() {
           </Paper>
           <Paper variant="outlined" sx={{ p: 1 }}>
             <Typography variant="subtitle2">Camera</Typography>
+            {status?.camera && (
+              <Typography variant="caption" color={active ? "info.main" : "text.secondary"} display="block">
+                {active ? "Set by the calibration" : "Last run"}: exposure {fmt(status.camera.exposureMs, 2)} ms, gain{" "}
+                {fmt(status.camera.gainDb, 1)} dB - {status.camera.note}
+              </Typography>
+            )}
             <Box sx={{ maxHeight: 360, overflow: "hidden" }}>
               <LiveViewControlWrapper useFastMode={true} />
             </Box>
@@ -319,6 +421,19 @@ export default function FrameCalibrationApp() {
           )}
         </Grid>
       </Grid>
+
+      <Paper variant="outlined" sx={{ p: 1, mt: 2 }}>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }} flexWrap="wrap">
+          <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>Report: what was expected (yellow), what was measured (green)</Typography>
+          <Button size="small" variant="outlined" onClick={() => download(apiFrameCalibrationGetReportPdf, `${runName}.pdf`)}>
+            Download PDF
+          </Button>
+          <Button size="small" variant="outlined" disabled={active} onClick={() => download(apiFrameCalibrationGetReportZip, `${runName}.zip`)}>
+            Download raw data (ZIP)
+          </Button>
+        </Stack>
+        <ReportFigures nFigures={status?.nFigures} runKey={status?.startedAt} onError={onFigureError} />
+      </Paper>
     </Box>
   );
 }

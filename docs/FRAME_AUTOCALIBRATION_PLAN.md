@@ -95,6 +95,22 @@ Measured on the Pi rig (2026-11-02, enclosed FRAME, runs 5/7/8 agree):
 - Open: plate placement (rect-hole edges) gave -0.07° / 5928x6825 µm in three runs and
   -0.20° / 6467x7534 µm in one (run 7, focus 40 µm lower); edge frames are now in the report.
 
+Changes after the Pi runs of 2026-11-03:
+- Main camera: maximum gain during the run (`maxGain`), exposure set on the plate (`autoExposure`,
+  95th percentile towards 30 %, cap 100 ms); the user's exposure and gain are restored after the run.
+  The via search runs short (4x: 0.05 ms at 24 dB; the second objective scaled by the magnification
+  ratio squared) so the rays stay dark; centring and the 3x3 grid run with the via ~5x saturated,
+  because the unsaturated via core is not flat (10x: 799 px / 25 px fit error instead of 1000 / 6).
+- A via candidate that cannot be centred (a ray tip cut by the frame edge) is reported and the
+  search continues (up to five).
+- Overview frames: LED + short manual exposure first, room light last (in daylight it found
+  silkscreen wells as a hole pair).
+- Stage positions in the routine come from verified move targets; one fresh read returned X = -26
+  instead of 63910 and drove the stage to the end stop.
+- Report: every step adds figures (raw frame, yellow = expected, green = measured) shown in the
+  wizard; `getFrameCalibrationReportPdf` (summary + figures) and `getFrameCalibrationReportZip`
+  (report folder with the raw 16-bit frames) for download.
+
 Decisions (2026-10-29): holder repeats within ±1 mm; Z home = farthest from the sample,
 negative Z = towards the sample; manual-focus pause when autofocus fails; parcentricity
 stored as `objective.xyOffsets` and applied with the existing Z-follow toggle; stepsize

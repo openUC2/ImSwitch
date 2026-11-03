@@ -76,6 +76,25 @@ Measured on the rig (2026-10-30, 4x, Hik 3072x2048, 0.617 µm/px):
   full light if the holes are not found.
 - `snapNumpyToFastAPI` clips 12-bit frames to 8 bit (PIL "L"), do not judge exposure from it.
 
+Measured on the Pi rig (2026-11-02, enclosed FRAME, runs 5/7/8 agree):
+- 4x: 0.598 µm/px, camera rotation -179.6°, plate focus Z -4380..-4420 µm. Slot 1 ("20x"):
+  0.240 µm/px, i.e. 2.5x the 4x, not 5x: `objective.magnifications` [4, 20] is wrong for this
+  turret (both behave as 1.44x nominal on this tube lens if slot 1 is a 10x). The routine now
+  measures the pixel size from +/- stage moves (phase correlation) before the via search.
+- Parcentricity of slot 1: (-1696, -289) µm (+/-2 µm over three runs), more than the old 800 µm
+  search radius; switch-back residual ~9-11 µm; via re-found 8-9 µm from the image centre.
+- Overview webcam: 640x480, auto exposure ("aperture priority"). The LED is either off (<=100)
+  or nearly full (>=120); in the dark enclosure LED 60 gives a black frame and auto exposure
+  saturates the LED cone over both holes. Hole frames: LED on, webcam manual exposure 10 ms
+  (new `exposure_mode` parameter of OpenCVCamManager, V4L2 only). Through the rect hole the
+  camera sees the objective turret (reflections that change with the stage position), so only
+  the round hole is tracked after the pair is identified once; frames are taken with Z at the
+  homed top (at focus the objective under the holes shifts the round hole by ~6 px).
+- UC2 firmware sometimes reports the A position under X ("X reads 30377 after a move to 64496");
+  offsets and positions are taken from verified move targets, not from fresh reads.
+- Open: plate placement (rect-hole edges) gave -0.07° / 5928x6825 µm in three runs and
+  -0.20° / 6467x7534 µm in one (run 7, focus 40 µm lower); edge frames are now in the report.
+
 Decisions (2026-10-29): holder repeats within ±1 mm; Z home = farthest from the sample,
 negative Z = towards the sample; manual-focus pause when autofocus fails; parcentricity
 stored as `objective.xyOffsets` and applied with the existing Z-follow toggle; stepsize

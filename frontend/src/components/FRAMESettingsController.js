@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { useSelector } from "react-redux";
 import { Tabs, Tab, Box } from "@mui/material";
+import PixelCalibrationTab from "./FRAMESettings/PixelCalibrationTab";
+import ManualPixelCalibrationTab from "./FRAMESettings/ManualPixelCalibrationTab";
+import VerifyCalibrationTab from "./FRAMESettings/VerifyCalibrationTab";
 import SetLasersTab from "./FRAMESettings/SetLasersTab";
 import FrameHomingTab from "./FRAMESettings/FrameHomingTab";
 import ZStageSyncTab from "./FRAMESettings/ZStageSyncTab";
@@ -30,7 +33,7 @@ const FRAMESettings = () => {
       localStorage.removeItem(INITIAL_TAB_KEY);
       return requested;
     }
-    return "readNoise";
+    return "autoPixel";
   });
   const hasObjectiveController = useSelector(
     selectHasController("ObjectiveController"),
@@ -38,7 +41,7 @@ const FRAMESettings = () => {
 
   useEffect(() => {
     if (!hasObjectiveController && selectedTab === "objective") {
-      setSelectedTab("readNoise");
+      setSelectedTab("autoPixel");
     }
   }, [hasObjectiveController, selectedTab]);
 
@@ -55,6 +58,9 @@ const FRAMESettings = () => {
         scrollButtons="auto"
         sx={{ borderBottom: 1, borderColor: "divider", mb: 3 }}
       >
+        <Tab value="autoPixel" label="Automatic Pixel Calibration" />
+        <Tab value="manualPixel" label="Manual Pixel Calibration" />
+        <Tab value="verifyCalibration" label="Verify Calibration" />
         <Tab value="readNoise" label="Read Noise Calibration" />
         <Tab value="setLasers" label="Set Lasers" />
         <Tab value="frameHoming" label="Frame Homing & Transport" />
@@ -67,6 +73,9 @@ const FRAMESettings = () => {
       </Tabs>
 
       <Box sx={{ mt: 2 }}>
+        {selectedTab === "autoPixel" && <PixelCalibrationTab />}
+        {selectedTab === "manualPixel" && <ManualPixelCalibrationTab />}
+        {selectedTab === "verifyCalibration" && <VerifyCalibrationTab />}
         {selectedTab === "readNoise" && <ReadNoiseCalibrationTab />}
         {selectedTab === "setLasers" && <SetLasersTab />}
         {selectedTab === "frameHoming" && <FrameHomingTab />}

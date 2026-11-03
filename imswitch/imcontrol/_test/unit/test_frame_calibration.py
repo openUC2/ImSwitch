@@ -99,8 +99,11 @@ def test_frame_calibration_recovers_simulated_frame():
         getPixelSize=lambda det, obj: (PS, PS), applyBacklash=lambda **kw: None,
         setCalibrationData=lambda **kw: stored.update(kw))
 
-    def set_offset(knownPosition, axis):
-        stage.offset[axis] = stage.cmd[axis] - knownPosition
+    def set_offset(knownPosition, axis, currentDevicePosition=None):
+        # the controller must pass the device position it verified itself: a fresh read can
+        # carry another axis's position (UC2 firmware, rig 2026-11-02)
+        assert currentDevicePosition is not None and abs(currentDevicePosition - stage.cmd[axis]) < 1e-6
+        stage.offset[axis] = currentDevicePosition - knownPosition
 
     controllers = {"PixelCalibration": pc, "Positioner": SimpleNamespace(setStageOffsetAxis=set_offset)}
     master = SimpleNamespace(
@@ -141,3 +144,29 @@ def test_frame_calibration_recovers_simulated_frame():
     assert res["verifyUm"] < 3.0
     assert abs(res["focus"]["0"]["z"] - Z_FOCUS) <= 20, res["focus"]
     assert cam.parameters["exposure"].value == 40.0          # restored after the via work
+
+
+def test_pixel_size_from_stage_moves():
+    """The configured magnification can be far off (Pi 2026-11-02: the "20x" is 2.5x the
+    4x, not 5x). The pixel size is measured from stage moves tracked by image correlation:
+    right from a 2.5x wrong guess over 2-D texture (the via), refused over 1-D texture
+    (ray edges only) instead of returning a distorted value."""
+    from imswitch.imcontrol.controller.controllers.FrameCalibrationController import DEFAULT_SETTINGS
+    stage = Stage()
+    cam = Camera(stage)
+    ctrl = FrameCalibrationController.__new__(FrameCalibrationController)
+    ctrl._master = SimpleNamespace(
+        positionersManager=type("PM", (), {"getAllDeviceNames": lambda s: ["S"], "__getitem__": lambda s, k: stage})(),
+        detectorsManager=type("DM", (), {"__getitem__": lambda s, k: cam})())
+    ctrl._logger = SimpleNamespace(info=print, warning=print, error=print)
+    ctrl._abort = threading.Event()
+    ctrl._status = ctrl._newStatus("running")
+    ctrl._ctx = {"s": {**DEFAULT_SETTINGS, "settleS": 0.0}, "det": "Cam"}
+    stage.move(Z_FOCUS, "Z")
+    R = np.array([[math.cos(THETA), -math.sin(THETA)], [math.sin(THETA), math.cos(THETA)]])
+    via = D0 + R @ fct.PLATE["via"]                       # device = user here (offset 0)
+    fov_wrong = min(H, W) * 2.5 * PS
+    ps = ctrl._measurePixelSize(0, via, fov_wrong)
+    assert ps is not None and abs(ps / PS - 1) < 0.02, ps
+    rays = D0 + R @ (np.array(fct.PLATE["via"]) + [1700.0, 0.0])   # inside one ray: parallel edges only
+    assert ctrl._measurePixelSize(0, rays, fov_wrong) is None

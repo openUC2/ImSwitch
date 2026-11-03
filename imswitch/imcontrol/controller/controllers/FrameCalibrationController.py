@@ -34,11 +34,12 @@ DEFAULT_SETTINGS = {
     "overviewCamera": "",        # "" = experiment.overviewCameraName, else ObservationCamera
     "illumination": "LED",       # transmission light switched on at start ("" = leave as is)
     "illuminationValue": 0,      # 0 = keep its current value
-    "overviewIlluminationValue": 60,  # dimmed for overview frames: full light saturates the holes
+    "overviewIlluminationValue": 60,  # overview frames by room light first (open rig); the LED is practically off below ~100
+    "overviewExposureMs": 10.0,  # else full LED, overview camera at this manual exposure (then /2, x2): auto exposure saturates the holes
     "homeTurret": True,
     "secondObjective": True,
     "searchRadiusUm": 4000,      # plate placement tolerance around the nominal via
-    "searchRadius2Um": 800,      # parcentricity tolerance of the second objective
+    "searchRadius2Um": 2000,     # parcentricity tolerance of the second objective (Pi rig 2026-11-02: ~1.5 mm)
     "axesStepUm": 2000,          # overview motion-direction check (< half the 4.5 mm well pitch)
     "focusSearchUm": 6000,       # first focus: sweep this far towards the sample from the homed Z
     "focusStepUm": 100,          # coarse focus step of the first objective (others: x mag ratio)
@@ -229,7 +230,12 @@ class FrameCalibrationController(ImConWidgetController):
         if pc is not None:
             ok, why = pc._validateCameraIntensity(self._ctx["det"])
             if not ok and "saturat" not in why:      # bright is fine here: the stage may sit over a hole
-                raise StepError(f"{self._ctx['det']}: {why} - is the {name or 'transmission light'} on, exposure ok?")
+                g = fct.gray(img)
+                if np.percentile(g, 99.5) <= 2 * np.percentile(g, 0.1) + 10:     # nothing above the black level
+                    raise StepError(f"{self._ctx['det']}: {why} - is the {name or 'transmission light'} on, "
+                                    "exposure and gain ok?")
+                # light, but the stage sits over dark plate: the exposure is set at the via
+                self._warn(f"{self._ctx['det']}: {why} at the start position - continuing")
             pc._resetDetectorFlip(self._ctx["det"])     # measure on the raw sensor; flips are re-applied on save
             self._ctx["flipReset"] = True
         params = getattr(m.detectorsManager[self._ctx["det"]], "parameters", {})
@@ -276,38 +282,44 @@ class FrameCalibrationController(ImConWidgetController):
 
     def _step_axes(self, s):
         """Track the round hole in the overview camera for +/- moves on each axis. A
-        landmark, not global correlation: the fixed LED glare pins a correlation at zero."""
+        landmark, not global correlation: the fixed LED glare pins a correlation at zero.
+        The hole pair identifies it once; then only the round hole is followed."""
         if not self._ctx["ov"]:
             return "skipped"
         step = float(s["axesStepUm"])
-        # the hole is near the optical axis when the stage sits at the hole's own plate
-        # coordinate; with full light the glare marks that axis in the overview image
-        ref = np.array(fct.PLATE["roundHole"], float)
+        # the stage at the midpoint of the two holes puts both near the optical axis, inside
+        # the LED cone (a dark enclosure lights only the cone); with full light the glare marks it
+        ref = self._holePairMid()
         self._move(*ref, approach=0)
         img = self._grab(self._ctx["ov"])
         c = fct.glare_center(img)
         self._ctx["ovAxis"] = c or [img.shape[1] / 2, img.shape[0] / 2]
         self._ctx["ovRadius"] = img.shape[1] / (6 if c else 3)
-        self._light(s["overviewIlluminationValue"])
         try:
-            p0 = self._holesAt(ref)
-            if p0 is None:                  # too dark for the overview camera: try with the full light
-                self._light(self._ctx.get("lightMain"))
-                p0 = self._holesAt(ref)
+            p0 = None
+            for mode in self._overviewModes(s):
+                if self._overviewMode(*mode):
+                    p0 = self._holesAt(ref)
+                if p0 is not None:
+                    self._ctx["ovMode"] = mode
+                    break
             if p0 is None:
                 raise StepError("the overview camera does not see the plate holes with the stage at the round hole - "
                                 "plate missing or not seated, or the camera moved")
+            r0 = np.asarray(p0["round"])
+            reach = 0.4 * float(np.linalg.norm(np.asarray(p0["rect"]) - r0))     # less than half way to the rect hole
+            self._ctx["ovRef"] = {"u": ref.tolist(), "round": r0.tolist(), "reach": reach}
             shifts = {}
             for i, ax in enumerate("XY"):
                 for sign in (1, -1):
                     t = ref.copy()
                     t[i] += sign * step
-                    p = self._holesAt(t)
+                    p = self._holesAt(t, near=r0, max_px=reach)
                     if p is None:
-                        raise StepError(f"plate holes lost in the overview image after {sign * step:+.0f} µm in {ax}")
-                    shifts[("+" if sign > 0 else "-") + ax] = np.asarray(p["round"]) - p0["round"]
+                        raise StepError(f"round hole lost in the overview image after {sign * step:+.0f} µm in {ax}")
+                    shifts[("+" if sign > 0 else "-") + ax] = np.asarray(p["round"]) - r0
         finally:
-            self._light(self._ctx.get("lightMain"))
+            self._overviewMode(self._ctx.get("lightMain"), None)
         J, problems = fct.axes_check(shifts, step, min_px=2.0)
         ref_J = (self._fc().get("result") or {}).get("overviewJ")
         if ref_J and not problems:
@@ -315,9 +327,9 @@ class FrameCalibrationController(ImConWidgetController):
             if change > 25:
                 problems.append(f"image directions changed by {change:.0f}° since the last calibration - "
                                 "axis/sign config changed or the overview camera moved")
-        self._ctx["overviewJ"] = J.tolist()
         if problems:
             raise StepError("; ".join(problems))
+        self._ctx["overviewJ"] = J.tolist()           # stored (reference for the next run) only when consistent
         out = ""
         Hprev = ((self._fc().get("result") or {}).get("overview") or {}).get("H")
         if Hprev or c:   # hole seen off the optical axis: the stage offset is off by that much
@@ -325,7 +337,8 @@ class FrameCalibrationController(ImConWidgetController):
             # the glare is ~3.5 mm off it (rig 2026-10-30), so then only gross errors count
             axis = np.asarray(Hprev)[:, 2] if Hprev else None
             axis = axis[:2] / axis[2] if axis is not None else np.asarray(self._ctx["ovAxis"])
-            shift = -np.linalg.solve(J, np.asarray(p0["round"]) - axis)
+            # the round hole is seen at axis + J (u - P - shift) with the stage at u = ref
+            shift = (ref - np.asarray(fct.PLATE["roundHole"])) - np.linalg.solve(J, r0 - axis)
             if np.linalg.norm(shift) > (1000 if Hprev else 6000):
                 self._ctx["plateShift"] = shift.tolist()
                 self._warn(f"the plate is ({shift[0]:+.0f}, {shift[1]:+.0f}) µm from where the stage offset expects it - "
@@ -344,12 +357,15 @@ class FrameCalibrationController(ImConWidgetController):
 
     def _step_offset(self, s):
         r0 = self._ctx["obj"][self._ctx["slot0"]]
-        self._move(*r0["u"])
+        self._move(*r0["u"])                 # verified: the stage reads within 3 µm of u
         stage = self._stageManager()
         old = np.array([stage.getStageOffsetAxis(axis=a) for a in "XY"], float)
         posc = self._master.getController("Positioner")
         for i, ax in enumerate("XY"):
-            posc.setStageOffsetAxis(knownPosition=float(fct.PLATE["via"][i]), axis=ax)
+            # device position from the verified move target, not from one fresh read: the
+            # firmware sometimes reports another axis (A under X, rig 2026-11-02 -> offset -63909)
+            posc.setStageOffsetAxis(knownPosition=float(fct.PLATE["via"][i]),
+                                    currentDevicePosition=float(r0["u"][i] + old[i]), axis=ax)
         new = np.array([stage.getStageOffsetAxis(axis=a) for a in "XY"], float)
         shift = old - new                  # user_new = user_old + (old - new)
         for t in self._status["trace"]:
@@ -379,12 +395,14 @@ class FrameCalibrationController(ImConWidgetController):
         w, h = fct.PLATE["rectHoleSize"]
         edges = []
         for dx, dy, k in ((-w / 2, 0, 0), (w / 2, 0, 0), (0, -h / 2, 1), (0, h / 2, 1)):
-            self._move(rect[0] + dx, rect[1] + dy)
-            img, p = self._grab(), self._pos()
+            u = (rect[0] + dx, rect[1] + dy)
+            self._move(*u)                     # verified target, not a fresh read (firmware reports A under X)
+            img = self._grab()
+            self._ctx["images"][f"edge_{len(edges)}"] = img       # report (Pi run 7: all four edges ~300 µm off)
             pts = fct.boundary_points(img)
             if len(pts) < 50:
-                raise StepError(f"no hole edge seen at ({rect[0] + dx:.0f}, {rect[1] + dy:.0f}) µm")
-            edges.append(float(np.median(fct.px_to_plate(pts, J, (p["X"], p["Y"]), img.shape[:2])[:, k])))
+                raise StepError(f"no hole edge seen at ({u[0]:.0f}, {u[1]:.0f}) µm")
+            edges.append(float(np.median(fct.px_to_plate(pts, J, u, img.shape[:2])[:, k])))
             self._trace(rect[0] + dx, rect[1] + dy, "edge")
         rc = [(edges[0] + edges[1]) / 2, (edges[2] + edges[3]) / 2]
         pl = fct.placement(fct.PLATE["via"], rc)
@@ -429,7 +447,14 @@ class FrameCalibrationController(ImConWidgetController):
         self._move(*fct.PLATE["via"])
         self._ctx["repeatUm"] = self._residualUm(r0)
         self._move(z=self._pos()["Z"] + s["zRetreatUm"])
-        r = self._calibrateObjective(k, s, fct.PLATE["via"], s["searchRadius2Um"])
+        try:
+            r = self._calibrateObjective(k, s, fct.PLATE["via"], s["searchRadius2Um"])
+        except Exception:
+            # the following steps (overview, save) work with the first objective
+            self._move(z=self._ctx.get("zTop", r0["z"] + s["zRetreatUm"]))   # homed top: always clear of the sample
+            self._selectObjective(k0)
+            self._move(z=r0["z"])
+            raise
         dev0, dev1 = np.asarray(r0["dev"]), np.asarray(r["dev"])
         offs = [[0.0, 0.0], [0.0, 0.0]]
         offs[k] = (dev1 - dev0).tolist()
@@ -445,24 +470,28 @@ class FrameCalibrationController(ImConWidgetController):
                 f"switch-back residual {self._ctx['switchBackUm']:.1f} µm")
 
     def _step_overview(self, s):
-        if not self._ctx["ov"] or "ovAxis" not in self._ctx:
+        ref = self._ctx.get("ovRef")
+        if not self._ctx["ov"] or ref is None:
             return "skipped"
-        hole = np.array(fct.PLATE["roundHole"], float)
-        self._light(s["overviewIlluminationValue"])
+        J = np.asarray(self._ctx["overviewJ"]) if "overviewJ" in self._ctx else np.zeros((2, 2))
+        z_focus = self._ctx["obj"][self._ctx["slot0"]]["z"]
+        # objective back at the homed top, as for the axes frames: at focus it sits under the
+        # holes and its reflections shift the round hole's dark area (Pi run 5: 6 px)
+        self._move(z=self._ctx.get("zTop", z_focus))
+        self._overviewMode(*(self._ctx.get("ovMode") or (s["overviewIlluminationValue"], None)))
         try:
-            for dx in (-6000, 0, 6000):         # 3x3 grid, holes stay near the optical axis
-                for dy in (-6000, 0, 6000):
-                    self._holesAt(hole + (dx, dy))
+            for dx in (-4000, 0, 4000):         # 3x3 grid, holes stay in the LED cone
+                for dy in (-4000, 0, 4000):
+                    d = np.array([dx, dy], float)
+                    self._holesAt(np.asarray(ref["u"]) + d, near=np.asarray(ref["round"]) + J @ d, max_px=ref["reach"])
         finally:
-            self._light(self._ctx.get("lightMain"))
+            self._overviewMode(self._ctx.get("lightMain"), None)
+            self._move(z=z_focus)              # from above, like the focus sweep
         off = np.array([self._stageManager().getStageOffsetAxis(axis=a) for a in "XY"])
-        samples = []
-        for dev, holes in self._ctx["ovSamples"]:
-            u = np.asarray(dev) - off
-            samples += [(u, fct.PLATE["roundHole"], holes["round"]), (u, fct.PLATE["rectHole"], holes["rect"])]
+        samples = [(np.asarray(dev) - off, fct.PLATE["roundHole"], o) for dev, o in self._ctx["ovSamples"]]
         H, rms, n = fct.fit_overview_homography(samples)
         if H is None:
-            raise StepError(f"plate holes seen in only {len(self._ctx['ovSamples'])} overview frames (need 2)")
+            raise StepError(f"round hole seen in only {len(samples)} overview frames (need 4)")
         self._ctx["overview"] = {"camera": self._ctx["ov"], "H": H.tolist(), "rmsPx": rms, "nPoints": n,
                                  "opticalAxisPx": self._ctx["ovAxis"]}
         if rms > 3:
@@ -498,26 +527,28 @@ class FrameCalibrationController(ImConWidgetController):
         f = mags[k0] / mags[slot] if mags[slot] else 1.0
         if oc is not None:
             self._selectObjective(slot)
-        ps = self._pixelSizeGuess(slot, mags)
+        ps0 = self._pixelSizeGuess(slot, mags)
         img = self._grab()
+        self._move(*centre)                 # the sunburst around the via gives the focus contrast
+        z = self._focus(slot, s, f)
+        # the stage is trusted, the configured magnifications are not (Pi 2026-11-02: "20x" = 2.5x the 4x)
+        ps = self._measurePixelSize(slot, centre, min(img.shape[:2]) * ps0) or ps0
         fov = min(img.shape[:2]) * ps
         d_px = fct.PLATE["viaDiameter"] / ps
-        self._move(*centre)                 # the sunburst around the via gives the focus contrast
-        self._focus(slot, s, f)
         self._exposure(s["viaExposureFactor"])
-        hit = self._searchVia(centre, radius, 0.8 * fov, d_px)
+        hit = self._searchVia(centre, radius, 0.7 * fov, d_px)    # overlap: some tile shows the via 0.4 r from its edge
         if hit is None:
             raise StepError(f"centre via not found within {radius:.0f} µm of ({centre[0]:.0f}, {centre[1]:.0f}) - "
                             "plate seated with the A1 notch at the stage origin? light on? try a larger search radius")
         J, rms, u, plate_level, d_px = self._centreAndFit(d_px, fov, s)
         if oc is not None:
-            self._saveZ(oc, slot)
-        p = self._pos()
-        dev = [p["X"] + self._stageManager().getStageOffsetAxis(axis="X"),
-               p["Y"] + self._stageManager().getStageOffsetAxis(axis="Y")]
-        r = {"J": J.tolist(), "rmsPx": rms, "u": list(u), "dev": dev, "z": p["Z"], "plateLevel": plate_level,
+            self._saveZ(oc, slot, z)
+        # positions from the verified move targets (u, z), not from a fresh read (see _step_offset)
+        dev = [u[0] + self._stageManager().getStageOffsetAxis(axis="X"),
+               u[1] + self._stageManager().getStageOffsetAxis(axis="Y")]
+        r = {"J": J.tolist(), "rmsPx": rms, "u": list(u), "dev": dev, "z": z, "plateLevel": plate_level,
              "discPx": d_px, "metrics": fct.J_metrics(J)}
-        nominal = ps if slot == k0 else self._ctx["obj"][k0]["metrics"]["scale_x_um_per_pixel"] * f
+        nominal = ps0 if slot == k0 else self._ctx["obj"][k0]["metrics"]["scale_x_um_per_pixel"] * f
         measured = r["metrics"]["scale_x_um_per_pixel"]
         if not 0.67 < measured / nominal < 1.5:
             self._warn(f"objective {slot}: {measured:.3f} µm/px is far from the expected {nominal:.3f} µm/px - "
@@ -526,7 +557,42 @@ class FrameCalibrationController(ImConWidgetController):
         self._ctx["images"][f"via_objective{slot}"] = self._grab()
         return r
 
+    def _measurePixelSize(self, slot, u, fov):
+        """µm/px from +/- stage moves of a tenth of the FOV, tracked by image correlation on the
+        focused sunburst. None (and a warning) when the correlation is weak or inconsistent."""
+        step = 0.1 * fov
+        self._move(*u)
+        ref = self._grab()
+        shifts = {}
+        for i, ax in enumerate("XY"):
+            for sign in (1, -1):
+                du = np.zeros(2)
+                du[i] = sign * step
+                self._move(*(np.asarray(u, float) + du))
+                sh, resp = fct.image_shift(ref, self._grab())
+                if resp < 0.05:
+                    self._warn(f"objective {slot}: pixel size not measured (no image correlation) - using the configured value")
+                    return None
+                shifts[("+" if sign > 0 else "-") + ax] = sh
+        self._move(*u)
+        J, problems = fct.axes_check(shifts, step)
+        m = fct.J_metrics(J)
+        if not problems and (abs(m["scale_x_um_per_pixel"] / m["scale_y_um_per_pixel"] - 1) > 0.1 or m["shear_deg"] > 5):
+            # square pixels: anything else is 1-D texture (ray edges), correlation blind along it
+            problems.append(f"scales {m['scale_x_um_per_pixel']:.3f}/{m['scale_y_um_per_pixel']:.3f} µm/px, "
+                            f"shear {m['shear_deg']:.1f}° - too little texture")
+        if problems:
+            self._warn(f"objective {slot}: pixel size not measured ({'; '.join(problems)}) - using the configured value")
+            return None
+        ps = (m["scale_x_um_per_pixel"] + m["scale_y_um_per_pixel"]) / 2
+        self._ctx.setdefault("pixelSizeMeasured", {})[str(slot)] = ps
+        return ps
+
+    def _holePairMid(self):
+        return (np.array(fct.PLATE["roundHole"], float) + np.array(fct.PLATE["rectHole"], float)) / 2
+
     def _searchVia(self, centre, radius, step, d_px):
+        self._ctx.pop("brightestTile", None)
         for dx, dy in fct.spiral(radius, step):
             x, y = centre[0] + dx, centre[1] + dy
             self._move(x, y, approach=0)
@@ -534,10 +600,15 @@ class FrameCalibrationController(ImConWidgetController):
             hit = fct.find_bright_disc(img, d_px)
             self._ctx["lastSearchImg"] = img
             self._trace(x, y, "tile")
+            p = float(np.percentile(img, 99.5))
+            if p > self._ctx.get("brightestTile", (-1,))[0]:
+                self._ctx["brightestTile"] = (p, img)
             if hit:
                 self._trace(x, y, "via")
                 self._ctx["images"].setdefault("via_found", self._ctx.get("lastSearchImg"))
                 return x, y, hit
+        if "brightestTile" in self._ctx:      # report: the tile most likely to show the via
+            self._ctx["images"]["via_search_brightest"] = self._ctx.pop("brightestTile")[1]
         return None
 
     def _centreAndFit(self, d_px, fov, s):
@@ -583,6 +654,7 @@ class FrameCalibrationController(ImConWidgetController):
                     self._move(*us)
                     img = self._grab()
                     hit = fct.find_bright_disc(img, d_px)
+                    self._trace(*us, "rough", hit=None if hit is None else [round(hit["x"]), round(hit["y"]), round(hit["r"])])
                     if hit:
                         e = math.hypot(hit["x"] - img.shape[1] / 2, hit["y"] - img.shape[0] / 2)
                         if best is None or e < best[0]:
@@ -677,12 +749,13 @@ class FrameCalibrationController(ImConWidgetController):
             return self._ctx["obj"][k0]["z"] + delta
         return None
 
-    def _saveZ(self, oc, slot):
+    def _saveZ(self, oc, slot, z):
         """Store the focus Z of this slot; on the first objective shift the other slot by
         the same amount so the parfocal offset (the Z follow on objective switches) stays."""
-        z = self._pos()["Z"]
         zcfg = self._ctx.get("zConfig") or []
         oc.saveCurrentZPosition(slot)
+        oc._zPositions[slot] = z                        # the verified focus Z, not a fresh read
+        oc._configManager.setObjectiveParameters(slot=slot, zPosition=z, emitSignal=True)
         if slot == self._ctx.get("slot0") and len(zcfg) == 2:
             k = 1 - slot
             oc._zPositions[k] = z + zcfg[k] - zcfg[slot]
@@ -820,19 +893,49 @@ class FrameCalibrationController(ImConWidgetController):
         raise StepError(f"{name or self._ctx['det']}: no new frame within {timeout:.0f} s "
                         f"(frame counter stuck at {n0}) - camera stalled or not streaming")
 
-    def _holesAt(self, u):
-        """Move to u, return the plate holes in the overview image (px) or None; keeps
-        (device position, holes) as homography samples."""
+    def _holesAt(self, u, near=None, max_px=None):
+        """Move to u and find the holes in the overview image: the pair, or with ``near``
+        (px) only the round hole followed from there. Returns {"round": [x, y], ...} or None;
+        keeps (device position, round-hole px) as homography samples."""
         self._move(*u, approach=0)
-        self._trace(*u, "overview")
         img = self._grab(self._ctx["ov"])
-        holes = fct.find_plate_holes(img, self._ctx["ovAxis"], self._ctx["ovRadius"])
-        if holes is not None:
-            p, stage = self._pos(), self._stageManager()
-            dev = [p["X"] + stage.getStageOffsetAxis(axis="X"), p["Y"] + stage.getStageOffsetAxis(axis="Y")]
-            self._ctx["ovSamples"].append((dev, holes))
-            self._ctx["images"].setdefault("overview", img)
+        if near is None:
+            holes = fct.find_plate_holes(img, self._ctx["ovAxis"], self._ctx["ovRadius"])
+        else:
+            r = fct.track_round_hole(img, self._ctx["ovAxis"], self._ctx["ovRadius"], near, max_px)
+            holes = None if r is None else {"round": r}
+        n = self._ctx["ovFrames"] = self._ctx.get("ovFrames", 0) + 1      # every frame goes to the report
+        self._ctx["images"][f"overview_{n:02d}"] = img
+        self._trace(*u, "overview", frame=n, holes=holes, mode=self._ctx.get("ovModeNow"))
+        if holes is not None:      # the verified move target, not a fresh read (firmware reports A under X)
+            stage = self._stageManager()
+            dev = [u[0] + stage.getStageOffsetAxis(axis="X"), u[1] + stage.getStageOffsetAxis(axis="Y")]
+            self._ctx["ovSamples"].append((dev, holes["round"]))
         return holes
+
+    def _overviewModes(self, s):
+        """(LED value, overview exposure in ms or None = camera auto) to try for the hole
+        frames: room light with the LED dimmed (open rig, Mac 2026-10-30), then the full LED
+        at a short manual exposure (dark enclosure, Pi 2026-11-02: the LED is off up to
+        ~100 and nearly full from ~120, and auto exposure saturates its cone over the holes)."""
+        e = float(s["overviewExposureMs"])
+        return [(s["overviewIlluminationValue"], None)] + [(self._ctx.get("lightMain"), x) for x in (e, e / 2, 2 * e) if x > 0]
+
+    def _overviewMode(self, light, exposureMs):
+        """Set the LED and the overview camera exposure (None = auto). False when the camera
+        has no manual exposure (no 'exposure_mode' parameter)."""
+        det = self._master.detectorsManager[self._ctx["ov"]]
+        params = getattr(det, "parameters", {}) or {}
+        if exposureMs and "exposure_mode" not in params:
+            return False
+        self._light(light)
+        if "exposure_mode" in params:
+            det.setParameter("exposure_mode", "manual" if exposureMs else "auto")
+            if exposureMs:
+                det.setParameter("exposure", float(exposureMs))
+            time.sleep(0.3)
+        self._ctx["ovModeNow"] = [light, exposureMs]
+        return True
 
     def _light(self, value):
         """Set the transmission light (0/None = leave it); the webcam needs a moment to re-expose."""
@@ -848,9 +951,9 @@ class FrameCalibrationController(ImConWidgetController):
                 "steps": [{"name": n, "title": t, "critical": c, "status": "pending", "detail": "", "warnings": [],
                            "seconds": None} for n, t, c in STEPS]}
 
-    def _trace(self, x, y, kind):
+    def _trace(self, x, y, kind, **extra):
         tr = self._status["trace"]
-        tr.append({"x": float(x), "y": float(y), "kind": kind})
+        tr.append({"x": float(x), "y": float(y), "kind": kind, **extra})
         del tr[:-3000]
 
     def _warn(self, msg):
@@ -881,6 +984,7 @@ class FrameCalibrationController(ImConWidgetController):
         return {"timestamp": datetime.now().isoformat(timespec="seconds"), "detector": c["det"],
                 "objectives": {str(k): {"metrics": r["metrics"], "rmsPx": r["rmsPx"], "z": r["z"]} for k, r in c["obj"].items()},
                 **{k: c[k] for k in ("offset", "placement", "backlash", "xyOffsets", "overview", "overviewJ", "focus", "plateShift",
+                                     "pixelSizeMeasured",
                                      "repeatUm", "switchBackUm", "verifyUm") if k in c}}
 
     def _fc(self):

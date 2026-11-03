@@ -26,6 +26,7 @@ import {
   Typography,
 } from "@mui/material";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper";
+import CameraSettingsDialog from "./CameraSettingsDialog";
 import * as positionSlice from "../state/slices/PositionSlice";
 import {
   apiFrameCalibrationContinue,
@@ -50,7 +51,8 @@ const FIELDS = [
   ["viaExposureFactor", "Via exposure (× live exposure)"],
   ["illumination", "Light source"],
   ["illuminationValue", "Light value (0 = keep)"],
-  ["overviewIlluminationValue", "Light for overview camera"],
+  ["overviewIlluminationValue", "Light for overview camera (room light)"],
+  ["overviewExposureMs", "Overview exposure at full light (ms)"],
 ];
 const FLAGS = [
   ["homeTurret", "Home turret"],
@@ -162,6 +164,7 @@ export default function FrameCalibrationApp() {
   const [status, setStatus] = useState(null);
   const [settings, setSettings] = useState(null);
   const [error, setError] = useState("");
+  const [cameraOpen, setCameraOpen] = useState(false);   // exposure/gain: the preflight needs a lit frame
 
   const refresh = useCallback(async () => {
     try {
@@ -208,6 +211,10 @@ export default function FrameCalibrationApp() {
 
   const steps = status?.steps || [];
   const done = steps.filter((s) => !["pending", "running"].includes(s.status)).length;
+  const preflightFailed = steps.find((s) => s.name === "preflight")?.status === "failed";
+  const cameraButton = (
+    <Button color="inherit" size="small" onClick={() => setCameraOpen(true)}>Camera settings</Button>
+  );
 
   return (
     <Box sx={{ p: 2 }}>
@@ -220,7 +227,8 @@ export default function FrameCalibrationApp() {
       </Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
       {status && ["finished", "failed", "aborted"].includes(status.state) && (
-        <Alert severity={status.state === "finished" ? (status.message.includes("warnings") ? "warning" : "success") : "error"} sx={{ mb: 2 }}>
+        <Alert severity={status.state === "finished" ? (status.message.includes("warnings") ? "warning" : "success") : "error"} sx={{ mb: 2 }}
+          action={preflightFailed ? cameraButton : undefined}>
           {status.message}{status.reportDir ? ` — report: ${status.reportDir}` : ""}
         </Alert>
       )}
@@ -228,11 +236,13 @@ export default function FrameCalibrationApp() {
       <Stack direction="row" spacing={1} sx={{ mb: 2 }} alignItems="center">
         <Button variant="contained" onClick={start} disabled={active || !plate}>Start calibration</Button>
         <Button variant="outlined" color="error" onClick={() => apiFrameCalibrationStop().then(refresh)} disabled={!active}>Abort</Button>
+        <Button variant="outlined" onClick={() => setCameraOpen(true)} disabled={active}>Camera settings</Button>
         <Typography variant="body2" color="text.secondary">
           Stage X {fmt(position?.x, 0)} · Y {fmt(position?.y, 0)} · Z {fmt(position?.z, 0)} µm
         </Typography>
       </Stack>
       {active && <LinearProgress variant="determinate" value={(100 * done) / Math.max(steps.length, 1)} sx={{ mb: 2 }} />}
+      <CameraSettingsDialog open={cameraOpen} onClose={() => setCameraOpen(false)} />
 
       <Grid container spacing={2}>
         <Grid item xs={12} md={6}>

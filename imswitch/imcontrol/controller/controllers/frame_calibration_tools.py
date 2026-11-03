@@ -72,12 +72,15 @@ def _border_free_contour(mask, margin=3):
     return pts[keep]
 
 
-def find_bright_disc(img, diameter_px, min_contrast=8.0):
+def find_bright_disc(img, diameter_px, min_contrast=8.0, edge_margin=0.4):
     """The centre via in transmission: a bright disc of roughly ``diameter_px``, at the
     short via exposure ~100x brighter than the plate (the sunburst rays: ~4x).
 
     The circle is fitted to the blob outline without the points on the image
     border, so a disc cut by the frame edge (20x) still gives its true centre.
+    A fitted centre less than ``edge_margin`` radii inside the frame is rejected: the
+    halo of a via beyond the edge, or a large bright region cut by it (rig 2026-11-02:
+    a "disc" on the last row that never came to the centre), cannot be centred.
     Returns dict(x, y, r, contrast, rms) in full-resolution px, or None.
     """
     g = gray(img)
@@ -114,6 +117,9 @@ def find_bright_disc(img, diameter_px, min_contrast=8.0):
                 cx, cy, r, rms = fit_circle(near)
         if not (0.5 < 2 * r / d < 2.0) or rms > 0.08 * r:
             continue
+        m = edge_margin * r
+        if not (m <= cx < g.shape[1] - m and m <= cy < g.shape[0] - m):
+            continue                                 # cut by the frame edge: halo or a large bright region
         inside = g[lab == i].mean()
         contrast = float(inside / max(bg, 1e-6))
         if contrast < min_contrast:
@@ -127,6 +133,20 @@ def find_bright_disc(img, diameter_px, min_contrast=8.0):
     # pixel centres: binned px i covers full-res [i*b, (i+1)*b)
     return {"x": (cx + 0.5) * b - 0.5, "y": (cy + 0.5) * b - 0.5, "r": r * b,
             "contrast": contrast, "rms": rms * b}
+
+
+def image_shift(a, b, width=768):
+    """Content displacement (full-resolution px) of image b relative to image a by phase
+    correlation at ~``width`` px, and the peak response (0..1; below ~0.05 no reliable match)."""
+    a, b = gray(a), gray(b)
+    f = max(1, a.shape[1] // width)
+    if f > 1:   # crop to a multiple of f so the scale factor is exactly f
+        h, w = a.shape[0] // f * f, a.shape[1] // f * f
+        a = cv2.resize(a[:h, :w], (w // f, h // f), interpolation=cv2.INTER_AREA)
+        b = cv2.resize(b[:h, :w], (w // f, h // f), interpolation=cv2.INTER_AREA)
+    win = cv2.createHanningWindow((a.shape[1], a.shape[0]), cv2.CV_32F)
+    (dx, dy), r = cv2.phaseCorrelate(a - a.mean(), b - b.mean(), win)
+    return np.array([dx, dy]) * f, float(r)
 
 
 def focus_metric(img):
@@ -185,10 +205,11 @@ def J_metrics(J):
     """µm/px scales, rotation and shear of the camera for the PixelCalibration store."""
     A = np.linalg.inv(J)                      # µm per px of content displacement
     U, s, Vt = np.linalg.svd(A)
+    R = U @ Vt                                # polar factor: unique even for isotropic scale (U alone is not)
     return {
         "scale_x_um_per_pixel": float(np.linalg.norm(A[:, 0])),
         "scale_y_um_per_pixel": float(np.linalg.norm(A[:, 1])),
-        "rotation_deg": float(np.degrees(np.arctan2(U[1, 0], U[0, 0]))),
+        "rotation_deg": float(np.degrees(np.arctan2(R[1, 0], R[0, 0]))),
         "shear_deg": float(90 - np.degrees(np.arccos(np.clip(
             abs(A[:, 0] @ A[:, 1]) / (np.linalg.norm(A[:, 0]) * np.linalg.norm(A[:, 1])), 0, 1)))),
         "condition_number": float(s[0] / s[1]),
@@ -255,27 +276,16 @@ def find_plate_holes(img, center, radius):
     """Overview camera: {"round": [x, y], "rect": [x, y]} of the two through-holes
     within ``radius`` px of ``center`` (the optical-axis pixel), or None.
 
-    Take the frame with the LED dimmed: under the full glare the holes saturate away.
-    The holes are the blackest blobs. In the oblique view the 6x7 mm rect looks as
-    elliptical as the ⌀6 round hole, so they are told apart as a pair: two hole-sized
-    neighbours, the rect 1.2-2.6x the area of the round one. Silkscreen letters
-    (an "O" has a dark ellipse inside) are far smaller; the region limit keeps dark
-    holder parts out."""
-    g = cv2.GaussianBlur(gray(img), (7, 7), 0)
-    roi = np.zeros(g.shape, np.uint8)
-    cv2.circle(roi, (int(center[0]), int(center[1])), int(radius), 1, -1)
-    v = g[roi > 0]
-    lo, med = np.percentile(v, 0.5), np.median(v)
-    n, lab, stats, cent = cv2.connectedComponentsWithStats(((g < lo + 0.35 * (med - lo)) & (roi > 0)).astype(np.uint8))
-    blobs = []
-    for i in range(1, n):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if not 2e-4 * g.size < area < 1e-2 * g.size:
-            continue
-        cnt, _ = cv2.findContours((lab == i).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        (_, _), (rw, rh), _ = cv2.minAreaRect(max(cnt, key=cv2.contourArea))
-        if 0.5 < area / max(rw * rh, 1) < 0.95 and max(rw, rh) / max(min(rw, rh), 1) < 2.2:
-            blobs.append((area, cent[i]))
+    The holes are dark blobs enclosed by the lit plate (Otsu split inside the region).
+    Not simply the darkest blobs: in a dark enclosure only the LED's light cone lights
+    the plate, and the unlit surroundings are darker than the holes (Pi rig
+    2026-11-02); those touch the region border and drop out. A saturated cone (camera
+    auto exposure) washes the holes out and gives no pair: take the frame at a short
+    exposure, or by room light with the LED off. In the oblique view the 6x7 mm rect
+    looks as elliptical as the ⌀6 round hole, so they are told apart as a pair: two
+    hole-sized neighbours, the rect 1.2-2.6x the area of the round one. Silkscreen
+    letters (an "O" has a dark ellipse inside) are far smaller."""
+    blobs = _dark_blobs(img, center, radius)
     best = None
     for a, ca in blobs:
         for b, cb in blobs:
@@ -284,6 +294,44 @@ def find_plate_holes(img, center, radius):
     if best is None:
         return None
     return {"round": [float(best[1][0]), float(best[1][1])], "rect": [float(best[2][0]), float(best[2][1])]}
+
+
+def track_round_hole(img, center, radius, near, max_px):
+    """The round hole followed from a known pixel position: the hole-sized dark blob
+    nearest to ``near`` within ``max_px`` ([x, y]), or None. Only the round hole is
+    tracked: through the rect hole the camera sees the objective turret below the plate,
+    whose reflections cut into its dark area differently at every stage position (Pi rig
+    2026-11-02), so the pair test fails or swaps the two."""
+    blobs = _dark_blobs(img, center, radius)
+    if not blobs:
+        return None
+    d = [float(np.linalg.norm(np.asarray(c) - np.asarray(near, float))) for _, c in blobs]
+    i = int(np.argmin(d))
+    return [float(blobs[i][1][0]), float(blobs[i][1][1])] if d[i] <= max_px else None
+
+
+def _dark_blobs(img, center, radius):
+    """[(area, centroid)] of hole-sized, compact dark blobs enclosed by the lit plate
+    within ``radius`` px of ``center`` (see find_plate_holes)."""
+    g = cv2.GaussianBlur(gray(img), (7, 7), 0)
+    full = 255.0 if np.asarray(img).dtype == np.uint8 else max(float(g.max()), 1.0)
+    roi = np.zeros(g.shape, np.uint8)
+    cv2.circle(roi, (int(center[0]), int(center[1])), int(radius), 1, -1)
+    v8 = np.clip(g[roi > 0] / full * 255, 0, 255).astype(np.uint8).reshape(-1, 1)
+    t8, _ = cv2.threshold(v8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    lit = (g > t8 / 255 * full) & (roi > 0)
+    n, lab, stats, cent = cv2.connectedComponentsWithStats((~lit).astype(np.uint8))
+    outside = set(np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]])).tolist())
+    blobs = []
+    for i in range(1, n):
+        area = stats[i, cv2.CC_STAT_AREA]
+        if i in outside or not 2e-4 * g.size < area < 1e-2 * g.size:
+            continue
+        cnt, _ = cv2.findContours((lab == i).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        (_, _), (rw, rh), _ = cv2.minAreaRect(max(cnt, key=cv2.contourArea))
+        if 0.5 < area / max(rw * rh, 1) < 0.95 and max(rw, rh) / max(min(rw, rh), 1) < 2.2:
+            blobs.append((area, cent[i]))
+    return blobs
 
 
 def fit_overview_homography(samples):
@@ -371,6 +419,23 @@ def _demo():
         r = find_bright_disc(img, d)
         assert r and abs(r["x"] - cx) < 1.0 and abs(r["y"] - cy) < 1.0, (r, cx, cy)
     assert find_bright_disc(200 + 40 * rng.standard_normal((512, 512)), 100) is None
+    # the halo of a via beyond the frame corner (rig 2026-11-02: black plate, glow up to
+    # ~500 counts in the corner, fitted centre outside the frame) is not a via; the same
+    # disc with its centre just inside the frame is
+    yy, xx = np.mgrid[0:2048, 0:3072]
+    halo = 8 + 500 * np.exp(-((xx - 3300) ** 2 + (yy - 2300) ** 2) / (2 * 400.0 ** 2))
+    assert find_bright_disc(halo, 486) is None
+    edge = 8 + 40 * rng.standard_normal((2048, 3072))
+    edge[(xx - 2950) ** 2 + (yy - 1900) ** 2 < 243 ** 2] = 3000
+    r = find_bright_disc(edge, 486)
+    assert r and abs(r["x"] - 2950) < 1.0 and abs(r["y"] - 1900) < 1.0, r
+    edge[:] = 8 + 40 * rng.standard_normal((2048, 3072))   # a large bright region cut by the last row
+    edge[(xx - 1474) ** 2 + (yy - 2041) ** 2 < 311 ** 2] = 3000
+    assert find_bright_disc(edge, 486) is None
+    # image shift by phase correlation (pixel-size measurement from stage moves)
+    tex = cv2.GaussianBlur(rng.random((1024, 1536)).astype(np.float32), (0, 0), 6)
+    sh, resp = image_shift(tex, np.roll(tex, (-37, 52), axis=(0, 1)))
+    assert np.allclose(sh, (52, -37), atol=1.5) and resp > 0.2, (sh, resp)
     # J round trip + px_to_plate
     J = np.array([[-1.6, 0.05], [-0.04, -1.62]])
     s = np.array([[x, y] for x in (-300, 0, 300) for y in (-300, 0, 300)], float)
@@ -382,6 +447,7 @@ def _demo():
     pix = np.array([(3072 - 1) / 2, (2048 - 1) / 2]) - J @ (P - u)
     assert np.allclose(px_to_plate(pix, J, u, (2048, 3072))[0], P)
     assert abs(J_metrics(J)["scale_x_um_per_pixel"] - 1 / 1.6) < 0.02
+    assert abs(abs(J_metrics(J)["rotation_deg"]) - 180) < 2 and abs(abs(J_metrics(-1.67 * np.eye(2))["rotation_deg"]) - 180) < 1e-6
     # axes check: good, then swapped/stale
     sh = {"+X": J[:, 0] * 500, "-X": -J[:, 0] * 500, "+Y": J[:, 1] * 500, "-Y": -J[:, 1] * 500}
     Jc, probs = axes_check(sh, 500)
@@ -408,6 +474,31 @@ def _demo():
     cv2.circle(ov, (1600, 850), 50, (0, 0, 0), -1)
     hz = find_plate_holes(ov, (950, 750), 320)
     assert hz and np.allclose(hz["round"], (975, 790), atol=1) and np.allclose(hz["rect"], (980, 897), atol=1), hz
+    # Pi rig 2026-11-02 (640x480 webcam in a dark enclosure, LED on, 10 ms): only the LED
+    # cone lights the plate; the holes (~20 and ~40 counts, the rect one with a bright
+    # reflection inside) sit in it and the unlit surroundings (~0) are darker than they are
+    pi = np.zeros((480, 640, 3), np.uint8)
+    cv2.circle(pi, (316, 345), 80, (190, 190, 190), -1)
+    cv2.circle(pi, (316, 345), 50, (252, 252, 252), -1)    # saturated core: marks the optical axis
+    for x in range(250, 390, 22):                      # silkscreen well outlines in the cone
+        cv2.line(pi, (x, 270), (x, 420), (240, 240, 240), 2)
+    cv2.ellipse(pi, (325, 342), (16, 12), 0, 0, 360, (20, 20, 20), -1)
+    cv2.ellipse(pi, (328, 387), (18, 17), 0, 0, 360, (40, 40, 40), -1)
+    cv2.circle(pi, (329, 391), 3, (250, 250, 250), -1)
+    hp = find_plate_holes(pi, glare_center(pi), 640 / 6)
+    assert hp and np.allclose(hp["round"], (325, 342), atol=1.5) and np.allclose(hp["rect"], (328, 387), atol=1.5), hp
+    # the turret seen through the rect hole: a bright crescent splits its dark area (run 5 frames
+    # 4, 7, 9); the pair test may fail, the round hole is still tracked from its last position
+    cv2.ellipse(pi, (322, 390), (16, 15), 0, 60, 300, (230, 230, 230), 6)
+    assert np.allclose(track_round_hole(pi, glare_center(pi), 640 / 6, (318, 340), 18), (325, 342), atol=1.5)
+    assert track_round_hole(pi, glare_center(pi), 640 / 6, (318, 300), 18) is None
+    # same rig, camera auto exposure: the cone saturates over both holes, dark wells
+    # remain at its rim - that must not give a hole pair (2026-11-02 run: swapped pairs)
+    sat = np.full((480, 640, 3), 30, np.uint8)
+    cv2.circle(sat, (318, 360), 75, (255, 255, 255), -1)
+    for (x, y) in ((240, 426), (267, 450), (222, 403), (233, 404)):
+        cv2.rectangle(sat, (x - 7, y - 7), (x + 7, y + 7), (60, 60, 60), -1)
+    assert find_plate_holes(sat, glare_center(sat), 640 / 6) is None
     # placement: rotate the rect centre by 0.5° about the via
     t = math.radians(0.5)
     v = np.subtract(PLATE["rectHole"], PLATE["via"])

@@ -55,10 +55,11 @@ SLIDES = {
     "viaDiameter": 300,
     "pinholes": [[x, _SLOT_Y + dy] for x in (_SLOT_X[0], _SLOT_X[3]) for dy in (-19000, 0, 19000)],
     "pinholeDiameters": [200, 300, 400],
-    # placement: the slide's outer pinholes (slide rotation in its slot) and slot 4's centre
-    # pinhole, 90 mm away (insert rotation and the stage scale over a long baseline)
-    "checkPoints": {"slot 1, -19 mm": [_SLOT_X[0], _SLOT_Y - 19000], "slot 1, +19 mm": [_SLOT_X[0], _SLOT_Y + 19000],
-                    "slot 4, centre": [_SLOT_X[3], _SLOT_Y]},
+    # placement: slot 4's centre pinhole, 90 mm away (insert rotation and the stage scale over
+    # a long baseline); each slide's outer pinholes (its rotation in the slot, and from their
+    # sizes which end the 0.2 mm one is at)
+    "checkPoints": {"slot 4, centre": [_SLOT_X[3], _SLOT_Y],
+                    **{f"slot {k}, {d:+d} mm": [_SLOT_X[k - 1], _SLOT_Y + 1000 * d] for k in (1, 4) for d in (-19, 19)}},
     "focusTexture": False,
 }
 TARGETS = {"plate": PLATE, "slides": SLIDES}

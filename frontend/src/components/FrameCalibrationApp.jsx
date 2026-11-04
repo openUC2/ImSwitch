@@ -126,6 +126,22 @@ function PlateMap({ plate, trace, stage, placement }) {
       ctx.arc(X(x), Y(y), 2, 0, 2 * Math.PI);
       ctx.fill();
     });
+    // measured pinholes (placement check), and on each slide which end the 0.2 mm one is at
+    ctx.strokeStyle = "#66bb6a";
+    Object.values(placement?.pinholes || {}).forEach(({ plate: [x, y] }) => {
+      ctx.beginPath();
+      ctx.arc(X(x), Y(y), 4, 0, 2 * Math.PI);
+      ctx.stroke();
+    });
+    ctx.fillStyle = "#66bb6a";
+    ctx.font = "bold 11px sans-serif";
+    Object.entries(placement?.slides || {}).forEach(([slot, v]) => {
+      const [cx, cy] = (plate.slides || [])[Number(slot) - 1] || [];
+      if (cx == null) return;
+      const ySmall = cy + (v.smallEnd === "-y" ? -19000 : 19000);
+      ctx.fillText("0.2", X(cx) + 6, Y(ySmall) + 4);
+      ctx.fillText("0.4", X(cx) + 6, Y(2 * cy - ySmall) + 4);
+    });
     ctx.fillStyle = "#ffd54f";
     ctx.beginPath();
     ctx.arc(X(plate.via[0]), Y(plate.via[1]), 3, 0, 2 * Math.PI);
@@ -237,8 +253,9 @@ function Results({ result }) {
   if (result.placement) {
     const p = result.placement;
     rows.push(["Placement", `rotation ${fmt(p.rotationDeg)}°` + (p.rectSize ? `, rect hole ${fmt(p.rectSize[0], 0)} × ${fmt(p.rectSize[1], 0)} µm` : "")
-      + (p.pinholes ? `, stage scale over 90 mm ${fmt(p.baselineScale, 5)}` : "")
-      + (p.slideRotationDeg != null ? `, slide in slot 1 ${fmt(p.slideRotationDeg)}° (${p.orientation})` : "")]);
+      + (p.pinholes ? `, stage scale over 90 mm ${fmt(p.baselineScale, 5)}` : "")]);
+    Object.entries(p.slides || {}).forEach(([slot, v]) => rows.push([`Slide in slot ${slot}`,
+      `0.2 mm pinhole towards ${v.smallEnd} (${v.smallEnd === "-y" ? "top" : "bottom"} of the map), rotation in the slot ${fmt(v.rotationDeg)}°`]));
   }
   if (result.backlash) rows.push(["Backlash", `X ${fmt(result.backlash.X, 1)} µm, Y ${fmt(result.backlash.Y, 1)} µm`]);
   if (result.xyOffsets) rows.push(["Parcentricity", result.xyOffsets.map((o, i) => `slot ${i}: (${fmt(o[0], 1)}, ${fmt(o[1], 1)})`).join(", ") + " µm"]);
@@ -383,6 +400,8 @@ export default function FrameCalibrationApp() {
             <Typography variant="caption" color="text.secondary">
               Red cross: where the objective looks now. Dots: blue search tiles, yellow via found, orange hole edges,
               purple overview-camera positions. Orange/green outline: measured plate pose.
+              {plate?.slides && " Grey dots: nominal pinholes; green circles: measured ones, with 0.2/0.4 at the ends where the "
+                + "0.2 mm and 0.4 mm pinholes were found (the slides work either way round)."}
             </Typography>
           </Paper>
           <Paper variant="outlined" sx={{ p: 1 }}>

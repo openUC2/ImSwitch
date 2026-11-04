@@ -834,10 +834,10 @@ class FrameCalibrationController(ImConWidgetController):
         return e
 
     def _placementByPinholes(self, s, T):
-        """Pinhole slides: find the check-point pinholes (slot 1's outer two, slot 4's centre one)
-        in single frames, their plate positions from the first objective's camera matrix. Slot 4
-        gives the insert rotation and the stage scale over 90 mm; slot 1's pair the slide's
-        rotation in its slot; the pinhole sizes (0.2 / 0.4 mm) how the slide was inserted."""
+        """Pinhole slides: find the check-point pinholes (slot 4's centre one, each slide's outer
+        two) in single frames, their plate positions from the first objective's camera matrix.
+        Slot 4's centre gives the insert rotation and the stage scale over 90 mm; each slide's
+        outer pair its rotation in the slot, and their sizes (0.2 / 0.4 mm) how it was inserted."""
         r0 = self._ctx["obj"][self._ctx["slot0"]]
         J, d_px = np.asarray(r0["J"]), r0["discPx"]
         ps = (r0["metrics"]["scale_x_um_per_pixel"] + r0["metrics"]["scale_y_um_per_pixel"]) / 2
@@ -871,10 +871,13 @@ class FrameCalibrationController(ImConWidgetController):
         cp, via = T["checkPoints"], T["via"]
         if "slot 4, centre" in found:
             pl.update(fct.placement(via, found["slot 4, centre"]["plate"], cp["slot 4, centre"], via))
-        lo, hi = found.get("slot 1, -19 mm"), found.get("slot 1, +19 mm")
-        if lo and hi:
-            pl["slideRotationDeg"] = fct.placement(lo["plate"], hi["plate"], cp["slot 1, +19 mm"], cp["slot 1, -19 mm"])["rotationDeg"]
-            pl["orientation"] = "0.2 mm pinhole at the " + ("-y" if lo["diameterUm"] < hi["diameterUm"] else "+y") + " end"
+        pl["slides"] = {}
+        for k in T["loadedSlots"]:
+            lo, hi = found.get(f"slot {k}, -19 mm"), found.get(f"slot {k}, +19 mm")
+            if lo and hi:
+                pl["slides"][str(k)] = {
+                    "rotationDeg": fct.placement(lo["plate"], hi["plate"], cp[f"slot {k}, +19 mm"], cp[f"slot {k}, -19 mm"])["rotationDeg"],
+                    "smallEnd": "-y" if lo["diameterUm"] < hi["diameterUm"] else "+y"}      # where the 0.2 mm pinhole is
         rot = pl.get("rotationDeg")
         self._figure("Placement: pinholes of the slides", annotated=fcr.montage(tiles) if tiles else None,
                      expected="each check-point pinhole at its nominal plate position (yellow cross)",
@@ -887,7 +890,8 @@ class FrameCalibrationController(ImConWidgetController):
         if abs(rot) > s["maxRotationDeg"]:
             self._warn(f"the slide insert is rotated {rot:.2f}° against the stage axes")
         return (f"insert rotation {rot:+.2f}°, stage scale over 90 mm {pl['baselineScale']:.5f}"
-                + (f", slide rotation in slot 1 {pl['slideRotationDeg']:+.2f}°, {pl['orientation']}" if "orientation" in pl else ""))
+                + "".join(f"; slot {k}: 0.2 mm pinhole at {v['smallEnd']}, slide rotation {v['rotationDeg']:+.2f}°"
+                          for k, v in pl["slides"].items()))
 
     def _holePairMid(self):
         return (np.array(fct.PLATE["roundHole"], float) + np.array(fct.PLATE["rectHole"], float)) / 2

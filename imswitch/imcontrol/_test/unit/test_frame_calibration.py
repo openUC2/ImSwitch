@@ -232,7 +232,9 @@ def test_frame_calibration_with_pinhole_slides():
                        D0 + R @ fct.SLIDES["via"] + lag, atol=2.0)
     pl = res["placement"]
     assert abs(pl["rotationDeg"] - math.degrees(THETA)) < 0.02 and abs(pl["baselineScale"] - 1) < 1e-4, pl
-    assert abs(pl["slideRotationDeg"] - math.degrees(THETA)) < 0.05 and pl["orientation"].startswith("0.2 mm pinhole at the -y"), pl
+    assert set(pl["slides"]) == {"1", "4"}, pl
+    for v in pl["slides"].values():       # the simulated slides have their 0.2 mm pinhole at -y
+        assert abs(v["rotationDeg"] - math.degrees(THETA)) < 0.05 and v["smallEnd"] == "-y", pl
     assert abs(res["focus"]["0"]["z"] - Z_FOCUS) <= 20, res["focus"]
     assert res["verifyUm"] < 3.0 and cam.parameters["exposure"].value == 40.0
     assert {x["name"]: x["status"] for x in st["steps"]}["axes"] == "skipped"

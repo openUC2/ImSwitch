@@ -160,6 +160,25 @@ Selected with the setting `target` = `"slides"` (wizard: "Calibration target"). 
   which makes the slide layout exact. The well-plate holder and the slide insert are
   different references, so switching holders needs the matching calibration.
 
+Measured on the Pi rig (2026-11-04, slides in slots 1 and 4, reports `20261104_133434`, `_134139`):
+- **The hole stays a crisp disc over 5 mm of Z** (Z -1500..-6500), same brightness: the illumination
+  is nearly collimated. It is not the large dim blur the design assumed.
+- **Halo and ghost:** ~1 FOV beside a hole the frame shows only its halo, cut by the frame edge, and
+  a ~1/260 ghost of the hole that moves *against* the stage (point-inverted about an off-axis image
+  point). At the former long exposure `_findLight` centred on them. The spiral now runs at
+  `pinholeSearchExposureMs` (0.3 ms, max gain), where only the hole stands out.
+- **Two focus peaks:** the rims of the hole, Z -2300 and -3970, 1670 µm apart (metric 0.014 / 0.028).
+  The first objective sweeps the whole range and takes the higher peak (by the Z direction, the rim
+  away from the objective; not checked by eye). The second objective stops at its peak, and its
+  hint follows the first objective's focus from holder to holder (+440 µm here).
+- Slide focus 4x -3980/-3960, 10x -5300/-5304; the plate had -4420 / -5820.
+- Layout check against the plate offset of 2026-11-03: slot 1's middle pinhole is **(+29, -771) µm**
+  from the layout position. Slot 4's sits (+96, -266) µm from it after that shift: insert rotation -0.17°.
+- Pinhole diameters as measured: 264 / ~370 / 441 µm for drills 0.2 / 0.3 / 0.4 mm.
+- Stage scale over 90 mm 1.00107 / 1.00106 (the plate's long baseline: 1.00113).
+- Parcentricity (-1698.1, -286.4) and (-1699.6, -288.3) µm; the plate gave (-1695.4, -287.0).
+- Switch-back residual 3.1 / 2.6 µm, re-found 3.8 / 2.5 µm, offset repeat (-3, -7) µm.
+
 ## 4. The routine (v1), step by step
 
 Every step: timeout, abort check, pass/fail with a one-line hint, numbers into the report.

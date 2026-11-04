@@ -55,6 +55,7 @@ DEFAULT_SETTINGS = {
     "focusSearchUm": 6000,       # first focus: sweep this far towards the sample from the homed Z
     "focusStepUm": 100,          # coarse focus step of the first objective (others: x mag ratio)
     "viaExposureFactor": 0.1,    # via work at this fraction of the exposure: the via is ~100x brighter than the plate
+    "pinholeSearchExposureMs": 0.3,  # slides, first objective at max gain: the hole ~65 % of full scale, its halo and ghost below light_spot
     "gridStepFov": 0.25,         # affine grid: +/- this fraction of the short FOV side
     "approachUm": 100,           # unidirectional approach distance, must exceed the backlash
     "zRetreatUm": 500,           # move away from the sample (+Z) before switching objectives
@@ -683,7 +684,7 @@ class FrameCalibrationController(ImConWidgetController):
         if self._T()["focusTexture"]:
             self._move(*centre)             # the sunburst around the via gives the focus contrast
         else:                               # opaque slide: the pinhole's light is all there is
-            centre = self._findLight(slot, centre, radius, 0.7 * min(img.shape[:2]) * ps0)
+            centre = self._findLight(slot, centre, radius, 0.7 * min(img.shape[:2]) * ps0, s, f)
         z = self._focus(slot, s, f)
         if not self._T()["focusTexture"]:   # via work relative to the focused pinhole, not a plate
             self._ctx["expBase"] = self._exposeOnLight(0.5) / s["viaExposureFactor"]
@@ -789,14 +790,20 @@ class FrameCalibrationController(ImConWidgetController):
                      measured=f"{ps:.4f} µm/px, {ps0 / ps:.2f}x the configured magnification", ok=True)
         return ps
 
-    def _findLight(self, slot, centre, radius, step):
-        """Opaque target (pinhole slides): no texture to focus on, and a far-defocused pinhole
-        is too large and dim for find_bright_disc. At the focus sweep's start height, spiral
-        to the first tile with light, bring the light near the image centre by trial (no J
-        yet) and set the exposure on it. Returns that stage position."""
+    def _findLight(self, slot, centre, radius, step, s, f):
+        """Opaque target (pinhole slides): no texture to focus on. At the focus sweep's start
+        height, spiral to the first tile with light, bring the light near the image centre by
+        trial (no J yet) and set the exposure on it. Returns that stage position.
+
+        The spiral runs short: on the Pi rig (2026-11-04) the hole stays a crisp disc over 5 mm of
+        Z, but at a longer exposure the frame ~1 FOV beside it shows only its halo, cut by the edge,
+        and a ~1/260 ghost of it that moves against the stage. Both pulled the light off the hole."""
         hint = self._zHint(slot)
         top = self._ctx.get("zTop", self._pos()["Z"])
         self._move(z=top if hint is None else min(hint, top))
+        r0 = self._ctx["obj"].get(self._ctx.get("slot0")) if slot != self._ctx.get("slot0") else None
+        self._setExposure(r0["viaExposureMs"] / f ** 2 if r0 and r0.get("viaExposureMs") else s["pinholeSearchExposureMs"],
+                          "pinhole search: only the hole itself stands out")
         spot = lambda img: (lambda p: None if p is None else {"x": p[0], "y": p[1]})(fct.light_spot(img))
         for dx, dy in fct.spiral(radius, step):
             u = np.array([centre[0] + dx, centre[1] + dy])
@@ -1061,7 +1068,11 @@ class FrameCalibrationController(ImConWidgetController):
         """Sweep Z towards the sample until the focus metric has passed a clear peak, then
         a fine sweep around it; both from the same side (Z backlash). Normal exposure:
         the sunburst rays give the contrast. Start: the last FRAME calibration of this
-        slot, the first objective + the configured parfocal offset, or the homed Z."""
+        slot, the first objective + the configured parfocal offset, or the homed Z.
+        Slides, first objective: the whole range, then the highest peak. A hole through the PCB
+        has two rims (Pi rig 2026-11-04: Z -2300 and -3970), and the first one met is the weaker.
+        The second objective always stops at the peak: short working distance, and its window
+        (+/- 25 steps around the hint) does not reach the other rim."""
         if self._T()["focusTexture"]:
             self._autoExposure()            # on the plate; the slides: set on the pinhole's light (_findLight)
         step = s["focusStepUm"] * f
@@ -1072,7 +1083,8 @@ class FrameCalibrationController(ImConWidgetController):
             tries.append((top, int(s["focusSearchUm"] / step)))
         curves = []
         for z0, n in tries:
-            zs, vals = self._sweepZ(min(z0, top), -step, n, stop_at_peak=True)
+            zs, vals = self._sweepZ(min(z0, top), -step, n,
+                                    stop_at_peak=self._T()["focusTexture"] or slot != self._ctx.get("slot0", slot))
             curves.append((zs, vals, f"coarse from {min(z0, top):.0f}"))
             if fct.focus_peaked(vals):
                 break
@@ -1110,10 +1122,15 @@ class FrameCalibrationController(ImConWidgetController):
         return zs, vals
 
     def _zHint(self, slot):
-        prev = ((self._fc().get("result") or {}).get("objectives") or {}).get(str(slot))
-        if prev and prev.get("z") is not None:
-            return float(prev["z"])
+        stored = (self._fc().get("result") or {}).get("objectives") or {}
+        prev = stored.get(str(slot))
         k0, zcfg = self._ctx.get("slot0"), self._ctx.get("zConfig") or []
+        if prev and prev.get("z") is not None:
+            # another holder puts the sample at another height: what the first objective's focus
+            # moved since the last calibration, the second one's moves too (its Z is unknown)
+            prev0 = stored.get(str(k0)) or {}
+            moved = slot != k0 and k0 in self._ctx["obj"] and prev0.get("z") is not None
+            return float(prev["z"]) + (self._ctx["obj"][k0]["z"] - prev0["z"] if moved else 0.0)
         if k0 is not None and slot != k0 and k0 in self._ctx["obj"]:
             delta = zcfg[slot] - zcfg[k0] if len(zcfg) > max(slot, k0) else 0.0
             return self._ctx["obj"][k0]["z"] + delta

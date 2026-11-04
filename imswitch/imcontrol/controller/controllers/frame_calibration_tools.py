@@ -20,6 +20,7 @@ import numpy as np
 
 # FRAME calibration plate, KiCad "calibration-plate" Rev E (SBS footprint)
 PLATE = {
+    "key": "plate",
     "name": "FRAME calibration plate Rev E",
     "size": [127760, 85480],
     # both top corners are chamfered 10 mm; bottom corners 3.18 mm fillets (ignored)
@@ -31,7 +32,36 @@ PLATE = {
     "rectHole": [21260, 51500],       # 6000 x 7000 routed
     "rectHoleSize": [6000, 7000],
     "viaGrid": {"first": [16885, 16225], "pitch": 1000, "n": 7},
+    "focusTexture": True,             # the sunburst rays: focus anywhere around the via
 }
+
+# Alternative target: the Heidstar HDS-SH-80120-IS4 4-slide insert (slides along y, 30 mm
+# pitch) with a KiCad "pinhole-slide" Rev A in slots 1 and 4. The slide is 76 x 26 mm
+# with three vias on its centre line, 19 mm apart: drills 0.2 / 0.3 / 0.4 mm, the 0.3 mm
+# one at the slide centre (the same drill as the plate's via). Which end has the 0.2 mm
+# one depends on how the slide went in; the positions do not. Slot centres: ImSwitch's
+# "Heidstar 4x Histosample" layout (frontend WellSelectorUtils.js), in the same plate
+# frame as the SBS plate. The black PCB is opaque: no focus texture, no overview landmark.
+_SLOT_X, _SLOT_Y = [18400 + 30000 * k for k in range(4)], 40600
+SLIDES = {
+    "key": "slides",
+    "name": "4-slide insert with pinhole slides in slots 1 and 4",
+    "size": [127760, 85480],
+    "outline": [[0, 0], [127760, 0], [127760, 85480], [0, 85480]],
+    "slides": [[x, _SLOT_Y] for x in _SLOT_X],      # slot centres
+    "slideSize": [26000, 76000],
+    "loadedSlots": [1, 4],
+    "via": [_SLOT_X[0], _SLOT_Y],                    # the 0.3 mm pinhole of the slide in slot 1
+    "viaDiameter": 300,
+    "pinholes": [[x, _SLOT_Y + dy] for x in (_SLOT_X[0], _SLOT_X[3]) for dy in (-19000, 0, 19000)],
+    "pinholeDiameters": [200, 300, 400],
+    # placement: the slide's outer pinholes (slide rotation in its slot) and slot 4's centre
+    # pinhole, 90 mm away (insert rotation and the stage scale over a long baseline)
+    "checkPoints": {"slot 1, -19 mm": [_SLOT_X[0], _SLOT_Y - 19000], "slot 1, +19 mm": [_SLOT_X[0], _SLOT_Y + 19000],
+                    "slot 4, centre": [_SLOT_X[3], _SLOT_Y]},
+    "focusTexture": False,
+}
+TARGETS = {"plate": PLATE, "slides": SLIDES}
 
 # where the rect hole lands if the plate is inserted wrongly (diagnosis only)
 WRONG_ORIENTATIONS = {
@@ -133,6 +163,23 @@ def find_bright_disc(img, diameter_px, min_contrast=8.0, edge_margin=0.4):
     # pixel centres: binned px i covers full-res [i*b, (i+1)*b)
     return {"x": (cx + 0.5) * b - 0.5, "y": (cy + 0.5) * b - 0.5, "r": r * b,
             "contrast": contrast, "rms": rms * b}
+
+
+def light_spot(img, min_ratio=4.0):
+    """Where the light is in an otherwise dark frame: [x, y] (full-resolution px) of the
+    pixels above half the brightest level, or None when nothing stands out from the
+    black level. Size-agnostic: a far-defocused pinhole on an opaque slide is a large dim
+    blur that find_bright_disc rejects. A fully lit frame (an open window) gives None."""
+    g = gray(img)
+    b = max(1, g.shape[1] // 384)
+    if b > 1:
+        g = cv2.resize(g[:g.shape[0] // b * b, :g.shape[1] // b * b], (g.shape[1] // b, g.shape[0] // b),
+                       interpolation=cv2.INTER_AREA)
+    lo, hi = float(np.percentile(g, 5)), float(np.percentile(g, 99.9))
+    if hi < min_ratio * max(lo, 1.0):
+        return None
+    ys, xs = np.nonzero(g > (lo + hi) / 2)
+    return [float((xs.mean() + 0.5) * b - 0.5), float((ys.mean() + 0.5) * b - 0.5)]
 
 
 def image_shift(a, b, width=768):
@@ -360,16 +407,17 @@ def overview_px_to_plate(H, o, u):
     return [float(d[0] + u[0]), float(d[1] + u[1])]
 
 
-def placement(via_measured, rect_center_measured):
-    """Plate pose from the via (offset anchor) and the measured rect-hole centre:
-    rotation about the via and the residual after removing it (µm)."""
-    v = np.subtract(PLATE["rectHole"], PLATE["via"])
-    m = np.subtract(rect_center_measured, via_measured)
+def placement(a_measured, b_measured, b_nominal=PLATE["rectHole"], a_nominal=PLATE["via"]):
+    """Pose from two landmarks, a (the via, the offset anchor) and b (default: the plate's
+    rect-hole centre): rotation of a->b against its nominal direction, and the measured /
+    nominal length of a->b (the stage scale over that baseline)."""
+    v = np.subtract(b_nominal, a_nominal)
+    m = np.subtract(b_measured, a_measured)
     theta = math.atan2(m[1], m[0]) - math.atan2(v[1], v[0])
     theta = (theta + math.pi) % (2 * math.pi) - math.pi
     scale = float(np.linalg.norm(m) / np.linalg.norm(v))
     return {"rotationDeg": math.degrees(theta), "baselineScale": scale,
-            "rectCenter": [float(x) for x in rect_center_measured]}
+            "rectCenter": [float(x) for x in b_measured]}
 
 
 def spiral(radius, step):
@@ -504,6 +552,21 @@ def _demo():
     v = np.subtract(PLATE["rectHole"], PLATE["via"])
     rc = np.add(PLATE["via"], [v[0] * math.cos(t) - v[1] * math.sin(t), v[0] * math.sin(t) + v[1] * math.cos(t)])
     assert abs(placement(PLATE["via"], rc)["rotationDeg"] - 0.5) < 1e-6
+    # slides: slot 4's centre pinhole 90 mm from slot 1's gives the rotation and the scale
+    t, k = math.radians(-0.2), 1.001
+    v = np.subtract(SLIDES["checkPoints"]["slot 4, centre"], SLIDES["via"])
+    m4 = np.add(SLIDES["via"], k * np.array([v[0] * math.cos(t) - v[1] * math.sin(t), v[0] * math.sin(t) + v[1] * math.cos(t)]))
+    pl = placement(SLIDES["via"], m4, SLIDES["checkPoints"]["slot 4, centre"], SLIDES["via"])
+    assert abs(pl["rotationDeg"] + 0.2) < 1e-6 and abs(pl["baselineScale"] - k) < 1e-9, pl
+    assert SLIDES["pinholes"][1] == SLIDES["via"] and len(TARGETS) == 2
+    # light spot: a far-defocused pinhole (a dim blur ~3x the FOV height wide, centre off the
+    # frame) on a black slide is found; black and fully lit frames give None
+    yy, xx = np.mgrid[0:1024, 0:1536]
+    blur = 8 + 300 * np.exp(-((xx - 1300) ** 2 + (yy - 200) ** 2) / (2 * 500.0 ** 2)) + 3 * rng.standard_normal((1024, 1536))
+    ls = light_spot(blur)
+    assert ls and ls[0] > 1000 and ls[1] < 450, ls
+    assert light_spot(8 + 3 * rng.standard_normal((1024, 1536))) is None
+    assert light_spot(np.full((1024, 1536), 3000.0) + 30 * rng.standard_normal((1024, 1536))) is None
     # via with a flare blob attached (rig 2026-10-30): the disc is still found
     fl = np.full((1024, 1536), 50.0)
     cv2.circle(fl, (760, 300), 120, 4000, -1)

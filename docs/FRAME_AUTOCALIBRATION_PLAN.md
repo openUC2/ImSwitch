@@ -117,6 +117,49 @@ stored as `objective.xyOffsets` and applied with the existing Z-follow toggle; s
 is trusted (3200 steps/mm), rotation is measured and reported, not applied; the old
 FRAME-Settings calibration tabs and StageCenterCalibration were removed.
 
+### 3b. Alternative target: pinhole slides in the 4-slide insert (2026-11-04)
+
+Selected with the setting `target` = `"slides"` (wizard: "Calibration target"). Geometry is
+`SLIDES` in `frame_calibration_tools.py`.
+
+- **Holder:** Heidstar HDS-SH-80120-IS4, a 170 x 130 mm stage insert with four slide slots
+  on a 30 mm pitch. The slides lie along y. Source: `~/Downloads/00_Heidstar-HDS-SH-80120-IS4.step`;
+  its four slide bodies are 76 x 26 x 1.4 mm.
+- **Slides:** KiCad `mAIkroscope-electronics-hardware/kicad/pinhole-slide` Rev A, in
+  slots 1 (leftmost) and 4 (rightmost).
+  - Black PCB, 76 x 26 mm, 1 mm chamfers.
+  - Three vias on the centre line, 19 mm apart: drills 0.2 / 0.3 / 0.4 mm, with the
+    0.3 mm one at the slide centre.
+  - The positions are symmetric, so it doesn't matter which end goes in first.
+- **Nominal positions:** the slot centres of ImSwitch's "Heidstar 4x Histosample" layout
+  (`frontend/src/axon/WellSelectorUtils.js`): x = 18400 + 30000·k, y = 40600, in the same
+  plate frame as the SBS plate. Not measured from the CAD; the search radius covers
+  ±4 mm.
+- **Via:** the 0.3 mm pinhole of slot 1 at (18400, 40600). It is the same drill as the
+  plate's via, so search, centring, camera matrix, stage offset, backlash and the second
+  objective run unchanged.
+- **Focus:** no texture, since the slide is opaque. `_findLight` spirals at the start Z
+  for the defocused pinhole's light (`light_spot`, size-agnostic) and brings it near the
+  image centre. The focus sweep then runs on the pinhole itself. Exposures are set on the
+  pinhole's light, not on a plate.
+- **Placement** (`_placementByPinholes`):
+  - slot 4's centre pinhole, 90 mm away: insert rotation and the stage scale over 90 mm;
+  - slot 1's outer pinholes (±19 mm): the slide's rotation in its slot;
+  - the pinhole diameters: which end has the 0.2 mm one.
+- **Second objective:** uses the smallest pinhole the placement check found (the 0.2 mm
+  one), not the 0.3 mm one. At a real 20x (0.123 µm/px) a 0.3 mm hole is ~2000 px, the
+  full frame height, so it can't be centred or gridded. Parcentricity is measured against
+  that pinhole's plate position from the placement step (through the first objective, it
+  is centred there).
+- **Search centre, both targets:** the second objective's search starts where the stored
+  `objective.xyOffsets` put the landmark, not at the nominal via. With a previous
+  calibration it is found in the first tiles.
+- **Overview:** the motion check and the overview mapping are skipped (no landmark the
+  overview camera sees yet). Follow-up: track the slides' QR codes.
+- **Stage offset:** the offset then makes slot 1's pinhole sit at its layout position,
+  which makes the slide layout exact. The well-plate holder and the slide insert are
+  different references, so switching holders needs the matching calibration.
+
 ## 4. The routine (v1), step by step
 
 Every step: timeout, abort check, pass/fail with a one-line hint, numbers into the report.

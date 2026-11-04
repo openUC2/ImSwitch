@@ -9,6 +9,12 @@ coordinates are plate coordinates, checks the plate placement, measures backlash
 calibrates the second objective (parfocality, parcentricity, affine) and fits the
 overview-camera homography. Everything is written to the setup JSON.
 
+Alternative target (setting ``target``: "slides"): the 4-slide insert with pinhole
+slides in slots 1 and 4. The 0.3 mm pinhole of slot 1 takes the via's place; the other
+pinholes replace the rect hole in the placement check; the opaque slides give no focus
+texture (the pinhole's light is found first, then focused) and no overview landmark
+(motion check and overview mapping are skipped).
+
 Geometry, detectors and fits: frame_calibration_tools.py. Plan:
 docs/FRAME_AUTOCALIBRATION_PLAN.md
 """
@@ -32,6 +38,7 @@ from . import frame_calibration_tools as fct
 _REPORT_DIR = os.path.join(os.path.expanduser("~"), "imswitch_calibrations", "frame_calibration")
 
 DEFAULT_SETTINGS = {
+    "target": "plate",           # calibration target: "plate" (FRAME calibration plate) or "slides" (pinhole slides)
     "detector": "",              # "" = PixelCalibration's default camera
     "overviewCamera": "",        # "" = experiment.overviewCameraName, else ObservationCamera
     "illumination": "LED",       # transmission light switched on at start ("" = leave as is)
@@ -113,7 +120,9 @@ class FrameCalibrationController(ImConWidgetController):
 
     @APIExport()
     def getFrameCalibrationPlate(self) -> dict:
-        return {**fct.PLATE, "wrongOrientations": fct.WRONG_ORIENTATIONS}
+        """Geometry of the selected calibration target, and the targets to choose from."""
+        return {**self._T(), "wrongOrientations": fct.WRONG_ORIENTATIONS,
+                "targets": {k: t["name"] for k, t in fct.TARGETS.items()}}
 
     @APIExport()
     def getFrameCalibrationStatus(self) -> dict:
@@ -295,7 +304,8 @@ class FrameCalibrationController(ImConWidgetController):
             ok, why = pc._validateCameraIntensity(self._ctx["det"])
             if not ok and "saturat" not in why:      # bright is fine here: the stage may sit over a hole
                 g = fct.gray(img)
-                if np.percentile(g, 99.5) <= 2 * np.percentile(g, 0.1) + 10:     # nothing above the black level
+                if np.percentile(g, 99.5) <= 2 * np.percentile(g, 0.1) + 10 and self._T()["focusTexture"]:
+                    # nothing above the black level (over an opaque pinhole slide that is normal)
                     raise StepError(f"{self._ctx['det']}: {why} - is the {name or 'transmission light'} on, "
                                     "exposure and gain ok?")
                 # light, but the stage sits over dark plate: the exposure is set at the via
@@ -347,7 +357,7 @@ class FrameCalibrationController(ImConWidgetController):
         """Track the round hole in the overview camera for +/- moves on each axis. A
         landmark, not global correlation: the fixed LED glare pins a correlation at zero.
         The hole pair identifies it once; then only the round hole is followed."""
-        if not self._ctx["ov"]:
+        if not self._ctx["ov"] or "roundHole" not in self._T():      # the slides have no overview landmark
             return "skipped"
         step = float(s["axesStepUm"])
         # the stage at the midpoint of the two holes puts both near the optical axis, inside
@@ -444,7 +454,7 @@ class FrameCalibrationController(ImConWidgetController):
         slots = self._slots()
         slot = slots[0]
         self._ctx["slot0"] = slot
-        centre = np.add(fct.PLATE["via"], self._ctx.get("plateShift", (0, 0)))
+        centre = np.add(self._T()["via"], self._ctx.get("plateShift", (0, 0)))
         r = self._calibrateObjective(slot, s, centre, s["searchRadiusUm"])
         return self._objSummary(slot, r)
 
@@ -457,7 +467,7 @@ class FrameCalibrationController(ImConWidgetController):
         for i, ax in enumerate("XY"):
             # device position from the verified move target, not from one fresh read: the
             # firmware sometimes reports another axis (A under X, rig 2026-11-02 -> offset -63909)
-            posc.setStageOffsetAxis(knownPosition=float(fct.PLATE["via"][i]),
+            posc.setStageOffsetAxis(knownPosition=float(self._T()["via"][i]),
                                     currentDevicePosition=float(r0["u"][i] + old[i]), axis=ax)
         new = np.array([stage.getStageOffsetAxis(axis=a) for a in "XY"], float)
         shift = old - new                  # user_new = user_old + (old - new)
@@ -467,7 +477,7 @@ class FrameCalibrationController(ImConWidgetController):
             r["u"] = (np.asarray(r["u"]) + shift).tolist()
         if "ovRef" in self._ctx:                     # the overview grid is placed around it
             self._ctx["ovRef"]["u"] = (np.asarray(self._ctx["ovRef"]["u"]) + shift).tolist()
-        found = np.asarray(r0["u"]) - np.array(fct.PLATE["via"])   # where the old offset expected it
+        found = np.asarray(r0["u"]) - np.array(self._T()["via"])   # where the old offset expected it
         self._ctx["offset"] = {"offset": new.tolist(), "viaFoundAtUm": (found - shift).tolist()}
         return (f"offset ({new[0]:.0f}, {new[1]:.0f}) µm; the via was "
                 f"({found[0] - shift[0]:+.0f}, {found[1] - shift[1]:+.0f}) µm from where the previous offset expected it")
@@ -475,6 +485,8 @@ class FrameCalibrationController(ImConWidgetController):
     def _step_placement(self, s):
         if not s["placementCheck"]:
             return "skipped"
+        if "checkPoints" in self._T():
+            return self._placementByPinholes(s, self._T())
         r0 = self._ctx["obj"][self._ctx["slot0"]]
         J, plate_level = np.asarray(r0["J"]), r0["plateLevel"]
 
@@ -528,7 +540,7 @@ class FrameCalibrationController(ImConWidgetController):
             return "skipped"
         r0 = self._ctx["obj"][self._ctx["slot0"]]
         J, d_px = np.asarray(r0["J"]), r0["discPx"]
-        via, a = np.array(fct.PLATE["via"], float), float(s["approachUm"])
+        via, a = np.array(self._T()["via"], float), float(s["approachUm"])
         out = {}
         for i, ax in enumerate("XY"):
             self._move(*via)                               # arrive from -
@@ -553,29 +565,44 @@ class FrameCalibrationController(ImConWidgetController):
         k, k0 = slots[1], self._ctx["slot0"]
         r0 = self._ctx["obj"][k0]
         # back on the via with the first objective: absolute repeatability after the long moves
-        self._move(*fct.PLATE["via"])
+        self._move(*self._T()["via"])
         self._ctx["repeatUm"] = self._residualUm(r0)
         self._move(z=self._at("Z") + s["zRetreatUm"])
+        # landmark: the via, or on the slides the smallest pinhole the placement check found (a
+        # 0.3 mm one is ~2000 px wide at 20x: the frame height). Through the first objective it
+        # sits at its measured plate position: that is where it is centred (device: + offset).
+        land, diam, dev0 = self._T()["via"], None, np.asarray(r0["dev"])
+        small = min(((v["plate"], v["diameterUm"]) for n, v in ((self._ctx.get("placement") or {}).get("pinholes") or {}).items()
+                     if n.startswith("slot 1")), key=lambda t: t[1], default=None)
+        if small is not None:
+            land, diam = small
+            dev0 = np.asarray(land) + [self._stageManager().getStageOffsetAxis(axis=a) for a in "XY"]
         try:
-            r = self._calibrateObjective(k, s, fct.PLATE["via"], s["searchRadius2Um"])
+            # search where the stored parcentricity puts it (an objective switch moves the stage
+            # by offs[k] - offs[k0]): the 20x tiles are small, the nominal via ~1.5 mm off (Pi)
+            offs = getattr(self._setupInfo.objective, "xyOffsets", None) or [[0, 0], [0, 0]]
+            centre = np.add(land, np.subtract(offs[k], offs[k0]))
+            r = self._calibrateObjective(k, s, centre, s["searchRadius2Um"], diameter_um=diam)
         except Exception:
             # the following steps (overview, save) work with the first objective
             self._move(z=self._ctx.get("zTop", r0["z"] + s["zRetreatUm"]))   # homed top: always clear of the sample
             self._selectObjective(k0)
             self._move(z=r0["z"])
             raise
-        dev0, dev1 = np.asarray(r0["dev"]), np.asarray(r["dev"])
+        dev1 = np.asarray(r["dev"])
         offs = [[0.0, 0.0], [0.0, 0.0]]
         offs[k] = (dev1 - dev0).tolist()
         self._setupInfo.objective.xyOffsets = offs
         self._ctx["xyOffsets"] = offs
-        # switch back with Z + XY compensation: the via must stay centred and in focus
+        # switch back with Z + XY compensation: the landmark must stay centred and in focus
         self._selectObjective(k0, skipZ=False)
         time.sleep(0.5)
         self._ctx["switchBackUm"] = self._residualUm(r0)
         self._viaFigure(f"Back on objective {k0} with the stored offsets", r0, self._ctx["switchBackUm"], 10)
         if self._ctx["switchBackUm"] > 10:
-            self._warn(f"after switching back the via is {self._ctx['switchBackUm']:.1f} µm off centre")
+            self._warn(f"after switching back the via is {self._ctx['switchBackUm']:.1f} µm off centre - an objective "
+                       "switch's X/Y compensation that reverses an axis adds its backlash (see 'Backlash X/Y'; "
+                       "'Apply backlash' compensates it)")
         return (self._objSummary(k, r) + f"; parcentricity ({offs[k][0]:+.1f}, {offs[k][1]:+.1f}) µm; "
                 f"switch-back residual {self._ctx['switchBackUm']:.1f} µm")
 
@@ -623,7 +650,7 @@ class FrameCalibrationController(ImConWidgetController):
 
     def _step_save(self, s):
         k0 = self._ctx["slot0"]
-        self._move(*fct.PLATE["via"])
+        self._move(*self._T()["via"])
         self._ctx["verifyUm"] = self._residualUm(self._ctx["obj"][k0])
         self._viaFigure("Via re-found by its plate coordinates", self._ctx["obj"][k0], self._ctx["verifyUm"], 20)
         pc = self._master.getController("PixelCalibration")
@@ -631,7 +658,7 @@ class FrameCalibrationController(ImConWidgetController):
             m = fct.J_metrics(np.asarray(r["J"]))
             m.update(method="frame_calibration_via_grid", n_inliers=9, rmse_px=r["rmsPx"],
                      rmse_um=r["rmsPx"] * (m["scale_x_um_per_pixel"] + m["scale_y_um_per_pixel"]) / 2,
-                     validation_ok=True, validation_message="FRAME calibration plate, via tracked on a 3x3 grid")
+                     validation_ok=True, validation_message=f"{self._T()['name']}: via tracked on a 3x3 grid")
             pc.setCalibrationData(detectorName=self._ctx["det"], affineMatrix=fct.affine_for_store(np.asarray(r["J"])),
                                   objectiveId=str(slot), metrics=m)
         self._ctx["saved"] = True
@@ -644,7 +671,7 @@ class FrameCalibrationController(ImConWidgetController):
         return f"saved; via re-found {self._ctx['verifyUm']:.1f} µm from the image centre"
 
     # ------------------------------------------------- per-objective work
-    def _calibrateObjective(self, slot, s, centre, radius):
+    def _calibrateObjective(self, slot, s, centre, radius, diameter_um=None):
         oc = self._master.getController("Objective")
         mags = list(getattr(self._setupInfo.objective, "magnifications", None) or [1, 1])
         k0 = self._ctx.get("slot0", slot)
@@ -653,12 +680,17 @@ class FrameCalibrationController(ImConWidgetController):
             self._selectObjective(slot)
         ps0 = self._pixelSizeGuess(slot, mags)
         img = self._grab()
-        self._move(*centre)                 # the sunburst around the via gives the focus contrast
+        if self._T()["focusTexture"]:
+            self._move(*centre)             # the sunburst around the via gives the focus contrast
+        else:                               # opaque slide: the pinhole's light is all there is
+            centre = self._findLight(slot, centre, radius, 0.7 * min(img.shape[:2]) * ps0)
         z = self._focus(slot, s, f)
+        if not self._T()["focusTexture"]:   # via work relative to the focused pinhole, not a plate
+            self._ctx["expBase"] = self._exposeOnLight(0.5) / s["viaExposureFactor"]
         # the stage is trusted, the configured magnifications are not (Pi 2026-11-02: "20x" = 2.5x the 4x)
         ps = self._measurePixelSize(slot, centre, min(img.shape[:2]) * ps0) or ps0
         fov = min(img.shape[:2]) * ps
-        d_px = fct.PLATE["viaDiameter"] / ps
+        d_px = (diameter_um or self._T()["viaDiameter"]) / ps
         r0 = self._ctx["obj"].get(k0) if slot != k0 else None
         if r0 and r0.get("viaExposureMs"):
             # the via's brightness per pixel goes with 1/magnification^2: from the first objective's via
@@ -757,6 +789,106 @@ class FrameCalibrationController(ImConWidgetController):
                      measured=f"{ps:.4f} µm/px, {ps0 / ps:.2f}x the configured magnification", ok=True)
         return ps
 
+    def _findLight(self, slot, centre, radius, step):
+        """Opaque target (pinhole slides): no texture to focus on, and a far-defocused pinhole
+        is too large and dim for find_bright_disc. At the focus sweep's start height, spiral
+        to the first tile with light, bring the light near the image centre by trial (no J
+        yet) and set the exposure on it. Returns that stage position."""
+        hint = self._zHint(slot)
+        top = self._ctx.get("zTop", self._pos()["Z"])
+        self._move(z=top if hint is None else min(hint, top))
+        spot = lambda img: (lambda p: None if p is None else {"x": p[0], "y": p[1]})(fct.light_spot(img))
+        for dx, dy in fct.spiral(radius, step):
+            u = np.array([centre[0] + dx, centre[1] + dy])
+            self._move(*u, approach=0)
+            img = self._grab()
+            self._trace(*u, "tile")
+            if spot(img):
+                u = self._roughCentre(u, 0, step / 0.7, find=spot, fracs=(0.3,))
+                self._move(*u)                 # _roughCentre ends on its last trial position
+                e = self._exposeOnLight(0.4)
+                img = self._ctx["lastLightImg"]
+                p = spot(img)
+                self._figure(f"Pinhole light found, objective {slot}", img,
+                             [("cross", (p["x"], p["y"]), 20, fcr.MEASURED)] if p else [],
+                             expected="the (defocused) light of the 0.3 mm pinhole near the image centre",
+                             measured=f"at stage ({u[0]:.0f}, {u[1]:.0f}) µm, Z {self._at('Z'):.0f} µm; exposure {e:.2f} ms",
+                             ok=True)
+                return u
+        raise StepError(f"no light from the pinhole within {radius:.0f} µm of ({centre[0]:.0f}, {centre[1]:.0f}) µm - "
+                        "pinhole slide in slot 1, LED on? try a larger search radius")
+
+    def _exposeOnLight(self, target):
+        """Main-camera exposure with the brightest pixels (99.9th percentile) at ~``target``
+        of full scale; returns it (ms)."""
+        det = self._master.detectorsManager[self._ctx["det"]]
+        e = float(det.parameters["exposure"].value)
+        for _ in range(8):
+            raw = self._ctx["lastLightImg"] = self._grab()
+            full = 255.0 if raw.dtype == np.uint8 else (4095.0 if raw.max() < 4096 else 65535.0)
+            p = float(np.percentile(fct.gray(raw), 99.9))
+            if 0.6 * target * full < p < min(1.5 * target, 0.95) * full:
+                break
+            e = float(np.clip(e * (0.25 if p >= 0.95 * full else np.clip(target * full / max(p, 1.0), 0.1, 10)), 0.02, 100))
+            self._setExposure(e, f"exposure set on the pinhole: brightest pixels towards {100 * target:.0f} % of full scale")
+        return e
+
+    def _placementByPinholes(self, s, T):
+        """Pinhole slides: find the check-point pinholes (slot 1's outer two, slot 4's centre one)
+        in single frames, their plate positions from the first objective's camera matrix. Slot 4
+        gives the insert rotation and the stage scale over 90 mm; slot 1's pair the slide's
+        rotation in its slot; the pinhole sizes (0.2 / 0.4 mm) how the slide was inserted."""
+        r0 = self._ctx["obj"][self._ctx["slot0"]]
+        J, d_px = np.asarray(r0["J"]), r0["discPx"]
+        ps = (r0["metrics"]["scale_x_um_per_pixel"] + r0["metrics"]["scale_y_um_per_pixel"]) / 2
+        fov = min(self._ctx["lastImg"].shape[:2]) * ps
+        if r0.get("viaExposureMs"):
+            self._setExposure(r0["viaExposureMs"], "pinhole search at the via search exposure")
+        found, tiles = {}, []
+        for name, P in T["checkPoints"].items():
+            hit = None
+            for dx, dy in fct.spiral(s["searchRadiusUm"] / 2, 0.7 * fov):
+                u = (P[0] + dx, P[1] + dy)
+                self._move(*u, approach=0)
+                self._trace(*u, "tile")
+                if fct.find_bright_disc(self._grab(), d_px):
+                    self._move(*u)                 # again from the negative side: backlash taken up
+                    img = self._grab()
+                    hit = fct.find_bright_disc(img, d_px)
+                    if hit:
+                        break
+            if hit is None:
+                self._warn(f"pinhole '{name}' not found within {s['searchRadiusUm'] / 2:.0f} µm of {P} µm")
+                continue
+            q = fct.px_to_plate((hit["x"], hit["y"]), J, u, img.shape[:2])[0]
+            found[name] = {"plate": q.tolist(), "offsetUm": (q - np.asarray(P, float)).tolist(), "diameterUm": 2 * hit["r"] * ps}
+            self._trace(*u, "edge")
+            c = np.array([(img.shape[1] - 1) / 2, (img.shape[0] - 1) / 2])
+            tiles.append(fcr.annotate(img, [("cross", c - J @ (np.asarray(P, float) - np.asarray(u, float)), 30, fcr.EXPECTED),
+                                            ("circle", (hit["x"], hit["y"]), hit["r"], fcr.MEASURED),
+                                            ("text", (20, 40), name, fcr.MEASURED)], width=480))
+        pl = {"pinholes": found}
+        cp, via = T["checkPoints"], T["via"]
+        if "slot 4, centre" in found:
+            pl.update(fct.placement(via, found["slot 4, centre"]["plate"], cp["slot 4, centre"], via))
+        lo, hi = found.get("slot 1, -19 mm"), found.get("slot 1, +19 mm")
+        if lo and hi:
+            pl["slideRotationDeg"] = fct.placement(lo["plate"], hi["plate"], cp["slot 1, +19 mm"], cp["slot 1, -19 mm"])["rotationDeg"]
+            pl["orientation"] = "0.2 mm pinhole at the " + ("-y" if lo["diameterUm"] < hi["diameterUm"] else "+y") + " end"
+        rot = pl.get("rotationDeg")
+        self._figure("Placement: pinholes of the slides", annotated=fcr.montage(tiles) if tiles else None,
+                     expected="each check-point pinhole at its nominal plate position (yellow cross)",
+                     measured="; ".join(f"{n}: {v['offsetUm'][0]:+.0f}, {v['offsetUm'][1]:+.0f} µm, ⌀ {v['diameterUm']:.0f} µm"
+                                        for n, v in found.items()) or "none found",
+                     ok=rot is not None and abs(rot) <= s["maxRotationDeg"])
+        self._ctx["placement"] = pl
+        if rot is None:
+            raise StepError("slot 4's pinhole not found - is the second pinhole slide in slot 4?")
+        if abs(rot) > s["maxRotationDeg"]:
+            self._warn(f"the slide insert is rotated {rot:.2f}° against the stage axes")
+        return (f"insert rotation {rot:+.2f}°, stage scale over 90 mm {pl['baselineScale']:.5f}"
+                + (f", slide rotation in slot 1 {pl['slideRotationDeg']:+.2f}°, {pl['orientation']}" if "orientation" in pl else ""))
+
     def _holePairMid(self):
         return (np.array(fct.PLATE["roundHole"], float) + np.array(fct.PLATE["rectHole"], float)) / 2
 
@@ -783,7 +915,7 @@ class FrameCalibrationController(ImConWidgetController):
                 h = (hit["x"], hit["y"])
                 self._figure(f"Via search: candidate {len(rejected) + 1}", img,
                              [("circle", h, hit["r"], fcr.MEASURED), ("circle", h, d_px / 2, fcr.EXPECTED, True)],
-                             expected=f"a bright disc of ⌀ {d_px:.0f} px (yellow; {fct.PLATE['viaDiameter']} µm drill)",
+                             expected=f"a bright disc of ⌀ {d_px:.0f} px (yellow)",
                              measured=f"⌀ {2 * hit['r']:.0f} px at ({hit['x']:.0f}, {hit['y']:.0f}) px, "
                                       f"{hit['contrast']:.0f}x the plate; stage ({x:.0f}, {y:.0f}) µm")
                 try:
@@ -836,18 +968,20 @@ class FrameCalibrationController(ImConWidgetController):
         plate_level = float(np.median(fct.gray(img)[outside])) if outside.any() else float(np.median(img))
         return J, rms, u, plate_level, d_px
 
-    def _roughCentre(self, u, d_px, fov):
+    def _roughCentre(self, u, d_px, fov, find=None, fracs=(0.3, 0.12)):
         """The search hit may sit at the frame edge. Without knowing the image orientation:
-        try a 3x3 grid of positions and keep the one with the via nearest the image centre."""
-        for frac in (0.3, 0.12):
+        try a 3x3 grid of positions and keep the one with the via (``find(img)`` -> dict with
+        x, y, or None) nearest the image centre."""
+        find = find or (lambda img: fct.find_bright_disc(img, d_px))
+        for frac in fracs:
             best = None
             for gx in (-1, 0, 1):
                 for gy in (-1, 0, 1):
                     us = u + np.array([gx, gy]) * frac * fov
                     self._move(*us)
                     img = self._grab()
-                    hit = fct.find_bright_disc(img, d_px)
-                    self._trace(*us, "rough", hit=None if hit is None else [round(hit["x"]), round(hit["y"]), round(hit["r"])])
+                    hit = find(img)
+                    self._trace(*us, "rough", hit=None if hit is None else [round(hit["x"]), round(hit["y"]), round(hit.get("r", 0))])
                     if hit:
                         e = math.hypot(hit["x"] - img.shape[1] / 2, hit["y"] - img.shape[0] / 2)
                         if best is None or e < best[0]:
@@ -928,7 +1062,8 @@ class FrameCalibrationController(ImConWidgetController):
         a fine sweep around it; both from the same side (Z backlash). Normal exposure:
         the sunburst rays give the contrast. Start: the last FRAME calibration of this
         slot, the first objective + the configured parfocal offset, or the homed Z."""
-        self._autoExposure()
+        if self._T()["focusTexture"]:
+            self._autoExposure()            # on the plate; the slides: set on the pinhole's light (_findLight)
         step = s["focusStepUm"] * f
         hint = self._zHint(slot)
         top = self._ctx.get("zTop", self._pos()["Z"])
@@ -947,8 +1082,9 @@ class FrameCalibrationController(ImConWidgetController):
                          measured="no clear peak", ok=False)
             if not s["manualFocusFallback"]:
                 raise StepError("no focus found: the focus metric shows no clear peak (light, exposure, plate?)")
-            self._waitUser("No clear focus found. Focus on the plate (the rays around the centre via) with the "
-                           "Z buttons, then press Continue.")
+            self._waitUser("No clear focus found. Focus on the " + ("plate (the rays around the centre via)"
+                           if self._T()["focusTexture"] else "pinhole of the slide in slot 1")
+                           + " with the Z buttons, then press Continue.")
             return self._pos()["Z"]
         zc = zs[int(np.argmax(vals))]
         zs, vals = self._sweepZ(zc + step, -step / 5, 11)
@@ -1227,7 +1363,7 @@ class FrameCalibrationController(ImConWidgetController):
 
     def _summary(self):
         c = self._ctx
-        return {"timestamp": datetime.now().isoformat(timespec="seconds"), "detector": c["det"],
+        return {"timestamp": datetime.now().isoformat(timespec="seconds"), "detector": c["det"], "target": self._T()["key"],
                 "objectives": {str(k): {"metrics": r["metrics"], "rmsPx": r["rmsPx"], "z": r["z"]} for k, r in c["obj"].items()},
                 **{k: c[k] for k in ("offset", "placement", "backlash", "xyOffsets", "overview", "overviewJ", "focus", "plateShift",
                                      "pixelSizeMeasured",
@@ -1237,6 +1373,10 @@ class FrameCalibrationController(ImConWidgetController):
         if self._setupInfo.frameCalibration is None:
             self._setupInfo.frameCalibration = {}
         return self._setupInfo.frameCalibration
+
+    def _T(self):
+        """Geometry of the selected calibration target (frame_calibration_tools.TARGETS)."""
+        return fct.TARGETS.get((self._ctx.get("s") or self._settings())["target"], fct.PLATE)
 
     def _settings(self):
         stored = self._fc().get("settings", {})

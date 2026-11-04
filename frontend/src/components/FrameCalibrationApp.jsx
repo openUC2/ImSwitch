@@ -19,6 +19,7 @@ import {
   FormControlLabel,
   Grid,
   LinearProgress,
+  MenuItem,
   Paper,
   Stack,
   Table,
@@ -102,13 +103,29 @@ function PlateMap({ plate, trace, stage, placement }) {
       const rot = ([x, y]) => [vx + (x - vx) * Math.cos(t) - (y - vy) * Math.sin(t), vy + (x - vx) * Math.sin(t) + (y - vy) * Math.cos(t)];
       outline(plate.outline.map(rot), Math.abs(placement.rotationDeg) > 0.3 ? "#ff7043" : "#66bb6a", []);
     }
-    // landmarks
+    // landmarks: the plate's holes, or the insert's slide slots (loaded ones filled) and pinholes
     ctx.strokeStyle = "#cfd8dc";
-    ctx.beginPath();
-    ctx.arc(X(plate.roundHole[0]), Y(plate.roundHole[1]), (plate.roundHoleDiameter / 2) * s, 0, 2 * Math.PI);
-    ctx.stroke();
-    const [rw, rh] = plate.rectHoleSize;
-    ctx.strokeRect(X(plate.rectHole[0] - rw / 2), Y(plate.rectHole[1] - rh / 2), rw * s, rh * s);
+    if (plate.roundHole) {
+      ctx.beginPath();
+      ctx.arc(X(plate.roundHole[0]), Y(plate.roundHole[1]), (plate.roundHoleDiameter / 2) * s, 0, 2 * Math.PI);
+      ctx.stroke();
+      const [rw, rh] = plate.rectHoleSize;
+      ctx.strokeRect(X(plate.rectHole[0] - rw / 2), Y(plate.rectHole[1] - rh / 2), rw * s, rh * s);
+    }
+    (plate.slides || []).forEach(([cx, cy], i) => {
+      const [sw, sh] = plate.slideSize;
+      if ((plate.loadedSlots || []).includes(i + 1)) {
+        ctx.fillStyle = "#263238";
+        ctx.fillRect(X(cx - sw / 2), Y(cy - sh / 2), sw * s, sh * s);
+      }
+      ctx.strokeRect(X(cx - sw / 2), Y(cy - sh / 2), sw * s, sh * s);
+    });
+    ctx.fillStyle = "#cfd8dc";
+    (plate.pinholes || []).forEach(([x, y]) => {
+      ctx.beginPath();
+      ctx.arc(X(x), Y(y), 2, 0, 2 * Math.PI);
+      ctx.fill();
+    });
     ctx.fillStyle = "#ffd54f";
     ctx.beginPath();
     ctx.arc(X(plate.via[0]), Y(plate.via[1]), 3, 0, 2 * Math.PI);
@@ -217,7 +234,12 @@ function Results({ result }) {
     rows.push([`Objective ${slot}`, `${fmt(m.scale_x_um_per_pixel, 4)} × ${fmt(m.scale_y_um_per_pixel, 4)} µm/px, rotation ${fmt(m.rotation_deg)}°, shear ${fmt(m.shear_deg)}°, residual ${fmt(o.rmsPx)} px, focus Z ${fmt(o.z, 0)} µm`]);
   });
   if (result.offset) rows.push(["Stage offset", `(${fmt(result.offset.offset[0], 0)}, ${fmt(result.offset.offset[1], 0)}) µm`]);
-  if (result.placement) rows.push(["Plate placement", `rotation ${fmt(result.placement.rotationDeg)}°, rect hole ${fmt(result.placement.rectSize?.[0], 0)} × ${fmt(result.placement.rectSize?.[1], 0)} µm`]);
+  if (result.placement) {
+    const p = result.placement;
+    rows.push(["Placement", `rotation ${fmt(p.rotationDeg)}°` + (p.rectSize ? `, rect hole ${fmt(p.rectSize[0], 0)} × ${fmt(p.rectSize[1], 0)} µm` : "")
+      + (p.pinholes ? `, stage scale over 90 mm ${fmt(p.baselineScale, 5)}` : "")
+      + (p.slideRotationDeg != null ? `, slide in slot 1 ${fmt(p.slideRotationDeg)}° (${p.orientation})` : "")]);
+  }
   if (result.backlash) rows.push(["Backlash", `X ${fmt(result.backlash.X, 1)} µm, Y ${fmt(result.backlash.Y, 1)} µm`]);
   if (result.xyOffsets) rows.push(["Parcentricity", result.xyOffsets.map((o, i) => `slot ${i}: (${fmt(o[0], 1)}, ${fmt(o[1], 1)})`).join(", ") + " µm"]);
   if (result.overview) rows.push(["Overview camera", `homography from ${result.overview.nPoints} points, residual ${fmt(result.overview.rmsPx)} px`]);
@@ -225,7 +247,7 @@ function Results({ result }) {
   return (
     <Table size="small">
       <TableBody>
-        <TableRow><TableCell colSpan={2}><Typography variant="caption">{result.timestamp} · {result.detector}</Typography></TableCell></TableRow>
+        <TableRow><TableCell colSpan={2}><Typography variant="caption">{result.timestamp} · {result.detector}{result.target ? ` · target: ${result.target}` : ""}</Typography></TableCell></TableRow>
         {rows.map(([k, v]) => (
           <TableRow key={k}><TableCell sx={{ whiteSpace: "nowrap" }}>{k}</TableCell><TableCell>{v}</TableCell></TableRow>
         ))}
@@ -273,6 +295,7 @@ export default function FrameCalibrationApp() {
     setSettings((s) => ({ ...s, [key]: value }));
     try {
       setSettings(await apiFrameCalibrationSetSettings({ [key]: value }));
+      if (key === "target") setPlate(await apiFrameCalibrationGetPlate());     // the map shows the selected target
     } catch (e) {
       setError(`Could not save setting: ${e.message || e}`);
     }
@@ -316,10 +339,16 @@ export default function FrameCalibrationApp() {
     <Box sx={{ p: 2 }}>
       <Typography variant="h5" gutterBottom>FRAME Calibration</Typography>
       <Typography variant="body2" color="text.secondary" paragraph>
-        Put the FRAME calibration plate in the holder — well-label side up, A1 notch in the stage-origin corner — and press
-        Start. The microscope homes, finds the plate, calibrates pixel size, rotation and shear of the camera for each
-        objective, the stage offset, the offset between the objectives and the overview camera, and stores everything in the
-        setup file.
+        {settings?.target === "slides"
+          ? "Put the 4-slide insert in the stage with a pinhole slide in the leftmost (1) and the rightmost (4) slot, pushed "
+            + "against the stops, and press Start. The microscope homes, finds slot 1's middle (0.3 mm) pinhole, calibrates pixel "
+            + "size, rotation and shear of the camera for each objective, the stage offset and the offset between the objectives, "
+            + "checks the insert rotation and the stage scale with the other pinholes, and stores everything in the setup file. "
+            + "The overview camera is not calibrated with the slides."
+          : "Put the FRAME calibration plate in the holder — well-label side up, A1 notch in the stage-origin corner — and press "
+            + "Start. The microscope homes, finds the plate, calibrates pixel size, rotation and shear of the camera for each "
+            + "objective, the stage offset, the offset between the objectives and the overview camera, and stores everything in "
+            + "the setup file."}
       </Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
       {status && ["finished", "failed", "aborted"].includes(status.state) && (
@@ -330,6 +359,12 @@ export default function FrameCalibrationApp() {
       )}
 
       <Stack direction="row" spacing={1} sx={{ mb: 2 }} alignItems="center">
+        {settings && plate?.targets && (
+          <TextField select size="small" label="Calibration target" value={settings.target || "plate"} disabled={active}
+            onChange={(e) => saveSetting("target", e.target.value)} sx={{ minWidth: 260 }}>
+            {Object.entries(plate.targets).map(([k, name]) => <MenuItem key={k} value={k}>{name}</MenuItem>)}
+          </TextField>
+        )}
         <Button variant="contained" onClick={start} disabled={active || !plate}>Start calibration</Button>
         <Button variant="outlined" color="error" onClick={() => apiFrameCalibrationStop().then(refresh)} disabled={!active}>Abort</Button>
         <Button variant="outlined" onClick={() => setCameraOpen(true)} disabled={active}>Camera settings</Button>

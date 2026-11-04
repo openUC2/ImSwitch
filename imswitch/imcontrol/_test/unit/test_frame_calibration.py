@@ -20,6 +20,8 @@ D0 = np.array([1200.0, -900.0])                                    # device posi
 BACKLASH = {"X": 12.0, "Y": 30.0}
 Z_FOCUS = -1500.0                                                  # plate in focus (homed Z = 0)
 H, W = 900, 1200
+GHOST = (540.0, 150.0)                                             # image point the slides' ghost is inverted about
+RIM = 800.0                                                        # the pinhole's other rim, this far from focus
 # second objective: magnification x1.5, optical axis 300/-200 µm off, focus 300 µm lower
 MAG, AXIS_OFF, DZ = [1.0, 1.5], [(0.0, 0.0), (300.0, -200.0)], [0.0, -300.0]
 
@@ -81,12 +83,23 @@ class Camera:
         gain = self.parameters["exposure"].value / 40 / m ** 2          # light per pixel ~ 1/magnification^2
         if self.slides:      # black PCB slides: only the pinholes (0.2/0.3/0.4 mm along +y) let light through
             img = np.zeros((H, W), np.float32)      # float32: the defocus blur is the slow part
+            # as on the rig (2026-11-04): a halo reaches a frame ~1 FOV from the hole; a ~1/260 ghost of
+            # the hole moves against the stage (point-inverted about an off-axis image point)
+            ghost = R.T @ (-np.linalg.solve(m * J_TRUE, np.stack([2 * GHOST[0] - self.xx, 2 * GHOST[1] - self.yy]).reshape(2, -1))
+                           + (d + AXIS_OFF[self.slot] - D0)[:, None])
+            ghost = ghost.reshape(2, H, W)
+            halo = np.zeros((H, W), np.float32)
             for i, (px, py) in enumerate(fct.SLIDES["pinholes"]):
-                img[np.hypot(P[0] - px, P[1] - py) < fct.SLIDES["pinholeDiameters"][i % 3] / 2] = 30000
-            sigma = abs(dz) / 40
+                r = np.hypot(P[0] - px, P[1] - py)
+                halo += 2000 * np.exp(-r / (0.6 * H * PS / m)).astype(np.float32)
+                img[np.hypot(ghost[0] - px, ghost[1] - py) < fct.SLIDES["pinholeDiameters"][i % 3] / 2] = 30000 / 260
+                img[r < fct.SLIDES["pinholeDiameters"][i % 3] / 2] = 30000
+            # two rims, one PCB thickness apart: the far one (met first coming from the homed Z) is the softer
+            rim = RIM if self.slot == 0 else 3 * RIM   # outside the second objective's focus window, as on the rig
+            sigma = min(abs(dz), 2 * abs(dz - rim) + 240) / 40
             if sigma > 0.3:
                 img = cv2.GaussianBlur(img, (0, 0), sigma)
-            img = img * gain + 8 + 3 * np.random.default_rng(self.n).standard_normal((H, W))
+            img = (img + halo) * gain + 8 + 3 * np.random.default_rng(self.n).standard_normal((H, W))
             img = np.clip(img, 0, 4095)
             return (img, self.n) if returnFrameNumber else img
         img = np.full((H, W), 200.0, np.float32)
@@ -282,6 +295,18 @@ def test_via_search_goes_on_after_a_false_candidate():
         raise StepError("lost the via")
     with pytest.raises(StepError, match="5 via candidates could not be centred"):
         ctrl._searchVia(via, 2000, 150, fct.PLATE["viaDiameter"] / PS, never)
+
+
+def test_second_objective_focus_follows_the_first_to_another_holder():
+    """The slide insert holds the sample at another height than the plate holder (rig
+    2026-11-04: 450 µm). The second objective's sweep must start around the new height, not
+    around the stored Z: that is its only protection against a short working distance."""
+    ctrl = FrameCalibrationController.__new__(FrameCalibrationController)
+    ctrl._setupInfo = SimpleNamespace(frameCalibration={"result": {"objectives": {"0": {"z": -4420.0}, "1": {"z": -5820.0}}}})
+    ctrl._ctx = {"slot0": 0, "obj": {}}
+    assert ctrl._zHint(0) == -4420.0 and ctrl._zHint(1) == -5820.0        # nothing measured yet
+    ctrl._ctx["obj"][0] = {"z": -3970.0}
+    assert ctrl._zHint(1) == -5370.0
 
 
 def test_pixel_size_from_stage_moves():

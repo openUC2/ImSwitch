@@ -38,6 +38,7 @@ import AutofocusController from "./AutofocusController";
 import DetectorParameters from "./DetectorParameters";
 import StreamControls from "./StreamControls";
 import IlluminationController from "./IlluminationController";
+import CanPowerControl from "./CanPowerControl.jsx";
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView";
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
@@ -779,7 +780,10 @@ export default function LiveView({ setFileManagerInitialPath }) {
         label: "Focus",
         icon: <CenterFocusStrongIcon fontSize="small" />,
         render: () => (
-          <AutofocusController hostIP={hostIP} hostPort={hostPort} />
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <CanPowerControl />
+            <AutofocusController hostIP={hostIP} hostPort={hostPort} />
+          </Box>
         ),
       },
       hasObjectiveController && {
@@ -1179,6 +1183,10 @@ function RightPanelContent({
           <Typography variant="h6">Autofocus</Typography>
         </Box>
         <AutofocusController hostIP={hostIP} hostPort={hostPort} />
+      </Box>
+
+      <Box mb={3}>
+        <CanPowerControl />
       </Box>
 
       <Box mb={3} data-tour="illumination">

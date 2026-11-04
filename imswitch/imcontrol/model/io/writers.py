@@ -17,7 +17,6 @@ from ..writers.base import (
     WriterCapabilities,
 )
 from ..writers.registry import get_writer, WriterRegistry
-from ..writers.ome_tiff_writer import OMETiffWriter
 from ..writers.ome_zarr_writer import OMEZarrWriter
 
 # Re-export metadata types from metadata module
@@ -92,7 +91,6 @@ __all__ = [
     'WriterDetectorContext',
     'WriterFrameEvent',
     'WriterCapabilities',
-    'OMETiffWriter',
     'OMEZarrWriter',
     'get_writer',
     'convert_detector_context',

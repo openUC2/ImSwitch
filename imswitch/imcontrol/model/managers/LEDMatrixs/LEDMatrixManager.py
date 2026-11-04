@@ -1,10 +1,21 @@
 from abc import ABC, abstractmethod
 from typing import Union
 
+import numpy as np
+
+from . import ledgeometry
+
 
 class LEDMatrixManager(ABC):
     """ Abstract base class for managers that control LEDMatrixs. Each type of
-    LEDMatrix corresponds to a manager derived from this class. """
+    LEDMatrix corresponds to a manager derived from this class.
+
+    Geometry (manager properties, see ledgeometry.py):
+
+    - ``ledLayout`` -- bundled layout name ("geodome80", "illumination_ring136"), CSV path
+      or {"grid": [nx, ny], "pitch_mm": .., "height_mm": ..}; default: Nx x Ny grid
+    - ``ledCalibration`` -- {"rotation_deg", "flip", "offset_mm"}: LED frame -> camera
+    """
 
     @abstractmethod
     def __init__(self, LEDMatrixInfo, name: str, isBinary: bool, valueUnits: str,
@@ -15,6 +26,10 @@ class LEDMatrixManager(ABC):
         """
 
         self._LEDMatrixInfo = LEDMatrixInfo
+        props = LEDMatrixInfo.managerProperties
+        self.ledLayout = props.get('ledLayout', {'grid': [props.get('Nx', 8), props.get('Ny', 8)]})
+        self.positions = ledgeometry.load_layout(self.ledLayout)
+        self.calibration = {**ledgeometry.DEFAULT_CALIBRATION, **props.get('ledCalibration', {})}
         self.__name = name
         self.__pattern = None
         self.valueUnits = valueUnits
@@ -56,6 +71,16 @@ class LEDMatrixManager(ABC):
     def setIndividualPattern(self, pattern, getReturn=False) -> None:
         """ Sets the value of the LEDMatrix. """
         pass
+
+    def illuminationNA(self) -> np.ndarray:
+        """ (N, 2) illumination NA of every LED in camera frame, see ledgeometry. """
+        return ledgeometry.illumination_na(self.positions, self.calibration)
+
+    def setLEDs(self, ids, rgb=(255, 255, 255), getReturn=True):
+        """ Light exactly the LEDs ``ids`` (chain indices) in ``rgb``, all others off. """
+        pattern = np.zeros((len(self.positions), 3), dtype=int)
+        pattern[list(ids)] = rgb
+        return self.setIndividualPattern(pattern, getReturn=getReturn)
 
     def setEnabled(self, enabled) -> None:
         """ Sets the value of the LEDMatrix. """

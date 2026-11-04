@@ -30,7 +30,6 @@ from imswitch.imcontrol.model.io import (
     SaveFormat,
     SaveMode,
     get_recording_service,
-    StreamingDataStoreAdapter,
     SnapResult,
 )
 from ..basecontrollers import ImConWidgetController
@@ -72,7 +71,6 @@ class RecordingController(ImConWidgetController):
         self._recording_service: Optional[RecordingService] = None
         
         # Streaming adapter for continuous recordings (lazy initialization)
-        self._streaming_adapter: Optional[StreamingDataStoreAdapter] = None
 
         # Connect CommunicationChannel signals
         '''
@@ -104,7 +102,7 @@ class RecordingController(ImConWidgetController):
                                    write_zarr: bool = True, 
                                    write_tiff: bool = False) -> bool:
         """
-        Start a streaming recording session using StreamingDataStoreAdapter.
+        Start a streaming recording session (see RecordingService.start_streaming).
         
         This is the modern approach for continuous recordings with OME-Zarr support.
         Uses automatic frame capture via signal callback for continuous recording.
@@ -119,66 +117,19 @@ class RecordingController(ImConWidgetController):
         Returns:
             True if session started successfully
         """
-        if self._streaming_adapter is not None and self._streaming_adapter._is_open:
-            self.__logger.warning("Streaming session already active")
-            return False
-        
         try:
-            metadata_hub = getattr(self._master, 'metadataHub', None)
-            
-            self._streaming_adapter = StreamingDataStoreAdapter(
-                base_path=folder,
-                detectors_manager=self._master.detectorsManager,
-                metadata_hub=metadata_hub,
-                write_zarr=write_zarr,
-                write_tiff=write_tiff,
-                n_time_points=n_time_points,
-            )
-            
-            self._streaming_adapter.open(detector_names)
-            
-            # Configure recording service for automatic frame capture
-            self.recording_service.set_streaming_adapter(self._streaming_adapter)
-            self.recording_service._streaming_start_time = time.time()
-            self.recording_service._streaming_detector_names = detector_names or []
-            self.recording_service._connect_frame_callback()
-            
-            self.__logger.info(f"Streaming recording started with auto-capture: {folder}")
-            return True
+            return self.recording_service.start_streaming(
+                folder, self._master.detectorsManager, detector_names=detector_names,
+                write_zarr=write_zarr, write_tiff=write_tiff, n_time_points=n_time_points,
+                metadata_hub=getattr(self._master, 'metadataHub', None))
         except Exception as e:
-            self.__logger.error(f"Failed to start streaming recording: {e}")
-            self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
-            self._streaming_adapter = None
+            self.__logger.error(f"Failed to start streaming recording: {e}\n"
+                                f"{traceback.format_exc()}")
             return False
-    
-    
+
     def stop_streaming_recording(self) -> Dict[str, Any]:
-        """
-        Stop the active streaming recording session.
-        
-        Returns:
-            Statistics about the recording session
-        """
-        if self._streaming_adapter is None:
-            return {}
-        
-        try:
-            # Disconnect frame callback first
-            self.recording_service._disconnect_frame_callback()
-            self.recording_service._streaming_adapter = None
-            self.recording_service._streaming_start_time = None
-            self.recording_service._streaming_detector_names = []
-            
-            stats = self._streaming_adapter.get_statistics()
-            self._streaming_adapter.close()
-            self.__logger.info(f"Streaming recording stopped. Stats: {stats}")
-        except Exception as e:
-            self.__logger.error(f"Error stopping streaming recording: {e}")
-            stats = {}
-        finally:
-            self._streaming_adapter = None
-        
-        return stats
+        """Stop the active streaming recording session; returns its statistics."""
+        return self.recording_service.stop_streaming()
 
     def _buildSnapPreview(self, detectorNames, maxSize: int = 1024) -> Optional[dict]:
         """Encode the just-captured frame as a small 8-bit PNG data URL.
@@ -879,7 +830,7 @@ class RecordingController(ImConWidgetController):
         """Stop any active recording."""
         if self.recording_service.is_video_recording:
             self.recording_service.stop_video_recording()
-        if self._streaming_adapter is not None:
+        if self.recording_service.is_streaming:
             self.stop_streaming_recording()
         self._commChannel.sigRecordingEnded.emit()
 
@@ -933,7 +884,6 @@ class RecordingController(ImConWidgetController):
             )
         elif detectorMode == -3:  # A specific detector
             pass 
-            #return self._widget.getSelectedSpecificDetectors()
 
     def getFileName(self, description: str = "", detector_names: list = None):
         """

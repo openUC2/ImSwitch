@@ -30,6 +30,7 @@ from typing import Annotated, Any, Dict, Generator, List, Optional
 import numpy as np
 
 from imswitch.imcommon.framework import Signal
+from imswitch.imcontrol.controller.busy import busy_reasons
 from imswitch.imcommon.model import APIExport, initLogger
 from imswitch.imcontrol.model import configfiletools
 from ..basecontrollers import ImConWidgetController
@@ -42,7 +43,6 @@ MAX_ACTIVITY = 50
 MAX_UPLOADS = 12
 THUMBNAIL_PX = 192
 STATE_PUBLISH_PERIOD_S = 1.0
-BUSY_STATES = ("running", "paused", "stopping")
 HOMEABLE_AXES = ("X", "Y")  # Z homing drives the objective towards its endstop: not remote
 
 
@@ -542,21 +542,7 @@ class ArkitektController(ImConWidgetController):
 
     def _refuse_if_busy(self) -> None:
         """Remote calls must not interfere with what runs locally."""
-        get = getattr(self._master, "getController", lambda name: None)
-        reasons = []
-        experiment, recording = get("Experiment"), get("Recording")
-        try:
-            if experiment is not None and (
-                    experiment.getExperimentStatus().get("status") in BUSY_STATES):
-                reasons.append("an experiment is running")
-            if recording is not None and recording.isRecording():
-                reasons.append("a recording is running")
-            for name in ("Workflow", "Timelapse"):
-                manager = getattr(get(name), "workflow_manager", None)
-                if manager is not None and manager.get_status().get("status") in BUSY_STATES:
-                    reasons.append(f"a {name.lower()} is running")
-        except Exception as e:
-            self._logger.warning(f"Arkitekt busy check failed (not blocking): {e}")
+        reasons = busy_reasons(self._master, self._logger)
         if reasons:
             raise RuntimeError(f"Refused: {', '.join(reasons)} in ImSwitch.")
 

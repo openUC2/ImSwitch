@@ -1,174 +1,54 @@
-import numpy as np
-import time
-import threading
-import csv
-import os
+from typing import Optional
+
+from imswitch.imcommon.model import APIExport, initLogger
 from ..basecontrollers import ImConWidgetController
-from imswitch.imcommon.model import APIExport, dirtools, initLogger
-from datetime import datetime
+
+
 class TemperatureController(ImConWidgetController):
-    """ Linked to TemperatureWidget."""
+    """Heater PID on the UC2 board (``rs232sManager["ESP32"]``)."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self, tryInheritParent=False)
-
-        # Parameters for monitoring the pressure
-        self.tMeasure  = 2 # sampling rate of measure pressure
-        self.is_measure = True
-        self.temperatureValue  = 0
-        self.nBuffer = 100
-        self.currPoint = 0
-        self.setPointData = np.zeros((self.nBuffer,2))
-        self.timeData = np.zeros(self.nBuffer)
-        self.startTime = time.time()
-
-        # settings for the controller
-        self.controlTarget = 0
-
-        # Hard-coded PID values..
-        self.Kp = 100
-        self.Ki = 0.1
-        self.Kd = .5
-        self.PIDenabled = False
-        self.pollingPeriod = 5
-
-        # get hold on the Temperature Controller
+        self.Kp, self.Ki, self.Kd = 100, 0.1, 0.5
+        self.controlTarget = 0.0
         self.temperatureController = self._master.rs232sManager["ESP32"]._esp32.temperature
 
-        # Connect TemperatureWidget signals
-        # create logging directory
-        self.temperatureDir = os.path.join(dirtools.UserFileDirs.Root, 'temperatureController')
-        if not os.path.exists(self.temperatureDir):
-            os.makedirs(self.temperatureDir)
+    @APIExport(runOnUIThread=False)
+    def set_temperature(self, active: bool, Kp: Optional[float] = None,
+                        Ki: Optional[float] = None, Kd: Optional[float] = None,
+                        target: Optional[float] = None, sensorOffset: float = 3.0) -> dict:
+        """Switch the heater PID on or off.
 
+        Args:
+            active: True regulates, false switches the heater off.
+            Kp, Ki, Kd: PID gains; empty keeps the previous ones.
+            target: Setpoint in °C at the sample; empty keeps the previous one.
+            sensorOffset: °C added for the board, whose sensor sits at the heater.
 
-    def switchTemperatureMonitor(self, active):
-        """ Switch the temperature monitoring on or off. """
-        self.is_measure = active
-        if active:
-            self.startTemperatureMeasurements()
-        else:
-            self.stopTemperatureMeasurements()
-
-    def startTemperatureMeasurements(self):
-        # Start the temperature display thread
-        self.temperatureController.start_temperature_polling(period=self.pollingPeriod)
-
-        self.measurementThread = threading.Thread(target=self.updateMeasurements)
-        self.measurementThread.start()
-
-    def stopTemperatureMeasurements(self):
-        self.is_measure=False
-        self.measurementThread.join()
-
-    def valueTemperatureValueChanged(self, value):
-        """ Change setpoint for the temperature. """
-        self.controlTarget = value
-
-        # retrieve PID values
-        self.Kp, self.Ki, self.Kd = self._widget.getPIDValues()
-
-        # get temperature value from GUI
-        self.controlTarget = self._widget.getTemperatureValue()
-
-        # we actually set the target value with this slider
-        self._widget.updateTargetTemperatureValue(self.controlTarget)
-        self.set_temperature(active=self.PIDenabled,
-                                Kp=self.Kp, Ki=self.Ki, Kd=self.Kd, target=self.controlTarget)
-
-    def valueRotationSpeedChanged(self, value):
-        """ Change magnitude. """
-        self.speedRotation = int(value)
-        self._widget.updateRotationSpeed(self.speedPump)
-        self.tRoundtripRotation = self.stepsPerRotation/(0.001+self.speedRotation) # in s
-        self.positioner.moveForever(speed=(self.speedPump,self.speedRotation,0),is_stop=False)
-
-    def __del__(self):
-        self.is_measure=False
-        self.measurementThread.quit()
-        if hasattr(super(), '__del__'):
-            super().__del__()
-
-    def setPID(self, enabled):
-        """ Show or hide Temperature. """
-        self.PIDenabled = enabled
-        # retrieve PID values
-        self.Kp, self.Ki, self.Kd = self._widget.getPIDValues()
-
-        # get temperature value from GUI
-        self.controlTarget = float(self._widget.getTemperatureValue())
-
-        self.set_temperature(active=self.PIDenabled,
-                                Kp=self.Kp, Ki=self.Ki, Kd=self.Kd, target=self.controlTarget)
+        Returns the state as getTemperature does.
+        """
+        self.Kp = self.Kp if Kp is None else float(Kp)
+        self.Ki = self.Ki if Ki is None else float(Ki)
+        self.Kd = self.Kd if Kd is None else float(Kd)
+        if target is not None:
+            self.controlTarget = float(target)
+        self.temperatureController.set_temperature(
+            active=int(bool(active)), Kp=self.Kp, Ki=self.Ki, Kd=self.Kd,
+            target=self.controlTarget + float(sensorOffset))
+        return self.getTemperature()
 
     @APIExport(runOnUIThread=False)
-    def set_temperature(self, active, Kp=None, Ki=None, Kd=None, target=None, sensorOffset = 3):
-        """ Set the temperature. """
-        if Kp is not None:
-            self.Kp = Kp
-        if Ki is not None:
-            self.Ki = Ki
-        if Kd is not None:
-            self.Kd = Kd
-        if target is not None:
-            self.controlTarget = target
+    def getTemperature(self) -> dict:
+        """Current heater sensor reading in °C, the setpoint and the PID gains.
 
-
-
-        self.temperatureController.set_temperature(active=active
-            , Kp=self.Kp, Ki=self.Ki, Kd=self.Kd, target=self.controlTarget+sensorOffset)
-
-    def updateSetPointData(self):
-        if self.currPoint < self.nBuffer:
-            self.setPointData[self.currPoint,0] = self.temperatureValue
-            self.setPointData[self.currPoint,1] = self.controlTarget
-
-            self.timeData[self.currPoint] = time.time() - self.startTime
-        else:
-            self.setPointData[:-1,0] = self.setPointData[1:,0]
-            self.setPointData[-1,0] = self.temperatureValue
-            self.setPointData[:-1,1] = self.setPointData[1:,1]
-            self.setPointData[-1,1] = self.controlTarget
-            self.timeData[:-1] = self.timeData[1:]
-            self.timeData[-1] = time.time() - self.startTime
-        self.currPoint += 1
-
-    def updateMeasurements(self):
-        self.temperatureController.start_temperature_polling(period=self.pollingPeriod)
-
-        while self.is_measure:
-            self.temperatureValue  = self.temperatureController.get_temperature()
-            if self.temperatureValue and self.temperatureValue > -200: # if not, we have faulty values
-
-                self._widget.updateTemperature(self.temperatureValue)
-
-                # logging temperature to file
-                mFileName = os.path.join(self.temperatureDir, 'temperature.csv')
-
-                # Create directory if it does not exist
-                os.makedirs(os.path.dirname(mFileName), exist_ok=True)
-                try:
-                    # in case somebody accesses the file
-                    with open(mFileName, 'a', newline='') as file:
-                        writer = csv.writer(file)
-                        now = datetime.now()
-                        # dd/mm/YY H:M:S
-                        dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
-                        writer.writerow([dt_string, self.temperatureValue])
-                except:
-                    pass
-
-                # update plot
-                self.updateSetPointData()
-                if self.currPoint < self.nBuffer:
-                    self._widget.temperaturePlotCurve.setData(self.timeData[1:self.currPoint],
-                                                        self.setPointData[1:self.currPoint,0])
-                else:
-                    self._widget.temperaturePlotCurve.setData(self.timeData, self.setPointData[:,0])
-            time.sleep(self.tMeasure)
-        self.temperatureController.stop_temperature_polling()
-
+        target_c is the value last passed to set_temperature (without its
+        sensorOffset). Non-blocking: the reading is the board's last report.
+        """
+        value = self.temperatureController.get_temperature()
+        return {"temperature_c": None if value is None or value <= -200 else float(value),
+                "target_c": float(self.controlTarget),
+                "Kp": self.Kp, "Ki": self.Ki, "Kd": self.Kd}
 
 
 # Copyright (C) 2020-2021 ImSwitch developers

@@ -8,7 +8,7 @@ from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberPara
 # "property does not exist" warnings from the camera wrapper.
 _HARDWARE_READABLE_PARAMS = (
     'exposure', 'gain', 'blacklevel', 'image_width', 'image_height',
-    'pixel_format',
+    'pixel_format', 'exposure_mode',
 )
 
 
@@ -61,6 +61,9 @@ class OpenCVCamManager(DetectorManager):
         parameters = {
             'exposure': DetectorNumberParameter(group='Misc', value=100, valueUnits='ms',
                                                 editable=True),
+            # manual: 'exposure' is applied (V4L2 only); auto: the camera's own auto exposure
+            'exposure_mode': DetectorListParameter(group='Misc', value='auto', options=['auto', 'manual'],
+                                                   editable=True),
             'gain': DetectorNumberParameter(group='Misc', value=1, valueUnits='arb.u.',
                                             editable=True),
             'blacklevel': DetectorNumberParameter(group='Misc', value=100, valueUnits='arb.u.',

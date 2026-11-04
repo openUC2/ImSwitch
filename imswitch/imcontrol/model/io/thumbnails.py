@@ -181,7 +181,13 @@ def _read_zarr_plane(abs_path: str) -> np.ndarray:
             arr = smallest[1]
     if arr is None:
         raise ValueError(f"No readable array in zarr store: {abs_path}")
-    return _reduce_to_2d(np.asarray(arr[...]))
+    data = np.asarray(arr[...])
+    # An RGB camera's frames are stored as three channels coloured R, G, B.
+    channels = dict(g.attrs).get("omero", {}).get("channels", [])
+    if data.ndim == 5 and data.shape[1] == 3 and \
+            [c.get("color") for c in channels] == ["FF0000", "00FF00", "0000FF"]:
+        return np.moveaxis(data[0, :, data.shape[2] // 2], 0, -1)
+    return _reduce_to_2d(data)
 
 
 def _reduce_to_2d(arr: np.ndarray) -> np.ndarray:

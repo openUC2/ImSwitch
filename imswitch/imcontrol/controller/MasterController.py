@@ -11,6 +11,9 @@ from imswitch.imcontrol.model import (
     LasersManager,
     MultiManager,
     PositionersManager,
+    PumpsManager,
+    DigitalIOManager,
+    ValvesManager,
     #RecordingManager,  # DEPRECATED - kept for backwards compatibility
     RS232sManager,
     SLMManager,
@@ -19,10 +22,8 @@ from imswitch.imcontrol.model import (
     LEDMatrixsManager,
     ROIScanManager,
     WebRTCManager,
-    HyphaManager,
     UC2ConfigManager,
     AutofocusManager,
-    HistoScanManager,
     StresstestManager,
     PixelCalibrationManager,
     LightsheetManager,
@@ -32,7 +33,6 @@ from imswitch.imcontrol.model import (
     LEDsManager,
     FlowStopManager,
     WorkflowManager,
-    TimelapseManager,
     LepmonManager,
     ExperimentManager,
     ObjectiveManager,
@@ -108,6 +108,12 @@ class MasterController:
         )
 
         self.LEDsManager = LEDsManager(self.__setupInfo.LEDs)
+        # Pumps and valves drive a laser channel (PWM) or a positioner axis.
+        fluidicsDevices = dict(lasersManager=self.lasersManager,
+                               positionersManager=self.positionersManager, **lowLevelManagers)
+        self.pumpsManager = PumpsManager(self.__setupInfo.pumps, **fluidicsDevices)
+        self.valvesManager = ValvesManager(self.__setupInfo.valves, **fluidicsDevices)
+        self.digitalIOManager = DigitalIOManager(self.__setupInfo.digitalIO, **lowLevelManagers)
         
         # Initialize unified I/O service (RecordingService from io module)
         self.recordingService = RecordingService(self.detectorsManager)
@@ -139,22 +145,16 @@ class MasterController:
             self.dpcManager = DPCManager(self.__setupInfo.dpc)
         if "NIDAQ" in self.__setupInfo.availableWidgets:
             self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
-        if "Hypha" in self.__setupInfo.availableWidgets:
-            self.hyphaManager = HyphaManager(self.__setupInfo.hypha)
         if "ROIScan" in self.__setupInfo.availableWidgets:
             self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
         if "Lightsheet" in self.__setupInfo.availableWidgets:
             self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
         if "WebRTC" in self.__setupInfo.availableWidgets:
             self.webrtcManager = WebRTCManager(self.__setupInfo.webrtc)
-        if "Timelapse" in self.__setupInfo.availableWidgets:
-            self.timelapseManager = TimelapseManager()
         if "Experiment" in self.__setupInfo.availableWidgets:
             self.experimentManager = ExperimentManager(self.__setupInfo.experiment)
         if "Objective" in self.__setupInfo.availableWidgets:
             self.objectiveManager = ObjectiveManager(self.__setupInfo.objective, setupInfo=self.__setupInfo)
-        if "HistoScan" in self.__setupInfo.availableWidgets:
-            self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
         if "Stresstest" in self.__setupInfo.availableWidgets:
             self.StresstestManager = StresstestManager(self.__setupInfo.Stresstest)
         if "FlowStop" in self.__setupInfo.availableWidgets:

@@ -5,30 +5,33 @@ Tests experiment control endpoints including status monitoring, hardware paramet
 import time
 
 
+# Every controller endpoint lives below /imswitch/api (ImSwitchServer root_path + router).
+API = "/imswitch/api"
+
 def test_get_experiment_status(api_server):
     """Test getting current experiment status."""
-    response = api_server.get("/ExperimentController/getExperimentStatus")
+    response = api_server.get(f"{API}/ExperimentController/getExperimentStatus")
     assert response.status_code == 200
     print("✓ Experiment status retrieved successfully")
 
 
 def test_get_hardware_parameters(api_server):
     """Test getting hardware parameters."""
-    response = api_server.get("/ExperimentController/getHardwareParameters")
+    response = api_server.get(f"{API}/ExperimentController/getHardwareParameters")
     assert response.status_code == 200
     print("✓ Hardware parameters retrieved successfully")
 
 
 def test_get_ome_writer_config(api_server):
     """Test getting OME writer configuration."""
-    response = api_server.get("/ExperimentController/getOMEWriterConfig")
+    response = api_server.get(f"{API}/ExperimentController/getOMEWriterConfig")
     assert response.status_code == 200
     print("✓ OME writer configuration retrieved successfully")
 
 
 def test_fast_stage_scan_acquisition_filepath(api_server):
     """Test getting file path of last fast stage scan."""
-    response = api_server.get("/ExperimentController/startFastStageScanAcquisitionFilePath")
+    response = api_server.get(f"{API}/ExperimentController/startFastStageScanAcquisitionFilePath")
     # May return 200 with path or 404 if no scan exists yet
     assert response.status_code in [200, 404]
     if response.status_code == 200:
@@ -53,20 +56,20 @@ def test_start_fast_stage_scan_acquisition(api_server):
         "nTimes": 1
     }
 
-    response = api_server.get("/ExperimentController/startFastStageScanAcquisition", params=params)
+    response = api_server.get(f"{API}/ExperimentController/startFastStageScanAcquisition", params=params)
     assert response.status_code in [200, 422]  # May fail if hardware not available
 
     if response.status_code == 200:
         print("✓ Fast stage scan acquisition started successfully")
 
         # Check status
-        status_response = api_server.get("/ExperimentController/getExperimentStatus")
+        status_response = api_server.get(f"{API}/ExperimentController/getExperimentStatus")
         assert status_response.status_code == 200
         print(f"✓ Experiment status during scan: {status_response.json()}")
 
         # Wait a moment then stop the scan
         time.sleep(0.5)
-        stop_response = api_server.get("/ExperimentController/stopFastStageScanAcquisition")
+        stop_response = api_server.get(f"{API}/ExperimentController/stopFastStageScanAcquisition")
         assert stop_response.status_code == 200
         print("✓ Fast stage scan stopped successfully")
     else:
@@ -83,29 +86,29 @@ def test_experiment_lifecycle(api_server):
     }
 
     # Try to start experiment
-    start_response = api_server.get("/ExperimentController/startFastStageScanAcquisition", params=scan_params)
+    start_response = api_server.get(f"{API}/ExperimentController/startFastStageScanAcquisition", params=scan_params)
 
     if start_response.status_code == 200:
         print("✓ Experiment started successfully")
 
         # Get status
-        status_response = api_server.get("/ExperimentController/getExperimentStatus")
+        status_response = api_server.get(f"{API}/ExperimentController/getExperimentStatus")
         assert status_response.status_code == 200
         status = status_response.json()
         print(f"✓ Experiment status: {status}")
 
         # Try pause workflow
-        pause_response = api_server.get("/ExperimentController/pauseWorkflow")
+        pause_response = api_server.get(f"{API}/ExperimentController/pauseWorkflow")
         assert pause_response.status_code == 200
         print("✓ Workflow pause attempted")
 
         # Try resume
-        resume_response = api_server.get("/ExperimentController/resumeExperiment")
+        resume_response = api_server.get(f"{API}/ExperimentController/resumeExperiment")
         assert resume_response.status_code == 200
         print("✓ Experiment resume attempted")
 
         # Stop experiment
-        stop_response = api_server.get("/ExperimentController/stopExperiment")
+        stop_response = api_server.get(f"{API}/ExperimentController/stopExperiment")
         assert stop_response.status_code == 200
         print("✓ Experiment stopped successfully")
 
@@ -115,7 +118,7 @@ def test_experiment_lifecycle(api_server):
 
 def test_force_stop_experiment(api_server):
     """Test force stopping experiment."""
-    response = api_server.get("/ExperimentController/forceStopExperiment")
+    response = api_server.get(f"{API}/ExperimentController/forceStopExperiment")
     assert response.status_code == 200
     print("✓ Force stop experiment command sent successfully")
 
@@ -129,7 +132,7 @@ def test_wellplate_experiment_endpoint(api_server):
         "description": "Test experiment for API validation"
     }
 
-    response = api_server.post("/ExperimentController/startWellplateExperiment", json=experiment_config)
+    response = api_server.post(f"{API}/ExperimentController/startWellplateExperiment", json=experiment_config)
     # May return 422 if schema validation fails, which is expected
     assert response.status_code in [200, 422]
 
@@ -137,7 +140,7 @@ def test_wellplate_experiment_endpoint(api_server):
         print("✓ Wellplate experiment started successfully")
 
         # Stop the experiment
-        stop_response = api_server.get("/ExperimentController/stopExperiment")
+        stop_response = api_server.get(f"{API}/ExperimentController/stopExperiment")
         assert stop_response.status_code == 200
         print("✓ Wellplate experiment stopped")
     else:
@@ -146,7 +149,7 @@ def test_wellplate_experiment_endpoint(api_server):
 
 def test_get_last_scan_ome_zarr(api_server):
     """Test getting last scan as OME-ZARR."""
-    response = api_server.get("/ExperimentController/getLastScanAsOMEZARR")
+    response = api_server.get(f"{API}/ExperimentController/getLastScanAsOMEZARR")
     # May return 404 if no scan exists
     assert response.status_code in [200, 404]
 
@@ -185,8 +188,10 @@ def test_experiment_controller_endpoints_discovery(api_server):
         "/ExperimentController/forceStopExperiment"
     ]
 
+    # openapi paths may or may not carry the /imswitch/api prefix; match on the suffix.
     for required in required_endpoints:
-        assert required in experiment_endpoints, f"Required endpoint missing: {required}"
+        assert any(path.endswith(required) for path in experiment_endpoints), \
+            f"Required endpoint missing: {required}"
 
     print("✓ All required ExperimentController endpoints are present")
 

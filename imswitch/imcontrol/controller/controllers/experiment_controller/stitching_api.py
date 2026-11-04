@@ -100,12 +100,12 @@ class AshlarMixin:
         """
         self._logger.info(f"Ashlar stitching started for: {target_dir}")
 
-        # Locate convert_experiment_tiffs.py relative to this controller file.
-        # imswitch/imcontrol/controller/controllers/ → root → scripts/
+        # The script lives in the repository's scripts/ folder:
+        # experiment_controller/ → controllers/ → controller/ → imcontrol/ → imswitch/ → root
         script = os.path.abspath(
             os.path.join(
                 os.path.dirname(__file__),
-                "..", "..", "..", "..", "scripts",
+                "..", "..", "..", "..", "..", "scripts",
                 "convert_experiment_tiffs.py",
             )
         )

@@ -5,14 +5,13 @@ This package provides modular components for handling different experiment
 execution modes and shared functionality.
 
 NOTE: The writer classes (OMEWriter, OMEWriterConfig, OMEFileStorePaths,
-OmeTiffStitcher, SingleTiffWriter, MinimalMetadata, MinimalZarrDataSource) 
+MinimalMetadata)
 have been migrated to the io/ome_writers module.
 
 For new code, please import from:
     from imswitch.imcontrol.model.io import (
         OMEWriter, OMEWriterConfig, OMEFileStorePaths,
-        OmeTiffStitcher, SingleTiffWriter,
-        MinimalMetadata, MinimalZarrDataSource,
+        MinimalMetadata,
     )
 
 The imports below are maintained for backward compatibility but are DEPRECATED.
@@ -59,10 +58,7 @@ from imswitch.imcontrol.model.io import (
     OMEWriter,
     OMEWriterConfig,
     OMEFileStorePaths,
-    OmeTiffStitcher,
-    SingleTiffWriter,
     MinimalMetadata,
-    MinimalZarrDataSource,
 )
 
 import warnings
@@ -72,8 +68,7 @@ def __getattr__(name):
     """Emit deprecation warning when accessing migrated classes."""
     deprecated_classes = [
         'OMEWriter', 'OMEWriterConfig', 'OMEFileStorePaths', 
-        'OmeTiffStitcher', 'SingleTiffWriter',
-        'MinimalMetadata', 'MinimalZarrDataSource',
+        'MinimalMetadata',
     ]
     if name in deprecated_classes:
         warnings.warn(
@@ -93,10 +88,7 @@ __all__ = [
     'OMEFileStorePaths',
     'OMEWriter',
     'OMEWriterConfig',
-    'OmeTiffStitcher',
-    'SingleTiffWriter',
     'MinimalMetadata',
-    'MinimalZarrDataSource',
 ]
 
 '''

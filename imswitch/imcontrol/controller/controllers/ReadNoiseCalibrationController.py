@@ -53,6 +53,7 @@ from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport, initLogger, dirtools
 
 from ..basecontrollers import ImConWidgetController
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 
 
 def _convert_to_native(obj):
@@ -549,7 +550,7 @@ class ReadNoiseCalibrationController(ImConWidgetController):
             os.makedirs(subdir, exist_ok=True)
             path = os.path.join(subdir, f"{kind}_stack.tif")
             save_stack = stack.astype(np.float32) if np.issubdtype(stack.dtype, np.floating) else stack
-            tifffile.imwrite(path, save_stack)
+            save_image(path, save_stack, "TYX", name=f"{kind} frames")
             self._session[f"{kind}Count"] = int(stack.shape[0])
             self._session["status"] = f"{kind}_done"
             self._write_session()

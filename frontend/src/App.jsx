@@ -26,11 +26,13 @@ import LightsheetController from "./components/LightsheetController.jsx";
 import LiveView from "./components/LiveView.js";
 import MazeGameController from "./components/MazeGameController.js";
 import MotorSettingsController from "./components/MotorSettingsController.jsx";
+import LaserSettingsController from "./components/LaserSettingsController.jsx";
 import ObjectiveController from "./components/ObjectiveController.js";
 import SocketView from "./components/SocketView.js";
 import MMCoreController from "./components/MMCoreController.jsx";
 
 import FRAMESettingsController from "./components/FRAMESettingsController.js";
+import FrameCalibrationApp from "./components/FrameCalibrationApp.jsx";
 import STORMControllerLocal from "./components/STORMControllerLocal.js";
 import StresstestController from "./components/StresstestController.js";
 import SystemSettings from "./components/SystemSettings.js";
@@ -49,6 +51,7 @@ import AufgabenController from "./components/aufgaben/AufgabenController.jsx";
 import ArkitektController from "./components/ArkitektController.jsx";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
 import GalvoScannerController from "./components/GalvoScannerController.jsx";
+import SLMController from "./components/SLMController.jsx";
 import ShitScopeComponent from "./components/ShitScopeComponent.js";
 
 // ImSwitch Navigation Drawer
@@ -768,6 +771,7 @@ function App() {
               {selectedPlugin === "GalvoScannerController" && (
                 <GalvoScannerController />
               )}
+              {selectedPlugin === "SLM" && <SLMController />}
               {selectedPlugin === "ShitScope" && (
                 <ShitScopeComponent
                   onOpenFileManager={handleFileManagerInitialPathChange}
@@ -806,6 +810,9 @@ function App() {
               {selectedPlugin === "SystemSettings" && <SystemSettings />}
               {selectedPlugin === "MotorSettings" && (
                 <MotorSettingsController />
+              )}
+              {selectedPlugin === "LaserSettings" && (
+                <LaserSettingsController />
               )}
               {selectedPlugin === "FileManager" && (
                 <div
@@ -872,6 +879,7 @@ function App() {
               {selectedPlugin === "StageMap" && <StageMapController />}
               {selectedPlugin === "OPM" && <OPMController />}
               {selectedPlugin === "Aufgaben" && <AufgabenController />}
+              {selectedPlugin === "FrameCalibration" && <FrameCalibrationApp />}
               {selectedPlugin === "Arkitekt" && <ArkitektController />}
               {selectedPlugin === "CompositeAcquisition" && (
                 <CompositeAcquisitionComponent />

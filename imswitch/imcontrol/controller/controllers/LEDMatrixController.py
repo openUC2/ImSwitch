@@ -100,6 +100,13 @@ class LEDMatrixController(ImConWidgetController):
         """ Sets the value of the LEDMatrix. """
         self.ledMatrix.setStatus(status=status)
 
+    @APIExport()
+    def setLEDs(self, ledIds: str = "", intensity_r: int = 255, intensity_g: int = 255,
+                intensity_b: int = 255) -> None:
+        """ Light exactly the comma-separated chain indices ``ledIds``, all others off. """
+        ids = [int(s) for s in ledIds.split(",") if s.strip()]
+        self.ledMatrix.setLEDs(ids, (intensity_r, intensity_g, intensity_b))
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

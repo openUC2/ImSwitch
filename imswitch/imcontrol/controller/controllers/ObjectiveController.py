@@ -385,6 +385,12 @@ class ObjectiveController(LiveUpdatedController):
                             )
                         except Exception as e:
                             self._logger.error(f"Failed to apply Z focus adjustment: {e}", exc_info=True)
+                    # parcentricity: keep the same sample point centred
+                    offs = getattr(self._setupInfo.objective, "xyOffsets", None) or [[0, 0], [0, 0]]
+                    for i, ax in enumerate(("X", "Y")):
+                        d = offs[slot][i] - offs[self._currentObjective][i]
+                        if d and self._positioner is not None:
+                            self._positioner.move(value=d, axis=ax, is_absolute=False, is_blocking=True)
 
                 # Move the axis A motor (objective turret)
                 success = self._moveMotorToSlot(slot)

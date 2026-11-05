@@ -135,6 +135,26 @@ class ESP32LEDLaserManager(LaserManager):
             self.__logger.error(f"setStrobe on channel {self.channel_index} failed: {e}")
             return None
 
+    def getPWMSettings(self):
+        """Firmware PWM parameters of this channel from /laser_get, e.g.
+        {"LASERid":1,"LASERval":0,"LASERmax":1024,"LASERRes":10,"LASERFreq":5000,...};
+        None when the firmware or the installed uc2rest does not report them."""
+        getLaser = getattr(self._laser, "get_laser", None)
+        if getLaser is None:
+            self.__logger.warning("uc2rest has no Laser.get_laser; update UC2-REST")
+            return None
+        try:
+            return getLaser(self.channel_index)
+        except Exception as e:
+            self.__logger.error(f"getPWMSettings on channel {self.channel_index} failed: {e}")
+            return None
+
+    def setPWMSettings(self, frequency=None, resolution=None):
+        """Change PWM frequency (Hz) and/or resolution (bits); the firmware
+        switches the channel off while doing so (on-board lasers only)."""
+        self._laser.set_laser_pwm(self.channel_index, frequency=frequency, resolution=resolution)
+        return self.getPWMSettings()
+
     def sendTrigger(self, triggerId):
         # uc2rest exposes the trigger on .digitalout; there is no .digital.
         return self._esp32.digitalout.sendTrigger(triggerId)

@@ -389,7 +389,11 @@ class TriggeredCamera:
             t = (n - 1) * req["period_us"] * 1e-6 + delay * 1e-6
             frame = self.render(self._start + np.sign(dist) * min(abs(dist), req["speed"] * t))
         if n == 1:
-            self._lastN = None
+            self._lastN, self._arrival0 = None, time.time()
+        # Arrival on the trigger clock, as with a firmware timer: the virtual
+        # sweep thread catches up after a stall (busy CI runner) and would
+        # otherwise stamp two kept frames with the same trigger period.
+        arrival = self._arrival0 + (n - 1) * req["period_us"] * 1e-6
         if self.minPeriodUs and self._lastN is not None and \
                 (n - self._lastN) * req["period_us"] < self.minPeriodUs:
             return                      # still reading out: the trigger is ignored
@@ -399,7 +403,7 @@ class TriggeredCamera:
             return                      # lost between camera and host
         trig = 0 if self.trig0 is None else self.trig0 + n
         with self._lock:
-            self._buffer.append((frame, self.frameNum, trig, time.time()))
+            self._buffer.append((frame, self.frameNum, trig, arrival))
 
 
 class Lasers(dict):

@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Optional, Union
 from imswitch.imcommon.model import APIExport, initLogger
 from imswitch.imcontrol.model import configfiletools
 from imswitch.imcontrol.view.guitools.ViewSetupInfo import LaserPresetInfo
@@ -150,6 +150,22 @@ class LaserController(ImConWidgetController):
         """ Sets the value of the specified laser, in the units that the laser
         uses. """
         self.valueChanged(laserName, value)
+
+    @APIExport()
+    def getLaserPWMSettings(self, laserName: str) -> Optional[dict]:
+        """ Returns the firmware PWM parameters of the laser (LASERval,
+        LASERmax, LASERRes, LASERFreq, ...), or None if its manager or
+        firmware cannot report them. """
+        getter = getattr(self._master.lasersManager[laserName], "getPWMSettings", None)
+        return getter() if getter else None
+
+    @APIExport()
+    def setLaserPWMSettings(self, laserName: str, frequency: Optional[int] = None,
+                            resolution: Optional[int] = None) -> Optional[dict]:
+        """ Sets PWM frequency (Hz) and/or resolution (bits) of the laser on
+        the device. The laser is switched off. Returns the new settings. """
+        setter = getattr(self._master.lasersManager[laserName], "setPWMSettings", None)
+        return setter(frequency=frequency, resolution=resolution) if setter else None
 
     @APIExport()
     def changeScanPower(self, laserName, laserValue):

@@ -171,31 +171,29 @@ class DigitalIOInfo:
 
 @dataclass(frozen=False)
 class SLMInfo:
-    monitorIdx: int
-    """ Index of the monitor in the system list of monitors (indexing starts at
-    0). """
+    """A spatial light modulator or DMD driven as a display (HDMI) in a plane
+    conjugate to the sample. Enabled with "SLM" in availableWidgets; see docs/SLM.md."""
 
-    width: int
-    """ Width of SLM, in pixels. """
+    display: str = "virtual"
+    """ Output backend: "virtual" (nothing shown; tests and the virtual microscope),
+    "framebuffer" (Linux /dev/fb<displayIndex>, the Raspberry Pi HDMI output, no X needed)
+    or "window" (fullscreen window on monitor displayIndex; needs pygame-ce). """
 
-    height: int
-    """ Height of SLM, in pixels. """
+    displayIndex: int = 0
+    """ Framebuffer number or monitor index (0 = primary, 1 = first external). """
 
-    wavelength: int
-    """ Wavelength of the laser line used with the SLM. """
+    width: int = 1920
+    """ Pattern width in pixels. Once the output is open its real size wins. """
 
-    pixelSize: float
-    """ Pixel size or pixel pitch of the SLM, in millimetres. """
+    height: int = 1080
+    """ Pattern height in pixels. """
 
-    angleMount: float
-    """ The angle of incidence and reflection of the laser line that is shaped
-    by the SLM, in radians. For adding a blazed grating to create off-axis
-    holography. """
+    settleTimeMs: float = 50.0
+    """ Wait after a new frame before the camera is triggered: display latency plus the
+    DMD/SLM refresh. Too short and the previous pattern is imaged. """
 
-    correctionPatternsDir: str
-    """ Directory of .bmp images provided by Hamamatsu for flatness correction
-    at various wavelengths. A combination will be chosen based on the
-    wavelength. """
+    calibrationDetector: Optional[str] = None
+    """ Camera used for the automatic camera<->display calibration; None = the current one. """
 
 
 @dataclass(frozen=False)
@@ -299,6 +297,9 @@ class ObjectiveInfo:
     objectiveNames: List
     objectivePositions: List
     zPositions: List = field(default_factory=lambda: [0, 0])
+    xyOffsets: List = field(default_factory=lambda: [[0, 0], [0, 0]])
+    """ Parcentricity per slot (µm, stage XY). Switching slots moves XY by the
+    difference, together with the relative Z move (i.e. unless skipZ). """
     homeDirection: int = -1
     homePolarity: int = 1
     homeSpeed: int = 20000
@@ -1058,6 +1059,10 @@ class SetupInfo:
     overviewRegistration: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
     """ Overview-camera slide registration config (per camera/layout, including
     stage XYZ positions and homographies). Persisted by ExperimentController. """
+
+    frameCalibration: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
+    """ One-button FRAME calibration: {"settings": {...}, "result": {...}}
+    (overview homography, placement, last report). Persisted by FrameCalibrationController. """
 
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """

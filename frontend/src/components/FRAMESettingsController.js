@@ -1,16 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { useSelector } from "react-redux";
 import { Tabs, Tab, Box } from "@mui/material";
-import SetLasersTab from "./FRAMESettings/SetLasersTab";
-import TestHomingTab from "./FRAMESettings/TestHomingTab";
-import FrameHomingTab from "./FRAMESettings/FrameHomingTab";
-import ZStageSyncTab from "./FRAMESettings/ZStageSyncTab";
 import PixelCalibrationTab from "./FRAMESettings/PixelCalibrationTab";
 import ManualPixelCalibrationTab from "./FRAMESettings/ManualPixelCalibrationTab";
 import VerifyCalibrationTab from "./FRAMESettings/VerifyCalibrationTab";
+import SetLasersTab from "./FRAMESettings/SetLasersTab";
+import FrameHomingTab from "./FRAMESettings/FrameHomingTab";
+import ZStageSyncTab from "./FRAMESettings/ZStageSyncTab";
 import ReadNoiseCalibrationTab from "./FRAMESettings/ReadNoiseCalibrationTab";
 import ExtendedObjectiveController from "./ObjectiveController";
-import StageOffsetCalibrationTab from "./FRAMESettings/StageOffsetCalibrationTab";
 import OpticalFlowTab from "./FRAMESettings/OpticalFlowTab";
 import CollisionDetectionTab from "./FRAMESettings/CollisionDetectionTab";
 import { selectHasController } from "../state/slices/BackendCapabilitiesSlice";
@@ -18,13 +16,9 @@ import { selectHasController } from "../state/slices/BackendCapabilitiesSlice";
 /**
  * FRAMESettings - Main component for pixel calibration and frame setup
  *
- * Provides a tabbed interface for:
- * - Automatic Pixel Calibration (stage affine calibration)
- * - Manual Pixel Calibration (two-point pixel-size calibration)
- * - Set Lasers (laser channel configuration)
- * - Test Homing (axis homing verification)
- * - Objective Controller (objective management)
- * - Stage Offset Calibration (raster scan -> stage offset)
+ * Expert tools for the FRAME. Pixel size, camera rotation, stage offset and
+ * objective offsets are calibrated by the FRAME Calibration app
+ * (FrameCalibrationApp.jsx) with the calibration plate.
  */
 // localStorage handshake key: another view (e.g. the startup "Homing
 // Recommended" dialog) can request a specific tab to be opened on mount by
@@ -69,13 +63,11 @@ const FRAMESettings = () => {
         <Tab value="verifyCalibration" label="Verify Calibration" />
         <Tab value="readNoise" label="Read Noise Calibration" />
         <Tab value="setLasers" label="Set Lasers" />
-        <Tab value="testHoming" label="Test Homing" />
         <Tab value="frameHoming" label="Frame Homing & Transport" />
         <Tab value="zStageSync" label="Z-Stage Sync" />
         {hasObjectiveController && (
           <Tab value="objective" label="Objective Controller" />
         )}
-        <Tab value="stageOffset" label="Stage Offset Calibration" />
         <Tab value="opticalFlow" label="Optical Flow Alignment" />
         <Tab value="collision" label="Collision Detection" />
       </Tabs>
@@ -86,13 +78,11 @@ const FRAMESettings = () => {
         {selectedTab === "verifyCalibration" && <VerifyCalibrationTab />}
         {selectedTab === "readNoise" && <ReadNoiseCalibrationTab />}
         {selectedTab === "setLasers" && <SetLasersTab />}
-        {selectedTab === "testHoming" && <TestHomingTab />}
         {selectedTab === "frameHoming" && <FrameHomingTab />}
         {selectedTab === "zStageSync" && <ZStageSyncTab />}
         {hasObjectiveController && selectedTab === "objective" && (
           <ExtendedObjectiveController />
         )}
-        {selectedTab === "stageOffset" && <StageOffsetCalibrationTab />}
         {selectedTab === "opticalFlow" && <OpticalFlowTab />}
         {selectedTab === "collision" && <CollisionDetectionTab />}
       </Box>

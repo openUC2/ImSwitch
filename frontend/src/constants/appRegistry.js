@@ -30,6 +30,7 @@ import {
   Psychology as PsychologyIcon,
   Map as MapIcon,
   AccountTree as AccountTreeIcon,
+  Texture as TextureIcon,
 } from "@mui/icons-material";
 
 /**
@@ -200,6 +201,21 @@ export const APP_REGISTRY = {
     pluginId: "GalvoScannerController",
   },
 
+  // SLMController
+  slm: {
+    id: "slm",
+    name: "SLM / DMD",
+    description:
+      "Spatial light modulator or DMD on an external display conjugate to the sample: static patterns, light where you draw on the camera image, camera-display calibration and pattern sequences synchronised with the camera.",
+    category: APP_CATEGORIES.APPS,
+    icon: TextureIcon,
+    enabled: false,
+    essential: false,
+    keywords: ["slm", "dmd", "pattern", "structured", "illumination", "photostimulation", "projector", "display"],
+    pluginId: "SLM",
+    requiredControllers: ["SLMController"],
+  },
+
   stormLocal: {
     id: "stormLocal",
     name: "STORM Local",
@@ -283,6 +299,20 @@ export const APP_REGISTRY = {
       "configuration",
     ],
     pluginId: "FRAMESettings",
+  },
+
+  frameCalibration: {
+    id: "frameCalibration",
+    name: "FRAME Calibration",
+    description:
+      "One-button calibration with the FRAME calibration plate: homing, pixel size, rotation and shear per objective, stage offset, parfocality/parcentricity of the objectives, plate placement and overview camera.",
+    category: APP_CATEGORIES.CALIBRATION,
+    icon: AutoFixHighIcon,
+    enabled: true,
+    essential: false,
+    keywords: ["frame", "calibration", "plate", "pixel", "affine", "offset", "objective", "homing", "overview"],
+    pluginId: "FrameCalibration",
+    requiredControllers: ["FrameCalibrationController"],
   },
 
   lightsheet: {

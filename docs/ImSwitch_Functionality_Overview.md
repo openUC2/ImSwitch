@@ -66,6 +66,7 @@
 
 ### Additional Hardware
 - **Galvo scanners** (for laser scanning)
+- **SLM / DMD displays** (patterns on a display conjugate to the sample; `docs/SLM.md`)
 - **Temperature control**
 - **Flow control** (microfluidics): pumps (UC2 stepper, virtual) and valves (board outputs,
   servo, serial, virtual) as setup blocks; named digital lines (`digitalIO`)

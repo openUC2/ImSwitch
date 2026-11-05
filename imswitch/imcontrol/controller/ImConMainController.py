@@ -39,17 +39,17 @@ class ImConMainController(MainController):
         )
 
         self.controllers = {}
-        # if not present, add StageCenterCalibration  and AcceptanceTestController
-        if "StageCenterCalibration" not in self.__mainView.widgets:
-            self.__mainView.widgets["StageCenterCalibration"] = 'StageCenterCalibration'
+        # if not present, add FrameCalibration and AcceptanceTestController
+        if "FrameCalibration" not in self.__mainView.widgets:
+            self.__mainView.widgets["FrameCalibration"] = 'FrameCalibration'
         if "AcceptanceTest" not in self.__mainView.widgets:
             self.__mainView.widgets["AcceptanceTest"] = 'AcceptanceTest'
 
         for widgetKey, widget in self.__mainView.widgets.items():
             self.__logger.info(f"Creating controller for widget {widgetKey}")
             # TODO: Hacky workaround
-            if widgetKey == "StageCenterCalibration":
-                widget = ("StageCenterCalibration",None,None)
+            if widgetKey == "FrameCalibration":
+                widget = ("FrameCalibration",None,None)
             if widgetKey == "AcceptanceTest":
                 widget = ("AcceptanceTest",None,None)
                 

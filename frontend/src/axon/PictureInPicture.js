@@ -13,7 +13,7 @@ import { PictureInPictureAlt, Close, DragIndicator } from "@mui/icons-material";
 import LiveViewControlWrapper from "./LiveViewControlWrapper";
 import DetectorToggle from "./DetectorToggle";
 
-const DEFAULT_SIZE = { width: 480, height: 400 };
+const DEFAULT_SIZE = { width: 570, height: 550 }; // larger default (#331); the frame still fits inside
 const MIN_SIZE = { width: 200, height: 150 };
 const MARGIN = 16; // px kept free between the window and the screen edge
 const RESIZED_KEY = "pip-resized"; // set once the user has resized: hide the hint

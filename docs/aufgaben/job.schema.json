@@ -3,6 +3,92 @@
   "AbsolutePosition": {
    "description": "An absolute position in 3D space.",
    "properties": {
+    "grid_col": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Grid Col"
+    },
+    "grid_row": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Grid Row"
+    },
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Name"
+    },
+    "plate_col": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Plate Col"
+    },
+    "plate_row": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Plate Row"
+    },
+    "properties": {
+     "anyOf": [
+      {
+       "items": {
+        "$ref": "#/$defs/PropertyTuple"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Properties"
+    },
+    "sequence": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/MDASequence"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
     "x": {
      "anyOf": [
       {
@@ -38,73 +124,32 @@
      ],
      "default": null,
      "title": "Z"
-    },
-    "name": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Name"
-    },
-    "sequence": {
-     "anyOf": [
-      {
-       "$ref": "#/$defs/MDASequence"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
     }
    },
    "title": "AbsolutePosition",
+   "type": "object"
+  },
+  "AcquireImage": {
+   "description": "[`useq.Action`][] to acquire an image.\n\nAttributes\n----------\ntype : Literal[\"acquire_image\"]\n    This action can be used to acquire an image.",
+   "properties": {
+    "type": {
+     "const": "acquire_image",
+     "default": "acquire_image",
+     "title": "Type",
+     "type": "string"
+    }
+   },
+   "title": "AcquireImage",
    "type": "object"
   },
   "AutofocusResource": {
    "additionalProperties": false,
    "description": "How to focus. ``range_um`` is the half-range around the current Z.",
    "properties": {
-    "kind": {
-     "const": "autofocus",
-     "default": "autofocus",
-     "title": "Kind",
+    "algorithm": {
+     "default": "LAPE",
+     "title": "Algorithm",
      "type": "string"
-    },
-    "mode": {
-     "default": "software",
-     "enum": [
-      "software",
-      "hardware"
-     ],
-     "title": "Mode",
-     "type": "string"
-    },
-    "method": {
-     "default": "scan",
-     "enum": [
-      "scan",
-      "hill_climbing"
-     ],
-     "title": "Method",
-     "type": "string"
-    },
-    "range_um": {
-     "default": 50.0,
-     "exclusiveMinimum": 0,
-     "title": "Range Um",
-     "type": "number"
-    },
-    "step_um": {
-     "default": 5.0,
-     "exclusiveMinimum": 0,
-     "title": "Step Um",
-     "type": "number"
     },
     "channel": {
      "anyOf": [
@@ -132,10 +177,41 @@
      "description": "Its intensity; None keeps the value",
      "title": "Intensity"
     },
-    "algorithm": {
-     "default": "LAPE",
-     "title": "Algorithm",
+    "kind": {
+     "const": "autofocus",
+     "default": "autofocus",
+     "title": "Kind",
      "type": "string"
+    },
+    "max_attempts": {
+     "default": 2,
+     "minimum": 1,
+     "title": "Max Attempts",
+     "type": "integer"
+    },
+    "method": {
+     "default": "scan",
+     "enum": [
+      "scan",
+      "hill_climbing"
+     ],
+     "title": "Method",
+     "type": "string"
+    },
+    "mode": {
+     "default": "software",
+     "enum": [
+      "software",
+      "hardware"
+     ],
+     "title": "Mode",
+     "type": "string"
+    },
+    "range_um": {
+     "default": 50.0,
+     "exclusiveMinimum": 0,
+     "title": "Range Um",
+     "type": "number"
     },
     "settle_s": {
      "default": 0.1,
@@ -143,11 +219,11 @@
      "title": "Settle S",
      "type": "number"
     },
-    "max_attempts": {
-     "default": 2,
-     "minimum": 1,
-     "title": "Max Attempts",
-     "type": "integer"
+    "step_um": {
+     "default": 5.0,
+     "exclusiveMinimum": 0,
+     "title": "Step Um",
+     "type": "number"
     }
    },
    "title": "AutofocusResource",
@@ -194,41 +270,42 @@
    "title": "AxesBasedAF",
    "type": "object"
   },
-  "CaptureChannel": {
-   "description": "A useq ``Channel`` plus what ImSwitch needs to switch the light.\n\n``config`` names the illumination source as configured in the setup (a\nlaser or LED) or, for ``kind`` ring/dpc, labels the LED-matrix pattern.\n``exposure`` is in ms, ``z_offset`` in µm, as in useq. The extra fields are\ndropped on export to useq.",
+  "CameraROI": {
+   "description": "Camera region of interest.\n\nMay be initialized with a ``(offset_x, offset_y, width, height)`` tuple.\n\nAttributes\n----------\noffset_x : int\n    X offset of the ROI in pixels. Must be >= 0.\noffset_y : int\n    Y offset of the ROI in pixels. Must be >= 0.\nwidth : int\n    Width of the ROI in pixels. Must be >= 0.\nheight : int\n    Height of the ROI in pixels. Must be >= 0.",
    "properties": {
-    "config": {
-     "title": "Config",
-     "type": "string"
+    "height": {
+     "minimum": 0,
+     "title": "Height",
+     "type": "integer"
     },
-    "group": {
-     "default": "Channel",
-     "title": "Group",
-     "type": "string"
+    "offset_x": {
+     "minimum": 0,
+     "title": "Offset X",
+     "type": "integer"
     },
-    "exposure": {
-     "anyOf": [
-      {
-       "exclusiveMinimum": 0.0,
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Exposure"
+    "offset_y": {
+     "minimum": 0,
+     "title": "Offset Y",
+     "type": "integer"
     },
-    "do_stack": {
-     "default": true,
-     "title": "Do Stack",
-     "type": "boolean"
-    },
-    "z_offset": {
-     "default": 0.0,
-     "title": "Z Offset",
-     "type": "number"
-    },
+    "width": {
+     "minimum": 0,
+     "title": "Width",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "offset_x",
+    "offset_y",
+    "width",
+    "height"
+   ],
+   "title": "CameraROI",
+   "type": "object"
+  },
+  "CaptureChannel": {
+   "description": "A useq ``Channel`` plus what ImSwitch needs to switch the light.\n\n``config`` names the illumination source as configured in the setup (a\nlaser or LED) or, for ``kind`` ring/dpc, labels the LED-matrix pattern.\n``exposure`` is in ms, ``z_offset`` in \u00b5m, as in useq. The extra fields are\ndropped on export to useq.",
+   "properties": {
     "acquire_every": {
      "default": 1,
      "exclusiveMinimum": 0,
@@ -247,9 +324,19 @@
      "default": null,
      "title": "Camera"
     },
-    "intensity": {
+    "config": {
+     "title": "Config",
+     "type": "string"
+    },
+    "do_stack": {
+     "default": true,
+     "title": "Do Stack",
+     "type": "boolean"
+    },
+    "exposure": {
      "anyOf": [
       {
+       "exclusiveMinimum": 0.0,
        "type": "number"
       },
       {
@@ -257,8 +344,7 @@
       }
      ],
      "default": null,
-     "description": "Source intensity in the source's own units; None keeps it",
-     "title": "Intensity"
+     "title": "Exposure"
     },
     "gain": {
      "anyOf": [
@@ -272,6 +358,24 @@
      "default": null,
      "description": "Camera gain; None keeps it",
      "title": "Gain"
+    },
+    "group": {
+     "default": "Channel",
+     "title": "Group",
+     "type": "string"
+    },
+    "intensity": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Source intensity in the source's own units; None keeps it",
+     "title": "Intensity"
     },
     "kind": {
      "default": "default",
@@ -294,6 +398,11 @@
      ],
      "default": null,
      "description": "LED-matrix pattern for kind ring (radius) or dpc (direction)"
+    },
+    "z_offset": {
+     "default": 0.0,
+     "title": "Z Offset",
+     "type": "number"
     }
    },
    "required": [
@@ -306,12 +415,6 @@
    "additionalProperties": false,
    "description": "The channels one capture takes, in order (JOBS: capture definition).",
    "properties": {
-    "kind": {
-     "const": "capture",
-     "default": "capture",
-     "title": "Kind",
-     "type": "string"
-    },
     "channels": {
      "items": {
       "$ref": "#/$defs/CaptureChannel"
@@ -324,6 +427,12 @@
      "default": false,
      "title": "Keep Light On Between Channels",
      "type": "boolean"
+    },
+    "kind": {
+     "const": "capture",
+     "default": "capture",
+     "title": "Kind",
+     "type": "string"
     }
    },
    "required": [
@@ -332,70 +441,38 @@
    "title": "CaptureResource",
    "type": "object"
   },
-  "Channel": {
-   "description": "Define an acquisition channel.\n\nAttributes\n----------\nconfig : str\n    Name of the configuration to use for this channel, (e.g. `\"488nm\"`, `\"DAPI\"`,\n    `\"FITC\"`).\ngroup : str\n    Optional name of the group to which this channel belongs. By default,\n    `\"Channel\"`.\nexposure : float | None\n    Exposure time in milliseconds. Must be positive.  If not provided, implies use\n    current exposure time. By default, `None`.\ndo_stack : bool\n    If `True`, instructs engine to include this channel in any Z stacks being\n    acquired. By default, `True`.\nz_offset : float\n    Relative Z offset from current position, in microns. By default, `0`.\nacquire_every : int\n    Acquire every Nth frame (if acquiring a time series). By default, `1`.\ncamera: str | None\n    Name of the camera to use for this channel. If not provided, implies use\n    current camera. By default, `None`.",
+  "CustomAction": {
+   "description": "[`useq.Action`][] to perform a custom action.\n\nThis is a generic user action that can be used to represent anything that is not\ncovered by the other action types, such as a microfluidic event, or a\nphotostimulation, etc...\n\nThe `data` attribute is a dictionary that can contain any data that is needed to\nperform the custom action.  It *must* be serializable to JSON by `pydantic`.\n\nAttributes\n----------\ntype : Literal[\"custom\"]\n    This action can be used to perform a custom action.\nname : str, optional\n    A name for the custom action (not to be confused with the `type` attribute,\n    which must always be `\"custom\"`).\ndata : dict, optional\n    Custom data associated with the action.",
    "properties": {
-    "config": {
-     "title": "Config",
+    "data": {
+     "additionalProperties": true,
+     "title": "Data",
+     "type": "object"
+    },
+    "name": {
+     "default": "",
+     "title": "Name",
      "type": "string"
     },
-    "group": {
-     "default": "Channel",
-     "title": "Group",
+    "type": {
+     "const": "custom",
+     "default": "custom",
+     "title": "Type",
      "type": "string"
-    },
-    "exposure": {
-     "anyOf": [
-      {
-       "exclusiveMinimum": 0.0,
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Exposure"
-    },
-    "do_stack": {
-     "default": true,
-     "title": "Do Stack",
-     "type": "boolean"
-    },
-    "z_offset": {
-     "default": 0.0,
-     "title": "Z Offset",
-     "type": "number"
-    },
-    "acquire_every": {
-     "default": 1,
-     "exclusiveMinimum": 0,
-     "title": "Acquire Every",
-     "type": "integer"
-    },
-    "camera": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Camera"
     }
    },
-   "required": [
-    "config"
-   ],
-   "title": "Channel",
+   "title": "CustomAction",
    "type": "object"
   },
   "Every": {
    "additionalProperties": false,
    "description": "Run a node only on every n-th iteration of a loop (JOBS: Every nth).",
    "properties": {
+    "include_first": {
+     "default": true,
+     "title": "Include First",
+     "type": "boolean"
+    },
     "nth": {
      "minimum": 1,
      "title": "Nth",
@@ -413,11 +490,6 @@
      "default": null,
      "description": "Loop node id; default the innermost loop",
      "title": "Of"
-    },
-    "include_first": {
-     "default": true,
-     "title": "Include First",
-     "type": "boolean"
     }
    },
    "required": [
@@ -459,17 +531,9 @@
   "GridFromEdges": {
    "description": "Yield absolute stage positions to cover a bounded area.\n\nThe bounded area is defined by top, left, bottom and right edges in\nstage coordinates.  The bounds define the *outer* edges of the images, including\nthe field of view and overlap.\n\nAttributes\n----------\ntop : float\n    Top stage position of the bounding area\nleft : float\n    Left stage position of the bounding area\nbottom : float\n    Bottom stage position of the bounding area\nright : float\n    Right stage position of the bounding area\noverlap : float | Tuple[float, float]\n    Overlap between grid positions in percent. If a single value is provided, it is\n    used for both x and y. If a tuple is provided, the first value is used\n    for x and the second for y.\nmode : OrderMode\n    Define the ways of ordering the grid positions. Options are\n    row_wise, column_wise, row_wise_snake, column_wise_snake and spiral.\n    By default, row_wise_snake.\nfov_width : Optional[float]\n    Width of the field of view in microns.  If not provided, acquisition engines\n    should use current width of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.\nfov_height : Optional[float]\n    Height of the field of view in microns. If not provided, acquisition engines\n    should use current height of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.",
    "properties": {
-    "fov_width": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Fov Width"
+    "bottom": {
+     "title": "Bottom",
+     "type": "number"
     },
     "fov_height": {
      "anyOf": [
@@ -482,6 +546,26 @@
      ],
      "default": null,
      "title": "Fov Height"
+    },
+    "fov_width": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Width"
+    },
+    "left": {
+     "title": "Left",
+     "type": "number"
+    },
+    "mode": {
+     "$ref": "#/$defs/OrderMode",
+     "default": "row_wise_snake"
     },
     "overlap": {
      "default": [
@@ -501,24 +585,12 @@
      "title": "Overlap",
      "type": "array"
     },
-    "mode": {
-     "$ref": "#/$defs/OrderMode",
-     "default": "row_wise_snake"
+    "right": {
+     "title": "Right",
+     "type": "number"
     },
     "top": {
      "title": "Top",
-     "type": "number"
-    },
-    "left": {
-     "title": "Left",
-     "type": "number"
-    },
-    "bottom": {
-     "title": "Bottom",
-     "type": "number"
-    },
-    "right": {
-     "title": "Right",
      "type": "number"
     }
    },
@@ -534,17 +606,18 @@
   "GridFromPolygon": {
    "description": "Grid plan based on a polygon boundary.\n\nThis grid plan generates absolute stage positions that cover a polygon region.\nAdditionally the convex hull, and/or a buffered polygon can be created to generate\ntiles over a larger area surrounding the initial polygon.\n\nAttributes\n----------\nvertices : list[tuple[float, float]]\n    List of (x, y) points that define the polygon boundary.\n    Must have at least 3 points.\nconvex_hull : Optional[bool]\n    If True, the convex hull of the polygon will be used.\noffset : Optional[float]\n    Expand area bounded by vertices to include all points within a `offset` of the\n    original boundary. A positive offset produces a dilation, a negative offset an\n    erosion.\noverlap : float | Tuple[float, float]\n    Overlap between grid positions in percent. If a single value is provided, it is\n    used for both x and y. If a tuple is provided, the first value is used\n    for x and the second for y.\nmode : OrderMode\n    Define the ways of ordering the grid positions. Options are\n    row_wise, column_wise, row_wise_snake, column_wise_snake and spiral.\n    By default, row_wise_snake.\nfov_width : Optional[float]\n    Width of the field of view in microns.  If not provided, acquisition engines\n    should use current width of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.\nfov_height : Optional[float]\n    Height of the field of view in microns. If not provided, acquisition engines\n    should use current height of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.",
    "properties": {
-    "fov_width": {
+    "convex_hull": {
      "anyOf": [
       {
-       "type": "number"
+       "type": "boolean"
       },
       {
        "type": "null"
       }
      ],
-     "default": null,
-     "title": "Fov Width"
+     "default": false,
+     "description": "If True, the convex hull of the polygon will be used.",
+     "title": "Convex Hull"
     },
     "fov_height": {
      "anyOf": [
@@ -557,6 +630,35 @@
      ],
      "default": null,
      "title": "Fov Height"
+    },
+    "fov_width": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Width"
+    },
+    "mode": {
+     "$ref": "#/$defs/OrderMode",
+     "default": "row_wise_snake"
+    },
+    "offset": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Offsets the polygon in all directions to improve tile coverage.",
+     "title": "Offset"
     },
     "overlap": {
      "default": [
@@ -575,10 +677,6 @@
      ],
      "title": "Overlap",
      "type": "array"
-    },
-    "mode": {
-     "$ref": "#/$defs/OrderMode",
-     "default": "row_wise_snake"
     },
     "vertices": {
      "description": "List of vertices that define the polygon, must have at least 3 vertices.",
@@ -598,32 +696,6 @@
      "minItems": 3,
      "title": "Vertices",
      "type": "array"
-    },
-    "convex_hull": {
-     "anyOf": [
-      {
-       "type": "boolean"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": false,
-     "description": "If True, the convex hull of the polygon will be used.",
-     "title": "Convex Hull"
-    },
-    "offset": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "description": "Offsets the polygon in all directions to improve tile coverage.",
-     "title": "Offset"
     }
    },
    "required": [
@@ -634,7 +706,7 @@
   },
   "GridResource": {
    "additionalProperties": false,
-   "description": "A tile pattern relative to a position (useq grid plans, µm).",
+   "description": "A tile pattern relative to a position (useq grid plans, \u00b5m).",
    "properties": {
     "kind": {
      "const": "grid",
@@ -672,17 +744,10 @@
   "GridRowsColumns": {
    "description": "Grid plan based on number of rows and columns.\n\nAttributes\n----------\nrows: int\n    Number of rows.\ncolumns: int\n    Number of columns.\nrelative_to : RelativeTo\n    Point in the grid to which the coordinates are relative. If \"center\", the grid\n    is centered around the origin. If \"top_left\", the grid is positioned such that\n    the top left corner is at the origin.\noverlap : float | Tuple[float, float]\n    Overlap between grid positions in percent. If a single value is provided, it is\n    used for both x and y. If a tuple is provided, the first value is used\n    for x and the second for y.\nmode : OrderMode\n    Define the ways of ordering the grid positions. Options are\n    row_wise, column_wise, row_wise_snake, column_wise_snake and spiral.\n    By default, row_wise_snake.\nfov_width : Optional[float]\n    Width of the field of view in microns.  If not provided, acquisition engines\n    should use current width of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.\nfov_height : Optional[float]\n    Height of the field of view in microns. If not provided, acquisition engines\n    should use current height of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.",
    "properties": {
-    "fov_width": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Fov Width"
+    "columns": {
+     "minimum": 1,
+     "title": "Columns",
+     "type": "integer"
     },
     "fov_height": {
      "anyOf": [
@@ -695,6 +760,22 @@
      ],
      "default": null,
      "title": "Fov Height"
+    },
+    "fov_width": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Width"
+    },
+    "mode": {
+     "$ref": "#/$defs/OrderMode",
+     "default": "row_wise_snake"
     },
     "overlap": {
      "default": [
@@ -714,23 +795,14 @@
      "title": "Overlap",
      "type": "array"
     },
-    "mode": {
-     "$ref": "#/$defs/OrderMode",
-     "default": "row_wise_snake"
+    "relative_to": {
+     "$ref": "#/$defs/RelativeTo",
+     "default": "center"
     },
     "rows": {
      "minimum": 1,
      "title": "Rows",
      "type": "integer"
-    },
-    "columns": {
-     "minimum": 1,
-     "title": "Columns",
-     "type": "integer"
-    },
-    "relative_to": {
-     "$ref": "#/$defs/RelativeTo",
-     "default": "center"
     }
    },
    "required": [
@@ -743,6 +815,18 @@
   "GridWidthHeight": {
    "description": "Grid plan based on total width and height.\n\nAttributes\n----------\nwidth: float\n    Minimum total width of the grid, in microns. (may be larger based on fov_width)\nheight: float\n    Minimum total height of the grid, in microns. (may be larger based on\n    fov_height)\nrelative_to : RelativeTo\n    Point in the grid to which the coordinates are relative. If \"center\", the grid\n    is centered around the origin. If \"top_left\", the grid is positioned such that\n    the top left corner is at the origin.\noverlap : float | Tuple[float, float]\n    Overlap between grid positions in percent. If a single value is provided, it is\n    used for both x and y. If a tuple is provided, the first value is used\n    for x and the second for y.\nmode : OrderMode\n    Define the ways of ordering the grid positions. Options are\n    row_wise, column_wise, row_wise_snake, column_wise_snake and spiral.\n    By default, row_wise_snake.\nfov_width : Optional[float]\n    Width of the field of view in microns.  If not provided, acquisition engines\n    should use current width of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.\nfov_height : Optional[float]\n    Height of the field of view in microns. If not provided, acquisition engines\n    should use current height of the FOV based on the current objective and camera.\n    Engines MAY override this even if provided.",
    "properties": {
+    "fov_height": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Height"
+    },
     "fov_width": {
      "anyOf": [
       {
@@ -755,17 +839,14 @@
      "default": null,
      "title": "Fov Width"
     },
-    "fov_height": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Fov Height"
+    "height": {
+     "exclusiveMinimum": 0,
+     "title": "Height",
+     "type": "number"
+    },
+    "mode": {
+     "$ref": "#/$defs/OrderMode",
+     "default": "row_wise_snake"
     },
     "overlap": {
      "default": [
@@ -785,23 +866,14 @@
      "title": "Overlap",
      "type": "array"
     },
-    "mode": {
-     "$ref": "#/$defs/OrderMode",
-     "default": "row_wise_snake"
+    "relative_to": {
+     "$ref": "#/$defs/RelativeTo",
+     "default": "center"
     },
     "width": {
      "exclusiveMinimum": 0,
      "title": "Width",
      "type": "number"
-    },
-    "height": {
-     "exclusiveMinimum": 0,
-     "title": "Height",
-     "type": "number"
-    },
-    "relative_to": {
-     "$ref": "#/$defs/RelativeTo",
-     "default": "center"
     }
    },
    "required": [
@@ -811,24 +883,52 @@
    "title": "GridWidthHeight",
    "type": "object"
   },
-  "LedPattern": {
-   "additionalProperties": false,
-   "description": "The LED-matrix pattern of a ring (dark field) or DPC (half field) channel.",
+  "HardwareAutofocus": {
+   "description": "[`useq.Action`][] to perform a hardware autofocus.\n\nSee also [`useq.AutoFocusPlan`][].\n\nAttributes\n----------\ntype : Literal[\"hardware_autofocus\"]\n    This action can be used to trigger hardware autofocus.\nautofocus_device_name : str, optional\n    The name of the autofocus offset motor device (if applicable).  If `None`,\n    acquisition engines may attempt to set the offset however they see fit (such as\n    using a current or default autofocus device.)\nautofocus_motor_offset: float, optional\n    Before autofocus is performed, the autofocus motor should be moved to this\n    offset, if applicable. (Not all autofocus devices have an offset motor.)\n    If None, the autofocus motor should not be moved.\nmax_retries : int\n    The number of retries if autofocus fails. By default, 3.",
    "properties": {
-    "radius": {
+    "autofocus_device_name": {
      "anyOf": [
       {
-       "minimum": 0,
-       "type": "integer"
+       "type": "string"
       },
       {
        "type": "null"
       }
      ],
      "default": null,
-     "description": "Ring radius in LEDs (ring)",
-     "title": "Radius"
+     "title": "Autofocus Device Name"
     },
+    "autofocus_motor_offset": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Autofocus Motor Offset"
+    },
+    "max_retries": {
+     "default": 3,
+     "title": "Max Retries",
+     "type": "integer"
+    },
+    "type": {
+     "const": "hardware_autofocus",
+     "default": "hardware_autofocus",
+     "title": "Type",
+     "type": "string"
+    }
+   },
+   "title": "HardwareAutofocus",
+   "type": "object"
+  },
+  "LedPattern": {
+   "additionalProperties": false,
+   "description": "The LED-matrix pattern of a ring (dark field) or DPC (half field) channel.",
+   "properties": {
     "direction": {
      "anyOf": [
       {
@@ -848,11 +948,11 @@
      "description": "Lit half (dpc)",
      "title": "Direction"
     },
-    "intensity_r": {
+    "intensity_b": {
      "default": 255,
      "maximum": 255,
      "minimum": 0,
-     "title": "Intensity R",
+     "title": "Intensity B",
      "type": "integer"
     },
     "intensity_g": {
@@ -862,12 +962,26 @@
      "title": "Intensity G",
      "type": "integer"
     },
-    "intensity_b": {
+    "intensity_r": {
      "default": 255,
      "maximum": 255,
      "minimum": 0,
-     "title": "Intensity B",
+     "title": "Intensity R",
      "type": "integer"
+    },
+    "radius": {
+     "anyOf": [
+      {
+       "minimum": 0,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Ring radius in LEDs (ring)",
+     "title": "Radius"
     },
     "settle_s": {
      "default": 0.05,
@@ -880,13 +994,199 @@
    "title": "LedPattern",
    "type": "object"
   },
-  "MDASequence": {
-   "description": "A sequence of MDA (Multi-Dimensional Acquisition) events.\n\nThis is the core object in the `useq` library, and is used define a sequence of\nevents to be run on a microscope. It object may be constructed manually, or from\nfile (e.g. json or yaml).\n\nThe object itself acts as an iterator for [`useq.MDAEvent`][] objects:\n\nAttributes\n----------\nmetadata : dict\n    A dictionary of user metadata to be stored with the sequence.\naxis_order : str\n    The order of the axes in the sequence. Must be a permutation of `\"tpgcz\"`. The\n    default is `\"tpgcz\"`.\nstage_positions : tuple[Position, ...]\n    The stage positions to visit. (each with `x`, `y`, `z`, `name`, and `sequence`,\n    all of which are optional).\ngrid_plan : GridFromEdges | GridRelative | None\n    The grid plan to follow. One of `GridFromEdges`, `GridRelative` or `None`.\nchannels : tuple[Channel, ...]\n    The channels to acquire. see `Channel`.\ntime_plan : MultiPhaseTimePlan | TIntervalDuration | TIntervalLoops         | TDurationLoops | None\n    The time plan to follow. One of `TIntervalDuration`, `TIntervalLoops`,\n    `TDurationLoops`, `MultiPhaseTimePlan`, or `None`\nz_plan : ZTopBottom | ZRangeAround | ZAboveBelow | ZRelativePositions |         ZAbsolutePositions | None\n    The z plan to follow. One of `ZTopBottom`, `ZRangeAround`, `ZAboveBelow`,\n    `ZRelativePositions`, `ZAbsolutePositions`, or `None`.\nuid : UUID\n    A read-only unique identifier (uuid version 4) for the sequence. This will be\n    generated, do not set.\nautofocus_plan : AxesBasedAF | None\n    The hardware autofocus plan to follow. One of `AxesBasedAF` or `None`.\nkeep_shutter_open_across : tuple[str, ...]\n    A tuple of axes `str` across which the illumination shutter should be kept open.\n    Resulting events will have `keep_shutter_open` set to `True` if and only if\n    ALL axes whose indices are changing are in this tuple. For example, if\n    `keep_shutter_open_across=('z',)`, then the shutter would be kept open between\n    events axes {'t': 0, 'z: 0} and {'t': 0, 'z': 1}, but not between\n    {'t': 0, 'z': 0} and {'t': 1, 'z': 0}.\n\nExamples\n--------\nCreate a MDASequence\n\n>>> from useq import MDASequence, Position, Channel, TIntervalDuration\n>>> seq = MDASequence(\n...     axis_order=\"tpgcz\",\n...     time_plan={\"interval\": 0.1, \"loops\": 2},\n...     stage_positions=[(1, 1, 1)],\n...     grid_plan={\"rows\": 2, \"columns\": 2},\n...     z_plan={\"range\": 3, \"step\": 1},\n...     channels=[{\"config\": \"DAPI\", \"exposure\": 1}]\n... )\n\nPrint the sequence to visualize its structure\n\n>>> print(seq)\n... MDASequence(\n...     stage_positions=(Position(x=1.0, y=1.0, z=1.0, name=None),),\n...     grid_plan=GridRowsColumns(\n...         fov_width=None,\n...         fov_height=None,\n...         overlap=(0.0, 0.0),\n...         mode=<OrderMode.row_wise_snake: 'row_wise_snake'>,\n...         rows=2,\n...         columns=2,\n...         relative_to=<RelativeTo.center: 'center'>\n...     ),\n...     channels=(\n...         Channel(\n...             config='DAPI',\n...             group='Channel',\n...             exposure=1.0,\n...             do_stack=True,\n...             z_offset=0.0,\n...             acquire_every=1,\n...             camera=None\n...         ),\n...     ),\n...     time_plan=TIntervalLoops(\n...         prioritize_duration=False,\n...         interval=datetime.timedelta(microseconds=100000),\n...         loops=2\n...     ),\n...     z_plan=ZRangeAround(go_up=True, range=3.0, step=1.0)\n... )\n\nIterate over the events in the sequence\n\n>>> print(list(seq))\n... [\n...     MDAEvent(\n...         index=mappingproxy({'t': 0, 'p': 0, 'g': 0, 'c': 0, 'z': 0}),\n...         channel=Channel(config='DAPI'),\n...         exposure=1.0,\n...         min_start_time=0.0,\n...         x_pos=0.5,\n...         y_pos=1.5,\n...         z_pos=-0.5\n...     ),\n...     MDAEvent(\n...         index=mappingproxy({'t': 0, 'p': 0, 'g': 0, 'c': 0, 'z': 1}),\n...         channel=Channel(config='DAPI'),\n...         exposure=1.0,\n...         min_start_time=0.0,\n...         x_pos=0.5,\n...         y_pos=1.5,\n...         z_pos=0.5\n...     ),\n...     ...\n... ]\n\nPrint the sequence as yaml\n\n>>> print(seq.yaml())\n\n```yaml\naxis_order:\n   - t\n   - p\n   - g\n   - c\n   - z\nchannels:\n   - config: DAPI\n     exposure: 1.0\ngrid_plan:\n   columns: 2\n   rows: 2\nstage_positions:\n   - x: 1.0\n     y: 1.0\n     z: 1.0\ntime_plan:\n   interval: '0:00:00.100000'\n   loops: 2\nz_plan:\n   range: 3.0\n   step: 1.0\n```",
+  "MDAEvent": {
+   "description": "Define a single event in a [`MDASequence`][useq.MDASequence].\n\nUsually, this object will be generator by iterating over a\n[`MDASequence`][useq.MDASequence] (see [`useq.MDASequence.iter_events`][]).\n\nAttributes\n----------\nindex : dict[str, int]\n    Index of this event in the sequence. This is a mapping of axis name\n    to index.  For example: `{'t': 4, 'c': 0, 'z': 5},`\nchannel : Channel | None\n    Channel to use for this event. If `None`, implies use current channel.\n    By default, `None`.  `Channel` is a simple pydantic object with two attributes:\n    `config` and `group`.  `config` is the name of the configuration to use for this\n    channel, (e.g. `\"488nm\"`, `\"DAPI\"`, `\"FITC\"`).  `group` is the name of the group\n    to which this channel belongs. By default, `\"Channel\"`.\nexposure : float | None\n    Exposure time in milliseconds. If not provided, implies use current exposure\n    time. By default, `None`.\nmin_start_time : float | None\n    Minimum start time of this event, in seconds.  If provided, the engine will\n    pause until this time has elapsed before starting this event. Times are\n    relative to the start of the sequence, or the last event with\n    `reset_event_timer` set to `True`.\npos_name : str | None\n    The name assigned to the position. By default, `None`.\nx_pos : float | None\n    X position in microns. If not provided, implies use current position. By\n    default, `None`.\ny_pos : float | None\n    Y position in microns. If not provided, implies use current position. By\n    default, `None`.\nz_pos : float | None\n    Z position in microns. If not provided, implies use current position. By\n    default, `None`.\nslm_image : SLMImage | None\n    Image data to display on an SLM device. `SLMImage` is a simple pydantic object\n    with two attributes: `data` and `device`. `data` is the image data (anything\n    that can be cast to a numpy array), `device` is the name of the SLM device to\n    use. If not provided, the \"default\" SLM device should be used. By default,\n    `None`.\nsequence : MDASequence | None\n    A reference to the [`useq.MDASequence`][] this event belongs to. This is a\n    read-only attribute. By default, `None`.\nproperties : Sequence[PropertyTuple] | None\n    List of [`useq.PropertyTuple`][] to set before starting this event. Where each\n    item in the list is a 3-member named tuple of `(device_name, property_name,\n    property_value)`.  This is inspired by micro-manager's Device Adapter API, but\n    could be used to set arbitrary properties in any backend that supports the\n    concept of devices that have properties with values. By default, `None`.\nroi : CameraROI | None\n    Camera region of interest. Accepts a `CameraROI` object or a bare tuple of\n    `(offset_x, offset_y, width, height)` which will be automatically converted.\n    By default, `None`.\nmetadata : dict\n    Optional metadata to be associated with this event.\naction : Action\n    The action to perform for this event.  By default, [`useq.AcquireImage`][].\n    Example of another action is [`useq.HardwareAutofocus`][] which could be used\n    to perform a hardware autofocus.  For backwards compatibility, an `action` of\n    `None` implies `AcquireImage`.  You may use `CustomAction` to indicate any\n    custom action, with the `data` attribute containing any data required to\n    perform the custom action.\nkeep_shutter_open : bool\n    If `True`, the illumination shutter should be left open after the event has\n    been executed, otherwise it should be closed. By default, `False`.\"\n    This is useful when the sequence of events being executed use the same\n    illumination scheme (such as a z-stack in a single channel), and closing and\n    opening the shutter between events would be slow.\nreset_event_timer : bool\n    If `True`, the engine should reset the event timer to the time of this event,\n    and future `min_start_time` values will be relative to this event. By default,\n    `False`.",
    "properties": {
+    "action": {
+     "discriminator": {
+      "mapping": {
+       "acquire_image": "#/$defs/AcquireImage",
+       "custom": "#/$defs/CustomAction",
+       "hardware_autofocus": "#/$defs/HardwareAutofocus"
+      },
+      "propertyName": "type"
+     },
+     "oneOf": [
+      {
+       "$ref": "#/$defs/HardwareAutofocus"
+      },
+      {
+       "$ref": "#/$defs/AcquireImage"
+      },
+      {
+       "$ref": "#/$defs/CustomAction"
+      }
+     ],
+     "title": "Action"
+    },
+    "channel": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/useq___mda_event__Channel"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "exposure": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0.0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Exposure"
+    },
+    "index": {
+     "additionalProperties": {
+      "type": "integer"
+     },
+     "title": "Index",
+     "type": "object"
+    },
+    "keep_shutter_open": {
+     "default": false,
+     "title": "Keep Shutter Open",
+     "type": "boolean"
+    },
     "metadata": {
      "additionalProperties": true,
      "title": "Metadata",
      "type": "object"
+    },
+    "min_start_time": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Min Start Time"
+    },
+    "pos_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Pos Name"
+    },
+    "properties": {
+     "anyOf": [
+      {
+       "items": {
+        "$ref": "#/$defs/PropertyTuple"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Properties"
+    },
+    "reset_event_timer": {
+     "default": false,
+     "title": "Reset Event Timer",
+     "type": "boolean"
+    },
+    "roi": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/CameraROI"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "sequence": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/MDASequence"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "slm_image": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/SLMImage"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "x_pos": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "X Pos"
+    },
+    "y_pos": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Y Pos"
+    },
+    "z_pos": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Z Pos"
+    }
+   },
+   "title": "MDAEvent",
+   "type": "object"
+  },
+  "MDASequence": {
+   "description": "A sequence of MDA (Multi-Dimensional Acquisition) events.\n\nThis is the core object in the `useq` library, and is used define a sequence of\nevents to be run on a microscope. It object may be constructed manually, or from\nfile (e.g. json or yaml).\n\nThe object itself acts as an iterator for [`useq.MDAEvent`][] objects:\n\nAttributes\n----------\nmetadata : dict\n    A dictionary of user metadata to be stored with the sequence.\naxis_order : str\n    The order of the axes in the sequence. Must be a permutation of `\"tpgcz\"`. The\n    default is `\"tpgcz\"`.\nstage_positions : tuple[Position, ...]\n    The stage positions to visit. (each with `x`, `y`, `z`, `name`, and `sequence`,\n    all of which are optional).\ngrid_plan : GridFromEdges | GridRelative | None\n    The grid plan to follow. One of `GridFromEdges`, `GridRelative` or `None`.\nchannels : tuple[Channel, ...]\n    The channels to acquire. see `Channel`.\ntime_plan : MultiPhaseTimePlan | TIntervalDuration | TIntervalLoops         | TDurationLoops | None\n    The time plan to follow. One of `TIntervalDuration`, `TIntervalLoops`,\n    `TDurationLoops`, `MultiPhaseTimePlan`, or `None`\nz_plan : ZTopBottom | ZRangeAround | ZAboveBelow | ZRelativePositions |         ZAbsolutePositions | None\n    The z plan to follow. One of `ZTopBottom`, `ZRangeAround`, `ZAboveBelow`,\n    `ZRelativePositions`, `ZAbsolutePositions`, or `None`.\nuid : UUID\n    A read-only unique identifier (uuid version 4) for the sequence. This will be\n    generated, do not set.\nautofocus_plan : AxesBasedAF | None\n    The hardware autofocus plan to follow. One of `AxesBasedAF` or `None`.\nsetup : MDAEvent | None\n    An optional setup event for the sequence. This event is **not** yielded\n    during iteration; it is intended to be handled separately by the engine.\n    It can be used to set hardware state (e.g. device properties, ROI)\n    before the main acquisition events. By default, `None`.\nkeep_shutter_open_across : tuple[str, ...]\n    A tuple of axes `str` across which the illumination shutter should be kept open.\n    Resulting events will have `keep_shutter_open` set to `True` if and only if\n    ALL axes whose indices are changing are in this tuple. For example, if\n    `keep_shutter_open_across=('z',)`, then the shutter would be kept open between\n    events axes {'t': 0, 'z: 0} and {'t': 0, 'z': 1}, but not between\n    {'t': 0, 'z': 0} and {'t': 1, 'z': 0}.\n\nExamples\n--------\nCreate a MDASequence\n\n>>> from useq import MDASequence, Position, Channel, TIntervalDuration\n>>> seq = MDASequence(\n...     axis_order=\"tpgcz\",\n...     time_plan={\"interval\": 0.1, \"loops\": 2},\n...     stage_positions=[(1, 1, 1)],\n...     grid_plan={\"rows\": 2, \"columns\": 2},\n...     z_plan={\"range\": 3, \"step\": 1},\n...     channels=[{\"config\": \"DAPI\", \"exposure\": 1}]\n... )\n\nPrint the sequence to visualize its structure\n\n>>> print(seq)\n... MDASequence(\n...     stage_positions=(Position(x=1.0, y=1.0, z=1.0, name=None),),\n...     grid_plan=GridRowsColumns(\n...         fov_width=None,\n...         fov_height=None,\n...         overlap=(0.0, 0.0),\n...         mode=<OrderMode.row_wise_snake: 'row_wise_snake'>,\n...         rows=2,\n...         columns=2,\n...         relative_to=<RelativeTo.center: 'center'>\n...     ),\n...     channels=(\n...         Channel(\n...             config='DAPI',\n...             group='Channel',\n...             exposure=1.0,\n...             do_stack=True,\n...             z_offset=0.0,\n...             acquire_every=1,\n...             camera=None\n...         ),\n...     ),\n...     time_plan=TIntervalLoops(\n...         prioritize_duration=False,\n...         interval=datetime.timedelta(microseconds=100000),\n...         loops=2\n...     ),\n...     z_plan=ZRangeAround(go_up=True, range=3.0, step=1.0)\n... )\n\nIterate over the events in the sequence\n\n>>> print(list(seq))\n... [\n...     MDAEvent(\n...         index=mappingproxy({'t': 0, 'p': 0, 'g': 0, 'c': 0, 'z': 0}),\n...         channel=Channel(config='DAPI'),\n...         exposure=1.0,\n...         min_start_time=0.0,\n...         x_pos=0.5,\n...         y_pos=1.5,\n...         z_pos=-0.5\n...     ),\n...     MDAEvent(\n...         index=mappingproxy({'t': 0, 'p': 0, 'g': 0, 'c': 0, 'z': 1}),\n...         channel=Channel(config='DAPI'),\n...         exposure=1.0,\n...         min_start_time=0.0,\n...         x_pos=0.5,\n...         y_pos=1.5,\n...         z_pos=0.5\n...     ),\n...     ...\n... ]\n\nPrint the sequence as yaml\n\n>>> print(seq.yaml())\n\n```yaml\naxis_order:\n   - t\n   - p\n   - g\n   - c\n   - z\nchannels:\n   - config: DAPI\n     exposure: 1.0\ngrid_plan:\n   columns: 2\n   rows: 2\nstage_positions:\n   - x: 1.0\n     y: 1.0\n     z: 1.0\ntime_plan:\n   interval: '0:00:00.100000'\n   loops: 2\nz_plan:\n   range: 3.0\n   step: 1.0\n```\n\nCreate a sequence with a setup event\n\n>>> from useq import MDASequence, MDAEvent\n>>> seq = MDASequence(\n...     setup=MDAEvent(\n...         properties=[(\"Camera\", \"Binning\", \"2\")],\n...         roi=(0, 0, 512, 512),\n...     ),\n...     channels=[\"GFP\"],\n...     time_plan={\"interval\": 1, \"loops\": 5},\n... )\n\nThe setup event is accessible via ``seq.setup`` but is not yielded\nduring iteration (it should be handled separately by implementing engines):\n\n>>> seq.setup.action.name\n'setup'\n>>> seq.setup.roi\nCameraROI(offset_x=0, offset_y=0, width=512, height=512)\n\nPrint setup sequence as yaml\n\n>>> print(seq.yaml())\nchannels:\n- config: GFP\nsetup:\n  action:\n    name: setup\n  properties:\n  - - Camera\n    - Binning\n    - '2'\n  roi:\n    height: 512\n    offset_x: 0\n    offset_y: 0\n    width: 512\ntime_plan:\n  interval: 1.0\n  loops: 5\n<BLANKLINE>",
+   "properties": {
+    "autofocus_plan": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/AxesBasedAF"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
     },
     "axis_order": {
      "default": [
@@ -902,19 +1202,12 @@
      "title": "Axis Order",
      "type": "array"
     },
-    "stage_positions": {
-     "anyOf": [
-      {
-       "$ref": "#/$defs/WellPlatePlan"
-      },
-      {
-       "items": {
-        "$ref": "#/$defs/AbsolutePosition"
-       },
-       "type": "array"
-      }
-     ],
-     "title": "Stage Positions"
+    "channels": {
+     "items": {
+      "$ref": "#/$defs/useq___channel__Channel"
+     },
+     "title": "Channels",
+     "type": "array"
     },
     "grid_plan": {
      "anyOf": [
@@ -943,12 +1236,42 @@
      "default": null,
      "title": "Grid Plan"
     },
-    "channels": {
+    "keep_shutter_open_across": {
      "items": {
-      "$ref": "#/$defs/Channel"
+      "type": "string"
      },
-     "title": "Channels",
+     "title": "Keep Shutter Open Across",
      "type": "array"
+    },
+    "metadata": {
+     "additionalProperties": true,
+     "title": "Metadata",
+     "type": "object"
+    },
+    "setup": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/MDAEvent"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "stage_positions": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/WellPlatePlan"
+      },
+      {
+       "items": {
+        "$ref": "#/$defs/AbsolutePosition"
+       },
+       "type": "array"
+      }
+     ],
+     "title": "Stage Positions"
     },
     "time_plan": {
      "anyOf": [
@@ -994,24 +1317,6 @@
      ],
      "default": null,
      "title": "Z Plan"
-    },
-    "autofocus_plan": {
-     "anyOf": [
-      {
-       "$ref": "#/$defs/AxesBasedAF"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
-    "keep_shutter_open_across": {
-     "items": {
-      "type": "string"
-     },
-     "title": "Keep Shutter Open Across",
-     "type": "array"
     }
    },
    "title": "MDASequence",
@@ -1020,11 +1325,6 @@
   "MultiPhaseTimePlan": {
    "description": "Time sequence composed of multiple phases.\n\nAttributes\n----------\nphases : Sequence[TIntervalDuration | TIntervalLoops | TDurationLoops]\n    Sequence of time plans.",
    "properties": {
-    "prioritize_duration": {
-     "default": false,
-     "title": "Prioritize Duration",
-     "type": "boolean"
-    },
     "phases": {
      "items": {
       "anyOf": [
@@ -1041,6 +1341,11 @@
      },
      "title": "Phases",
      "type": "array"
+    },
+    "prioritize_duration": {
+     "default": false,
+     "title": "Prioritize Duration",
+     "type": "boolean"
     }
    },
    "required": [
@@ -1053,39 +1358,11 @@
    "additionalProperties": false,
    "description": "One step of a job.\n\n``task`` names a task type from the catalogue. ``params`` are validated\nagainst that task's parameter model. Containers use ``body``; a condition\nalso uses ``orelse``; a time lapse may use ``idle`` for work done while it\nwaits for the next round.",
    "properties": {
-    "id": {
-     "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-     "title": "Id",
-     "type": "string"
-    },
-    "task": {
-     "title": "Task",
-     "type": "string"
-    },
-    "params": {
-     "additionalProperties": true,
-     "title": "Params",
-     "type": "object"
-    },
     "body": {
      "items": {
       "$ref": "#/$defs/Node"
      },
      "title": "Body",
-     "type": "array"
-    },
-    "orelse": {
-     "items": {
-      "$ref": "#/$defs/Node"
-     },
-     "title": "Orelse",
-     "type": "array"
-    },
-    "idle": {
-     "items": {
-      "$ref": "#/$defs/Node"
-     },
-     "title": "Idle",
      "type": "array"
     },
     "enabled": {
@@ -1111,6 +1388,30 @@
      ],
      "default": null
     },
+    "id": {
+     "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+     "title": "Id",
+     "type": "string"
+    },
+    "idle": {
+     "items": {
+      "$ref": "#/$defs/Node"
+     },
+     "title": "Idle",
+     "type": "array"
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Label"
+    },
     "on_error": {
      "anyOf": [
       {
@@ -1128,17 +1429,21 @@
      "default": "abort",
      "title": "On Error"
     },
-    "label": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Label"
+    "orelse": {
+     "items": {
+      "$ref": "#/$defs/Node"
+     },
+     "title": "Orelse",
+     "type": "array"
+    },
+    "params": {
+     "additionalProperties": true,
+     "title": "Params",
+     "type": "object"
+    },
+    "task": {
+     "title": "Task",
+     "type": "string"
     }
    },
    "required": [
@@ -1164,16 +1469,25 @@
    "additionalProperties": false,
    "description": "A value the operator sets before a run; referenced as ``param.<name>``.",
    "properties": {
-    "type": {
-     "enum": [
-      "integer",
-      "number",
-      "boolean",
-      "string",
-      "choice"
-     ],
-     "title": "Type",
-     "type": "string"
+    "choices": {
+     "items": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "number"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "title": "Choices",
+     "type": "array"
     },
     "default": {
      "anyOf": [
@@ -1196,17 +1510,10 @@
      "default": null,
      "title": "Default"
     },
-    "minimum": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Minimum"
+    "description": {
+     "default": "",
+     "title": "Description",
+     "type": "string"
     },
     "maximum": {
      "anyOf": [
@@ -1220,37 +1527,17 @@
      "default": null,
      "title": "Maximum"
     },
-    "choices": {
-     "items": {
-      "anyOf": [
-       {
-        "type": "boolean"
-       },
-       {
-        "type": "integer"
-       },
-       {
-        "type": "number"
-       },
-       {
-        "type": "string"
-       }
-      ]
-     },
-     "title": "Choices",
-     "type": "array"
-    },
-    "unit": {
+    "minimum": {
      "anyOf": [
       {
-       "type": "string"
+       "type": "number"
       },
       {
        "type": "null"
       }
      ],
      "default": null,
-     "title": "Unit"
+     "title": "Minimum"
     },
     "title": {
      "anyOf": [
@@ -1264,9 +1551,15 @@
      "default": null,
      "title": "Title"
     },
-    "description": {
-     "default": "",
-     "title": "Description",
+    "type": {
+     "enum": [
+      "integer",
+      "number",
+      "boolean",
+      "string",
+      "choice"
+     ],
+     "title": "Type",
      "type": "string"
     },
     "ui": {
@@ -1279,6 +1572,18 @@
      ],
      "title": "Ui",
      "type": "string"
+    },
+    "unit": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Unit"
     }
    },
    "required": [
@@ -1289,20 +1594,13 @@
   },
   "PositionsResource": {
    "additionalProperties": false,
-   "description": "Named stage positions in µm (user frame). Tasks may add or remove points.",
+   "description": "Named stage positions in \u00b5m (user frame). Tasks may add or remove points.",
    "properties": {
     "kind": {
      "const": "positions",
      "default": "positions",
      "title": "Kind",
      "type": "string"
-    },
-    "positions": {
-     "items": {
-      "$ref": "#/$defs/AbsolutePosition"
-     },
-     "title": "Positions",
-     "type": "array"
     },
     "labels": {
      "additionalProperties": {
@@ -1311,25 +1609,43 @@
      "description": "position name -> label",
      "title": "Labels",
      "type": "object"
+    },
+    "positions": {
+     "items": {
+      "$ref": "#/$defs/AbsolutePosition"
+     },
+     "title": "Positions",
+     "type": "array"
     }
    },
    "title": "PositionsResource",
    "type": "object"
   },
+  "PropertyTuple": {
+   "maxItems": 3,
+   "minItems": 3,
+   "prefixItems": [
+    {
+     "title": "Device Name",
+     "type": "string"
+    },
+    {
+     "title": "Property Name",
+     "type": "string"
+    },
+    {
+     "title": "Property Value"
+    }
+   ],
+   "type": "array"
+  },
   "RandomPoints": {
    "description": "Yield random points in a specified geometric shape.\n\nAttributes\n----------\nnum_points : int\n    Number of points to generate.\nmax_width : float\n    Maximum width of the bounding box in microns.\nmax_height : float\n    Maximum height of the bounding box in microns.\nshape : Shape\n    Shape of the bounding box. Current options are \"ellipse\" and \"rectangle\".\nrandom_seed : Optional[int]\n    Random numpy seed that should be used to generate the points. If None, a random\n    seed will be used.\nallow_overlap : bool\n    By defaut, True. If False and `fov_width` and `fov_height` are specified, points\n    will not overlap and will be at least `fov_width` and `fov_height apart.\norder : TraversalOrder\n    Order in which the points will be visited. If None, order is simply the order\n    in which the points are generated (random).  Use 'nearest_neighbor' or\n    'two_opt' to order the points in a more structured way.\nstart_at : int | RelativePosition\n    Position or index of the point to start at. This is only used if `order` is\n    'nearest_neighbor' or 'two_opt'.  If a position is provided, it will *always*\n    be included in the list of points. If an index is provided, it must be less than\n    the number of points, and corresponds to the index of the (randomly generated)\n    points; this likely only makes sense when `random_seed` is provided.",
    "properties": {
-    "fov_width": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Fov Width"
+    "allow_overlap": {
+     "default": true,
+     "title": "Allow Overlap",
+     "type": "boolean"
     },
     "fov_height": {
      "anyOf": [
@@ -1343,16 +1659,17 @@
      "default": null,
      "title": "Fov Height"
     },
-    "num_points": {
-     "exclusiveMinimum": 0,
-     "title": "Num Points",
-     "type": "integer"
-    },
-    "max_width": {
-     "default": 1,
-     "exclusiveMinimum": 0,
-     "title": "Max Width",
-     "type": "number"
+    "fov_width": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Width"
     },
     "max_height": {
      "default": 1,
@@ -1360,9 +1677,27 @@
      "title": "Max Height",
      "type": "number"
     },
-    "shape": {
-     "$ref": "#/$defs/Shape",
-     "default": "ellipse"
+    "max_width": {
+     "default": 1,
+     "exclusiveMinimum": 0,
+     "title": "Max Width",
+     "type": "number"
+    },
+    "num_points": {
+     "exclusiveMinimum": 0,
+     "title": "Num Points",
+     "type": "integer"
+    },
+    "order": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/TraversalOrder"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": "two_opt"
     },
     "random_seed": {
      "anyOf": [
@@ -1376,21 +1711,9 @@
      "default": null,
      "title": "Random Seed"
     },
-    "allow_overlap": {
-     "default": true,
-     "title": "Allow Overlap",
-     "type": "boolean"
-    },
-    "order": {
-     "anyOf": [
-      {
-       "$ref": "#/$defs/TraversalOrder"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": "two_opt"
+    "shape": {
+     "$ref": "#/$defs/Shape",
+     "default": "ellipse"
     },
     "start_at": {
      "anyOf": [
@@ -1415,25 +1738,37 @@
   "Region": {
    "additionalProperties": false,
    "properties": {
-    "name": {
-     "title": "Name",
-     "type": "string"
-    },
-    "min_x": {
-     "title": "Min X",
-     "type": "number"
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Label"
     },
     "max_x": {
      "title": "Max X",
+     "type": "number"
+    },
+    "max_y": {
+     "title": "Max Y",
+     "type": "number"
+    },
+    "min_x": {
+     "title": "Min X",
      "type": "number"
     },
     "min_y": {
      "title": "Min Y",
      "type": "number"
     },
-    "max_y": {
-     "title": "Max Y",
-     "type": "number"
+    "name": {
+     "title": "Name",
+     "type": "string"
     },
     "vertices": {
      "anyOf": [
@@ -1459,18 +1794,6 @@
      ],
      "default": null,
      "title": "Vertices"
-    },
-    "label": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Label"
     }
    },
    "required": [
@@ -1485,7 +1808,7 @@
   },
   "RegionsResource": {
    "additionalProperties": false,
-   "description": "Areas in stage µm, drawn by a user or produced by an analysis task.",
+   "description": "Areas in stage \u00b5m, drawn by a user or produced by an analysis task.",
    "properties": {
     "kind": {
      "const": "regions",
@@ -1507,6 +1830,18 @@
   "RelativePosition": {
    "description": "A relative position in 3D space.\n\nRelative positions also support `fov_width` and `fov_height` attributes, and can\nbe used to define a single field of view for a \"multi-point\" plan.",
    "properties": {
+    "fov_height": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fov Height"
+    },
     "fov_width": {
      "anyOf": [
       {
@@ -1519,17 +1854,91 @@
      "default": null,
      "title": "Fov Width"
     },
-    "fov_height": {
+    "grid_col": {
      "anyOf": [
       {
-       "type": "number"
+       "type": "integer"
       },
       {
        "type": "null"
       }
      ],
      "default": null,
-     "title": "Fov Height"
+     "title": "Grid Col"
+    },
+    "grid_row": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Grid Row"
+    },
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Name"
+    },
+    "plate_col": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Plate Col"
+    },
+    "plate_row": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Plate Row"
+    },
+    "properties": {
+     "anyOf": [
+      {
+       "items": {
+        "$ref": "#/$defs/PropertyTuple"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Properties"
+    },
+    "sequence": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/MDASequence"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
     },
     "x": {
      "default": 0,
@@ -1545,29 +1954,6 @@
      "default": 0,
      "title": "Z",
      "type": "number"
-    },
-    "name": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Name"
-    },
-    "sequence": {
-     "anyOf": [
-      {
-       "$ref": "#/$defs/MDASequence"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
     }
    },
    "title": "RelativePosition",
@@ -1607,6 +1993,44 @@
    "title": "Retry",
    "type": "object"
   },
+  "SLMImage": {
+   "description": "SLM Image in a MDA event.\n\nThis object can be cast to a numpy.array using `np.asarray` or `np.array`.\n\nAttributes\n----------\ndata: npt.ArrayLike\n    Image data. Anything that can be cast to a numpy array. For pydantic simplicity,\n    we mark this as Any, but in practice it should be numpy.typing.ArrayLike (which\n    is anything that can be cast to a numpy array using `np.asarray`).\ndevice: Optional[str]\n    Optional name of the SLM device to use. If not provided, the \"default\" SLM\n    device should be used. (It is left to the backend to determine what device that\n    is). By default, `None`.\nexposure: Optional[float]\n    Exposure time for the SLM specifically (if different from the detector), in\n    milliseconds. If not provided, the exposure on the owning MDAEvent should be\n    used. By default, `None`.",
+   "properties": {
+    "data": {
+     "title": "Data"
+    },
+    "device": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Device"
+    },
+    "exposure": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0.0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Exposure"
+    }
+   },
+   "required": [
+    "data"
+   ],
+   "title": "SLMImage",
+   "type": "object"
+  },
   "Shape": {
    "description": "Shape of the bounding box for random points.\n\nAttributes\n----------\nELLIPSE : Literal['ellipse']\n    The bounding box is an ellipse.\nRECTANGLE : Literal['rectangle']\n    The bounding box is a rectangle.",
    "enum": [
@@ -1620,6 +2044,19 @@
    "additionalProperties": false,
    "description": "Where and how frames are written. Both formats are plain OME.",
    "properties": {
+    "folder": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Relative to the data folder; default by job name",
+     "title": "Folder"
+    },
     "formats": {
      "items": {
       "enum": [
@@ -1641,19 +2078,6 @@
      ],
      "title": "Layout",
      "type": "string"
-    },
-    "folder": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "description": "Relative to the data folder; default by job name",
-     "title": "Folder"
     },
     "stitched_preview": {
      "default": false,
@@ -1678,28 +2102,28 @@
   "TDurationLoops": {
    "description": "Define temporal sequence using duration and number of loops.\n\nAttributes\n----------\nduration : str | timedelta\n    Total duration of sequence. Scalars are interpreted as seconds.\n    Strings are parsed according to ISO 8601.\nloops : int\n    Number of frames.\nprioritize_duration : bool\n    If `True`, instructs engine to prioritize duration over number of frames in case\n    of conflict. By default, `False`.",
    "properties": {
-    "prioritize_duration": {
-     "default": false,
-     "title": "Prioritize Duration",
-     "type": "boolean"
-    },
     "duration": {
-     "title": "Duration",
      "anyOf": [
       {
-       "type": "number",
-       "description": "seconds"
+       "description": "seconds",
+       "type": "number"
       },
       {
-       "type": "string",
-       "format": "duration"
+       "format": "duration",
+       "type": "string"
       }
-     ]
+     ],
+     "title": "Duration"
     },
     "loops": {
      "exclusiveMinimum": 0,
      "title": "Loops",
      "type": "integer"
+    },
+    "prioritize_duration": {
+     "default": false,
+     "title": "Prioritize Duration",
+     "type": "boolean"
     }
    },
    "required": [
@@ -1712,36 +2136,36 @@
   "TIntervalDuration": {
    "description": "Define temporal sequence using interval and duration.\n\nAttributes\n----------\ninterval : str | timedelta\n    Time between frames. Scalars are interpreted as seconds.\n    Strings are parsed according to ISO 8601.\nduration : str | timedelta\n    Total duration of sequence.\nprioritize_duration : bool\n    If `True`, instructs engine to prioritize duration over number of frames in case\n    of conflict. By default, `True`.",
    "properties": {
+    "duration": {
+     "anyOf": [
+      {
+       "description": "seconds",
+       "type": "number"
+      },
+      {
+       "format": "duration",
+       "type": "string"
+      }
+     ],
+     "title": "Duration"
+    },
+    "interval": {
+     "anyOf": [
+      {
+       "description": "seconds",
+       "type": "number"
+      },
+      {
+       "format": "duration",
+       "type": "string"
+      }
+     ],
+     "title": "Interval"
+    },
     "prioritize_duration": {
      "default": true,
      "title": "Prioritize Duration",
      "type": "boolean"
-    },
-    "interval": {
-     "title": "Interval",
-     "anyOf": [
-      {
-       "type": "number",
-       "description": "seconds"
-      },
-      {
-       "type": "string",
-       "format": "duration"
-      }
-     ]
-    },
-    "duration": {
-     "title": "Duration",
-     "anyOf": [
-      {
-       "type": "number",
-       "description": "seconds"
-      },
-      {
-       "type": "string",
-       "format": "duration"
-      }
-     ]
     }
    },
    "required": [
@@ -1754,28 +2178,28 @@
   "TIntervalLoops": {
    "description": "Define temporal sequence using interval and number of loops.\n\nAttributes\n----------\ninterval : str | timedelta | float\n    Time between frames. Scalars are interpreted as seconds.\n    Strings are parsed according to ISO 8601.\nloops : int\n    Number of frames.\nprioritize_duration : bool\n    If `True`, instructs engine to prioritize duration over number of frames in case\n    of conflict. By default, `False`.",
    "properties": {
-    "prioritize_duration": {
-     "default": false,
-     "title": "Prioritize Duration",
-     "type": "boolean"
-    },
     "interval": {
-     "title": "Interval",
      "anyOf": [
       {
-       "type": "number",
-       "description": "seconds"
+       "description": "seconds",
+       "type": "number"
       },
       {
-       "type": "string",
-       "format": "duration"
+       "format": "duration",
+       "type": "string"
       }
-     ]
+     ],
+     "title": "Interval"
     },
     "loops": {
      "exclusiveMinimum": 0,
      "title": "Loops",
      "type": "integer"
+    },
+    "prioritize_duration": {
+     "default": false,
+     "title": "Prioritize Duration",
+     "type": "boolean"
     }
    },
    "required": [
@@ -1830,29 +2254,25 @@
   "WellPlate": {
    "description": "A multi-well plate definition.\n\nParameters\n----------\nrows : int\n    The number of rows in the plate. Must be > 0.\ncolumns : int\n    The number of columns in the plate. Must be > 0.\nwell_spacing : tuple[float, float] | float\n    The center-to-center distance in mm (pitch) between wells in the x and y\n    directions. If a single value is provided, it is used for both x and y.\nwell_size : tuple[float, float] | float\n    The size in mm of each well in the x and y directions. If the well is squared or\n    rectangular, this is the width and height of the well. If the well is circular,\n    this is the diameter. If a single value is provided, it is used for both x and\n    y.\ncircular_wells : bool\n    Whether wells are circular (True) or squared/rectangular (False).\nname : str\n    A name for the plate.",
    "properties": {
-    "rows": {
-     "exclusiveMinimum": 0,
-     "title": "Rows",
-     "type": "integer"
+    "circular_wells": {
+     "default": true,
+     "title": "Circular Wells",
+     "type": "boolean"
     },
     "columns": {
      "exclusiveMinimum": 0,
      "title": "Columns",
      "type": "integer"
     },
-    "well_spacing": {
-     "maxItems": 2,
-     "minItems": 2,
-     "prefixItems": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "number"
-      }
-     ],
-     "title": "Well Spacing",
-     "type": "array"
+    "name": {
+     "default": "",
+     "title": "Name",
+     "type": "string"
+    },
+    "rows": {
+     "exclusiveMinimum": 0,
+     "title": "Rows",
+     "type": "integer"
     },
     "well_size": {
      "maxItems": 2,
@@ -1868,15 +2288,19 @@
      "title": "Well Size",
      "type": "array"
     },
-    "circular_wells": {
-     "default": true,
-     "title": "Circular Wells",
-     "type": "boolean"
-    },
-    "name": {
-     "default": "",
-     "title": "Name",
-     "type": "string"
+    "well_spacing": {
+     "maxItems": 2,
+     "minItems": 2,
+     "prefixItems": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "number"
+      }
+     ],
+     "title": "Well Spacing",
+     "type": "array"
     }
    },
    "required": [
@@ -1889,11 +2313,8 @@
    "type": "object"
   },
   "WellPlatePlan": {
-   "description": "A plan for acquiring images from a multi-well plate.\n\nParameters\n----------\nplate : WellPlate | str | int\n    The well-plate definition. Minimally including rows, columns, and well spacing.\n    If expressed as a string, it is assumed to be a key in\n    `useq.registered_well_plate_keys`.\na1_center_xy : tuple[float, float]\n    The stage coordinates in µm of the center of well A1 (top-left corner).\nrotation : float | None\n    The rotation angle in degrees (anti-clockwise) of the plate.\n    If None, no rotation is applied.\n    If expressed as a string, it is assumed to be an angle with units (e.g., \"5°\",\n    \"4 rad\", \"4.5deg\").\n    If expressed as an arraylike, it is assumed to be a 2x2 rotation matrix\n    `[[cos, -sin], [sin, cos]]`, or a 4-tuple `(cos, -sin, sin, cos)`.\nselected_wells : IndexExpression | None\n    Any <=2-dimensional index expression for selecting wells.\n    for example:\n    -   None -> No wells are selected.\n    -   slice(0) -> (also) select no wells.\n    -   slice(None) -> Selects all wells.\n    -   0 -> Selects the first row.\n    -   [0, 1, 2] -> Selects the first three rows.\n    -   slice(1, 5) -> selects wells from row 1 to row 4.\n    -   (2, slice(1, 4)) -> select wells in the second row and only columns 1 to 3.\n    -   ([1, 2], [3, 4]) -> select wells in (row, column): (1, 3) and (2, 4)\nwell_points_plan : GridRowsColumns | RandomPoints | Position\n    A plan for acquiring images within each well. This can be a single position\n    (for a single image per well), a GridRowsColumns (for a grid of images),\n    or RandomPoints (for random points within each well).",
+   "description": "A plan for acquiring images from a multi-well plate.\n\nParameters\n----------\nplate : WellPlate | str | int\n    The well-plate definition. Minimally including rows, columns, and well spacing.\n    If expressed as a string, it is assumed to be a key in\n    `useq.registered_well_plate_keys`.\na1_center_xy : tuple[float, float]\n    The stage coordinates in \u00b5m of the center of well A1 (top-left corner).\nrotation : float | None\n    The rotation angle in degrees (anti-clockwise) of the plate.\n    If None, no rotation is applied.\n    If expressed as a string, it is assumed to be an angle with units (e.g., \"5\u00b0\",\n    \"4 rad\", \"4.5deg\").\n    If expressed as an arraylike, it is assumed to be a 2x2 rotation matrix\n    `[[cos, -sin], [sin, cos]]`, or a 4-tuple `(cos, -sin, sin, cos)`.\nselected_wells : IndexExpression | None\n    Any <=2-dimensional index expression for selecting wells.\n    for example:\n    -   None -> No wells are selected.\n    -   slice(0) -> (also) select no wells.\n    -   slice(None) -> Selects all wells.\n    -   0 -> Selects the first row.\n    -   [0, 1, 2] -> Selects the first three rows.\n    -   slice(1, 5) -> selects wells from row 1 to row 4.\n    -   (2, slice(1, 4)) -> select wells in the second row and only columns 1 to 3.\n    -   ([1, 2], [3, 4]) -> select wells in (row, column): (1, 3) and (2, 4)\nwell_points_plan : GridRowsColumns | RandomPoints | Position\n    A plan for acquiring images within each well. This can be a single position\n    (for a single image per well), a GridRowsColumns (for a grid of images),\n    or RandomPoints (for random points within each well).",
    "properties": {
-    "plate": {
-     "$ref": "#/$defs/WellPlate"
-    },
     "a1_center_xy": {
      "maxItems": 2,
      "minItems": 2,
@@ -1907,6 +2328,9 @@
      ],
      "title": "A1 Center Xy",
      "type": "array"
+    },
+    "plate": {
+     "$ref": "#/$defs/WellPlate"
     },
     "rotation": {
      "anyOf": [
@@ -1983,9 +2407,6 @@
      "title": "Kind",
      "type": "string"
     },
-    "plan": {
-     "$ref": "#/$defs/WellPlatePlan"
-    },
     "labels": {
      "additionalProperties": {
       "type": "string"
@@ -1993,6 +2414,9 @@
      "description": "well name -> label",
      "title": "Labels",
      "type": "object"
+    },
+    "plan": {
+     "$ref": "#/$defs/WellPlatePlan"
     }
    },
    "required": [
@@ -2004,11 +2428,6 @@
   "ZAboveBelow": {
    "description": "Define Z as asymmetric range above and below some reference position.\n\nNote that `below` will always be visited, regardless of `go_up`, while `above` will\nalways be *encompassed* by the range, but may not be precisely visited if the step\nsize does not divide evenly into the range.\n\nAttributes\n----------\nabove : float\n    Range above reference position in microns (inclusive).\nbelow : float\n    Range below reference position in microns (inclusive).\nstep : float\n    Step size in microns.\ngo_up : bool\n    If `True`, instructs engine to start at bottom and move towards top. By default,\n    `True`.",
    "properties": {
-    "go_up": {
-     "default": true,
-     "title": "Go Up",
-     "type": "boolean"
-    },
     "above": {
      "title": "Above",
      "type": "number"
@@ -2016,6 +2435,11 @@
     "below": {
      "title": "Below",
      "type": "number"
+    },
+    "go_up": {
+     "default": true,
+     "title": "Go Up",
+     "type": "boolean"
     },
     "step": {
      "title": "Step",
@@ -2031,19 +2455,19 @@
    "type": "object"
   },
   "ZAbsolutePositions": {
-   "description": "Define Z as a list of absolute positions.\n\nAttributes\n----------\nrelative : list[float]\n    List of relative z positions.\ngo_up : bool\n    If `True` (the default), visits points in the order provided, otherwise in\n    reverse.",
+   "description": "Define Z as a list of absolute positions.\n\nAttributes\n----------\nabsolute : list[float]\n    List of absolute z positions.\ngo_up : bool\n    If `True` (the default), visits points in the order provided, otherwise in\n    reverse.",
    "properties": {
-    "go_up": {
-     "default": true,
-     "title": "Go Up",
-     "type": "boolean"
-    },
     "absolute": {
      "items": {
       "type": "number"
      },
      "title": "Absolute",
      "type": "array"
+    },
+    "go_up": {
+     "default": true,
+     "title": "Go Up",
+     "type": "boolean"
     }
    },
    "required": [
@@ -2137,21 +2561,21 @@
   "ZTopBottom": {
    "description": "Define Z using absolute top & bottom positions.\n\nNote that `bottom` will always be visited, regardless of `go_up`, while `top` will\nalways be *encompassed* by the range, but may not be precisely visited if the step\nsize does not divide evenly into the range.\n\nAttributes\n----------\ntop : float\n    Top position in microns (inclusive).\nbottom : float\n    Bottom position in microns (inclusive).\nstep : float\n    Step size in microns.\ngo_up : bool\n    If `True`, instructs engine to start at bottom and move towards top. By default,\n    `True`.",
    "properties": {
+    "bottom": {
+     "title": "Bottom",
+     "type": "number"
+    },
     "go_up": {
      "default": true,
      "title": "Go Up",
      "type": "boolean"
     },
-    "top": {
-     "title": "Top",
-     "type": "number"
-    },
-    "bottom": {
-     "title": "Bottom",
-     "type": "number"
-    },
     "step": {
      "title": "Step",
+     "type": "number"
+    },
+    "top": {
+     "title": "Top",
      "type": "number"
     }
    },
@@ -2162,25 +2586,104 @@
    ],
    "title": "ZTopBottom",
    "type": "object"
+  },
+  "useq___channel__Channel": {
+   "description": "Define an acquisition channel.\n\nAttributes\n----------\nconfig : str\n    Name of the configuration to use for this channel, (e.g. `\"488nm\"`, `\"DAPI\"`,\n    `\"FITC\"`).\ngroup : str\n    Optional name of the group to which this channel belongs. By default,\n    `\"Channel\"`.\nexposure : float | None\n    Exposure time in milliseconds. Must be positive.  If not provided, implies use\n    current exposure time. By default, `None`.\ndo_stack : bool\n    If `True`, instructs engine to include this channel in any Z stacks being\n    acquired. By default, `True`.\nz_offset : float\n    Relative Z offset from current position, in microns. By default, `0`.\nacquire_every : int\n    Acquire every Nth frame (if acquiring a time series). By default, `1`.\ncamera: str | None\n    Name of the camera to use for this channel. If not provided, implies use\n    current camera. By default, `None`.",
+   "properties": {
+    "acquire_every": {
+     "default": 1,
+     "exclusiveMinimum": 0,
+     "title": "Acquire Every",
+     "type": "integer"
+    },
+    "camera": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Camera"
+    },
+    "config": {
+     "title": "Config",
+     "type": "string"
+    },
+    "do_stack": {
+     "default": true,
+     "title": "Do Stack",
+     "type": "boolean"
+    },
+    "exposure": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0.0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Exposure"
+    },
+    "group": {
+     "default": "Channel",
+     "title": "Group",
+     "type": "string"
+    },
+    "z_offset": {
+     "default": 0.0,
+     "title": "Z Offset",
+     "type": "number"
+    }
+   },
+   "required": [
+    "config"
+   ],
+   "title": "Channel",
+   "type": "object"
+  },
+  "useq___mda_event__Channel": {
+   "description": "Channel in a MDA event.\n\nAttributes\n----------\nconfig : str\n    Name of the configuration to use for this channel, (e.g. `\"488nm\"`, `\"DAPI\"`,\n    `\"FITC\"`).\ngroup : str\n    Optional name of the group to which this channel belongs. By default,\n    `\"Channel\"`.",
+   "properties": {
+    "config": {
+     "title": "Config",
+     "type": "string"
+    },
+    "group": {
+     "default": "Channel",
+     "title": "Group",
+     "type": "string"
+    }
+   },
+   "required": [
+    "config"
+   ],
+   "title": "Channel",
+   "type": "object"
   }
  },
+ "$id": "https://openuc2.github.io/schemas/aufgaben.job/1.json",
  "additionalProperties": false,
  "description": "An Aufgaben job document.",
  "properties": {
-  "schema": {
-   "const": "aufgaben.job/1",
-   "default": "aufgaben.job/1",
-   "title": "Schema",
+  "description": {
+   "default": "",
+   "title": "Description",
    "type": "string"
+  },
+  "metadata": {
+   "additionalProperties": true,
+   "title": "Metadata",
+   "type": "object"
   },
   "name": {
    "minLength": 1,
    "title": "Name",
-   "type": "string"
-  },
-  "description": {
-   "default": "",
-   "title": "Description",
    "type": "string"
   },
   "parameters": {
@@ -2188,26 +2691,6 @@
     "$ref": "#/$defs/Parameter"
    },
    "title": "Parameters",
-   "type": "object"
-  },
-  "variables": {
-   "additionalProperties": {
-    "anyOf": [
-     {
-      "type": "boolean"
-     },
-     {
-      "type": "integer"
-     },
-     {
-      "type": "number"
-     },
-     {
-      "type": "string"
-     }
-    ]
-   },
-   "title": "Variables",
    "type": "object"
   },
   "resources": {
@@ -2259,6 +2742,12 @@
    "title": "Resources",
    "type": "object"
   },
+  "schema": {
+   "const": "aufgaben.job/1",
+   "default": "aufgaben.job/1",
+   "title": "Schema",
+   "type": "string"
+  },
   "storage": {
    "$ref": "#/$defs/Storage"
   },
@@ -2269,9 +2758,24 @@
    "title": "Tasks",
    "type": "array"
   },
-  "metadata": {
-   "additionalProperties": true,
-   "title": "Metadata",
+  "variables": {
+   "additionalProperties": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "integer"
+     },
+     {
+      "type": "number"
+     },
+     {
+      "type": "string"
+     }
+    ]
+   },
+   "title": "Variables",
    "type": "object"
   }
  },
@@ -2279,6 +2783,5 @@
   "name"
  ],
  "title": "Job",
- "type": "object",
- "$id": "https://openuc2.github.io/schemas/aufgaben.job/1.json"
+ "type": "object"
 }

@@ -21,7 +21,7 @@ import {
 import LiveViewControlWrapper from "./LiveViewControlWrapper";
 import DetectorToggle from "./DetectorToggle";
 
-const DEFAULT_SIZE  = { width: 340, height: 270 };
+const DEFAULT_SIZE  = { width: 570, height: 550 };
 const MIN_SIZE      = { width: 160, height: 130 };
 
 /**

@@ -17,6 +17,7 @@ const ConfirmDialog = ({
   danger = false,
   onCancel,
   onConfirm,
+  children,
 }) => (
   <Dialog open={open} onClose={onCancel} fullWidth maxWidth="xs">
     <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -25,6 +26,7 @@ const ConfirmDialog = ({
     </DialogTitle>
     <DialogContent>
       <DialogContentText>{text}</DialogContentText>
+      {children}
     </DialogContent>
     <DialogActions>
       <Button size="large" onClick={onCancel} sx={{ flex: 1 }}>

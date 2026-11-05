@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useMemo } from "react";
+import React, { useRef, useCallback, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Box,
@@ -13,6 +13,8 @@ import {
   TableRow,
   IconButton,
   Tooltip,
+  Checkbox,
+  FormControlLabel,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import AddLocationIcon from "@mui/icons-material/AddLocation";
@@ -23,6 +25,7 @@ import SaveAltIcon from "@mui/icons-material/SaveAlt";
 import FileUploadIcon from "@mui/icons-material/FileUpload";
 
 import InfoPopup from "../InfoPopup";
+import ConfirmDialog from "../../mobile/components/ConfirmDialog.jsx";
 import apiPositionerControllerMovePositionerXYZ from "../../backendapi/apiPositionerControllerMovePositionerXYZ.js";
 
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
@@ -47,6 +50,9 @@ const PositionsDimension = () => {
 
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const positionState = useSelector(positionSlice.getPositionState);
+  const skipClearConfirm = useSelector(experimentUISlice.getSkipClearPositionsConfirm);
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [dontAskAgain, setDontAskAgain] = useState(false);
 
   const pointList = useMemo(() => experimentState.pointList || [], [experimentState.pointList]);
 
@@ -129,6 +135,23 @@ const PositionsDimension = () => {
     dispatch(experimentSlice.setPointList([]));
     infoPopupRef.current?.showMessage("All positions cleared");
   }, [dispatch]);
+
+  const handleClearAllClick = useCallback(() => {
+    if (skipClearConfirm) {
+      handleClearAll();
+      return;
+    }
+    setDontAskAgain(false);
+    setClearDialogOpen(true);
+  }, [skipClearConfirm, handleClearAll]);
+
+  const handleClearConfirm = useCallback(() => {
+    if (dontAskAgain) {
+      dispatch(experimentUISlice.setSkipClearPositionsConfirm(true));
+    }
+    setClearDialogOpen(false);
+    handleClearAll();
+  }, [dontAskAgain, dispatch, handleClearAll]);
 
   // Save positions to CSV (name + xyz + well/area so they round-trip).
   const handleSavePositions = useCallback(() => {
@@ -287,7 +310,7 @@ const PositionsDimension = () => {
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
               Positions ({pointList.length})
             </Typography>
-            <Button size="small" color="error" variant="text" onClick={handleClearAll}>
+            <Button size="small" color="error" variant="text" onClick={handleClearAllClick}>
               Clear All
             </Button>
           </Box>
@@ -299,8 +322,9 @@ const PositionsDimension = () => {
                 <TableRow>
                   <TableCell sx={{ fontWeight: 600, py: 0.5 }}>#</TableCell>
                   <TableCell sx={{ fontWeight: 600, py: 0.5 }}>Name</TableCell>
-                  <TableCell sx={{ fontWeight: 600, py: 0.5 }} align="right">X (µm)</TableCell>
-                  <TableCell sx={{ fontWeight: 600, py: 0.5 }} align="right">Y (µm)</TableCell>
+                  {/* pr: 4 = cell padding + width of the number input's ▲▼ arrows */}
+                  <TableCell sx={{ fontWeight: 600, py: 0.5, pr: 4, whiteSpace: "nowrap" }} align="right">X (µm)</TableCell>
+                  <TableCell sx={{ fontWeight: 600, py: 0.5, pr: 4, whiteSpace: "nowrap" }} align="right">Y (µm)</TableCell>
                   <TableCell sx={{ fontWeight: 600, py: 0.5 }} align="right">Z (µm)</TableCell>
                   <TableCell sx={{ py: 0.5 }} align="center"></TableCell>
                 </TableRow>
@@ -365,7 +389,7 @@ const PositionsDimension = () => {
                         </IconButton>
                       </Tooltip>
                       <Tooltip title="Remove position">
-                        <IconButton size="small" onClick={() => handleRemovePosition(idx)}>
+                        <IconButton size="small" onClick={() => handleRemovePosition(idx)} sx={{ ml: 2 }}>
                           <DeleteIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
@@ -377,6 +401,27 @@ const PositionsDimension = () => {
           </TableContainer>
         </Box>
       )}
+
+      <ConfirmDialog
+        open={clearDialogOpen}
+        danger
+        title="Clear all positions?"
+        text={`This removes all ${pointList.length} positions and areas from the experiment. This cannot be undone.`}
+        confirmLabel="Clear All"
+        onCancel={() => setClearDialogOpen(false)}
+        onConfirm={handleClearConfirm}
+      >
+        <FormControlLabel
+          sx={{ mt: 1 }}
+          control={
+            <Checkbox
+              checked={dontAskAgain}
+              onChange={(e) => setDontAskAgain(e.target.checked)}
+            />
+          }
+          label="Don't ask me again"
+        />
+      </ConfirmDialog>
 
       <InfoPopup ref={infoPopupRef} />
     </Box>

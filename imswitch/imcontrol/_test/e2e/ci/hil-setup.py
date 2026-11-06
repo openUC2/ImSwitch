@@ -189,14 +189,14 @@ def container_image():
 FORKLIFT = ["env", "LC_ALL=C", "forklift"]
 
 
-def forklift(*args, sudo=False):
+def forklift(*args):
     """Run forklift, its output indented into our log; True if it succeeded.
 
-    stage apply changes the host and runs with sudo, as forklift asks for it.
-    -E keeps HOME, so it still works on this user's workspace.
+    Never with sudo, stage apply included: openUC2 OS mounts the stage store
+    into ~/.local/share/forklift/stages as an idmapped bind mount that maps only
+    this user's uid, so root cannot create files there (EOVERFLOW).
     """
-    command = [*FORKLIFT, *args]
-    return run_logged(*(["sudo", "-E", *command] if sudo else command))
+    return run_logged(*FORKLIFT, *args)
 
 
 def forklift_output(*args):
@@ -444,7 +444,7 @@ def start_test_pallet(state):
     pull_missing_images(state)
 
     log(f"applying the test pallet (stage {state['test_stage']})")
-    if not forklift("stage", "apply", sudo=True):
+    if not forklift("stage", "apply"):
         raise StepFailed("forklift could not apply the test pallet")
 
     log(f"waiting for ImSwitch (up to {READY_TIMEOUT}s)")
@@ -666,12 +666,12 @@ def restore_original_pallet(state, keep_image):
     # --cache-img=false: everything of that stage is still on the card.
     if not (
         forklift("stage", "set-next", "--cache-img=false", stage)
-        and forklift("stage", "apply", sudo=True)
+        and forklift("stage", "apply")
     ):
         # The state file stays, so restore can simply be run again.
         warn(f"RESTORE FAILED -- the rig may still run the test pallet {state['test_pallet']}")
         warn(f"fix by hand: forklift stage set-next --cache-img=false {stage}"
-             " && sudo -E forklift stage apply")
+             " && sudo systemctl restart forklift-apply")
         raise StepFailed(f"or retry:   {sys.argv[0]} restore")
 
     log(f"putting the local pallet back to {state['original_pallet']}")

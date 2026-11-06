@@ -67,7 +67,8 @@ keeps running on the swapped image.
    source and commit and its upgrade query to the state file; `forklift plt
    switch` to the test pallet (without remembering it as the upgrade query and
    without forklift's image caching); pulls the images the card does not have
-   yet; `sudo -E forklift stage apply`.
+   yet; `forklift stage apply` (without sudo: the stage store is an idmapped
+   mount that root cannot write to).
 5. **Waits** for the API, checks the container runs the image under test,
    **starts the live view** of every acquisition camera, then waits until each
    detector delivers a frame (observation camera via `snapOverviewImage`; a

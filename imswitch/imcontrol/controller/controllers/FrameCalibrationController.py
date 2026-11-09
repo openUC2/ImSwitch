@@ -102,6 +102,9 @@ class FrameCalibrationController(ImConWidgetController):
         self._diskReport = None      # after a restart: the newest report on disk
         self._status = self._newStatus("idle")
         self._status["result"] = self._fc().get("result")
+        
+        # global speed 
+        self._speed = 20000
 
     # ------------------------------------------------------------------ API
     @APIExport()
@@ -1255,7 +1258,7 @@ class FrameCalibrationController(ImConWidgetController):
                 continue
             for attempt in (1, 2):
                 self._checkAbort()
-                stage.move(value=float(v), axis=ax, is_absolute=True, is_blocking=True)
+                stage.move(value=float(v), axis=ax, is_absolute=True, is_blocking=True, speed=self._speed)
                 got = self._pos()[ax]
                 if abs(got - v) <= tol:
                     self._ctx.setdefault("at", {})[ax] = float(v)    # verified: later steps use this, not a fresh read

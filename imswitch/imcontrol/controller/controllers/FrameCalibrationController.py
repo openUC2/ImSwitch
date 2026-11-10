@@ -90,6 +90,7 @@ class StepError(RuntimeError):
 
 
 class FrameCalibrationController(ImConWidgetController):
+    _speed = 20000   # stage speed for every calibration move
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -102,9 +103,6 @@ class FrameCalibrationController(ImConWidgetController):
         self._diskReport = None      # after a restart: the newest report on disk
         self._status = self._newStatus("idle")
         self._status["result"] = self._fc().get("result")
-        
-        # global speed 
-        self._speed = 20000
 
     # ------------------------------------------------------------------ API
     @APIExport()

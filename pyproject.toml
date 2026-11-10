@@ -146,6 +146,9 @@ fallback_version = "0.0.0.dev0"
 imswitch-provisioner = "imswitch.imcontrol.model.jupyter_connection:ExistingProvisioner"
 
 [tool.uv]
+# numpy is pinned to 2.1.2, which has no Python 3.14 support (and useq-schema 0.9.2
+# needs numpy>=2.3.2 there), so only lock for the interpreters we actually test.
+environments = ["python_full_version < '3.14'"]
 # Force psygnal to be installed from source (no binary wheel).
 # The compiled (mypyc) version forbids subclassing which ImSwitch requires.
 # See https://github.com/pyapp-kit/psygnal/issues/330

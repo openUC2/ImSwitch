@@ -389,7 +389,12 @@ class TestTemperatureMonitor:
         cam.is_streaming = True
 
         cam._startTemperatureMonitor()
-        time.sleep(0.3)
+        # poll instead of a fixed sleep: a loaded macOS runner wrote only 2 rows in 0.3 s
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if self._log_file(tmp_path).exists() and len(self._rows(tmp_path)[1]) >= 3:
+                break
+            time.sleep(0.02)
         cam._stopTemperatureMonitor()
         assert cam._tempMonitorThread is None
 

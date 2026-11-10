@@ -221,21 +221,22 @@ def test_parameters_are_checked():
 # --------------------------------------------------------------------------- #
 def test_time_lapse_skips_missed_rounds_and_runs_idle():
     job = _job([{"id": "t", "task": "time_lapse",
-                 "params": {"plan": {"interval": 0.25, "loops": 6}, "on_overrun": "skip"},
+                 "params": {"plan": {"interval": 0.5, "loops": 6}, "on_overrun": "skip"},
                  "body": [{"id": "inc", "task": "set_variable",
                            "params": {"name": "n", "value": "${n + 1}"}},
-                          {"id": "slow", "task": "wait", "params": {"seconds": 0.6},
+                          {"id": "slow", "task": "wait", "params": {"seconds": 1.05},
                            "enabled": "loop.t.index == 0"}],
                  "idle": [{"id": "idle", "task": "set_variable",
                            "params": {"name": "i", "value": "${i + 1}"}}]}],
         variables={"n": 0, "i": 0})
     t0 = time.monotonic()
     run = _run(job)
-    # round 0 ends at 0.6 s: the 0.25 s start is missed and 0.5 s has also passed, so
-    # round 1 is skipped and the idle body runs until round 2 at 0.75 s (150 ms of
-    # slack for a slow runner; the old 50 ms failed on the macOS runner)
+    # round 0 ends at 1.05 s, past the starts of round 1 (0.5 s) and round 2 (1.0 s):
+    # round 1 is skipped, round 2 runs late at once, and the idle body fills the waits
+    # before rounds 3-5. A second round is only skipped if round 0 runs past 1.5 s --
+    # 450 ms of slack for a slow runner (the old 150 ms failed on macOS CI).
     assert run.variables["n"] == 5 and run.variables["i"] >= 2
-    assert 1.2 < time.monotonic() - t0 < 2.5
+    assert 2.4 < time.monotonic() - t0 < 4.0
 
 
 def test_zstack_returns_and_channel_offsets(tmp_path):

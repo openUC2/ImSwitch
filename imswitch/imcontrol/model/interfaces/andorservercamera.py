@@ -90,6 +90,7 @@ class CameraAndorServer:
         self.status: Dict[str, Any] = {}
         self.is_connected = False
         self._bootId: Optional[str] = None
+        self._sdkProblem: Optional[str] = None  # last "no Andor SDK" message, logged once
         self._listeners: List = []  # callables invoked after (re)connecting
 
         self._lock = threading.Lock()
@@ -139,7 +140,14 @@ class CameraAndorServer:
             info = self._json('GET', '/info', timeout=3.0)
             status = self._json('GET', '/status', timeout=3.0)
             if status.get('state') not in ('idle', 'live', 'exposing'):
-                self.__logger.debug(f'andor-server is {status.get("state")}: {status.get("error")}')
+                if (status.get('sdk') or {}).get('loaded') is False and status.get('backend') == 'andor':
+                    # The image has no Andor SDK; it is installed on the server, not here.
+                    if status.get('error') != self._sdkProblem:
+                        self._sdkProblem = status.get('error')
+                        self.__logger.warning(f'andor-server {self.baseUrl}/ has no Andor SDK yet: '
+                                              f'{self._sdkProblem}')
+                else:
+                    self.__logger.debug(f'andor-server is {status.get("state")}: {status.get("error")}')
                 return False
             caps = self._json('GET', '/capabilities', timeout=3.0)
         except AndorServerError as e:

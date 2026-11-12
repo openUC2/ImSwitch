@@ -62,12 +62,21 @@ TEMPERATURE_SHUTDOWN_SAMPLES = 2
 # running hot has a hardware fault that power-cycling the TEC cannot fix, so
 # after this many recoveries the cooler stays off until a target is set again.
 TEMPERATURE_RECOVERY_ATTEMPTS = 3
-# The TEC target is re-written to the camera at this interval. One write is not
-# always enough: the camera can report the target back correctly, with the
-# cooler switched on, and still leave the sensor sitting at ambient for hours.
-# Re-asserting it costs one register write a minute and gets the regulation
-# going again without anyone having to notice and fix it by hand.
+# The TEC target is re-written to the camera at this interval, as a backstop
+# for a write that got lost anyway (see TEC_WRITE_SETTLE_S). TOUPCAM_OPTION_TEC
+# and _TECTARGET are answered from the SDK's own cache, never from the camera,
+# so a lost write still reads back as "on, at target".
 TEMPERATURE_REASSERT_INTERVAL_S = 60.0
+# A TEC write (TOUPCAM_OPTION_TEC, put_Temperature) that reaches the camera
+# within a few ms of a sensor-temperature or TEC-voltage read is lost: the
+# camera acknowledges it, but the cooler ends up off -- a lost TEC=1 even
+# switches off a cooler that was running. Measured on an MTR3CMOS09000KMA (fw
+# 4.6.7.20221118, SDK 60.32226): 0 and 20 ms between read and write failed
+# every time, 100 ms and more never did. set_temperature() reading the sensor
+# right before switching the cooler on, and the keep-alive running right after
+# the monitor's temperature read, left the sensor at ambient with 0 V on the
+# TEC. So TEC writes wait this long after the last such read.
+TEC_WRITE_SETTLE_S = 0.2
 # A cooler that is regulating gets within a few degrees of its target in a
 # minute or two. Staying this far above it for this long means it is not
 # working: a target outside the model's range, a dead TEC, or no heat path.
@@ -169,6 +178,10 @@ class CameraToupcam:
         self._lastTecReassert = 0.0
         self._tecStallSince = None
         self._tecStallLogged = False
+        # Serialises TEC reads and writes across the UI and monitor threads, so
+        # a write can keep TEC_WRITE_SETTLE_S away from the last read.
+        self._tecLock = threading.RLock()
+        self._lastTecReadAt = 0.0  # time.monotonic()
         self.gain = gain
         self.frame_rate = frame_rate
         self.cameraNo = cameraNo if cameraNo is not None else 0
@@ -1301,9 +1314,25 @@ class CameraToupcam:
         if not self._hasGetTemperature:
             return None
         try:
-            return self.hcam.get_Temperature() / 10.0
+            return self._tecRead(self.hcam.get_Temperature) / 10.0
         except Exception:
             return None
+
+    def _tecRead(self, read):
+        """Run a temperature / TEC register read and note when it happened,
+        for _settleBeforeTecWrite."""
+        with self._tecLock:
+            try:
+                return read()
+            finally:
+                self._lastTecReadAt = time.monotonic()
+
+    def _settleBeforeTecWrite(self):
+        """Wait until TEC_WRITE_SETTLE_S has passed since the last TEC read.
+        Call with _tecLock held, so no other thread reads in between."""
+        wait = self._lastTecReadAt + TEC_WRITE_SETTLE_S - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
 
     def _applyTecTarget(self, temperature_c, quiet: bool = False) -> bool:
         """Switch the cooler on and push ``temperature_c`` (no safety checks).
@@ -1312,8 +1341,10 @@ class CameraToupcam:
         would otherwise write an INFO line every minute.
         """
         try:
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_TEC, 1)
-            self.hcam.put_Temperature(int(round(temperature_c * 10)))
+            with self._tecLock:
+                self._settleBeforeTecWrite()
+                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_TEC, 1)
+                self.hcam.put_Temperature(int(round(temperature_c * 10)))
             self._lastTecReassert = time.time()
             message = (f"TEC on, target {temperature_c:.1f} °C "
                        f"(sensor now {self.get_temperature()} °C)")
@@ -1329,7 +1360,9 @@ class CameraToupcam:
     def _disableTec(self, reason: str) -> bool:
         """Switch the cooler off, keeping the cached target for a later re-arm."""
         try:
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_TEC, 0)
+            with self._tecLock:
+                self._settleBeforeTecWrite()
+                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_TEC, 0)
             self.__logger.warning(f"TEC switched off: {reason}")
             return True
         except Exception as e:
@@ -1392,7 +1425,11 @@ class CameraToupcam:
         self._applyTecTarget(temperature_c)
 
     def get_target_temperature(self):
-        """TEC target in °C as the camera reports it, or None if unsupported."""
+        """TEC target in °C as last written, or None if unsupported.
+
+        The SDK answers this from its own cache, not from the camera, so it
+        does not show whether the write actually took effect.
+        """
         if not self._hasTEC:
             return None
         try:
@@ -1401,7 +1438,9 @@ class CameraToupcam:
             return None
 
     def get_tec_enabled(self):
-        """True/False for the cooler state, or None if unsupported."""
+        """True/False for the cooler state as last written, or None if
+        unsupported. SDK cache like get_target_temperature: whether the cooler
+        is really driven shows in get_tec_voltage()."""
         if not self._hasTEC:
             return None
         try:
@@ -1438,11 +1477,13 @@ class CameraToupcam:
         if not self._hasTEC or self.hcam is None:
             return None, None
         try:
-            volt = self.hcam.get_Option(toupcam.TOUPCAM_OPTION_TEC_VOLTAGE) / 10.0
+            volt = self._tecRead(lambda: self.hcam.get_Option(
+                toupcam.TOUPCAM_OPTION_TEC_VOLTAGE)) / 10.0
         except Exception:
             return None, None
         try:
-            vmax = self.hcam.get_Option(toupcam.TOUPCAM_OPTION_TEC_VOLTAGE_MAX) / 10.0
+            vmax = self._tecRead(lambda: self.hcam.get_Option(
+                toupcam.TOUPCAM_OPTION_TEC_VOLTAGE_MAX)) / 10.0
         except Exception:
             vmax = None
         return volt, vmax
@@ -1585,10 +1626,10 @@ class CameraToupcam:
     def _maintainTecTarget(self, temperature: float) -> None:
         """Re-assert the TEC target periodically and warn when it is not working.
 
-        Writing the target once is not reliable: the camera can report the
-        requested target back on a read, with the cooler on, and still leave
-        the sensor at ambient indefinitely. Re-writing it every
-        TEMPERATURE_REASSERT_INTERVAL_S is what gets it regulating again.
+        A lost write (see TEC_WRITE_SETTLE_S) still reads back as on and at
+        target, since the SDK answers those from its cache, so nothing else
+        would notice. Re-writing it every TEMPERATURE_REASSERT_INTERVAL_S gets
+        the cooler going again within a minute.
 
         Skipped while the over-temperature cutoff is tripped: there the cooler
         is off deliberately and _checkTemperatureSafety owns it.
@@ -1628,14 +1669,13 @@ class CameraToupcam:
                           f"that holds steady.")
         elif volt is not None and volt < 0.5:
             rangeHint += (f" The TEC is not driven ({volt:.1f} V) although it "
-                          f"reports on.")
+                          f"was switched on: the camera dropped the write.")
         self.__logger.warning(
             f"Cooler is not regulating: the sensor has been at "
             f"{temperature:.1f} °C for "
             f"{(now - self._tecStallSince) / 60.0:.0f} min with the TEC on and "
-            f"a target of {self.targetTemperature:.1f} °C (the camera reports "
-            f"{self.get_target_temperature()}). Check the target, the fan and "
-            f"the heat path.{rangeHint}")
+            f"a target of {self.targetTemperature:.1f} °C. Check the target, "
+            f"the fan and the heat path.{rangeHint}")
 
     def _temperatureMonitorLoop(self):
         while True:

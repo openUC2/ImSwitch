@@ -29,18 +29,23 @@ def _free_port():
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="module")
-def server(tmp_path_factory):
-    port = _free_port()
-    config = Config(mock=True, port=port, save_dir=str(tmp_path_factory.mktemp("snaps")))
-    srv = uvicorn.Server(uvicorn.Config(create_app(config, camera=MockCamera(seed=2)), host="127.0.0.1",
-                                        port=port, log_level="warning"))
+def _serve(config, camera):
+    srv = uvicorn.Server(uvicorn.Config(create_app(config, camera=camera), host="127.0.0.1",
+                                        port=config.port, log_level="warning"))
     thread = threading.Thread(target=srv.run, daemon=True)
     thread.start()
     for _ in range(100):
         if srv.started:
             break
         time.sleep(0.05)
+    return srv, thread
+
+
+@pytest.fixture(scope="module")
+def server(tmp_path_factory):
+    port = _free_port()
+    config = Config(mock=True, port=port, save_dir=str(tmp_path_factory.mktemp("snaps")))
+    srv, thread = _serve(config, MockCamera(seed=2))
     yield port
     srv.should_exit = True
     thread.join(10)
@@ -145,3 +150,21 @@ def test_server_unreachable_comes_up_disconnected():
         assert m.fullShape == (1024, 1024)
     finally:
         m.finalize()
+
+
+def test_server_without_andor_sdk_is_reported(tmp_path, caplog):
+    from andor_server.camera import AndorCamera
+    from andor_server.sdk_runtime import SDKLocator
+
+    config = Config(port=_free_port(), sdk_dir=str(tmp_path / "sdk"), reinit_delay_s=0.1)
+    srv, thread = _serve(config, AndorCamera(SDKLocator(config)))
+    try:
+        m = make_manager(config.port, connectTimeout=1)
+        try:
+            assert not m._camera.is_connected
+            assert any("has no Andor SDK yet" in r.getMessage() for r in caplog.records)
+        finally:
+            m.finalize()
+    finally:
+        srv.should_exit = True
+        thread.join(10)

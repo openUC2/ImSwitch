@@ -4,6 +4,7 @@ import { useSelector } from "react-redux";
 import SettingsMenu from "./SettingsMenu.jsx";
 import StorageButton from "../StorageButton.js";
 import * as uc2Slice from "../../state/slices/UC2Slice.js";
+import { SYSTEM_PAGE_KEYS } from "../SystemPage.jsx";
 
 /**
  * ImSwitch TopBar Component
@@ -21,6 +22,10 @@ const TopBar = ({
   // Get backend connection status
   const uc2State = useSelector(uc2Slice.getUc2State);
   const isBackendConnected = uc2State.backendConnected;
+  // The system pages are tabs of one "System" page.
+  const pageTitle = SYSTEM_PAGE_KEYS.includes(selectedPlugin)
+    ? "System"
+    : selectedPlugin;
   return (
     <Box
       sx={(theme) => ({
@@ -66,9 +71,7 @@ const TopBar = ({
             whiteSpace: "nowrap",
           }}
         >
-          {isMobile || dense
-            ? selectedPlugin
-            : `ImSwitch UI - ${selectedPlugin}`}
+          {isMobile || dense ? pageTitle : `ImSwitch UI - ${pageTitle}`}
         </Typography>
 
         <StorageButton

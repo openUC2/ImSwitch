@@ -207,6 +207,25 @@ def focus_metric(img):
     return float(lap.var() / max(float(g.mean()), 1e-6) ** 2)
 
 
+def pinhole_focus_metric(img):
+    """Focus of a pinhole in an opaque slide: the steepest edge of its light, per px, over its
+    contrast (~1 / edge width at ~768 px width). Exposure-invariant, unlike focus_metric,
+    whose Laplacian energy over the mean^2 is noise on a dim, far-defocused blob (FRAME 10,
+    8-bit Hik, 2026-11-12: it fell over 6 mm while the pinhole shrank from 1000 to 580 px).
+    0 when nothing stands out from the black level (also a uniformly lit frame)."""
+    g = gray(img)
+    b = max(1, g.shape[1] // 768)
+    if b > 1:
+        g = cv2.resize(g[:g.shape[0] // b * b, :g.shape[1] // b * b], (g.shape[1] // b, g.shape[0] // b),
+                       interpolation=cv2.INTER_AREA)
+    lo, hi = float(np.percentile(g, 5)), float(np.percentile(g, 99.9))
+    if hi < 4 * max(lo, 1.0) or hi - lo < 4:
+        return 0.0
+    g = cv2.GaussianBlur(g, (0, 0), 1.0)
+    mag = np.hypot(cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)) / 8
+    return float(np.percentile(mag, 99.9) / (hi - lo))
+
+
 def focus_peaked(vals, rise=1.5, fall=0.6):
     """A Z sweep has passed a clear focus peak: the best value stands out from the
     lowest one and the curve has fallen again after it."""

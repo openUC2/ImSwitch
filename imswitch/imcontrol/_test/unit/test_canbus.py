@@ -58,9 +58,53 @@ class FakeServer:
         return Response(body=body)
 
 
+REPO = "youseetoo/uc2-esp32"
+RELEASE_TAG = "v2026.0.0-beta.4"
+
+
+class FakeGitHub:
+    """requests.get for the GitHub API and release downloads. The newest
+    release only has web-flasher images; the pre-release before it has the
+    esp32_* images (LED uploaded before GitHub published digests)."""
+
+    def __init__(self):
+        self.files = {MASTER: IMAGE, MOTOR_Y: IMAGE, LED: IMAGE}
+        web = [self._asset("can-hat-master-v2.bin", IMAGE),
+               {"name": "can-hat-master-v2-manifest.json", "size": 10}]
+        images = [self._asset(n, b, digest=n != LED) for n, b in self.files.items()]
+        self.releases = [
+            {"tag_name": "v2026.01.19-3", "draft": False, "prerelease": False, "assets": web},
+            {"tag_name": RELEASE_TAG, "draft": False, "prerelease": True, "assets": images},
+            {"tag_name": "v9-draft", "draft": True, "prerelease": False, "assets": images}]
+        for r in self.releases:
+            r["html_url"] = f"https://github.com/{REPO}/releases/tag/{r['tag_name']}"
+        self.api_calls, self.downloads, self.rate_limited = 0, [], False
+
+    @staticmethod
+    def _asset(name, data, digest=True):
+        return {"name": name, "size": len(data), "updated_at": "t",
+                "digest": f"sha256:{hashlib.sha256(data).hexdigest()}" if digest else None}
+
+    def get(self, url, headers=None, timeout=None, stream=False):
+        api = f"{server_module.GITHUB_API}/repos/{REPO}/releases"
+        download = f"https://github.com/{REPO}/releases/download/{RELEASE_TAG}/"
+        if url.startswith(download):
+            self.downloads.append(url[len(download):])
+            return Response(raw=self.files[url[len(download):]])
+        self.api_calls += 1
+        if self.rate_limited:
+            return Response(status=403, headers={"X-RateLimit-Remaining": "0"})
+        if url.startswith(f"{api}?"):
+            return Response(body=self.releases)
+        tag = url[len(f"{api}/tags/"):]
+        found = next((r for r in self.releases if r["tag_name"] == tag), None)
+        return Response(body=found) if found else Response(status=404)
+
+
 class Response:
-    def __init__(self, body=None, raw=b"", status=200):
+    def __init__(self, body=None, raw=b"", status=200, headers=None):
         self._body, self.raw, self.status = body, io.BytesIO(raw), status
+        self.status_code, self.headers = status, headers or {}
 
     def json(self):
         return json.loads(json.dumps(self._body))
@@ -292,6 +336,66 @@ def test_image_choice(server, tmp_path):
     server.files["id_12_custom.bin"] = IMAGE
     assert fw.can_image(12) == "id_12_custom.bin"
     assert fw.master_image() == MASTER         # the CANopen master before the old HAT names
+
+
+@pytest.fixture
+def github(monkeypatch):
+    fake = FakeGitHub()
+    monkeypatch.setattr(server_module.requests, "get", fake.get)
+    return fake
+
+
+def test_github_release_listing_skips_drafts_and_web_flasher_images(github, tmp_path):
+    releases = FirmwareServer(URL, tmp_path).releases()["releases"]
+    assert [(r["tag"], r["image_count"]) for r in releases] == [("v2026.01.19-3", 0),
+                                                                (RELEASE_TAG, 3)]
+    fw = FirmwareServer(URL, tmp_path)
+    refused = fw.set_release("v2026.01.19-3")  # web-flasher images only
+    assert refused["status"] == "error" and "web-flasher" in refused["message"]
+    assert fw.source()["source"] == "local"   # a refused release changes nothing
+
+
+def test_github_latest_is_the_newest_release_with_images(github, tmp_path):
+    fw = FirmwareServer(URL, tmp_path)
+    result = fw.set_release("latest")
+    assert result["status"] == "success" and result["release_tag"] == RELEASE_TAG
+    assert fw.source() == {"source": "github", "firmware_server_url": URL,
+                           "github_repo": REPO, "github_release": "latest"}
+    files = fw.files()
+    assert files["server_version"] == RELEASE_TAG and files["firmware_server"].endswith(RELEASE_TAG)
+    motor = next(f for f in files["files"] if f["filename"] == MOTOR_Y)
+    assert motor["version"] == RELEASE_TAG
+    assert motor["url"].startswith(f"https://github.com/{REPO}/releases/download/{RELEASE_TAG}/")
+    assert fw.set_url(URL)["status"] == "error" and fw.source()["source"] == "github"
+
+
+def test_github_download_is_verified_and_api_answers_are_cached(github, tmp_path):
+    fw = FirmwareServer(URL, tmp_path, release=RELEASE_TAG)
+    assert fw.download(MOTOR_Y).read_bytes() == IMAGE
+    assert fw.download(MOTOR_Y) is not None and github.downloads == [MOTOR_Y]  # cached
+    assert fw.download(LED) is not None        # no digest: the size is still checked
+    github.files[LED] = IMAGE + b"\x00"
+    assert fw.download(LED) is None
+    assert github.api_calls == 1               # one release read for all of it
+
+
+def test_github_rate_limit_is_reported(github, tmp_path):
+    github.rate_limited = True
+    fw = FirmwareServer(URL, tmp_path)
+    assert "rate limit" in fw.releases()["message"]
+    assert "rate limit" in fw.set_release(RELEASE_TAG)["message"]
+    assert fw.manifest() == {}                 # the local server is unchanged (and absent)
+
+
+def test_update_check_against_a_github_release(github, tmp_path):
+    net, _, _ = network(tmp_path, scan_result(node(12, "motor", RELEASE_TAG, MOTOR_Y),
+                                              node(30, "led")))
+    net.server.set_release(RELEASE_TAG)
+    check = net.updater.check()
+    devices = {d["canId"]: d for d in check["devices"]}
+    assert check["server_reachable"] and check["server_version"] == RELEASE_TAG
+    assert devices[12]["update_status"] == "up_to_date"
+    assert devices[30]["update_status"] == "update_available"
 
 
 # ── CAN OTA ─────────────────────────────────────────────────────────────────

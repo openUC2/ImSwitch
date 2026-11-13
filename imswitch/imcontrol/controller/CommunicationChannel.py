@@ -24,7 +24,6 @@ class CommunicationChannel(SignalInterface):
 
     sigAcquisitionStopped = Signal()
 
-    sigScriptExecutionFinished = Signal()
 
     sigAdjustFrame = Signal(object)  # (shape)
 
@@ -34,9 +33,7 @@ class CommunicationChannel(SignalInterface):
 
     sigCrosshairToggled = Signal(bool)  # (enabled)
 
-    sigAddItemToVb = Signal(object)  # (item)
 
-    sigRemoveItemFromVb = Signal(object)  # (item)
 
     sigRecordingStarted = Signal()
 
@@ -50,9 +47,7 @@ class CommunicationChannel(SignalInterface):
         str, np.ndarray, object, bool
     )  # (name, image, filePath, savedToDisk)
 
-    sigRunScan = Signal(bool, bool)  # (recalculateSignals, isNonFinalPartOfSequence)
 
-    sigAbortScan = Signal()
 
     sigScanStarting = Signal()
 
@@ -67,25 +62,18 @@ class CommunicationChannel(SignalInterface):
     sigSLMMaskUpdated = Signal(object)  # (mask)
     sigSIMMaskUpdated = Signal(object) # (mask)
 
-    sigToggleBlockScanWidget = Signal(bool)
 
     sigSnapImg = Signal()
 
     sigSnapImgPrev = Signal(str, np.ndarray, str)  # (detector, image, nameSuffix)
 
-    sigRequestScanParameters = Signal()
 
-    sigSendScanParameters = Signal(dict, dict, object)  # (analogParams, digitalParams, scannerList)
 
-    sigSetAxisCenters = Signal(object, object)  # (axisDeviceList, axisCenterList)
 
     sigStartRecordingExternal = Signal()
 
-    sigRequestScanFreq = Signal()
 
-    sigSendScanFreq = Signal(float)  # (scanPeriod)
 
-    sigPixelSizeChange = Signal(float)  # (pixelSize)
 
     sigExperimentStop = Signal()
     #sigRequestScannersInScan = Signal()
@@ -102,15 +90,10 @@ class CommunicationChannel(SignalInterface):
     sigStartLiveAcquistion = Signal(bool)
     sigStopLiveAcquisition = Signal(bool)
 
-    sigInitialFocalPlane = Signal(float) # initial focal plane for DeckScanController
 
-    sigBroadcast = Signal(str, str, object)
 
-    sigSaveFocus = Signal()
 
-    sigScanFrameFinished = Signal()  # TODO: emit this signal when a scanning frame finished, maybe in scanController if possible? Otherwise in APDManager for now, even if that is not general if you want to do camera-based experiments. Could also create a signal specifically for this from the scan curve generator perhaps, specifically for the rotation experiments, would that be smarter?
 
-    sigUpdateRotatorPosition = Signal(str, str)  # (rotatorName)
 
     sigUpdateMotorPosition = Signal(list)  # # TODO: Just forcely update the positoin in the GUI
 
@@ -122,27 +105,16 @@ class CommunicationChannel(SignalInterface):
 
     sigUpdateCANDevices = Signal(list)  # (canDevicesList) - updates CAN device scan results from callbacks
 
-    sigSetSyncInMovementSettings = Signal(str, float)  # (rotatorName, position)
 
     sigNewFrame = Signal()
 
     # signal to control actions from the ESP32
-    sigESP32Message = Signal(str, str)  # (key, message)
 
     # useq-schema related signals
-    sigSetXYPosition = Signal(float, float)
-    sigSetZPosition = Signal(float)
-    sigSetExposure = Signal(float)
-    sigSetSpeed = Signal(float)
 
     # light-sheet related signals
     sigStartLightSheet = Signal(float, float, float, str, str, float) # (startX, startY, speed, axis, lightsource, lightsourceIntensity)
     sigStopLightSheet = Signal()
-
-    # scanning-related signals
-    sigStartTileBasedTileScanning = Signal(int, int, int, int, int, int, str, int, int, bool, bool, bool) # (numb erTilesX, numberTilesY, stepSizeX, stepSizeY, nTimes, tPeriod, illuSource, initPosX, initPosY, isStitchAshlar, isStitchAshlarFlipX, isStitchAshlarFlipY)
-    sigStopTileBasedTileScanning = Signal()
-    sigOnResultTileBasedTileScanning = Signal(np.ndarray, np.ndarray) # (tiles, postions)
 
 
     @property

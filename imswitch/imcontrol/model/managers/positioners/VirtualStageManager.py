@@ -4,6 +4,10 @@ import threading
 import time
 
 class VirtualStageManager(PositionerManager):
+    # start_stage_scanning only moves: no camera triggers, so a firmware-timed
+    # stage scan would wait for frames forever. Aufgaben hides fast_stage_scan.
+    scanTriggersFrames = False
+
     def __init__(self, positionerInfo, name, **lowLevelManagers):
         super().__init__(positionerInfo, name, initialPosition={axis: 0 for axis in positionerInfo.axes})
         self.__logger = initLogger(self, instanceName=name)
@@ -45,9 +49,13 @@ class VirtualStageManager(PositionerManager):
         """The simulated stage applies X/Y (and X/Y/Z) in one step."""
         return ["XY", "XYZ"]
 
+    DEFAULT_SPEED_UM_S = 15000.0
+    MAX_MOVE_TIME_S = 10.0
+
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=1):
         # For absolute moves the caller passes user coordinates; the simulated
         # device sees user + offset (same convention as ESP32StageManager).
+        before = dict(self._positioner.position)
         ox = self.stageOffsetPositions.get("X", 0)
         oy = self.stageOffsetPositions.get("Y", 0)
         oz = self.stageOffsetPositions.get("Z", 0)
@@ -77,10 +85,20 @@ class VirtualStageManager(PositionerManager):
                 y=self.stepsizeY*((value[1]+oy) if is_absolute else value[1]),
                 is_absolute=is_absolute,
             )
-        for axes in ["A","X","Y","Z"]:
-            self._position[axes] = self._positioner.position[axes]
+        if is_blocking:   # a blocking move takes as long as the real stage would
+            self._wait_for_travel(before, speed)
 
-        self.getPosition() # update position in GUI
+        # user frame, as at startup and as ESP32StageManager keeps it; also updates the GUI
+        self._position.update(self.getPosition())
+
+    def _wait_for_travel(self, before, speed):
+        steps = {"X": self.stepsizeX, "Y": self.stepsizeY, "Z": self.stepsizeZ, "A": self.stepsizeA}
+        distance = max(abs(self._positioner.position[a] - before[a]) / (abs(steps[a]) or 1)
+                       for a in steps)
+        if isinstance(speed, (tuple, list)):
+            speed = max(speed)
+        speed = float(speed or getattr(self, "_travelSpeed", None) or self.DEFAULT_SPEED_UM_S)
+        time.sleep(min(self.MAX_MOVE_TIME_S, distance / max(speed, 1.0)))
 
     def getDevicePositionAxis(self, axis="X"):
         """Raw device position for one axis on the virtual stage."""
@@ -111,7 +129,13 @@ class VirtualStageManager(PositionerManager):
         pass
 
     def setSpeed(self, speed, axis=None):
-        pass
+        """Travel speed of blocking moves (µm/s); ``speed`` shows it per axis."""
+        if speed is None:
+            return
+        value = float(max(speed) if isinstance(speed, (tuple, list)) else speed)
+        self._travelSpeed = value
+        for a in ([axis] if axis in self.axes else self.axes):
+            self._speed[a] = value
 
     def setPosition(self, value, axis):
         pass
@@ -170,10 +194,14 @@ class VirtualStageManager(PositionerManager):
     def stopAll(self):
         pass
 
-    def doHome(self, axis, isBlocking=False):
+    def doHome(self, axis, isBlocking=False, **homingOptions):
+        # PositionerController.homeAxis passes direction, speed, polarity,
+        # release distance and timeout; a virtual endstop needs none of them.
+        # Taking only (axis, isBlocking) made every REST homing call raise.
         if axis == "X": self.home_x(isBlocking)
         if axis == "Y": self.home_y(isBlocking)
         if axis == "Z": self.home_z(isBlocking)
+        if axis == "A": self.home_a(isBlocking)
 
 
     def home_x(self, is_blocking):
@@ -188,9 +216,13 @@ class VirtualStageManager(PositionerManager):
         self.move(value=0, axis="Z", is_absolute=True)
         self.setPosition(axis="Z", value=0)
 
+    def home_a(self, is_blocking):
+        self.move(value=0, axis="A", is_absolute=True)
+        self.setPosition(axis="A", value=0)
+
     def home_xyz(self):
-        if self.homeXenabled and self.homeYenabled and self.homeZenabled:
-            [self.setPosition(axis=axis, value=0) for axis in ["X","Y","Z"]]
+        for axis in ("X", "Y", "Z"):
+            self.doHome(axis)
 
 
     # ------------------------------------------------------------------ #
@@ -243,7 +275,8 @@ class VirtualStageManager(PositionerManager):
             n += 1
             travelled = min(abs(distance), speed * (n - 1) * period)
             x = start + direction * travelled
-            self.move(value=x, axis=axis, is_absolute=True)
+            # the sweep keeps its own clock; a blocking move would add travel time per step
+            self.move(value=x, axis=axis, is_absolute=True, is_blocking=False)
             for listener in list(self.strobeTriggerListeners):
                 try:
                     listener(n, x)

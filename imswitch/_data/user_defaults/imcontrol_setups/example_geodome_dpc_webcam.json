@@ -1,0 +1,71 @@
+{
+    "detectors": {
+        "WidefieldCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "OpenCVCamManager",
+            "managerProperties": {
+                "cameraListIndex": 0,
+                "isRGB": false,
+                "cameraEffPixelsize": 1.0,
+                "opencvcam": {
+                    "exposure": 0,
+                    "gain": 0,
+                    "blacklevel": 0,
+                    "image_width": 1280,
+                    "image_height": 720
+                }
+            },
+            "forAcquisition": true,
+            "forFocusLock": false
+        }
+    },
+    "lasers": {},
+    "LEDMatrixs": {
+        "ESP32 LEDMatrix": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "ESP32LEDMatrixManager",
+            "managerProperties": {
+                "rs232device": "ESP32",
+                "Nx": 10,
+                "Ny": 8,
+                "ledLayout": "geodome80",
+                "ledCalibration": {
+                    "rotation_deg": 0.0,
+                    "flip": false,
+                    "offset_mm": [0.0, 0.0, 0.0]
+                }
+            }
+        }
+    },
+    "positioners": {},
+    "rs232devices": {
+        "ESP32": {
+            "managerName": "ESP32Manager",
+            "managerProperties": {
+                "serialport": "/dev/cu.usbmodem114401",
+                "baudrate": 115200,
+                "debug": false
+            }
+        }
+    },
+    "dpc": {
+        "wavelength": 0.53,
+        "pixelsize": 1.0,
+        "magnefication": 10,
+        "NA": 0.25,
+        "NAi": 0.25,
+        "n": 1.0,
+        "rotations": [0, 180, 90, 270]
+    },
+    "availableWidgets": [
+        "Settings",
+        "View",
+        "Recording",
+        "Image",
+        "LEDMatrix",
+        "DPC", 
+        "UC2Config"
+    ]
+}

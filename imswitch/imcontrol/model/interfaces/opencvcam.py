@@ -89,12 +89,32 @@ class CameraOpenCV:
 
         self.__logger.info("Camera closed")
 
+    def _isV4L2(self):
+        try:
+            return self.camera is not None and self.camera.getBackendName() == "V4L2"
+        except Exception:
+            return False
+
+    def set_exposure_mode(self, mode):
+        """'auto' or 'manual'. Only V4L2 (Linux) switches the camera itself
+        (auto_exposure 3 = aperture priority, 1 = manual); manual applies the stored exposure."""
+        self.isAutoParameters = str(mode).lower() != "manual"
+        if not self._isV4L2():
+            return
+        try:
+            self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3 if self.isAutoParameters else 1)
+        except Exception as e:
+            self.__logger.error(f"Could not set exposure mode {mode}: {e}")
+        if not self.isAutoParameters:
+            self.set_exposure_time(self.exposure_time)
+
     def set_exposure_time(self,exposure_time):
+        self.exposure_time = exposure_time      # kept in auto mode, applied when switched to manual
         if self.isAutoParameters:
             return
-        self.exposure_time = exposure_time
         try:
-            self.camera.set(cv2.CAP_PROP_EXPOSURE, self.exposure_time)
+            # ms; V4L2 counts exposure_time_absolute in 100 µs
+            self.camera.set(cv2.CAP_PROP_EXPOSURE, self.exposure_time * 10 if self._isV4L2() else self.exposure_time)
         except Exception as e:
             self.__logger.error(e)
             self.__logger.debug("Error setting Exposure time in opencv camera")
@@ -144,6 +164,8 @@ class CameraOpenCV:
             self.set_analog_gain(property_value)
         elif property_name == "exposure":
             self.set_exposure_time(property_value)
+        elif property_name == "exposure_mode":
+            self.set_exposure_mode(property_value)
         elif property_name == "blacklevel":
             self.set_blacklevel(property_value)
         elif property_name == "pixel_format":
@@ -162,6 +184,8 @@ class CameraOpenCV:
             property_value = self.analog_gain
         elif property_name == "exposure":
             property_value = self.exposure_time
+        elif property_name == "exposure_mode":
+            property_value = "auto" if self.isAutoParameters else "manual"
         elif property_name == "blacklevel":
             property_value = self.blacklevel
         elif property_name == "image_width":

@@ -25,12 +25,12 @@ import queue  # thread-safe queue for streamer
 from imswitch.imcommon.framework import Timer
 from imswitch.imcommon.model import ostools, APIExport, initLogger, dirtools
 from imswitch.imcontrol.model import RecMode
+from imswitch.imcontrol.model.managers.detectors.DetectorManager import getDetectorExposureSeconds
 from imswitch.imcontrol.model.io import (
     RecordingService, 
     SaveFormat,
     SaveMode,
     get_recording_service,
-    StreamingDataStoreAdapter,
     SnapResult,
 )
 from ..basecontrollers import ImConWidgetController
@@ -72,7 +72,6 @@ class RecordingController(ImConWidgetController):
         self._recording_service: Optional[RecordingService] = None
         
         # Streaming adapter for continuous recordings (lazy initialization)
-        self._streaming_adapter: Optional[StreamingDataStoreAdapter] = None
 
         # Connect CommunicationChannel signals
         '''
@@ -104,7 +103,7 @@ class RecordingController(ImConWidgetController):
                                    write_zarr: bool = True, 
                                    write_tiff: bool = False) -> bool:
         """
-        Start a streaming recording session using StreamingDataStoreAdapter.
+        Start a streaming recording session (see RecordingService.start_streaming).
         
         This is the modern approach for continuous recordings with OME-Zarr support.
         Uses automatic frame capture via signal callback for continuous recording.
@@ -119,66 +118,19 @@ class RecordingController(ImConWidgetController):
         Returns:
             True if session started successfully
         """
-        if self._streaming_adapter is not None and self._streaming_adapter._is_open:
-            self.__logger.warning("Streaming session already active")
-            return False
-        
         try:
-            metadata_hub = getattr(self._master, 'metadataHub', None)
-            
-            self._streaming_adapter = StreamingDataStoreAdapter(
-                base_path=folder,
-                detectors_manager=self._master.detectorsManager,
-                metadata_hub=metadata_hub,
-                write_zarr=write_zarr,
-                write_tiff=write_tiff,
-                n_time_points=n_time_points,
-            )
-            
-            self._streaming_adapter.open(detector_names)
-            
-            # Configure recording service for automatic frame capture
-            self.recording_service.set_streaming_adapter(self._streaming_adapter)
-            self.recording_service._streaming_start_time = time.time()
-            self.recording_service._streaming_detector_names = detector_names or []
-            self.recording_service._connect_frame_callback()
-            
-            self.__logger.info(f"Streaming recording started with auto-capture: {folder}")
-            return True
+            return self.recording_service.start_streaming(
+                folder, self._master.detectorsManager, detector_names=detector_names,
+                write_zarr=write_zarr, write_tiff=write_tiff, n_time_points=n_time_points,
+                metadata_hub=getattr(self._master, 'metadataHub', None))
         except Exception as e:
-            self.__logger.error(f"Failed to start streaming recording: {e}")
-            self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
-            self._streaming_adapter = None
+            self.__logger.error(f"Failed to start streaming recording: {e}\n"
+                                f"{traceback.format_exc()}")
             return False
-    
-    
+
     def stop_streaming_recording(self) -> Dict[str, Any]:
-        """
-        Stop the active streaming recording session.
-        
-        Returns:
-            Statistics about the recording session
-        """
-        if self._streaming_adapter is None:
-            return {}
-        
-        try:
-            # Disconnect frame callback first
-            self.recording_service._disconnect_frame_callback()
-            self.recording_service._streaming_adapter = None
-            self.recording_service._streaming_start_time = None
-            self.recording_service._streaming_detector_names = []
-            
-            stats = self._streaming_adapter.get_statistics()
-            self._streaming_adapter.close()
-            self.__logger.info(f"Streaming recording stopped. Stats: {stats}")
-        except Exception as e:
-            self.__logger.error(f"Error stopping streaming recording: {e}")
-            stats = {}
-        finally:
-            self._streaming_adapter = None
-        
-        return stats
+        """Stop the active streaming recording session; returns its statistics."""
+        return self.recording_service.stop_streaming()
 
     def _buildSnapPreview(self, detectorNames, maxSize: int = 1024) -> Optional[dict]:
         """Encode the just-captured frame as a small 8-bit PNG data URL.
@@ -381,32 +333,6 @@ class RecordingController(ImConWidgetController):
             response.update(preview)
         return response
 
-    def _getDetectorExposureSeconds(self, detector) -> float:
-        """Best-effort read of the detector exposure time, returned in seconds.
-
-        Exposure parameters are stored in milliseconds in ImSwitch. Returns 0.0
-        when the exposure cannot be determined (naming differs between drivers).
-        """
-        try:
-            params = detector.parameters
-        except Exception:
-            return 0.0
-        for key in ("exposure", "exposureTime", "ExposureTime", "exposure_time"):
-            try:
-                param = params.get(key) if hasattr(params, "get") else params[key]
-            except Exception:
-                param = None
-            if param is None:
-                continue
-            value = getattr(param, "value", param)
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                continue
-            if value > 0:
-                return value / 1000.0
-        return 0.0
-
     def _armDetectorsForSnap(self, detectorNames,
                              cancelEvent: Optional[threading.Event] = None) -> list:
         """Ensure the given detectors are acquiring so a fresh frame can be
@@ -511,7 +437,7 @@ class RecordingController(ImConWidgetController):
         usually inside the driver's own grab call; cancelSnap() therefore also
         stops the detector, which makes that call return early.
         """
-        exposureSeconds = self._getDetectorExposureSeconds(detector)
+        exposureSeconds = getDetectorExposureSeconds(detector)
         # Allow a full exposure for every frame we wait for, plus a safety margin.
         timeout = max(2.0, (exposureSeconds + 0.2) * (framesToWait + 1) + extraTimeout)
         startTime = time.time()
@@ -606,7 +532,7 @@ class RecordingController(ImConWidgetController):
             except Exception:
                 continue
             longestExposureSeconds = max(
-                longestExposureSeconds, self._getDetectorExposureSeconds(detector)
+                longestExposureSeconds, getDetectorExposureSeconds(detector)
             )
         return longestExposureSeconds * 1000.0 + 1500.0
 
@@ -747,7 +673,7 @@ class RecordingController(ImConWidgetController):
                         "error": "No such snap job"}
             return self._snapJobPublicState(job)
 
-    @APIExport()
+    @APIExport(runInThreadpool=True)
     def cancelSnap(self, jobId: Optional[str] = None) -> dict:
         """Abort a running snap and stop the exposure.
 
@@ -801,23 +727,28 @@ class RecordingController(ImConWidgetController):
         Take a snap and return numpy arrays.
         
         This method delegates to RecordingService.snap_numpy() for
-        memory-only snap operations.
+        memory-only snap operations. As in snap(), detectors whose stream is
+        stopped are armed for one fresh exposure and released again.
         """
         self.updateRecAttrs(isSnapping=True)
         detectorNames = self.getDetectorNamesToCapture()
-        
+
         # Collect metadata attributes (same as snap())
         attrs = {
             detectorName: self._get_detector_attrs(detectorName)
             for detectorName in detectorNames
         }
-        
-        # TODO: We have to check if the camera is actually running - if not, start the camera loop 
-        
-        return self.recording_service.snap_numpy(
-            detector_names=detectorNames,
-            attrs=attrs
-        )
+
+        # Without a running stream getLatestFrame() has nothing (or only a stale
+        # frame) to return, and the detector would be missing from the result.
+        armedDetectors = self._armDetectorsForSnap(detectorNames)
+        try:
+            return self.recording_service.snap_numpy(
+                detector_names=detectorNames,
+                attrs=attrs
+            )
+        finally:
+            self._disarmDetectorsAfterSnap(armedDetectors)
 
     def _start_frame_recording(self, save_format: SaveFormat):
         """Start recording for a specific number of frames."""
@@ -879,7 +810,7 @@ class RecordingController(ImConWidgetController):
         """Stop any active recording."""
         if self.recording_service.is_video_recording:
             self.recording_service.stop_video_recording()
-        if self._streaming_adapter is not None:
+        if self.recording_service.is_streaming:
             self.stop_streaming_recording()
         self._commChannel.sigRecordingEnded.emit()
 
@@ -933,7 +864,6 @@ class RecordingController(ImConWidgetController):
             )
         elif detectorMode == -3:  # A specific detector
             pass 
-            #return self._widget.getSelectedSpecificDetectors()
 
     def getFileName(self, description: str = "", detector_names: list = None):
         """
@@ -1042,7 +972,7 @@ class RecordingController(ImConWidgetController):
             self.setSharedAttr(_recModeAttr, self.recMode.name)
 
 
-    @APIExport(runOnUIThread=False)
+    @APIExport(runOnUIThread=False, runInThreadpool=True)
     def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: int = SaveFormat.TIFF,
                         returnPreview: bool = False, previewMaxSize: int = 1024) -> dict:
         """Take a snap and save it to a file at the given fileName.
@@ -1067,7 +997,7 @@ class RecordingController(ImConWidgetController):
         return self.snap(name=fileName, mSaveFormat=saveFormat,
                          returnPreview=returnPreview, previewMaxSize=previewMaxSize)
 
-    @APIExport(runOnUIThread=False)
+    @APIExport(runOnUIThread=False, runInThreadpool=True)
     def snapImage(self, output: bool = False, toList: bool = True) -> Union[None, list]:
         """
         Take a snap and save it to a .tiff file at the set file path.
@@ -1085,7 +1015,7 @@ class RecordingController(ImConWidgetController):
         else:
             self.snap()
 
-    @APIExport(runOnUIThread=False)
+    @APIExport(runOnUIThread=False, runInThreadpool=True)
     def snapNumpyToFastAPI(
         self, detectorName: str = None, resizeFactor: float = 1
     ) -> Response:
@@ -1102,7 +1032,10 @@ class RecordingController(ImConWidgetController):
             detectorNames = self.getDetectorNamesToCapture()
             images = {
                 detectorName: images[detectorName] for detectorName in detectorNames
+                if images.get(detectorName) is not None
             }
+            if not images:
+                raise HTTPException(status_code=503, detail="No frame from any detector")
 
             # Determine the maximum height and total width for the stitched image
             max_height = max(img.shape[0] for img in images.values())
@@ -1143,7 +1076,13 @@ class RecordingController(ImConWidgetController):
             if detectorName is None:
                 detectorName = self.getDetectorNamesToCapture()[0]
             # get the image from the specified detector
-            image = images[detectorName]
+            image = images.get(detectorName)
+            if image is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"No frame from detector '{detectorName}' "
+                           f"(not an acquisition detector, or it delivered no frame)",
+                )
 
             # eventually resize image to save bandwidth
             if resizeFactor < 1:
@@ -1216,7 +1155,7 @@ class RecordingController(ImConWidgetController):
         self.endedRecording = False
         return self._build_recording_response()
 
-    @APIExport(runOnUIThread=True)
+    @APIExport(runOnUIThread=True, runInThreadpool=True)
     def stopRecording(self) -> Dict[str, Any]:
         """Stops recording using RecordingService."""
         recording_result = self._build_recording_response()

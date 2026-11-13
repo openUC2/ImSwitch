@@ -81,9 +81,6 @@ context.update(exposure_ms=200.0, gain=3.0)
 
 # Export for storage
 context_dict = context.to_dict()
-
-# Generate OME Pixels object
-pixels = context.to_ome_pixels(size_z=10, size_t=5, size_c=1)
 ```
 
 ### 3. Metadata Schema
@@ -226,20 +223,10 @@ attrs = {
 
 ### OME Writers
 
-Future OME writers can consume hub metadata:
-
-```python
-# Get OME object for all detectors
-ome = hub.to_ome(detector_names=['Camera1', 'Camera2'])
-
-# Or per-detector
-context = hub.get_detector('Camera1')
-pixels = context.to_ome_pixels(size_z=10, size_t=100, size_c=1)
-
-# With frame events
-events = hub.peek_frame_events('Camera1', n=100)
-planes = [event.to_ome_plane(the_t=i) for i, event in enumerate(events)]
-```
+The OME writers do not build OME objects from the hub. OME-XML comes from one builder,
+`imswitch.imcontrol.model.aufgaben.storage.ome_xml` (ome-types), used by every OME-TIFF ImSwitch
+writes; OME-Zarr metadata is checked against ome-zarr-models when it is written. The hub supplies
+values (pixel size, positions, exposure) that the writers pass in.
 
 ## Usage Examples
 
@@ -376,21 +363,6 @@ See inline documentation in:
 - `imswitch/imcontrol/model/metadata/metadata_hub.py`
 - `imswitch/imcontrol/model/metadata/schema.py`
 - `imswitch/imcontrol/model/metadata/sharedattrs_bridge.py`
-
-## OME-types Integration
-
-The hub provides direct OME-types object generation:
-
-```python
-# Generate complete OME metadata
-ome = hub.to_ome(detector_names=['Camera1'])
-
-# Export to OME-XML
-xml_string = ome.to_xml()
-
-# Use with OME-Zarr/OME-TIFF writers
-# (Integration in progress)
-```
 
 ---
 

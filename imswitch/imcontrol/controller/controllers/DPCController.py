@@ -1,3 +1,5 @@
+import io
+import json
 import os
 import queue
 
@@ -6,30 +8,37 @@ import time
 import threading
 from datetime import datetime
 from dataclasses import dataclass, asdict
-from typing import Optional, Dict, Any, Tuple
-import tifffile as tif
+from typing import Dict, Any, Optional
 import cv2
+import tifffile
+from scipy.ndimage import uniform_filter
 
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.framework import Signal
+from imswitch.imcontrol.model import configfiletools
+from imswitch.imcontrol.model.aufgaben.storage import save_image
+from imswitch.imcontrol.model.managers.LEDMatrixs import ledgeometry
 
 
-pi    = np.pi
-naxis = np.newaxis
 F     = lambda x: np.fft.fft2(x)
 IF    = lambda x: np.fft.ifft2(x)
+
+# Order of the images in every DPC stack: LEDs whose illumination NA points along +x / -x /
+# +y / -y of the camera image (x = column, y = row), see ledgeometry.dpc_patterns.
+DPC_PATTERNS = ("+x", "-x", "+y", "-y")
 
 # =========================
 # Dataclasses (API-stable)
 # =========================
 @dataclass
 class DPCParams:
-    """DPC processing parameters"""
-    pixelsize: float = 0.2  # micrometers
+    """DPC / FPM parameters"""
+    pixelsize: float = 0.2  # micrometers, sample plane
     wavelength: float = 0.53  # micrometers
-    na: float = 0.3
-    nai: float = 0.3
+    na: float = 0.3  # objective NA
+    nai: float = 0.3  # outer illumination NA of the DPC half patterns
+    nai_inner: float = 0.0  # inner illumination NA (annular DPC)
     n: float = 1.0
     led_intensity_r: int = 0  # Red channel intensity
     led_intensity_g: int = 255  # Green channel intensity (default)
@@ -40,6 +49,8 @@ class DPCParams:
     save_directory: str = ""
     reg_u: float = 1e-1  # Tikhonov regularization for absorption
     reg_p: float = 5e-3  # Tikhonov regularization for phase
+    fpm_na_max: float = 1.0  # FPM scans every LED up to this illumination NA
+    display: str = "phase"  # streamed image: phase, absorption, dpc_x, dpc_y or a raw image +x/-x/+y/-y
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -53,19 +64,24 @@ class DPCState:
     processed_count: int = 0
     last_process_time: float = 0.0
     processing_fps: float = 0.0
+    task: str = ""  # "fpm" / "calibration" / "snap" while an LED scan runs
+    task_progress: float = 0.0
+    task_message: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 class DPCController(ImConWidgetController):
     """
-    DPC Controller with backend processing and API control.
-    
-    Features:
-    - Uses LEDMatrixController setHalves() for pattern generation
-    - MJPEG streaming of reconstructed images
-    - API control via RESTful endpoints
-    - Optional data saving
+    DPC and FPM with any LED source (geodesic dome, ring board, LED matrix).
+
+    LEDs are chosen by their illumination NA in camera frame (LEDMatrixManager.illuminationNA,
+    ledgeometry.py), so the DPC half patterns, the DPC transfer functions and the FPM k-vectors
+    all come from the real LED positions. start_led_calibration measures the LED -> camera
+    rotation / mirror from a defocused sample.
+
+    - live DPC (MJPEG stream of the phase), snap_dpc saves one raw stack + reconstruction
+    - start_fpm_acquisition: one image per LED, TIFF stack + JSON with the k-vectors
     """
 
     sigImageReceived = Signal()
@@ -79,57 +95,39 @@ class DPCController(ImConWidgetController):
         # switch to detect if a recording is in progress
         self.isRecording = False
 
-        # load config file
-        if self._setupInfo.dpc is None: # TODO: We should have a default config example here
-            self._logger.error('DPC is not configured in your setup file.')
-
-        # Pattern names for DPC (using LEDMatrix setHalves)
-        self.allDPCPatternNames = ("top", "bottom", "right", "left")
-
-        # dpc parameters from setup
-
-        wavelength = self._master.dpcManager.wavelength if hasattr(self._master.dpcManager, 'wavelength') else 0.53
-        pixelsize = self._master.dpcManager.pixelsize if hasattr(self._master.dpcManager, 'pixelsize') else 0.2
-        na = self._master.dpcManager.NA if hasattr(self._master.dpcManager, 'NA') else 0.3
-        nai = self._master.dpcManager.NAi if hasattr(self._master.dpcManager, 'NAi') else 0.3
-        n = self._master.dpcManager.n if hasattr(self._master.dpcManager, 'n') else 1.0
-
-        # Initialize parameters
+        # dpc parameters from setup (optional)
+        dpcManager = self._master.dpcManager
         self._params = DPCParams(
-            pixelsize=pixelsize,
-            wavelength=wavelength,
-            na=na,
-            nai=nai,
-            n=n,
-            led_intensity_r=0,
-            led_intensity_g=255,
-            led_intensity_b=0,
-            wait_time=0.2,
-            frame_sync=2,
-            save_images=False,
+            pixelsize=getattr(dpcManager, 'pixelsize', 0.2),
+            wavelength=getattr(dpcManager, 'wavelength', 0.53),
+            na=getattr(dpcManager, 'NA', 0.3),
+            nai=getattr(dpcManager, 'NAi', 0.3),
+            n=getattr(dpcManager, 'n', 1.0),
             save_directory=str(os.path.join(dirtools.UserFileDirs.Data, "DPC"))
         )
         self._state = DPCState()
         self._processing_lock = threading.Lock()
+        self._stop_processing_event = threading.Event()
+        self._stop_task_event = threading.Event()
 
         # Get LEDMatrix manager
         allLEDMatrixNames = self._master.LEDMatrixsManager.getAllDeviceNames()
         if len(allLEDMatrixNames) == 0:
             self._logger.error("No LEDMatrix found in setup")
             return
-        self.ledMatrix = self._master.LEDMatrixsManager[allLEDMatrixNames[0]]
+        self.ledMatrixName = allLEDMatrixNames[0]
+        self.ledMatrix = self._master.LEDMatrixsManager[self.ledMatrixName]
 
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
         self.detector.startAcquisition()
-        self.frameShape = self.detector.shape
 
         # initialize DPC processor
-        self.DPCProcessor = DPCProcessor(self, self.frameShape, self._params)
+        self.DPCProcessor = DPCProcessor(self._params)
 
-        # MJPEG streaming
-        self._mjpeg_queue = queue.Queue(maxsize=2)
+        # MJPEG streaming: latest phase JPEG, sent to every connected client
+        self._mjpeg_frame = None
         self._jpeg_quality = 85
 
         # Processing queue - decouples capture from reconstruction
@@ -138,41 +136,45 @@ class DPCController(ImConWidgetController):
         # Processing threads
         self._capture_thread = None
         self._reconstruction_thread = None
-        self._stop_processing_event = threading.Event()
+        self._task_thread = None
 
         # Performance monitoring
         self._perf_process_times = []
         self._perf_window_size = 30
 
-        # connect the reconstructed image to the displayer
+        # last LED scan analysis (start_led_calibration)
+        self._brightfield = {}  # LED id -> bool
+        self._last_calibration = None
+        self._views = {}  # images of the last DPC result by display name
+
         self._logger.info("DPCController initialized successfully")
 
     def __del__(self):
         """Cleanup on deletion"""
         self.stop_dpc_processing()
-
-        if self._capture_thread is not None:
-            self._stop_processing_event.set()
-            self._capture_thread.join(timeout=2.0)
-
-        if self._reconstruction_thread is not None:
-            self._stop_processing_event.set()
-            self._reconstruction_thread.join(timeout=2.0)
+        self._stop_task_event.set()
 
     # =========================
-    # Core Processing Methods
+    # LED patterns
     # =========================
-    def _set_led_pattern(self, pattern_name: str):
-        """Set LED pattern using LEDMatrix manager setHalves method"""
-        intensity = (self._params.led_intensity_r,
-                    self._params.led_intensity_g,
-                    self._params.led_intensity_b)
-        self.ledMatrix.setHalves(
-            intensity=intensity,
-            region=pattern_name,
-            getReturn=True,
-            timeout=.2
-        )
+    def _rgb(self):
+        return (self._params.led_intensity_r, self._params.led_intensity_g,
+                self._params.led_intensity_b)
+
+    def _dpc_patterns(self) -> Dict[str, np.ndarray]:
+        """{pattern: LED ids} of the four DPC half patterns at the current params / calibration."""
+        masks = ledgeometry.dpc_patterns(self.ledMatrix.illuminationNA(),
+                                         self._params.nai, self._params.nai_inner)
+        return {name: np.flatnonzero(masks[name]) for name in DPC_PATTERNS}
+
+    def _check_dpc_patterns(self, patterns) -> str:
+        """Error message if a half pattern has no LED inside the objective NA, else ''."""
+        r = np.hypot(*self.ledMatrix.illuminationNA().T)
+        empty = [n for n, ids in patterns.items() if not np.any(r[ids] <= self._params.na)]
+        if empty:
+            return (f"DPC patterns {empty} have no LED inside the objective NA {self._params.na}: "
+                    f"raise 'nai' / 'na' or check the LED calibration (offset_mm)")
+        return ""
 
     # ────────────────────────────────────────────────────────────────────────
     # Deterministic frame-acquisition helpers (same pattern as ExperimentController)
@@ -196,9 +198,8 @@ class DPCController(ImConWidgetController):
     def _beginTriggeredAcquisition(self) -> bool:
         """Switch the detector to software-trigger mode for deterministic post-LED-change grabs.
 
-        DPC captures one frame per LED half-illumination pattern.  In software-
-        trigger mode every exposure is initiated *after* setHalves() returns, so
-        no pre-pattern photons reach the sensor.  Falls back transparently to the
+        In software-trigger mode every exposure is initiated *after* the LED pattern is set,
+        so no pre-pattern photons reach the sensor. Falls back transparently to the
         freerun frame-number polling path when the detector does not support it.
 
         Returns True when the camera was successfully switched.
@@ -283,45 +284,45 @@ class DPCController(ImConWidgetController):
             return mFrame, currentFrameNumber
         return mFrame
 
-    def _get_fresh_frame(self, timeout: float = 1.0, nFrameSync: int = 2) -> Optional[np.ndarray]:
-        """Get a fresh frame — delegates to grabCameraFrame() for deterministic acquisition.
-
-        The ``timeout`` parameter is kept for API compatibility but is no longer
-        used directly; grabCameraFrame() derives the timeout from the current
-        exposure time automatically.
-        """
-        return self.grabCameraFrame(frameSync=nFrameSync)
+    def _grab(self) -> np.ndarray:
+        """Fresh 2-D frame in the camera's dtype (colour cameras: channel mean)."""
+        frame = self.grabCameraFrame(frameSync=self._params.frame_sync)
+        if frame is None:
+            raise RuntimeError("no camera frame")
+        frame = np.asarray(frame)
+        return frame.mean(axis=2).astype(frame.dtype) if frame.ndim == 3 else frame
 
     def _capture_dpc_stack(self):
-        """Capture 4 images with different LED patterns"""
+        """(4, H, W) stack in DPC_PATTERNS order and the LED ids lit for each image,
+        None when stopped."""
+        patterns = self._dpc_patterns()
         stack = []
-
-        # Turn off all LEDs first
-        #self.ledMatrix.setAll(state=(0,0,0), getReturn=False)
-
-        for pattern_name in self.allDPCPatternNames:
-            if self._stop_processing_event.is_set():
+        for pattern_name in DPC_PATTERNS:
+            if self._stop_processing_event.is_set() or self._stop_task_event.is_set():
                 return None
-
-            # Set pattern
-            self._set_led_pattern(pattern_name)
-            self._logger.debug(f"Showing pattern: {pattern_name}")
-            time.sleep(self._params.wait_time / 2)
-
-            # Capture fresh frame with sync
-            frame = self._get_fresh_frame(timeout=1.0, nFrameSync=self._params.frame_sync)
-            if frame is None:
-                self._logger.warning(f"Failed to get frame for pattern {pattern_name}")
-                continue
-
-            if len(frame.shape) > 2:
-                frame = np.mean(frame, axis=2)
-            stack.append(frame)
-
+            self.ledMatrix.setLEDs(patterns[pattern_name], self._rgb())
+            time.sleep(self._params.wait_time)
+            stack.append(self._grab())
             self._state.frame_count += 1
+        return np.array(stack), patterns
 
+    def _process(self, stack, patterns, save):
+        """Reconstruct, emit and stream one DPC stack."""
+        na = self.ledMatrix.illuminationNA()
+        source_na = [na[patterns[name]] for name in DPC_PATTERNS]
+        dpc_x, dpc_y, qdpc = self.DPCProcessor.process_stack(stack, source_na, save=save)
+        self.sigDPCProcessorImageComputed.emit(dpc_x, "DPC x")
+        self.sigDPCProcessorImageComputed.emit(dpc_y, "DPC y")
+        self._views = {**dict(zip(DPC_PATTERNS, stack)), "dpc_x": dpc_x, "dpc_y": dpc_y,
+                       "absorption": qdpc.real, "phase": qdpc.imag}
+        self._show()
+        self._state.processed_count += 1
 
-        return np.array(stack) if len(stack) == 4 else None
+    def _show(self):
+        """Stream the selected image (params.display) of the last DPC result."""
+        views = self._views
+        if self._params.display in views:
+            self._add_to_mjpeg_stream(views[self._params.display])
 
     def _capture_loop(self):
         """Capture loop - captures DPC stacks and adds to processing queue"""
@@ -329,23 +330,19 @@ class DPCController(ImConWidgetController):
 
         while not self._stop_processing_event.is_set():
             try:
-                # Capture 4-image stack
-                stack = self._capture_dpc_stack()
-
-                if stack is None:
-                    if self._stop_processing_event.is_set():
-                        break
+                captured = self._capture_dpc_stack()
+                if captured is None:
                     continue
 
                 # Add to processing queue (non-blocking, drop old if full)
                 try:
-                    self._processing_queue.put_nowait(stack)
+                    self._processing_queue.put_nowait(captured)
                 except queue.Full:
                     # Drop oldest stack and add new one
                     try:
                         self._processing_queue.get_nowait()
-                        self._processing_queue.put_nowait(stack)
-                    except:
+                        self._processing_queue.put_nowait(captured)
+                    except queue.Empty:
                         pass
 
             except Exception as e:
@@ -353,7 +350,7 @@ class DPCController(ImConWidgetController):
                 time.sleep(0.1)
 
         # Turn off LEDs when done
-        self.ledMatrix.setAll(state=(0,0,0), getReturn=False)
+        self.ledMatrix.setLEDs([], getReturn=False)
         self._logger.info("DPC capture loop stopped")
 
     def _reconstruction_loop(self):
@@ -364,44 +361,23 @@ class DPCController(ImConWidgetController):
             try:
                 # Get stack from queue with timeout
                 try:
-                    stack = self._processing_queue.get(timeout=0.5)
+                    stack, patterns = self._processing_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
 
                 t_start = time.time()
-
-                # Process stack
-                result = self.DPCProcessor.process_stack(stack, save=self._params.save_images)
-
-                if result is not None:
-                    dpc_lr, dpc_tb, qdpc = result
-
-                    # Emit signals for display
-                    self.sigDPCProcessorImageComputed.emit(dpc_lr, "DPC left/right")
-                    self.sigDPCProcessorImageComputed.emit(dpc_tb, "DPC top/bottom")
-
-                    # Add to MJPEG stream (use phase or combined image)
-                    if qdpc is not None and len(qdpc) > 0:
-                        phase_image = np.angle(qdpc[0])
-                        self._add_to_mjpeg_stream(phase_image)
-                    else:
-                        # Fallback to gradient image
-                        self._add_to_mjpeg_stream(dpc_lr)
-
-                    self._state.processed_count += 1
+                self._process(stack, patterns, save=self._params.save_images)
 
                 # Update performance metrics
-                t_end = time.time()
-                process_time = t_end - t_start
+                process_time = time.time() - t_start
                 self._state.last_process_time = process_time
 
                 self._perf_process_times.append(process_time)
                 if len(self._perf_process_times) > self._perf_window_size:
                     self._perf_process_times.pop(0)
 
-                if len(self._perf_process_times) > 0:
-                    avg_time = np.mean(self._perf_process_times)
-                    self._state.processing_fps = 1.0 / avg_time if avg_time > 0 else 0.0
+                avg_time = np.mean(self._perf_process_times)
+                self._state.processing_fps = 1.0 / avg_time if avg_time > 0 else 0.0
 
                 self._emit_state_changed()
 
@@ -412,49 +388,141 @@ class DPCController(ImConWidgetController):
         self._logger.info("DPC reconstruction loop stopped")
 
     def _add_to_mjpeg_stream(self, image):
-        """Add processed image to MJPEG stream"""
+        """Add processed image to MJPEG stream (1-99 percentile contrast)"""
         try:
-            # Normalize to 0-255 with NaN handling
-            img_normalized = image.copy()
-
-            # Replace NaN and inf with 0
-            img_normalized = np.nan_to_num(img_normalized, nan=0.0, posinf=0.0, neginf=0.0)
-
-            img_min, img_max = img_normalized.min(), img_normalized.max()
-            if img_max > img_min and np.isfinite(img_max) and np.isfinite(img_min):
-                img_normalized = (img_normalized - img_min) / (img_max - img_min) * 255.0
-            else:
-                # If min == max or invalid, just clip to 0-255
-                img_normalized = np.clip(img_normalized, 0, 255)
-
-            # Safely convert to uint8
-            img_normalized = np.clip(img_normalized, 0, 255).astype(np.uint8)
-
-            # Convert to BGR for JPEG encoding
-            if len(img_normalized.shape) == 2:
-                img_bgr = cv2.cvtColor(img_normalized, cv2.COLOR_GRAY2BGR)
-            else:
-                img_bgr = cv2.cvtColor(img_normalized, cv2.COLOR_RGB2BGR)
-
-            # Encode as JPEG
+            img = np.nan_to_num(np.asarray(image, np.float64))
+            lo, hi = np.percentile(img, (1, 99))
+            img_u8 = np.uint8(np.clip((img - lo) / (hi - lo + 1e-12), 0, 1) * 255)
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality]
-            _, buffer = cv2.imencode('.jpg', img_bgr, encode_param)
-
-            # Add to queue (non-blocking, drop old frames)
-            try:
-                self._mjpeg_queue.put_nowait(buffer.tobytes())
-            except queue.Full:
-                try:
-                    self._mjpeg_queue.get_nowait()
-                    self._mjpeg_queue.put_nowait(buffer.tobytes())
-                except:
-                    pass
+            _, buffer = cv2.imencode('.jpg', img_u8, encode_param)
+            self._mjpeg_frame = buffer.tobytes()
         except Exception as e:
             self._logger.error(f"Error adding image to MJPEG stream: {e}")
 
     def _emit_state_changed(self):
         """Emit state changed signal"""
         self.sigDPCStateChanged.emit(self._state.to_dict())
+
+    # =========================
+    # LED scans (FPM, calibration, DPC snap) in a background thread
+    # =========================
+    def _start_task(self, name: str, body) -> Dict[str, Any]:
+        with self._processing_lock:
+            if self._state.is_processing or self._state.task:
+                return {"status": "busy", "state": self._state.to_dict()}
+            self._state.task, self._state.task_progress, self._state.task_message = name, 0.0, "starting"
+            self._stop_task_event.clear()
+            self._task_thread = threading.Thread(target=self._run_task, args=(name, body),
+                                                 daemon=True, name=f"DPC-{name}")
+            self._task_thread.start()
+        return {"status": "started", "state": self._state.to_dict()}
+
+    def _run_task(self, name, body):
+        try:
+            self._ensure_camera_running()
+            self._beginTriggeredAcquisition()
+            self._state.task_message = body()
+        except Exception as e:
+            self._logger.error(f"{name} failed: {e}", exc_info=True)
+            self._state.task_message = f"{name} failed: {e}"
+        finally:
+            self._endTriggeredAcquisition()
+            self.ledMatrix.setLEDs([], getReturn=False)
+            self._state.task = ""
+            self._emit_state_changed()
+
+    def _scan_leds(self, ids):
+        """One frame per LED, lit one at a time: (N, H, W), or None when stopped."""
+        frames = []
+        for k, i in enumerate(ids):
+            if self._stop_task_event.is_set():
+                return None
+            self.ledMatrix.setLEDs([i], self._rgb())
+            time.sleep(self._params.wait_time)
+            frames.append(self._grab())
+            self._state.task_progress = (k + 1) / len(ids)
+            self._state.task_message = f"LED {i} ({k + 1}/{len(ids)})"
+            self._emit_state_changed()
+        return np.array(frames)
+
+    def _fpm(self) -> str:
+        na = self.ledMatrix.illuminationNA()
+        ids = np.flatnonzero(np.hypot(*na.T) <= self._params.fpm_na_max)
+        stack = self._scan_leds(ids)
+        if stack is None:
+            return "FPM aborted"
+        p = self._params
+        os.makedirs(p.save_directory, exist_ok=True)
+        stem = os.path.join(p.save_directory, datetime.now().strftime("%Y_%m_%d-%H-%M-%S") + "_FPM")
+        tifffile.imwrite(stem + ".tif", stack)
+        cal = self.ledMatrix.calibration
+        na_led = ledgeometry.illumination_na(self.ledMatrix.positions, {"offset_mm": cal["offset_mm"]})
+        meta = {
+            "images": "one per LED, in led_ids order",
+            "led_ids": ids.tolist(),
+            "na_camera": na[ids].tolist(),
+            "na_camera_axes": "x = image column, y = image row",
+            "na_led_frame": na_led[ids].tolist(),
+            "led_positions_mm": self.ledMatrix.positions[ids].tolist(),
+            "led_layout": self.ledMatrix.ledLayout,
+            "led_calibration": cal,
+            "led_rgb": list(self._rgb()),
+            "wavelength_um": p.wavelength,
+            "pixelsize_um": p.pixelsize,
+            "na_objective": p.na,
+            "n": p.n,
+            "exposure_ms": self._getExposureTimeSec() * 1e3,
+        }
+        with open(stem + ".json", "w") as f:
+            json.dump(meta, f, indent=1)
+        return f"saved {len(ids)} images to {stem}.tif"
+
+    def _calibrate(self) -> str:
+        """Scan all LEDs on a defocused sample: brightfield / darkfield map (objective NA
+        estimate) and the image shift per brightfield LED -> rotation / mirror (applied)."""
+        ids = np.arange(len(self.ledMatrix.positions))
+        stack = self._scan_leds(ids)
+        if stack is None:
+            return "calibration aborted"
+        cal = self.ledMatrix.calibration
+        na_led = ledgeometry.illumination_na(self.ledMatrix.positions, {"offset_mm": cal["offset_mm"]})
+        r = np.hypot(*na_led.T)
+        bf = ledgeometry.split_brightfield(ledgeometry.brightfield_scores(stack))
+        self._brightfield = dict(zip(ids.tolist(), bf.tolist()))
+        use = bf if bf.sum() >= 3 else np.ones_like(bf)
+        ref = stack[use][np.argmin(r[use])]
+        shifts = np.array([ledgeometry.image_shift(ref, img) for img in stack[use]])
+        fit = ledgeometry.fit_orientation(na_led[use], shifts)
+        spread = float(np.sqrt(np.mean(np.sum((shifts - shifts.mean(axis=0)) ** 2, axis=1))))
+        na_obj = float((r[bf].max() + r[~bf].min()) / 2) if bf.any() and (~bf).any() else None
+        ok = spread > 1.0 and fit["rms_px"] < 0.5 * spread
+        self._last_calibration = {**fit, "shift_spread_px": spread, "n_brightfield": int(bf.sum()),
+                                  "na_objective_estimate": na_obj, "applied": ok,
+                                  "shifts_px": {int(i): s.tolist() for i, s in zip(ids[use], shifts)}}
+        msg = f"{int(bf.sum())} brightfield LEDs" + (f", objective NA ~{na_obj:.2f}" if na_obj else "")
+        if not ok:
+            return msg + f"; shifts too small / inconsistent ({spread:.1f} px, rms {fit['rms_px']:.1f} px): defocus more"
+        self._save_calibration({**cal, "rotation_deg": round(fit["rotation_deg"], 1), "flip": fit["flip"]})
+        return msg + f"; applied rotation {fit['rotation_deg']:.1f} deg, flip {fit['flip']}"
+
+    def _snap(self) -> str:
+        msg = self._check_dpc_patterns(self._dpc_patterns())
+        if msg:
+            return msg
+        captured = self._capture_dpc_stack()
+        if captured is None:
+            return "DPC snap aborted"
+        self._process(*captured, save=True)
+        return f"DPC saved to {self._params.save_directory}"
+
+    def _save_calibration(self, cal):
+        """Apply the LED -> camera calibration and store it in the setup file."""
+        self.ledMatrix.calibration = cal
+        self._setupInfo.LEDMatrixs[self.ledMatrixName].managerProperties["ledCalibration"] = cal
+        try:
+            configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
+        except Exception as e:
+            self._logger.warning(f"LED calibration applied but not saved to the setup file: {e}")
 
     # =========================
     # API: Parameter Control
@@ -468,10 +536,10 @@ class DPCController(ImConWidgetController):
     def set_dpc_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Set DPC parameters
-        
+
         Args:
             params: Dictionary of parameters to update
-            
+
         Returns:
             Updated parameter dictionary
         """
@@ -480,10 +548,8 @@ class DPCController(ImConWidgetController):
                 if hasattr(self._params, key):
                     setattr(self._params, key, value)
                     self._logger.debug(f"Updated DPC parameter: {key} = {value}")
-
-            # Update processor if it exists
-            if hasattr(self, 'DPCProcessor'):
-                self.DPCProcessor.update_parameters(self._params)
+            self.DPCProcessor.update_parameters(self._params)
+        self._show()  # a new display choice shows the last result at once
 
         return self.get_dpc_params()
 
@@ -491,6 +557,32 @@ class DPCController(ImConWidgetController):
     def get_dpc_state(self) -> Dict[str, Any]:
         """Get current DPC processing state"""
         return self._state.to_dict()
+
+    @APIExport(runOnUIThread=True)
+    def get_led_layout(self) -> Dict[str, Any]:
+        """Every LED with its illumination NA in camera frame (x = column, y = row), the DPC
+        patterns it belongs to and its brightfield flag from the last calibration scan."""
+        na = self.ledMatrix.illuminationNA()
+        member = {}
+        for name, ids in self._dpc_patterns().items():
+            for i in ids:
+                member.setdefault(int(i), []).append(name)
+        leds = [{"id": i, "na_x": float(n[0]), "na_y": float(n[1]), "dpc": member.get(i, []),
+                 "brightfield": self._brightfield.get(i)} for i, n in enumerate(na)]
+        return {"layout": self.ledMatrix.ledLayout, "calibration": self.ledMatrix.calibration,
+                "last_calibration": self._last_calibration, "na_objective": self._params.na,
+                "leds": leds}
+
+    @APIExport(runOnUIThread=True)
+    def set_led_calibration(self, rotation_deg: float = 0.0, flip: bool = False,
+                            offset_x_mm: float = 0.0, offset_y_mm: float = 0.0,
+                            offset_z_mm: float = 0.0) -> Dict[str, Any]:
+        """Set the LED -> camera calibration by hand (rotation of the LED NA vectors in the
+        image, mirror in x first; offset = position of the LED structure relative to its
+        layout coordinates, for a planar board offset_z_mm is its height above the sample)."""
+        self._save_calibration({"rotation_deg": float(rotation_deg), "flip": bool(flip),
+                                "offset_mm": [float(offset_x_mm), float(offset_y_mm), float(offset_z_mm)]})
+        return self.get_led_layout()
 
     # =========================
     # API: Processing Control
@@ -501,12 +593,19 @@ class DPCController(ImConWidgetController):
         with self._processing_lock:
             if self._state.is_processing:
                 return {"status": "already_running", "state": self._state.to_dict()}
+            if self._state.task:
+                return {"status": "busy", "state": self._state.to_dict()}
+            error = self._check_dpc_patterns(self._dpc_patterns())
+            if error:
+                self._state.task_message = error
+                return {"status": "error", "message": error, "state": self._state.to_dict()}
 
             # Reset state
             self._state.is_processing = True
             self._state.is_paused = False
             self._state.frame_count = 0
             self._state.processed_count = 0
+            self._state.task_message = ""
             self._perf_process_times = []
 
             # Ensure camera is running
@@ -574,47 +673,106 @@ class DPCController(ImConWidgetController):
 
             return {"status": "stopped", "state": self._state.to_dict()}
 
-    @APIExport(runOnUIThread=False)
-    def mjpeg_stream_dpc(self, startStream: bool = True, jpeg_quality: int = 85) -> Any:
-        """
-        MJPEG stream of processed DPC images
-        
-        Args:
-            startStream: Whether to start streaming
-            jpeg_quality: JPEG quality (1-100)
-            
-        Yields:
-            MJPEG frames
-        """
-        if not startStream:
-            return
+    @APIExport(runOnUIThread=True)
+    def snap_dpc(self) -> Dict[str, Any]:
+        """One DPC stack: reconstruct, stream and save raw images + phase / absorption."""
+        return self._start_task("snap", self._snap)
 
-        self._jpeg_quality = jpeg_quality
+    @APIExport(runOnUIThread=True)
+    def start_fpm_acquisition(self) -> Dict[str, Any]:
+        """One image per LED up to fpm_na_max, saved as TIFF stack + JSON with the LED
+        k-vectors (illumination NA in camera frame) for FPM reconstruction."""
+        return self._start_task("fpm", self._fpm)
+
+    @APIExport(runOnUIThread=True)
+    def start_led_calibration(self) -> Dict[str, Any]:
+        """Scan all LEDs on a sample defocused by ~50-100 um: finds the brightfield LEDs and
+        the LED -> camera rotation / mirror (applied when the image shifts are consistent).
+        The defocus direction is unknown, so a 180 deg rotation flips the phase sign."""
+        return self._start_task("calibration", self._calibrate)
+
+    @APIExport(runOnUIThread=True)
+    def stop_task(self) -> Dict[str, Any]:
+        """Abort a running FPM / calibration / snap scan."""
+        self._stop_task_event.set()
+        return {"status": "stopping", "state": self._state.to_dict()}
+
+    @APIExport(runOnUIThread=False)
+    def get_dpc_wotf(self, wavelength: Optional[float] = None, na: Optional[float] = None,
+                     nai: Optional[float] = None, nai_inner: Optional[float] = None):
+        """PNG of the weak-object transfer functions of the four DPC patterns, absorption (Hu,
+        real) and phase (Hp, imaginary), in NA units, camera frame (x right, y down). Unset
+        arguments use the current parameters; the LEDs follow the current calibration."""
+        from fastapi.responses import Response
+        from matplotlib.figure import Figure
+        from matplotlib.patches import Circle
+        p = self._params
+        wavelength = p.wavelength if wavelength is None else wavelength
+        na = p.na if na is None else na
+        nai = p.nai if nai is None else nai
+        nai_inner = p.nai_inner if nai_inner is None else nai_inner
+        fig = Figure(figsize=(10, 5.4), layout="constrained")
+        try:
+            led_na = self.ledMatrix.illuminationNA()
+            masks = ledgeometry.dpc_patterns(led_na, nai, nai_inner)
+            lim = 2.2 * na  # frequency grid out to 2.2 NA / wavelength, the WOTFs end at 2 NA
+            solver = DPCSolver((256, 256), wavelength, na, wavelength / (2 * lim),
+                               [led_na[masks[name]] for name in DPC_PATTERNS])
+            axes = fig.subplots(2, 4)
+            for row, (wotf, label) in enumerate([(solver.Hu.real, "absorption, real"),
+                                                 (solver.Hp.imag, "phase, imaginary")]):
+                vmax = np.abs(wotf).max()
+                for ax, h, name in zip(axes[row], wotf, DPC_PATTERNS):
+                    im = ax.imshow(np.fft.fftshift(h), cmap="RdBu_r", vmin=-vmax, vmax=vmax,
+                                   extent=(-lim, lim, lim, -lim))
+                    ax.add_patch(Circle((0, 0), na, fill=False, ls="--", lw=0.7))
+                    ax.set_title(f"{name}: {label}", fontsize=9)
+                    ax.tick_params(labelsize=7)
+                axes[row][0].set_ylabel("NA y", fontsize=8)
+                fig.colorbar(im, ax=axes[row], shrink=0.85)
+            for ax in axes[1]:
+                ax.set_xlabel("NA x", fontsize=8)
+            fig.suptitle(f"WOTF  \u03bb {wavelength:g} \u00b5m, objective NA {na:g} (dashed), "
+                         f"illumination NA {nai_inner:g}-{nai:g}", fontsize=10)
+        except Exception as e:  # e.g. a pattern without LED inside the objective NA
+            fig.clear()
+            fig.text(0.5, 0.5, f"No WOTF: {e}.\nRaise the illumination NA or check the LED calibration.",
+                     ha="center", va="center", wrap=True)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=80)
+        return Response(buf.getvalue(), media_type="image/png")
+
+    @APIExport(runOnUIThread=False)
+    def mjpeg_stream_dpc(self, startStream: bool = True, jpeg_quality: int = 85):
+        """MJPEG stream (multipart/x-mixed-replace) of the reconstructed phase. A new client
+        gets the latest image at once, then every new one."""
+        from fastapi.responses import StreamingResponse
+        if not startStream:
+            return {"status": "success", "message": "stream stopped"}
+        self._jpeg_quality = max(1, min(100, jpeg_quality))
 
         def generate():
-            self._logger.info("Starting MJPEG stream for DPC")
-            try:
-                while True:
-                    try:
-                        frame = self._mjpeg_queue.get(timeout=1.0)
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-                    except queue.Empty:
-                        continue
-                    except Exception as e:
-                        self._logger.error(f"Error in MJPEG stream: {e}")
-                        break
-            except GeneratorExit:
-                self._logger.info("MJPEG stream closed")
+            sent = None
+            while True:
+                frame = self._mjpeg_frame
+                if frame is sent:
+                    time.sleep(0.1)
+                    yield b""  # back to the server loop, so a closed connection ends here
+                    continue
+                sent = frame
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n"
+                       + f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii") + frame + b"\r\n")
 
-        return generate()
+        return StreamingResponse(generate(), media_type="multipart/x-mixed-replace;boundary=frame",
+                                 headers={"Cache-Control": "no-cache, no-store, must-revalidate",
+                                          "X-Accel-Buffering": "no"})
 
     def _ensure_camera_running(self):
         """Ensure camera is running"""
         try:
             if not self.detector.isAcquiring():
                 self.detector.startAcquisition()
-        except:
+        except Exception:
             pass
 
 
@@ -623,136 +781,82 @@ class DPCController(ImConWidgetController):
 #####################################'''
 
 class DPCProcessor(object):
+    """Reconstructs DPC stacks; the solver is rebuilt when the frame shape, the optics or the
+    lit LEDs change."""
 
-    def __init__(self, parent, shape, params: DPCParams):
-        '''
-        setup parameters
-        '''
-        # initialize logger
+    def __init__(self, params: DPCParams):
         self._logger = initLogger(self, tryInheritParent=False)
-        self.parent = parent
-
-        # Default values from params
-        self.shape = shape
-        self.pixelsize = params.pixelsize
-        self.NA = params.na
-        self.NAi = params.nai
-        self.n = params.n
-        self.wavelength = params.wavelength
-        self.rotation = [0, 180, 90, 270]  # top, bottom, right, left
-        self.save_directory = params.save_directory
-
-        # Create DPC solver
-        self.dpc_solver_obj = DPCSolver(
-            shape=self.shape,
-            wavelength=self.wavelength,
-            na=self.NA,
-            NAi=self.NAi,
-            pixelsize=self.pixelsize,
-            rotation=self.rotation
-        )
-
-        # Set Tikhonov regularization
-        self.dpc_solver_obj.setTikhonovRegularization(
-            reg_u=params.reg_u,
-            reg_p=params.reg_p
-        )
-
-        # Ensure save directory exists
-        if self.save_directory:
-            os.makedirs(self.save_directory, exist_ok=True)
+        self.update_parameters(params)
 
     def update_parameters(self, params: DPCParams):
         """Update processor parameters from DPCParams"""
-        self.pixelsize = params.pixelsize
-        self.NA = params.na
-        self.NAi = params.nai
-        self.n = params.n
-        self.wavelength = params.wavelength
-        self.save_directory = params.save_directory
+        self.params = params
+        self._solver = None
+        self._key = None
 
-        # Recreate solver with new parameters
-        self.dpc_solver_obj = DPCSolver(
-            shape=self.shape,
-            wavelength=self.wavelength,
-            na=self.NA,
-            NAi=self.NAi,
-            pixelsize=self.pixelsize,
-            rotation=self.rotation
-        )
-
-        self.dpc_solver_obj.setTikhonovRegularization(
-            reg_u=params.reg_u,
-            reg_p=params.reg_p
-        )
-
-    def process_stack(self, stack: np.ndarray, save: bool = False) -> Optional[Tuple]:
+    def process_stack(self, stack: np.ndarray, source_na, save: bool = False):
         """
-        Process 4-image DPC stack
-        
+        Process a 4-image DPC stack (DPC_PATTERNS order).
+
         Args:
-            stack: (4, H, W) array of DPC images
-            save: Whether to save results
-            
+            stack: (4, H, W) DPC images
+            source_na: per image, (M, 2) illumination NA of the lit LEDs (camera frame)
+            save: Whether to save raw images and results
+
         Returns:
-            Tuple of (dpc_lr, dpc_tb, qdpc_result) or None on error
+            (dpc_x, dpc_y, qdpc) with qdpc = absorption + 1j * phase
         """
-        try:
-            if stack.shape[0] != 4:
-                self._logger.error(f"Expected 4 images, got {stack.shape[0]}")
-                return None
+        p = self.params
+        key = (stack.shape[1:], p.wavelength, p.na, p.pixelsize, p.reg_u, p.reg_p,
+               tuple(np.asarray(s).tobytes() for s in source_na))
+        if key != self._key:
+            self._solver = DPCSolver(stack.shape[1:], p.wavelength, p.na, p.pixelsize, source_na)
+            self._solver.setTikhonovRegularization(reg_u=p.reg_u, reg_p=p.reg_p)
+            self._key = key
 
-            # Compute qDPC reconstruction
-            qdpc_result = self.dpc_solver_obj.solve(dpc_imgs=stack.astype('float64'))
+        imgs = stack.astype(np.float64)
+        qdpc = self._solver.solve(dpc_imgs=imgs)[0]
+        dpc_x = (imgs[0] - imgs[1]) / (imgs[0] + imgs[1] + 1e-10)
+        dpc_y = (imgs[2] - imgs[3]) / (imgs[2] + imgs[3] + 1e-10)
 
-            # Compute gradient images (normalized difference)
-            dpc_result_1 = (stack[0] - stack[1]) / (stack[0] + stack[1] + 1e-10)  # top - bottom
-            dpc_result_2 = (stack[2] - stack[3]) / (stack[2] + stack[3] + 1e-10)  # right - left
+        if save and p.save_directory:
+            os.makedirs(p.save_directory, exist_ok=True)
+            stem = os.path.join(p.save_directory, datetime.now().strftime("%Y_%m_%d-%H-%M-%S"))
+            save_image(stem + "_DPC_raw.tif", stack, axes="CYX", channel_names=DPC_PATTERNS,
+                       pixel_size_um=p.pixelsize, name="DPC raw (+x, -x, +y, -y)")
+            save_image(stem + "_DPC_phase.tif", qdpc.imag.astype(np.float32),
+                       pixel_size_um=p.pixelsize, name="qDPC phase")
+            save_image(stem + "_DPC_absorption.tif", qdpc.real.astype(np.float32),
+                       pixel_size_um=p.pixelsize, name="qDPC absorption")
+            self._logger.info(f"Saved DPC results to {stem}_DPC_*.tif")
 
-            # Save images if requested
-            if save and self.save_directory:
-                date = datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
-
-                # Save qDPC reconstruction
-                filename_recon = os.path.join(self.save_directory, f"{date}_DPC_Reconstruction.tif")
-                tif.imwrite(filename_recon, qdpc_result)
-
-                # Save gradient images
-                filename_lr = os.path.join(self.save_directory, f"{date}_DPC_LeftRight.tif")
-                filename_tb = os.path.join(self.save_directory, f"{date}_DPC_TopBottom.tif")
-                tif.imwrite(filename_lr, dpc_result_2.astype(np.float32))
-                tif.imwrite(filename_tb, dpc_result_1.astype(np.float32))
-
-                self._logger.info(f"Saved DPC results to {self.save_directory}")
-
-            return dpc_result_2, dpc_result_1, qdpc_result
-
-        except Exception as e:
-            self._logger.error(f"Error during DPC reconstruction: {e}", exc_info=True)
-            return None
+        return dpc_x, dpc_y, qdpc
 
 # (C) Wallerlab 2019
 # https://github.com/Waller-Lab/DPC/blob/master/python_code/dpc_algorithm.py
-import numpy as np
-import numpy as np
-from scipy.ndimage import uniform_filter
+# Source = the lit LEDs (one delta per LED) instead of ideal half discs. WOTFGen's correlation
+# puts a source point at -NA / wavelength for an illumination exp(+i 2 pi NA / wavelength r),
+# hence the minus sign below (checked against a forward simulation in test_led_geometry.py).
 
 class DPCSolver:
-    def __init__(self, shape, wavelength, na, NAi, pixelsize, rotation):
-        self.shape = (shape[1], shape[0]) # the image shape comes in X,Y but here we assume height, width => so transpose
-        if self.shape[0] == 0:
-            self.shape = (512, 512)
-
+    def __init__(self, shape, wavelength, na, pixelsize, source_na):
+        """shape: (H, W); source_na: per DPC image, (M, 2) illumination NA of its LEDs
+        in camera frame (x = column, y = row)."""
+        self.shape = tuple(shape)
         self.wavelength = wavelength
-        self.na         = na
-        self.NAi      = NAi
+        self.na = na
         self.pixel_size = pixelsize
-        self.dpc_num    = len(rotation)
-        self.rotation   = rotation
-        self.fxlin      = np.fft.ifftshift(self.genGrid(self.shape[-1], 1.0/self.shape[-1]/self.pixel_size))
-        self.fylin      = np.fft.ifftshift(self.genGrid(self.shape[-2], 1.0/self.shape[-2]/self.pixel_size))
-        self.pupil      = self.pupilGen(self.fxlin, self.fylin, self.wavelength, self.na)
-        self.sourceGen()
+        self.dpc_num = len(source_na)
+        fy = np.fft.fftfreq(self.shape[0], d=pixelsize)[:, None]
+        fx = np.fft.fftfreq(self.shape[1], d=pixelsize)[None, :]
+        self.pupil = (fx ** 2 + fy ** 2 <= (na / wavelength) ** 2).astype(np.complex128)
+        self.source = np.zeros((self.dpc_num,) + self.shape)
+        for src, nas in zip(self.source, source_na):
+            nas = -np.reshape(nas, (-1, 2))
+            nas = nas[np.hypot(nas[:, 0], nas[:, 1]) <= na]  # darkfield LEDs add nothing, but alias on a coarse grid
+            ix = np.round(nas[:, 0] / wavelength * self.shape[1] * pixelsize).astype(int) % self.shape[1]
+            iy = np.round(nas[:, 1] / wavelength * self.shape[0] * pixelsize).astype(int) % self.shape[0]
+            np.add.at(src, (iy, ix), 1.0)
         self.WOTFGen()
 
     def setTikhonovRegularization(self, reg_u = 1e-6, reg_p = 1e-6):
@@ -766,29 +870,14 @@ class DPCSolver:
             img          /= meanIntensity        # normalize intensity with DC term
             img          -= 1.0                  # subtract the DC term
 
-    def sourceGen(self):
-        self.source = []
-        pupil = self.pupilGen(self.fxlin, self.fylin, self.wavelength, self.na, NAi=self.NAi)
-        for rotIdx in range(self.dpc_num):
-            self.source.append(np.zeros((self.shape)))
-            rotdegree = self.rotation[rotIdx]
-            if rotdegree < 180:
-                self.source[-1][self.fylin[:, naxis]*np.cos(np.deg2rad(rotdegree))+1e-15>=
-                                self.fxlin[naxis, :]*np.sin(np.deg2rad(rotdegree))] = 1.0
-                self.source[-1] *= pupil
-            else:
-                self.source[-1][self.fylin[:, naxis]*np.cos(np.deg2rad(rotdegree))+1e-15<
-                                self.fxlin[naxis, :]*np.sin(np.deg2rad(rotdegree))] = -1.0
-                self.source[-1] *= pupil
-                self.source[-1] += pupil
-        self.source = np.asarray(self.source)
-
     def WOTFGen(self):
         self.Hu = []
         self.Hp = []
         for rotIdx in range(self.source.shape[0]):
             FSP_cFP  = F(self.source[rotIdx]*self.pupil)*F(self.pupil).conj()
-            I0       = (self.source[rotIdx]*self.pupil*self.pupil.conj()).sum()
+            I0       = (self.source[rotIdx]*self.pupil*self.pupil.conj()).sum().real
+            if I0 == 0:
+                raise ValueError(f"DPC image {rotIdx} has no LED inside the objective NA")
             self.Hu.append(2.0*IF(FSP_cFP.real)/I0)
             self.Hp.append(2.0j*IF(1j*FSP_cFP.imag)/I0)
         self.Hu = np.asarray(self.Hu)
@@ -822,17 +911,6 @@ class DPCSolver:
             dpc_result.append(absorption+1.0j*phase)
 
         return np.asarray(dpc_result)
-
-
-    def pupilGen(self, fxlin, fylin, wavelength, na, NAi=0.0):
-        pupil = np.array(fxlin[naxis, :]**2+fylin[:, naxis]**2 <= (na/wavelength)**2)
-        if NAi != 0.0:
-            pupil[fxlin[naxis, :]**2+fylin[:, naxis]**2 < (NAi/wavelength)**2] = 0.0
-        return pupil
-
-    def genGrid(self, size, dx):
-        xlin = np.arange(size, dtype='complex128')
-        return (xlin-size//2)*dx
 
 
 

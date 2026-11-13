@@ -1,0 +1,38 @@
+{
+  "detectors": {
+    "Andor": {
+      "analogChannel": null,
+      "digitalLine": null,
+      "managerName": "AndorServerManager",
+      "managerProperties": {
+        "host": "localhost",
+        "port": 8010,
+        "connectTimeout": 30,
+        "longExposureMs": 2000,
+        "binning": 1,
+        "supportedBinnings": [1, 2, 4, 8],
+        "andor": {
+          "exposure_ms": 100,
+          "output_amplifier": "em",
+          "em_gain": 2,
+          "em_gain_mode": "real",
+          "hs_speed_mhz": 10,
+          "preamp_gain": null,
+          "baseline_clamp": true,
+          "shutter_mode": "auto",
+          "trigger_mode": "internal",
+          "live_max_fps": 5
+        },
+        "cooler": {
+          "on": true,
+          "setpoint_c": -60,
+          "fan_mode": "full"
+        }
+      },
+      "forAcquisition": true,
+      "forFocusLock": false
+    }
+  },
+  "rs232devices": {},
+  "availableWidgets": ["Settings", "View", "Recording", "Image", "LiveView"]
+}

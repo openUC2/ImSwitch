@@ -142,6 +142,9 @@ class SharedAttributes(SignalInterface):
     def __iter__(self):
         yield from self._data.items()
 
+    def __contains__(self, key):
+        return key in self._data
+
     @classmethod
     def fromHDF5File(cls, file, dataset):
         """ Loads the attributes from a HDF5 file into a SharedAttributes

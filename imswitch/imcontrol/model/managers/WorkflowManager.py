@@ -19,11 +19,37 @@ class WorkflowManager(object):
 class WorkflowContext:
     def __init__(self):
         self.data: Dict[str, Any] = {}
-        self.should_stop = False
-        self.should_pause = False
+        # Stop/pause are backed by events so a paused or sleeping workflow
+        # thread wakes up immediately when it is resumed or stopped.
+        self._stop_event = threading.Event()
+        self._resume_event = threading.Event()
+        self._resume_event.set()
         self.current_step_index = 0
         self.event_listeners: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
         self.objects: Dict[str, Any] = {}  # Storage for arbitrary objects
+
+    @property
+    def should_stop(self) -> bool:
+        return self._stop_event.is_set()
+
+    @should_stop.setter
+    def should_stop(self, value: bool):
+        if value:
+            self._stop_event.set()
+            self._resume_event.set()  # a paused thread must wake up to exit
+        else:
+            self._stop_event.clear()
+
+    @property
+    def should_pause(self) -> bool:
+        return not self._resume_event.is_set()
+
+    @should_pause.setter
+    def should_pause(self, value: bool):
+        if value:
+            self._resume_event.clear()
+        else:
+            self._resume_event.set()
 
     def set_metadata(self, key: str, value: Any):
         self.data[key] = value
@@ -69,6 +95,22 @@ class WorkflowContext:
 
     def request_pause(self):
         self.should_pause = True
+
+    def request_resume(self):
+        self.should_pause = False
+
+    def wait_if_paused(self):
+        """Block while paused. Returns False if a stop was requested."""
+        while not self._resume_event.wait(timeout=0.5):
+            if self.should_stop:
+                return False
+        return not self.should_stop
+
+    def sleep(self, seconds: float) -> bool:
+        """Sleep that returns early on stop. Returns False if interrupted."""
+        if seconds is None or seconds <= 0:
+            return not self.should_stop
+        return not self._stop_event.wait(timeout=seconds)
 
 class WorkflowStep:
     def __init__(
@@ -191,15 +233,17 @@ class Workflow:
         try:
             context = context or WorkflowContext()
             context.total_step_number = len(self.steps)
+            step = None
             for i in range(context.current_step_index, len(self.steps)):
-                if context.should_stop:
+                # Pause checkpoint between steps; returns False on stop.
+                if not context.wait_if_paused():
                     break
                 step = self.steps[i]
                 step.run(context)
                 context.current_step_index = i + 1
             return context
         except Exception as e:
-            print("Error in step: "+step.name)
+            print("Error in step: " + (step.name if step is not None else "<none>"))
             print(e)
             # print the full stack trace
             traceback.print_exc()

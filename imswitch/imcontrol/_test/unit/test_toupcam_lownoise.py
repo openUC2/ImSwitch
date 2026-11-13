@@ -91,6 +91,11 @@ def _make_camera(hcam=None, *, bits=16, maxBitDepth=14, heat=True,
     cam._hasCGHDR = cghdr
     cam._hasBlacklevel = blacklevel
     cam._hasTEC = False
+    cam._hasSoftwareTrigger = False
+    cam._sdkRunning = False
+    cam._parked = False
+    cam._triggerMode = 0
+    cam._acceptFramesAfter = 0.0
     cam._hasGetTemperature = False
     cam._hasFan = False
     cam.targetTemperature = -10.0
@@ -109,6 +114,8 @@ def _make_camera(hcam=None, *, bits=16, maxBitDepth=14, heat=True,
     cam._lastTecReassert = 0.0
     cam._tecStallSince = None
     cam._tecStallLogged = False
+    cam._tecLock = threading.RLock()
+    cam._lastTecReadAt = 0.0
     cam.exposure_time = 100
     cam.model = "CameraToupcam"
     cam._heatMax = 5
@@ -384,7 +391,12 @@ class TestTemperatureMonitor:
         cam.is_streaming = True
 
         cam._startTemperatureMonitor()
-        time.sleep(0.3)
+        # poll instead of a fixed sleep: a loaded macOS runner wrote only 2 rows in 0.3 s
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if self._log_file(tmp_path).exists() and len(self._rows(tmp_path)[1]) >= 3:
+                break
+            time.sleep(0.02)
         cam._stopTemperatureMonitor()
         assert cam._tempMonitorThread is None
 
@@ -551,9 +563,9 @@ class TestOverTemperatureCutoff:
 class TestTecKeepAlive:
     """The TEC target is re-written periodically, and a stall is reported.
 
-    A single write is not reliable on this family: the camera reports the
-    target back correctly, with the cooler on, and can still sit at ambient
-    for hours (observed in a real temperature log at target -40 degC).
+    A write that is lost anyway (see TestTecWriteSpacing) still reads back as
+    on and at target, so the sensor can sit at ambient for hours (observed in
+    a real temperature log at target -40 degC).
     """
 
     def test_target_below_the_model_range_is_clamped(self):
@@ -655,3 +667,113 @@ class TestTecKeepAlive:
         assert cam._tecStallLogged is False
         assert not [w for w in cam._CameraToupcam__logger.warnings
                     if "not regulating" in w]
+
+
+class TecTimingHcam(FakeTecHcam):
+    """FakeTecHcam that times every TEC write against the last temperature /
+    TEC-voltage read: the real camera drops a write that follows a read within
+    a few ms, and leaves the cooler off."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.options.setdefault(toupcam.TOUPCAM_OPTION_TEC_VOLTAGE, 58)
+        self.options.setdefault(toupcam.TOUPCAM_OPTION_TEC_VOLTAGE_MAX, 61)
+        self.lastReadAt = None
+        self.writeGaps = []
+
+    def _wrote(self):
+        if self.lastReadAt is not None:
+            self.writeGaps.append(time.monotonic() - self.lastReadAt)
+
+    def get_Temperature(self):
+        self.lastReadAt = time.monotonic()
+        return super().get_Temperature()
+
+    def get_Option(self, option):
+        if option in (toupcam.TOUPCAM_OPTION_TEC_VOLTAGE,
+                      toupcam.TOUPCAM_OPTION_TEC_VOLTAGE_MAX):
+            self.lastReadAt = time.monotonic()
+        return super().get_Option(option)
+
+    def put_Option(self, option, value):
+        if option == toupcam.TOUPCAM_OPTION_TEC:
+            self._wrote()
+        super().put_Option(option, value)
+
+    def put_Temperature(self, nTemperature):
+        self._wrote()
+        super().put_Temperature(nTemperature)
+
+
+class TestTecWriteSpacing:
+    """TEC writes keep TEC_WRITE_SETTLE_S away from the last TEC read.
+
+    On the real camera a TEC=1 within ~20 ms of a temperature read was lost
+    every time, which left the sensor at ambient with 0 V on the TEC.
+    """
+
+    SETTLE_S = 0.05
+
+    @pytest.fixture(autouse=True)
+    def _short_settle(self, monkeypatch):
+        from imswitch.imcontrol.model.interfaces import toupcamcamera
+        monkeypatch.setattr(toupcamcamera, "TEC_WRITE_SETTLE_S", self.SETTLE_S)
+
+    def test_set_temperature_waits_after_its_own_temperature_read(self):
+        hcam = TecTimingHcam()
+        cam = _make_cooled_camera(hcam)
+
+        cam.set_temperature(-30)
+
+        assert hcam.options[toupcam.TOUPCAM_OPTION_TEC] == 1
+        assert hcam.writeGaps, "set_temperature should read the sensor first"
+        assert min(hcam.writeGaps) >= self.SETTLE_S
+
+    def test_keep_alive_waits_after_the_monitor_read(self):
+        from imswitch.imcontrol.model.interfaces import toupcamcamera
+        hcam = TecTimingHcam()
+        cam = _make_cooled_camera(hcam)
+        cam.set_temperature(-30)
+        hcam.writeGaps.clear()
+
+        cam._lastTecReassert -= toupcamcamera.TEMPERATURE_REASSERT_INTERVAL_S + 1
+        cam._maintainTecTarget(cam.get_temperature())
+
+        assert len(hcam.writeGaps) == 2  # TEC=1 and the target
+        assert min(hcam.writeGaps) >= self.SETTLE_S
+
+    def test_over_temperature_cutoff_waits_too(self):
+        hcam = TecTimingHcam()
+        cam = _make_cooled_camera(hcam)
+        cam.set_temperature(-30)
+        hcam.writeGaps.clear()
+        hcam.sensorTemperature = int(_SHUTDOWN_C * 10) + 50
+
+        for _ in range(2):
+            cam._checkTemperatureSafety(cam.get_temperature())
+
+        assert hcam.options[toupcam.TOUPCAM_OPTION_TEC] == 0
+        assert hcam.writeGaps and min(hcam.writeGaps) >= self.SETTLE_S
+
+    def test_reads_from_another_thread_do_not_slip_in_between(self):
+        # The UI polls temperature and TEC voltage while the monitor writes.
+        hcam = TecTimingHcam()
+        cam = _make_cooled_camera(hcam)
+        stop = threading.Event()
+
+        def poll():
+            while not stop.is_set():
+                cam.get_temperature()
+                cam.get_tec_voltage()
+
+        poller = threading.Thread(target=poll, daemon=True)
+        poller.start()
+        try:
+            for target in (-30, -25, -20):
+                cam.set_temperature(target)
+        finally:
+            stop.set()
+            poller.join(timeout=2.0)
+
+        assert len(hcam.writeGaps) == 6
+        assert min(hcam.writeGaps) >= self.SETTLE_S

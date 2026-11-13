@@ -137,7 +137,11 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 )
 
             protocol_saved = False  # Ensure protocol is written only once per experiment
-            for snake_tile in snake_tiles:
+            for region_index, snake_tile in enumerate(snake_tiles):
+                # Multi-region runs need one output per region: with a shared
+                # name each region reopened the same zarr store in "w" mode.
+                experiment_params["region_suffix"] = (
+                    f"_r{region_index:03d}" if len(snake_tiles) > 1 else "")
                 # Calculate timeout based on scan parameters
                 scan_timeout = self._calculate_scan_timeout(snake_tile, illumination_intensities, experiment_params)
                 
@@ -516,7 +520,9 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         for iTime in range(n_times):
             # Set up OME-Zarr writer for this time point
             self.controller.mFilePath = os.path.join(
-                experiment_params["dirPath"], f"{experiment_params['mFileName']}_t{iTime:04d}_FastStageScan")
+                experiment_params["dirPath"],
+                f"{experiment_params['mFileName']}{experiment_params.get('region_suffix', '')}"
+                f"_t{iTime:04d}_FastStageScan")
             omezarr_store = OMEFileStorePaths(self.controller.mFilePath)
             data_path = dirtools.UserFileDirs.getValidatedDataPath()
             self.controller.setOmeZarrUrl(self.controller.mFilePath.split(data_path)[-1] + ".ome.zarr")
@@ -525,8 +531,18 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             self.controller._stop_writer_evt.clear()
             self.controller._writer_thread_ome = threading.Thread(
                 target=self.controller._writer_loop_ome,
-                args=(omezarr_store, total_frames, metadata_list, xstart, ystart, 
-                      xstep, ystep, nx, ny, 0, n_times, nz, nIlluminations),
+                # Keywords: the positional form shifted these into
+                # min_period/is_tiff/write_stitched_tiff/is_performance_mode
+                # and left nZ_planes = nIlluminations = 1, so every plane and
+                # channel was written to z=0, c=0. Each iTime has its own file,
+                # so a writer holds one timepoint.
+                args=(omezarr_store, total_frames, metadata_list, xstart, ystart,
+                      xstep, ystep, nx, ny),
+                kwargs=dict(min_period=0, is_performance_mode=True,
+                            is_tiff=getattr(self.controller, "_ome_write_tiff", False),
+                            write_stitched_tiff=getattr(self.controller, "_ome_write_stitched_tiff", True),
+                            nTimePoints=1, nZ_planes=nz,
+                            nIlluminations=nIlluminations),
                 daemon=True
             )
             self.controller._writer_thread_ome.start()

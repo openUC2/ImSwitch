@@ -1,99 +1,65 @@
-#!/usr/bin/env python3
 """The OME-Zarr pyramid must not need the whole canvas in RAM.
 
 Franzi's 2026-09-08 log: a 270336 x 172032 RGB slide scan finished, then the
 pyramid step asked numpy for 130 GiB three times ("Unable to allocate") and
-logged "generated successfully" anyway. Reading the canvas one row band at a
-time keeps the working set small however large the scan.
-Runs standalone: `.venv/bin/python <this file>`.
+logged "generated successfully" anyway. NgffImage (shared by ExperimentController
+and Aufgaben) reads the canvas one row band at a time, and a failure surfaces.
 """
-
-import os
-import sys
-import types
-
 import numpy as np
+import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
-
-from imswitch.imcontrol.model.io.ome_writers.ome_writer import OMEWriter  # noqa: E402
+from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage
 
 
-class _Canvas:
-    """A zarr-like array that refuses to be read in one piece.
+class _Spy:
+    """Wraps a zarr array; slicing more than ``max_rows`` rows raises MemoryError."""
 
-    Slicing more than `max_rows` rows raises MemoryError, exactly like numpy
-    did on the Pi when asked for the whole plane.
-    """
+    def __init__(self, array, max_rows):
+        self._array, self.max_rows, self.reads = array, max_rows, []
 
-    def __init__(self, data, max_rows):
-        self._data = data
-        self.shape = data.shape
-        self.max_rows = max_rows
-        self.reads = []
+    def __getattr__(self, name):
+        return getattr(self._array, name)
 
     def __getitem__(self, key):
         rows = key[3]
-        if isinstance(rows, slice):
-            n = len(range(*rows.indices(self.shape[3])))
-        else:
-            n = 1
+        n = len(range(*rows.indices(self._array.shape[3]))) if isinstance(rows, slice) else 1
         if n > self.max_rows:
             raise MemoryError(f"Unable to allocate {n} rows")
         self.reads.append(n)
-        return self._data[key]
+        return self._array[key]
 
     def __setitem__(self, key, value):
-        self._data[key] = value
+        self._array[key] = value
 
 
-def _writer(is_rgb):
-    stub = types.SimpleNamespace(
-        isRGB=is_rgb,
-        logger=types.SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None,
-                                     error=lambda *a, **k: None, debug=lambda *a, **k: None),
-        PYRAMID_BAND_ROWS=64,
-        _pyramid_failures=0,
-    )
-    stub._downsample_all_dimensions = types.MethodType(OMEWriter._downsample_all_dimensions, stub)
-    return stub
+def _image(tmp_path, h, w, dtype="uint16", channels=1):
+    image = NgffImage.create(tmp_path / "c.ome.zarr", ImageSpec(
+        shape=(1, channels, 1, h, w), dtype=dtype, chunks_yx=(32, w)))
+    data = np.random.default_rng(0).integers(0, 255, (channels, h, w)).astype(dtype)
+    for c in range(channels):
+        image.write(data[c], 0, c, 0)
+    return image, data
 
 
-def test_pyramid_is_built_from_bands_that_fit():
-    h, w = 300, 200
-    full = np.arange(h * w, dtype=np.uint16).reshape(1, 1, 1, h, w)
-    source = _Canvas(full.copy(), max_rows=64)          # whole-plane reads would fail
-    target = np.zeros((1, 1, 1, h // 2, w // 2), dtype=np.uint16)
-
-    _writer(False)._downsample_all_dimensions(source, target, level=1, n_t=1, n_c=1, n_z=1)
-
-    np.testing.assert_array_equal(target[0, 0, 0], full[0, 0, 0, ::2, ::2])
-    assert max(source.reads) <= 64                       # never more than a band
+def test_pyramid_is_built_from_bands_that_fit(tmp_path):
+    image, data = _image(tmp_path, 300, 200)
+    image.BAND_ROWS = 64
+    image.array = spy = _Spy(image.array, max_rows=64)      # whole-plane reads would fail
+    image.finalize(min_size=50, max_levels=3)
+    assert image.levels == 3 and max(spy.reads) <= 64       # never more than a band
+    np.testing.assert_array_equal(image.group["1"][0, 0, 0], data[0, ::2, ::2])
+    np.testing.assert_array_equal(image.group["2"][0, 0, 0], data[0, ::4, ::4])
 
 
-def test_rgb_pyramid_is_built_from_bands_that_fit():
-    h, w = 130, 90
-    full = np.random.default_rng(0).integers(0, 255, (1, 1, 1, h, w, 3), dtype=np.uint8)
-    source = _Canvas(full.copy(), max_rows=64)
-    target = np.zeros((1, 1, 1, (h + 3) // 4, (w + 3) // 4, 3), dtype=np.uint8)
-
-    _writer(True)._downsample_all_dimensions(source, target, level=2, n_t=1, n_c=1, n_z=1)
-
-    np.testing.assert_array_equal(target[0, 0, 0], full[0, 0, 0, ::4, ::4, :])
+def test_rgb_canvas_pyramid_keeps_three_channels(tmp_path):
+    image, data = _image(tmp_path, 130, 90, dtype="uint8", channels=3)
+    image.BAND_ROWS = 64
+    image.finalize(min_size=20, max_levels=3)
+    np.testing.assert_array_equal(image.group["2"][0, :, 0], data[:, ::4, ::4])
 
 
-def test_a_failed_level_is_counted_not_swallowed():
-    source = _Canvas(np.zeros((1, 1, 1, 100, 10), np.uint8), max_rows=5)   # every band too big
-    target = np.zeros((1, 1, 1, 50, 5), np.uint8)
-    w = _writer(False)
-    w.PYRAMID_BAND_ROWS = 64
-    w._downsample_all_dimensions(source, target, level=1, n_t=1, n_c=1, n_z=1)
-    assert w._pyramid_failures == 1
-
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all passed")
+def test_a_failed_level_is_not_swallowed(tmp_path):
+    image, _ = _image(tmp_path, 100, 10, dtype="uint8")
+    image.array = _Spy(image.array, max_rows=5)               # every band too big
+    with pytest.raises(MemoryError):
+        image.finalize(min_size=4)

@@ -170,47 +170,86 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
             self.__logger.error(f"Failed to start galvo scan: {e}")
             return {"error": str(e)}
 
+    @staticmethod
+    def _nack(result: Any) -> Optional[str]:
+        """
+        Why a UC2-REST reply is not an acknowledgement, or None when it is one.
+
+        post_json returns a dict, a list of dicts, a failure string ("No response
+        received", "communication interrupted ...", "Failed to Send") or a bare qid
+        when no reply was awaited. A CAN master answers {"return": 1|0, "qid"}, a
+        standalone board {"success": true|false}; either may carry an "error".
+        """
+        if isinstance(result, str):
+            return result
+        for reply in (result if isinstance(result, list) else [result]):
+            if not isinstance(reply, dict):
+                continue
+            if reply.get('error'):
+                return str(reply['error'])
+            if reply.get('return') == 0 or reply.get('success') is False:
+                return f"firmware rejected the command: {reply}"
+        return None
+
     def stop_scan(self, timeout: int = 1) -> Dict[str, Any]:
         """
-        Stop the galvo scanner.
-        
-        Args:
-            timeout: Request timeout in seconds
-            
+        Stop the galvo scanner, then park the beam if park_on_stop is set.
+
         Returns:
-            dict: Response from ESP32 hardware
+            dict: {"status": "stopped", ...} or {"error": ...}. Not "stopped" unless
+            the board acknowledged the stop; a failed park is reported as an error
+            even though the scan did stop.
         """
         if self._galvo is None:
             self.__logger.error("Galvo not initialized")
             return {"error": "Galvo not initialized"}
-        
+
         try:
             result = self._galvo.stop_galvo_scan(timeout=timeout)
-            self._is_scanning = False
-            self.__logger.info("Stopped galvo scan")
-            # Move the beam to the configured park position (e.g. center) so it
-            # doesn't sit at wherever the scan happened to stop.
-            if self._park_on_stop:
-                self.park(timeout=timeout)
-            return result or {"status": "stopped"}
         except Exception as e:
             self.__logger.error(f"Failed to stop galvo scan: {e}")
             return {"error": str(e)}
+        err = self._nack(result)
+        if err:
+            self.__logger.error(f"Stop galvo scan not acknowledged: {err}")
+            return {"error": f"Stop not acknowledged: {err}"}
+
+        self._is_scanning = False
+        self.__logger.info("Stopped galvo scan")
+        out = {"status": "stopped", "hardware_response": result}
+        # Don't leave the beam wherever the scan happened to stop.
+        if self._park_on_stop:
+            parked = self.park(timeout=timeout)
+            if "error" in parked:
+                return {"error": f"Scan stopped, but parking failed: {parked['error']}"}
+            out["park"] = parked
+        return out
 
     def park(self, timeout: int = 1) -> Dict[str, Any]:
-        """Move the beam to the configured park position (DAC counts)."""
+        """
+        Move the beam to the configured park position (DAC counts).
+
+        The firmware's goto stops any running scan first. Returns
+        {"status": "parked", ...} only once the board acknowledged it.
+        """
         if self._galvo is None:
             return {"error": "Galvo not initialized"}
         try:
             result = self._galvo.set_position(self._park_x, self._park_y,
                                               timeout=timeout)
-            self.__logger.info(
-                f"Parked galvo at ({self._park_x}, {self._park_y})")
-            return result or {"status": "parked",
-                              "x": self._park_x, "y": self._park_y}
         except Exception as e:
             self.__logger.error(f"Failed to park galvo: {e}")
             return {"error": str(e)}
+        err = self._nack(result)
+        if err:
+            self.__logger.error(
+                f"Park at ({self._park_x}, {self._park_y}) not acknowledged: {err}")
+            return {"error": f"Park not acknowledged: {err}"}
+        self._is_scanning = False
+        self._arb_scan_running = False
+        self.__logger.info(f"Parked galvo at ({self._park_x}, {self._park_y})")
+        return {"status": "parked", "x": self._park_x, "y": self._park_y,
+                "hardware_response": result}
 
     def get_status(self, timeout: int = 1) -> Dict[str, Any]:
         """
@@ -330,80 +369,98 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
     def set_arbitrary_points(self, points: List[Dict], laser_trigger: str = "AUTO",
                               timeout: int = 1) -> Dict[str, Any]:
         """
-        Send arbitrary points to the ESP32 scanner hardware.
-        
+        Send arbitrary points to the ESP32 and start looping through them.
+
         Args:
-            points: List of point dicts with 'x', 'y', 'dwell_us', optional 'laser_intensity'
-                    (already in DAC coordinates 0-4095). Max 265 points.
-            laser_trigger: Trigger mode
+            points: List of point dicts with 'x', 'y', 'dwell_us' (DAC coordinates
+                    0-4095, dwell in us). At most MAX_ARBITRARY_POINTS; the board
+                    has no per-point laser intensity, so 'laser_intensity' is ignored.
+            laser_trigger: AUTO, HIGH, LOW or CONTINUOUS
             timeout: Request timeout
-            
+
         Returns:
-            dict: Response from hardware
+            dict: {"status": "started", ...} once the board acknowledged, else {"error": ...}
         """
         if self._galvo is None:
             return {"error": "Galvo not initialized"}
-        
-        if len(points) > 265:
-            return {"error": "Maximum 265 points supported"}
+
+        if len(points) > self.MAX_ARBITRARY_POINTS:
+            return {"error": f"Maximum {self.MAX_ARBITRARY_POINTS} points supported, "
+                             f"got {len(points)}"}
         if len(points) == 0:
             return {"error": "At least 1 point required"}
-        
+
         try:
-            self._arbitrary_points = points
             result = self._galvo.set_arbitrary_points(
                 points=points, laser_trigger=laser_trigger, timeout=timeout
             )
-            self._arb_scan_running = True
-            self._arb_scan_paused = False
-            self.__logger.info(f"Started arbitrary point scan with {len(points)} points")
-            return result or {"status": "started", "num_points": len(points)}
         except Exception as e:
             self.__logger.error(f"Failed to set arbitrary points: {e}")
             return {"error": str(e)}
+        err = self._nack(result)
+        if err:
+            self.__logger.error(f"Arbitrary points not acknowledged: {err}")
+            return {"error": f"Points not acknowledged: {err}"}
 
-    def stop_arbitrary_scan(self, timeout: int = 1) -> Dict[str, Any]:
-        """Stop arbitrary point scanning."""
+        self._arbitrary_points = points
+        self._arb_laser_trigger = laser_trigger
+        self._arb_scan_running = True
+        self._arb_scan_paused = False
+        self.__logger.info(f"Started arbitrary point scan with {len(points)} points")
+        return {"status": "started", "num_points": len(points), "hardware_response": result}
+
+    def _halt_arbitrary_scan(self, timeout: int) -> Dict[str, Any]:
+        """Stop the scanner task. The firmware's stop works in arbitrary mode too."""
         if self._galvo is None:
             return {"error": "Galvo not initialized"}
-        
         try:
-            result = self._galvo.stop_arbitrary_points(timeout=timeout)
-            self._arb_scan_running = False
-            self._arb_scan_paused = False
-            self.__logger.info("Stopped arbitrary point scan")
-            return result or {"status": "stopped"}
+            result = self._galvo.stop_galvo_scan(timeout=timeout)
         except Exception as e:
             self.__logger.error(f"Failed to stop arbitrary scan: {e}")
             return {"error": str(e)}
+        err = self._nack(result)
+        if err:
+            self.__logger.error(f"Stop arbitrary scan not acknowledged: {err}")
+            return {"error": f"Stop not acknowledged: {err}"}
+        self._arb_scan_running = False
+        self._arb_scan_paused = False
+        return {"status": "stopped", "hardware_response": result}
+
+    def stop_arbitrary_scan(self, timeout: int = 1) -> Dict[str, Any]:
+        """Stop arbitrary point scanning, then park the beam if park_on_stop is set."""
+        out = self._halt_arbitrary_scan(timeout)
+        if "error" in out:
+            return out
+        self.__logger.info("Stopped arbitrary point scan")
+        if self._park_on_stop:
+            parked = self.park(timeout=timeout)
+            if "error" in parked:
+                return {"error": f"Scan stopped, but parking failed: {parked['error']}"}
+            out["park"] = parked
+        return out
 
     def pause_arbitrary_scan(self, timeout: int = 1) -> Dict[str, Any]:
-        """Pause arbitrary point scanning."""
-        if self._galvo is None:
-            return {"error": "Galvo not initialized"}
-        
-        try:
-            result = self._galvo.pause_arbitrary_points(timeout=timeout)
-            self._arb_scan_paused = True
-            self.__logger.info("Paused arbitrary point scan")
-            return result or {"status": "paused"}
-        except Exception as e:
-            self.__logger.error(f"Failed to pause arbitrary scan: {e}")
-            return {"error": str(e)}
+        """
+        Pause arbitrary point scanning. The firmware has no pause command, so this
+        stops the scanner (beam stays where it is, no park) and keeps the point list
+        for resume_arbitrary_scan.
+        """
+        out = self._halt_arbitrary_scan(timeout)
+        if "error" in out:
+            return out
+        self._arb_scan_paused = True
+        self.__logger.info("Paused arbitrary point scan")
+        return {"status": "paused", "hardware_response": out["hardware_response"]}
 
     def resume_arbitrary_scan(self, timeout: int = 1) -> Dict[str, Any]:
-        """Resume arbitrary point scanning from paused position."""
-        if self._galvo is None:
-            return {"error": "Galvo not initialized"}
-        
-        try:
-            result = self._galvo.resume_arbitrary_points(timeout=timeout)
-            self._arb_scan_paused = False
-            self.__logger.info("Resumed arbitrary point scan")
-            return result or {"status": "resumed"}
-        except Exception as e:
-            self.__logger.error(f"Failed to resume arbitrary scan: {e}")
-            return {"error": str(e)}
+        """Resume after a pause by sending the stored points again (restarts at point 0)."""
+        if not self._arb_scan_paused or not self._arbitrary_points:
+            return {"error": "No paused arbitrary scan to resume"}
+        out = self.set_arbitrary_points(self._arbitrary_points, self._arb_laser_trigger,
+                                        timeout=timeout)
+        if "error" in out:
+            return out
+        return {"status": "resumed", "hardware_response": out["hardware_response"]}
 
 
 # Copyright (C) 2020-2025 ImSwitch developers

@@ -183,8 +183,11 @@ class ExperimentNormalMode(ExperimentModeBase):
         # Compute writer offset for multi-timepoint experiments.
         # Each timepoint creates its own set of writers, so the flat
         # file_writers list is indexed as: t * num_tiles + tile_index.
-        is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-        writer_offset = t * len(snake_tiles) if not is_single_tiff_mode else 0
+        # This holds for single-position runs too: they still get one writer
+        # per region per timepoint (_setup_ome_writers), so the old
+        # "single TIFF mode" shortcut (index = t) sent every region's frames
+        # to the wrong writer whenever there was more than one region.
+        writer_offset = t * len(snake_tiles)
 
         # If keep_illumination_on, turn on all active illumination sources once
         # at the beginning instead of toggling per frame.
@@ -354,7 +357,11 @@ class ExperimentNormalMode(ExperimentModeBase):
                 write_individual_tiffs=self.controller._ome_write_individual_tiffs,
                 write_omero=write_omero,
                 min_period=0.1,
-                n_time_points=n_times, n_z_planes=len(z_positions),
+                # One writer per region per timepoint (the "_{t}_" in the file
+                # name), so each holds a single timepoint. Allocating n_times
+                # here filled one slot of n_times and multiplied the canvas size
+                # by n_times, which also tripped the large-scan policy.
+                n_time_points=1, n_z_planes=len(z_positions),
                 n_channels=n_channels, channel_names=channel_names,
             )
             file_writers.append(OMEWriter(
@@ -558,6 +565,12 @@ class ExperimentNormalMode(ExperimentModeBase):
                         "minZ": autofocus_min,
                         "maxZ": autofocus_max,
                         "stepSize": autofocus_step_size,
+                        # autofocus() prefers af_range/af_resolution over
+                        # minZ/maxZ/stepSize, and their defaults (±100 µm,
+                        # 10 µm) used to win here. Same translation as
+                        # ParameterValue.autofocus_kwargs().
+                        "af_range": abs(autofocus_max - autofocus_min) / 2.0 or 100.0,
+                        "af_resolution": autofocus_step_size or 10.0,
                         "illuminationChannel": autofocus_illumination_channel,
                         "max_attempts": autofocus_max_attempts,
                         "target_focus_setpoint": autofocus_target_focus_setpoint,
@@ -644,8 +657,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     exposure_time = exposures[illu_index] if illu_index < len(exposures) else exposures[0]
                     gain = gains[illu_index] if illu_index < len(gains) else gains[0]
 
-                    is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-                    writer_index = t if is_single_tiff_mode else (writer_offset + position_center_index)
+                    writer_index = writer_offset + position_center_index
 
                     if illu_kind == "default":
                         # ---- Conventional laser/LED channel: legacy behaviour ----
@@ -864,23 +876,18 @@ class ExperimentNormalMode(ExperimentModeBase):
 
 
 
-        # Finalize OME writer for this tile (skip in single TIFF mode since we only have one writer)
-        # Always finalize tile writers since each timepoint creates its own writers.
-        # Use writer_offset to address the correct writer in the flat list.
-        is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-        should_finalize_tile = not is_single_tiff_mode
-
-        if should_finalize_tile:
-            actual_writer_index = writer_offset + position_center_index
-            workflow_steps.append(WorkflowStep(
-                name=f"Finalize OME writer for tile {position_center_index} (timepoint {t})",
-                step_id=step_id,
-                main_func=self.controller.dummy_main_func,
-                main_params={},
-                post_funcs=[self.controller.finalize_tile_ome_writer],
-                post_params={"tile_index": actual_writer_index},
-            ))
-            step_id += 1
+        # Finalize this tile's writer; each timepoint has its own writers,
+        # addressed in the flat list via writer_offset.
+        actual_writer_index = writer_offset + position_center_index
+        workflow_steps.append(WorkflowStep(
+            name=f"Finalize OME writer for tile {position_center_index} (timepoint {t})",
+            step_id=step_id,
+            main_func=self.controller.dummy_main_func,
+            main_params={},
+            post_funcs=[self.controller.finalize_tile_ome_writer],
+            post_params={"tile_index": actual_writer_index},
+        ))
+        step_id += 1
 
         return step_id
 
@@ -974,8 +981,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                 ))
                 step_id += 1
 
-        # Add timing calculation for proper period control (for all timepoints except implicit last)
-        if n_times > 1:
+        # Wait for the next timepoint. Not after the last one: there is no next
+        # round, and waiting would hold the run open for one extra period.
+        if n_times > 1 and not is_last_timepoint:
             workflow_steps.append(WorkflowStep(
                 name=f"Calculate and wait for proper time period (timepoint {t})",
                 step_id=step_id,

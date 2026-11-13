@@ -24,6 +24,8 @@ import {
   TableHead,
   TableRow,
   Alert,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
@@ -39,6 +41,8 @@ import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
 import AddCircleIcon from '@mui/icons-material/AddCircle';
 import BrushIcon from '@mui/icons-material/Brush';
+import MyLocationIcon from '@mui/icons-material/MyLocation';
+import TimelineIcon from '@mui/icons-material/Timeline';
 import { useSelector, useDispatch } from 'react-redux';
 import { getConnectionSettingsState } from '../state/slices/ConnectionSettingsSlice';
 import {
@@ -88,6 +92,9 @@ import GalvoAffineCalibrationWizard from './GalvoAffineCalibrationWizard';
 import * as liveStreamSlice from '../state/slices/LiveStreamSlice';
 import LiveViewControlWrapper from '../axon/LiveViewControlWrapper';
 
+// Longest point list the firmware accepts (SCANNER_MAX_ARBITRARY_POINTS)
+const MAX_POINTS = 256;
+
 /**
  * GalvoArbitraryPointsTab - Tab for interactive point-based galvo scanning
  * 
@@ -98,6 +105,7 @@ import LiveViewControlWrapper from '../axon/LiveViewControlWrapper';
  * - Affine transform editor (advanced panel)
  * - Calibration wizard trigger
  * - Start/Stop/Pause/Resume controls
+ * - Instant mode: a click on the camera view sends the scanner to that point and holds it
  */
 const GalvoArbitraryPointsTab = () => {
   const dispatch = useDispatch();
@@ -119,6 +127,15 @@ const GalvoArbitraryPointsTab = () => {
   // Displayed image dimensions reported by LiveViewControlWrapper
   const [imageSize, setImageSize] = useState({ width: 640, height: 480 });
   const [isDrawing, setIsDrawing] = useState(true);
+
+  // 'sequence' = build a point list and run it; 'instant' = a click moves the
+  // scanner there at once and holds it (a one-point scan) until Stop.
+  const [mode, setMode] = useState('sequence');
+  const instant = mode === 'instant';
+  const [instantPos, setInstantPos] = useState(null); // DAC position the beam was last sent to
+  const [instantX, setInstantX] = useState(2048);
+  const [instantY, setInstantY] = useState(2048);
+  const instantSeq = useRef(0); // drops the answer of a click that a newer click overtook
 
   // Manual point creation form state
   const [newPointX, setNewPointX] = useState(2048);
@@ -189,13 +206,44 @@ const GalvoArbitraryPointsTab = () => {
   }, [affine, getSubsamplingFactor, imageSize]);
 
   // ========================
+  // Instant mode: send the scanner to one DAC position and hold it
+  // ========================
+
+  const goToPoint = useCallback(async (x, y) => {
+    if (!selectedScanner) return;
+    const seq = ++instantSeq.current;
+    // Points are already in DAC space: do not apply the affine again on the backend.
+    const point = { x, y, dwell_us: arbState.defaultDwellUs, laser_intensity: arbState.defaultIntensity };
+    try {
+      const data = await apiStartArbitraryScan(
+        hostIP, hostPort, selectedScanner, [point], arbState.laserTrigger, false
+      );
+      if (seq !== instantSeq.current) return;
+      if (data.error) {
+        dispatch(setError(`Failed to move scanner: ${data.error}`));
+        return;
+      }
+      dispatch(clearError());
+      setInstantPos({ x, y });
+      setInstantX(x);
+      setInstantY(y);
+      dispatch(setArbScanRunning(true));
+      dispatch(setArbScanPaused(false));
+    } catch (err) {
+      if (seq === instantSeq.current) dispatch(setError(`Failed to move scanner: ${err.message}`));
+    }
+  }, [hostIP, hostPort, selectedScanner, arbState.defaultDwellUs, arbState.defaultIntensity,
+      arbState.laserTrigger, dispatch]);
+
+  // ========================
   // Click Handler (from LiveViewControlWrapper)
   // ========================
 
   // onClick signature: (pixelX, pixelY, imgWidth, imgHeight, displayInfo)
   const handleLiveViewClick = useCallback((pixelX, pixelY, imgWidth, imgHeight) => {
-    if (!isDrawing) return;
-    if (pointsList.length >= 265) return;
+    // Instant mode ignores the drawing switch; the calibration wizard still has priority
+    if (!instant && !isDrawing) return;
+    if (!instant && pointsList.length >= MAX_POINTS) return;
 
     // In calibration mode, record sensor coords (not DAC)
     if (calibration.active) {
@@ -209,8 +257,13 @@ const GalvoArbitraryPointsTab = () => {
     }
 
     const dac = pixelToDac(pixelX, pixelY, imgWidth, imgHeight);
+    if (instant) {
+      goToPoint(dac.x, dac.y);
+      return;
+    }
     dispatch(addArbitraryPoint({ x: dac.x, y: dac.y }));
-  }, [isDrawing, pointsList.length, calibration, pixelToDac, getSubsamplingFactor, dispatch]);
+  }, [instant, isDrawing, pointsList.length, calibration, pixelToDac, getSubsamplingFactor,
+      goToPoint, dispatch]);
 
   // ========================
   // Continuous draw: pointer → image-pixel conversion using wrapper container
@@ -236,20 +289,20 @@ const GalvoArbitraryPointsTab = () => {
 
   // Place a dot at the current pointer position (called by the paint interval)
   const placePointAtPointer = useCallback(() => {
-    if (!isPainting.current || !isDrawing || calibration.active) return;
-    if (pointsList.length >= 265) return;
+    if (!isPainting.current || !isDrawing || instant || calibration.active) return;
+    if (pointsList.length >= MAX_POINTS) return;
     const pos = pointerToImagePixel(lastPointerPos.current.x, lastPointerPos.current.y);
     if (!pos) return;
     const dac = pixelToDac(pos.imgPixelX, pos.imgPixelY, imageSize.width, imageSize.height);
     dispatch(addArbitraryPoint({ x: dac.x, y: dac.y }));
-  }, [isDrawing, calibration.active, pointsList.length, pointerToImagePixel, pixelToDac, imageSize, dispatch]);
+  }, [isDrawing, instant, calibration.active, pointsList.length, pointerToImagePixel, pixelToDac, imageSize, dispatch]);
 
   // Keep a stable ref to placePointAtPointer so the interval always calls the latest version
   const placePointRef = useRef(placePointAtPointer);
   useEffect(() => { placePointRef.current = placePointAtPointer; }, [placePointAtPointer]);
 
   const handlePointerDown = useCallback((e) => {
-    if (!isDrawing || calibration.active) return;
+    if (!isDrawing || instant || calibration.active) return;
     isPainting.current = true;
     lastPointerPos.current = { x: e.clientX, y: e.clientY };
     // Place the first dot immediately
@@ -260,7 +313,7 @@ const GalvoArbitraryPointsTab = () => {
     }, drawIntervalMs);
     // Capture pointer so we keep receiving events even if mouse leaves
     e.currentTarget.setPointerCapture(e.pointerId);
-  }, [isDrawing, calibration.active, drawIntervalMs]);
+  }, [isDrawing, instant, calibration.active, drawIntervalMs]);
 
   const handlePointerMove = useCallback((e) => {
     if (!isPainting.current) return;
@@ -311,9 +364,15 @@ const GalvoArbitraryPointsTab = () => {
   }, [hostIP, hostPort, selectedScanner, pointsList, arbState.laserTrigger, dispatch]);
 
   const handleStop = useCallback(async () => {
+    instantSeq.current += 1; // a move still in flight must not re-mark the beam as held
+    setInstantPos(null);
     dispatch(setArbScanRunning(false));
     try {
-      await apiStopArbitraryScan(hostIP, hostPort, selectedScanner);
+      const data = await apiStopArbitraryScan(hostIP, hostPort, selectedScanner);
+      if (data.error) {
+        dispatch(setError(`Failed to stop: ${data.error}`));
+        return;
+      }
       dispatch(setStatusMessage('Arbitrary scan stopped'));
       setTimeout(() => dispatch(clearStatusMessage()), 2000);
     } catch (err) {
@@ -321,10 +380,24 @@ const GalvoArbitraryPointsTab = () => {
     }
   }, [hostIP, hostPort, selectedScanner, dispatch]);
 
+  // Leaving a mode ends whatever it is holding, so a laser is never left on in a
+  // mode that has no Stop button.
+  const handleModeChange = useCallback((_, next) => {
+    if (!next || next === mode) return;
+    if (arbState.running) handleStop();
+    setInstantPos(null);
+    setMode(next);
+  }, [mode, arbState.running, handleStop]);
+
   const handlePause = useCallback(async () => {
     dispatch(setArbScanPaused(true));
     try {
-      await apiPauseArbitraryScan(hostIP, hostPort, selectedScanner);
+      const data = await apiPauseArbitraryScan(hostIP, hostPort, selectedScanner);
+      if (data.error) {
+        dispatch(setArbScanPaused(false));
+        dispatch(setError(`Failed to pause: ${data.error}`));
+        return;
+      }
       dispatch(setStatusMessage('Arbitrary scan paused'));
       setTimeout(() => dispatch(clearStatusMessage()), 2000);
     } catch (err) {
@@ -335,7 +408,12 @@ const GalvoArbitraryPointsTab = () => {
   const handleResume = useCallback(async () => {
     dispatch(setArbScanPaused(false));
     try {
-      await apiResumeArbitraryScan(hostIP, hostPort, selectedScanner);
+      const data = await apiResumeArbitraryScan(hostIP, hostPort, selectedScanner);
+      if (data.error) {
+        dispatch(setArbScanPaused(true));
+        dispatch(setError(`Failed to resume: ${data.error}`));
+        return;
+      }
       dispatch(setStatusMessage('Arbitrary scan resumed'));
       setTimeout(() => dispatch(clearStatusMessage()), 2000);
     } catch (err) {
@@ -415,7 +493,7 @@ const GalvoArbitraryPointsTab = () => {
         try {
           const imported = JSON.parse(evt.target.result);
           if (Array.isArray(imported)) {
-            dispatch(setArbitraryPoints(imported.slice(0, 265)));
+            dispatch(setArbitraryPoints(imported.slice(0, MAX_POINTS)));
             dispatch(setStatusMessage(`Imported ${imported.length} points`));
             setTimeout(() => dispatch(clearStatusMessage()), 2000);
           }
@@ -437,8 +515,8 @@ const GalvoArbitraryPointsTab = () => {
   const overlayContent = useMemo(() => {
     const { width: imgW, height: imgH } = imageSize;
 
-    // Point markers
-    const pointMarkers = pointsList.map((pt, i) => {
+    // Point markers (the sequence is not shown while an instant position is in use)
+    const pointMarkers = (instant ? [] : pointsList).map((pt, i) => {
       const { x: cx, y: cy } = dacToDisplayPixel(pt.x, pt.y);
       const intensity = pt.laser_intensity ?? 128;
       const r = Math.round((intensity / 255) * 255);
@@ -478,6 +556,22 @@ const GalvoArbitraryPointsTab = () => {
       );
     }
 
+    // Where the beam was last sent in instant mode
+    let instantMarker = null;
+    if (instant && instantPos) {
+      const { x: cx, y: cy } = dacToDisplayPixel(instantPos.x, instantPos.y);
+      instantMarker = (
+        <g data-testid="galvo-instant-marker">
+          <circle cx={cx} cy={cy} r={10} fill="none" stroke="#ff3030" strokeWidth={2} />
+          <line x1={cx - 16} y1={cy} x2={cx + 16} y2={cy} stroke="#ff3030" strokeWidth={1.5} />
+          <line x1={cx} y1={cy - 16} x2={cx} y2={cy + 16} stroke="#ff3030" strokeWidth={1.5} />
+          <text x={cx + 14} y={cy - 12} fontSize={11} fill="#fff" fontWeight="bold">
+            {instantPos.x}, {instantPos.y}
+          </text>
+        </g>
+      );
+    }
+
     return (
       <svg
         style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
@@ -485,10 +579,11 @@ const GalvoArbitraryPointsTab = () => {
         preserveAspectRatio="xMidYMid meet"
       >
         {pointMarkers}
+        {instantMarker}
         {calMarkers}
       </svg>
     );
-  }, [pointsList, calibration, dacToDisplayPixel, getSubsamplingFactor, imageSize]);
+  }, [pointsList, instant, instantPos, calibration, dacToDisplayPixel, getSubsamplingFactor, imageSize]);
 
   // ========================
   // Render
@@ -511,9 +606,28 @@ const GalvoArbitraryPointsTab = () => {
         {/* ===== LEFT: Camera + Overlay ===== */}
         <Grid item xs={12} md={7}>
           <Paper sx={{ p: 1, mb: 2 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              Camera View — Click to add points ({pointsList.length}/265)
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                       flexWrap: 'wrap', gap: 1, mb: 1 }}>
+              <Typography variant="subtitle2">
+                {instant
+                  ? 'Camera View — Click to move the scanner there'
+                  : `Camera View — Click to add points (${pointsList.length}/${MAX_POINTS})`}
+              </Typography>
+              <ToggleButtonGroup
+                size="small"
+                exclusive
+                value={mode}
+                onChange={handleModeChange}
+                aria-label="Scan mode"
+              >
+                <ToggleButton value="sequence" data-testid="galvo-mode-sequence">
+                  <TimelineIcon fontSize="small" sx={{ mr: 0.5 }} /> Sequence
+                </ToggleButton>
+                <ToggleButton value="instant" data-testid="galvo-mode-instant">
+                  <MyLocationIcon fontSize="small" sx={{ mr: 0.5 }} /> Instant position
+                </ToggleButton>
+              </ToggleButtonGroup>
+            </Box>
 
             {/* Live stream with SVG point overlay.
                  Points are stored as galvo DAC coords (0-4095).
@@ -529,7 +643,7 @@ const GalvoArbitraryPointsTab = () => {
                 border: calibration.active ? '2px solid #ffff00' : '1px solid #444',
                 borderRadius: 1,
                 overflow: 'hidden',
-                cursor: isDrawing ? 'crosshair' : 'default',
+                cursor: (instant || isDrawing) ? 'crosshair' : 'default',
                 touchAction: 'none', // Prevent browser scroll while drawing
               }}>
               <LiveViewControlWrapper
@@ -542,6 +656,8 @@ const GalvoArbitraryPointsTab = () => {
 
             {/* Camera overlay toolbar */}
             <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+              {!instant && (
+                <>
               <Button
                 size="small"
                 variant={isDrawing ? 'contained' : 'outlined'}
@@ -584,8 +700,12 @@ const GalvoArbitraryPointsTab = () => {
                   <UploadIcon />
                 </IconButton>
               </Tooltip>
+                </>
+              )}
               <Chip
-                label={arbState.running ? (arbState.paused ? 'Paused' : 'Scanning') : 'Idle'}
+                label={arbState.running
+                  ? (arbState.paused ? 'Paused' : (instant ? 'Holding point' : 'Scanning'))
+                  : 'Idle'}
                 color={arbState.running ? (arbState.paused ? 'warning' : 'success') : 'default'}
                 size="small"
               />
@@ -595,8 +715,20 @@ const GalvoArbitraryPointsTab = () => {
           {/* Scan Controls */}
           <Paper sx={{ p: 2, mb: 2 }}>
             <Typography variant="subtitle2" gutterBottom>
-              Arbitrary Scan Control
+              {instant ? 'Instant Position Control' : 'Arbitrary Scan Control'}
             </Typography>
+            {instant ? (
+              <Button
+                variant="contained"
+                color="error"
+                startIcon={<StopIcon />}
+                onClick={handleStop}
+                fullWidth
+                data-testid="galvo-instant-stop"
+              >
+                Stop and park
+              </Button>
+            ) : (
             <Grid container spacing={1}>
               <Grid item xs={3}>
                 <Button
@@ -646,6 +778,7 @@ const GalvoArbitraryPointsTab = () => {
                 </Button>
               </Grid>
             </Grid>
+            )}
 
             {/* Laser Trigger Mode */}
             <FormControl size="small" sx={{ mt: 2, minWidth: 160 }}>
@@ -680,6 +813,68 @@ const GalvoArbitraryPointsTab = () => {
 
         {/* ===== RIGHT: Points Table + Settings ===== */}
         <Grid item xs={12} md={5}>
+          {instant ? (
+            <Paper sx={{ p: 2, mb: 2 }}>
+              <Typography variant="subtitle2" gutterBottom>
+                Instant Position
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }} data-testid="galvo-instant-readout">
+                {instantPos
+                  ? `Scanner holds DAC position (${instantPos.x}, ${instantPos.y}).`
+                  : 'Click the camera view, or enter a DAC position below.'}
+              </Typography>
+              <Grid container spacing={1} alignItems="center">
+                <Grid item xs={4}>
+                  <TextField
+                    label="X (DAC)"
+                    type="number"
+                    size="small"
+                    fullWidth
+                    value={instantX}
+                    onChange={(e) => setInstantX(Math.max(0, Math.min(4095, Number(e.target.value) || 0)))}
+                    inputProps={{ min: 0, max: 4095, 'data-testid': 'galvo-instant-x' }}
+                  />
+                </Grid>
+                <Grid item xs={4}>
+                  <TextField
+                    label="Y (DAC)"
+                    type="number"
+                    size="small"
+                    fullWidth
+                    value={instantY}
+                    onChange={(e) => setInstantY(Math.max(0, Math.min(4095, Number(e.target.value) || 0)))}
+                    inputProps={{ min: 0, max: 4095, 'data-testid': 'galvo-instant-y' }}
+                  />
+                </Grid>
+                <Grid item xs={4}>
+                  <Button
+                    variant="contained"
+                    onClick={() => goToPoint(instantX, instantY)}
+                    fullWidth
+                    data-testid="galvo-instant-go"
+                  >
+                    Go
+                  </Button>
+                </Grid>
+                <Grid item xs={6}>
+                  <TextField
+                    label="Dwell (µs)"
+                    type="number"
+                    size="small"
+                    fullWidth
+                    value={arbState.defaultDwellUs}
+                    onChange={(e) => dispatch(setDefaultDwellUs(Math.max(1, Number(e.target.value) || 1)))}
+                    inputProps={{ min: 1 }}
+                  />
+                </Grid>
+              </Grid>
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                The scanner repeats this one point until you press Stop. The laser follows the
+                Laser Trigger setting: HIGH keeps it on at the point, LOW keeps it off.
+              </Typography>
+            </Paper>
+          ) : (
+          <>
           {/* Global Defaults */}
           <Paper sx={{ p: 2, mb: 2 }}>
             <Typography variant="subtitle2" gutterBottom>
@@ -878,6 +1073,9 @@ const GalvoArbitraryPointsTab = () => {
               </Table>
             </TableContainer>
           </Paper>
+
+          </>
+          )}
 
           {/* Advanced: Affine Transform Editor */}
           <Accordion>

@@ -26,10 +26,10 @@ import apiUC2ConfigControllerCheckFirmwareUpdates from "../backendapi/apiUC2Conf
 import apiUC2ConfigControllerStartFirmwareUpdate from "../backendapi/apiUC2ConfigControllerStartFirmwareUpdate";
 import apiUC2ConfigControllerGetFirmwareUpdateStatus from "../backendapi/apiUC2ConfigControllerGetFirmwareUpdateStatus";
 import apiUC2ConfigControllerCancelFirmwareUpdate from "../backendapi/apiUC2ConfigControllerCancelFirmwareUpdate";
-import apiUC2ConfigControllerSetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerSetOTAFirmwareServer";
 import apiUC2ConfigControllerReassignCANId from "../backendapi/apiUC2ConfigControllerReassignCANId";
 import { FIRMWARE_STATUS } from "./firmwareStatus";
 import UsbFlashWizard from "./UsbFlashWizard";
+import FirmwareSourcePicker, { applyFirmwareSource, loadFirmwareSource } from "./FirmwareSourcePicker";
 import { getCanOtaState } from "../state/slices/canOtaSlice";
 import { getUsbFlashState } from "../state/slices/usbFlashSlice";
 
@@ -158,7 +158,7 @@ const CanUpdate = ({ initialCheck, onBack, onClose }) => {
   const [error, setError] = useState(null);
   const [reasons, setReasons] = useState([]);
   const [run, setRun] = useState(null); // getFirmwareUpdateStatus once started
-  const [serverEdit, setServerEdit] = useState(null); // URL being edited, or null
+  const [serverEdit, setServerEdit] = useState(null); // firmware source being edited, or null
   const [reassign, setReassign] = useState(null); // { device, newId, busy, error }
   const canOta = useSelector(getCanOtaState);
   const usbFlash = useSelector(getUsbFlashState);
@@ -233,17 +233,26 @@ const CanUpdate = ({ initialCheck, onBack, onClose }) => {
     }
   };
 
-  const applyServer = async () => {
+  const editServer = async () => {
     try {
-      const result = await apiUC2ConfigControllerSetOTAFirmwareServer(serverEdit);
+      setServerEdit(await loadFirmwareSource());
+    } catch (e) {
+      setError(`Could not read the firmware source: ${e.message}`);
+    }
+  };
+
+  const applyServer = async () => {
+    setError(null);
+    try {
+      const result = await applyFirmwareSource(serverEdit);
       if (result.status !== "success") {
-        setError(result.message || "The firmware server did not answer.");
+        setError(result.message || "The firmware source did not answer.");
         return;
       }
       setServerEdit(null);
       loadCheck();
     } catch (e) {
-      setError(`Could not set the firmware server: ${e.message}`);
+      setError(`Could not set the firmware source: ${e.message}`);
     }
   };
 
@@ -280,25 +289,23 @@ const CanUpdate = ({ initialCheck, onBack, onClose }) => {
 
   const renderServer = () => (
     <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", mb: 1 }}>
-      <Typography variant="body2" color="text.secondary">Firmware server</Typography>
+      <Typography variant="body2" color="text.secondary">Firmware from</Typography>
       {serverEdit === null ? (
         <>
           <Box component="span" sx={mono}>{check?.firmware_server}</Box>
           <Typography variant="body2" color="text.secondary">
             · <Box component="span" sx={mono}>{check?.server_version || "no version.json"}</Box>
           </Typography>
-          <Button size="small" onClick={() => setServerEdit(check?.firmware_server || "")}>
-            Change
-          </Button>
+          <Button size="small" onClick={editServer}>Change</Button>
         </>
       ) : (
-        <>
-          <TextField size="small" value={serverEdit} sx={{ minWidth: 320 }}
-                     onChange={(e) => setServerEdit(e.target.value)}
-                     placeholder="http://host.docker.internal/firmware" />
-          <Button size="small" variant="outlined" onClick={applyServer}>Use</Button>
-          <Button size="small" onClick={() => setServerEdit(null)}>Cancel</Button>
-        </>
+        <Box sx={{ width: "100%", mt: 1 }}>
+          <FirmwareSourcePicker value={serverEdit} onChange={setServerEdit} />
+          <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
+            <Button size="small" variant="outlined" onClick={applyServer}>Use</Button>
+            <Button size="small" onClick={() => setServerEdit(null)}>Cancel</Button>
+          </Box>
+        </Box>
       )}
     </Box>
   );
@@ -308,8 +315,8 @@ const CanUpdate = ({ initialCheck, onBack, onClose }) => {
       {renderServer()}
       {check?.server_reachable === false && (
         <Alert severity="error" sx={{ mb: 1 }}>
-          The firmware server is not reachable. Change it above, or start the
-          firmware-image-server container.
+          The firmware source is not reachable. Change it above: start the
+          firmware-image-server container, or use a GitHub release.
         </Alert>
       )}
       {check?.server_reachable && !check?.server_version && (

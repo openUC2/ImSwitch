@@ -33,6 +33,7 @@ import NanoImagingPack as nip
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport, initLogger
+from imswitch.imcontrol.model.managers.detectors.DetectorManager import getDetectorExposureSeconds
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
     compute_affine_matrix,
     measure_pixel_shift,
@@ -1187,14 +1188,8 @@ class PixelCalibrationClass:
         identical to the reference — giving ~0 displacement and an absurd pixel
         size. Scaling the timeout with exposure keeps the grab honest.
         """
-        exposure_s = None
         try:
-            params = getattr(self._detector, "parameters", {}) or {}
-            for k in ("exposure", "ExposureTime", "exposure_time", "Exposure"):
-                if k in params and params[k] is not None:
-                    val = float(getattr(params[k], "value", params[k]))
-                    exposure_s = val / 1000.0
-                    break
+            exposure_s = getDetectorExposureSeconds(self._detector)
         except Exception:
             exposure_s = None
         if not exposure_s or exposure_s <= 0:

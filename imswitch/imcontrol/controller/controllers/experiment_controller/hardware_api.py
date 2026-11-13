@@ -10,6 +10,7 @@ import os
 
 from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowContext
 from imswitch.imcommon.model import APIExport
+from imswitch.imcontrol.model.managers.detectors.DetectorManager import getDetectorExposureSeconds
 
 from imswitch.imcontrol.controller.controllers.experiment_controller import ExperimentWorkflowParams, SyntheticChannel
 
@@ -207,8 +208,10 @@ class HardwareMixin:
 
         Priority order:
         1. DetectorManager.getParameter("exposure") — returns ms, clean API.
-        2. _camera.exposure_time raw attribute — µs, camera-specific fallback.
-        3. Hard-coded 0.1 s safe default.
+        2. The cached exposure parameter under whatever name the driver uses
+           ("Exposure", "exposure_time", ...).
+        3. _camera.exposure_time raw attribute — µs, camera-specific fallback.
+        4. Hard-coded 0.1 s safe default.
         """
         try:
             exp_ms = self.mDetector.getParameter("exposure")
@@ -216,6 +219,9 @@ class HardwareMixin:
                 return float(exp_ms) / 1000.0
         except Exception:
             pass
+        exp_s = getDetectorExposureSeconds(self.mDetector)
+        if exp_s > 0:
+            return exp_s
         try:
             return self.mDetector._camera.exposure_time / 1e6
         except Exception:

@@ -2,7 +2,7 @@
 // Redux slice for managing enabled/disabled applications
 // Handles user preferences for which apps appear in the navigation drawer
 
-import { createSlice } from "@reduxjs/toolkit";
+import { createSelector, createSlice } from "@reduxjs/toolkit";
 import { APP_REGISTRY, APP_CATEGORIES } from "../../constants/appRegistry";
 
 // Initial state - essentials are always enabled, others start disabled
@@ -188,7 +188,19 @@ export const {
 } = appManagerSlice.actions;
 
 // Selectors
-export const selectEnabledApps = (state) => state.appManager.enabledApps;
+// Essential apps are always enabled, also when the saved list predates them
+// (a persisted state from before an app became essential).
+const ESSENTIAL_APP_IDS = Object.values(APP_REGISTRY)
+  .filter((app) => app.essential)
+  .map((app) => app.id);
+
+export const selectEnabledApps = createSelector(
+  (state) => state.appManager.enabledApps,
+  (enabled) =>
+    ESSENTIAL_APP_IDS.every((id) => enabled.includes(id))
+      ? enabled
+      : [...new Set([...ESSENTIAL_APP_IDS, ...enabled])],
+);
 export const selectSearchQuery = (state) => state.appManager.searchQuery;
 export const selectSelectedCategory = (state) =>
   state.appManager.selectedCategory;
@@ -196,18 +208,18 @@ export const selectAppStats = (state) => state.appManager.stats;
 
 // Computed selectors
 export const selectEnabledAppObjects = (state) => {
-  const enabledIds = state.appManager.enabledApps;
+  const enabledIds = selectEnabledApps(state);
   return Object.values(APP_REGISTRY).filter((app) =>
     enabledIds.includes(app.id)
   );
 };
 
 export const selectIsAppEnabled = (appId) => (state) => {
-  return state.appManager.enabledApps.includes(appId);
+  return selectEnabledApps(state).includes(appId);
 };
 
 export const selectEnabledAppsByCategory = (category) => (state) => {
-  const enabledIds = state.appManager.enabledApps;
+  const enabledIds = selectEnabledApps(state);
   return Object.values(APP_REGISTRY).filter(
     (app) => enabledIds.includes(app.id) && app.category === category
   );

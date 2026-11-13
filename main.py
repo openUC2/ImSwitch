@@ -15,8 +15,9 @@ if __name__ == '__main__':
     # Anything firewall related
     
      sudo firewall-cmd --add-port=8001/tcp --permanent
-     sudo firewall-cmd --add-port=8001/udp --permanent     
-     sudo firewall-cmd --add-port=3232/tcp --permanent # for esp ota
+     sudo firewall-cmd --add-port=8001/udp --permanent
+     sudo firewall-cmd --add-port=9000/tcp --permanent     
+     sudo firewall-cmd --add-port=31950/tcp --permanent # for esp ota
      sudo firewall-cmd --add-port=3333/tcp --permanent # for esp ota
      sudo firewall-cmd --add-port=8888/tcp --permanent # for jupyter notebook
      sudo firewall-cmd --add-port=5249/tcp --permanent # for flimlabs

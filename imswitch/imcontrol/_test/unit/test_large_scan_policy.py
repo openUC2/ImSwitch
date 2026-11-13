@@ -36,7 +36,7 @@ def test_small_scan_keeps_every_requested_output():
     w, _ = _writer(3, 3)                      # 9 tiles, ~75 MB
     assert not w.large_scan
     assert w.config.write_zarr and w.config.write_stitched_tiff
-    assert w.config.write_tiff                # 75 MB mosaic is fine in RAM
+    assert w.config.write_tiff                # exported from the canvas, nothing held in RAM
     assert not w.config.write_individual_tiffs
     w.finalize()
 
@@ -46,18 +46,17 @@ def test_large_scan_drops_every_canvas_and_keeps_tiles():
     assert w.large_scan
     assert not w.config.write_zarr
     assert not w.config.write_stitched_tiff
-    assert not w.config.write_tiff
+    assert not w.config.write_tiff and not w.config.wants_tiff
     assert w.config.write_individual_tiffs   # the one output that scales
-    assert w.canvas is None and w.tiff_stitcher is None and w.tiff_mosaic is None
+    assert w.canvas is None and w.zarr_image is None
     assert any("Large scan" in m and "GiB" in m for m in log)
     w.finalize()
 
 
-def test_medium_scan_drops_only_the_in_ram_mosaic():
-    w, _ = _writer(12, 12)                    # 144 tiles x 8 MB = 1.1 GiB: under 2 GiB, over 512 MiB
+def test_medium_scan_keeps_the_tiff_it_no_longer_holds_in_ram():
+    w, _ = _writer(12, 12)                    # 144 tiles x 8 MB = 1.1 GiB: under 2 GiB
     assert not w.large_scan
-    assert w.config.write_zarr and w.config.write_stitched_tiff
-    assert not w.config.write_tiff            # would be 1.1 GiB of numpy on an 8 GB Pi
+    assert w.config.write_zarr and w.config.write_stitched_tiff and w.config.write_tiff
     w.finalize()
 
 

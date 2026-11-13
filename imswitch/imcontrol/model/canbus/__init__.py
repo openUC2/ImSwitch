@@ -3,7 +3,8 @@
 Independent of ImSwitch: it needs a uc2rest client and a few callbacks. Build
 everything at once with CanNetwork, or use the parts:
 
-- FirmwareServer: image listing, version.json, verified (sha256) downloads
+- FirmwareServer: image listing, version.json, verified (sha256) downloads,
+  from a local firmware server or a GitHub release
 - CanBus: bus scan, node-id reassignment, restarts, waiting for a version
 - CanOta: CAN streaming OTA with retries and post-flash verification
 - UsbFlasher: esptool flashing and serial bring-up of fresh boards

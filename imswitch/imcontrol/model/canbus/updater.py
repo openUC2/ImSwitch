@@ -88,7 +88,7 @@ class FirmwareUpdater:
                                  reachable=node.get("statusStr") != "unreachable",
                                  canId=node.get("canId"), deviceTypeStr=node.get("deviceTypeStr"),
                                  connection="can", build=node.get("build"), mac=node.get("mac")))
-        return {"status": "success", "firmware_server": self.server.url,
+        return {"status": "success", "firmware_server": self.server.location,
                 "server_reachable": bool(on_server),
                 "server_version": manifest.get("version"),
                 "server_commit_time": manifest.get("commit_time"),
@@ -99,7 +99,7 @@ class FirmwareUpdater:
         try:
             return set(self.server.image_names())
         except Exception as e:
-            self._log.warning(f"Firmware server {self.server.url} not reachable: {e}")
+            self._log.warning(f"Firmware server {self.server.location} not reachable: {e}")
             return set()
 
     # ── update ──────────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ class FirmwareUpdater:
         check = self.check()
         if not check.get("server_reachable"):
             return {"status": "refused", "reasons": [
-                f"The firmware server {self.server.url} is not reachable."]}
+                f"The firmware server {self.server.location} is not reachable."]}
         steps, problems = self._plan(check, can_ids, include_master)
         if problems or not steps:
             return {"status": "refused", "reasons": problems or ["Nothing to update."]}

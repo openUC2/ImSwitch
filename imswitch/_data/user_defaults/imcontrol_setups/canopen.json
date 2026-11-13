@@ -127,7 +127,6 @@
     "OffAxisHolo",
     "GalvoScanner",
     "Goniometer",
-    "StageCenterCalibration",
     "OpticalFlowController",
     "I2CSensor"
   ]

@@ -1,0 +1,31 @@
+{
+  "schema": "aufgaben.job/1",
+  "name": "Stop-flow imaging with temperature control",
+  "description": "Heat to the target, switch the inlet valve to the sample, then repeatedly pump a volume, let it settle and take an image. Flush to waste at the end. What FlowStop does today, plus a valve and a heater.",
+  "parameters": {
+    "cycles": {"type": "integer", "default": 200, "minimum": 1, "ui": "runtime"},
+    "volume_ul": {"type": "number", "default": 50, "minimum": 1, "unit": "µL", "ui": "wizard"},
+    "target_c": {"type": "number", "default": 37, "unit": "°C", "ui": "wizard"}
+  },
+  "variables": {"images": 0},
+  "resources": {
+    "bf": {"kind": "capture", "channels": [{"config": "LED", "exposure": 10, "intensity": 300}]}
+  },
+  "tasks": [
+    {"id": "heat", "task": "set_temperature", "params": {"target_c": "${param.target_c}"}},
+    {"id": "warm", "task": "wait_until", "params": {"expr": "device.temperature_c >= param.target_c - 0.5", "timeout_s": 1800}},
+    {"id": "to_sample", "task": "set_valve", "params": {"valve": "inlet", "position": "sample"}},
+    {"id": "cycle", "task": "repeat", "params": {"count": 200},
+     "body": [
+       {"id": "pump", "task": "pump_volume", "params": {"pump": "peristaltic", "volume_ul": "${param.volume_ul}", "rate_ul_min": 500}},
+       {"id": "settle", "task": "wait", "params": {"seconds": 2}},
+       {"id": "img", "task": "capture", "params": {"channels": "@bf"}},
+       {"id": "count", "task": "set_variable", "params": {"name": "images", "value": "${images + 1}"}},
+       {"id": "enough", "task": "condition", "params": {"expr": "images >= param.cycles"},
+        "body": [{"id": "stop", "task": "break", "params": {"loop": "cycle"}}]}
+     ]},
+    {"id": "to_waste", "task": "set_valve", "params": {"valve": "inlet", "position": "waste"}},
+    {"id": "flush", "task": "pump_volume", "params": {"pump": "peristaltic", "volume_ul": 500, "rate_ul_min": 1000}},
+    {"id": "cool", "task": "set_temperature"}
+  ]
+}

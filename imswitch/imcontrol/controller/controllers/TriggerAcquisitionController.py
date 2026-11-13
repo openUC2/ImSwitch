@@ -52,7 +52,7 @@ class TriggerAcquisitionController(LiveUpdatedController):
 
         """
         self._stop_live()
-        self.detector.setParameter("trigger_source", "External trigger")
+        self.detector.setParameter("trigger_source", trigger_source or "External trigger")
         self._flush()
 
     # ── acquisition ─────────────────────────────────────────────────────────────

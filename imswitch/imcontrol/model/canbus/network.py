@@ -16,6 +16,8 @@ class CanNetwork:
     :param client: callable returning the uc2rest client of the USB master
                    (or None when no board is connected)
     :param firmware_url: firmware server serving the images + version.json
+    :param firmware_release: None = use the firmware server; "latest" or a tag
+                             = that GitHub release of *github_repo* instead
     :param cache_dir: where downloaded images are kept
     :param link: the host's own serial connection to the master, with
                  release() / restore() / current_port() — esptool needs the
@@ -26,9 +28,11 @@ class CanNetwork:
     """
 
     def __init__(self, client, firmware_url: str, cache_dir: Path, link,
-                 hooks: UpdateHooks = None, emit_ota=None, emit_usb=None, logger=None):
+                 hooks: UpdateHooks = None, emit_ota=None, emit_usb=None, logger=None,
+                 firmware_release: str = None, github_repo: str = None):
         self.guard = SerialPortGuard()
-        self.server = FirmwareServer(firmware_url, cache_dir, logger)
+        self.server = FirmwareServer(firmware_url, cache_dir, logger, github_repo=github_repo,
+                                     release=firmware_release)
         self.bus = CanBus(client, logger)
         self.ota = CanOta(client, self.server, self.bus, self.guard, emit_ota, logger)
         self.usb = UsbFlasher(self.server, self.guard, link, emit_usb, logger)

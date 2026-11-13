@@ -1,11 +1,10 @@
 import numpy as np
 import time
-import tifffile as tif
 import os
 from datetime import datetime
 import queue
-from typing import Generator, Optional, Dict, Any
-from dataclasses import dataclass
+import shutil
+from typing import Optional, Dict, Any
 import threading
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger, dirtools
 from ..basecontrollers import LiveUpdatedController
 from imswitch.imcommon.model import APIExport
+from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage, save_image
 
 # Import pydantic models for parameter management
 try:
@@ -40,62 +40,6 @@ try:
     isMicroEye = True
 except ImportError:
     isMicroEye = False
-
-# Arkitekt integration
-try:
-    from arkitekt_next import easy, startup, state, progress
-    from mikro_next.api.schema import (Image, from_array_like, Stage,
-                                       create_stage)
-    from mikro_next.api.schema import (PartialRGBViewInput, ColorMap,
-                                       PartialAffineTransformationViewInput)
-    import xarray as xr
-    IS_ARKITEKT = True
-except ImportError:
-    IS_ARKITEKT = False
-    # Create dummy decorators and functions when Arkitekt is not available
-    Stage = object
-    Image = object
-    def state(cls):
-        return cls
-
-    def startup(func):
-        return func
-
-    def progress(value, message=""):
-        pass
-
-
-@state
-@dataclass
-class STORMState:
-    """State management for STORM acquisition via Arkitekt"""
-    stage: Optional[Stage] = None
-    acquisition_active: bool = False
-    session_id: Optional[str] = None
-    total_frames_acquired: int = 0
-    current_parameters: Dict[str, Any] = None
-
-    def __post_init__(self):
-        if self.current_parameters is None:
-            self.current_parameters = {}
-
-
-@startup
-def init_storm_state(instance_id: str) -> STORMState:
-    """Initialize the STORM state for Arkitekt"""
-    stage = None
-    if IS_ARKITEKT:
-        try:stage = create_stage(name=f"STORM_Stage_{instance_id}")
-        except Exception as e:
-            print(f"Failed to create STORM stage: {e}")
-    return STORMState(
-        stage=stage,
-        acquisition_active=False,
-        session_id=None,
-        total_frames_acquired=0,
-        current_parameters={}
-    )
-
 
 class STORMReconController(LiveUpdatedController):
     """ Linked to STORMReconWidget."""
@@ -127,6 +71,7 @@ class STORMReconController(LiveUpdatedController):
         self._acquisition_thread = None
         self._cropping_params = None
         self._ome_zarr_store = None
+        self._zarr_path = None   # where the OME-Zarr store is created on the first frame
         self._current_session_id = None
         self._direct_saving_mode = False  # True when saving directly without generators
         self._save_format = "omezarr"
@@ -135,12 +80,6 @@ class STORMReconController(LiveUpdatedController):
         self._local_processing_enabled = False  # Flag for local processing during acquisition
         self._last_reconstruction_path = ""
         self._last_reconstruction_path = None
-        # Initialize Arkitekt integration if available
-        self._arkitekt_app = None
-        self._arkitekt_handle = None
-        if IS_ARKITEKT:
-            self._initializeArkitekt()
-
         # Initialize processing parameters via pydantic models
         self._initializeProcessingParameters()
 
@@ -244,401 +183,6 @@ class STORMReconController(LiveUpdatedController):
 
         self._logger.debug("Processing parameters initialized")
 
-    def _initializeArkitekt(self):
-        """Initialize Arkitekt connection and register functions"""
-        try:
-            self._logger.debug("Initializing Arkitekt integration for STORM")
-
-            # Create Arkitekt app
-            self._arkitekt_app = easy("STORM_Service", url="http://go.arkitekt.io",)
-
-            # Register STORM-specific functions for remote access
-            self._arkitekt_app.register(self.arkitekt_start_storm_acquisition)
-            self._arkitekt_app.register(self.arkitekt_stop_storm_acquisition)
-            self._arkitekt_app.register(self.arkitekt_get_storm_frames)
-            self._arkitekt_app.register(self.arkitekt_get_storm_status)
-            self._arkitekt_app.register(self.arkitekt_set_storm_parameters)
-            self._arkitekt_app.register(self.arkitekt_capture_storm_image)
-            self._arkitekt_app.register(self.arkitekt_trigger_reconstruction)
-
-            # Enter the app context
-            self._arkitekt_app.enter()
-
-            # Start the app in detached mode
-            self._arkitekt_handle = self._arkitekt_app.run_detached()
-
-            self._logger.debug("Arkitekt STORM service started successfully")
-
-        except Exception as e:
-            self._logger.error(f"Failed to initialize Arkitekt: {e}")
-            self._arkitekt_app = None
-            self._arkitekt_handle = None
-
-    '''
-    ################
-    # ARKITEKT  ###
-    # #############
-    '''
-    # Arkitekt remote callable functions
-    def arkitekt_start_storm_acquisition(self,
-                                          storm_state: STORMState,
-                                          session_id: str = None,
-                                          crop_x: int = None,
-                                          crop_y: int = None,
-                                          crop_width: int = None,
-                                          crop_height: int = None,
-                                          saveDirectory: str = None,
-                                          save_format: str = "tiff",
-                                          exposure_time: float = None
-                                          ) -> Dict[str, Any]:
-        """
-        Start STORM acquisition via Arkitekt.
-
-        This function starts fast STORM frame acquisition with optional
-        cropping and saving. It can be called remotely via the Arkitekt
-        framework.
-
-        Parameters:
-        - storm_state: STORMState object for tracking acquisition state
-        - session_id: Unique identifier for this acquisition session
-        - crop_x, crop_y: Top-left corner of crop region (None to disable)
-        - crop_width, crop_height: Dimensions of crop region
-        - saveDirectory: Path to save acquired frames (None to disable saving)
-        - save_format: Format to save frames ('omezarr', 'tiff')
-        - exposure_time: Exposure time for frames (None to use current)
-
-        Returns:
-        - Dictionary with session info and status
-        """
-        progress(10, "Starting STORM acquisition...")
-
-        result = self.startFastSTORMAcquisition(
-            session_id=session_id,
-            crop_x=crop_x,
-            crop_y=crop_y,
-            crop_width=crop_width,
-            crop_height=crop_height,
-            saveDirectory=saveDirectory,
-            save_format=save_format,
-            exposure_time=exposure_time,
-            process_arkitekt=True
-        )
-
-        if result.get("success"):
-            storm_state.acquisition_active = True
-            storm_state.session_id = result.get("session_id")
-            storm_state.total_frames_acquired = 0
-            progress(100, f"STORM acquisition started: {storm_state.session_id}")
-        else:
-            progress(0, f"Failed to start: {result.get('message')}")
-
-        return result
-
-    def arkitekt_stop_storm_acquisition(self,
-                                         storm_state: STORMState
-                                         ) -> Dict[str, Any]:
-        """
-        Stop STORM acquisition via Arkitekt.
-
-        Parameters:
-        - storm_state: STORMState object for tracking acquisition state
-
-        Returns:
-        - Dictionary with session info and status
-        """
-        progress(50, "Stopping STORM acquisition...")
-
-        result = self.stopFastSTORMAcquisition()
-
-        if result.get("success"):
-            storm_state.acquisition_active = False
-            storm_state.session_id = None
-            total_frames = storm_state.total_frames_acquired
-            progress(100, f"STORM acquisition stopped. Total frames: {total_frames}")
-        else:
-            progress(0, f"Failed to stop: {result.get('message')}")
-
-        return result
-
-    def arkitekt_get_storm_frames(self,
-                                  storm_state: STORMState,
-                                  num_frames: int = 100,
-                                  timeout: float = 10.0,
-                                  image_name_prefix: str = "storm_frame"
-                                  ) -> Generator[Image, None, None]:
-        """
-        Get STORM frames via Arkitekt as Mikro Images.
-
-        This generator yields acquired STORM frames converted to Mikro Image
-        format for integration with the Arkitekt/Mikro ecosystem.
-
-        Parameters:
-        - storm_state: STORMState object for tracking acquisition state
-        - num_frames: Maximum number of frames to yield
-        - timeout: Timeout for waiting for each frame
-        - image_name_prefix: Prefix for generated image names
-
-        Yields:
-        - Mikro Image objects containing frame data
-        """
-        frame_count = 0
-
-        for frame_data in self.getSTORMFrameGenerator(num_frames=num_frames,
-                                                      timeout=timeout):
-            if 'error' in frame_data:
-                progress(0, f"Error acquiring frame: {frame_data['error']}")
-                break
-
-            frame = frame_data['raw_frame']
-            metadata = frame_data['metadata']
-
-            # Update state
-            storm_state.total_frames_acquired += 1
-            frame_count += 1
-
-            # Convert to RGB if needed for Mikro
-            if len(frame.shape) == 2:
-                frame_rgb = np.repeat(frame[:, :, np.newaxis], 3, axis=2)
-            else:
-                frame_rgb = frame
-
-            # Create image name
-            image_name = f"{image_name_prefix}_{frame_count:04d}"
-
-            # Create affine transformation for spatial context
-            affine_view = PartialAffineTransformationViewInput(
-                affineMatrix=[
-                    [1.0, 0, 0, 0],  # Could use pixel size if available
-                    [0, 1.0, 0, 0],
-                    [0, 0, 1, 0],
-                    [0, 0, 0, 1]
-                ],
-                stage=storm_state.stage,
-            )
-
-            # Create RGB views for visualization
-            rgb_views = [
-                PartialRGBViewInput(
-                    cMin=0, cMax=1,
-                    contrastLimitMax=float(frame_rgb.max()),
-                    contrastLimitMin=float(frame_rgb.min()),
-                    colorMap=ColorMap.RED,
-                    baseColor=[0, 0, 0]
-                ),
-                PartialRGBViewInput(
-                    cMin=1, cMax=2,
-                    contrastLimitMax=float(frame_rgb.max()),
-                    contrastLimitMin=float(frame_rgb.min()),
-                    colorMap=ColorMap.GREEN,
-                    baseColor=[0, 0, 0]
-                ),
-                PartialRGBViewInput(
-                    cMin=2, cMax=3,
-                    contrastLimitMax=float(frame_rgb.max()),
-                    contrastLimitMin=float(frame_rgb.min()),
-                    colorMap=ColorMap.BLUE,
-                    baseColor=[0, 0, 0]
-                )
-            ]
-
-            progress_val = int((frame_count / num_frames) * 100)
-            progress(progress_val,
-                     f"Processing STORM frame {frame_count}/{num_frames}")
-
-            # Convert to Mikro Image and yield
-            yield from_array_like(
-                xr.DataArray(frame_rgb, dims=list("yxc")),
-                name=image_name,
-                rgb_views=rgb_views,
-                transformation_views=[affine_view]
-            )
-
-    def arkitekt_get_storm_status(self,
-                                  storm_state: STORMState
-                                  ) -> Dict[str, Any]:
-        """
-        Get STORM acquisition status via Arkitekt.
-
-        Parameters:
-        - storm_state: STORMState object for tracking acquisition state
-
-        Returns:
-        - Dictionary with current status information including state info
-        """
-        base_status = self.getSTORMStatus()
-
-        # Add Arkitekt-specific state information
-        base_status.update({
-            "arkitekt_session_active": storm_state.acquisition_active,
-            "arkitekt_session_id": storm_state.session_id,
-            "total_frames_acquired": storm_state.total_frames_acquired,
-            "arkitekt_available": IS_ARKITEKT
-        })
-
-        return base_status
-
-    def arkitekt_set_storm_parameters(self,
-                                      storm_state: STORMState,
-                                      threshold: float = None,
-                                      roi_size: int = None,
-                                      update_rate: int = None
-                                      ) -> Dict[str, Any]:
-        """
-        Set STORM processing parameters via Arkitekt.
-
-        Parameters:
-        - storm_state: STORMState object for tracking acquisition state
-        - threshold: Detection threshold for localization
-        - roi_size: ROI size for fitting
-        - update_rate: Update rate for live processing
-
-        Returns:
-        - Dictionary with current parameter values
-        """
-        result = self.setSTORMParameters(
-            threshold=threshold,
-            roi_size=roi_size,
-            update_rate=update_rate
-        )
-
-        # Update state parameters
-        storm_state.current_parameters.update(result)
-
-        progress(100, f"STORM parameters updated: {result}")
-
-        return result
-
-    def arkitekt_capture_storm_image(self,
-                                     storm_state: STORMState,
-                                     image_name: str = "storm_capture"
-                                     ) -> Image:
-        """
-        Capture a single STORM image via Arkitekt.
-
-        This function captures a single frame and processes it through the
-        STORM reconstruction pipeline, returning a Mikro Image.
-
-        Parameters:
-        - storm_state: STORMState object for tracking acquisition state
-        - image_name: Name for the captured image
-
-        Returns:
-        - Mikro Image object containing the captured and processed frame
-        """
-        progress(25, "Capturing STORM image...")
-
-        # Trigger reconstruction and get frame
-        self.triggerSTORMReconstruction()
-        frames_chunk = self.detector.getChunk()
-
-        if frames_chunk is None:
-            raise ValueError("No frame available from detector")
-
-        # Use normalized frame processing and take the most recent frame
-        frames_list = self._normalizeFrameChunk(frames_chunk)
-        if not frames_list:
-            raise ValueError("No frames in chunk")
-        frame = frames_list[-1]
-
-        progress(50, "Processing frame through STORM pipeline...")
-
-        # Apply cropping if active
-        if self._cropping_params is not None:
-            crop = self._cropping_params
-            frame = frame[crop['y']:crop['y']+crop['height'],
-                         crop['x']:crop['x']+crop['width']]
-
-        # Convert to RGB format for Mikro
-        if len(frame.shape) == 2:
-            frame = np.repeat(frame[:, :, np.newaxis], 3, axis=2)
-
-        progress(75, "Converting to Mikro Image...")
-
-        # Create affine transformation
-        affine_view = PartialAffineTransformationViewInput(
-            affineMatrix=[
-                [1.0, 0, 0, 0],
-                [0, 1.0, 0, 0],
-                [0, 0, 1, 0],
-                [0, 0, 0, 1]
-            ],
-            stage=storm_state.stage,
-        )
-
-        # Create RGB views
-        rgb_views = [
-            PartialRGBViewInput(
-                cMin=0, cMax=1,
-                contrastLimitMax=float(frame.max()),
-                contrastLimitMin=float(frame.min()),
-                colorMap=ColorMap.RED,
-                baseColor=[0, 0, 0]
-            ),
-            PartialRGBViewInput(
-                cMin=1, cMax=2,
-                contrastLimitMax=float(frame.max()),
-                contrastLimitMin=float(frame.min()),
-                colorMap=ColorMap.GREEN,
-                baseColor=[0, 0, 0]
-            ),
-            PartialRGBViewInput(
-                cMin=2, cMax=3,
-                contrastLimitMax=float(frame.max()),
-                contrastLimitMin=float(frame.min()),
-                colorMap=ColorMap.BLUE,
-                baseColor=[0, 0, 0]
-            )
-        ]
-
-        progress(100, "STORM image captured and processed")
-
-        return from_array_like(
-            xr.DataArray(frame, dims=list("yxc")),
-            name=image_name,
-            rgb_views=rgb_views,
-            transformation_views=[affine_view]
-        )
-
-    def arkitekt_trigger_reconstruction(self,
-                                        storm_state: STORMState
-                                        ) -> str:
-        """
-        Trigger STORM reconstruction via Arkitekt.
-
-        Parameters:
-        - storm_state: STORMState object for tracking acquisition state
-
-        Returns:
-        - Status message
-        """
-        try:
-            self.triggerSTORMReconstruction()
-            progress(100, "STORM reconstruction triggered successfully")
-            return "STORM reconstruction triggered successfully"
-        except Exception as e:
-            progress(0, f"Failed to trigger reconstruction: {str(e)}")
-            return f"Failed to trigger reconstruction: {str(e)}"
-
-    def __del__(self):
-        # Clean up Arkitekt resources
-        if self._arkitekt_handle is not None:
-            try:
-                self._arkitekt_app.cancel()
-                self._arkitekt_app.exit()
-                if self._acquisition_active:
-                    self.stopFastSTORMAcquisition()
-                self._arkitekt_handle = None
-            except Exception as e:
-                self._logger.error(f"Error cleaning up Arkitekt: {e}")
-
-        # Clean up existing resources
-        if hasattr(self, 'imageComputationThread'):
-            self.imageComputationThread.quit()
-            self.imageComputationThread.wait()
-        if hasattr(super(), '__del__'):
-            super().__del__()
-
-
     '''
     ################
     # MICROEYE  ###
@@ -669,16 +213,13 @@ class STORMReconController(LiveUpdatedController):
                                   save_format: str = "tiff",
                                   exposure_time: float = None,
                                   max_frames: int = -1,
-                                  process_arkitekt: bool = False,
                                   process_locally: bool = False,
                                   update_rate: int = 10,
                                   processing_parameters: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Start fast STORM frame acquisition with optional cropping and saving.
 
-        When not using Arkitekt, this will initialize frame saving and start
-        continuous acquisition to disk. When using Arkitekt, frames are made
-        available via generators.
+        Initialises frame saving and starts continuous acquisition to disk.
 
         Parameters:
         - session_id: Unique identifier for this acquisition session
@@ -733,24 +274,15 @@ class STORMReconController(LiveUpdatedController):
             self.imageComputationWorker.setActive(True)
             self._logger.info("Local processing enabled for acquisition")
 
-        # Determine acquisition mode and initialize saving
-        if saveDirectory is not None:
+        # Active before the saving worker starts: it runs while this is set
+        self._acquisition_active = True
+        self._direct_saving_mode = saveDirectory is not None
+        if self._direct_saving_mode:
             self._saveDirectory = saveDirectory
             self._save_format = save_format
             self._initializeSaving(saveDirectory, save_format)
-
-            # If not using Arkitekt, start direct saving mode
-            if (not IS_ARKITEKT or self._arkitekt_app is None) or not process_arkitekt:
-                self._direct_saving_mode = True
-                self._startDirectSavingAcquisition(max_frames=max_frames)
-            else:
-                self._direct_saving_mode = False
+            self._startDirectSavingAcquisition(max_frames=max_frames)
         else:
-            self._direct_saving_mode = False
-
-        # Start acquisition
-        self._acquisition_active = True
-        if not self._direct_saving_mode:
             self.detector.startAcquisition()
 
         # Emit state change signal
@@ -825,7 +357,7 @@ class STORMReconController(LiveUpdatedController):
 
         # Finalize saving
         frames_saved = self._frame_count
-        if self._ome_zarr_store is not None or hasattr(self, '_tiff_writer'):
+        if self._ome_zarr_store is not None:
             self._finalizeSaving()
 
         session_id = self._current_session_id
@@ -843,86 +375,6 @@ class STORMReconController(LiveUpdatedController):
             "message": f"Fast STORM acquisition stopped. {frames_saved} frames saved.",
             "frames_saved": frames_saved
         }
-
-    def getSTORMFrameGenerator(self,
-                               num_frames: int = 100,
-                               timeout: float = 10.0) -> Generator[Dict[str, Any], None, None]:
-        """
-        Generator that yields acquired STORM frames with metadata.
-
-        Parameters:
-        - num_frames: Maximum number of frames to yield
-        - timeout: Timeout for waiting for each frame
-
-        Yields:
-        - Dictionary containing frame data, timestamp, and metadata
-        """
-        frames_yielded = 0
-
-        while frames_yielded < num_frames and self._acquisition_active:
-            try:
-                # Get all frames from detector since last call to avoid losing frames
-                frames_chunk = self.detector.getChunk()
-
-                if frames_chunk is not None:
-                    # Use normalized frame processing
-                    frames_to_process = self._normalizeFrameChunk(frames_chunk)
-
-                    for frame in frames_to_process:
-                        if frames_yielded >= num_frames:
-                            break
-
-                        # Apply cropping if specified
-                        if self._cropping_params is not None:
-                            crop = self._cropping_params
-                            frame = frame[crop['y']:crop['y']+crop['height'],
-                                         crop['x']:crop['x']+crop['width']]
-
-                        # Process with microEye if available and enabled
-                        processed_frame = None
-                        localization_params = None
-                        if isMicroEye and self.active:
-                            processed_frame, localization_params = self.imageComputationWorker.reconSTORMFrame(frame)
-
-                        # Create metadata
-                        metadata = {
-                            'timestamp': datetime.now().isoformat(),
-                            'frame_number': frames_yielded,
-                            'session_id': self._current_session_id,
-                            'original_shape': frame.shape,
-                            'cropping_params': self._cropping_params
-                        }
-
-                        if localization_params is not None:
-                            metadata['num_localizations'] = len(localization_params)
-
-                        # Save frame if saving is enabled
-                        if self._ome_zarr_store is not None:
-                            self._saveFrameToZarr(frame, frames_yielded, metadata)
-
-                        yield {
-                            'raw_frame': frame,
-                            'processed_frame': processed_frame,
-                            'localization_params': localization_params,
-                            'metadata': metadata
-                        }
-
-                        frames_yielded += 1
-
-                # Small delay to prevent excessive CPU usage when no frames available
-                time.sleep(0.001)
-
-            except Exception as e:
-                yield {
-                    'error': str(e),
-                    'frame_number': frames_yielded,
-                    'timestamp': datetime.now().isoformat()
-                }
-                break
-
-        # Cleanup
-        if self._acquisition_active:
-            self.stopFastSTORMAcquisition()
 
     @APIExport()
     def getSTORMStatus(self) -> Dict[str, Any]:
@@ -943,7 +395,6 @@ class STORMReconController(LiveUpdatedController):
             "saveDirectory": self._saveDirectory,
             "save_format": self._save_format,
             "frames_saved": self._frame_count,
-            "arkitekt_available": IS_ARKITEKT and self._arkitekt_app is not None
         }
 
     @APIExport(requestType="POST")
@@ -1411,7 +862,7 @@ class STORMReconController(LiveUpdatedController):
                 else:
                     frame_to_save = reconstructed_frame.astype(np.uint16)
 
-                tif.imwrite(str(filepath), frame_to_save)
+                save_image(filepath, frame_to_save, name="STORM reconstruction")
                 self._last_reconstruction_path = str(filepath)
 
                 # Save localizations if available
@@ -1430,17 +881,15 @@ class STORMReconController(LiveUpdatedController):
 
 
     def _initializeSaving(self, saveDirectory: str, save_format: str):
-        """Initialize saving mechanism based on format."""
+        """One OME-NGFF time series; a TIFF is exported from it at the end."""
+        self._tiff_save_path = None
+        self._ome_zarr_store = self._zarr_path = None
         try:
-            if save_format.lower() == "omezarr":
-                self._initializeOMEZarrSaving(saveDirectory)
-            elif save_format.lower() == "tiff":
-                self._initializeTiffSaving(saveDirectory)
-            else:
+            if save_format.lower() not in ("omezarr", "tiff"):
                 raise ValueError(f"Unsupported save format: {save_format}")
+            self._initializeOMEZarrSaving(saveDirectory, temporary=save_format.lower() == "tiff")
         except Exception as e:
             self._logger.error(f"Failed to initialize saving: {e}")
-            self._ome_zarr_store = None
 
     def _startDirectSavingAcquisition(self, max_frames: int = -1):
         """Start direct frame acquisition and saving in background thread.
@@ -1454,13 +903,9 @@ class STORMReconController(LiveUpdatedController):
 
             while self._acquisition_active:
                 try:
-                    # Get all frames from detector since last call
-                    frames_chunk, frame_indices = self.detector.getChunk()
-
-                    if frames_chunk is not None:
-                        # Handle different chunk formats from different cameras
-                        frames_to_process = self._normalizeFrameChunk(frames_chunk)
-
+                    # All frames from the detector since the last call
+                    frames_to_process = self._chunkFrames(self.detector.getChunk())
+                    if frames_to_process:
                         for frame in frames_to_process:
                             if not self._acquisition_active:
                                 break
@@ -1491,15 +936,11 @@ class STORMReconController(LiveUpdatedController):
                                 'local_processing': self._local_processing_enabled
                             }
 
-                            # Save frame based on format
-                            if self._save_format.lower() == "omezarr" and self._ome_zarr_store is not None:
-                                self._saveFrameToZarr(frame, self._frame_count, metadata)
-                            elif self._save_format.lower() == "tiff":
-                                self._saveFrameToTiff(frame, self._frame_count, metadata)
-                            else:
-                                self._logger.error(f"Unsupported save format: {self._save_format}")
+                            if self._zarr_path is None:
+                                self._logger.error("Saving was not initialised; stopping")
                                 self._acquisition_active = False
                                 break
+                            self._saveFrameToZarr(frame, self._frame_count, metadata)
 
                             self._frame_count += 1
 
@@ -1527,6 +968,14 @@ class STORMReconController(LiveUpdatedController):
         self._acquisition_thread.daemon = True
         self._acquisition_thread.start()
 
+    def _chunkFrames(self, chunk):
+        """The frames of a getChunk() result: most cameras return (frames, ids)."""
+        if isinstance(chunk, tuple) and len(chunk) == 2:
+            chunk = chunk[0]
+        if chunk is None or (hasattr(chunk, "__len__") and len(chunk) == 0):
+            return []
+        return self._normalizeFrameChunk(chunk)
+
     def _normalizeFrameChunk(self, frames_chunk):
         """
         Normalize frame chunk format from different camera implementations.
@@ -1541,6 +990,10 @@ class STORMReconController(LiveUpdatedController):
         """
         if frames_chunk is None:
             return []
+
+        # A list or tuple of frames
+        if not isinstance(frames_chunk, np.ndarray):
+            return list(frames_chunk)
 
         # Handle single frame case
         if len(frames_chunk.shape) == 2:
@@ -1568,130 +1021,46 @@ class STORMReconController(LiveUpdatedController):
         # Default: assume it's (nBuffer, height, width)
         return [frames_chunk[i] for i in range(frames_chunk.shape[0])]
 
-    def _initializeOMEZarrSaving(self, saveDirectory: str):
-        """Initialize simple OME-Zarr saving for time series without pyramids."""
-        try:
-            # Use standard data directory structure
-            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            drivePath = dirtools.UserFileDirs.getValidatedDataPath()
-            dirPath = os.path.join(drivePath, 'STORMController', timeStamp)
-            saveDirectory = os.path.join(dirPath, saveDirectory)
+    def _initializeOMEZarrSaving(self, saveDirectory: str, temporary: bool = False):
+        """One OME-NGFF time series (T grows per frame) in the STORM data folder.
 
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(saveDirectory), exist_ok=True)
-
-            # Initialize simplified OME-Zarr store using MinimalZarrDataSource
-            from imswitch.imcontrol.model.io import MinimalZarrDataSource
-            self._ome_zarr_store = MinimalZarrDataSource(saveDirectory, mode="w")
-
-            # Get frame shape for configuration
-            sample_chunk = self.detector.getChunk()
-            if sample_chunk is not None:
-                sample_frames = self._normalizeFrameChunk(sample_chunk)
-                if sample_frames:
-                    sample_frame = sample_frames[0]
-                    if self._cropping_params is not None:
-                        crop = self._cropping_params
-                        shape_y, shape_x = crop['height'], crop['width']
-                    else:
-                        shape_y, shape_x = sample_frame.shape
-
-                    # Configure metadata for simple time-series OME-Zarr
-                    config = {
-                        'shape_t': 10000,  # Large number, will be trimmed later
-                        'shape_c': 1,
-                        'shape_z': 1,
-                        'shape_y': shape_y,
-                        'shape_x': shape_x,
-                        'dtype': sample_frame.dtype,
-                        "experiment": {
-                            "MicroscopeState": {
-                                "timepoints": 10000,
-                                "channels": {
-                                    "channel_1": {
-                                        "is_selected": True,
-                                        "name": "STORM Channel",
-                                        "color": "#FF0000"
-                                    }
-                                },
-                                "microscope_name": "storm_detector",
-                                "stack_cycling_mode": "per_stack"
-                            },
-                            "CameraParameters": {
-                                "storm_detector": {
-                                    "x_pixels": shape_x,
-                                    "y_pixels": shape_y
-                                }
-                            }
-                        }
-                    }
-                    self._ome_zarr_store.set_metadata_from_configuration_experiment(config)
-                    self._ome_zarr_store.new_position(pos_index=0, pos_name="STORM Position", pos_x=0, pos_y=0, pos_z=0)
-
-        except ImportError:
-            self._logger.warning("OME-Zarr dependencies not available, falling back to TIFF")
-            self._initializeTiffSaving(saveDirectory.replace('.zarr', '.tiff'))
-        except Exception as e:
-            self._logger.error(f"Failed to initialize OME-Zarr saving: {e}")
-            self._ome_zarr_store = None
-
-    def _initializeTiffSaving(self, saveDirectory: str):
-        """Initialize single TIFF saving following ExperimentController pattern."""
-        # Use standard data directory structure
+        ``temporary``: only an OME-TIFF is wanted; the store is hidden and removed
+        after the export in ``_finalizeSaving``.
+        """
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        drivePath = dirtools.UserFileDirs.getValidatedDataPath()
-        dirPath = os.path.join(drivePath, 'STORMController', timeStamp)
-
-        # Ensure directory exists
+        dirPath = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'STORMController',
+                               timeStamp)
         os.makedirs(dirPath, exist_ok=True)
-
-        # Create single TIFF file path
-        self._tiff_save_path = os.path.join(dirPath, f"{saveDirectory}_{timeStamp}.tiff")
-        self._tiff_writer = None
-        self._logger.info(f"TIFF saving initialized: {self._tiff_save_path}")
+        base = saveDirectory[:-5] if saveDirectory.endswith(".zarr") else saveDirectory
+        if temporary:
+            self._tiff_save_path = os.path.join(dirPath, f"{base}_{timeStamp}.ome.tif")
+            self._zarr_path = os.path.join(dirPath, f".{base}.ome.zarr")
+        else:
+            self._zarr_path = os.path.join(dirPath, f"{base}.ome.zarr")
 
     def _saveFrameToZarr(self, frame: np.ndarray, frame_number: int, metadata: dict):
-        """Save frame to OME-Zarr store."""
+        """Save frame to OME-Zarr store; the store is sized by the first (cropped) frame."""
         try:
-            if self._ome_zarr_store is not None:
-                # Write frame to zarr store using the simple time-series approach
-                self._ome_zarr_store.write(frame, ti=frame_number, ci=0)
+            if self._ome_zarr_store is None:
+                spec = ImageSpec(shape=(1, 1, 1) + tuple(frame.shape[:2]), dtype=str(frame.dtype),
+                                 pixel_size_um=float(self.detector.pixelSizeUm[-1]),
+                                 channel_names=["STORM"],
+                                 name=os.path.basename(self._zarr_path).split(".")[0] or "STORM")
+                self._ome_zarr_store = NgffImage.create(self._zarr_path, spec)
+            self._ome_zarr_store.write(frame, frame_number, 0, 0)
         except Exception as e:
             self._logger.error(f"Failed to save frame to Zarr: {e}")
-
-    def _saveFrameToTiff(self, frame: np.ndarray, frame_number: int, metadata: dict):
-        """Save frame to single TIFF file using append mode."""
-        try:
-            # Initialize writer on first frame
-            if self._tiff_writer is None:
-                # Use tifffile to create a single multi-page TIFF
-                self._tiff_writer = tif.TiffWriter(self._tiff_save_path, bigtiff=True)
-
-            # Write frame to TIFF with metadata
-            self._tiff_writer.write(
-                frame.astype(np.uint16),
-                metadata={'FrameNumber': frame_number,
-                         'Timestamp': metadata.get('timestamp', ''),
-                         'SessionID': metadata.get('session_id', '')},
-                contiguous=True
-            )
-
-        except Exception as e:
-            self._logger.error(f"Failed to save frame to TIFF: {e}")
 
     def _finalizeSaving(self):
         """Finalize and close saving."""
         try:
-            # Close OME-Zarr store properly
-            if self._ome_zarr_store is not None:
-                self._ome_zarr_store.close()
-                self._ome_zarr_store = None
-
-            # Close single TIFF writer properly
-            if hasattr(self, '_tiff_writer') and self._tiff_writer is not None:
-                self._tiff_writer.close()
-                self._tiff_writer = None
-                self._logger.info(f"TIFF file finalized: {self._tiff_save_path}")
+            store, self._ome_zarr_store = self._ome_zarr_store, None
+            if store is not None:
+                store.finalize()
+                if self._tiff_save_path:   # TIFF format: export, then drop the hidden store
+                    store.export_ome_tiff(self._tiff_save_path)
+                    shutil.rmtree(str(store.group.store.root), ignore_errors=True)
+                    self._logger.info(f"OME-TIFF written: {self._tiff_save_path}")
 
         except Exception as e:
             self._logger.error(f"Failed to finalize saving: {e}")
@@ -1849,7 +1218,7 @@ class STORMReconImageComputationWorker:
             else:
                 image_to_save = self.sumReconstruction.astype(np.uint16)
 
-            tif.imwrite(filepath, image_to_save, append=False)
+            save_image(filepath, image_to_save, name="STORM reconstruction")
             self._logger.info(f"STORM reconstruction saved: {filepath}")
 
             # Reset reconstruction

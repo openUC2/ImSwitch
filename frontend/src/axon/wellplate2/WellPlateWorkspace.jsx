@@ -5,7 +5,6 @@ import {
   Tabs,
   Tab,
   Tooltip,
-  Typography,
   IconButton,
   ToggleButton,
   ToggleButtonGroup,
@@ -21,7 +20,6 @@ import MapIcon from "@mui/icons-material/Map";
 import ViewInArIcon from "@mui/icons-material/ViewInAr";
 import LockIcon from "@mui/icons-material/Lock";
 import MyLocationIcon from "@mui/icons-material/MyLocation";
-import LinkIcon from "@mui/icons-material/Link";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
 import ScienceIcon from "@mui/icons-material/Science";
 import useDeviceProfile from "../../hooks/useDeviceProfile";
@@ -411,6 +409,14 @@ const WellPlateWorkspace = ({ headerAction = null }) => {
 
   const active = viewports[viewport] || viewports[0];
 
+  const tourButton = (
+    <Tooltip title="Take a quick tour of the WellPlate workspace">
+      <IconButton size="small" onClick={handleTour}>
+        <HelpOutlineIcon fontSize="small" />
+      </IconButton>
+    </Tooltip>
+  );
+
   return (
     // Fills the height AxonTabComponent hands down; the two columns below get
     // their own scrollbars (independent left/right scrolling) instead of one
@@ -425,19 +431,20 @@ const WellPlateWorkspace = ({ headerAction = null }) => {
         flexDirection: "column",
       }}
     >
-      {/* Linked-workspace hint + tour launcher */}
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 0.75,
-          color: theme.palette.text.secondary,
-          mb: 0.5,
-          px: 0.5,
-          flexShrink: 0,
-        }}
-      >
-        {compactLayout ? (
+      {/* Compact: switch between the viewport and the experiment pane. On
+          desktop both are visible and the tour / live-preview buttons sit at
+          the end of the viewport tab row instead of taking a row of their own. */}
+      {compactLayout && (
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 0.75,
+            mb: 0.5,
+            px: 0.5,
+            flexShrink: 0,
+          }}
+        >
           <ToggleButtonGroup
             exclusive
             size="small"
@@ -455,26 +462,10 @@ const WellPlateWorkspace = ({ headerAction = null }) => {
               Experiment
             </ToggleButton>
           </ToggleButtonGroup>
-        ) : (
-          <>
-            <LinkIcon sx={{ fontSize: 16 }} />
-            <Typography variant="caption">
-              Pick a viewport on the left — the experiment is always on the right.
-              Map selections fill the Positions list live.
-            </Typography>
-          </>
-        )}
-        <Tooltip title="Take a quick tour of the WellPlate workspace">
-          <IconButton size="small" onClick={handleTour} sx={{ p: 0.25 }}>
-            <HelpOutlineIcon sx={{ fontSize: 18 }} />
-          </IconButton>
-        </Tooltip>
-        {headerAction && (
-          <Box sx={{ ml: compactLayout ? 0 : "auto", flexShrink: 0 }}>
-            {headerAction}
-          </Box>
-        )}
-      </Box>
+          {tourButton}
+          {headerAction}
+        </Box>
+      )}
 
       <Box
         sx={{
@@ -496,47 +487,62 @@ const WellPlateWorkspace = ({ headerAction = null }) => {
             minHeight: 0,
           }}
         >
-          <Tabs
-            value={viewport}
-            onChange={(_e, v) => setViewport(v)}
-            variant="scrollable"
-            scrollButtons="auto"
-            allowScrollButtonsMobile
-            data-tour-wp="viewport-strip"
+          <Box
             sx={{
-              minHeight: 48,
+              display: "flex",
+              alignItems: "center",
               flexShrink: 0,
               borderBottom: 1,
               borderColor: "divider",
-              "& .MuiTab-root": {
-                minHeight: 48,
-                textTransform: "none",
-                fontWeight: 500,
-              },
             }}
           >
-            {viewports.map((v, i) => (
-              <TooltipTab
-                key={v.key}
-                value={i}
-                help={v.help}
-                icon={v.icon}
-                iconPosition="start"
-                label={v.label}
-                data-tour-wp={`tab-${v.key}`}
-                // Subtle separator before the utility-panel group, without
-                // injecting non-Tab children into <Tabs>.
-                sx={
-                  v.divider
-                    ? {
-                        ml: 1,
-                        borderLeft: `1px solid ${alpha(theme.palette.divider, 0.9)}`,
-                      }
-                    : undefined
-                }
-              />
-            ))}
-          </Tabs>
+            <Tabs
+              value={viewport}
+              onChange={(_e, v) => setViewport(v)}
+              variant="scrollable"
+              scrollButtons="auto"
+              allowScrollButtonsMobile
+              data-tour-wp="viewport-strip"
+              sx={{
+                minHeight: 48,
+                flex: 1,
+                minWidth: 0,
+                "& .MuiTab-root": {
+                  minHeight: 48,
+                  textTransform: "none",
+                  fontWeight: 500,
+                },
+              }}
+            >
+              {viewports.map((v, i) => (
+                <TooltipTab
+                  key={v.key}
+                  value={i}
+                  help={v.help}
+                  icon={v.icon}
+                  iconPosition="start"
+                  label={v.label}
+                  data-tour-wp={`tab-${v.key}`}
+                  // Subtle separator before the utility-panel group, without
+                  // injecting non-Tab children into <Tabs>.
+                  sx={
+                    v.divider
+                      ? {
+                          ml: 1,
+                          borderLeft: `1px solid ${alpha(theme.palette.divider, 0.9)}`,
+                        }
+                      : undefined
+                  }
+                />
+              ))}
+            </Tabs>
+            {!compactLayout && (
+              <>
+                {tourButton}
+                {headerAction}
+              </>
+            )}
+          </Box>
 
           {/* Viewport content — independent scroll area */}
           <Box

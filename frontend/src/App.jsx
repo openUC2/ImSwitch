@@ -8,7 +8,6 @@ import useDeviceProfile from "./hooks/useDeviceProfile";
 import TouchKeypadHost from "./components/touch/TouchKeypadHost.jsx";
 
 import AboutPage from "./components/AboutPage.js";
-import ConnectionSettings from "./components/ConnectionSettings.jsx";
 import DesktopAppSettings from "./components/DesktopAppSettings.jsx";
 import DetectorTriggerController from "./components/DetectorTriggerController.js";
 import ExtendedLEDMatrixController from "./components/ExtendedLEDMatrixController.jsx";
@@ -35,12 +34,8 @@ import FRAMESettingsController from "./components/FRAMESettingsController.js";
 import FrameCalibrationApp from "./components/FrameCalibrationApp.jsx";
 import STORMControllerLocal from "./components/STORMControllerLocal.js";
 import StresstestController from "./components/StresstestController.js";
-import SystemSettings from "./components/SystemSettings.js";
-import SystemUpdateController from "./components/SystemUpdateController.jsx";
-import UC2ConfigurationController from "./components/UC2ConfigurationController.jsx";
+import SystemPage, { SYSTEM_PAGE_KEYS } from "./components/SystemPage.jsx";
 import SerialDebugController from "./components/SerialDebugController.jsx";
-import WiFiController from "./components/WiFiController.jsx";
-import LoggingController from "./components/LoggingController.jsx";
 import VizarrViewer from "./components/VizarrViewer.jsx";
 import { JupyterProvider } from "./context/JupyterContext.js";
 import { PWAProvider } from "./context/PWAContext.js";
@@ -807,7 +802,9 @@ function App() {
               )}
               {selectedPlugin === "Objective" && <ObjectiveController />}
               {selectedPlugin === "About" && <AboutPage />}
-              {selectedPlugin === "SystemSettings" && <SystemSettings />}
+              {SYSTEM_PAGE_KEYS.includes(selectedPlugin) && (
+                <SystemPage page={selectedPlugin} onNavigate={handlePluginChange} />
+              )}
               {selectedPlugin === "MotorSettings" && (
                 <MotorSettingsController />
               )}
@@ -866,7 +863,6 @@ function App() {
               {selectedPlugin === "LightSheet" && <LightsheetController />}
               {selectedPlugin === "MMCore" && <MMCoreController />}
 
-              {selectedPlugin === "WiFi" && <WiFiController />}
               {plugins.map(
                 (p) =>
                   selectedPlugin === p.name && (
@@ -891,7 +887,6 @@ function App() {
                 <CompositeComponent />
               )}
               {selectedPlugin === "FlowStop" && <FlowStopController />}
-              {selectedPlugin === "UC2" && <UC2ConfigurationController />}
               {selectedPlugin === "SerialDebug" && <SerialDebugController />}
               {selectedPlugin === "DetectorTrigger" && (
                 <DetectorTriggerController />
@@ -902,10 +897,7 @@ function App() {
               {selectedPlugin === "Lepmon" && <LepMonController />}
               {selectedPlugin === "MazeGame" && <MazeGameController />}
               {selectedPlugin === "SocketView" && <SocketView />}
-              {selectedPlugin === "SystemUpdate" && <SystemUpdateController />}
-              {selectedPlugin === "Connections" && <ConnectionSettings />}
               {selectedPlugin === "DesktopApp" && <DesktopAppSettings />}
-              {selectedPlugin === "Logging" && <LoggingController />}
             </Box>
           </Box>
         </SnackbarProvider>

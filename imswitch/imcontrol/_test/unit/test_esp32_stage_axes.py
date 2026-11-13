@@ -24,7 +24,13 @@ class FakeParent:
     def post_json(self, path, payload, **kwargs):
         self.sent.append(payload)
         if path == "/motor_get":
-            return [{"steppers": [{"stepperid": i, "position": p} for i, p in self.positions.items()]}]
+            # as the firmware: a bare request is answered {"motor": {"steppers": ...}}; a filtered one (CAN)
+            # {"steppers": ...} with every id asked for, {"isDone": -1} where it knows no position
+            if "motor" not in payload:
+                return [{"motor": {"steppers": [{"stepperid": i, "position": p} for i, p in self.positions.items()]}}]
+            return [{"steppers": [{"stepperid": s["stepperid"], "position": self.positions[s["stepperid"]]}
+                                  if s["stepperid"] in self.positions else {"stepperid": s["stepperid"], "isDone": -1}
+                                  for s in payload["motor"]["steppers"]]}]
         return {}
 
     def last(self, key):
@@ -110,3 +116,19 @@ def test_relative_move_is_counted_once_when_the_board_reports_meanwhile():
     assert stage.position["Z"] == 1000
     stage.move(1000, "Z", is_blocking=False)
     assert stage.position["Z"] == 2000
+
+
+def test_position_push_sharing_the_qid_does_not_read_as_zero():
+    """A motor's position push carries the qid of that motor's last move; after the 254-qid
+    wrap it can share the qid of a /motor_get and arrive first. Taken as the answer, every
+    other axis read 0 (FRAME calibration 2026-11-12: "X reads 728.2 after a move to 19394.5")."""
+    import inspect
+    if "missing" not in inspect.signature(Motor.get_position).parameters:
+        pytest.skip("uc2rest without get_position(missing=...)")
+    stage, parent, _ = make_stage(["X", "Y", "Z"])
+    stage.move(100, "X", is_absolute=True)
+    stage.move(200, "Y", is_absolute=True)
+    push = {"steppers": [{"stepperid": 0, "position": -29000, "isDone": 1}], "qid": 7}
+    parent.post_json = lambda path, payload, **kw: [push]      # the answer itself got lost
+    pos = stage.getPosition()
+    assert pos["X"] == 100 and pos["Y"] == 200, pos           # last known, not 0

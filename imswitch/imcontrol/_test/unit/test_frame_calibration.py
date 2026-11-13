@@ -31,8 +31,8 @@ class Stage:
     -Z (FRAME 10, 2026-11-12). After homing the Z end stop refuses moves beyond it."""
     axes = ["X", "Y", "Z"]
 
-    def __init__(self, z_in=-1):
-        self.zIn, self.zHomed = z_in, False
+    def __init__(self, z_in=-1, z_focus=Z_FOCUS):
+        self.zIn, self.zHomed, self.zFocus = z_in, False, z_focus
         self.homeParams = {a: {"enabled": True, "steps": 0, "direction": 1} for a in self.axes}
         self.homeParams["Z"]["direction"] = -z_in
         self.cmd = {a: 5000.0 for a in self.axes}          # commanded device position (what firmware reports)
@@ -87,7 +87,7 @@ class Camera:
         m = MAG[self.slot]
         off = -np.linalg.solve(m * J_TRUE, np.stack([self.xx - c[0], self.yy - c[1]]).reshape(2, -1))
         P = (R.T @ (off + (d + AXIS_OFF[self.slot] - D0)[:, None])).reshape(2, H, W)
-        dz = -self.stage.zIn * self.stage.real["Z"] - Z_FOCUS - DZ[self.slot]
+        dz = -self.stage.zIn * self.stage.real["Z"] - self.stage.zFocus - DZ[self.slot]
         gain = self.parameters["exposure"].value / 40 / m ** 2          # light per pixel ~ 1/magnification^2
         if self.slides:      # black PCB slides: only the pinholes (0.2/0.3/0.4 mm along +y) let light through
             img = np.zeros((H, W), np.float32)      # float32: the defocus blur is the slow part
@@ -152,8 +152,8 @@ class Objective:
         self._zPositions[slot] = self.stage.getPosition()["Z"]
 
 
-def _run_simulated(target="plate", two_objectives=False, z_in=-1):
-    stage = Stage(z_in)
+def _run_simulated(target="plate", two_objectives=False, z_in=-1, z_focus=Z_FOCUS):
+    stage = Stage(z_in, z_focus)
     cam = Camera(stage, slides=target == "slides")
     stored = {}                                       # objective id -> setCalibrationData kwargs
     pc = SimpleNamespace(
@@ -274,6 +274,25 @@ def test_pinhole_slides_on_a_rig_that_homes_z_to_minus():
     for k in (0, 1):
         A = np.array(stored[str(k)]["affineMatrix"])[:, :2]
         assert np.allclose(A, -np.linalg.inv(MAG[k] * J_TRUE), rtol=0, atol=2e-3), (k, A)
+
+
+def test_pinhole_focus_beyond_the_sweep_range():
+    """FRAME 10 (2026-11-12): the slides' focus lies more than focusSearchUm (6 mm) from the
+    homed Z. The sweep, still rising at its end, must go on to the peak instead of stopping
+    there (it stored the sweep's end as focus, and the 20x then found no light)."""
+    ctrl, stage, cam, stored = _run_simulated("slides", two_objectives=True, z_in=1, z_focus=-7500.0)
+    res = ctrl._status["result"]
+    assert abs(res["focus"]["0"]["z"] - 7500) <= 20, res["focus"]
+    assert abs(res["focus"]["1"]["z"] - (7500 - DZ[1])) <= 15, res["focus"]
+
+
+def test_pinhole_focus_metric_is_exposure_invariant_and_peaks_at_focus():
+    img = np.zeros((600, 900), np.float32)
+    img[np.hypot(*np.mgrid[-300:300, -450:450]) < 120] = 1.0
+    vals = [fct.pinhole_focus_metric(np.clip(cv2.GaussianBlur(img, (0, 0), sg) * k + 2, 0, 255).astype(np.uint8))
+            for sg, k in ((40, 200), (10, 200), (1, 200), (1, 60))]
+    assert vals[0] < vals[1] < vals[2] and abs(vals[3] / vals[2] - 1) < 0.15, vals
+    assert fct.pinhole_focus_metric(np.full((600, 900), 120, np.uint8)) == 0.0        # evenly lit: no edge
 
 
 def _bare_controller(stage, cam):

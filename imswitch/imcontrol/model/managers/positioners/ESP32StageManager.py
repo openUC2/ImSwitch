@@ -441,16 +441,34 @@ class ESP32StageManager(PositionerManager):
         pass
 
     def _readDevicePositions(self):
-        """Device positions as an array indexed by stepperid. Ids 0-3 are the board's own
-        axes, which a bare /motor_get lists; other ids (CAN) are asked for explicitly."""
+        """Device positions as an array indexed by stepperid, NaN where the reply did not
+        carry the axis (uc2rest >= the 'missing' argument; older ones report 0 there). Ids 0-3
+        are the board's own axes, which a bare /motor_get lists; other ids (CAN) are asked for
+        explicitly."""
         ids = [self.axisIds[ax] for ax in self._axes]
-        return 1. * self._motor.get_position(axis=None if max(ids) < 4 else ids)
+        axis = None if max(ids) < 4 else ids
+        try:
+            return 1. * self._motor.get_position(axis=axis, missing=np.nan)
+        except TypeError:
+            return 1. * self._motor.get_position(axis=axis)
 
     def getPosition(self):
-        # load position from device
+        """User positions read from the board. An axis the reply did not carry (lost reply,
+        or a position push of another motor that shared the qid - it read as 0, FRAME
+        calibration 2026-11-12) is read once more, then taken from the last known position."""
         try:
             allPositions = self._readDevicePositions()
-            return {ax: allPositions[self.axisIds[ax]] - self.getStageOffsetAxis(ax) for ax in self._axes}
+            missing = [ax for ax in self._axes if np.isnan(allPositions[self.axisIds[ax]])]
+            if missing:
+                again = self._readDevicePositions()
+                for ax in missing:
+                    allPositions[self.axisIds[ax]] = again[self.axisIds[ax]]
+                missing = [ax for ax in missing if np.isnan(allPositions[self.axisIds[ax]])]
+                if missing:
+                    self.__logger.warning(f"no position reply for {missing} - using the last known position")
+            last = getattr(self, "_position", None) or {}       # getPosition() also fills it in __init__
+            return {ax: (last.get(ax, 0.0) if ax in missing
+                         else allPositions[self.axisIds[ax]] - self.getStageOffsetAxis(ax)) for ax in self._axes}
         except Exception as e:
             self.__logger.error(e)
             return self._position

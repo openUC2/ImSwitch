@@ -14,6 +14,8 @@ Tests of a running ImSwitch on a real microscope, through its HTTP API only. The
 | `objective_switch` | switching the objective shows in the image, and light still gets through | **moves** turret and Z, **light** |
 | `lightsource` | lasers/LEDs switch; every LED reaches the cameras | **light** |
 | `ledmatrix` | the LED matrix reaches the cameras | **light** |
+| `ledmatrix_single` | one LED lights alone (`setLEDs`) and is dimmer than every LED | **light** |
+| `frame_calibration` | the one-button FRAME calibration runs through; needs the calibration target in the holder | **moves** (homes, turret), **light**, **writes the setup** (backup: `setup_before_frame_calibration.json`) |
 | `motor_axis_move` | each axis steps 10 µm and back | **moves** |
 | `motor_motion_camera` | the observation camera sees X/Y/Z/A move | **moves** (parks at the transport position), **light** |
 
@@ -35,7 +37,8 @@ python -m imswitch.imcontrol._test.hil out --sync-firmware            # FLASHES 
 
 It waits until ImSwitch answers, the board is connected and every camera gives a frame, then
 runs the tests and writes `junit.xml`, `report.html` (results, output and photos in one file)
-and `summary.md` to `REPORT_DIR`. Both reports name the setup file the rig ran with. Exit code: `0` all passed, `1` a test failed, `2` the tests
+and `summary.md` to `REPORT_DIR`. A test may leave further files there; it finds the folder in
+the environment variable `HIL_REPORT_DIR`. Both reports name the setup file the rig ran with. Exit code: `0` all passed, `1` a test failed, `2` the tests
 could not run (not ready, firmware sync failed, unknown test, everything skipped).
 
 The test rig (os-rpi, `.github/hil/`) runs exactly this command inside the ImSwitch container.

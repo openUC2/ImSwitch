@@ -15,6 +15,7 @@ Exit code: 0 all passed, 1 a test failed, 2 the tests could not run.
 The test rig (os-rpi) runs exactly this command inside the ImSwitch container.
 """
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -100,6 +101,8 @@ def main():
         return COULD_NOT_RUN
 
     report_dir = Path(args.report_dir)
+    # A test that leaves a file for the report (e.g. a backup) writes it here.
+    os.environ["HIL_REPORT_DIR"] = str(report_dir.resolve())
     code = pytest.main(
         [*[str(file) for file in files or [HERE]],
          "-c", str(HERE / "pytest.ini"), "-ra", f"--junitxml={report_dir / 'junit.xml'}"],

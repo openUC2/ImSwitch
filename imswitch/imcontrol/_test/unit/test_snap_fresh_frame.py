@@ -16,6 +16,9 @@ from __future__ import annotations
 import threading
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 from imswitch.imcontrol.controller.controllers.RecordingController import (
     RecordingController,
 )
@@ -139,6 +142,54 @@ class TestSnapCostsOneExposure:
 
         assert armed == ["cam"]
         assert det.framesExposed == 0
+
+
+def _make_snap_numpy_controller(detector):
+    """Controller with what snapNumpy() needs; the recording service returns
+    the detector's latest frame, as RecordingService.snap does."""
+    ctrl = _make_controller(detector)
+    ctrl.updateRecAttrs = lambda **kwargs: None
+    ctrl.getDetectorNamesToCapture = lambda: ["cam"]
+    ctrl._get_detector_attrs = lambda name: {}
+
+    def snap_numpy(detector_names, attrs):
+        frames = {name: ctrl._master.detectorsManager[name].getLatestFrame()
+                  for name in detector_names}
+        return {name: frame for name, frame in frames.items() if frame is not None}
+
+    ctrl._recording_service = SimpleNamespace(snap_numpy=snap_numpy)
+    return ctrl
+
+
+class TestSnapNumpyArmsStoppedDetectors:
+    def test_stopped_detector_is_armed_and_released(self):
+        det = FakeDetector()
+        ctrl = _make_snap_numpy_controller(det)
+
+        images = ctrl.snapNumpy()
+
+        assert images.get("cam") is not None
+        assert det._running is False
+
+    def test_running_stream_is_left_running(self):
+        det = FakeDetector()
+        det.startAcquisition()
+        ctrl = _make_snap_numpy_controller(det)
+
+        images = ctrl.snapNumpy()
+
+        assert images.get("cam") is not None
+        assert det._running is True
+
+    def test_missing_frame_is_a_503_not_a_key_error(self):
+        det = FakeDetector()
+        det._running = None  # state unknown: not armed, and no frame comes
+        ctrl = _make_snap_numpy_controller(det)
+
+        with pytest.raises(HTTPException) as exc:
+            ctrl.snapNumpyToFastAPI(detectorName="cam")
+
+        assert exc.value.status_code == 503
 
 
 def _renumbering_grab(det):

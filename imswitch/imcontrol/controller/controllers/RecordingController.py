@@ -25,6 +25,7 @@ import queue  # thread-safe queue for streamer
 from imswitch.imcommon.framework import Timer
 from imswitch.imcommon.model import ostools, APIExport, initLogger, dirtools
 from imswitch.imcontrol.model import RecMode
+from imswitch.imcontrol.model.managers.detectors.DetectorManager import getDetectorExposureSeconds
 from imswitch.imcontrol.model.io import (
     RecordingService, 
     SaveFormat,
@@ -332,32 +333,6 @@ class RecordingController(ImConWidgetController):
             response.update(preview)
         return response
 
-    def _getDetectorExposureSeconds(self, detector) -> float:
-        """Best-effort read of the detector exposure time, returned in seconds.
-
-        Exposure parameters are stored in milliseconds in ImSwitch. Returns 0.0
-        when the exposure cannot be determined (naming differs between drivers).
-        """
-        try:
-            params = detector.parameters
-        except Exception:
-            return 0.0
-        for key in ("exposure", "exposureTime", "ExposureTime", "exposure_time"):
-            try:
-                param = params.get(key) if hasattr(params, "get") else params[key]
-            except Exception:
-                param = None
-            if param is None:
-                continue
-            value = getattr(param, "value", param)
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                continue
-            if value > 0:
-                return value / 1000.0
-        return 0.0
-
     def _armDetectorsForSnap(self, detectorNames,
                              cancelEvent: Optional[threading.Event] = None) -> list:
         """Ensure the given detectors are acquiring so a fresh frame can be
@@ -462,7 +437,7 @@ class RecordingController(ImConWidgetController):
         usually inside the driver's own grab call; cancelSnap() therefore also
         stops the detector, which makes that call return early.
         """
-        exposureSeconds = self._getDetectorExposureSeconds(detector)
+        exposureSeconds = getDetectorExposureSeconds(detector)
         # Allow a full exposure for every frame we wait for, plus a safety margin.
         timeout = max(2.0, (exposureSeconds + 0.2) * (framesToWait + 1) + extraTimeout)
         startTime = time.time()
@@ -557,7 +532,7 @@ class RecordingController(ImConWidgetController):
             except Exception:
                 continue
             longestExposureSeconds = max(
-                longestExposureSeconds, self._getDetectorExposureSeconds(detector)
+                longestExposureSeconds, getDetectorExposureSeconds(detector)
             )
         return longestExposureSeconds * 1000.0 + 1500.0
 
@@ -698,7 +673,7 @@ class RecordingController(ImConWidgetController):
                         "error": "No such snap job"}
             return self._snapJobPublicState(job)
 
-    @APIExport()
+    @APIExport(runInThreadpool=True)
     def cancelSnap(self, jobId: Optional[str] = None) -> dict:
         """Abort a running snap and stop the exposure.
 
@@ -752,23 +727,28 @@ class RecordingController(ImConWidgetController):
         Take a snap and return numpy arrays.
         
         This method delegates to RecordingService.snap_numpy() for
-        memory-only snap operations.
+        memory-only snap operations. As in snap(), detectors whose stream is
+        stopped are armed for one fresh exposure and released again.
         """
         self.updateRecAttrs(isSnapping=True)
         detectorNames = self.getDetectorNamesToCapture()
-        
+
         # Collect metadata attributes (same as snap())
         attrs = {
             detectorName: self._get_detector_attrs(detectorName)
             for detectorName in detectorNames
         }
-        
-        # TODO: We have to check if the camera is actually running - if not, start the camera loop 
-        
-        return self.recording_service.snap_numpy(
-            detector_names=detectorNames,
-            attrs=attrs
-        )
+
+        # Without a running stream getLatestFrame() has nothing (or only a stale
+        # frame) to return, and the detector would be missing from the result.
+        armedDetectors = self._armDetectorsForSnap(detectorNames)
+        try:
+            return self.recording_service.snap_numpy(
+                detector_names=detectorNames,
+                attrs=attrs
+            )
+        finally:
+            self._disarmDetectorsAfterSnap(armedDetectors)
 
     def _start_frame_recording(self, save_format: SaveFormat):
         """Start recording for a specific number of frames."""
@@ -992,7 +972,7 @@ class RecordingController(ImConWidgetController):
             self.setSharedAttr(_recModeAttr, self.recMode.name)
 
 
-    @APIExport(runOnUIThread=False)
+    @APIExport(runOnUIThread=False, runInThreadpool=True)
     def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: int = SaveFormat.TIFF,
                         returnPreview: bool = False, previewMaxSize: int = 1024) -> dict:
         """Take a snap and save it to a file at the given fileName.
@@ -1017,7 +997,7 @@ class RecordingController(ImConWidgetController):
         return self.snap(name=fileName, mSaveFormat=saveFormat,
                          returnPreview=returnPreview, previewMaxSize=previewMaxSize)
 
-    @APIExport(runOnUIThread=False)
+    @APIExport(runOnUIThread=False, runInThreadpool=True)
     def snapImage(self, output: bool = False, toList: bool = True) -> Union[None, list]:
         """
         Take a snap and save it to a .tiff file at the set file path.
@@ -1035,7 +1015,7 @@ class RecordingController(ImConWidgetController):
         else:
             self.snap()
 
-    @APIExport(runOnUIThread=False)
+    @APIExport(runOnUIThread=False, runInThreadpool=True)
     def snapNumpyToFastAPI(
         self, detectorName: str = None, resizeFactor: float = 1
     ) -> Response:
@@ -1052,7 +1032,10 @@ class RecordingController(ImConWidgetController):
             detectorNames = self.getDetectorNamesToCapture()
             images = {
                 detectorName: images[detectorName] for detectorName in detectorNames
+                if images.get(detectorName) is not None
             }
+            if not images:
+                raise HTTPException(status_code=503, detail="No frame from any detector")
 
             # Determine the maximum height and total width for the stitched image
             max_height = max(img.shape[0] for img in images.values())
@@ -1093,7 +1076,13 @@ class RecordingController(ImConWidgetController):
             if detectorName is None:
                 detectorName = self.getDetectorNamesToCapture()[0]
             # get the image from the specified detector
-            image = images[detectorName]
+            image = images.get(detectorName)
+            if image is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"No frame from detector '{detectorName}' "
+                           f"(not an acquisition detector, or it delivered no frame)",
+                )
 
             # eventually resize image to save bandwidth
             if resizeFactor < 1:
@@ -1166,7 +1155,7 @@ class RecordingController(ImConWidgetController):
         self.endedRecording = False
         return self._build_recording_response()
 
-    @APIExport(runOnUIThread=True)
+    @APIExport(runOnUIThread=True, runInThreadpool=True)
     def stopRecording(self) -> Dict[str, Any]:
         """Stops recording using RecordingService."""
         recording_result = self._build_recording_response()

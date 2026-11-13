@@ -113,10 +113,22 @@ back to `musl` (Alpine) automatically.
 - **Temperature monitor**: a background thread polls the sensor temperature
   every 5 s for as long as the camera is open (the cooler runs then too, so the
   check cannot wait for an acquisition).
-  - **TEC keep-alive**: the target is re-written to the camera every 60 s.
-    Before the stream was kept running, a camera could report the target and
-    the cooler as on and still sit at ambient (the `Stop()` effect above). The
-    re-write is kept as a cheap safeguard.
+  - **TEC write spacing**: a TEC write (`TOUPCAM_OPTION_TEC`,
+    `put_Temperature`) that reaches the camera within a few ms of a sensor
+    temperature or TEC-voltage read is lost. The camera acknowledges it, but
+    the cooler ends up off, and a lost `TEC=1` even switches off a running
+    cooler. On the MTR3CMOS09000KMA (SDK 60.32226) 0 and 20 ms between read
+    and write failed every time, 100 ms and more never did. `set_temperature()`
+    used to read the sensor right before switching the cooler on, and the
+    keep-alive ran right after the monitor's read, so the sensor sat at ambient
+    with 0 V on the TEC. All TEC reads and writes now share a lock, and a write
+    waits `TEC_WRITE_SETTLE_S` (200 ms) after the last read.
+  - **Readback is SDK cache**: `TOUPCAM_OPTION_TEC` and `_TECTARGET` (so
+    `tec_on` / `tec_target_c` in the log) never go to the camera; they report
+    what was last written, even if the camera dropped it. Whether the cooler is
+    really driven shows in `tec_voltage_v` (about 0 V = not driven).
+  - **TEC keep-alive**: the target is re-written to the camera every 60 s, as a
+    backstop for a write that got lost anyway.
   - **Target range**: `set_temperature()` clamps to the model's own range
     (`TOUPCAM_OPTION_TECTARGET_RANGE`, logged at startup) and warns when it
     has to. An out-of-range target is accepted by the SDK and read back

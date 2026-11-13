@@ -69,6 +69,71 @@ class DetectorListParameter(DetectorParameter):
     """ The available values to pick from. """
 
 
+# Normalised names of parameters that hold the exposure time, in order of
+# preference. Names are compared lower-cased with spaces, "_" and "-" removed,
+# so "exposure", "Exposure" (MMCore), "exposure_time", "ExposureTime",
+# "exposureTime" and "Set exposure time" (Hamamatsu, Photometrics) all match,
+# while "exposure_mode" does not.
+_EXPOSURE_PARAMETER_KEYS = ("exposure", "exposuretime", "setexposuretime")
+
+# Factor from a parameter's ``valueUnits`` to milliseconds. Exposure is stored
+# in ms throughout ImSwitch, so missing or unknown units count as ms.
+_TIME_UNITS_TO_MS = {
+    "ms": 1.0, "msec": 1.0,
+    "s": 1000.0, "sec": 1000.0,
+    "us": 1e-3, "µs": 1e-3, "μs": 1e-3,
+    "ns": 1e-6,
+    "min": 60000.0,
+}
+
+
+def _normaliseParameterName(name: Any) -> str:
+    return "".join(ch for ch in str(name) if ch not in " _-").lower()
+
+
+def getDetectorExposureMs(detector: Any) -> float:
+    """ Best-effort exposure time of a detector, in milliseconds.
+
+    ``detector`` is a DetectorManager (anything with a ``parameters`` dict) or
+    such a parameter dict itself. Drivers name the exposure parameter
+    differently, so the lookup ignores case and separators, and it converts
+    using the parameter's ``valueUnits`` when they name a time unit. Only
+    cached parameter values are read, never the hardware, so this is safe to
+    call while an acquisition holds the camera.
+
+    Returns 0.0 when no positive exposure can be found; callers treat that as
+    "not a long exposure".
+    """
+    try:
+        parameters = getattr(detector, "parameters", detector)
+        items = list(parameters.items())
+    except Exception:
+        return 0.0
+
+    candidates = {}
+    for name, parameter in items:
+        key = _normaliseParameterName(name)
+        if key in _EXPOSURE_PARAMETER_KEYS:
+            candidates.setdefault(key, []).append(parameter)
+
+    for key in _EXPOSURE_PARAMETER_KEYS:
+        for parameter in candidates.get(key, ()):
+            try:
+                value = float(getattr(parameter, "value", parameter))
+                units = str(getattr(parameter, "valueUnits", "") or "").strip().lower()
+            except Exception:
+                continue
+            if not np.isfinite(value) or value <= 0:
+                continue
+            return value * _TIME_UNITS_TO_MS.get(units, 1.0)
+    return 0.0
+
+
+def getDetectorExposureSeconds(detector: Any) -> float:
+    """ Same as :func:`getDetectorExposureMs`, in seconds. """
+    return getDetectorExposureMs(detector) / 1000.0
+
+
 class DetectorManager(SignalInterface):
     """ Abstract base class for managers that control detectors. Each type of
     detector corresponds to a manager derived from this class. """

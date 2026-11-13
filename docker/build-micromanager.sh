@@ -18,6 +18,13 @@ cd /tmp
 wget -q "https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitch-master/micro-manager-arm64.zip"
 mkdir -p /opt
 unzip -q micro-manager-arm64.zip -d /opt    # -> /opt/micro-manager/lib/micro-manager/*.so
+# The release zip is the CI artifact, which wraps micro-manager-arm64.tar.gz
+# (build-mm-arm64.yml): unpack that too, or no adapter ends up in the image.
+if [ -f /opt/micro-manager-arm64.tar.gz ]; then
+	tar -xzf /opt/micro-manager-arm64.tar.gz -C /opt
+	rm -f /opt/micro-manager-arm64.tar.gz
+fi
+ls /opt/micro-manager/lib/micro-manager/libmmgr_dal_* >/dev/null   # fail the build without adapters
 cat /opt/DEVICE_INTERFACE_VERSION.txt || true
 rm -f micro-manager-arm64.zip
 

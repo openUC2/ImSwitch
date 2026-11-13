@@ -42,7 +42,6 @@ import {
   FormGroup,
 } from "@mui/material";
 import {
-  Bookmark as BookmarkIcon,
   Save as SaveIcon,
   Delete as DeleteIcon,
   PlayArrow as ApplyIcon,
@@ -836,30 +835,9 @@ const StreamPresets = () => {
     closeEdit();
   };
 
+  // One row inside the live view's Camera card (no frame or heading of its own).
   return (
-    <Box
-      sx={{
-        border: 1,
-        borderColor: "divider",
-        borderRadius: 1,
-        p: 1.5,
-        mt: 1,
-      }}
-    >
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-        <BookmarkIcon fontSize="small" color="action" />
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-          Stream Presets
-        </Typography>
-        <Tooltip title="Frontend-only macros for objective, exposure, gain and livestream parameters">
-          <Chip
-            label={`${presets.length} saved`}
-            size="small"
-            variant="outlined"
-          />
-        </Tooltip>
-      </Stack>
-
+    <Box>
       {error && (
         <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError("")}>
           {error}
@@ -875,12 +853,16 @@ const StreamPresets = () => {
         direction="row"
         spacing={1}
         alignItems="center"
-        sx={{ mb: 1, flexWrap: "wrap" }}
+        sx={{ flexWrap: "wrap" }}
       >
         <FormControl size="small" sx={{ minWidth: 200, flexGrow: 1 }}>
-          <InputLabel>Saved preset</InputLabel>
+          <InputLabel>
+            {presets.length ? `Preset (${presets.length} saved)` : "Preset"}
+          </InputLabel>
           <Select
-            label="Saved preset"
+            label={
+              presets.length ? `Preset (${presets.length} saved)` : "Preset"
+            }
             value={selectedId}
             onChange={(e) => setSelectedId(e.target.value)}
           >
@@ -955,7 +937,7 @@ const StreamPresets = () => {
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title="Save the current settings as a new preset">
+        <Tooltip title="Save objective, exposure, gain, illumination and stream settings as a preset (stored in this browser)">
           <Button
             size="small"
             variant="outlined"

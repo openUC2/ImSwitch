@@ -368,6 +368,7 @@ const LiveViewControlWrapper = ({
         onDoubleClick={handleImageDoubleClick}
         onImageLoad={handleImageLoadInternal}
         overlayContent={overlayContent}
+        fill={fill}
       />
     );
   };

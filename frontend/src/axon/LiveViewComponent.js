@@ -16,6 +16,8 @@ import apiPositionerControllerMovePositionerXYZ from "../backendapi/apiPositione
  * @param {function} onDoubleClick - Callback for double click: (pixelX, pixelY, imageWidth, imageHeight)
  * @param {function} onImageLoad - Callback when image dimensions change: (width, height)
  * @param {React.ReactNode} overlayContent - Optional overlay content to render on top of the canvas
+ * @param {boolean} fill - The parent fixes the size (floating preview, touch
+ *   layouts): fit the whole frame inside it instead of filling the width.
  */
 const LiveViewComponent = ({
   useFastMode = true,
@@ -23,6 +25,7 @@ const LiveViewComponent = ({
   onDoubleClick,
   onImageLoad,
   overlayContent,
+  fill = false,
 }) => {
   // redux dispatcher
   const dispatch = useDispatch();
@@ -184,16 +187,22 @@ const LiveViewComponent = ({
         return { width: 400, height: 300 };
       }
 
-      const imageAspectRatio = imageWidth / imageHeight;
+      // Fill: the parent decides the height, so fit the whole frame in.
+      // Otherwise use the full container width and let the height follow
+      // (the container then grows with the canvas).
+      const scale = fill
+        ? Math.min(
+            containerSize.width / imageWidth,
+            containerSize.height / imageHeight,
+          )
+        : containerSize.width / imageWidth;
 
-      // Match container width exactly as requested
-      // Always use the full container width and scale height accordingly
-      const displayWidth = Math.floor(containerSize.width);
-      const displayHeight = Math.floor(containerSize.width / imageAspectRatio);
-
-      return { width: displayWidth, height: displayHeight };
+      return {
+        width: Math.floor(imageWidth * scale),
+        height: Math.floor(imageHeight * scale),
+      };
     },
-    [containerSize],
+    [containerSize, fill],
   );
 
   // Apply responsive sizing (canvas CSS box) for the given frame dimensions.
@@ -208,7 +217,7 @@ const LiveViewComponent = ({
         width: `${displayDimensions.width}px`,
         height: `${displayDimensions.height}px`,
         display: "block",
-        margin: "20px auto", // Center the canvas horizontally
+        margin: fill ? 0 : "20px auto", // Center the canvas horizontally
         objectFit: "contain",
       });
 
@@ -222,7 +231,7 @@ const LiveViewComponent = ({
         onImageLoad(imgWidth, imgHeight);
       }
     },
-    [getDisplayDimensions, onImageLoad],
+    [getDisplayDimensions, onImageLoad, fill],
   );
 
   // ── Efficient JPEG render path ──────────────────────────────────────────
@@ -521,7 +530,7 @@ const LiveViewComponent = ({
       ref={containerRef}
       sx={{
         position: "relative",
-        width: "80%",
+        width: fill ? "100%" : "80%",
         height: "100%",
         display: "flex",
         alignItems: "center",

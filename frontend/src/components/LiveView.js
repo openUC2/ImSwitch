@@ -35,7 +35,6 @@ import AxisControl from "./AxisControl.jsx";
 import JoystickControl from "./JoystickControl.jsx";
 import VirtualJoystickControl from "./VirtualJoystickControl.js";
 import AutofocusController from "./AutofocusController";
-import DetectorParameters from "./DetectorParameters";
 import StreamControls from "./StreamControls";
 import IlluminationController from "./IlluminationController";
 import CanPowerControl from "./CanPowerControl.jsx";
@@ -724,6 +723,8 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
   const streamControls = (
     <StreamControls
+      hostIP={hostIP}
+      hostPort={hostPort}
       isStreamRunning={isStreamRunning}
       isLongExposure={isLongExposure}
       exposureMs={exposureMs}
@@ -768,12 +769,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
         key: "camera",
         label: "Camera",
         icon: <PhotoCameraIcon fontSize="small" />,
-        render: () => (
-          <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {streamControls}
-            <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
-          </Box>
-        ),
+        render: () => streamControls,
       },
       {
         key: "focus",
@@ -953,62 +949,66 @@ export default function LiveView({ setFileManagerInitialPath }) {
             px: 1,
           }}
         >
-          <Box
-            sx={{
-              mt: 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "flex-start",
-              gap: 1,
-              flexWrap: "wrap",
-            }}
-          >
-            <Typography
-              variant="caption"
-              sx={{ color: "text.secondary", fontWeight: 600 }}
-            >
-              Detectors:
-            </Typography>
-            <ButtonGroup
-              variant="outlined"
-              color="primary"
-              size="small"
-              aria-label="Detector selection"
-              data-tour="detector-tabs"
+          {/* Detector picker: only worth a row when there is a choice. */}
+          {detectors.length > 1 && (
+            <Box
               sx={{
+                mt: 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-start",
+                gap: 1,
                 flexWrap: "wrap",
-                "& .MuiButtonGroup-grouped": {
-                  minWidth: 120,
-                },
               }}
             >
-              {detectors.map((detectorName, idx) => (
-                <Button
-                  key={detectorName}
-                  onClick={() => dispatch(liveViewSlice.setActiveTab(idx))}
-                  sx={
-                    activeTab === idx
-                      ? {
-                          backgroundColor: "primary.main",
-                          color: "primary.contrastText",
-                          "&:hover": {
-                            backgroundColor: "primary.dark",
-                          },
-                        }
-                      : undefined
-                  }
-                >
-                  {detectorName}
-                </Button>
-              ))}
-            </ButtonGroup>
-          </Box>
+              <Typography
+                variant="caption"
+                sx={{ color: "text.secondary", fontWeight: 600 }}
+              >
+                Detectors:
+              </Typography>
+              <ButtonGroup
+                variant="outlined"
+                color="primary"
+                size="small"
+                aria-label="Detector selection"
+                data-tour="detector-tabs"
+                sx={{
+                  flexWrap: "wrap",
+                  "& .MuiButtonGroup-grouped": {
+                    minWidth: 120,
+                  },
+                }}
+              >
+                {detectors.map((detectorName, idx) => (
+                  <Button
+                    key={detectorName}
+                    onClick={() => dispatch(liveViewSlice.setActiveTab(idx))}
+                    sx={
+                      activeTab === idx
+                        ? {
+                            backgroundColor: "primary.main",
+                            color: "primary.contrastText",
+                            "&:hover": {
+                              backgroundColor: "primary.dark",
+                            },
+                          }
+                        : undefined
+                    }
+                  >
+                    {detectorName}
+                  </Button>
+                ))}
+              </ButtonGroup>
+            </Box>
+          )}
 
           {/* Toggle button to open/close right panel */}
           <IconButton
             onClick={() => setRightPanelOpen(!rightPanelOpen)}
             sx={{
               mt: 1,
+              ml: "auto",
               backgroundColor: "primary.main",
               color: "primary.contrastText",
               "&:hover": {
@@ -1034,14 +1034,8 @@ export default function LiveView({ setFileManagerInitialPath }) {
           <LiveViewControlWrapper />
         </Box>
 
-        {/* Stream, Record and Detector Controls */}
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mb: 2 }}>
-          {streamControls}
-
-          <Box data-tour="camera-controls">
-            <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
-          </Box>
-        </Box>
+        {/* Camera (stream + detector parameters + presets) and Capture */}
+        <Box sx={{ mb: 2 }}>{streamControls}</Box>
       </Box>
 
       {/* RIGHT - Controls Panel (Drawer on mobile, inline on desktop) */}

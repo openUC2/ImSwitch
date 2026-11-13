@@ -385,18 +385,22 @@ class TestTemperatureMonitor:
         rows = list(csv.reader(self._log_file(tmp_path).open()))
         return rows[0], rows[1:]
 
+    def _wait_rows(self, tmp_path, n, timeout=5.0):
+        """Poll for n logged rows: a loaded macOS runner falls well behind the
+        50 ms interval, so a fixed sleep is not enough."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._log_file(tmp_path).exists() and len(self._rows(tmp_path)[1]) >= n:
+                return
+            time.sleep(0.02)
+
     def test_rows_are_appended_while_armed(self, tmp_path, monkeypatch):
         cam = self._cooled_logging_camera(tmp_path, monkeypatch)
         cam.set_temperature(-30)
         cam.is_streaming = True
 
         cam._startTemperatureMonitor()
-        # poll instead of a fixed sleep: a loaded macOS runner wrote only 2 rows in 0.3 s
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            if self._log_file(tmp_path).exists() and len(self._rows(tmp_path)[1]) >= 3:
-                break
-            time.sleep(0.02)
+        self._wait_rows(tmp_path, 3)
         cam._stopTemperatureMonitor()
         assert cam._tempMonitorThread is None
 
@@ -426,9 +430,9 @@ class TestTemperatureMonitor:
     def test_second_session_appends_to_the_same_file(self, tmp_path, monkeypatch):
         cam = self._cooled_logging_camera(tmp_path, monkeypatch)
         cam.is_streaming = True
-        for _ in range(2):
+        for session in range(2):
             cam._startTemperatureMonitor()
-            time.sleep(0.12)
+            self._wait_rows(tmp_path, 2 * (session + 1))
             cam._stopTemperatureMonitor()
         from imswitch.imcontrol.model.interfaces.toupcamcamera import (
             TEMPERATURE_LOG_COLUMNS)

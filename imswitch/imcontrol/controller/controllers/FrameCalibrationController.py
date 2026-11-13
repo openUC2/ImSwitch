@@ -58,7 +58,8 @@ DEFAULT_SETTINGS = {
     "pinholeSearchExposureMs": 0.3,  # slides, first objective at max gain: the hole ~65 % of full scale, its halo and ghost below light_spot
     "gridStepFov": 0.25,         # affine grid: +/- this fraction of the short FOV side
     "approachUm": 100,           # unidirectional approach distance, must exceed the backlash
-    "zRetreatUm": 500,           # move away from the sample (+Z) before switching objectives
+    "zRetreatUm": 500,           # move away from the sample (towards the Z end stop) before switching objectives
+    "zTowardsSample": 0,         # Z direction of the focus: 0 = away from the Z end stop (-homeDirectionZ), else +1/-1
     "settleS": 0.2,
     "placementCheck": True,
     "maxRotationDeg": 0.3,
@@ -81,6 +82,9 @@ STEPS = [  # (name, title, critical)
 ]
 
 
+_PCB_UM = 2000   # pinhole slides: a hole through the PCB has a rim on each side, ~1.7 mm apart (Pi rig 2026-11-04)
+
+
 class _Aborted(Exception):
     pass
 
@@ -90,6 +94,7 @@ class StepError(RuntimeError):
 
 
 class FrameCalibrationController(ImConWidgetController):
+    _speed = 20000   # stage speed for every calibration move
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -309,8 +314,10 @@ class FrameCalibrationController(ImConWidgetController):
                     # nothing above the black level (over an opaque pinhole slide that is normal)
                     raise StepError(f"{self._ctx['det']}: {why} - is the {name or 'transmission light'} on, "
                                     "exposure and gain ok?")
-                # light, but the stage sits over dark plate: the exposure is set at the via
-                self._warn(f"{self._ctx['det']}: {why} at the start position - continuing")
+                # light, but the stage sits over dark plate: the exposure is set at the via;
+                # over an opaque pinhole slide a black frame is expected, no warning
+                if self._T()["focusTexture"]:
+                    self._warn(f"{self._ctx['det']}: {why} at the start position - continuing")
             pc._resetDetectorFlip(self._ctx["det"])     # measure on the raw sensor; flips are re-applied on save
             self._ctx["flipReset"] = True
         out = [f"{self._ctx['det']} {img.shape[1]}x{img.shape[0]}"]
@@ -568,7 +575,7 @@ class FrameCalibrationController(ImConWidgetController):
         # back on the via with the first objective: absolute repeatability after the long moves
         self._move(*self._T()["via"])
         self._ctx["repeatUm"] = self._residualUm(r0)
-        self._move(z=self._at("Z") + s["zRetreatUm"])
+        self._move(z=self._at("Z") - self._zIn() * s["zRetreatUm"])
         # landmark: the via, or on the slides the smallest pinhole the placement check found (a
         # 0.3 mm one is ~2000 px wide at 20x: the frame height). Through the first objective it
         # sits at its measured plate position: that is where it is centred (device: + offset).
@@ -586,7 +593,7 @@ class FrameCalibrationController(ImConWidgetController):
             r = self._calibrateObjective(k, s, centre, s["searchRadius2Um"], diameter_um=diam)
         except Exception:
             # the following steps (overview, save) work with the first objective
-            self._move(z=self._ctx.get("zTop", r0["z"] + s["zRetreatUm"]))   # homed top: always clear of the sample
+            self._move(z=self._ctx.get("zTop", r0["z"] - self._zIn() * s["zRetreatUm"]))   # homed top: always clear of the sample
             self._selectObjective(k0)
             self._move(z=r0["z"])
             raise
@@ -800,30 +807,82 @@ class FrameCalibrationController(ImConWidgetController):
         and a ~1/260 ghost of it that moves against the stage. Both pulled the light off the hole."""
         hint = self._zHint(slot)
         top = self._ctx.get("zTop", self._pos()["Z"])
-        self._move(z=top if hint is None else min(hint, top))
+        self._move(z=top if hint is None else self._notPast(hint, top))
         r0 = self._ctx["obj"].get(self._ctx.get("slot0")) if slot != self._ctx.get("slot0") else None
         self._setExposure(r0["viaExposureMs"] / f ** 2 if r0 and r0.get("viaExposureMs") else s["pinholeSearchExposureMs"],
                           "pinhole search: only the hole itself stands out")
         spot = lambda img: (lambda p: None if p is None else {"x": p[0], "y": p[1]})(fct.light_spot(img))
+        e0 = float(self._master.detectorsManager[self._ctx["det"]].parameters["exposure"].value)
+        for e in dict.fromkeys((e0, min(10 * e0, 100.0))):
+            # second pass longer: a far-defocused pinhole is a dim blur, and an 8-bit camera
+            # (FRAME 10, Hik RGB, 2026-11-12) has few counts above black at the short exposure
+            if e != e0:
+                self._setExposure(e, "pinhole search, second pass: longer exposure for a dim, defocused hole")
+            u, lit = self._spiralForLight(centre, radius, step, spot)
+            if u is None and lit is not None:
+                u = self._lightByZ(slot, s, f, lit, spot)
+            if u is not None:
+                break
+        else:
+            raise StepError(f"no light from the pinhole within {radius:.0f} µm of ({centre[0]:.0f}, {centre[1]:.0f}) µm - "
+                            "pinhole slide in slot 1, LED on? try a larger search radius")
+        u = self._roughCentre(u, 0, step / 0.7, find=spot, fracs=(0.3,))
+        self._move(*u)                 # _roughCentre ends on its last trial position
+        e = self._exposeOnLight(0.4)
+        img = self._ctx["lastLightImg"]
+        p = spot(img)
+        self._figure(f"Pinhole light found, objective {slot}", img,
+                     [("cross", (p["x"], p["y"]), 20, fcr.MEASURED)] if p else [],
+                     expected="the (defocused) light of the 0.3 mm pinhole near the image centre",
+                     measured=f"at stage ({u[0]:.0f}, {u[1]:.0f}) µm, Z {self._at('Z'):.0f} µm; exposure {e:.2f} ms",
+                     ok=True)
+        return u
+
+    def _spiralForLight(self, centre, radius, step, spot):
+        """(first spiral tile whose frame shows the pinhole's light as a spot, None), else
+        (None, the brightest tile's stage position if it is clearly lit). A pinhole far out of
+        focus - more so through a high-NA objective (20x, FRAME 10 2026-11-12) - spreads its
+        light evenly over the frame: no spot, but the tiles near it are brighter than the rest."""
+        levels = []
         for dx, dy in fct.spiral(radius, step):
             u = np.array([centre[0] + dx, centre[1] + dy])
             self._move(*u, approach=0)
             img = self._grab()
             self._trace(*u, "tile")
             if spot(img):
-                u = self._roughCentre(u, 0, step / 0.7, find=spot, fracs=(0.3,))
-                self._move(*u)                 # _roughCentre ends on its last trial position
-                e = self._exposeOnLight(0.4)
-                img = self._ctx["lastLightImg"]
-                p = spot(img)
-                self._figure(f"Pinhole light found, objective {slot}", img,
-                             [("cross", (p["x"], p["y"]), 20, fcr.MEASURED)] if p else [],
-                             expected="the (defocused) light of the 0.3 mm pinhole near the image centre",
-                             measured=f"at stage ({u[0]:.0f}, {u[1]:.0f}) µm, Z {self._at('Z'):.0f} µm; exposure {e:.2f} ms",
-                             ok=True)
+                return u, None
+            levels.append((float(np.mean(fct.gray(img))), u, img))
+        if not levels:
+            return None, None
+        best = max(levels, key=lambda t: t[0])
+        dark = float(np.percentile([t[0] for t in levels], 10))
+        lit = best[0] > 2 * dark + 2
+        self._figure("Pinhole search: brightest tile", best[2],
+                     expected="the pinhole's light as a spot in one of the tiles",
+                     measured=f"no spot; brightest tile mean {best[0]:.1f} counts at stage ({best[1][0]:.0f}, {best[1][1]:.0f}) µm, "
+                              f"darkest tiles {dark:.1f}" + (" - lit: searching in Z there" if lit else " - nothing lit"),
+                     ok=False)
+        return None, (best[1] if lit else None)
+
+    def _lightByZ(self, slot, s, f, u, spot):
+        """At the brightest tile ``u``: sweep Z through this objective's focus window until the
+        evenly spread light concentrates into a spot. Returns u, or None."""
+        step = s["focusStepUm"] * f
+        zin, top = self._zIn(), self._ctx.get("zTop", self._pos()["Z"])
+        hint = self._zHint(slot)
+        z0, n = (hint - zin * 25 * step, 51) if hint is not None else (top, int(s["focusSearchUm"] / step))
+        self._move(*u)
+        for i in range(n):
+            z = self._notPast(z0, top) + i * zin * step
+            try:
+                self._move(z=z)
+            except StepError:
+                break
+            if spot(self._grab()):
+                self._warn(f"objective {slot}: the pinhole's light concentrates at Z {z:.0f} µm, "
+                           f"not at the expected {hint if hint is not None else top:.0f} µm")
                 return u
-        raise StepError(f"no light from the pinhole within {radius:.0f} µm of ({centre[0]:.0f}, {centre[1]:.0f}) µm - "
-                        "pinhole slide in slot 1, LED on? try a larger search radius")
+        return None
 
     def _exposeOnLight(self, target):
         """Main-camera exposure with the brightest pixels (99.9th percentile) at ~``target``
@@ -1082,14 +1141,25 @@ class FrameCalibrationController(ImConWidgetController):
         step = s["focusStepUm"] * f
         hint = self._zHint(slot)
         top = self._ctx.get("zTop", self._pos()["Z"])
-        tries = [(hint + 25 * step, 50)] if hint is not None else []
+        zin = self._zIn()                   # towards the sample: away from the homed Z end stop
+        tries = [(hint - zin * 25 * step, 50)] if hint is not None else []
         if slot == self._ctx.get("slot0", slot):     # never with the second (short working distance) objective
             tries.append((top, int(s["focusSearchUm"] / step)))
         curves = []
+        first = slot == self._ctx.get("slot0", slot)
         for z0, n in tries:
-            zs, vals = self._sweepZ(min(z0, top), -step, n,
-                                    stop_at_peak=self._T()["focusTexture"] or slot != self._ctx.get("slot0", slot))
-            curves.append((zs, vals, f"coarse from {min(z0, top):.0f}"))
+            zs, vals = self._sweepZ(self._notPast(z0, top), zin * step, n,
+                                    stop_at_peak=self._T()["focusTexture"] or not first)
+            if first and not fct.focus_peaked(vals) and int(np.argmax(vals)) >= len(vals) - 3:
+                # still rising at the end of the range: the focus lies further (FRAME 10, 2026-11-12:
+                # beyond 6 mm). On until just past the peak - the objective stays short of the focal
+                # plane until then. A pinhole has two rims one PCB apart, the first met the weaker
+                # (see above): past its peak, on by that much more, then the highest peak counts.
+                rims = 0 if self._T()["focusTexture"] else int(np.ceil(_PCB_UM / step))
+                more_z, more = self._sweepZ(zs[-1] + zin * step, zin * step, int(s["focusSearchUm"] / step),
+                                            stop_at_peak=True, prior=vals, stop_on_limit=True, after_peak=rims)
+                zs, vals = zs + more_z, vals + more
+            curves.append((zs, vals, f"coarse from {self._notPast(z0, top):.0f}"))
             if fct.focus_peaked(vals):
                 break
         else:
@@ -1098,30 +1168,69 @@ class FrameCalibrationController(ImConWidgetController):
                          measured="no clear peak", ok=False)
             if not s["manualFocusFallback"]:
                 raise StepError("no focus found: the focus metric shows no clear peak (light, exposure, plate?)")
+            z_end = self._at("Z")
             self._waitUser("No clear focus found. Focus on the " + ("plate (the rays around the centre via)"
                            if self._T()["focusTexture"] else "pinhole of the slide in slot 1")
                            + " with the Z buttons, then press Continue.")
-            return self._pos()["Z"]
+            self._ctx.pop("at", None)            # the user moved the stage: read, don't trust the last target
+            z = self._pos()["Z"]
+            if abs(z - z_end) < 1:
+                self._warn(f"objective {slot}: Continue without refocusing - Z stays at the end of the focus sweep "
+                           f"({z:.0f} µm), not at a focus; the following steps (second objective) will likely fail")
+            return z
         zc = zs[int(np.argmax(vals))]
-        zs, vals = self._sweepZ(zc + step, -step / 5, 11)
+        zs, vals = self._sweepZ(zc - zin * step, zin * step / 5, 11)
         zb = zs[int(np.argmax(vals))]
         self._figure(f"Focus sweep, objective {slot}",
                      annotated=fcr.plot_curves(curves + [(zs, vals, "fine")], "Z (µm)", "focus metric", mark_x=zb),
                      expected="one clear peak of the focus metric (the rays around the via come into focus)",
                      measured=f"focus at Z {zb:.0f} µm (coarse step {step:.0f} µm, fine {step / 5:.0f} µm); "
                               f"exposure {self._ctx.get('expBase', 0):.2f} ms", ok=True)
-        self._move(z=zb + step)
+        self._move(z=zb - zin * step)       # approached from the sweep's side (Z backlash)
         self._move(z=zb)
         self._ctx.setdefault("focus", {})[str(slot)] = {"z": zb, "stepUm": step}
         return zb
 
-    def _sweepZ(self, z0, dz, n, stop_at_peak=False):
-        zs, vals = [], []
+    def _zIn(self):
+        """+1/-1: the Z direction towards the sample, i.e. of the focus sweeps. The homed Z sits at
+        its end stop clear of the sample, so the focus lies away from it: -homeDirectionZ. The Pi rig
+        homes to +Z (focus at -4420 µm, 2026-11-03); FRAME 10 (2026-11-12) homes to -Z, and a sweep
+        to -Z ran into the end stop ("Z did not reach -234 µm (reads -134 µm)"). Setting zTowardsSample
+        overrides it."""
+        if "zIn" not in self._ctx:
+            v = int((self._ctx.get("s") or {}).get("zTowardsSample", 0) or 0)
+            if not v:
+                hp = (getattr(self._stageManager(), "homeParams", None) or {}).get("Z") or {}
+                d = hp.get("direction")
+                v = -1 if d is None or float(d) > 0 else 1
+            self._ctx["zIn"] = 1 if v > 0 else -1
+        return self._ctx["zIn"]
+
+    def _notPast(self, z, top):
+        """``z``, but not beyond the homed Z on the side away from the sample (the end stop)."""
+        return top if (z - top) * self._zIn() < 0 else z
+
+    def _sweepZ(self, z0, dz, n, stop_at_peak=False, prior=(), stop_on_limit=False, after_peak=0):
+        """Focus metric at z0 + i dz. The slides' pinhole: pinhole_focus_metric. ``prior``: the
+        values of the sweep this one continues (for the peak test); ``after_peak``: steps on
+        after the first peak; ``stop_on_limit``: end at a Z the stage does not reach (end stop)
+        instead of failing."""
+        metric = fct.focus_metric if self._T()["focusTexture"] else fct.pinhole_focus_metric
+        zs, vals, peaked_at = [], [], None
         for i in range(n):
-            self._move(z=z0 + i * dz)
+            try:
+                self._move(z=z0 + i * dz)
+            except StepError:
+                if not stop_on_limit:
+                    raise
+                self._warn(f"focus sweep ended at Z {z0 + (i - 1) * dz:.0f} µm: the stage does not go further")
+                self._move(z=z0 + (i - 1) * dz)
+                break
             zs.append(z0 + i * dz)
-            vals.append(fct.focus_metric(self._grab()))
-            if stop_at_peak and fct.focus_peaked(vals):
+            vals.append(metric(self._grab()))
+            if stop_at_peak and peaked_at is None and fct.focus_peaked(list(prior) + vals):
+                peaked_at = i
+            if peaked_at is not None and i - peaked_at >= after_peak:
                 break
         return zs, vals
 
@@ -1255,7 +1364,7 @@ class FrameCalibrationController(ImConWidgetController):
                 continue
             for attempt in (1, 2):
                 self._checkAbort()
-                stage.move(value=float(v), axis=ax, is_absolute=True, is_blocking=True)
+                stage.move(value=float(v), axis=ax, is_absolute=True, is_blocking=True, speed=self._speed)
                 got = self._pos()[ax]
                 if abs(got - v) <= tol:
                     self._ctx.setdefault("at", {})[ax] = float(v)    # verified: later steps use this, not a fresh read

@@ -33,6 +33,10 @@ import {
   InputLabel,
   Checkbox,
   FormControlLabel,
+  Menu,
+  Divider,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip as MuiTooltip,
 } from "@mui/material";
 import PlaceIcon from "@mui/icons-material/Place";
@@ -42,9 +46,8 @@ import GestureIcon from "@mui/icons-material/Gesture";
 import PanToolIcon from "@mui/icons-material/PanTool";
 import ScatterPlotIcon from "@mui/icons-material/ScatterPlot";
 import AddLocationIcon from "@mui/icons-material/AddLocation";
-import GpsFixedIcon from "@mui/icons-material/GpsFixed";
 import BlurLinearIcon from "@mui/icons-material/BlurLinear";
-import LayersClearIcon from "@mui/icons-material/LayersClear";
+import LayersIcon from "@mui/icons-material/Layers";
 import {
   apiStageMapClear,
   apiStageMapGetParams,
@@ -74,7 +77,8 @@ const WellSelectorComponent = () => {
     "image/test1.json", //TODO remove test
   ]);
 
-  // Pending layout switch awaiting user confirmation when pointList is non-empty
+  // Anchor of the "Layers" menu (what the map draws)
+  const [layersAnchor, setLayersAnchor] = useState(null);
 
   //child ref
   const childRef = useRef(); //canvas
@@ -274,25 +278,9 @@ const WellSelectorComponent = () => {
   };
 
   //##################################################################################
-  const handleResetView = () => {
-    //call child methode
-    childRef.current.resetView();
-  };
-
-  //##################################################################################
   const handleResetHistory = () => {
     //call child method to reset position history
     childRef.current.resetHistory();
-  };
-
-  //##################################################################################
-  const handleShowOverlapChange = (event) => {
-    dispatch(wellSelectorSlice.setShowOverlap(event.target.checked));
-  };
-
-  //##################################################################################
-  const handleShowShapeChange = (event) => {
-    dispatch(wellSelectorSlice.setShowShape(event.target.checked));
   };
 
   //##################################################################################
@@ -547,21 +535,6 @@ const WellSelectorComponent = () => {
   };
 
   //##################################################################################
-  const handleCalibrateOffset = () => {
-    // Stage offset calibration is now available via right-click context menu on the canvas.
-    // Right-click on the map and select "We are here (Calibrate Offset)" to set the stage offset.
-    // This uses the clicked position as the known position and transmits it to the backend
-    // via the setStageOffsetAxis API (single source of truth for offsets).
-    if (infoPopupRef.current) {
-      infoPopupRef.current.showMessage(
-        touchUI
-          ? "Long-press the map where you are and select 'We are here' to calibrate the stage offset."
-          : "Right-click on the map where you are and select 'We are here' to calibrate the stage offset.",
-      );
-    }
-  };
-
-  //##################################################################################
   const handleMoveCameraSpeedXYChange = (event) => {
     dispatch(wellSelectorSlice.setMoveCameraSpeedXY(event.target.value));
     // Keep the experiment scan speed in sync so "Move Camera Speed" drives the
@@ -577,219 +550,289 @@ const WellSelectorComponent = () => {
     dispatch(wellSelectorSlice.setMoveCameraSpeedZ(event.target.value));
   };
 
+  // What a click on the map does. The line under the map repeats the active
+  // tool's tip, so nothing has to be hovered to find out.
+  const MAP_TOOLS = [
+    {
+      mode: Mode.SINGLE_SELECT,
+      label: "Single",
+      icon: <PlaceIcon fontSize="small" />,
+      tip: "Click the map to add an imaging position.",
+    },
+    {
+      mode: Mode.AREA_SELECT,
+      label: "Area",
+      icon: <HighlightAltIcon fontSize="small" />,
+      tip: "Drag a rectangle to tile-scan a region.",
+    },
+    {
+      mode: Mode.CUP_SELECT,
+      label: "Well",
+      icon: <RadioButtonCheckedIcon fontSize="small" />,
+      tip: "Click wells to image each whole well.",
+    },
+    {
+      mode: Mode.FREEHAND_DRAW,
+      label: "Freehand",
+      icon: <GestureIcon fontSize="small" />,
+      tip: "Draw a closed region (or tap out vertices at the stage position), then Convert it to scan points.",
+    },
+    {
+      mode: Mode.MOVE_CAMERA,
+      label: "Move",
+      icon: <PanToolIcon fontSize="small" />,
+      tip: "Click the map to drive the stage there.",
+    },
+  ];
+  const activeTool = MAP_TOOLS.find((t) => t.mode === wellSelectorState.mode);
+  const navHint = touchUI
+    ? "Pinch to zoom, two fingers to pan, long-press to remove a point or set “We are here”."
+    : "Ctrl+wheel to zoom, Ctrl+drag to pan, right-click to remove a point or set “We are here”.";
+
+  // What the map draws, in one menu instead of a row of checkboxes and toggles.
+  const LAYERS = [
+    {
+      label: "Tile overlap",
+      on: wellSelectorState.showOverlap,
+      toggle: () =>
+        dispatch(wellSelectorSlice.setShowOverlap(!wellSelectorState.showOverlap)),
+    },
+    {
+      label: "Area outlines",
+      on: wellSelectorState.showShape,
+      toggle: () =>
+        dispatch(wellSelectorSlice.setShowShape(!wellSelectorState.showShape)),
+    },
+    {
+      label: "Overview camera image",
+      on: overviewRegState.overlayEnabled,
+      toggle: handleToggleOverviewOverlay,
+    },
+    {
+      label: "Stage map / prescan tiles",
+      on: stageMapState.showOnWellplate,
+      toggle: handleToggleStageMapOverlay,
+    },
+  ];
+  const xySpeedTooHigh =
+    (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000;
+
   //##################################################################################
   return (
-    <div style={{ border: "0px solid #eee", padding: "10px" }}>
+    <Box sx={{ p: 1 }}>
       {/* Opentrons-style labware selection (loadName + well chips + condition labels) */}
       <LabwareSelectionPanel defaultExpanded={false} />
 
-      {/* LAYOUT */}
-      {/* WellSelectorComponent with mode passed as prop width: "100%", height: "100%", display: "block"*/}
-      <WellSelectorCanvas ref={childRef} style={{}} />
+      {/* Toolbar: the map tool, the plate layout and what the map shows */}
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 1,
+          mb: 1,
+        }}
+      >
+        <ToggleButtonGroup
+          exclusive
+          size="small"
+          value={wellSelectorState.mode}
+          onChange={(_, mode) => mode !== null && handleModeChange(mode)}
+          aria-label="Map tool"
+        >
+          {MAP_TOOLS.map((t) => (
+            <ToggleButton key={t.mode} value={t.mode} sx={{ gap: 0.5, px: 1.25 }}>
+              {t.icon}
+              {t.label}
+            </ToggleButton>
+          ))}
+        </ToggleButtonGroup>
 
-      {/* PARAMETER*/}
-      {/* Add a little spacer between the wellselector and layout */}
-      <div style={{ height: "16px" }} />
-
-      {/* PARAMETER */}
-      {/* Add a little spacer between the wellselector and layout */}
-      <div style={{ marginBottom: "15px" }}>
-        <div />
-        <FormControl>
-          <InputLabel>Layout</InputLabel>
+        <FormControl size="small" sx={{ ml: "auto", minWidth: 180 }}>
+          <InputLabel id="wp-layout-label">Layout</InputLabel>
           <Select
+            labelId="wp-layout-label"
             label="Layout"
             value={experimentState.wellLayout.name}
             onChange={handleLayoutChange}
           >
             {/* hard coded layouts */}
             <MenuItem value="Blank">Blank</MenuItem>
-            <MenuItem value="Heidstar 4x Histosample">
-              4 Slide Heidstar
-            </MenuItem>
+            <MenuItem value="Heidstar 4x Histosample">4 Slide Heidstar</MenuItem>
             <MenuItem value="Ropod">Ropod</MenuItem>
             <MenuItem value="Wellplate 384">Wellplate 384</MenuItem>
             <MenuItem value="DEP Chip">DEP Chip (8x6)</MenuItem>
             {/* online layouts */}
             {wellLayoutFileList.map((file) => (
-              <MenuItem value={file}>{file}</MenuItem>
+              <MenuItem key={file} value={file}>
+                {file}
+              </MenuItem>
             ))}
           </Select>
         </FormControl>
 
-        {/* VIEW - All controls in one row */}
-        <Box
-          sx={{
-            display: "flex",
-            gap: 1,
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<LayersIcon />}
+          onClick={(e) => setLayersAnchor(e.currentTarget)}
+          sx={{ height: 40 }}
         >
-          <Button
-            variant="contained"
-            size="small"
-            onClick={() => handleResetView()}
-          >
-            Reset View
-          </Button>
-
-          <Button
-            variant="contained"
-            size="small"
-            onClick={() => handleResetHistory()}
-          >
-            Reset History
-          </Button>
-
-          <FormControlLabel
-            sx={{ ml: 0, mr: 0.5 }}
-            control={
+          Layers
+        </Button>
+        <Menu
+          anchorEl={layersAnchor}
+          open={Boolean(layersAnchor)}
+          onClose={() => setLayersAnchor(null)}
+        >
+          {LAYERS.map((layer) => (
+            <MenuItem key={layer.label} dense onClick={layer.toggle}>
               <Checkbox
                 size="small"
-                checked={Boolean(wellSelectorState.showOverlap)}
-                onChange={handleShowOverlapChange}
+                checked={Boolean(layer.on)}
+                sx={{ p: 0, mr: 1 }}
               />
-            }
-            label={<Typography variant="body2">Show Overlap</Typography>}
-          />
+              {layer.label}
+            </MenuItem>
+          ))}
+          <Divider />
+          <MenuItem
+            dense
+            onClick={() => {
+              handleResetHistory();
+              setLayersAnchor(null);
+            }}
+          >
+            Clear stage trail
+          </MenuItem>
+          {(stageMapState?.tiles?.length || 0) > 0 && (
+            <MenuItem
+              dense
+              disabled={prescanRunning}
+              onClick={() => {
+                handleClearPrescan();
+                setLayersAnchor(null);
+              }}
+            >
+              Clear prescan tiles
+            </MenuItem>
+          )}
+        </Menu>
+      </Box>
 
-          <FormControlLabel
-            sx={{ ml: 0, mr: 0.5 }}
-            control={
-              <Checkbox
-                size="small"
-                checked={Boolean(wellSelectorState.showShape)}
-                onChange={handleShowShapeChange}
-              />
-            }
-            label={<Typography variant="body2">Show Shape</Typography>}
-          />
-        </Box>
-        <Typography variant="caption" sx={{ display: "block", mt: 0.5, color: "text.secondary" }}>
-          {touchUI
-            ? "Pinch to zoom, two fingers to pan, long-press the map to remove a point or to set “We are here”."
-            : "Ctrl+wheel to zoom, Ctrl+drag to pan, right-click the map to remove a point or to set “We are here”."}
-        </Typography>
-      </div>
+      <WellSelectorCanvas ref={childRef} style={{}} />
 
-      {/* MODE — selection tools + stage actions, with explanatory icons + tooltips */}
+      {/* Under the map: the active tool's options on the left, actions that
+          work in any tool on the right. */}
       <Box
         sx={{
-          mb: 1.5,
           display: "flex",
-          flexWrap: "wrap",
-          justifyContent: "center",
           alignItems: "center",
+          flexWrap: "wrap",
           gap: 1,
+          mt: 1,
         }}
       >
-        {/* Selection / interaction modes (active one is filled) */}
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-          {[
-            {
-              mode: Mode.SINGLE_SELECT,
-              label: "Single",
-              icon: <PlaceIcon />,
-              tip: "Single point — click the map to add one imaging position.",
-            },
-            {
-              mode: Mode.AREA_SELECT,
-              label: "Area",
-              icon: <HighlightAltIcon />,
-              tip: "Area — drag a rectangle to tile-scan a whole region.",
-            },
-            {
-              mode: Mode.CUP_SELECT,
-              label: "Well",
-              icon: <RadioButtonCheckedIcon />,
-              tip: "Well — click wells to image the entire well.",
-            },
-            {
-              mode: Mode.FREEHAND_DRAW,
-              label: "Freehand",
-              icon: <GestureIcon />,
-              tip: "Freehand — draw a closed region, then press Convert to fill it with scan points.",
-            },
-            {
-              mode: Mode.MOVE_CAMERA,
-              label: "Move",
-              icon: <PanToolIcon />,
-              tip: "Move camera — click the map to drive the stage to that point.",
-            },
-          ].map((b) => (
-            <Tooltip key={b.label} title={b.tip} arrow>
+        {wellSelectorState.mode === Mode.MOVE_CAMERA && (
+          <>
+            <TextField
+              label="XY speed (µm/s)"
+              type="number"
+              size="small"
+              value={wellSelectorState.moveCameraSpeedXY ?? 20000}
+              onChange={handleMoveCameraSpeedXYChange}
+              inputProps={{
+                min: 1,
+                step: 1000,
+                "data-keypad-presets": "1000,5000,10000,15000,20000",
+              }}
+              error={xySpeedTooHigh}
+              helperText={
+                xySpeedTooHigh
+                  ? "Above 20000 µm/s the stage may lose steps"
+                  : undefined
+              }
+              sx={{ width: 160 }}
+            />
+            <TextField
+              label="Z speed (µm/s)"
+              type="number"
+              size="small"
+              value={wellSelectorState.moveCameraSpeedZ ?? 1000}
+              onChange={handleMoveCameraSpeedZChange}
+              inputProps={{
+                min: 1,
+                step: 100,
+                "data-keypad-presets": "100,500,1000,2000",
+              }}
+              sx={{ width: 140 }}
+            />
+          </>
+        )}
+
+        {wellSelectorState.mode === Mode.FREEHAND_DRAW && (
+          <>
+            <Tooltip
+              title="Add the current stage XY as a boundary vertex — drive to a tissue edge, tap, repeat."
+              arrow
+            >
               <Button
                 size="small"
-                startIcon={b.icon}
-                variant={
-                  wellSelectorState.mode === b.mode ? "contained" : "outlined"
-                }
-                onClick={() => handleModeChange(b.mode)}
+                variant="outlined"
+                startIcon={<AddLocationIcon />}
+                onClick={handleAddCurrentAsVertex}
               >
-                {b.label}
+                Add vertex
               </Button>
             </Tooltip>
-          ))}
-        </Box>
+            <Tooltip title="Close the boundary you have been tapping out." arrow>
+              <Button size="small" variant="outlined" onClick={handleCloseFreehand}>
+                Close region
+              </Button>
+            </Tooltip>
+            <Tooltip
+              title="Wrap the existing positions in a boundary (convex hull)."
+              arrow
+            >
+              <Button size="small" variant="outlined" onClick={handleWrapPoints}>
+                Wrap points
+              </Button>
+            </Tooltip>
+            <Tooltip
+              title="Convert the drawn freehand region into tiled scan points."
+              arrow
+            >
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<ScatterPlotIcon />}
+                onClick={handleConvertFreehandToPoints}
+              >
+                Convert
+              </Button>
+            </Tooltip>
+          </>
+        )}
 
-        {/* Stage actions */}
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-          {wellSelectorState.mode === Mode.FREEHAND_DRAW && (
-            <>
-              <Tooltip
-                title="Add the current stage XY as a boundary vertex — drive to a tissue edge, tap, repeat."
-                arrow
-              >
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<AddLocationIcon />}
-                  onClick={handleAddCurrentAsVertex}
-                >
-                  Add vertex
-                </Button>
-              </Tooltip>
-              <Tooltip
-                title="Close the boundary you have been tapping out."
-                arrow
-              >
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={handleCloseFreehand}
-                >
-                  Close region
-                </Button>
-              </Tooltip>
-              <Tooltip
-                title="Wrap the existing positions in a boundary (convex hull)."
-                arrow
-              >
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={handleWrapPoints}
-                >
-                  Wrap points
-                </Button>
-              </Tooltip>
-              <Tooltip
-                title="Convert the drawn freehand region into tiled scan points."
-                arrow
-              >
-                <Button
-                  size="small"
-                  variant="outlined"
-                  color="secondary"
-                  startIcon={<ScatterPlotIcon />}
-                  onClick={handleConvertFreehandToPoints}
-                >
-                  Convert
-                </Button>
-              </Tooltip>
-            </>
-          )}
+        <Box
+          sx={{
+            ml: "auto",
+            display: "flex",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 1,
+          }}
+        >
+          <Tooltip title="Add the current stage XYZ as a new position." arrow>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<AddLocationIcon />}
+              onClick={() => handleAddCurrentPosition()}
+            >
+              Add current
+            </Button>
+          </Tooltip>
           <Tooltip
             title={`Sweep the selected area fast and lay the result under the map, so you can see the tissue and trace it. Uses the tile spacing (${prescanDy} µm), the stage speed (${prescanSpeed} µm/s) and the illumination you already have set.`}
             arrow
@@ -809,7 +852,7 @@ const WellSelectorComponent = () => {
             arrow
           >
             <FormControlLabel
-              sx={{ ml: 0, mr: 0.5 }}
+              sx={{ ml: 0, mr: 0 }}
               control={
                 <Checkbox
                   size="small"
@@ -829,129 +872,19 @@ const WellSelectorComponent = () => {
             />
           </Tooltip>
           {prescanStrobe && <StrobeSettingsButton disabled={prescanRunning} />}
-          {(stageMapState?.tiles?.length || 0) > 0 && (
-            <Tooltip title="Discard the overlay so the next prescan starts on a clean map." arrow>
-              <Button
-                size="small"
-                variant="outlined"
-                color="warning"
-                startIcon={<LayersClearIcon />}
-                onClick={handleClearPrescan}
-                disabled={prescanRunning}
-              >
-                Clear overlay
-              </Button>
-            </Tooltip>
-          )}
-          <Tooltip title="Add the current stage XYZ as a new position." arrow>
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<AddLocationIcon />}
-              onClick={() => handleAddCurrentPosition()}
-            >
-              Add current
-            </Button>
-          </Tooltip>
-          <Tooltip
-            title="Calibrate the stage offset: right-click the map where the camera currently is and choose 'We are here'."
-            arrow
-          >
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<GpsFixedIcon />}
-              onClick={() => handleCalibrateOffset()}
-            >
-              Calibrate
-            </Button>
-          </Tooltip>
-          <Tooltip
-            title="Show/hide the Overview camera overlay (stitched overview image) on the plate map."
-            arrow
-          >
-            <Button
-              size="small"
-              variant={
-                overviewRegState.overlayEnabled ? "contained" : "outlined"
-              }
-              color="secondary"
-              onClick={handleToggleOverviewOverlay}
-            >
-              {overviewRegState.overlayEnabled ? "Overlay on" : "Overlay off"}
-            </Button>
-          </Tooltip>
-          <Tooltip
-            title="Show/hide the collected stage-map scan tiles (e.g. a low-magnification overview scan) at their true stage positions, so a ROI for a higher-magnification scan can be selected on the sample image."
-            arrow
-          >
-            <Button
-              size="small"
-              variant={stageMapState.showOnWellplate ? "contained" : "outlined"}
-              color="secondary"
-              onClick={handleToggleStageMapOverlay}
-            >
-              {stageMapState.showOnWellplate ? "Tiles on" : "Tiles off"}
-            </Button>
-          </Tooltip>
         </Box>
       </Box>
 
-      {/* MOVE CAMERA speed controls – only shown when MOVE_CAMERA mode is active */}
-      {wellSelectorState.mode === Mode.MOVE_CAMERA && (
-        <Box
-          sx={{
-            display: "flex",
-            gap: 2,
-            alignItems: "center",
-            flexWrap: "wrap",
-            mb: 1,
-            mt: 1,
-          }}
-        >
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            Move Camera Speed:
-          </Typography>
-          <TextField
-            label="XY Speed (µm/s)"
-            type="number"
-            size="small"
-            value={wellSelectorState.moveCameraSpeedXY ?? 20000}
-            onChange={handleMoveCameraSpeedXYChange}
-            inputProps={{
-              min: 1,
-              step: 1000,
-              "data-keypad-presets": "1000,5000,10000,15000,20000",
-            }}
-            error={
-              (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000
-            }
-            helperText={
-              (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000
-                ? "⚠ >20000 µm/s is highly unreliable (may lose steps/accuracy)"
-                : " "
-            }
-            sx={{ width: 230 }}
-          />
-          <TextField
-            label="Z Speed (µm/s)"
-            type="number"
-            size="small"
-            value={wellSelectorState.moveCameraSpeedZ ?? 1000}
-            onChange={handleMoveCameraSpeedZChange}
-            inputProps={{
-              min: 1,
-              step: 100,
-              "data-keypad-presets": "100,500,1000,2000",
-            }}
-            sx={{ width: 140 }}
-          />
-        </Box>
-      )}
+      <Typography
+        variant="caption"
+        sx={{ display: "block", mt: 0.5, color: "text.secondary" }}
+      >
+        {activeTool ? `${activeTool.tip} ` : ""}
+        {navHint}
+      </Typography>
 
       <InfoPopup ref={infoPopupRef} />
-
-    </div>
+    </Box>
   );
 };
 

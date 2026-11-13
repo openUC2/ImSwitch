@@ -20,15 +20,11 @@ import {
   Settings,
   DarkMode,
   LightMode,
-  Wifi,
   Info,
-  Memory,
   Cable,
   Tune,
-  SystemUpdate,
   Storage,
   Build,
-  Article,
   School,
   DesktopWindows,
   Language as LanguageIcon,
@@ -384,8 +380,16 @@ const SettingsMenu = ({ onNavigate }) => {
 
         <Divider />
 
-        {/* Backend Connection - Always available (needed to establish connection) */}
-        <MenuItem onClick={() => handleNavigationClick("Connections")}>
+        {/* System: connection, ImSwitch & host, setup file, board firmware,
+            WiFi and logs are tabs of one page. Until the backend answers only
+            the connection tab works, so that is where it opens. */}
+        <MenuItem
+          onClick={() =>
+            handleNavigationClick(
+              isBackendConnected ? "SystemSettings" : "Connections",
+            )
+          }
+        >
           <ListItemIcon>
             <Cable
               fontSize="small"
@@ -399,44 +403,13 @@ const SettingsMenu = ({ onNavigate }) => {
             />
           </ListItemIcon>
           <ListItemText
-            primary="Backend Connection"
+            primary="System & connection"
             secondary={
               isBackendConnected
-                ? "Connected - Configure settings"
+                ? "Connection, setup file, firmware, WiFi, logs"
                 : hasConnectionSettings
-                  ? "Connection failed - Check settings"
+                  ? "Connection failed - check settings"
                   : "Setup required"
-            }
-          />
-        </MenuItem>
-
-        {/* Backend-Dependent Items - Following Copilot Instructions for API communication */}
-
-        {/* System Settings - Requires backend API calls */}
-        <MenuItem
-          onClick={() => handleNavigationClick("SystemSettings")}
-          disabled={!allowAccess}
-          sx={{
-            opacity: allowAccess ? 1 : 0.5,
-            "&.Mui-disabled": {
-              opacity: 0.5,
-            },
-          }}
-        >
-          <ListItemIcon>
-            <Storage
-              fontSize="small"
-              color={allowAccess ? "inherit" : "disabled"}
-            />
-          </ListItemIcon>
-          <ListItemText
-            primary="System Settings"
-            secondary={
-              allowAccess
-                ? isDeveloperMode && !isBackendConnected
-                  ? "Hardware configuration (Developer Mode)"
-                  : "Hardware configuration"
-                : "Requires backend connection"
             }
           />
         </MenuItem>
@@ -491,124 +464,6 @@ const SettingsMenu = ({ onNavigate }) => {
             primary="Laser Settings"
             secondary={
               allowAccess ? "PWM max value, resolution, frequency" : "Requires backend connection"
-            }
-          />
-        </MenuItem>
-
-        {/* ImSwitch Backend Settings */}
-        <MenuItem
-          onClick={() => handleNavigationClick("UC2")}
-          disabled={!allowAccess}
-          sx={{
-            opacity: allowAccess ? 1 : 0.5,
-            "&.Mui-disabled": {
-              opacity: 0.5,
-            },
-          }}
-        >
-          <ListItemIcon>
-            <Memory
-              fontSize="small"
-              color={allowAccess ? "inherit" : "disabled"}
-            />
-          </ListItemIcon>
-          <ListItemText
-            primary="ImSwitch Backend Settings"
-            secondary={
-              allowAccess
-                ? isDeveloperMode && !isBackendConnected
-                  ? "Microscope configuration (Developer Mode)"
-                  : "Microscope configuration"
-                : "Requires backend connection"
-            }
-          />
-        </MenuItem>
-
-        {/* Logging Interface */}
-        <MenuItem
-          onClick={() => handleNavigationClick("Logging")}
-          disabled={!allowAccess}
-          sx={{
-            opacity: allowAccess ? 1 : 0.5,
-            "&.Mui-disabled": {
-              opacity: 0.5,
-            },
-          }}
-        >
-          <ListItemIcon>
-            <Article
-              fontSize="small"
-              color={allowAccess ? "inherit" : "disabled"}
-            />
-          </ListItemIcon>
-          <ListItemText
-            primary="Logging"
-            secondary={
-              allowAccess
-                ? isDeveloperMode && !isBackendConnected
-                  ? "View & download log files (Developer Mode)"
-                  : "View & download log files"
-                : "Requires backend connection"
-            }
-          />
-        </MenuItem>
-
-        {/* WiFi Configuration - Requires backend API calls for network management */}
-        <MenuItem
-          onClick={() => handleNavigationClick("WiFi")}
-          disabled={!allowAccess}
-          sx={{
-            opacity: allowAccess ? 1 : 0.5,
-            "&.Mui-disabled": {
-              opacity: 0.5,
-            },
-          }}
-        >
-          <ListItemIcon>
-            <Wifi
-              fontSize="small"
-              color={allowAccess ? "inherit" : "disabled"}
-            />
-          </ListItemIcon>
-          <ListItemText
-            primary="WiFi Configuration"
-            secondary={
-              allowAccess
-                ? isDeveloperMode && !isBackendConnected
-                  ? "Network setup (Developer Mode)"
-                  : "Network setup"
-                : "Requires backend connection"
-            }
-          />
-        </MenuItem>
-
-        <Divider />
-
-        {/* Firmware Updates */}
-        <MenuItem
-          onClick={() => handleNavigationClick("SystemUpdate")}
-          disabled={!allowAccess}
-          sx={{
-            opacity: allowAccess ? 1 : 0.5,
-            "&.Mui-disabled": {
-              opacity: 0.5,
-            },
-          }}
-        >
-          <ListItemIcon>
-            <SystemUpdate
-              fontSize="small"
-              color={allowAccess ? "inherit" : "disabled"}
-            />
-          </ListItemIcon>
-          <ListItemText
-            primary="ESP32 & Updates"
-            secondary={
-              allowAccess
-                ? isDeveloperMode && !isBackendConnected
-                  ? "Update the device firmware (Developer Mode)"
-                  : "Update the device firmware"
-                : "Requires backend connection"
             }
           />
         </MenuItem>

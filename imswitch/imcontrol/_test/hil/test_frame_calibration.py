@@ -26,7 +26,9 @@ POLL_S = 2          # seconds between two status requests
 STOP_TIMEOUT = 60   # seconds a stopped calibration may take to end
 # Without a focus the calibration would wait for someone to focus by hand and press Continue.
 # Nobody is there in a test, so the run fails instead.
-TEST_SETTINGS = {"manualFocusFallback": False}
+# The light value is set, not kept ("illuminationValue" 0 = keep its current value): the
+# teardown turns every light to 0, so a kept value would be 0 in the next run - a black camera.
+TEST_SETTINGS = {"manualFocusFallback": False, "illuminationValue": 500}
 BACKUP_NAME = "setup_before_frame_calibration.json"
 ENDED = ("finished", "failed", "aborted")
 
@@ -156,3 +158,7 @@ def test_every_step_succeeds(calibration):
               if step["warnings"]]
     if warned:
         print("\nwarnings:\n" + "\n".join(warned))
+    # A skipped step did not test its part of the rig, e.g. the turret without a second objective.
+    skipped = [step["title"] for step in calibration["steps"] if step["status"] == "skipped"]
+    if skipped:
+        print("\nskipped, so not tested:\n" + "\n".join(skipped))

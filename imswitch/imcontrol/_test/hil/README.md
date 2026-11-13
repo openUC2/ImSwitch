@@ -11,15 +11,21 @@ Tests of a running ImSwitch on a real microscope, through its HTTP API only. The
 | `board_link` | the UC2 board is connected and runs the CANopen master firmware | reads |
 | `firmware_server` | the firmware server has images; every board runs its version | reads |
 | `camera_capture` | every camera returns a frame at its resolution | reads |
-| `objective_switch` | switching the objective shows in the image, and light still gets through | **moves** turret and Z, **light** |
 | `lightsource` | lasers/LEDs switch; every LED reaches the cameras | **light** |
 | `ledmatrix` | the LED matrix reaches the cameras | **light** |
 | `ledmatrix_single` | one LED lights alone (`setLEDs`) and is dimmer than every LED | **light** |
 | `frame_calibration` | the one-button FRAME calibration runs through; needs the calibration target in the holder | **moves** (homes, turret), **light**, **writes the setup** (backup: `setup_before_frame_calibration.json`) |
-| `motor_axis_move` | each axis steps 10 µm and back | **moves** |
-| `motor_motion_camera` | the observation camera sees X/Y/Z/A move | **moves** (parks at the transport position), **light** |
 
 Hardware a setup does not have skips its tests. Hardware that is there but does not work fails.
+
+They run in the order of the table: the boards, the cameras, the lights, then the calibration.
+The order is the list `ORDER` in `conftest.py`.
+
+The calibration is the test of the motors. It homes Z, X, Y and the turret, reads the position
+back after every move, follows X and Y in the observation camera, focuses with Z and switches
+the objective. It does not start when a test before it failed: without boards, cameras and
+light it can only fail. A step the calibration skips (e.g. the second objective on a rig with
+one) is listed in the test's output as not tested.
 
 ## Run
 
@@ -69,7 +75,7 @@ What the tests share has nothing to do with what they check:
 |---|---|
 | `hil_client.py` | HTTP (`get_json`, `post_json`, `wait_until`), `setup()`, `parametrize_from_rig` |
 | `hil_report.py` | `attach(label, image)` and the HTML/Markdown report |
-| `conftest.py` | marks the tests `hardware`; skips everything when ImSwitch is not reachable |
+| `conftest.py` | the order of the tests (`ORDER`); skips the calibration after a failure; marks the tests `hardware`; skips everything when ImSwitch is not reachable |
 | `__main__.py` | the command above |
 | `firmware_sync.py` | `--sync-firmware` |
 
@@ -94,7 +100,8 @@ So a rig with other hardware needs another setup file in ImSwitch, not other tes
 ## Writing a test
 
 Copy the test that is closest to the new one, rename it `test_<name>.py`, and change it. It
-runs with the others from then on; nothing else has to be registered. A test file has:
+runs with the others from then on, after the tests listed in `ORDER` (`conftest.py`); add its
+name there to give it another place. A test file has:
 
 1. a first line saying what it checks and what it does to the rig;
 2. its settings, as constants;

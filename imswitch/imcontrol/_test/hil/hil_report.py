@@ -21,6 +21,44 @@ _started = time.time()
 _photos = {}   # test id -> [(label, base64 PNG)]
 _results = {}  # test id -> {"status", "duration", "details", "output"}
 
+calibration = {}
+report_error = None
+
+
+def reset():
+    global _started, report_error
+    _started = time.time()
+    report_error = None
+    _photos.clear()
+    _results.clear()
+    calibration.clear()
+
+
+def record_problem(name, message):
+    _results[name] = {"status": "error", "duration": 0.0, "details": str(message), "output": ""}
+
+
+def write_reports(report_dir, setup_file):
+    global report_error
+    report_dir.mkdir(parents=True, exist_ok=True)
+    if not calibration:
+        skipped = [r["details"] for name, r in _results.items()
+                   if "test_frame_calibration.py" in name and r["details"]]
+        calibration.update(state="not started", message="; ".join(skipped) or
+                           "Calibration was not selected or the suite could not start.")
+    (report_dir / "hil-report.pdf").unlink(missing_ok=True)
+    (report_dir / "report-error.txt").unlink(missing_ok=True)
+    try:
+        from hil_pdf import write_pdf
+        write_pdf(report_dir, setup_file, _results, _photos, calibration, _started)
+    except Exception as error:
+        report_error = str(error)
+        record_problem("PDF generation", report_error)
+        (report_dir / "report-error.txt").write_text(report_error, encoding="utf-8")
+        print(f"[hil] PDF generation failed: {error}", flush=True)
+    (report_dir / "summary.md").write_text(summary(setup_file), encoding="utf-8")
+    (report_dir / "report.html").write_text(page(setup_file), encoding="utf-8")
+
 
 def attach(label, image):
     """Add a photo to the test that is running. ``image`` is a PIL image or a numpy array."""
@@ -70,15 +108,15 @@ class ReportPlugin:
             result["details"] = report.longrepr[2]  # (file, line, reason)
 
     def pytest_sessionfinish(self):
-        self.report_dir.mkdir(parents=True, exist_ok=True)
-        (self.report_dir / "summary.md").write_text(summary(self.setup_file), encoding="utf-8")
-        (self.report_dir / "report.html").write_text(page(self.setup_file), encoding="utf-8")
+        write_reports(self.report_dir, self.setup_file)
 
 
 def summary(setup_file):
     """Markdown, short enough for a CI step summary: the setup, the counts, one line per failure."""
     totals = " · ".join(f"{n} {status}" for status, n in counts().items())
-    lines = ["### HIL report", "", f"setup `{setup_file}`", "", totals, ""]
+    lines = ["### HIL report", "", f"setup `{setup_file}`", "", totals, "",
+             f"Calibration: **{calibration.get('state', 'not started')}**. Results retained on the instrument.",
+             "", "Combined PDF: `hil-report.pdf` (artifact: `hil-report-pdf`).", ""]
     for test, result in _results.items():
         if result["status"] in ("failed", "error"):
             last_line = (result["details"].strip().splitlines() or [""])[-1]
@@ -111,6 +149,7 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HIL report</title><style>{css}</style></head><body>
 <h1>HIL report</h1>
+<p><a href="hil-report.pdf">Download combined test and calibration PDF</a></p>
 <div class="meta">setup <code>{setup}</code> · started {started} · took {took:.0f} s</div>
 <div class="counts">{totals}</div>
 {tests}

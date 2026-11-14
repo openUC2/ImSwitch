@@ -19,6 +19,7 @@ import pytest
 from PIL import Image
 
 import hil_client as client
+import hil_report
 from hil_report import attach
 
 RUN_TIMEOUT = 1800  # seconds the whole calibration may take
@@ -48,22 +49,53 @@ def set_settings(values):
                             json=values)
 
 
+def running():
+    return client.get_json("/FrameCalibrationController/isFrameCalibrationRunning") is True
+
+
 def stop_and_wait():
-    """Stop a calibration that still runs, and wait until it has ended."""
-    if status()["state"] in ENDED + ("idle",):
+    """The terminal status alone does not mean cleanup/report writing has finished."""
+    if not running():
         return
-    client.post_json("/FrameCalibrationController/stopFrameCalibration")
-    client.wait_until(lambda: status()["state"] in ENDED + ("idle",), STOP_TIMEOUT,
-                      interval=POLL_S)
+    if status()["state"] not in ENDED:
+        client.post_json("/FrameCalibrationController/stopFrameCalibration")
+    assert client.wait_until(lambda: not running(), STOP_TIMEOUT, interval=POLL_S), (
+        f"calibration thread did not stop within {STOP_TIMEOUT}s")
 
 
-def run_calibration():
+def collect_report(run):
+    """Export only the completed calibration started by this test, never an older one."""
+    assert not running(), "cannot export while calibration still runs"
+    current = status()
+    assert run.get("startedAt") and current["startedAt"] == run["startedAt"], (
+        "calibration identity changed; refusing to attach another run's report")
+    hil_report.calibration.update(state=current["state"], message=current["message"],
+                                  startedAt=current["startedAt"])
+    folder = Path(os.environ.get("HIL_REPORT_DIR", "."))
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "calibration-status.json").write_text(json.dumps(current, indent=2), encoding="utf-8")
+    response = client.get("/FrameCalibrationController/getFrameCalibrationReportPdf", timeout=120)
+    assert response.status_code == 200 and response.content.startswith(b"%PDF-"), (
+        f"calibration PDF export failed: HTTP {response.status_code}")
+    # Recheck after export because the endpoint returns the running/last report.
+    assert status()["startedAt"] == run["startedAt"], "calibration changed during PDF export"
+    from pypdf import PdfReader
+    assert len(PdfReader(io.BytesIO(response.content)).pages), "calibration PDF has no pages"
+    path = folder / "calibration-report.pdf"
+    path.write_bytes(response.content)
+    hil_report.calibration["pdf"] = str(path)
+
+
+def run_calibration(run):
     """Start the calibration and follow it to its end; returns the last status.
 
     Every step's change is printed once, so the output reads as the calibration's log.
     """
     started = client.post_json("/FrameCalibrationController/startFrameCalibration")
     assert started.get("success"), f"startFrameCalibration refused: {started}"
+    run["accepted"] = True
+    hil_report.calibration.update(state="running", message="Calibration accepted")
+    run["startedAt"] = status()["startedAt"]
     printed = {}
     deadline = time.monotonic() + RUN_TIMEOUT
     while True:
@@ -73,7 +105,8 @@ def run_calibration():
             if printed.get(step["name"]) != line and step["status"] != "pending":
                 printed[step["name"]] = line
                 print(f"[{step['status']}] {step['title']}: {step['detail']}", flush=True)
-        if current["state"] in ENDED:
+        assert current["startedAt"] == run["startedAt"], "calibration replaced during polling"
+        if current["state"] in ENDED and not running():
             return current
         # The test turned the manual focus off; a wait for the user would never end.
         assert current["state"] != "waiting", (
@@ -83,8 +116,9 @@ def run_calibration():
         time.sleep(POLL_S)
 
 
-def attach_figures():
+def attach_figures(run):
     """Every report figure of the run (yellow = expected, green = measured) into the report."""
+    assert not running() and status()["startedAt"] == run.get("startedAt"), "not this run's completed figures"
     for figure in client.get_json("/FrameCalibrationController/getFrameCalibrationFigures"):
         response = client.get("/FrameCalibrationController/getFrameCalibrationFigure",
                               params={"figureId": figure["id"]})
@@ -96,11 +130,22 @@ def attach_figures():
 # --- the rig before and after -----------------------------------------------------------------
 
 def all_lights_off():
+    actions = []
     for name in client.setup()["lasers"]:
-        client.get_json("/LaserController/setLaserValue", {"laserName": name, "value": 0})
-        client.get_json("/LaserController/setLaserActive", {"laserName": name, "active": False})
+        actions.extend([
+            ("/LaserController/setLaserValue", {"laserName": name, "value": 0}),
+            ("/LaserController/setLaserActive", {"laserName": name, "active": False}),
+        ])
     if client.setup()["LEDMatrixs"]:
-        client.get_json("/LEDMatrixController/setAllLEDOff")
+        actions.append(("/LEDMatrixController/setAllLEDOff", None))
+    errors = []
+    for endpoint, params in actions:
+        try:
+            client.get_json(endpoint, params)
+        except Exception as error:
+            errors.append(f"{endpoint} {params}: {error}")
+    if errors:
+        raise RuntimeError("; ".join(errors))
 
 
 def save_setup_backup():
@@ -124,19 +169,39 @@ def calibration():
     if response.status_code == 404:
         pytest.skip("this ImSwitch has no FrameCalibrationController")
     original = client.json_of(response)
-    if status()["state"] not in ENDED + ("idle",):
+    if running():
         pytest.skip(f"a FRAME calibration is already running: {status()['state']}")
 
     save_setup_backup()
     print(f"target {original['target']!r}, settings changed for the test: {TEST_SETTINGS}")
+    run, errors = {}, []
+    result = None
+    hil_report.calibration.update(state="not started", message="Calibration start not yet accepted")
     try:
         set_settings(TEST_SETTINGS)
-        result = run_calibration()
+        result = run_calibration(run)
+    except Exception as error:
+        errors.append(("calibration", error))
     finally:
-        stop_and_wait()
-        set_settings({key: original[key] for key in TEST_SETTINGS})
-        all_lights_off()
-        attach_figures()
+        actions = []
+        if run.get("accepted"):
+            actions.append(("stop/wait", stop_and_wait))
+        actions.extend([
+            ("restore settings", lambda: set_settings({key: original[key] for key in TEST_SETTINGS})),
+            ("lights off", all_lights_off),
+        ])
+        if run.get("accepted"):
+            actions.extend([("export PDF", lambda: collect_report(run)),
+                            ("attach figures", lambda: attach_figures(run))])
+        for label, action in actions:
+            try:
+                action()
+            except Exception as error:
+                errors.append((label, error))
+        if errors:
+            detail = "; ".join(f"{label}: {error}" for label, error in errors)
+            hil_report.calibration["error"] = detail
+            raise RuntimeError(detail) from errors[0][1]
     print(f"\n{result['state']}: {result['message']}")
     return result
 

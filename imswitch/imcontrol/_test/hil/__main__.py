@@ -50,26 +50,29 @@ def can_snap(detector, for_acquisition):
 
 
 def why_not_ready():
-    """Wait for ImSwitch, the board and every camera. Returns None, or what is missing."""
+    """Wait for ImSwitch and a readable setup. Returns None, or what is missing."""
     if not client.wait_until(client.reachable, READY_API_TIMEOUT, interval=5):
         return f"ImSwitch did not answer at {client.IMSWITCH_URL} within {READY_API_TIMEOUT}s"
-    if client.get_json("/UC2ConfigController/uc2_board_is_connected") is not True:
-        return "the UC2 board is not connected"
-    detectors = client.setup()["detectors"]
-    if not detectors:
-        return "the setup has no detectors"
-    for name, detector in detectors.items():
-        for_acquisition = detector["forAcquisition"]
-        if for_acquisition:  # an acquisition detector gives frames only while its live view runs
-            status = client.post_json("/LiveViewController/startLiveView",
-                                      {"detectorName": name}, timeout=60).get("status")
-            if status not in ("success", "already_running"):
-                return f"{name}: startLiveView answered {status!r}"
-        if not client.wait_until(lambda: can_snap(name, for_acquisition), READY_DETECTOR_TIMEOUT,
-                                 interval=5):
-            return f"{name} gave no frame within {READY_DETECTOR_TIMEOUT}s"
-        print(f"[hil] {name} is ready", flush=True)
+    client.setup()  # A readable setup is needed to collect the tests.
     return None
+
+
+def prepare_cameras():
+    """Give cameras time to start; record failures without blocking calibration."""
+    problems = []
+    for name, detector in client.setup()["detectors"].items():
+        try:
+            acquisition = detector["forAcquisition"]
+            if acquisition:
+                result = client.post_json("/LiveViewController/startLiveView",
+                                          {"detectorName": name}, timeout=60)
+                assert result.get("status") in ("success", "already_running"), result
+            assert client.wait_until(lambda: can_snap(name, acquisition),
+                                     READY_DETECTOR_TIMEOUT, interval=5), "no frame before timeout"
+        except (requests.RequestException, AssertionError) as error:
+            problems.append(f"{name}: {error}")
+    return problems
+
 
 
 def main():
@@ -81,11 +84,22 @@ def main():
                         help="FLASH every board to the firmware server's version first")
     args = parser.parse_args()
 
+    report_dir = Path(args.report_dir)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["HIL_REPORT_DIR"] = str(report_dir.resolve())
+    hil_report.reset()
+    # A reused local report directory must not expose artifacts from an older run.
+    for name in ("hil-report.pdf", "test-report.pdf", "calibration-report.pdf",
+                 "calibration-status.json", "setup_before_frame_calibration.json", "report-error.txt",
+                 "report.html", "summary.md", "junit.xml"):
+        (report_dir / name).unlink(missing_ok=True)
     files = [HERE / f"test_{name}.py" for name in args.tests]
     unknown = [name for name, file in zip(args.tests, files) if not file.is_file()]
     if unknown:
         known = " ".join(sorted(file.stem[len("test_"):] for file in HERE.glob("test_*.py")))
-        print(f"[hil] no such test: {' '.join(unknown)}. There are: {known}")
+        problem = f"no such test: {' '.join(unknown)}. There are: {known}"
+        hil_report.record_problem("startup", problem)
+        hil_report.write_reports(report_dir, "unavailable")
         return COULD_NOT_RUN
 
     try:
@@ -98,11 +112,13 @@ def main():
         problem = str(error)
     if problem:
         print(f"[hil] not running the tests: {problem}")
+        hil_report.record_problem("startup", problem)
+        hil_report.write_reports(report_dir, "unavailable")
         return COULD_NOT_RUN
 
-    report_dir = Path(args.report_dir)
-    # A test that leaves a file for the report (e.g. a backup) writes it here.
-    os.environ["HIL_REPORT_DIR"] = str(report_dir.resolve())
+    for problem in prepare_cameras():
+        hil_report.record_problem(f"camera preparation: {problem.split(':', 1)[0]}", problem)
+
     code = pytest.main(
         [*[str(file) for file in files or [HERE]],
          "-c", str(HERE / "pytest.ini"), "-ra", f"--junitxml={report_dir / 'junit.xml'}"],
@@ -110,7 +126,9 @@ def main():
 
     counts = hil_report.counts()
     print("[hil] " + " · ".join(f"{n} {status}" for status, n in counts.items()))
-    if code == pytest.ExitCode.TESTS_FAILED:
+    if hil_report.report_error:
+        return COULD_NOT_RUN
+    if code == pytest.ExitCode.TESTS_FAILED or counts["failed"] or counts["error"]:
         return FAILED
     if code != pytest.ExitCode.OK:
         return COULD_NOT_RUN

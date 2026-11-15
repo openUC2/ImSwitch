@@ -204,11 +204,21 @@ class MDAMixin:
 
             # Register the MDA manager with ImSwitch hardware
             if not self.mda_manager._detector_manager:
+                # The engine calls autofocus_manager.runAutofocus(). The master's
+                # AutofocusManager has no such method (and the attribute is
+                # named AutoFocusManager), so hand it this controller's
+                # autofocus with the default settings.
+                controller = self
+
+                class _AutofocusAdapter:
+                    def runAutofocus(self):
+                        return controller.autofocus(**controller._focus_map_af_kwargs())
+
                 self.mda_manager.register(
                     detector_manager=self._master.detectorsManager,
                     positioners_manager=self._master.positionersManager,
                     lasers_manager=self._master.lasersManager,
-                    autofocus_manager=getattr(self._master, 'autofocusManager', None)
+                    autofocus_manager=_AutofocusAdapter(),
                 )
                 self._logger.info("Registered MDA engine with ImSwitch hardware managers")
 
@@ -254,6 +264,17 @@ class MDAMixin:
         except Exception as e:
             self._logger.error(f"Error starting native MDA sequence: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Error starting native MDA sequence: {str(e)}")
+
+    @APIExport()
+    def stop_native_mda_sequence(self) -> Dict[str, Any]:
+        """Stop a sequence started with run_native_mda_sequence.
+
+        Takes effect before the next event, including during a time-lapse wait.
+        The event in progress (move, exposure) completes first.
+        """
+        running = bool(getattr(self.mda_manager, "_is_running", False))
+        self.mda_manager.stop()
+        return {"status": "stopping" if running else "idle"}
 
     def snap_image_with_metadata(self, metadata: Dict[str, Any]) -> np.ndarray:
         """Snap an image with MDA metadata."""

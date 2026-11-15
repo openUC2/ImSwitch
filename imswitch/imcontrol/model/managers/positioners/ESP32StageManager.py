@@ -241,7 +241,10 @@ class ESP32StageManager(PositionerManager):
         # Apply hard-limit settings to hardware for all axes
         try:
             for _axis in self._axes:
-                self._motor.set_hard_limits(axis=self.axisIds[_axis], enabled=self.hardLimitsEnabled[_axis])
+                # same physical signal as the home endstop: send its polarity, else the
+                # firmware's persisted polarity is reset to 0 until the first homing
+                self._motor.set_hard_limits(axis=self.axisIds[_axis], enabled=self.hardLimitsEnabled[_axis],
+                                            polarity=int(self.homeParams[_axis]["endstoppolarity"]))
         except Exception as _e:
             self.__logger.warning(f"Could not apply hard limits on startup: {_e}")
 
@@ -346,9 +349,12 @@ class ESP32StageManager(PositionerManager):
             return
         if not is_absolute and all(v == 0 for v in values):
             return
+        # Targets are fixed before the command goes out: uc2rest already counts the move into
+        # its position and a board message that arrives meanwhile pushes that into
+        # self._position, so adding v afterwards counted a relative move twice.
+        targets = {ax: v if is_absolute else self._position.get(ax, 0) + v for ax, v in zip(axes, values)}
         # don't move to invalid positions (check both min and max limits)
-        for ax, v in zip(axes, values):
-            target = v if is_absolute else self._position.get(ax, 0) + v
+        for ax, target in targets.items():
             if self.limitEnabled[ax] and not self.minPos[ax] <= target <= self.maxPos[ax]:
                 self.__logger.warning(f"{ax} move blocked: target {target} outside [{self.minPos[ax]}, {self.maxPos[ax]}]")
                 return
@@ -356,8 +362,7 @@ class ESP32StageManager(PositionerManager):
         device = {ax: v + self.stageOffsetPositions[ax] if is_absolute else v for ax, v in zip(axes, values)}
         self._moveDevice(device, dict(zip(axes, speeds)), dict(zip(axes, accelerations)), is_absolute=is_absolute,
                          is_blocking=is_blocking, isEnable=isEnable, timeout=timeout, is_reduced=is_reduced)
-        for ax, v in zip(axes, values):
-            self._position[ax] = v if is_absolute else self._position.get(ax, 0) + v
+        self._position.update(targets)
 
     def _moveDevice(self, targets, speed, acceleration=None, is_absolute=False, is_blocking=True, isEnable=None, timeout=gTIMEOUT, is_reduced=False):
         """One move in device coordinates (no offsets, no soft limits).
@@ -436,16 +441,34 @@ class ESP32StageManager(PositionerManager):
         pass
 
     def _readDevicePositions(self):
-        """Device positions as an array indexed by stepperid. Ids 0-3 are the board's own
-        axes, which a bare /motor_get lists; other ids (CAN) are asked for explicitly."""
+        """Device positions as an array indexed by stepperid, NaN where the reply did not
+        carry the axis (uc2rest >= the 'missing' argument; older ones report 0 there). Ids 0-3
+        are the board's own axes, which a bare /motor_get lists; other ids (CAN) are asked for
+        explicitly."""
         ids = [self.axisIds[ax] for ax in self._axes]
-        return 1. * self._motor.get_position(axis=None if max(ids) < 4 else ids)
+        axis = None if max(ids) < 4 else ids
+        try:
+            return 1. * self._motor.get_position(axis=axis, missing=np.nan)
+        except TypeError:
+            return 1. * self._motor.get_position(axis=axis)
 
     def getPosition(self):
-        # load position from device
+        """User positions read from the board. An axis the reply did not carry (lost reply,
+        or a position push of another motor that shared the qid - it read as 0, FRAME
+        calibration 2026-11-12) is read once more, then taken from the last known position."""
         try:
             allPositions = self._readDevicePositions()
-            return {ax: allPositions[self.axisIds[ax]] - self.getStageOffsetAxis(ax) for ax in self._axes}
+            missing = [ax for ax in self._axes if np.isnan(allPositions[self.axisIds[ax]])]
+            if missing:
+                again = self._readDevicePositions()
+                for ax in missing:
+                    allPositions[self.axisIds[ax]] = again[self.axisIds[ax]]
+                missing = [ax for ax in missing if np.isnan(allPositions[self.axisIds[ax]])]
+                if missing:
+                    self.__logger.warning(f"no position reply for {missing} - using the last known position")
+            last = getattr(self, "_position", None) or {}       # getPosition() also fills it in __init__
+            return {ax: (last.get(ax, 0.0) if ax in missing
+                         else allPositions[self.axisIds[ax]] - self.getStageOffsetAxis(ax)) for ax in self._axes}
         except Exception as e:
             self.__logger.error(e)
             return self._position
@@ -466,10 +489,13 @@ class ESP32StageManager(PositionerManager):
     def doHome(self, axis, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None, hardHome=None):
         hp = self.homeParams.get(axis)
         if hp and (hp["enabled"] or abs(hp["steps"]) > 0):
-            self._homeAxis(axis, isBlocking, hardHome)
+            return self._homeAxis(axis, isBlocking, hardHome)
 
     def _homeAxis(self, axis, isBlocking=False, hardHome=None):
+        """Home one axis. Blocking: returns the uc2rest reply (frames list whose last
+        frame carries home.status "done"/"timeout", or an error string); else the qid."""
         hp = self.homeParams[axis]
+        r = "done"
         # move z prior to homing X/Y?
         if axis in ("X", "Y") and self._safeDistanceZHoming != 0 and "Z" in self.homeParams:
             self.move(value=self._zPositionPriorHoming + self._safeDistanceZHoming, speed=self.homeParams["Z"]["speed"], axis="Z", is_absolute=True, is_blocking=True)
@@ -481,27 +507,31 @@ class ESP32StageManager(PositionerManager):
             self.setPositionOnDevice(value=0, axis=axis)
         elif hp["enabled"]:
             hard = hp["hard"] if hardHome is None else hardHome
-            self._homeModule.home(axis=self.axisIds[axis], speed=hp["speed"], direction=hp["direction"],
-                                  endstoppolarity=hp["endstoppolarity"], endposrelease=hp["endposrelease"],
-                                  endstoptimeout=hp["timeout"], isBlocking=isBlocking, hardhome=bool(hard))
+            # Python wait (ms) must outlast the firmware homing timeout, else a blocking
+            # call returns while the MCU is still homing
+            r = self._homeModule.home(axis=self.axisIds[axis], speed=hp["speed"], direction=hp["direction"],
+                                      endstoppolarity=hp["endstoppolarity"], endposrelease=hp["endposrelease"],
+                                      endstoptimeout=hp["timeout"], timeout=(hp["timeout"] or 20000) + 5000,
+                                      isBlocking=isBlocking, hardhome=bool(hard))
         else:
             self.__logger.info(f"No homing parameters set for {axis} axis or not enabled in settings.")
-            return
+            return None
         if axis == "Z":
             self._zPositionPriorHoming = 0
+        return r
 
     # per-axis shortcuts used by other controllers
     def home_x(self, isBlocking=False, *args, **kwargs):
-        self._homeAxis("X", isBlocking)
+        return self._homeAxis("X", isBlocking)
 
     def home_y(self, isBlocking=False, *args, **kwargs):
-        self._homeAxis("Y", isBlocking)
+        return self._homeAxis("Y", isBlocking)
 
     def home_z(self, isBlocking=False, *args, hardHome=None, **kwargs):
-        self._homeAxis("Z", isBlocking, hardHome)
+        return self._homeAxis("Z", isBlocking, hardHome)
 
     def home_a(self, isBlocking=False, *args, **kwargs):
-        self._homeAxis("A", isBlocking)
+        return self._homeAxis("A", isBlocking)
 
     def startStageScanning(self, nStepsLine=100, dStepsLine=1, nTriggerLine=1, nStepsPixel=100, dStepsPixel=1, nTriggerPixel=1, delayTimeStep=10, nFrames=5, isBlocking=False):
         self._motor.startStageScanning(nStepsLine=nStepsLine, dStepsLine=dStepsLine, nTriggerLine=nTriggerLine,
@@ -572,7 +602,7 @@ class ESP32StageManager(PositionerManager):
                              speed=20000, acceleration=None, tTrig=None):
         """
         Start a stage scanning operation with the given parameters.
-        
+
         :param xstart: Starting position in X direction.
         :param xstep: Step size in X direction.
         :param nx: Number of steps in X direction.
@@ -705,7 +735,8 @@ class ESP32StageManager(PositionerManager):
 
             try:
                 # Step 1: store current Z so we can return to it afterwards
-                self._zPositionPriorHoming = self.getPosition()["Z"]
+                # local copy: home_z() resets _zPositionPriorHoming to 0
+                zPrior = self._zPositionPriorHoming = self.getPosition()["Z"]
                 if aborted():
                     return
 
@@ -741,7 +772,7 @@ class ESP32StageManager(PositionerManager):
                 self._emitHomingState(axis="Y", axisStatus="done")
                 if aborted():
                     return
-                
+
                 # Step 6: Moving to a save position (e.g. transport position) after homing XY to avoid collisions during Z restore
                 self._emitHomingState(phase="moving_to_safe_xy", message="Moving to safe XY position")
                 value = {ax: self.transportPositions[ax] for ax in ("X", "Y")}
@@ -752,7 +783,7 @@ class ESP32StageManager(PositionerManager):
 
                 # Step 7: restore Z to its previous height
                 self._emitHomingState(phase="restoring_z", message="Restoring Z position")
-                self.move(value=self._zPositionPriorHoming, speed=self.homeParams["Z"]["speed"], axis="Z",
+                self.move(value=zPrior, speed=self.homeParams["Z"]["speed"], axis="Z",
                           is_absolute=True, is_blocking=True)
 
                 self._emitHomingState(phase="done", active=False, message="Frame homing complete")
@@ -966,11 +997,15 @@ class ESP32StageManager(PositionerManager):
 
     def register_stagescan_callback(self, on_stagescan_complete_fct):
         self._motor.register_stagescan_callback(on_stagescan_complete_fct)
-        
-    
-    def unregister_stagescan_callback(self):
-        self._motor.unregister_stagescan_callback()
-    
+
+
+    def unregister_stagescan_callback(self, on_stagescan_complete_fct=None):
+        # uc2rest removes one specific callback; calling it without one raised
+        # a TypeError that the caller swallowed, so callbacks piled up.
+        if on_stagescan_complete_fct is None:
+            return
+        self._motor.unregister_stagescan_callback(on_stagescan_complete_fct)
+
     def reset_stagescan_complete(self):
         pass
 
@@ -1089,7 +1124,7 @@ class ESP32StageManager(PositionerManager):
     # ============================================================================
     # Motor Settings API - Unified configuration interface
     # ============================================================================
-    
+
     def getMotorSettings(self) -> dict:
         """
         Get all motor settings in a unified format.
@@ -1260,7 +1295,7 @@ class ESP32StageManager(PositionerManager):
             self.__logger.error(f"Error getting TMC settings for axis {axis}: {e}")
 
         return result
-    
+
     def setTMCSettingsForAxis(self, axis: str, settings: dict) -> dict:
         """
         Set TMC stepper driver settings for a specific axis.
@@ -1268,7 +1303,7 @@ class ESP32StageManager(PositionerManager):
         """
         axis = axis.upper()
         result = {'axis': axis, 'success': False}
-        
+
         try:
             self.setupMotorDriver(
                 axis=axis,
@@ -1286,9 +1321,9 @@ class ESP32StageManager(PositionerManager):
         except Exception as e:
             result['error'] = str(e)
             self.__logger.error(f"Error updating TMC settings for axis {axis}: {e}")
-        
+
         return result
-    
+
     def getJoystickDirectionSettings(self) -> dict:
         """Return the in-memory joystick inversion cache: {axis: bool}.
 

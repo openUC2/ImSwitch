@@ -30,6 +30,8 @@ import {
   MenuItem,
   Select,
   Stack,
+  Tab,
+  Tabs,
   TextField,
   Tooltip,
   Typography,
@@ -202,7 +204,10 @@ const ParameterField = React.memo(function ParameterField({
   );
 });
 
-export default function CameraSettingsDialog({ open, onClose }) {
+// streamPanel: optional live-stream settings shown as a second tab, so the live
+// view has one settings dialog for everything camera-related.
+export default function CameraSettingsDialog({ open, onClose, streamPanel = null }) {
+  const [tab, setTab] = useState(0);
   const [detectorNames, setDetectorNames] = useState([]);
   // Only set by the detector picker; null means "whatever the backend
   // considers the current detector". The tree carries the resolved name.
@@ -353,147 +358,160 @@ export default function CameraSettingsDialog({ open, onClose }) {
         </IconButton>
       </DialogTitle>
 
-      <DialogContent dividers>
-        {error ? (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
-          </Alert>
-        ) : null}
+      {streamPanel ? (
+        <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 3 }}>
+          <Tab label="Camera" />
+          <Tab label="Live stream" />
+        </Tabs>
+      ) : null}
 
-        {loading && !tree ? (
-          <Box sx={{ display: "flex", justifyContent: "center", p: 4 }}>
-            <CircularProgress />
-          </Box>
-        ) : null}
+      {streamPanel && tab === 1 ? (
+        <DialogContent dividers sx={{ p: 0 }}>
+          {streamPanel}
+        </DialogContent>
+      ) : (
+        <DialogContent dividers>
+          {error ? (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {error}
+            </Alert>
+          ) : null}
 
-        {tree ? (
-          <>
-            {/* Hardware summary */}
-            <Stack
-              direction="row"
-              spacing={1}
-              sx={{ flexWrap: "wrap", gap: 1, mb: 2 }}
-            >
-              {tree.sensorWidth ? (
-                <Chip
-                  size="small"
-                  label={`Sensor ${tree.sensorWidth} × ${tree.sensorHeight}`}
-                />
-              ) : null}
-              {tree.currentWidth ? (
-                <Chip
-                  size="small"
-                  label={`Frame ${tree.currentWidth} × ${tree.currentHeight}`}
-                />
-              ) : null}
-              {Array.isArray(tree.pixelSizeUm) ? (
-                <Chip
-                  size="small"
-                  label={`Pixel ${Number(
-                    tree.pixelSizeUm[tree.pixelSizeUm.length - 1],
-                  ).toFixed(3)} µm`}
-                />
-              ) : null}
-              <Chip size="small" label={tree.isRGB ? "RGB" : "Mono"} />
-              {tree.cameraType ? (
-                <Chip size="small" label={tree.cameraType} />
-              ) : null}
-              <Chip
-                size="small"
-                color={tree.isConnected ? "success" : "default"}
-                label={tree.isConnected ? "Connected" : "Not connected"}
-              />
-              {tree.isMock ? (
-                <Chip size="small" color="warning" label="Mock camera" />
-              ) : null}
-            </Stack>
+          {loading && !tree ? (
+            <Box sx={{ display: "flex", justifyContent: "center", p: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : null}
 
-            {/* Detector picker + binning */}
-            <Grid container spacing={2} sx={{ mb: 1 }}>
-              {detectorNames.length > 1 ? (
-                <Grid item xs={12} sm={6} md={4}>
-                  <FormControl size="small" fullWidth>
-                    <InputLabel id="camera-detector-label">Detector</InputLabel>
-                    <Select
-                      labelId="camera-detector-label"
-                      id="camera-detector-select"
-                      label="Detector"
-                      value={tree.detectorName || ""}
-                      onChange={(e) => setSelectedDetector(e.target.value)}
-                      disabled={busy}
-                    >
-                      {detectorNames.map((n) => (
-                        <MenuItem key={n} value={n}>
-                          {n}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Grid>
-              ) : null}
-
-              <Grid item xs={12} sm={6} md={4}>
-                <Tooltip
-                  arrow
-                  title="Hardware/digital binning. Higher binning gives a smaller, brighter and less noisy image."
-                >
-                  <FormControl
+          {tree ? (
+            <>
+              {/* Hardware summary */}
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{ flexWrap: "wrap", gap: 1, mb: 2 }}
+              >
+                {tree.sensorWidth ? (
+                  <Chip
                     size="small"
-                    fullWidth
-                    disabled={busy || supportedBinnings.length < 2}
-                  >
-                    <InputLabel id="camera-binning-label">Binning</InputLabel>
-                    <Select
-                      labelId="camera-binning-label"
-                      id="camera-binning-select"
-                      label="Binning"
-                      value={tree.binning ?? 1}
-                      onChange={(e) => handleBinningChange(e.target.value)}
-                    >
-                      {(supportedBinnings.length
-                        ? supportedBinnings
-                        : [tree.binning ?? 1]
-                      ).map((b) => (
-                        <MenuItem key={b} value={b}>
-                          {`${b} × ${b}`}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Tooltip>
-              </Grid>
-            </Grid>
+                    label={`Sensor ${tree.sensorWidth} × ${tree.sensorHeight}`}
+                  />
+                ) : null}
+                {tree.currentWidth ? (
+                  <Chip
+                    size="small"
+                    label={`Frame ${tree.currentWidth} × ${tree.currentHeight}`}
+                  />
+                ) : null}
+                {Array.isArray(tree.pixelSizeUm) ? (
+                  <Chip
+                    size="small"
+                    label={`Pixel ${Number(
+                      tree.pixelSizeUm[tree.pixelSizeUm.length - 1],
+                    ).toFixed(3)} µm`}
+                  />
+                ) : null}
+                <Chip size="small" label={tree.isRGB ? "RGB" : "Mono"} />
+                {tree.cameraType ? (
+                  <Chip size="small" label={tree.cameraType} />
+                ) : null}
+                <Chip
+                  size="small"
+                  color={tree.isConnected ? "success" : "default"}
+                  label={tree.isConnected ? "Connected" : "Not connected"}
+                />
+                {tree.isMock ? (
+                  <Chip size="small" color="warning" label="Mock camera" />
+                ) : null}
+              </Stack>
 
-            {/* Parameter groups */}
-            {groups.map((group) => (
-              <Box key={group.name} sx={{ mb: 2 }}>
-                <Divider textAlign="left" sx={{ mb: 1.5, mt: 1 }}>
-                  <Typography variant="overline" color="text.secondary">
-                    {group.name}
-                  </Typography>
-                </Divider>
-                <Grid container spacing={2}>
-                  {(group.parameters || []).map((param) => (
-                    <Grid item xs={12} sm={6} md={4} key={param.name}>
-                      <ParameterField
-                        param={param}
-                        onChange={handleParamChange}
+              {/* Detector picker + binning */}
+              <Grid container spacing={2} sx={{ mb: 1 }}>
+                {detectorNames.length > 1 ? (
+                  <Grid item xs={12} sm={6} md={4}>
+                    <FormControl size="small" fullWidth>
+                      <InputLabel id="camera-detector-label">Detector</InputLabel>
+                      <Select
+                        labelId="camera-detector-label"
+                        id="camera-detector-select"
+                        label="Detector"
+                        value={tree.detectorName || ""}
+                        onChange={(e) => setSelectedDetector(e.target.value)}
                         disabled={busy}
-                      />
-                    </Grid>
-                  ))}
-                </Grid>
-              </Box>
-            ))}
+                      >
+                        {detectorNames.map((n) => (
+                          <MenuItem key={n} value={n}>
+                            {n}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                ) : null}
 
-            {groups.length === 0 && !loading ? (
-              <Typography variant="body2" color="text.secondary">
-                This detector does not expose any parameters.
-              </Typography>
-            ) : null}
-          </>
-        ) : null}
-      </DialogContent>
+                <Grid item xs={12} sm={6} md={4}>
+                  <Tooltip
+                    arrow
+                    title="Hardware/digital binning. Higher binning gives a smaller, brighter and less noisy image."
+                  >
+                    <FormControl
+                      size="small"
+                      fullWidth
+                      disabled={busy || supportedBinnings.length < 2}
+                    >
+                      <InputLabel id="camera-binning-label">Binning</InputLabel>
+                      <Select
+                        labelId="camera-binning-label"
+                        id="camera-binning-select"
+                        label="Binning"
+                        value={tree.binning ?? 1}
+                        onChange={(e) => handleBinningChange(e.target.value)}
+                      >
+                        {(supportedBinnings.length
+                          ? supportedBinnings
+                          : [tree.binning ?? 1]
+                        ).map((b) => (
+                          <MenuItem key={b} value={b}>
+                            {`${b} × ${b}`}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Tooltip>
+                </Grid>
+              </Grid>
+
+              {/* Parameter groups */}
+              {groups.map((group) => (
+                <Box key={group.name} sx={{ mb: 2 }}>
+                  <Divider textAlign="left" sx={{ mb: 1.5, mt: 1 }}>
+                    <Typography variant="overline" color="text.secondary">
+                      {group.name}
+                    </Typography>
+                  </Divider>
+                  <Grid container spacing={2}>
+                    {(group.parameters || []).map((param) => (
+                      <Grid item xs={12} sm={6} md={4} key={param.name}>
+                        <ParameterField
+                          param={param}
+                          onChange={handleParamChange}
+                          disabled={busy}
+                        />
+                      </Grid>
+                    ))}
+                  </Grid>
+                </Box>
+              ))}
+
+              {groups.length === 0 && !loading ? (
+                <Typography variant="body2" color="text.secondary">
+                  This detector does not expose any parameters.
+                </Typography>
+              ) : null}
+            </>
+          ) : null}
+        </DialogContent>
+      )}
 
       <DialogActions>
         {busy ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}

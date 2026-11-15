@@ -22,6 +22,7 @@ import io
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import LiveUpdatedController
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 
 # Import modular Lepmon components
 try:
@@ -681,8 +682,7 @@ class LepmonController(LiveUpdatedController):
         self.mFrame = frame
         
         if fileFormat.upper() == "TIF":
-            import tifffile as tif
-            tif.imwrite(fileName + ".tif", frame, append=False)
+            save_image(fileName + ".tif", frame)
         elif fileFormat.upper() == "JPG":
             cv2.imwrite(fileName + ".jpg", frame)
         elif fileFormat.upper() == "PNG":

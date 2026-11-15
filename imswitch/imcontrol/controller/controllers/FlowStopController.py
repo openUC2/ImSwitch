@@ -7,12 +7,12 @@ from typing import Any, Dict
 
 import cv2
 import numpy as np
-import tifffile as tif
 
 from imswitch.imcommon.model import dirtools, APIExport
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from ..basecontrollers import LiveUpdatedController
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 
 
 # EcoTaxa-flavoured sample metadata, the subset PlanktoScope/FairScope writes into
@@ -478,7 +478,7 @@ class FlowStopController(LiveUpdatedController):
             self._logger.warning("No frame received from the camera.")
             return
         if fileFormat == "TIF":
-            tif.imwrite(fileName + ".tif", mFrame, append=False)
+            save_image(fileName + ".tif", mFrame)
         elif fileFormat in ("JPG", "PNG"):
             ext = ".jpg" if fileFormat == "JPG" else ".png"
             if fileFormat == "JPG":  # PNG keeps 16 bit, JPEG is 8 bit only

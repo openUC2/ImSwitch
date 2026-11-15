@@ -12,6 +12,8 @@ import json
 import os
 import numpy as np
 
+from imswitch.imcommon.model import initLogger
+
 
 @dataclass
 class GalvoScanConfig:
@@ -181,6 +183,10 @@ class GalvoScannerManager(ABC):
         is_scanning: Whether the scanner is currently active
     """
 
+    # Arbitrary-point list limit of the firmware (SCANNER_MAX_ARBITRARY_POINTS in
+    # uc2-ESP HighSpeedScannerCore.h). A longer list is rejected by the board.
+    MAX_ARBITRARY_POINTS = 256
+
     @abstractmethod
     def __init__(self, galvoScannerInfo, name: str):
         """
@@ -237,7 +243,10 @@ class GalvoScannerManager(ABC):
         self._park_x = int(props.get('park_x', 2048))
         self._park_y = int(props.get('park_y', 2048))
         self._park_on_stop = bool(props.get('park_on_stop', True))
-        
+        self.__logger = initLogger(self, instanceName=name)
+        # Edits made in the UI win over the setup-JSON defaults above
+        self._load_park_config()
+
         # Affine transform for camera-to-galvo mapping
         self._affine_transform = AffineTransform()
         self._calibration_config_path = None
@@ -246,6 +255,7 @@ class GalvoScannerManager(ABC):
         self._arbitrary_points = []
         self._arb_scan_paused = False
         self._arb_scan_running = False
+        self._arb_laser_trigger = "AUTO"
 
     @property
     def name(self) -> str:
@@ -359,15 +369,36 @@ class GalvoScannerManager(ABC):
             'park_on_stop': self._park_on_stop,
         }
 
+    def _park_config_path(self) -> str:
+        # Same folder and naming as the affine calibration
+        return os.path.join(os.path.expanduser('~'), '.imswitch',
+                            f'galvo_park_{self._name}.json')
+
+    def _load_park_config(self) -> bool:
+        """Restore the park settings saved by set_park_config. False if none."""
+        path = self._park_config_path()
+        if not os.path.exists(path):
+            return False
+        try:
+            with open(path, 'r') as f:
+                saved = json.load(f)
+            self.set_park_config(park_x=saved.get('park_x'), park_y=saved.get('park_y'),
+                                 park_on_stop=saved.get('park_on_stop'), persist=False)
+            return True
+        except Exception as e:
+            self.__logger.warning(f"Ignoring unreadable park config {path}: {e}")
+            return False
+
     def set_park_config(self, park_x: int = None, park_y: int = None,
-                        park_on_stop: bool = None) -> Dict[str, Any]:
+                        park_on_stop: bool = None, persist: bool = True) -> Dict[str, Any]:
         """
-        Update the parking configuration.
+        Update the parking configuration and save it, so it survives a restart.
 
         Args:
             park_x: Park X position in DAC counts (0-4095)
             park_y: Park Y position in DAC counts (0-4095)
             park_on_stop: Whether to move to the park position when a scan stops
+            persist: Write the result to ~/.imswitch/galvo_park_<name>.json
         """
         if park_x is not None:
             self._park_x = max(0, min(4095, int(park_x)))
@@ -375,6 +406,14 @@ class GalvoScannerManager(ABC):
             self._park_y = max(0, min(4095, int(park_y)))
         if park_on_stop is not None:
             self._park_on_stop = bool(park_on_stop)
+        if persist:
+            path = self._park_config_path()
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, 'w') as f:
+                    json.dump(self.get_park_config(), f, indent=2)
+            except OSError as e:
+                self.__logger.warning(f"Could not save park config to {path}: {e}")
         return self.get_park_config()
 
     def park(self, timeout: int = 1) -> Dict[str, Any]:

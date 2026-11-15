@@ -69,20 +69,22 @@ export const ONBOARDING_TOUR_STEPS = [
     id: "stream-controls",
     group: "Live View settings",
     target: '[data-tour="stream-controls"]',
-    title: "Stream controls",
+    title: "Camera",
     intro:
-      "<b>Start</b> / <b>Stop</b> the live stream and toggle the <b>Histogram</b> " +
-      "overlay to inspect pixel intensities.",
+      "Everything that sets up the image: <b>Start</b> / <b>Stop</b> the live " +
+      "stream, the <b>Histogram</b> overlay, exposure, gain, binning and saved " +
+      "<b>presets</b>.",
     position: "top",
   },
   {
     id: "stream-settings-button",
     group: "Live View settings",
     target: '[data-tour="stream-settings-button"]',
-    title: "Stream settings",
+    title: "Camera settings",
     intro:
-      "Open advanced stream settings — image format (binary / JPEG / WebRTC), " +
-      "compression and performance options for the live view.",
+      "One dialog for every camera parameter (black level, trigger, cooling, " +
+      "…) and, in its <b>Live stream</b> tab, the stream format, compression " +
+      "and display range.",
     position: "left",
     optional: true,
   },
@@ -94,7 +96,7 @@ export const ONBOARDING_TOUR_STEPS = [
     intro:
       "Save a single snapshot or record a video/stack. Pick the file format, " +
       "add an optional description and jump to the saved file with " +
-      "<b>Go to Folder</b>.",
+      "<b>Open capture folder</b>.",
     position: "top",
     optional: true,
   },
@@ -106,8 +108,8 @@ export const ONBOARDING_TOUR_STEPS = [
     target: '[data-tour="camera-controls"]',
     title: "Detector parameters",
     intro:
-      "Adjust camera exposure, gain and black level here. Values update live and " +
-      "can also be driven automatically by the backend.",
+      "Exposure, exposure mode, gain and binning. Values update live and can " +
+      "also be driven automatically by the backend.",
     position: "top",
     optional: true,
   },
@@ -196,9 +198,9 @@ export const ONBOARDING_TOUR_STEPS = [
     target: '[data-tour="settings-menu"]',
     title: "Settings & connection",
     intro:
-      "Click here to unfold the settings menu: backend connection, system & " +
-      "motor settings, WiFi, firmware updates, dark mode — and to restart this " +
-      "tour from <b>Start Intro Tour</b>.",
+      "Click here to unfold the settings menu: <b>System & connection</b> " +
+      "(backend, setup file, firmware, WiFi, logs), motor and laser settings, " +
+      "dark mode — and to restart this tour from <b>Start Intro Tour</b>.",
     position: "bottom",
   },
 

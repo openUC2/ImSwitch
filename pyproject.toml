@@ -27,7 +27,7 @@ dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = [
     "setuptools >= 42",
-    "pydantic==2.11.4",
+    "pydantic==2.12.5",  # ome-zarr-models needs >=2.11.5,<2.13
     "coloredlogs >= 15",
     "colour-science >= 0.3",
     "dataclasses-json >= 0.5",
@@ -55,21 +55,31 @@ dependencies = [
     "NanoImagingPack==2.1.5",
     # Pin below 0.1.7: that PyPI release added imswitchuc2 as a dep, creating a
     # circular dependency and an av==17 conflict with our aiortc-compatible av==13.
-    "imswitchclient>=0.1.7",
+    "imswitchclient>=0.2.0",
     "psygnal",
     "python-socketio[asyncio]>=5.11,<6", # Used to be: "python-socketio[asyncio]==5.11.4",
     "jupyterlab==4.2.5",
     "python-dateutil >= 2.8.1",
     "zarr>=3.0.0a0",
     "numcodecs>=0.13.1",
+    # OME-NGFF metadata models (built and checked on every write) and OME-XML for TIFFs.
+    "ome-zarr-models>=1.0",
+    "ome-types>=0.5",
     "jsonschema>=4.0",
     "aiohttp>=3.9.4",
-    "arkitekt[rekuest,mikro]>=5.0.1",
+    # arkitekt releases near-daily with sub-dep bounds that do not hold (5.0.1
+    # breaks on arkitekt-spec 3.19), so the family is pinned to the tested set.
+    "arkitekt[rekuest,mikro]==5.0.1",
+    "arkitekt-spec==3.0.0",
+    "arkitekt-runtime==4.1.1",
+    "rekuest==7.1.0",
+    "mikro==6.2.1",
+    "fakts==5.2.0",
     "koil>=2.0.5",
     "msgpack>=1.0.4",
     "esptool",
     "av==13.1.0",
-    "uc2-rest>=0.2.0.41",  # fwVersion/fwImage, CAN OTA reconnect fixes
+    "uc2-rest>=0.2.0.43",  # named stepper ids (axes beyond XYZA)
     "unitelabs-sila",
     "unitelabs-cdk",
     "mikro-next>=1",
@@ -78,7 +88,7 @@ dependencies = [
     # overwrite each other. contrib-headless is the superset without Qt/GUI.
     "opencv-contrib-python-headless>=4.13.0.92",
     "ipympl>=0.9.2",
-    "useq-schema",
+    "useq-schema==0.9.2",  # docs/aufgaben/job.schema.json is generated from it
     "ashlarUC2>=1.18.5",
     "uc2canopen>=0.1.4",
     "vmbpy>=1.2.2 ; sys_platform == 'linux'",
@@ -95,11 +105,6 @@ Lepmon = [
     "RPi.GPIO",
     "luma.oled",
 ]
-imjoy = [
-    "imjoy-rpc==0.5.59",
-    "imjoy_rpc",
-    "imjoy",
-]
 dev = [
     "pytest",
 ]
@@ -108,6 +113,11 @@ omero = [
 ]
 pymmcore = [
     "pymmcore-plus>=0.10",
+]
+slm = [
+    # "window" backend of the SLM/DMD display: a fullscreen window on one monitor,
+    # run in a subprocess (imswitch/imcontrol/model/managers/slm_display.py).
+    "pygame-ce>=2.5",
 ]
 
 [project.urls]
@@ -136,6 +146,9 @@ fallback_version = "0.0.0.dev0"
 imswitch-provisioner = "imswitch.imcontrol.model.jupyter_connection:ExistingProvisioner"
 
 [tool.uv]
+# numpy is pinned to 2.1.2, which has no Python 3.14 support (and useq-schema 0.9.2
+# needs numpy>=2.3.2 there), so only lock for the interpreters we actually test.
+environments = ["python_full_version < '3.14'"]
 # Force psygnal to be installed from source (no binary wheel).
 # The compiled (mypyc) version forbids subclassing which ImSwitch requires.
 # See https://github.com/pyapp-kit/psygnal/issues/330

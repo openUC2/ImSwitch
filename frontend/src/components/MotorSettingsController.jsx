@@ -406,11 +406,7 @@ const AxisSettingsPanel = ({ axis, settings, onChange, onSave, isSaving, baseURL
                 });
                 // Move 100 steps
                 await axios.get('/PositionerController/move', {
-                  positionerName: 'ESP32Stage',
-                  axis: axis,
-                  dist: -100,
-                  isAbsolute: false,
-                  isBlocking: false
+                  params: { positionerName: 'ESP32Stage', axis, dist: -100, isAbsolute: false, isBlocking: false }
                 });
               } catch (e) {
                 console.error('Test movement failed:', e);
@@ -429,11 +425,7 @@ const AxisSettingsPanel = ({ axis, settings, onChange, onSave, isSaving, baseURL
               try {
                 const axios = createAxiosInstance(baseURL);
                 await axios.get('/PositionerController/move', {
-                  positionerName: 'ESP32Stage',
-                  axis: axis,
-                  dist: 100,
-                  isAbsolute: false,
-                  isBlocking: false
+                  params: { positionerName: 'ESP32Stage', axis, dist: 100, isAbsolute: false, isBlocking: false }
                 });
               } catch (e) {
                 console.error('Test movement failed:', e);
@@ -444,6 +436,32 @@ const AxisSettingsPanel = ({ axis, settings, onChange, onSave, isSaving, baseURL
             +100 steps
           </Button>
         </Box>
+        <Typography variant="subtitle2" gutterBottom sx={{ mt: 2 }}>
+          Test Homing
+        </Typography>
+        <Button
+          variant="outlined"
+          size="small"
+          color="warning"
+          disabled={testing}
+          onClick={async () => {
+            setTesting(true);
+            try {
+              const axios = createAxiosInstance(baseURL);
+              await axios.get('/PositionerController/homeAxis', {
+                params: { positionerName: 'ESP32Stage', axis, isBlocking: false }
+              });
+            } catch (e) {
+              console.error('Test homing failed:', e);
+            }
+            setTesting(false);
+          }}
+        >
+          Home {axis}
+        </Button>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+          Runs the saved homing settings of this axis (homing must be enabled for it).
+        </Typography>
       </Box>
 
       {/* Save Button */}
@@ -738,8 +756,7 @@ const GlobalSettingsPanel = ({ settings, onChange, onSave, isSaving }) => {
 };
 
 // Joystick Direction & Speed Multiplier Panel component
-const JoystickSettingsPanel = () => {
-  const AXES = ["X", "Y", "Z", "A"];
+const JoystickSettingsPanel = ({ axes: AXES = ["X", "Y", "Z", "A"] }) => {
   const [inverted, setInverted] = useState({});
   const [multiplier, setMultiplier] = useState({});
   const [loading, setLoading] = useState(true);
@@ -1019,7 +1036,11 @@ const MotorSettingsController = () => {
   };
 
   // Tabs for axes
-  const axisTabs = ["X", "Y", "Z", "A", "Global", "Joystick", "TMC"];
+  const axisList = Object.keys(motorSettings?.axes || {}).length
+    ? Object.keys(motorSettings.axes)
+    : ["X", "Y", "Z", "A"];
+  const axisTabs = [...axisList, "Global", "Joystick", "TMC"];
+  const globalTab = axisList.length, joystickTab = globalTab + 1, tmcTab = globalTab + 2;
 
   if (!isBackendConnected) {
     return (
@@ -1100,7 +1121,7 @@ const MotorSettingsController = () => {
             <Divider sx={{ my: 2 }} />
 
             {/* Tab Panels for each axis */}
-            {["X", "Y", "Z", "A"].map((axis, idx) => (
+            {axisList.map((axis, idx) => (
               <TabPanel key={axis} value={tabIndex} index={idx}>
                 <AxisSettingsPanel
                   axis={axis}
@@ -1113,7 +1134,7 @@ const MotorSettingsController = () => {
             ))}
 
             {/* Global Settings Tab */}
-            <TabPanel value={tabIndex} index={4}>
+            <TabPanel value={tabIndex} index={globalTab}>
               <GlobalSettingsPanel
                 settings={motorSettings?.global}
                 onSave={handleSaveGlobalSettings}
@@ -1122,12 +1143,12 @@ const MotorSettingsController = () => {
             </TabPanel>
 
             {/* Joystick Direction & Speed Multiplier Tab */}
-            <TabPanel value={tabIndex} index={5}>
-              <JoystickSettingsPanel />
+            <TabPanel value={tabIndex} index={joystickTab}>
+              <JoystickSettingsPanel axes={axisList} />
             </TabPanel>
 
             {/* TMC Settings Tab */}
-            <TabPanel value={tabIndex} index={6}>
+            <TabPanel value={tabIndex} index={tmcTab}>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 Select an axis to configure its TMC stepper driver settings. 
                 Note: Changing microsteps will automatically scale the stepsize to maintain physical movement distance.
@@ -1139,11 +1160,11 @@ const MotorSettingsController = () => {
                 scrollButtons="auto"
                 sx={{ mb: 2 }}
               >
-                {["X", "Y", "Z", "A"].map((axis) => (
+                {axisList.map((axis) => (
                   <Tab key={axis} label={axis} />
                 ))}
               </Tabs>
-              {["X", "Y", "Z", "A"].map((axis, idx) => (
+              {axisList.map((axis, idx) => (
                 <Box key={axis} hidden={tmcAxisIndex !== idx}>
                   {tmcAxisIndex === idx && (
                     <TMCSettingsPanel

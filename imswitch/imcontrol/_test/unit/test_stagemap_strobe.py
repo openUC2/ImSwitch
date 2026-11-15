@@ -389,7 +389,11 @@ class TriggeredCamera:
             t = (n - 1) * req["period_us"] * 1e-6 + delay * 1e-6
             frame = self.render(self._start + np.sign(dist) * min(abs(dist), req["speed"] * t))
         if n == 1:
-            self._lastN = None
+            self._lastN, self._arrival0 = None, time.time()
+        # Arrival on the trigger clock, as with a firmware timer: the virtual
+        # sweep thread catches up after a stall (busy CI runner) and would
+        # otherwise stamp two kept frames with the same trigger period.
+        arrival = self._arrival0 + (n - 1) * req["period_us"] * 1e-6
         if self.minPeriodUs and self._lastN is not None and \
                 (n - self._lastN) * req["period_us"] < self.minPeriodUs:
             return                      # still reading out: the trigger is ignored
@@ -399,7 +403,7 @@ class TriggeredCamera:
             return                      # lost between camera and host
         trig = 0 if self.trig0 is None else self.trig0 + n
         with self._lock:
-            self._buffer.append((frame, self.frameNum, trig, time.time()))
+            self._buffer.append((frame, self.frameNum, trig, arrival))
 
 
 class Lasers(dict):
@@ -836,3 +840,13 @@ def test_full_calibration_reports_when_no_window_lights_every_row():
     assert len(result["windowTries"]) == StageMapController.STROBE_CAL_WINDOW_TRIES
     assert ctrl.params.strobeDelayUs == -1.0               # nothing stored
     assert ctrl.params.strobeWindowMs == 3.0
+
+
+def test_virtual_stage_speed_stays_a_per_axis_dict():
+    """PositionerController reads speed[axis]; a scalar here kept it from starting."""
+    stage = virtual_stage()
+    assert set(stage.speed) == {"X", "Y", "Z", "A"}
+    stage.setSpeed(5000)
+    assert stage.speed["Z"] == 5000 and stage._travelSpeed == 5000
+    stage.setSpeed(200, axis="X")
+    assert stage.speed["X"] == 200 and stage.speed["Y"] == 5000

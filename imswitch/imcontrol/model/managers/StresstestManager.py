@@ -10,7 +10,7 @@ class StresstestManager(SignalInterface):
     """Manager for stress test configuration and default parameters.
     
     Loads and saves default stress test parameters from/to a configuration file,
-    similar to HistoScanManager pattern.
+    like the other managers.
     """
 
     def __init__(self, StresstestInfo, *args, **kwargs):

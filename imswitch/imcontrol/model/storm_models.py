@@ -157,9 +157,6 @@ class STORMAcquisitionParameters(BaseModel):
     process_locally: bool = Field(default=True,
                                 description="Process frames locally with microeye")
 
-    process_arkitekt: bool = Field(default=False,
-                                 description="Process frames via Arkitekt")
-
     # Processing parameters for local processing
     processing_parameters: Optional[Dict[str, Any]] = Field(default=None,
                                                           description="Processing parameters for local reconstruction")
@@ -208,7 +205,6 @@ class STORMStatusResponse(BaseModel):
 
     # System status
     microeye_available: bool = Field(description="Whether microEye is available")
-    arkitekt_available: bool = Field(description="Whether Arkitekt is available")
 
     # Current parameters
     current_processing_params: Optional[STORMProcessingParameters] = Field(

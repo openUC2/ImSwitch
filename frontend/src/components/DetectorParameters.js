@@ -4,7 +4,6 @@ import {
   TextField,
   MenuItem,
   Box,
-  Typography,
   Tooltip,
   IconButton,
   Button,
@@ -12,25 +11,22 @@ import {
   InputLabel,
   Select,
 } from "@mui/material";
-import { Camera, InfoOutlined, Tune } from "@mui/icons-material";
 import * as detectorParametersSlice from "../state/slices/DetectorParametersSlice.js";
 import { normalizeGainValue } from "../constants/cameraGainValues.js";
-import CameraSettingsDialog from "./CameraSettingsDialog.jsx";
 
 const AUTO_ONCE_RESET_DELAY_MS = 1500;
 const AUTO_ONCE_UI_HOLD_MS = AUTO_ONCE_RESET_DELAY_MS + 300;
 
 /**
- * Detector Parameters Component - Now with WebSocket support
+ * The everyday detector parameters (exposure, exposure mode, gain, binning) as
+ * one row of fields. Rendered inside the live view's Camera card; the full
+ * parameter tree is in the camera settings dialog. Values follow backend
+ * changes over the WebSocket (e.g. in auto mode) without polling.
  *
- * This component displays and updates detector parameters.
- * It now receives parameter updates via WebSocket when the backend changes them
- * (e.g., in Auto Mode), without requiring polling.
- *
- * Usage:
- *   <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
+ * refreshKey: change it to re-read the parameters (after the settings dialog
+ * may have changed them).
  */
-export default function DetectorParameters({ hostIP, hostPort }) {
+export default function DetectorParameters({ hostIP, hostPort, refreshKey = 0 }) {
   const dispatch = useDispatch();
 
   // Get detector parameters from Redux (updated via WebSocket)
@@ -44,7 +40,6 @@ export default function DetectorParameters({ hostIP, hostPort }) {
   const [localExposure, setLocalExposure] = useState("");
   const [localGain, setLocalGain] = useState("");
   const [autoOncePending, setAutoOncePending] = useState(false);
-  const [cameraDialogOpen, setCameraDialogOpen] = useState(false);
 
   // Track whether a field is currently being edited so we don't
   // overwrite the user's in-progress typing with a WebSocket update.
@@ -111,7 +106,7 @@ export default function DetectorParameters({ hostIP, hostPort }) {
     return () => {
       cancelled = true;
     };
-  }, [hostIP, hostPort, dispatch]);
+  }, [hostIP, hostPort, dispatch, refreshKey]);
 
   // Sync local text fields when Redux state changes (from WebSocket)
   // but only if user is not currently editing those fields
@@ -293,260 +288,152 @@ export default function DetectorParameters({ hostIP, hostPort }) {
     await refreshDetectorParameters();
   };
 
-  const gainHelperText =
+  const gainLabel =
     gainMin !== null &&
     gainMin !== undefined &&
     gainMax !== null &&
     gainMax !== undefined
-      ? `${gainMin} – ${gainMax}`
-      : " ";
+      ? `Gain (${gainMin}–${gainMax})`
+      : "Gain";
+  const isAuto = detectorParams.mode === "auto";
+
+  const stepExposure = (delta) => {
+    if (isAuto) return;
+    const next = Number(localExposure || 0) + delta;
+    setLocalExposure(String(next));
+    handleImmediateFieldChange("exposure", next);
+  };
 
   return (
     <Box
-      component="fieldset"
       sx={{
-        border: 1,
-        borderColor: "divider",
-        borderRadius: 1,
-        p: 2,
         display: "flex",
-        flexDirection: "column",
+        flexWrap: "wrap",
         gap: 1,
+        alignItems: "center",
+        "& .MuiInputBase-root": { height: 40 },
       }}
     >
-      <Box
-        component="legend"
-        sx={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 0.5,
-          px: 1,
-        }}
-      >
-        <Camera fontSize="small" sx={{ color: "text.secondary" }} />
-        <Typography variant="subtitle1" sx={{ fontWeight: "medium" }}>
-          Detector Parameters
-        </Typography>
-        <Tooltip
-          arrow
-          title={
-            <Box sx={{ whiteSpace: "pre-line" }}>
-              {
-                "Exposure mode controls exposure only on this camera.\n\nManual: you set exposure directly.\nAuto: the camera continuously adapts exposure time.\nAuto once: the camera makes a single exposure adjustment and then returns to manual."
-              }
+      <TextField
+        label="Exposure (ms)"
+        type="text"
+        inputProps={{ inputMode: "decimal" }}
+        value={localExposure}
+        onFocus={() => beginEditing("exposure")}
+        onChange={handleNumericFieldChange("exposure", setLocalExposure)}
+        onBlur={() => endEditing("exposure")}
+        onKeyDown={handleNumericFieldKeyDown}
+        size="small"
+        disabled={isAuto}
+        sx={{ width: 140 }}
+        InputProps={{
+          endAdornment: (
+            <Box sx={{ display: "flex", flexDirection: "column", ml: 0.5 }}>
+              <IconButton
+                size="small"
+                sx={{ p: 0, height: 18 }}
+                aria-label="Increment exposure"
+                onClick={() => stepExposure(1)}
+                disabled={isAuto}
+              >
+                <span style={{ fontSize: 14, lineHeight: 1 }}>▲</span>
+              </IconButton>
+              <IconButton
+                size="small"
+                sx={{ p: 0, height: 18 }}
+                aria-label="Decrement exposure"
+                onClick={() => stepExposure(-1)}
+                disabled={isAuto}
+              >
+                <span style={{ fontSize: 14, lineHeight: 1 }}>▼</span>
+              </IconButton>
             </Box>
-          }
-        >
-          <IconButton size="small" sx={{ p: 0.25, color: "text.disabled" }}>
-            <InfoOutlined fontSize="inherit" />
-          </IconButton>
-        </Tooltip>
-        <Tooltip
-          arrow
-          title="All camera settings (black level, trigger, cooling, temperature, ...)"
-        >
+          ),
+        }}
+      />
+
+      <Tooltip
+        arrow
+        placement="top-start"
+        title="Manual: you set the exposure. Auto: the camera keeps adapting it. Auto once: one adjustment, then back to manual. Gain is never auto-adjusted here."
+      >
+        <FormControl size="small" sx={{ width: 120 }}>
+          <InputLabel id="detector-mode-label">Mode</InputLabel>
+          <Select
+            labelId="detector-mode-label"
+            id="detector-mode-select"
+            value={detectorParams.mode}
+            label="Mode"
+            onChange={(e) => handleParamChange("mode", e.target.value)}
+          >
+            <MenuItem value="manual">Manual</MenuItem>
+            <MenuItem value="auto">Auto</MenuItem>
+          </Select>
+        </FormControl>
+      </Tooltip>
+
+      <Tooltip
+        title="Run a single auto-exposure pass and then return to manual mode."
+        arrow
+      >
+        <span>
           <Button
             size="small"
             variant="outlined"
-            startIcon={<Tune fontSize="small" />}
-            onClick={() => setCameraDialogOpen(true)}
-            sx={{ ml: 1, py: 0.1 }}
+            onClick={handleAutoExposureOnce}
+            disabled={detectorParams.mode !== "manual" || autoOncePending}
+            sx={{ whiteSpace: "nowrap", height: 40 }}
           >
-            Camera settings
+            Auto once
           </Button>
-        </Tooltip>
-      </Box>
+        </span>
+      </Tooltip>
 
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: {
-            xs: "1fr",
-            md: "130px 190px minmax(120px, 1fr)",
-          },
-          gap: 1,
-          alignItems: "end",
-        }}
-      >
-        <Box>
-          <TextField
-            label="Exposure"
-            type="text"
-            inputProps={{ inputMode: "decimal" }}
-            value={localExposure}
-            onFocus={() => beginEditing("exposure")}
-            onChange={handleNumericFieldChange("exposure", setLocalExposure)}
-            onBlur={() => endEditing("exposure")}
-            onKeyDown={handleNumericFieldKeyDown}
-            size="small"
-            disabled={detectorParams.mode === "auto"}
-            sx={{
-              width: 130,
-              "& .MuiInputBase-root": {
-                height: 40,
-              },
-            }}
-            InputProps={{
-              endAdornment: (
-                <Box sx={{ display: "flex", flexDirection: "column", ml: 0.5 }}>
-                  <IconButton
-                    size="small"
-                    sx={{ p: 0, height: 18 }}
-                    aria-label="Increment exposure"
-                    onClick={() => {
-                      if (detectorParams.mode === "auto") return;
-                      const next = Number(localExposure || 0) + 1;
-                      setLocalExposure(String(next));
-                      handleImmediateFieldChange("exposure", next);
-                    }}
-                    disabled={detectorParams.mode === "auto"}
-                  >
-                    <span style={{ fontSize: 14, lineHeight: 1 }}>▲</span>
-                  </IconButton>
-                  <IconButton
-                    size="small"
-                    sx={{ p: 0, height: 18 }}
-                    aria-label="Decrement exposure"
-                    onClick={() => {
-                      if (detectorParams.mode === "auto") return;
-                      const next = Number(localExposure || 0) - 1;
-                      setLocalExposure(String(next));
-                      handleImmediateFieldChange("exposure", next);
-                    }}
-                    disabled={detectorParams.mode === "auto"}
-                  >
-                    <span style={{ fontSize: 14, lineHeight: 1 }}>▼</span>
-                  </IconButton>
-                </Box>
-              ),
-            }}
-          />
-        </Box>
-
-        <Box>
-          <Tooltip
-            arrow
-            placement="top-start"
-            title="Manual: set exposure directly. Auto: camera continuously adjusts exposure. Gain is not auto-adjusted here."
-          >
-            <FormControl size="small" sx={{ width: 180, height: 40 }}>
-              <InputLabel id="detector-mode-label">Mode</InputLabel>
-              <Select
-                labelId="detector-mode-label"
-                id="detector-mode-select"
-                value={detectorParams.mode}
-                label="Mode"
-                onChange={(e) => handleParamChange("mode", e.target.value)}
-              >
-                <MenuItem value="manual">Manual</MenuItem>
-                <MenuItem value="auto">Auto</MenuItem>
-              </Select>
-            </FormControl>
-          </Tooltip>
-        </Box>
-
-        <Box>
-          <Tooltip
-            title="Run a single auto-exposure pass and then return to manual mode."
-            arrow
-          >
-            <Button
-              size="small"
-              variant="contained"
-              onClick={handleAutoExposureOnce}
-              disabled={detectorParams.mode !== "manual" || autoOncePending}
-              sx={{
-                whiteSpace: "nowrap",
-                height: 40,
-                minHeight: 40,
-                width: 130,
-              }}
-            >
-              Auto once
-            </Button>
-          </Tooltip>
-        </Box>
-      </Box>
-
-      <Box sx={{ pt: 0.5 }}>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ fontWeight: 500 }}
-        >
-          Gain and binning
-        </Typography>
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: { xs: "1fr", md: "160px 160px" },
-            gap: 1,
-            alignItems: "start",
-            mt: 0.25,
-          }}
-        >
-          <TextField
-            label="Gain"
-            type="text"
-            inputProps={{ inputMode: "decimal" }}
-            value={localGain}
-            onFocus={() => beginEditing("gain")}
-            onChange={handleNumericFieldChange("gain", setLocalGain)}
-            onBlur={() => endEditing("gain")}
-            onKeyDown={handleNumericFieldKeyDown}
-            size="small"
-            helperText={gainHelperText}
-            FormHelperTextProps={{ sx: { minHeight: "1.2em", m: 0, mt: 0.25 } }}
-            sx={{
-              "& .MuiInputBase-root": {
-                height: 40,
-              },
-            }}
-          />
-
-          <Tooltip
-            arrow
-            title="Combines neighbouring pixels: smaller, brighter and less noisy images at lower resolution."
-          >
-            <FormControl
-              size="small"
-              sx={{ minWidth: 160 }}
-              disabled={supportedBinnings.length < 2}
-            >
-              <InputLabel id="detector-binning-label">Binning</InputLabel>
-              <Select
-                labelId="detector-binning-label"
-                id="detector-binning-select"
-                label="Binning"
-                value={
-                  supportedBinnings.length
-                    ? Number(detectorParams.binning) || supportedBinnings[0]
-                    : Number(detectorParams.binning) || 1
-                }
-                onChange={handleBinningChange}
-                sx={{ height: 40 }}
-              >
-                {(supportedBinnings.length
-                  ? supportedBinnings
-                  : [Number(detectorParams.binning) || 1]
-                ).map((val) => (
-                  <MenuItem key={val} value={val}>
-                    {`${val} × ${val}`}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Tooltip>
-        </Box>
-      </Box>
-
-      <CameraSettingsDialog
-        open={cameraDialogOpen}
-        onClose={() => {
-          setCameraDialogOpen(false);
-          refreshDetectorParameters();
-        }}
+      <TextField
+        label={gainLabel}
+        type="text"
+        inputProps={{ inputMode: "decimal" }}
+        value={localGain}
+        onFocus={() => beginEditing("gain")}
+        onChange={handleNumericFieldChange("gain", setLocalGain)}
+        onBlur={() => endEditing("gain")}
+        onKeyDown={handleNumericFieldKeyDown}
+        size="small"
+        sx={{ width: 120 }}
       />
+
+      <Tooltip
+        arrow
+        title="Combines neighbouring pixels: smaller, brighter and less noisy images at lower resolution."
+      >
+        <FormControl
+          size="small"
+          sx={{ width: 110 }}
+          disabled={supportedBinnings.length < 2}
+        >
+          <InputLabel id="detector-binning-label">Binning</InputLabel>
+          <Select
+            labelId="detector-binning-label"
+            id="detector-binning-select"
+            label="Binning"
+            value={
+              supportedBinnings.length
+                ? Number(detectorParams.binning) || supportedBinnings[0]
+                : Number(detectorParams.binning) || 1
+            }
+            onChange={handleBinningChange}
+          >
+            {(supportedBinnings.length
+              ? supportedBinnings
+              : [Number(detectorParams.binning) || 1]
+            ).map((val) => (
+              <MenuItem key={val} value={val}>
+                {`${val} × ${val}`}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </Tooltip>
     </Box>
   );
 }

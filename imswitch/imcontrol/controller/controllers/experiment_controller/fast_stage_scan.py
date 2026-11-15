@@ -92,7 +92,15 @@ class FastStageScanMixin:
                 data_path = dirtools.UserFileDirs.getValidatedDataPath()
                 self.setOmeZarrUrl(self.mFilePath.split(data_path)[-1]+".ome.zarr")
                 self._writer_thread_ome = threading.Thread(
-                    target=self._writer_loop_ome, args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0, nTimePoints, nZPlanes, nIlluminations),
+                    target=self._writer_loop_ome,
+                    args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny),
+                    # Keywords, see experiment_performance_mode: the positional
+                    # form collapsed all planes and channels into z=0, c=0.
+                    kwargs=dict(min_period=0, is_performance_mode=True,
+                                is_tiff=getattr(self, "_ome_write_tiff", False),
+                                write_stitched_tiff=getattr(self, "_ome_write_stitched_tiff", True),
+                                nTimePoints=nTimePoints, nZ_planes=nZPlanes,
+                                nIlluminations=nIlluminations),
                     daemon=True)
                 self._stop_writer_evt.clear()
                 self._writer_thread_ome.start()

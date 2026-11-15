@@ -2,7 +2,7 @@
  * plannedFocusGrid.js
  *
  * Client-side mirror of the backend's automatic focus-map grid
- * (FocusMap.generate_grid in imswitch/imcontrol/model/focus_map.py), so the
+ * (FocusMap.generate_grid in imswitch/imcontrol/model/aufgaben/focus_map.py), so the
  * planned autofocus positions can be previewed — and pruned — BEFORE the
  * automatic measurement runs. The kept points are sent to the backend as
  * `grid_points` in the FocusMapConfig; the backend then measures exactly

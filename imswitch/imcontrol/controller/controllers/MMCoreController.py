@@ -6,7 +6,6 @@ a background thread so the request doesn't block on multi-minute exposures.
 """
 import datetime
 import io
-import json
 import os
 import threading
 import time
@@ -14,7 +13,6 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import tifffile
 from fastapi import HTTPException
 from fastapi.responses import Response
 from PIL import Image
@@ -23,6 +21,7 @@ from pydantic import BaseModel
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
 from ..basecontrollers import ImConWidgetController
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 
 
 _MMCORE_MANAGER_NAME = "MMCoreDetectorManager"
@@ -820,19 +819,8 @@ class MMCoreController(ImConWidgetController):
                     "timestamp": now.isoformat(),
                 }
             )
-            try:
-                description = json.dumps(metadata, default=str)
-            except Exception:
-                description = (
-                    f"MMCore long-exposure snap: exposure_ms={currentExposure:.3f}, "
-                    f"detector={detector.name}"
-                )
-
-            tifffile.imwrite(
-                fullPath,
-                image,
-                description=description,
-            )
+            save_image(fullPath, image, exposure_ms=[currentExposure],
+                       channel_names=[detector.name], annotations=metadata)
 
             try:
                 relativePath = "/" + os.path.relpath(fullPath, data_root).replace("\\", "/")

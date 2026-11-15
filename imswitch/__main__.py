@@ -127,7 +127,7 @@ def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_fold
         config.to_legacy_globals(imswitch)
 
         from imswitch.imcommon import prepareApp, launchApp
-        from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController
+        from imswitch.imcommon.controller import ModuleCommunicationChannel
         from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
 
         # Setup logging system with configuration

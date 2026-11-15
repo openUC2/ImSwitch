@@ -1,0 +1,29 @@
+{
+  "schema": "aufgaben.job/1",
+  "name": "Skip empty wells",
+  "description": "Takes a quick brightfield look at every well, which is not saved. Wells whose image has no contrast are skipped; the others get a fluorescence Z-stack. Lower max_contrast if empty wells are imaged, raise it if wells with cells are skipped.",
+  "parameters": {
+    "max_contrast": {"type": "number", "default": 0.05, "minimum": 0, "title": "Contrast of an empty well", "ui": "wizard"}
+  },
+  "variables": {"skipped": 0},
+  "resources": {
+    "plate": {"kind": "well_plate", "plan": {"plate": "96-well", "a1_center_xy": [0.0, 0.0],
+      "selected_wells": [[0, 0, 0, 1, 1, 1], [0, 1, 2, 0, 1, 2]]}},
+    "look": {"kind": "capture", "channels": [{"config": "LED", "exposure": 10, "intensity": 300}]},
+    "z": {"kind": "z_plan", "plan": {"range": 10.0, "step": 2.0}},
+    "stain": {"kind": "capture", "channels": [{"config": "Laser488", "exposure": 100, "intensity": 500}]}
+  },
+  "storage": {"formats": ["ome-zarr"], "layout": "plate"},
+  "tasks": [
+    {"id": "well", "task": "loop_wells", "params": {"plate": "@plate"}, "body": [
+      {"id": "preview", "task": "capture", "params": {"channels": "@look", "save": false}},
+      {"id": "bg", "task": "detect_background", "params": {"source": "preview", "max_contrast": "${param.max_contrast}"}},
+      {"id": "empty", "task": "condition", "params": {"expr": "result.bg.empty"}, "body": [
+        {"id": "count_skip", "task": "set_variable", "params": {"name": "skipped", "value": "${skipped + 1}"}},
+        {"id": "note", "task": "log", "params": {"message": "empty well skipped"}},
+        {"id": "next", "task": "continue"}]},
+      {"id": "stack", "task": "zstack", "params": {"plan": "@z"}, "body": [
+        {"id": "img", "task": "capture", "params": {"channels": "@stain"}}]}
+    ]}
+  ]
+}

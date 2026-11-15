@@ -18,38 +18,11 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
 from imswitch.imcontrol.model.io.data_store import AcquisitionDataStore  # noqa: E402
-from imswitch.imcontrol.model.io.ome_writers import OmeTiffStitcher  # noqa: E402
 from imswitch.imcontrol.controller.controllers.StageMapController import (  # noqa: E402
     StageMapController,
 )
 
 TILE = np.zeros((32, 32), dtype=np.uint16)
-
-
-def test_stitcher_queue_does_not_grow_without_limit():
-    """A writer that never drains must not swallow unbounded frames."""
-    path = os.path.join(tempfile.mkdtemp(), "s.ome.tif")
-    stitcher = OmeTiffStitcher(path)
-    stitcher.QUEUE_WAIT_S = 0.05         # don't wait 30 s in a test
-    stitcher._logger = types.SimpleNamespace(
-        error=lambda *a, **k: None, info=lambda *a, **k: None,
-        warning=lambda *a, **k: None, debug=lambda *a, **k: None)
-    # Deliberately never started: nothing drains the queue.
-    for _ in range(OmeTiffStitcher.MAX_QUEUED_FRAMES + 20):
-        stitcher.add_image(TILE, 0.0, 0.0, 0, 0, 1.0)
-    assert len(stitcher.queue) == OmeTiffStitcher.MAX_QUEUED_FRAMES
-
-
-def test_stitcher_recovers_room_as_it_writes():
-    path = os.path.join(tempfile.mkdtemp(), "s.ome.tif")
-    stitcher = OmeTiffStitcher(path)
-    stitcher.start()
-    try:
-        for _ in range(OmeTiffStitcher.MAX_QUEUED_FRAMES * 3):
-            stitcher.add_image(TILE, 0.0, 0.0, 0, 0, 1.0)
-    finally:
-        stitcher.stop()
-    assert stitcher.images_written == OmeTiffStitcher.MAX_QUEUED_FRAMES * 3
 
 
 def test_write_queue_and_error_list_are_capped():

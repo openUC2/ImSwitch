@@ -251,6 +251,12 @@ class FLIMLabsDetectorManager(DetectorManager):
         # whole ImSwitch startup behind the normal request timeout.
         probeTimeout, self._client.timeout = self._client.timeout, 1.5
         try:
+            # Inside Docker, "localhost" is the container; a flim-server running
+            # on the host is reachable as host.docker.internal instead.
+            if self._host in ('localhost', '127.0.0.1') and not self._client.health():
+                self._client.host = 'host.docker.internal'
+                if not self._client.health():
+                    self._client.host = self._host
             serial = self._client.check_card()
         finally:
             self._client.timeout = probeTimeout

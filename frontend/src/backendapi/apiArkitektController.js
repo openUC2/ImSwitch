@@ -25,8 +25,8 @@ export const apiArkitektGetStatus = () => get("getArkitektStatus");
 
 // Starts the login in the background and returns at once; poll the status
 // (or listen to sigArkitektStatus) for the code to approve.
-export const apiArkitektBind = (url = "", redeemToken = "") =>
-  post("bindArkitekt", { url, redeemToken });
+export const apiArkitektBind = (url = "", mandateKey = "") =>
+  post("bindArkitekt", { url, mandateKey });
 
 // Stop a pending login or disconnect; the stored login is kept.
 export const apiArkitektCancel = () => post("cancelArkitekt");

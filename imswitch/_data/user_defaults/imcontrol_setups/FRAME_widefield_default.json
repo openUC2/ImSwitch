@@ -384,7 +384,7 @@
     "arkitekt": {
         "enabled": true,
         "appName": "FRAME Fork Approval",
-        "redeemToken": "3537b7ed-f341-4c09-86ce-c993764e1766",
+        "redeemToken": "",
         "url": "go.arkitekt.live",
         "syncInAsync": true,
         "deconvolveActionHash": "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"

@@ -723,13 +723,18 @@ class ArkitektInfo:
     """ Arkitekt server to bind to, e.g. ``http://nas.local`` for a local
     deployment. Set from the Arkitekt panel when binding. """
 
+    mandateKey: str = ""
+    """ Unattended login (no browser approval): a mandate key a member issued
+    on the server for one hub. One key serves one app. It is a credential:
+    keep it out of setup files that are shared. """
+
     redeemToken: str = ""
-    """ Provisioning token for an unattended login (no browser approval).
-    It is a credential: keep it out of setup files that are shared. """
+    """ Unused since arkitekt 16 (the server dropped redeem tokens; use
+    mandateKey); kept so older setup files load. """
 
     autoConnect: bool = True
     """ Reconnect at startup when this microscope was bound before (stored
-    login or redeem token). Never starts a browser login by itself. """
+    login or mandate key). Never starts a browser login by itself. """
 
     allowInsecureTransport: bool = False
     """ Allow the login over plain http to a server that is not localhost
@@ -738,6 +743,11 @@ class ArkitektInfo:
     useMikro: bool = True
     """ Offer the image actions (acquire frame, tile scan), which store images
     in the server's mikro service. Turn off for a server without mikro. """
+
+    uploadExperiments: bool = False
+    """ After an experiment, queue its OME-Zarr canvases (with their pyramid)
+    for mikro. They are uploaded in the background while bound and while the
+    microscope is idle; the queue survives restarts. """
 
     syncInAsync: bool = True
     """ Unused since the move from arkitekt_next to arkitekt; kept so older

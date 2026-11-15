@@ -76,6 +76,9 @@ class CommunicationChannel(SignalInterface):
 
 
     sigExperimentStop = Signal()
+    # {name, dir, canvases: [OME-Zarr canvas paths]}: emitted once an experiment's
+    # writers are finalized (pyramids built), also after a stop.
+    sigExperimentFinished = Signal(dict)
     #sigRequestScannersInScan = Signal()
 
 

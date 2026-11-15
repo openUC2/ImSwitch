@@ -57,7 +57,7 @@
           "type": "null"
         }
       ],
-      "description": "Persisted settings for the FLIM LABS bridge (remote flim-imager server host/port, laser sync, channels, calibration reference, galvo-sync options). Free-form dict written by GalvoScannerController.setFlimLabsConfig; ``null`` when nothing has been saved. Note: this is the *browser-side* bridge panel's state. To use the FLIM card as a regular 2D detector from the backend (ExperimentController, autofocus, snap), add a ``FLIMLabsDetectorManager`` entry under ``detectors`` instead \u2014 see that manager's docstring for the property list."
+      "description": "Persisted settings for the FLIM LABS bridge (remote flim-imager server host/port, laser sync, channels, calibration reference, galvo-sync options). Free-form dict written by GalvoScannerController.setFlimLabsConfig; ``null`` when nothing has been saved. Note: this is the *browser-side* bridge panel's state. To use the FLIM card as a regular 2D detector from the backend (ExperimentController, autofocus, snap), add a ``FLIMLabsDetectorManager`` entry under ``detectors`` instead — see that manager's docstring for the property list."
     },
     "rs232devices": {
       "type": "object",
@@ -545,7 +545,7 @@
         "defaultStreamSettings": {
           "type": "object",
           "additionalProperties": {},
-          "description": "Optional per-detector defaults for the live stream applied at startup. Recognised top-level keys (all optional): - ``protocol``: ``\"binary\" | \"jpeg\" | \"mjpeg\" | \"webrtc\"`` - ``subsampling_factor``: int >= 1 - ``throttle_ms``: int - ``jpeg_quality``: int (0..100, JPEG-specific) - ``compression_algorithm``: ``\"lz4\" | \"zstd\" | ...`` (binary-specific) - ``compression_level``: int (binary-specific) - ``crop_size``: [width, height] or null These are baked into the per-detector params on first stream start, so the live view comes up with a sensible default per camera (e.g. heavy subsampling on a large overview camera, lossless binary on a widefield sensor). The frontend cannot mutate these \u2014 it can only override the *current* session via ``setStreamParameters``/``setDetectorStreamParameters``."
+          "description": "Optional per-detector defaults for the live stream applied at startup. Recognised top-level keys (all optional): - ``protocol``: ``\"binary\" | \"jpeg\" | \"mjpeg\" | \"webrtc\"`` - ``subsampling_factor``: int >= 1 - ``throttle_ms``: int - ``jpeg_quality``: int (0..100, JPEG-specific) - ``compression_algorithm``: ``\"lz4\" | \"zstd\" | ...`` (binary-specific) - ``compression_level``: int (binary-specific) - ``crop_size``: [width, height] or null These are baked into the per-detector params on first stream start, so the live view comes up with a sensible default per camera (e.g. heavy subsampling on a large overview camera, lossless binary on a widefield sensor). The frontend cannot mutate these — it can only override the *current* session via ``setStreamParameters``/``setDetectorStreamParameters``."
         }
       }
     },
@@ -1198,7 +1198,7 @@
             "type": "object",
             "additionalProperties": {}
           },
-          "description": "Per-detector affine calibration data, keyed by detector name. Format: { \"<detectorName>\": { \"affine_matrix\": [[a11, a12, tx], [a21, a22, ty]], # 2x3 matrix \"metrics\": {...}, # scale_x_um_per_pixel, scale_y_um_per_pixel, ... \"timestamp\": \"...\", \"detector_name\": \"<detectorName>\" } } The affine matrix transforms pixel coordinates to stage coordinates: [stage_x] [a11 a12 tx] [pixel_x] [stage_y] = [a21 a22 ty] \u00d7 [pixel_y] [ 1 ] Sign of metrics.scale_x_um_per_pixel / scale_y_um_per_pixel encodes flip (negative => flip on that axis)."
+          "description": "Per-detector affine calibration data, keyed by detector name. Format: { \"<detectorName>\": { \"affine_matrix\": [[a11, a12, tx], [a21, a22, ty]], # 2x3 matrix \"metrics\": {...}, # scale_x_um_per_pixel, scale_y_um_per_pixel, ... \"timestamp\": \"...\", \"detector_name\": \"<detectorName>\" } } The affine matrix transforms pixel coordinates to stage coordinates: [stage_x] [a11 a12 tx] [pixel_x] [stage_y] = [a21 a22 ty] × [pixel_y] [ 1 ] Sign of metrics.scale_x_um_per_pixel / scale_y_um_per_pixel encodes flip (negative => flip on that axis)."
         },
         "defaultAffineMatrix": {
           "type": "array",
@@ -1435,7 +1435,7 @@
         },
         "scaleUmPerUnit": {
           "type": "number",
-          "description": "Microns of Z per unit of controller output. Only used until a calibration has run \u2014 after that the measured sensitivity replaces it.",
+          "description": "Microns of Z per unit of controller output. Only used until a calibration has run — after that the measured sensitivity replaces it.",
           "default": 100.0
         },
         "minStepThreshold": {
@@ -1545,14 +1545,19 @@
           "description": "Arkitekt server to bind to, e.g. ``http://nas.local`` for a local deployment. Set from the Arkitekt panel when binding.",
           "default": "https://go.arkitekt.live"
         },
+        "mandateKey": {
+          "type": "string",
+          "description": "Unattended login (no browser approval): a mandate key a member issued on the server for one hub. One key serves one app. It is a credential: keep it out of setup files that are shared.",
+          "default": ""
+        },
         "redeemToken": {
           "type": "string",
-          "description": "Provisioning token for an unattended login (no browser approval). It is a credential: keep it out of setup files that are shared.",
+          "description": "Unused since arkitekt 16 (the server dropped redeem tokens; use mandateKey); kept so older setup files load.",
           "default": ""
         },
         "autoConnect": {
           "type": "boolean",
-          "description": "Reconnect at startup when this microscope was bound before (stored login or redeem token). Never starts a browser login by itself.",
+          "description": "Reconnect at startup when this microscope was bound before (stored login or mandate key). Never starts a browser login by itself.",
           "default": true
         },
         "allowInsecureTransport": {
@@ -1564,6 +1569,11 @@
           "type": "boolean",
           "description": "Offer the image actions (acquire frame, tile scan), which store images in the server's mikro service. Turn off for a server without mikro.",
           "default": true
+        },
+        "uploadExperiments": {
+          "type": "boolean",
+          "description": "After an experiment, queue its OME-Zarr canvases (with their pyramid) for mikro. They are uploaded in the background while bound and while the microscope is idle; the queue survives restarts.",
+          "default": false
         },
         "syncInAsync": {
           "type": "boolean",

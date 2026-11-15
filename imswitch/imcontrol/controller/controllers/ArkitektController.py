@@ -13,6 +13,12 @@ Units: stage positions and distances in µm, in the ImSwitch user frame (what
 PositionerController reports). Exposure is in ms. Actions that move hardware
 or acquire are refused while an experiment, a recording or a workflow runs,
 and they hold the "microscope" lock, so remote calls run one at a time.
+
+Images: every image lands in one persistent stage space in mikro, placed at
+its top-left corner. A tile scan is written to one OME-Zarr canvas here and
+uploaded once, with its pyramid, after the scan. With arkitekt.uploadExperiments,
+the canvases of finished experiments are uploaded the same way, in the
+background, while the microscope is idle.
 """
 import asyncio
 import base64
@@ -22,28 +28,35 @@ import enum
 import functools
 import inspect
 import itertools
+import os
 import re
 import threading
 import time
-from typing import Annotated, Any, Dict, Generator, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 import numpy as np
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcontrol.controller.busy import busy_reasons
-from imswitch.imcommon.model import APIExport, initLogger
+from imswitch.imcommon.model import APIExport, dirtools, initLogger
 from imswitch.imcontrol.model import configfiletools
 from ..basecontrollers import ImConWidgetController
 
 # The action interface's version. The server registers the app under it, and
 # the stored login is kept per version: bump it only when actions change
-# incompatibly, never with ImSwitch's release number.
-ARKITEKT_APP_VERSION = "2.0.0"
+# incompatibly, never with ImSwitch's release number. 3.0.0: run_tile_scan
+# returns one stitched canvas instead of streaming every tile.
+ARKITEKT_APP_VERSION = "3.0.0"
 MAX_ACTIVITY = 50
 MAX_UPLOADS = 12
 THUMBNAIL_PX = 192
 STATE_PUBLISH_PERIOD_S = 1.0
 HOMEABLE_AXES = ("X", "Y")  # Z homing drives the objective towards its endstop: not remote
+# Background uploads of finished experiments run only while the microscope is idle.
+UPLOAD_POLL_S = 5.0
+UPLOAD_MAX_CPU_PERCENT = 60.0
+UPLOAD_MIN_FREE_MB = 1024
+UPLOAD_DASK_WORKERS = 2
 
 
 def _choices(name: str, values: List[str]) -> enum.Enum:
@@ -93,11 +106,18 @@ class ArkitektController(ImConWidgetController):
         self._useTriggeredGrab = False
         detectors = self._master.detectorsManager.getAllDeviceNames()
         self.mDetector = self._master.detectorsManager[detectors[0]] if detectors else None
+        self._upload_queue = None
         if self._manager is None:
             self._logger.warning("ArkitektManager unavailable; Arkitekt panel only.")
             return
         if getattr(self._setupInfo, "arkitekt", None) is None:
             self._setupInfo.arkitekt = self._manager.info  # what the panel changes gets saved
+        from imswitch.imcontrol.model.io.mikro_upload import UploadQueue
+        self._upload_queue = UploadQueue(os.path.join(dirtools.UserFileDirs.Config,
+                                                      "arkitekt_uploads.json"))
+        finished = getattr(self._commChannel, "sigExperimentFinished", None)
+        if finished is not None:
+            finished.connect(self._on_experiment_finished)
         self._manager.set_app_factory(self.build_app, ARKITEKT_APP_VERSION)
         self._manager.add_listener(self.sigArkitektStatus.emit)
         self._manager.auto_connect()
@@ -131,21 +151,22 @@ class ArkitektController(ImConWidgetController):
                 "activity": activity[::-1], "uploadCount": len(self._uploads)}
 
     @APIExport(runOnUIThread=False, requestType="POST")
-    def bindArkitekt(self, url: str = "", redeemToken: str = "") -> dict:
+    def bindArkitekt(self, url: str = "", mandateKey: str = "") -> dict:
         """Bind this microscope to the Arkitekt server at *url* (empty = the
         configured one; saved to the setup file). Returns at once.
 
         Without a stored login, the state becomes awaiting_login with a userCode
-        and an approveUrl: open the link, sign in and approve, and the state
-        becomes connected. A redeemToken logs in without a browser (it is not
-        saved). Network only: nothing on the microscope moves."""
+        and an approveUrl: open the link, sign in, pick the hub and approve, and
+        the state becomes connected. A mandateKey (issued for one hub on the
+        server) logs in without a browser; it is not saved. Network only:
+        nothing on the microscope moves."""
         if self._manager is None:
             return {"status": "error", "message": "Arkitekt is not configured."}
         url = (url or "").strip()
         if url and url != self._manager.info.url:
             self._manager.info.url = url
             self._save_settings()
-        return self._manager.bind(url=url or None, redeem_token=redeemToken or None)
+        return self._manager.bind(url=url or None, mandate_key=mandateKey or None)
 
     @APIExport(runOnUIThread=False, requestType="POST")
     def cancelArkitekt(self) -> dict:
@@ -169,16 +190,18 @@ class ArkitektController(ImConWidgetController):
     def setArkitektSettings(self, url: Optional[str] = None, appName: Optional[str] = None,
                             autoConnect: Optional[bool] = None,
                             allowInsecureTransport: Optional[bool] = None,
-                            useMikro: Optional[bool] = None) -> dict:
+                            useMikro: Optional[bool] = None,
+                            uploadExperiments: Optional[bool] = None) -> dict:
         """Change the Arkitekt settings and save them to the setup file. They
         apply at the next bind. A different url or appName is a different
-        login (each has its own stored session)."""
+        login (each has its own stored session). uploadExperiments: after an
+        experiment, queue its OME-Zarr canvases for mikro (uploaded while idle)."""
         if self._manager is None:
             return {"status": "error", "message": "Arkitekt is not configured."}
         info = self._manager.info
         for key, value in (("url", url), ("appName", appName), ("autoConnect", autoConnect),
                            ("allowInsecureTransport", allowInsecureTransport),
-                           ("useMikro", useMikro)):
+                           ("useMikro", useMikro), ("uploadExperiments", uploadExperiments)):
             if value is not None:
                 setattr(info, key, value.strip() if isinstance(value, str) else bool(value))
         saved = self._save_settings()
@@ -193,6 +216,27 @@ class ArkitektController(ImConWidgetController):
         datasetId, shape, dtype, positionUm: {x, y, z}, pixelSizeUm, time,
         thumbnail (JPEG data URL)}]. Live: sigArkitektUpload."""
         return list(self._uploads)[::-1]
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def queueArkitektUpload(self, path: str, name: str = "") -> dict:
+        """Queue an OME-Zarr canvas (an NGFF image folder, e.g. an experiment's
+        *.ome.zarr) for mikro. It is uploaded, with its pyramid, while bound
+        with mikro and the microscope is idle. Nothing is read now."""
+        if self._upload_queue is None:
+            return {"status": "error", "message": "Arkitekt is not configured."}
+        if not os.path.isdir(path):
+            return {"status": "error", "message": f"No such canvas folder: {path}"}
+        added = self._upload_queue.add(path, name or None)
+        return {"status": "success" if added else "warning",
+                "message": None if added else "Already queued or uploaded."}
+
+    @APIExport(runOnUIThread=False)
+    def getArkitektUploadQueue(self) -> dict:
+        """Canvases waiting for mikro, uploaded and failed (with the error):
+        {pending, uploaded, failed}."""
+        if self._upload_queue is None:
+            return {"pending": [], "uploaded": [], "failed": []}
+        return self._upload_queue.snapshot()
 
     @APIExport(runOnUIThread=False, requestType="POST")
     def clearArkitektActivity(self) -> dict:
@@ -237,6 +281,8 @@ class ArkitektController(ImConWidgetController):
             self._declare_camera_action(offer)
             if mikro_types:
                 self._declare_image_actions(offer, mikro_types, illumination)
+        if mikro_types:
+            self._declare_uploader(app, mikro_types["Mikro"])
         self._offered = offered
         return app
 
@@ -400,7 +446,8 @@ class ArkitektController(ImConWidgetController):
             self._set_camera(exposure_ms, gain)
 
     def _declare_image_actions(self, offer, mikro_types, Illumination):
-        """acquire_frame and run_tile_scan: images go to mikro (axes c, y, x)."""
+        """acquire_frame and run_tile_scan: images go to mikro (axes c, y, x),
+        placed in the stage space."""
         from arkitekt import Description, Effects, Task
 
         Mikro, Image = mikro_types["Mikro"], mikro_types["Image"]
@@ -416,7 +463,7 @@ class ArkitektController(ImConWidgetController):
         ) -> Image:
             """Acquire Frame
             Takes one camera frame (captured after the call) and stores it in
-            mikro, with the stage position and pixel size in its metadata."""
+            mikro, placed at its stage position in the stage space."""
             self._refuse_if_busy()
             task.progress(20, "Acquiring")
             frame = self.grabCameraFrame(frameSync=2)
@@ -450,20 +497,29 @@ class ArkitektController(ImConWidgetController):
             autofocus_step_um: float = 10.0,
             speed: Annotated[Optional[float], Description("Default: configured speed")] = None,
             settle_s: Annotated[float, Description("Wait after each move")] = 0.2,
-        ) -> Generator[Image, None, None]:
+        ) -> Image:
             """Run Tile Scan
-            Scans a grid around a centre (snake order), yields each tile as it
-            is stored, and places all tiles in one stage space in mikro so the
-            Arkitekt viewer shows them stitched by position. Returns the stage
-            to where it started and restores the illumination."""
+            Scans a grid around a centre (snake order) into one canvas on the
+            microscope, tiles placed by stage position. After the scan it
+            builds the pyramid and stores the canvas in mikro as one image,
+            placed in the stage space. Returns the stage to where it started
+            and restores the illumination."""
             self._refuse_if_busy()
             if exposure_ms is not None:
                 self._set_camera(exposure_ms, None)
             grid = self._tile_grid(range_x_um, range_y_um, center_x_um, center_y_um,
                                    overlap_percent, step_x_um, step_y_um)
-            yield from self._tile_scan(
+            return self._tile_scan(
                 mikro, task, grid, getattr(illumination, "value", illumination), intensity,
                 (autofocus_range_um, autofocus_step_um) if autofocus else None, speed, settle_s)
+
+    def _declare_uploader(self, app, Mikro):
+        """A background task of the agent: uploads queued canvases (finished
+        experiments, queueArkitektUpload) while the microscope is idle."""
+
+        @app.background
+        def upload_queued_canvases(mikro: Mikro) -> None:
+            self._upload_queued(mikro)
 
     def _mikro_types(self) -> Optional[dict]:
         try:
@@ -697,29 +753,39 @@ class ArkitektController(ImConWidgetController):
 
     # ── images to mikro ─────────────────────────────────────────────────────
 
-    def _upload(self, mikro, frame: np.ndarray, name: str, position: Dict[str, float],
-                space=None):
+    def _upload(self, mikro, frame: np.ndarray, name: str, position: Dict[str, float]):
         """Store *frame* as an array dataset (axes c, y, x, with a pyramid and
-        per-channel contrast), register it in *space* at its stage position,
-        remember a thumbnail for the panel and return its lens."""
-        import xarray as xr
+        per-channel contrast and names), register it in the stage space with
+        its top-left corner where it was seen (*position* is the field's
+        centre), remember a thumbnail for the panel and return its lens."""
         from mikro import dataset_arrays
-        from mikro.api.schema import CoordinateAnchorInput
+        from imswitch.imcontrol.model.io.mikro_upload import channel_anchors, stage_space
 
         array = np.asarray(frame)
         data = array[np.newaxis] if array.ndim == 2 else np.moveaxis(array, -1, 0)
-        cyx = xr.DataArray(data, dims=("c", "y", "x"))
-        levels = max(1, min(4, int(np.log2(max(cyx.shape[1:]) / 512)) + 1))
-        level_zero, scales = dataset_arrays(cyx, levels=levels, method="mean")
+        dims = ["c", "y", "x"]
+        levels = max(1, min(4, int(np.log2(max(data.shape[1:]) / 512)) + 1))
+        level_zero, scales = dataset_arrays(data, levels=levels, method="mean", dims=dims)
         dataset = mikro.create_array_dataset(
-            data=level_zero, scales=scales, name=name, axes=["c", "y", "x"],
-            anchors=CoordinateAnchorInput.histogram_anchors(cyx))
-        pixel_size = self._pixel_size_um()
-        if space is not None:
-            space.register(dataset, scale={"y": pixel_size, "x": pixel_size},
-                           x=position["x"], y=position["y"])
-        self._remember_upload(array, name, getattr(dataset, "id", None), position, pixel_size)
+            data=level_zero, scales=scales, name=name, axes=dims,
+            anchors=channel_anchors(data, dims, self._channel_names(data.shape[0])))
+        pixel = self._pixel_size_um()
+        height, width = data.shape[1:]
+        stage_space(mikro).register(dataset, scale={"y": pixel, "x": pixel},
+                                    x=position["x"] - width * pixel / 2,
+                                    y=position["y"] - height * pixel / 2)
+        self._remember_upload(array, name, getattr(dataset, "id", None), position, pixel)
         return dataset.lens()
+
+    def _channel_names(self, channels: int) -> List[str]:
+        """Names for a frame's channels: red/green/blue for a colour camera, else
+        the light source that is on (mikro picks a hue from such names)."""
+        from imswitch.imcontrol.model.io.mikro_upload import channel_labels
+        if channels == 3:
+            return channel_labels(["rgb_r", "rgb_g", "rgb_b"])
+        lit = [n for n in self._master.lasersManager.getAllDeviceNames()
+               if getattr(self._master.lasersManager[n], "enabled", False)]
+        return [lit[0] if len(lit) == 1 else f"C{i}" for i in range(channels)]
 
     def _remember_upload(self, array: np.ndarray, name: str, dataset_id, position: dict,
                          pixel_size: float) -> None:
@@ -752,34 +818,36 @@ class ArkitektController(ImConWidgetController):
 
     def _tile_scan(self, mikro, task, grid: dict, illumination: Optional[str],
                    intensity: Optional[float], autofocus: Optional[tuple], speed, settle_s):
-        from kanne.scalars import Unit
-        from mikro import space_2d
+        """Scan into one canvas on disk (nothing goes over the network during
+        the scan), then build its pyramid and upload it once."""
+        from imswitch.imcontrol.model.io.mikro_upload import read_ngff, stage_space, upload_ngff
 
         autofocus_controller = self._master.getController("Autofocus") if autofocus else None
         if autofocus and autofocus_controller is None:
             raise RuntimeError("Autofocus requested, but this setup has no autofocus.")
         nx, ny, tiles = grid["nx"], grid["ny"], grid["tiles"]
-        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        space = space_2d(mikro, f"Tile scan {stamp} ({nx}x{ny})", unit=Unit("micrometer"))
+        stamp = datetime.datetime.now()
+        name = f"Tile scan {stamp:%Y-%m-%d %H:%M} ({nx}x{ny})"
+        path = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "ArkitektController",
+                            f"{stamp:%Y%m%d_%H%M%S}_tile_scan.ome.zarr")
+        canvas = None
         restore_light = self._switch_illumination(illumination, intensity)
         task.progress(0, f"{nx} x {ny} tiles, step {grid['step'][0]:.0f} x "
                          f"{grid['step'][1]:.0f} µm")
         if autofocus_controller is None:  # autofocus switches the trigger mode itself
             self._beginTriggeredAcquisition()
         try:
-            for index, (ix, iy, x, y) in enumerate(tiles):
+            for index, (_, _, x, y) in enumerate(tiles):
                 self._move_xy(x, y, speed, None)
                 time.sleep(max(0.0, settle_s))
                 if autofocus_controller is not None:
                     self._autofocus(autofocus_controller, *autofocus)
-                frame = self.grabCameraFrame(frameSync=2)
-                position = {**self._position(None), "x": x, "y": y}
-                lens = self._upload(mikro, frame, f"Tile {ix:03d}_{iy:03d} x{x:.0f} y{y:.0f}",
-                                    position, space)
-                task.progress(int(100 * (index + 1) / len(tiles)),
+                frame = np.asarray(self.grabCameraFrame(frameSync=2))
+                if canvas is None:
+                    canvas = self._new_canvas(path, name, frame, grid, illumination)
+                self._write_tile(canvas, frame, x, y, grid)
+                task.progress(int(80 * (index + 1) / len(tiles)),
                               f"Tile {index + 1}/{len(tiles)}")
-                yield lens
-            space.stage(name=f"Tile scan {stamp}")
         finally:
             self._endTriggeredAcquisition()
             restore_light()
@@ -787,6 +855,116 @@ class ArkitektController(ImConWidgetController):
                 self._move_xy(grid["start"]["x"], grid["start"]["y"], speed, None)
             except Exception as e:
                 self._logger.warning(f"Could not return to the scan start: {e}")
+        task.progress(82, "Building the pyramid")
+        canvas.finalize()
+        task.progress(88, "Uploading to mikro")
+        stored = read_ngff(path)
+        dataset = upload_ngff(mikro, stored, name=name, space=stage_space(mikro))
+        center = {**grid["start"], "x": (grid["x_min"] + grid["x_max"]) / 2,
+                  "y": (grid["y_min"] + grid["y_max"]) / 2}
+        self._remember_upload(_preview(stored), name, getattr(dataset, "id", None), center,
+                              self._pixel_size_um())
+        return dataset.lens()
+
+    def _new_canvas(self, path: str, name: str, frame: np.ndarray, grid: dict,
+                    illumination: Optional[str]):
+        """The scan's OME-Zarr canvas: every tile centre of *grid* plus half a
+        field around it, at the camera's pixel size, one chunk per tile."""
+        from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage
+
+        height, width = frame.shape[:2]
+        rgb = frame.ndim == 3 and frame.shape[2] == 3
+        pixel = self._pixel_size_um()
+        xs, ys = [t[2] for t in grid["tiles"]], [t[3] for t in grid["tiles"]]
+        grid.update(x_min=min(xs), x_max=max(xs), y_min=min(ys), y_max=max(ys))
+        light = illumination or "C0"
+        spec = ImageSpec(
+            shape=(1, 3 if rgb else 1, 1,
+                   int(np.ceil((grid["y_max"] - grid["y_min"]) / pixel)) + height,
+                   int(np.ceil((grid["x_max"] - grid["x_min"]) / pixel)) + width),
+            dtype=str(frame.dtype), pixel_size_um=pixel,
+            origin_um=(grid["x_min"] - width * pixel / 2, grid["y_min"] - height * pixel / 2,
+                       grid["start"]["z"]),
+            channel_names=[f"{light}_rgb_{c}" for c in "rgb"] if rgb else [light],
+            name=name, chunks_yx=(height, width))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        return NgffImage.create(path, spec)
+
+    def _write_tile(self, canvas, frame: np.ndarray, x: float, y: float, grid: dict) -> None:
+        """Put a tile where its stage position says (later tiles cover the overlap)."""
+        pixel = canvas.spec.pixel_size_um
+        _, _, _, rows, cols = canvas.spec.shape
+        x0 = int(round((x - grid["x_min"]) / pixel))
+        y0 = int(round((y - grid["y_min"]) / pixel))
+        h, w = min(frame.shape[0], rows - y0), min(frame.shape[1], cols - x0)
+        planes = [frame[..., c] for c in range(3)] if frame.ndim == 3 else [frame]
+        for c, plane in enumerate(planes):
+            canvas.write(np.ascontiguousarray(plane[:h, :w]), 0, c, 0, y0, x0)
+
+    # ── finished experiments to mikro, while idle ───────────────────────────
+
+    def _on_experiment_finished(self, payload: dict) -> None:
+        """sigExperimentFinished: queue the run's canvases when the setup asks for it."""
+        if self._upload_queue is None or not getattr(self._manager.info, "uploadExperiments",
+                                                     False):
+            return
+        name = payload.get("name") or "Experiment"
+        for path in payload.get("canvases") or []:
+            if path and os.path.isdir(path):
+                region = os.path.basename(os.path.normpath(path)).replace(".ome.zarr", "")
+                if self._upload_queue.add(path, f"{name} {region}"):
+                    self._logger.info(f"Queued for mikro: {path}")
+
+    def _idle_for_upload(self) -> Optional[str]:
+        """None when an upload may start now, else why not."""
+        reasons = busy_reasons(self._master, self._logger)
+        if reasons:
+            return ", ".join(reasons)
+        try:
+            import psutil
+            if psutil.cpu_percent(interval=1.0) > UPLOAD_MAX_CPU_PERCENT:
+                return "CPU busy"
+            if psutil.virtual_memory().available < UPLOAD_MIN_FREE_MB * 2 ** 20:
+                return "low memory"
+        except ImportError:
+            pass
+        return None
+
+    def _upload_queued(self, mikro) -> None:
+        """The uploader's loop, in a worker thread of the agent. Stops when the
+        agent stops (koil cancels it between canvases)."""
+        from koil import check_cancelled
+
+        while True:
+            check_cancelled()
+            if not self._upload_next(mikro):
+                self._upload_queue.wait(UPLOAD_POLL_S)
+
+    def _upload_next(self, mikro) -> bool:
+        """Upload the oldest queued canvas if the microscope is idle. False when
+        there was nothing to do (empty queue, or busy)."""
+        import dask
+        from imswitch.imcontrol.model.io.mikro_upload import read_ngff, stage_space, upload_ngff
+
+        entry = self._upload_queue.next()
+        if entry is None or self._idle_for_upload() is not None:
+            return False
+        started = time.time()
+        try:
+            with dask.config.set(scheduler="threads", num_workers=UPLOAD_DASK_WORKERS):
+                canvas = read_ngff(entry["path"])
+                name = entry.get("name") or canvas.name
+                dataset = upload_ngff(mikro, canvas, name=name, space=stage_space(mikro))
+        except Exception as e:  # noqa: BLE001 - kept in the queue with its error
+            self._logger.error(f"Upload of {entry['path']} to mikro failed: {e}")
+            self._upload_queue.failed(entry, e)
+            return True
+        self._upload_queue.done(entry, getattr(dataset, "id", ""), time.time() - started)
+        self._logger.info(f"Uploaded {entry['path']} to mikro in {time.time() - started:.0f} s")
+        self._remember_upload(_preview(canvas), name, getattr(dataset, "id", None),
+                              {"x": canvas.origin_um["x"], "y": canvas.origin_um["y"], "z": 0.0},
+                              canvas.pixel_um["x"])
+        return True
 
     def _switch_illumination(self, name: Optional[str], intensity: Optional[float]):
         """Switch *name* on; returns the call that puts it back as it was."""
@@ -843,6 +1021,14 @@ class ArkitektController(ImConWidgetController):
                    ("run_tile_scan", "Run Tile Scan", True, True, images and has_stage)]
         return [{"name": n, "title": t, "description": "", "moves": m, "images": i}
                 for n, t, m, i, ok in planned if ok]
+
+
+def _preview(canvas) -> np.ndarray:
+    """The coarsest level of a canvas as a frame for _thumbnail: (y, x, 3) or (y, x)."""
+    data = np.asarray(canvas.levels[-1])
+    if data.ndim == 2:
+        return data
+    return np.moveaxis(data[:3], 0, -1) if data.shape[0] == 3 else data[0]
 
 
 def _thumbnail(array: np.ndarray) -> Optional[str]:

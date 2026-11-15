@@ -14,9 +14,10 @@ Brief: WP-423…426. Coordination server: **go.arkitekt.live** (decided). The da
 | ImSwitch on arkitekt 16 / mikro 14 (pins, `uv.lock`, code, 27 unit tests) | done, this branch |
 | Canvas with its pyramid → mikro, placed in a µm stage space | done: datasets 1–4 |
 | ImSwitch background upload in the live agent (virtual microscope) | done: dataset 3 |
-| View in orkestrator on the MacBook | **open** (Bene) |
-| Run Tile Scan / Acquire Frame on the FRAME's hardware | open: needs an ImSwitch image from this branch |
-| Hub as a pallet deployment in os-rpi | open: plan below |
+| View in orkestrator on the MacBook | **blocked**: the Mac reaches none of mikro's addresses (finding 11) |
+| Run Tile Scan / Acquire Frame on the FRAME's hardware | open: ImSwitch from this branch runs natively (`.venv` on arkitekt 16) |
+| Hub as a pallet deployment in os-rpi | done on os-rpi branch `feat/arkitekt-hub` (local), tested on a throwaway hub; this Pi not switched |
+| Delete ImSwitch's copy after the upload | done: `deleteAfterUpload`, off by default |
 | WP-424 benchmark | first figures below (synthetic scans, SD card) |
 
 ## Figures (SD card; VS Code server and the ImSwitch container running beside it)
@@ -75,7 +76,22 @@ id 24 / **wa 38 %** (the SD card is the limit). SoC at most 45.5 °C, never thro
     - Two shipped setups (`FRAME_widefield_default.json` and its `example_` copy) contained a
       redeem token, now blanked.
     - ImSwitch started outside Docker opens JupyterLab without a token on `0.0.0.0:8888`.
-11. **Minor:**
+11. **Orkestrator "Service mikro not found"** means that no address of mikro answered from the Mac
+    within 5 s. The Pi lets it through:
+    - the tailnet allows every port;
+    - firewalld accepts Docker's DNAT;
+    - the served certificate is the one the hub registered, which orkestrator pins.
+
+    Yet no packet from the Mac reached 2754/2755. To check on the Mac: macOS Local Network
+    permission for Orkestrator, and `curl -k https://100.117.194.33:2755/mikro/ht`.
+12. **Forklift removes compose projects it does not know** at every apply. `forklift plt plan` on
+    this Pi lists `remove hub`, so the next boot removes konstruktor's containers (the data
+    stays). So the hub has to be a Forklift deployment (option B below).
+13. **Offline:** `konstruktor coord create` makes a local coordination server. It runs lok,
+    kontrol, Postgres, Redis, RustFS and Caddy, with accounts of its own. A hub connected to it
+    works without internet. With go.arkitekt.live, logins and token refresh need internet; scans
+    stay on disk and the upload queue waits.
+14. **Minor:**
     - konstruktor's README says port 7080, but the CLI uses 2754/2755.
     - `--dry-run` creates the target folder.
     - `docs/setup-config.schema.json` has drifted from `SetupInfo`; only `ArkitektInfo` is
@@ -99,30 +115,46 @@ id 24 / **wa 38 %** (the SD card is the limit). SoC at most 45.5 °C, never thro
 - `model/io/mikro_upload.py`: the canvas upload (levels from disk, contrast from the coarsest
   level) and the persistent queue.
 - `scripts/arkitekt_canvas_bench.py`: synthetic scan canvas → mikro, with timings.
+- `deleteAfterUpload`: removes a canvas once mikro holds every level of it (checked on the server).
+  Toggles for it and `uploadExperiments` are in the panel.
+- An arkitekt older than 16 makes the panel name the version it needs. Before, the login failed
+  with a TypeError, as in Bene's `.venv`.
+- A bare host means https.
 
-## Pallet plan (os-rpi, off by default)
+## Pallet (os-rpi branch `feat/arkitekt-hub`, option B)
 
-- `deployments/arkitekt-hub.pkg`, two options:
-  - **A, konstruktor owns the hub.** Forklift ships the pinned binary and a unit that runs
-    `konstruktor up` at boot. `hub create` and `hub connect` run once by hand, with one browser
-    approval. konstruktor's backup, update and rollback keep working.
-  - **B, Forklift owns the compose.** Digest-pinned, `restart: unless-stopped`. konstruktor only
-    writes the configs once (`hub create --no-start`): the keys are per device, so they cannot live
-    in the pallet.
+```sh
+forklift plt enable-depl arkitekt-hub
+forklift plt enable-depl-feat imswitch arkitekt   # ImSwitch keeps its Arkitekt login
+forklift plt stage && sudo reboot
+konstruktor hub connect --in /home/pi/arkitekt/arkitekt-hub --server go.arkitekt.live   # once
+```
 
-  A is enough for the benchmark; B needs a decision with Ethan. In both cases: a firewalld service
-  for 2754/2755 and a link on the landing page.
-- `imswitch.pkg`: bind `/home/pi/arkitekt/imswitch` to `/home/pi/.local/state/arkitekt` (as the
-  robot apps do), and an image built from this branch.
+- **Forklift owns the containers:** digest-pinned images and `restart: unless-stopped`.
+- **konstruktor writes the per-device files once:** `arkitekt-hub-setup.service` runs
+  `hub create --no-start` with the same pinned images, before `forklift-apply`.
+- **Credentials:** the containers read them from files (`POSTGRES_*_FILE`,
+  `RUSTFS_*_FILE`).
+- **Before `hub connect`:** rekuest, mikro and the reporter wait for their configs instead of
+  failing.
+- **Shared commands:** the compose project is named like the folder, so konstruktor's commands act
+  on the same containers.
+- **Tested** on a throwaway hub: up in 11.5 s, Postgres healthy, both databases created, buckets
+  made, gateway on HTTP and HTTPS. `forklift dev plt check` passes with everything enabled.
+- **Not tested:** the boot unit itself, and `hub connect` in this layout.
+- **Switching this Pi** to the branch would also remove flim-imager and uc2-flasher, which this
+  Pi's pallet has but `edge` has not.
+- **Moving this Pi's hub:** see the package README (`mv` to `/home/pi/arkitekt/arkitekt-hub`).
 
 ## Open questions
 
 - **Bene:**
-  - Open datasets 1–4 in orkestrator on the MacBook, on the LAN or the hotspot: time to the first
-    picture, pan/zoom, and whether the RGB layer looks right.
+  - On the Mac: the Local Network permission for Orkestrator and the `curl` above, then datasets
+    1–4.
+  - Switch this Pi to the os-rpi branch (with flim-imager and uc2-flasher enabled again) and move
+    its hub?
+  - Push the two branches?
   - Is LAN and hotspot enough, or should the hub join the organization's mesh?
-  - Delete ImSwitch's copy after the upload? That saves half the card.
-  - May I enable the memory cgroup (needs a reboot)?
 - **Johannes:**
   - Can mikro take an existing zarr v3 (sharded) array without re-encoding?
   - Can the 5-minute code lifetime be set?

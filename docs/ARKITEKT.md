@@ -13,7 +13,8 @@ the hub must run rekuest 19 and mikro 15):
 pip install "arkitekt[rekuest,mikro]==16.0.1"
 ```
 
-Without the package ImSwitch starts normally. The Arkitekt panel then says what to install.
+Without the package ImSwitch starts normally. The Arkitekt panel then says what to install, and
+with an older arkitekt (e.g. 5.x in an old environment) which version it needs.
 
 ## Setup
 
@@ -29,18 +30,20 @@ writes it when a setting changes:
   "allowInsecureTransport": false,
   "useMikro": true,
   "uploadExperiments": false,
+  "deleteAfterUpload": false,
   "mandateKey": ""
 }
 ```
 
 | Key | Meaning |
 |---|---|
-| `url` | The server. Set from the panel when binding. |
+| `url` | The server. Set from the panel when binding. A bare host (`go.arkitekt.live`) means https. |
 | `appName` | The app identifier (lower-cased, spaces become dashes). Each name is its own registration and login. |
 | `autoConnect` | At startup, reconnect when the microscope was bound before. It never starts a browser login by itself. If the stored login was revoked, it stops with an error instead of asking again. |
 | `allowInsecureTransport` | Allow the login over plain `http://` to a host that is not localhost, e.g. a NAS without TLS. The session token then travels unencrypted. |
 | `useMikro` | Offer the image actions. They need mikro on the server. |
 | `uploadExperiments` | After an experiment, queue its OME-Zarr canvases for mikro. They are uploaded with their pyramid in the background, while bound and idle (no experiment, recording or workflow; CPU < 60 %; 1 GB free). The queue survives restarts. |
+| `deleteAfterUpload` | Remove an uploaded canvas from the microscope once mikro holds every level of it (asked of the server first), so a scan is stored once. Off by default. Only OME-Zarr image folders are removed. |
 | `mandateKey` | Unattended login, with no browser: a key a member issued on the server for one hub. It is a credential: keep it out of shared setup files. (`redeemToken` is gone with arkitekt 16.) |
 
 ## Binding and unbinding
@@ -56,7 +59,8 @@ and click **Bind microscope**:
 3. The microscope registers its actions and stays connected. The login is stored on this machine
    (arkitekt's per-user state directory), so later starts reconnect without approval. In Docker,
    that directory must be on a volume (`/home/pi/.local/state/arkitekt`), or every new container
-   asks again.
+   asks again: on openUC2 OS, `forklift plt enable-depl-feat imswitch arkitekt` keeps it in
+   `/home/pi/arkitekt/imswitch`.
 
 - **Disconnect / Cancel** stops a pending login or the connection. It keeps the stored login.
 - **Unbind** disconnects and removes the stored login, so binding again needs a new approval. While
@@ -101,9 +105,9 @@ duration, errors) and thumbnails of the images sent.
 | `POST bindArkitekt?url=&mandateKey=` | Starts the login in the background and returns at once. |
 | `POST cancelArkitekt` | Stops a pending login or the connection. |
 | `POST unbindArkitekt` | Disconnects and forgets the stored login. |
-| `POST setArkitektSettings?url=&appName=&autoConnect=&allowInsecureTransport=&useMikro=&uploadExperiments=` | Saved to the setup file. |
+| `POST setArkitektSettings?url=&appName=&autoConnect=&allowInsecureTransport=&useMikro=&uploadExperiments=&deleteAfterUpload=` | Saved to the setup file. |
 | `POST queueArkitektUpload?path=&name=` | Queues an OME-Zarr canvas (e.g. an older experiment) for the background upload. |
-| `GET getArkitektUploadQueue` | `{pending, uploaded, failed}`, with dataset ids, durations and errors. |
+| `GET getArkitektUploadQueue` | `{pending, uploaded, failed}`, with dataset ids, durations, errors and, with `deleteAfterUpload`, what became of the local copy (`localCopy`). |
 | `GET getArkitektUploads` / `POST clearArkitektActivity` | |
 
 Socket signals: `sigArkitektStatus`, `sigArkitektActivity`, `sigArkitektUpload`.

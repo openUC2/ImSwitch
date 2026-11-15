@@ -30,6 +30,9 @@ from imswitch.imcommon.model import initLogger
 from imswitch.imcontrol.model.SetupInfo import ArkitektInfo
 
 REQUIRED_PACKAGES = ("arkitekt", "rekuest")
+# The client this code is written for (pinned with its family in pyproject.toml).
+# An older one fails at the login instead: its device-code hook takes other arguments.
+ARKITEKT_VERSION = "16.0.1"
 DEFAULT_URL = "https://go.arkitekt.live"
 # A device code lives about five minutes; a manual bind asks for a fresh one this
 # many times (about half an hour) before it gives up.
@@ -54,6 +57,17 @@ AppFactory = Callable[[str, str], Any]
 
 def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _outdated_arkitekt() -> Optional[str]:
+    """The installed arkitekt's version when its major is older than ARKITEKT_VERSION's."""
+    try:
+        from importlib.metadata import version
+        installed = version("arkitekt")
+    except Exception:  # noqa: BLE001 - no metadata: let the import decide
+        return None
+    have, need = (re.match(r"\d+", v) for v in (installed, ARKITEKT_VERSION))
+    return installed if have and need and int(have.group()) < int(need.group()) else None
 
 
 def _slug(name: str) -> str:
@@ -128,6 +142,7 @@ class ArkitektManager:
         self.__logger = initLogger(self)
         self.info = setupInfo if setupInfo is not None else ArkitektInfo()
         self._missing = [p for p in REQUIRED_PACKAGES if importlib.util.find_spec(p) is None]
+        self._outdated = None if self._missing else _outdated_arkitekt()
         self._factory: Optional[AppFactory] = None
         self._version = "0.0.1"
         self._listeners: List[Callable[[dict], None]] = []
@@ -141,9 +156,10 @@ class ArkitektManager:
         self._retry: Optional[threading.Timer] = None
         self._services: List[str] = []
         self._session: Dict[str, Any] = {}
-        initial = UNAVAILABLE if self._missing else DISABLED if not self.info.enabled else UNBOUND
+        initial = UNAVAILABLE if not self.is_available() else \
+            DISABLED if not self.info.enabled else UNBOUND
         self._set(state=initial, message=self._missing_message())
-        if self._missing:
+        if not self.is_available():
             self.__logger.warning(self._missing_message())
 
     # ── for the controller ──────────────────────────────────────────────────
@@ -160,7 +176,7 @@ class ArkitektManager:
         self._listeners.append(callback)
 
     def is_available(self) -> bool:
-        return not self._missing
+        return not self._missing and not self._outdated
 
     @property
     def identifier(self) -> str:
@@ -168,21 +184,25 @@ class ArkitektManager:
 
     @property
     def url(self) -> str:
-        """The server a bind goes to: the setup's url, $FAKTS_URL, the public one."""
-        return (self.info.url or os.getenv("FAKTS_URL") or DEFAULT_URL).strip()
+        """The server a bind goes to: the setup's url, $FAKTS_URL, the public one.
+        A bare host ("go.arkitekt.live") means https: fakts would otherwise try
+        protocols in turn, and the stored login is kept per url string."""
+        url = (self.info.url or os.getenv("FAKTS_URL") or DEFAULT_URL).strip().rstrip("/")
+        return url if "://" in url else f"https://{url}"
 
     def status(self) -> dict:
         with self._lock:
             session = dict(self._session)
         url = self.url
         return {**session,
-                "available": not self._missing, "missingPackages": list(self._missing),
+                "available": self.is_available(), "missingPackages": list(self._missing),
                 "enabled": bool(self.info.enabled), "url": url,
                 "appName": self.identifier, "appVersion": self._version,
                 "autoConnect": bool(self.info.autoConnect),
                 "allowInsecureTransport": bool(self.info.allowInsecureTransport),
                 "useMikro": bool(self.info.useMikro),
                 "uploadExperiments": bool(getattr(self.info, "uploadExperiments", False)),
+                "deleteAfterUpload": bool(getattr(self.info, "deleteAfterUpload", False)),
                 "hasMandateKey": bool(getattr(self.info, "mandateKey", "")),
                 "hasStoredLogin": self.has_stored_login(),
                 "insecureUrl": _is_insecure(url),
@@ -256,7 +276,7 @@ class ArkitektManager:
     # ── internals ───────────────────────────────────────────────────────────
 
     def _refusal(self) -> Optional[str]:
-        if self._missing:
+        if not self.is_available():
             return self._missing_message()
         if not self.info.enabled:
             return "Arkitekt is disabled in the setup file (arkitekt.enabled = false)."
@@ -265,6 +285,10 @@ class ArkitektManager:
         return None
 
     def _missing_message(self) -> Optional[str]:
+        if self._outdated:
+            return (f"arkitekt {self._outdated} is installed, but ImSwitch needs arkitekt "
+                    f"{ARKITEKT_VERSION} and its family. Update the environment (uv sync), or: "
+                    f"pip install \"arkitekt[rekuest,mikro]=={ARKITEKT_VERSION}\"")
         if not self._missing:
             return None
         return (f"Python package(s) {', '.join(self._missing)} not installed. Install with: "

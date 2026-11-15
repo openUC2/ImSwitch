@@ -34,7 +34,8 @@ export const apiArkitektCancel = () => post("cancelArkitekt");
 // Disconnect and forget the stored login on this microscope.
 export const apiArkitektUnbind = () => post("unbindArkitekt");
 
-// Only the given keys change: {url, appName, autoConnect, allowInsecureTransport, useMikro}
+// Only the given keys change: {url, appName, autoConnect, allowInsecureTransport, useMikro,
+// uploadExperiments, deleteAfterUpload}
 export const apiArkitektSetSettings = (settings) => post("setArkitektSettings", settings);
 
 // [{id, name, datasetId, shape, dtype, positionUm, pixelSizeUm, time, thumbnail}]

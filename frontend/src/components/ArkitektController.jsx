@@ -339,6 +339,16 @@ const ArkitektController = () => {
             label={<Typography variant="body2">{t("Offer image actions (stores images in the server's mikro)")}</Typography>}
           />
           <FormControlLabel
+            control={<Switch size="small" checked={!!status.uploadExperiments}
+              onChange={(e) => saveSetting({ uploadExperiments: e.target.checked })} />}
+            label={<Typography variant="body2">{t("Upload finished experiments to mikro (in the background, while idle)")}</Typography>}
+          />
+          <FormControlLabel
+            control={<Switch size="small" color="warning" checked={!!status.deleteAfterUpload}
+              onChange={(e) => saveSetting({ deleteAfterUpload: e.target.checked })} />}
+            label={<Typography variant="body2">{t("Delete a scan from this microscope once mikro holds all of it")}</Typography>}
+          />
+          <FormControlLabel
             control={<Switch size="small" color="warning" checked={!!status.allowInsecureTransport}
               onChange={(e) => saveSetting({ allowInsecureTransport: e.target.checked })} />}
             label={<Typography variant="body2">{t("Allow insecure (http) login to a network server")}</Typography>}

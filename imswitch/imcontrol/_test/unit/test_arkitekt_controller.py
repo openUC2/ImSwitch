@@ -281,16 +281,28 @@ def test_state_publishing_never_reads_the_device(no_arkitekt):
 
 
 class FakeMikro:
-    """create_array_dataset and create_coordinate_system, recorded."""
+    """create_array_dataset, get_array_dataset and create_coordinate_system,
+    recorded. *loses_a_level*: the server holds one level less than was sent."""
 
-    def __init__(self):
+    def __init__(self, loses_a_level=False):
         self.datasets, self.spaces = [], []
+        self.loses_a_level = loses_a_level
 
     def create_array_dataset(self, **kwargs):
         dataset = types.SimpleNamespace(id=f"ds{len(self.datasets)}", kwargs=kwargs,
                                         lens=lambda: types.SimpleNamespace(id="lens"))
         self.datasets.append(dataset)
         return dataset
+
+    def get_array_dataset(self, id):
+        kwargs = next(d.kwargs for d in self.datasets if d.id == id)
+        shape = lambda array: tuple(getattr(array, "data", array).shape)  # noqa: E731
+        levels = [(0, shape(kwargs["data"]))] + [(s.level, shape(s.array))
+                                                 for s in kwargs.get("scales") or []]
+        if self.loses_a_level:
+            levels = levels[:-1]
+        return types.SimpleNamespace(id=id, data_arrays=[
+            types.SimpleNamespace(level=level, shape=s) for level, s in levels])
 
     def create_coordinate_system(self, name, axes, **kwargs):
         space = types.SimpleNamespace(name=name, kwargs=kwargs, registered=[])
@@ -399,6 +411,65 @@ def test_finished_experiments_are_queued_and_uploaded_when_idle(tmp_path, monkey
     queue = controller.getArkitektUploadQueue()
     assert queue["pending"] == [] and queue["uploaded"][0]["datasetId"] == "ds0"
     assert controller.getArkitektUploads()[0]["thumbnail"]
+    # deleteAfterUpload is off: the canvas stays
+    assert (tmp_path / "exp" / "region0.ome.zarr").is_dir()
+    assert "localCopy" not in queue["uploaded"][0]
+
+
+def test_an_uploaded_canvas_is_deleted_only_once_mikro_holds_all_of_it(tmp_path, monkeypatch):
+    pytest.importorskip("mikro")
+    kept, gone = tmp_path / "exp" / "kept.ome.zarr", tmp_path / "exp" / "gone.ome.zarr"
+    write_canvas(kept)
+    write_canvas(gone)
+    controller, _, _ = make_controller(info=ArkitektInfo(
+        autoConnect=False, uploadExperiments=True, deleteAfterUpload=True))
+    monkeypatch.setattr(controller, "_idle_for_upload", lambda: None)
+    controller.queueArkitektUpload(str(kept))
+    assert controller._upload_next(FakeMikro(loses_a_level=True)) is True
+    assert kept.is_dir()  # the server is missing a level: keep the only full copy
+    controller.queueArkitektUpload(str(gone))
+    assert controller._upload_next(FakeMikro()) is True
+    assert not gone.exists()
+    uploaded = controller.getArkitektUploadQueue()["uploaded"]
+    assert uploaded[0]["localCopy"].startswith("kept: mikro holds levels")
+    assert uploaded[1]["localCopy"] == "deleted"
+    assert controller.getArkitektUploads()[0]["thumbnail"]  # taken before the canvas went
+
+
+def test_only_an_ome_zarr_image_folder_is_deleted(tmp_path):
+    pytest.importorskip("zarr")
+    from imswitch.imcontrol.model.io.mikro_upload import delete_canvas
+    (tmp_path / "notes.ome.zarr").mkdir()
+    (tmp_path / "notes.ome.zarr" / "keep.txt").write_text("not an image")
+    write_canvas(tmp_path / "region.zarr")
+    write_canvas(tmp_path / "real.ome.zarr")
+    (tmp_path / "link.ome.zarr").symlink_to(tmp_path / "real.ome.zarr")
+    for path in ("notes.ome.zarr", "region.zarr", "link.ome.zarr", "missing.ome.zarr"):
+        with pytest.raises((ValueError, FileNotFoundError)):
+            delete_canvas(tmp_path / path)
+    assert (tmp_path / "notes.ome.zarr" / "keep.txt").exists()
+    assert (tmp_path / "region.zarr").is_dir() and (tmp_path / "real.ome.zarr").is_dir()
+    delete_canvas(tmp_path / "real.ome.zarr")
+    assert not (tmp_path / "real.ome.zarr").exists()
+
+
+def test_a_bare_host_is_the_https_server(no_arkitekt):
+    manager = manager_module.ArkitektManager(ArkitektInfo(url=" go.arkitekt.live/ "))
+    assert manager.url == "https://go.arkitekt.live"  # one stored login, never plain http
+    assert manager_module.ArkitektManager(ArkitektInfo(url="http://nas.local")).url == \
+        "http://nas.local"
+
+
+def test_an_old_arkitekt_is_named_instead_of_failing_at_the_login(monkeypatch):
+    import importlib.metadata
+    monkeypatch.setattr(manager_module.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(importlib.metadata, "version",
+                        lambda name: "5.0.1" if name == "arkitekt" else "1.0.0")
+    manager = manager_module.ArkitektManager(ArkitektInfo(autoConnect=False))
+    status = manager.status()
+    assert status["state"] == "unavailable" and status["available"] is False
+    assert "arkitekt 5.0.1 is installed" in status["message"]
+    assert manager.bind()["status"] == "error"
 
 
 class FakeFakts:

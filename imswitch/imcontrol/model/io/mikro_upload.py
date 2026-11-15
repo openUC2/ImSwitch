@@ -134,6 +134,32 @@ def upload_ngff(mikro, canvas: NgffCanvas, *, name: Optional[str] = None, space=
     return dataset
 
 
+def check_upload(mikro, dataset, canvas: NgffCanvas) -> Optional[str]:
+    """Why mikro's copy of *canvas* differs from it, or None when the server
+    holds every level with the shape it has on disk. Asked of the server, not
+    taken from what the upload returned."""
+    stored = mikro.get_array_dataset(dataset.id)
+    there = {int(array.level): tuple(array.shape) for array in stored.data_arrays}
+    here = {i: tuple(level.shape) for i, level in enumerate(canvas.levels)}
+    return None if there == here else f"mikro holds levels {there}, the canvas {here}"
+
+
+def delete_canvas(path) -> None:
+    """Remove an uploaded canvas folder from disk. Anything but an OME-Zarr image
+    (a *.ome.zarr folder with multiscales metadata) is refused, so a wrong path
+    cannot take other data with it."""
+    import shutil
+    import zarr
+
+    path = Path(path)
+    if not path.name.endswith(".ome.zarr") or not path.is_dir() or path.is_symlink():
+        raise ValueError(f"Not an OME-Zarr image folder: {path}")
+    attrs = dict(zarr.open_group(str(path), mode="r").attrs)
+    if "multiscales" not in attrs.get("ome", attrs):
+        raise ValueError(f"No NGFF image in {path}")
+    shutil.rmtree(path)
+
+
 def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
 
@@ -142,8 +168,9 @@ class UploadQueue:
     """Canvases waiting for mikro, oldest first, persisted in *path* (JSON).
 
     {"pending": [{path, name, queuedAt, attempts, error}],
-     "uploaded": [{path, name, datasetId, seconds, uploadedAt}],
-     "failed": [...]}. Thread-safe; wait() wakes on add()."""
+     "uploaded": [{path, name, datasetId, seconds, uploadedAt, localCopy}],
+     "failed": [...]}. localCopy is "deleted", or why the canvas was kept, when
+    the setup deletes uploaded canvases. Thread-safe; wait() wakes on add()."""
 
     def __init__(self, path):
         self.path = Path(path)
@@ -174,9 +201,9 @@ class UploadQueue:
         with self._changed:
             self._changed.wait(timeout)
 
-    def done(self, entry: dict, dataset_id, seconds: float) -> None:
+    def done(self, entry: dict, dataset_id, seconds: float, **fields) -> None:
         self._finish(entry, "uploaded", datasetId=str(dataset_id), seconds=round(seconds, 1),
-                     uploadedAt=_now(), error=None)
+                     uploadedAt=_now(), error=None, **fields)
 
     def failed(self, entry: dict, error: BaseException) -> None:
         """Count a failed attempt; after MAX_ATTEMPTS the canvas is set aside."""

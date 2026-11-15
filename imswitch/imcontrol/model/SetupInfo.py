@@ -749,6 +749,11 @@ class ArkitektInfo:
     for mikro. They are uploaded in the background while bound and while the
     microscope is idle; the queue survives restarts. """
 
+    deleteAfterUpload: bool = False
+    """ Remove an uploaded OME-Zarr canvas from this microscope once mikro
+    holds every level of it (checked on the server first), so each scan is
+    stored once. Applies to Run Tile Scan and to queued canvases. """
+
     syncInAsync: bool = True
     """ Unused since the move from arkitekt_next to arkitekt; kept so older
     setup files load. """

@@ -191,17 +191,21 @@ class ArkitektController(ImConWidgetController):
                             autoConnect: Optional[bool] = None,
                             allowInsecureTransport: Optional[bool] = None,
                             useMikro: Optional[bool] = None,
-                            uploadExperiments: Optional[bool] = None) -> dict:
+                            uploadExperiments: Optional[bool] = None,
+                            deleteAfterUpload: Optional[bool] = None) -> dict:
         """Change the Arkitekt settings and save them to the setup file. They
         apply at the next bind. A different url or appName is a different
         login (each has its own stored session). uploadExperiments: after an
-        experiment, queue its OME-Zarr canvases for mikro (uploaded while idle)."""
+        experiment, queue its OME-Zarr canvases for mikro (uploaded while idle).
+        deleteAfterUpload: remove a canvas from this microscope once mikro holds
+        every level of it (applies at once)."""
         if self._manager is None:
             return {"status": "error", "message": "Arkitekt is not configured."}
         info = self._manager.info
         for key, value in (("url", url), ("appName", appName), ("autoConnect", autoConnect),
                            ("allowInsecureTransport", allowInsecureTransport),
-                           ("useMikro", useMikro), ("uploadExperiments", uploadExperiments)):
+                           ("useMikro", useMikro), ("uploadExperiments", uploadExperiments),
+                           ("deleteAfterUpload", deleteAfterUpload)):
             if value is not None:
                 setattr(info, key, value.strip() if isinstance(value, str) else bool(value))
         saved = self._save_settings()
@@ -862,7 +866,9 @@ class ArkitektController(ImConWidgetController):
         dataset = upload_ngff(mikro, stored, name=name, space=stage_space(mikro))
         center = {**grid["start"], "x": (grid["x_min"] + grid["x_max"]) / 2,
                   "y": (grid["y_min"] + grid["y_max"]) / 2}
-        self._remember_upload(_preview(stored), name, getattr(dataset, "id", None), center,
+        preview = _preview(stored)
+        self._discard_local_copy(mikro, dataset, stored)
+        self._remember_upload(preview, name, getattr(dataset, "id", None), center,
                               self._pixel_size_um())
         return dataset.lens()
 
@@ -959,12 +965,36 @@ class ArkitektController(ImConWidgetController):
             self._logger.error(f"Upload of {entry['path']} to mikro failed: {e}")
             self._upload_queue.failed(entry, e)
             return True
-        self._upload_queue.done(entry, getattr(dataset, "id", ""), time.time() - started)
-        self._logger.info(f"Uploaded {entry['path']} to mikro in {time.time() - started:.0f} s")
-        self._remember_upload(_preview(canvas), name, getattr(dataset, "id", None),
+        seconds = time.time() - started
+        self._logger.info(f"Uploaded {entry['path']} to mikro in {seconds:.0f} s")
+        preview = _preview(canvas)  # before the canvas may go
+        local = self._discard_local_copy(mikro, dataset, canvas)
+        self._upload_queue.done(entry, getattr(dataset, "id", ""), seconds,
+                                **({"localCopy": local} if local else {}))
+        self._remember_upload(preview, name, getattr(dataset, "id", None),
                               {"x": canvas.origin_um["x"], "y": canvas.origin_um["y"], "z": 0.0},
                               canvas.pixel_um["x"])
         return True
+
+    def _discard_local_copy(self, mikro, dataset, canvas) -> Optional[str]:
+        """With arkitekt.deleteAfterUpload, remove an uploaded canvas from disk,
+        but only once the server holds every level of it. Returns "deleted" or
+        why it was kept; None when the setup keeps uploaded canvases."""
+        if not getattr(self._manager.info, "deleteAfterUpload", False):
+            return None
+        from imswitch.imcontrol.model.io.mikro_upload import check_upload, delete_canvas
+
+        try:
+            problem = check_upload(mikro, dataset, canvas)
+            if problem is None:
+                delete_canvas(canvas.path)
+        except Exception as e:  # noqa: BLE001 - the upload itself went through
+            problem = f"{type(e).__name__}: {e}"
+        if problem is not None:
+            self._logger.warning(f"Kept {canvas.path} after its upload: {problem}")
+            return f"kept: {problem}"[:300]
+        self._logger.info(f"Deleted {canvas.path}: mikro holds all its levels")
+        return "deleted"
 
     def _switch_illumination(self, name: Optional[str], intensity: Optional[float]):
         """Switch *name* on; returns the call that puts it back as it was."""

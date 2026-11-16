@@ -602,7 +602,7 @@ class ESP32StageManager(PositionerManager):
                              speed=20000, acceleration=None, tTrig=None):
         """
         Start a stage scanning operation with the given parameters.
-        
+
         :param xstart: Starting position in X direction.
         :param xstep: Step size in X direction.
         :param nx: Number of steps in X direction.
@@ -772,7 +772,7 @@ class ESP32StageManager(PositionerManager):
                 self._emitHomingState(axis="Y", axisStatus="done")
                 if aborted():
                     return
-                
+
                 # Step 6: Moving to a save position (e.g. transport position) after homing XY to avoid collisions during Z restore
                 self._emitHomingState(phase="moving_to_safe_xy", message="Moving to safe XY position")
                 value = {ax: self.transportPositions[ax] for ax in ("X", "Y")}
@@ -997,15 +997,15 @@ class ESP32StageManager(PositionerManager):
 
     def register_stagescan_callback(self, on_stagescan_complete_fct):
         self._motor.register_stagescan_callback(on_stagescan_complete_fct)
-        
-    
+
+
     def unregister_stagescan_callback(self, on_stagescan_complete_fct=None):
         # uc2rest removes one specific callback; calling it without one raised
         # a TypeError that the caller swallowed, so callbacks piled up.
         if on_stagescan_complete_fct is None:
             return
         self._motor.unregister_stagescan_callback(on_stagescan_complete_fct)
-    
+
     def reset_stagescan_complete(self):
         pass
 
@@ -1124,7 +1124,7 @@ class ESP32StageManager(PositionerManager):
     # ============================================================================
     # Motor Settings API - Unified configuration interface
     # ============================================================================
-    
+
     def getMotorSettings(self) -> dict:
         """
         Get all motor settings in a unified format.
@@ -1295,7 +1295,7 @@ class ESP32StageManager(PositionerManager):
             self.__logger.error(f"Error getting TMC settings for axis {axis}: {e}")
 
         return result
-    
+
     def setTMCSettingsForAxis(self, axis: str, settings: dict) -> dict:
         """
         Set TMC stepper driver settings for a specific axis.
@@ -1303,7 +1303,7 @@ class ESP32StageManager(PositionerManager):
         """
         axis = axis.upper()
         result = {'axis': axis, 'success': False}
-        
+
         try:
             self.setupMotorDriver(
                 axis=axis,
@@ -1321,9 +1321,9 @@ class ESP32StageManager(PositionerManager):
         except Exception as e:
             result['error'] = str(e)
             self.__logger.error(f"Error updating TMC settings for axis {axis}: {e}")
-        
+
         return result
-    
+
     def getJoystickDirectionSettings(self) -> dict:
         """Return the in-memory joystick inversion cache: {axis: bool}.
 

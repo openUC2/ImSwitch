@@ -95,6 +95,39 @@ def read_ngff(path) -> NgffCanvas:
                       labels=channel_labels(names))
 
 
+def write_image_canvas(path, image, *, name: str, pixel_um: float, center_um: Sequence[float],
+                       z_um: float = 0.0, channels: Optional[Sequence[str]] = None):
+    """Write *image* as an OME-Zarr canvas with its pyramid, centred at
+    *center_um* (x, y: the stage position it was taken at). (y, x) is one
+    channel, (y, x, 3) a camera's RGB, (c, y, x) channels named by *channels*."""
+    import numpy as np
+    from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage
+
+    image = np.asarray(image)
+    if image.ndim == 2:
+        planes, default = [image], ["C0"]
+    elif image.ndim == 3 and image.shape[2] == 3:
+        planes, default = [image[..., c] for c in range(3)], ["rgb_r", "rgb_g", "rgb_b"]
+    elif image.ndim == 3:
+        planes, default = list(image), [f"C{i}" for i in range(image.shape[0])]
+    else:
+        raise ValueError(f"An image is (y, x), (y, x, 3) or (c, y, x), not {image.shape}")
+    names = list(channels or default)
+    if len(names) != len(planes):
+        raise ValueError(f"{len(names)} channel names for {len(planes)} channels")
+    height, width = planes[0].shape
+    spec = ImageSpec(shape=(1, len(planes), 1, height, width), dtype=str(image.dtype),
+                     pixel_size_um=pixel_um, channel_names=names, name=name,
+                     origin_um=(center_um[0] - width * pixel_um / 2,
+                                center_um[1] - height * pixel_um / 2, z_um))
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    canvas = NgffImage.create(str(path), spec)
+    for c, plane in enumerate(planes):
+        canvas.write(np.ascontiguousarray(plane), 0, c, 0)
+    canvas.finalize()
+    return canvas
+
+
 def stage_space(mikro, name: str = "Stage"):
     """This microscope's stage as a µm space in mikro: created once, then reused."""
     from kanne.scalars import Unit

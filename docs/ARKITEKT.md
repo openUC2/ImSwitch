@@ -97,6 +97,22 @@ starts with 8 sources, so a scan of single tiles cannot be viewed.
 The panel shows the connection, the offered actions, a log of remote calls (arguments, result,
 duration, errors) and thumbnails of the images sent.
 
+## Images that go to mikro on their own
+
+Orkestrator only views images; nothing has to be triggered from Arkitekt. While ImSwitch is bound,
+the sources below share one upload queue. It uploads while the microscope is idle, survives
+restarts and network loss, and applies `deleteAfterUpload`.
+
+| From | How |
+|---|---|
+| Experiments | `uploadExperiments`: the canvases of every finished run |
+| Any controller | `self._commChannel.sigUploadToMikro.emit({"image": frame, "name": "…", "positionUm": {"x": …, "y": …}})` (an array is first written to disk as a canvas with a pyramid), or `{"path": "….ome.zarr"}` |
+| HTTP, scripts | `POST queueArkitektUpload?path=` |
+| Other programs | their own Arkitekt login and the `mikro` client, as in `scripts/arkitekt_canvas_bench.py upload` |
+
+[newswitch](https://github.com/openUC2/newswitch) saves only to local files. It does not use mikro
+yet, and it is on the older `arkitekt-next` packages.
+
 ## HTTP endpoints (`ArkitektController`)
 
 | Endpoint | |
@@ -121,7 +137,8 @@ Socket signals: `sigArkitektStatus`, `sigArkitektActivity`, `sigArkitektUpload`.
   `@app.background`), and the controller serves the panel endpoints.
 - `imswitch/imcontrol/model/io/mikro_upload.py`: an NGFF canvas into mikro with the levels it
   already has (nothing is downsampled again), the stage space, the persistent upload queue.
-  `ExperimentController` announces finished canvases with `sigExperimentFinished`.
+  `ExperimentController` announces finished canvases with `sigExperimentFinished`; any
+  controller sends images with `sigUploadToMikro` (both in `CommunicationChannel`).
 - `frontend/src/components/ArkitektController.jsx`, `state/slices/ArkitektSlice.js`,
   `backendapi/apiArkitektController.js`.
 - Tests: `imswitch/imcontrol/_test/unit/test_arkitekt_controller.py`. With arkitekt installed, these

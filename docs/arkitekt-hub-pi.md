@@ -91,7 +91,9 @@ id 24 / **wa 38 %** (the SD card is the limit). SoC at most 45.5 °C, never thro
     kontrol, Postgres, Redis, RustFS and Caddy, with accounts of its own. A hub connected to it
     works without internet. With go.arkitekt.live, logins and token refresh need internet; scans
     stay on disk and the upload queue waits.
-14. **Minor:**
+14. **newswitch** saves only to local files and has no mikro upload. It runs on `arkitekt-next`, so
+    it would first move to arkitekt 16.
+15. **Minor:**
     - konstruktor's README says port 7080, but the CLI uses 2754/2755.
     - `--dry-run` creates the target folder.
     - `docs/setup-config.schema.json` has drifted from `SetupInfo`; only `ArkitektInfo` is
@@ -120,6 +122,7 @@ id 24 / **wa 38 %** (the SD card is the limit). SoC at most 45.5 °C, never thro
 - An arkitekt older than 16 makes the panel name the version it needs. Before, the login failed
   with a TypeError, as in Bene's `.venv`.
 - A bare host means https.
+- `sigUploadToMikro`: any controller sends an array or an OME-Zarr folder to the upload queue.
 
 ## Pallet (os-rpi branch `feat/arkitekt-hub`, option B)
 

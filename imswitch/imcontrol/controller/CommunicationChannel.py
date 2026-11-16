@@ -79,6 +79,12 @@ class CommunicationChannel(SignalInterface):
     # {name, dir, canvases: [OME-Zarr canvas paths]}: emitted once an experiment's
     # writers are finalized (pyramids built), also after a stop.
     sigExperimentFinished = Signal(dict)
+    # Send an image to the Arkitekt server's mikro, from any controller:
+    # {"path": OME-Zarr image folder} or {"image": array (y, x), (y, x, 3) RGB or
+    # (c, y, x)}, optional "name", "channels", "positionUm" {x, y, z} (where the
+    # image's centre was; default: the stage now), "pixelSizeUm" (default: the
+    # camera's). Queued and uploaded while ImSwitch is bound and idle.
+    sigUploadToMikro = Signal(dict)
     #sigRequestScannersInScan = Signal()
 
 

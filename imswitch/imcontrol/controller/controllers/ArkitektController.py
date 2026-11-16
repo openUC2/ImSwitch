@@ -23,6 +23,7 @@ background, while the microscope is idle.
 import asyncio
 import base64
 import collections
+import concurrent.futures
 import datetime
 import enum
 import functools
@@ -118,6 +119,13 @@ class ArkitektController(ImConWidgetController):
         finished = getattr(self._commChannel, "sigExperimentFinished", None)
         if finished is not None:
             finished.connect(self._on_experiment_finished)
+        # Arrays sent with sigUploadToMikro are written to disk here, in order,
+        # off the sender's thread.
+        self._mikro_writer = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="sigUploadToMikro")
+        requested = getattr(self._commChannel, "sigUploadToMikro", None)
+        if requested is not None:
+            requested.connect(self._on_upload_request)
         self._manager.set_app_factory(self.build_app, ARKITEKT_APP_VERSION)
         self._manager.add_listener(self.sigArkitektStatus.emit)
         self._manager.auto_connect()
@@ -125,6 +133,8 @@ class ArkitektController(ImConWidgetController):
     def closeEvent(self):
         if self._manager is not None:
             self._manager.shutdown()
+        if getattr(self, "_mikro_writer", None) is not None:
+            self._mikro_writer.shutdown(wait=True)  # finish writing what was sent
 
     # ── HTTP: the Arkitekt panel ────────────────────────────────────────────
 
@@ -920,6 +930,47 @@ class ArkitektController(ImConWidgetController):
                 region = os.path.basename(os.path.normpath(path)).replace(".ome.zarr", "")
                 if self._upload_queue.add(path, f"{name} {region}"):
                     self._logger.info(f"Queued for mikro: {path}")
+
+    def _on_upload_request(self, payload: dict):
+        """sigUploadToMikro: queue an OME-Zarr folder ("path") or an array
+        ("image") for mikro. An array is first written to disk as a canvas with
+        its pyramid, so it survives a restart too. Returns the future of the
+        queued path (None when Arkitekt is off here)."""
+        if self._upload_queue is None or not self._manager.info.enabled:
+            self._logger.debug("sigUploadToMikro ignored: Arkitekt is not enabled")
+            return None
+        return self._mikro_writer.submit(self._queue_upload, dict(payload))
+
+    def _queue_upload(self, payload: dict) -> Optional[str]:
+        from imswitch.imcontrol.model.io.mikro_upload import write_image_canvas
+
+        name, path = payload.get("name") or None, payload.get("path")
+        try:
+            if payload.get("image") is not None:
+                stamp = datetime.datetime.now()
+                name = name or f"Image {stamp:%Y-%m-%d %H:%M:%S}"
+                try:
+                    here = payload.get("positionUm") or self._position(None)
+                except Exception:  # noqa: BLE001 - no stage: placed at the origin
+                    here = {"x": 0.0, "y": 0.0, "z": 0.0}
+                path = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(),
+                                    "ArkitektController", "uploads",
+                                    f"{stamp:%Y%m%d_%H%M%S_%f}_"
+                                    f"{re.sub(r'[^A-Za-z0-9._-]+', '_', name)[:40]}.ome.zarr")
+                write_image_canvas(path, payload["image"], name=name,
+                                   pixel_um=float(payload.get("pixelSizeUm")
+                                                  or self._pixel_size_um()),
+                                   center_um=(float(here["x"]), float(here["y"])),
+                                   z_um=float(here.get("z") or 0.0),
+                                   channels=payload.get("channels"))
+            if not path or not os.path.isdir(path):
+                raise ValueError(f"neither an image nor an OME-Zarr folder: {path!r}")
+            if self._upload_queue.add(path, name):
+                self._logger.info(f"Queued for mikro: {path}")
+            return path
+        except Exception as e:  # noqa: BLE001 - a sender must not fail on this
+            self._logger.error(f"sigUploadToMikro: {e}")
+            return None
 
     def _idle_for_upload(self) -> Optional[str]:
         """None when an upload may start now, else why not."""

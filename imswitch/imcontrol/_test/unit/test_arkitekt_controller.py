@@ -436,6 +436,31 @@ def test_an_uploaded_canvas_is_deleted_only_once_mikro_holds_all_of_it(tmp_path,
     assert controller.getArkitektUploads()[0]["thumbnail"]  # taken before the canvas went
 
 
+def test_any_controller_can_send_an_image_or_a_canvas_to_mikro(tmp_path, monkeypatch):
+    pytest.importorskip("mikro")
+    controller, _, _ = make_controller()
+    rgb = np.zeros((60, 80, 3), np.uint8)
+    rgb[..., 1] = 200
+    sent = controller._on_upload_request({"image": rgb, "name": "Overview",
+                                          "positionUm": {"x": 100.0, "y": 50.0},
+                                          "pixelSizeUm": 0.5}).result()
+    assert sent.endswith("_Overview.ome.zarr")
+    write_canvas(tmp_path / "other.ome.zarr")
+    assert controller._on_upload_request({"path": str(tmp_path / "other.ome.zarr")}).result()
+    assert controller._on_upload_request({"path": str(tmp_path / "missing")}).result() is None
+    assert [e["name"] for e in controller.getArkitektUploadQueue()["pending"]] == ["Overview", None]
+    monkeypatch.setattr(controller, "_idle_for_upload", lambda: None)
+    mikro = FakeMikro()
+    assert controller._upload_next(mikro)
+    uploaded = mikro.datasets[0].kwargs
+    assert uploaded["data"].data.shape == (3, 60, 80)
+    assert [a.label.label for a in uploaded["anchors"]] == ["red", "green", "blue"]
+    # placed at its top-left corner: the centre minus half a field
+    assert mikro.spaces[0].registered[0][2] == {"x": 80.0, "y": 35.0}
+    controller._manager.info.enabled = False
+    assert controller._on_upload_request({"image": rgb}) is None  # nothing written
+
+
 def test_only_an_ome_zarr_image_folder_is_deleted(tmp_path):
     pytest.importorskip("zarr")
     from imswitch.imcontrol.model.io.mikro_upload import delete_canvas

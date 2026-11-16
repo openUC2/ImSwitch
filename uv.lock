@@ -1282,6 +1282,16 @@ wheels = [
 [package.optional-dependencies]
 crypto = [
     { name = "cryptography" },
+[[package]]
+name = "fakts-next"
+version = "4.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "certifi" },
+    { name = "koil" },
+    { name = "oauthlib" },
+    { name = "pydantic" },
 ]
 mesh = [
     { name = "arkitekt-mesh" },
@@ -2864,6 +2874,25 @@ wheels = [
 [package.optional-dependencies]
 xarray = [
     { name = "xarray" },
+[[package]]
+name = "mikro-next"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dask" },
+    { name = "fakts-next" },
+    { name = "numcodecs" },
+    { name = "numpy", marker = "python_full_version >= '3.12' and python_full_version < '3.14'" },
+    { name = "obstore" },
+    { name = "pytest" },
+    { name = "rath" },
+    { name = "websockets" },
+    { name = "xarray" },
+    { name = "zarr" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/4c/f73f14af5d650d83ed2c6810f54ccb569f5f9f85d8c7c47291da61e8cd5b/mikro_next-2.0.0.tar.gz", hash = "sha256:ebebfe23707a6dbcc012d36063521b4467a67a278996bc832b73a6c1d629e6d1", size = 108533, upload-time = "2026-06-24T16:29:29.574Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/85/ec/caa686f24145b88bc7aa2de12c5e9afa169445fb645eede8bbc37bea5087/mikro_next-2.0.0-py3-none-any.whl", hash = "sha256:e6f66b1700e40ab8658d5bf043be9532b45597b9aae7381a949c0699e31a467f", size = 119301, upload-time = "2026-06-24T16:29:28.529Z" },
 ]
 
 [[package]]
@@ -4042,6 +4071,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/71/dba38ee2651f84f7842206adbd2233d8bbdb59fb85e9fa14232486a8c471/pydantic_extra_types-2.11.1.tar.gz", hash = "sha256:46792d2307383859e923d8fcefa82108b1a141f8a9c0198982b3832ab5ef1049", size = 172002, upload-time = "2026-03-16T08:08:03.92Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/17/c1/3226e6d7f5a4f736f38ac11a6fbb262d701889802595cdb0f53a885ac2e0/pydantic_extra_types-2.11.1-py3-none-any.whl", hash = "sha256:1722ea2bddae5628ace25f2aa685b69978ef533123e5638cfbddb999e0100ec1", size = 79526, upload-time = "2026-03-16T08:08:02.533Z" },
+]
+
+[[package]]
+name = "pydantic-settings"
+version = "2.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/20/c5/dbbc27b814c71676593d1c3f718e6cd7d4f00652cefa24b75f7aa3efb25e/pydantic_settings-2.11.0.tar.gz", hash = "sha256:d0e87a1c7d33593beb7194adb8470fc426e95ba02af83a0f23474a04c9a08180", size = 188394, upload-time = "2025-09-24T14:19:11.764Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/d6/887a1ff844e64aa823fb4905978d882a633cfe295c32eacad582b78a7d8b/pydantic_settings-2.11.0-py3-none-any.whl", hash = "sha256:fe2cea3413b9530d10f3a5875adffb17ada5c1e1bab0b2885546d7310415207c", size = 48608, upload-time = "2025-09-24T14:19:10.015Z" },
 ]
 
 [[package]]
@@ -5327,6 +5370,25 @@ wheels = [
 ]
 
 [[package]]
+name = "turms"
+version = "2.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "graphql-core" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "rich" },
+    { name = "rich-click" },
+    { name = "watchfiles" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/eb/2a/4572f4b67b197a5fe68278491b3c3bc1667d7e8aed576de8939037f8ec1e/turms-2.2.1.tar.gz", hash = "sha256:f9813e7bc17bd342e931b2b36e9d72e3ca5c3ce7664fa78fd5c1a7fee92e19f0", size = 96597, upload-time = "2026-09-30T19:05:15.404Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/32/0b/134b74552e5d154756ff2ad86d1b90acc1d7d3dcd2f65d7b82938161ebb6/turms-2.2.1-py3-none-any.whl", hash = "sha256:4ecb9f640b1b652ca4bd05cfd3bf16d41c2b3f7b3b0d803d94cb8762ba0b7590", size = 115394, upload-time = "2026-09-30T19:05:14.174Z" },
+]
+
+[[package]]
 name = "typer"
 version = "0.26.8"
 source = { registry = "https://pypi.org/simple" }
@@ -5407,16 +5469,16 @@ wheels = [
 
 [[package]]
 name = "uc2-rest"
-version = "0.2.0.43"
+version = "0.2.0.46"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "pyserial" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5c/f4/940abdc45a81d50c2189036fa6d271d0414dbc110adc9ea1d84a5b1464b9/uc2_rest-0.2.0.43.tar.gz", hash = "sha256:34fa84dff32591b03973043c640d04964d62d1d681c59006d079fbd54ef6282f", size = 91074, upload-time = "2026-10-14T18:20:10.442Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a5/b9/d4d5615bb156bf3335ed7a9da73fcaa6cace5d575d770209dd21efa9c281/uc2_rest-0.2.0.46.tar.gz", hash = "sha256:2cfa23565a238adace57ae25bc41217a97499f6e868080300a66ed9d248f61d2", size = 95466, upload-time = "2026-11-15T13:41:34.775Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/41/7b2e724c1e836a8d104622b10e45df67493399b97c305d3d91071fddc3f1/uc2_rest-0.2.0.43-py3-none-any.whl", hash = "sha256:956dae5c7159d5ba7bf00840cd7256c6d4484d50f9db7345eb45dc12e32645e7", size = 100471, upload-time = "2026-10-14T18:20:09.128Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/67/c69e7d02d77e18380c1c13fb8b0719f517f69cd5218e4067eca2db280cf6/uc2_rest-0.2.0.46-py3-none-any.whl", hash = "sha256:bd544130c5767da893c8e7dcdbd8b5eae5fe3f5a70eef765d959db5971ee335a", size = 102088, upload-time = "2026-11-15T13:41:33.554Z" },
 ]
 
 [[package]]

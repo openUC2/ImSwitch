@@ -52,12 +52,10 @@ jobs:
 
       - name: Install project with uv sync
         run: |
-          # Use the lockfile to install all deps deterministically — no resolver runs,
-          # no pip conflicts.  The 'dev' extra brings in pytest.
-          uv sync --frozen --extra dev
-          # psygnal binary wheels can break ImSwitch's SignalInterface subclassing;
-          # reinstall from source to get pure-Python modules.
-          uv pip install psygnal --no-binary :all:
+          # Every version comes from uv.lock; --locked also fails when uv.lock no longer matches
+          # pyproject.toml. The 'dev' extra brings in pytest. psygnal is built from source by the
+          # sync itself ([tool.uv] no-binary-package), as ImSwitch subclasses its classes.
+          uv sync --locked --extra dev
         shell: bash
 
       - name: Verify installation

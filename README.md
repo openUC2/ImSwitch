@@ -6,6 +6,25 @@ ImSwitch is a Python program which aims at generalizing microscope control. Here
 
 The openUC2/ImSwitch repo is a hard fork of the upstream project at [ImSwitch/ImSwitch](https://github.com/ImSwitch/ImSwitch), which is no longer maintained; openUC2/ImSwitch runs ImSwitch as a server in headless mode with an HTTP API which used by a React single-page-app browser GUI (also served from the ImSwitch server). This fork does not maintain the upstream's Qt-based desktop GUI.
 
+## Installing
+
+ImSwitch installs from `uv.lock` only: every dependency, UC2-REST included, at the version locked
+there.
+
+- **openUC2 OS (on the microscope):** ImSwitch runs as the container image
+  `ghcr.io/openuc2/imswitch`, which CI builds from this repository with `uv sync --frozen`.
+  Nothing to install.
+- **Docker elsewhere:** `docker compose -f docker/docker-compose.yml up` runs the image built from
+  master; `up --build` builds your checkout.
+- **From source:** `uv venv --system-site-packages && uv sync`, see [Setup](#setup).
+
+Two rules keep the lock true:
+
+- Change dependencies in `pyproject.toml`, run `uv lock`, and commit both. Never repair an
+  environment with `uv pip install` or `pip install`: it no longer matches the lock, and the next
+  `uv sync` or `uv run` undoes it.
+- A newer UC2-REST (on PyPI with every merge to its master): `uv lock --upgrade-package uc2-rest`.
+
 ## Development
 
 These instructions are for people developing and maintaining ImSwitch.
@@ -24,7 +43,8 @@ source $HOME/.local/bin/env
 git clone https://github.com/openUC2/ImSwitch
 cd ImSwitch
 
-# Create a virtual environment and install ImSwitch with UV
+# Create a virtual environment (--system-site-packages lets a Pi's picamera2 in) and install
+# ImSwitch with every dependency at the version in uv.lock
 uv venv --system-site-packages
 uv sync
 
@@ -32,23 +52,20 @@ uv sync
 uv run python main.py --headless --http-port 8001
 ```
 
-# Alternative installation with uv pip (not recommended, may cause dependency issues):
+`uv sync` installs every dependency at the version in `uv.lock`, UC2-REST included, so nothing
+needs reinstalling with `uv pip` afterwards: psygnal is built from source and the other OpenCV
+variants are left out by `[tool.uv]` in `pyproject.toml`.
+
+- After pulling: `uv sync` again. For the tests: `uv sync --extra dev`.
+- A newer UC2-REST (on PyPI with every merge to its `master`): `uv lock --upgrade-package uc2-rest`,
+  then commit `uv.lock`.
+- Working on UC2-REST alongside: `uv pip install -e ../UC2-REST`, then start ImSwitch with
+  `uv run --no-sync python main.py` (or `python main.py` in the activated venv). `uv run` and
+  `uv sync` put the locked UC2-REST back.
+
+Then the rest of the setup:
 
 ```bash
-source .venv/bin/activate
-# Yes, we need to start using `uv sync` instead for reproducible installs with our lockfile...but we're still ignoring the lockfile right now:
-uv pip install -e .[dev]
-
-# Run a workaround for some brokenness:
-uv pip uninstall psygnal
-uv pip install psygnal --no-binary :all:
-
-# Install UC2-REST from source
-cd ~
-git clone https://github.com/openuc2/UC2-REST
-cd UC2-REST
-uv pip install .
-
 # Download ImSwitch configurations (yes, this is a janky way of getting configurations)
 cd ~
 git clone https://github.com/openUC2/ImSwitchConfig
@@ -60,10 +77,8 @@ sudo usermod -a -G dialout $USER
 # eventually change ownership of the ImSwitchConfig Folder
 sudo chown  -R pi:pi /home/pi/ImSwitchConfig
 
-# fix opencv installations 
-uv pip uninstall opencv-python-headless opencv-contrib-python-headless opencv-contrib-python opencv-python
+# System libraries OpenCV needs
 sudo apt-get install -y libgl1 libglib2.0-0
-uv pip install opencv-contrib-python-headless>=4.13.0.92 --force-reinstall
 # Then reboot your computer, or at least fully log out of your user account and then log back in
 ```
 

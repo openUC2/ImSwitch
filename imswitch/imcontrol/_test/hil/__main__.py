@@ -99,9 +99,6 @@ def main():
     # A run that dies must not leave the report of an older run behind.
     for name in ("hil-report.pdf", "summary.md"):
         (report_dir / name).unlink(missing_ok=True)
-    # The rig (os-rpi) passes the pallet and images it swapped in; a laptop run has none.
-    if os.environ.get("HIL_PALLET"):
-        print(f"[hil] pallet under test:\n{os.environ['HIL_PALLET']}", flush=True)
     files = [HERE / f"test_{name}.py" for name in args.tests]
     unknown = [name for name, file in zip(args.tests, files) if not file.is_file()]
     if unknown:

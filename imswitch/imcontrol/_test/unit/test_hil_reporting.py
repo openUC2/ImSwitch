@@ -80,6 +80,39 @@ def test_pdf_failure_still_writes_the_summary(tmp_path, monkeypatch):
     assert hil_report.report_error == "broken PDF"
     assert not (tmp_path / "hil-report.pdf").exists()
     assert "broken PDF" in (tmp_path / "summary.md").read_text()
+    assert "hil-report.pdf` in the artifact" not in (tmp_path / "summary.md").read_text()
+
+
+def test_a_long_image_list_fits_on_the_pages(tmp_path, monkeypatch):
+    # Run 43896090621: the pallet text in one table cell was taller than a page (LayoutError).
+    images = [f"ghcr.io/openuc2/image-{number}:sha-{number:07d}" for number in range(200)]
+    monkeypatch.setenv("HIL_IMAGES", "\n".join(images))
+    results = {"test_board_link.py::test_it": {"status": "passed", "duration": 1., "details": ""}}
+    hil_pdf.write_pdf(tmp_path / "hil-report.pdf", "FRAME.json", 0, results, {}, {}, {}, [])
+    text = "".join(page.extract_text() for page in PdfReader(tmp_path / "hil-report.pdf").pages)
+    assert images[0] in text and images[-1] in text
+
+
+def test_a_long_output_fits_on_the_pages(tmp_path):
+    # Many failed cases of one file: their lines must not end up in one cell taller than a page.
+    results = {f"test_motor.py::test_it[{axis}{number}]": {
+        "status": "failed", "duration": 1., "details": "E   moved by 0\n" * 12}
+        for axis in "XYZA" for number in range(10)}
+    hil_pdf.write_pdf(tmp_path / "hil-report.pdf", "FRAME.json", 0, results, {}, {}, {}, [])
+    assert len(PdfReader(tmp_path / "hil-report.pdf").pages) > 2
+
+
+def test_summary_has_one_row_per_test_file():
+    hil_report.reset()
+    hil_report._results.update({
+        "test_board_link.py::test_a": {"status": "passed", "duration": 1., "details": ""},
+        "test_lightsource.py::test_a[LED]": {"status": "failed", "duration": 2.,
+                                             "details": "E   LED: not seen"},
+        "test_lightsource.py::test_b[LED]": {"status": "passed", "duration": 3., "details": ""}})
+    lines = hil_report.summary("FRAME.json").splitlines()
+    assert "| 1 | board_link | passed | 1 passed | 1 s |" in lines
+    assert "| 2 | lightsource | **failed** | 1 failed, 1 passed | 5 s |" in lines
+    assert any("LED: not seen" in line for line in lines)
 
 
 def test_stop_timeout_is_an_error(calibration_module, monkeypatch):
@@ -123,7 +156,8 @@ def test_failed_calibration_pdf_is_collected(calibration_module, monkeypatch, tm
     (notes,) = hil_report._notes.values()
     assert notes[0] == "The calibration ended as failed: no focus"
     assert "failed: no focus" in hil_report.summary("FRAME.json")
-    assert not list(tmp_path.iterdir())  # kept for hil-report.pdf, not written as a file
+    # Also saved on its own, so it survives a hil-report.pdf that cannot be written.
+    assert (tmp_path / "frame_calibration.pdf").read_bytes() == data
 
 
 def test_calibration_progress_is_one_line_per_start_and_end(calibration_module):

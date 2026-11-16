@@ -1,5 +1,7 @@
 """The report of a run: hil-report.pdf (results, photos, PDFs of the tests) and summary.md.
 
+summary.md is the short form for the CI step summary: a table with one row per test file.
+
 A test adds to its part of the report with:
 
     attach("dark", image)                    a photo
@@ -86,11 +88,50 @@ def counts():
     return {status: statuses.count(status) for status in STATUSES}
 
 
+def by_file(results):
+    """``{"test_board_link.py": {"test_uc2_board_connected": result, ...}, ...}``, in run order.
+
+    A problem outside the tests (``record_problem``) is an entry without cases.
+    """
+    files = {}
+    for test, result in results.items():
+        file, _, case = test.partition("::")
+        files.setdefault(file, {})[case] = result
+    return files
+
+
+def verdict_of(statuses):
+    """One status for several: failed when one failed, passed when one ran, else skipped."""
+    if "failed" in statuses or "error" in statuses:
+        return "failed"
+    return "passed" if "passed" in statuses else "skipped"
+
+
+def name_of(file):
+    """ "board_link" for "test_board_link.py"; a problem outside the tests keeps its name."""
+    return file[len("test_"):-len(".py")] if file.endswith(".py") else file
+
+
 def summary(setup_file):
-    """Markdown, short enough for a CI step summary: the setup, the counts, one line per failure."""
+    """Markdown for the CI step summary: one row per test file, then one line per failure."""
     totals = " · ".join(f"{n} {status}" for status, n in counts().items())
-    lines = ["### HIL report", "", f"setup `{setup_file}`", "", totals, "",
-             "Report: `hil-report.pdf` in the artifact `hil-report`.", ""]
+    if report_error:
+        report = f"The PDF was not written: {report_error}"
+    else:
+        report = "Report: `hil-report.pdf` in the artifact `hil-report`."
+    lines = ["### Hardware tests", "", f"setup `{setup_file}` · {totals}", "", report, "",
+             "| No. | Test | Result | Cases | Time |", "|---|---|---|---|---|"]
+    for number, (file, cases) in enumerate(by_file(_results).items(), 1):
+        statuses = [result["status"] for result in cases.values()]
+        cases_counted = ", ".join(f"{statuses.count(status)} {status}"
+                                  for status in STATUSES if status in statuses)
+        verdict = verdict_of(statuses)
+        if verdict == "failed":
+            verdict = f"**{verdict}**"  # bold, so a failure stands out in the table
+        seconds = sum(result["duration"] for result in cases.values())
+        lines.append(f"| {number} | {name_of(file)} | {verdict} | {cases_counted} | "
+                     f"{seconds:.0f} s |")
+    lines.append("")
     for test, result in _results.items():
         if result["status"] in ("failed", "error"):
             last_line = (result["details"].strip().splitlines() or [""])[-1]

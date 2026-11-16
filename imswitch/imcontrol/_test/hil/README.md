@@ -11,29 +11,39 @@ Each test file says at the top of its docstring what it checks and what it does 
 | `board_link` | ImSwitch talks to the UC2 board, and the board runs the master firmware | reads |
 | `firmware_server` | the firmware server has firmware files, and each board runs the server's version | reads |
 | `camera_capture` | each camera takes a picture as large as its sensor | reads |
-| `motor_axis_move` | each axis moves 10 µm and back; then each axis with homing switched on homes: Z, X, Y, then the turret | **moves** (10 µm, then to the end stops) |
-| `lightsource` | each laser and LED switches on and off; the cameras see each LED | **light** |
-| `ledmatrix` | the cameras see the LED matrix | **light** |
-| `ledmatrix_single` | one LED lights on its own (`setLEDs`) and is dimmer than the whole matrix | **light** |
+| `motor_axis_move` | each axis moves 10 µm and back, and ImSwitch reports the position it moved to | **moves** (10 µm) |
+| `stage_homing` | "Safe Global Homing" (`startFrameHoming`) homes Z, X and Y and reports each as done | **moves** (to the end stops, then to the transport position) |
+| `motor_motion_camera` | the observation camera sees every axis move: X and Y shift the image the right way, Z changes its scale | **moves** (transport position, 3 mm per axis), **light** |
+| `lightsource` | each laser and LED switches on and off; every camera sees each LED go on and off | **light** |
+| `ledmatrix` | every camera sees the LED matrix go on and off | **light** |
+| `ledmatrix_single` | one LED lights on its own (`setLEDs`), every camera sees it go on and off, and it is dimmer than the whole matrix | **light** |
 | `frame_calibration` | the FRAME calibration runs from start to end; needs the calibration target in the holder | **moves** (homes, turret), **light**, **writes the setup** (backup: `setup_before_frame_calibration.json`) |
 
 Hardware a setup does not have skips its tests.
 Hardware that is there but does not work fails.
 
 They run in the order of the table: the boards, the cameras, the motors, the lights, then the calibration.
-The stage is homed before the lights are tested, so the slide holder is out of the light path.
+The homing ends at the transport position, and the motion and light tests run there.
 The order is the list `ORDER` in `conftest.py`.
+
+A light test has one case per light, not one per camera.
+It passes only when every camera of the setup sees the light go on and go off again.
+A camera that ImSwitch serves as a mock, or that cannot report its status, is left out and named in the report.
 
 Some tests do not start after a failure; they are skipped and say which test failed.
 The table is `NEEDS` in `conftest.py`:
 
-- `frame_calibration` needs `board_link`, `camera_capture`, `motor_axis_move` and the three light tests.
+- `stage_homing` needs `motor_axis_move`.
+- `motor_motion_camera` needs `motor_axis_move` and `stage_homing`: its first move is absolute, so the stage must be homed.
+- `frame_calibration` needs `board_link`, `camera_capture`, the three motor tests and the three light tests.
   It does not need `firmware_server`: a board on another firmware version fails that test, but can still be calibrated.
+  Only `--sync-firmware` stops every test, when the flashing fails.
 
-`motor_axis_move` first steps every axis, then homes them, one case per axis.
-When a step failed or an axis did not home, the axes after it are skipped.
-The homing cannot see whether an end stop was found: `homeAxis` does not return it.
-It fails when ImSwitch answers with an error or not at all.
+`motor_axis_move` compares positions, which are the firmware's step count.
+`motor_motion_camera` is what shows that the stage really moved.
+`stage_homing` presses the same button as the FRAME settings page and checks the same per-axis "done".
+That "done" says that the homing command of the axis returned, not that its end stop was pressed.
+The turret (A) is homed by the calibration.
 The calibration homes again and checks every axis, reads the position back after every move, follows X and Y in the observation camera, focuses with Z and switches the objective.
 A step the calibration skips (e.g. the second objective on a rig with one) is listed in the test's output as not tested.
 
@@ -58,8 +68,9 @@ A camera that does not start is a problem in the report; the tests run anyway.
 | File | Holds |
 |---|---|
 | `hil-report.pdf` | the report to read: what was tested, one line per test, then every test with what failed, its notes, its cases and its photos, then the PDFs the tests appended (the calibration's own report) |
-| `summary.md` | the setup, the counts, one line per failure and the notes of the tests, for the CI run's page |
+| `summary.md` | the setup, the counts, a table with one row per test file, one line per failure and the notes of the tests, for the CI run's page |
 | `setup_before_frame_calibration.json` | the setup as it was before the calibration; only when the calibration ran |
+| `frame_calibration.pdf` | the calibration's own report, also appended to `hil-report.pdf`; only when the calibration ran |
 
 Both reports name the setup file the rig ran with.
 A test finds the folder in the environment variable `HIL_REPORT_DIR`.
@@ -146,6 +157,7 @@ A test file has:
 
 The test waits until the calibration's thread has ended, then fetches its PDF with `getFrameCalibrationReportPdf` and checks the run's `startedAt` before and after, so the report of another run is never taken.
 The PDF is appended to `hil-report.pdf` as ImSwitch wrote it (`hil_report.append_pdf`).
+It is also saved on its own as `frame_calibration.pdf` in the report folder, so it is there even when `hil-report.pdf` could not be written.
 When it cannot be fetched, the `frame_calibration` part of the report shows that as an error.
 
 The fixtures of `test_frame_calibration.py` put the rig back, each on its own: the calibration is stopped, the light goes off (the calibration leaves it on), the settings go back, and then the report is collected.
@@ -154,5 +166,5 @@ The calibration's result stays in the instrument's setup, also after os-rpi has 
 A calibration that fails may have written a part of it; `setup_before_frame_calibration.json` is there to go back by hand.
 Nothing is rolled back automatically.
 
-os-rpi passes three environment variables that the report shows: `HIL_TARGET` (the image or pallet under test), `HIL_PALLET` (the pallet and every image in it) and `HIL_RUN_URL` (the Actions run).
+os-rpi passes three environment variables that the report shows: `HIL_TARGET` (the image or pallet under test), `HIL_IMAGES` (every image of the pallet under test, one per line) and `HIL_RUN_URL` (the Actions run).
 A run from a laptop has none of them.

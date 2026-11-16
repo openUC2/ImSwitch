@@ -21,6 +21,8 @@ from reportlab.platypus import (
 )
 from reportlab.platypus.doctemplate import LayoutError
 
+from hil_report import by_file, name_of, verdict_of
+
 MARGIN = 42
 PADDING = 6  # points ReportLab's page frame keeps free inside the margins, on each side
 WIDTH = A4[0] - 2 * (MARGIN + PADDING)  # of the text
@@ -123,35 +125,11 @@ def grid(head, body, widths):
     return table
 
 
-def verdict_of(statuses):
-    """One status for several: failed when one failed, passed when one ran, else skipped."""
-    if "failed" in statuses or "error" in statuses:
-        return "failed"
-    return "passed" if "passed" in statuses else "skipped"
-
-
-def by_file(results):
-    """``{"test_board_link.py": {"test_uc2_board_connected": result, ...}, ...}``, in run order.
-
-    A problem outside the tests (``hil_report.record_problem``) is an entry without cases.
-    """
-    files = {}
-    for test, result in results.items():
-        file, _, case = test.partition("::")
-        files.setdefault(file, {})[case] = result
-    return files
-
-
 def failure_lines(details):
     """The lines of a pytest traceback that say what went wrong: its "E   ..." lines."""
     lines = details.strip().splitlines()
     errors = [line[1:].strip() for line in lines if line.startswith("E ")]
     return (errors or lines)[-OUTPUT_LINES:]
-
-
-def name_of(file):
-    """ "board_link" for "test_board_link.py"; a problem outside the tests keeps its name."""
-    return file[len("test_"):-len(".py")] if file.endswith(".py") else file
 
 
 def test_part(number, file, cases, description, notes, photos):
@@ -167,10 +145,14 @@ def test_part(number, file, cases, description, notes, photos):
             output.append(f"{case} skipped: {result['details']}")
     output.extend(notes)
     pairs = [("What it checks", description)] if description else []
-    if output:
-        pairs.append(("Output", "\n".join(output)))
+    # One line per row, labelled once: a table splits onto the next page only between rows.
+    pairs += [("Output" if index == 0 else "", line) for index, line in enumerate(output)]
     part = [Heading(f"{number}. {name}", 11, verdict_of([r["status"] for r in cases.values()])),
-            Indenter(left=INDENT), rows(pairs, width)]
+            Indenter(left=INDENT)]
+    # A file without docstring that passed has nothing to say.
+    # ReportLab refuses a table without rows.
+    if pairs:
+        part.append(rows(pairs, width))
     if any(cases):
         body = [[text(case), text(result["status"]), text(f"{result['duration']:.1f} s")]
                 for case, result in cases.items()]
@@ -197,8 +179,7 @@ def test_pages(setup, started, results, descriptions, photos, notes):
             ("Duration", f"{(time.time() - started) / 60:.0f} min"),
             ("Result", counted or "no test ran"),
             ("Tested target", os.environ.get("HIL_TARGET")),
-            ("Run", os.environ.get("HIL_RUN_URL")),
-            ("Pallet", os.environ.get("HIL_PALLET"))]
+            ("Run", os.environ.get("HIL_RUN_URL"))]
     summary = []
     for number, (file, cases) in enumerate(files.items(), 1):
         summary.append([text(number), Verdict(verdict_of([r["status"] for r in cases.values()])),
@@ -208,8 +189,14 @@ def test_pages(setup, started, results, descriptions, photos, notes):
              rows([pair for pair in head if pair[1]], WIDTH),
              Spacer(1, 6), text("Summary", LABEL),
              grid(["No.", "Result", "Test", "What it checks", "Time"], summary,
-                  [28, 42, 100, WIDTH - 215, 45]),
-             Heading("Tests", 13)]
+                  [28, 42, 100, WIDTH - 215, 45])]
+    # The rig (os-rpi) passes the images of the pallet under test, one per line.
+    # One image per row: a table splits between its rows onto the next page, never inside a row.
+    images = os.environ.get("HIL_IMAGES", "").split()
+    if images:
+        story += [Spacer(1, 6), text("Images under test", LABEL),
+                  grid(["Image"], [[text(image)] for image in images], [WIDTH])]
+    story.append(Heading("Tests", 13))
     for number, (file, cases) in enumerate(files.items(), 1):
         story += test_part(number, file, cases, descriptions.get(file, ""),
                            notes.get(file, []), photos)

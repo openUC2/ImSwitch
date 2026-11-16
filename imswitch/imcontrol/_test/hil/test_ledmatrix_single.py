@@ -1,11 +1,13 @@
-"""One LED of the matrix can be lit on its own.
-The cameras see it, and it is dimmer than the whole matrix.
+"""One LED of the matrix can be lit on its own, and every camera sees it go on and off.
+It is dimmer than the whole matrix.
 
 SWITCHES LIGHT.
 
+It passes only when every camera of the setup sees both switches.
 setLEDs lights exactly the LEDs it is given.
-One LED must change the image by more than the camera's own noise,
-and the whole matrix must give a brighter image than that one LED.
+On: one LED changes the image by more than the camera's own noise.
+Off: the image is back to dark, within that noise.
+The whole matrix must give a brighter image than that one LED.
 The LED is the one closest to the optical axis (from the DPC LED layout),
 so that it lights the sample in brightfield;
 without the DPC controller it is the centre of the setup's Nx x Ny grid.
@@ -19,7 +21,7 @@ import pytest
 from PIL import Image, ImageChops, ImageStat
 
 import hil_client as client
-from hil_report import attach
+from hil_report import attach, note
 
 SINGLE_INTENSITY = 255         # per colour, of setLEDs (0..255)
 MATRIX_INTENSITY = 255         # per colour, of setAllLED, the same as one LED
@@ -42,6 +44,21 @@ def all_lights_off():
         client.get_json("/LaserController/setLaserValue", {"laserName": name, "value": 0})
         client.get_json("/LaserController/setLaserActive", {"laserName": name, "active": False})
     client.get_json("/LEDMatrixController/setAllLEDOff")
+    time.sleep(LIGHT_SETTLE_S)
+
+
+def every_led_on():
+    client.get_json("/LEDMatrixController/setAllLED", {
+        "intensity_r": MATRIX_INTENSITY, "intensity_g": MATRIX_INTENSITY,
+        "intensity_b": MATRIX_INTENSITY})
+    time.sleep(LIGHT_SETTLE_S)
+
+
+def only_led_on(led):
+    """Only ``led`` on: setLEDs switches every other LED off."""
+    client.get_json("/LEDMatrixController/setLEDs", {
+        "ledIds": str(led), "intensity_r": SINGLE_INTENSITY, "intensity_g": SINGLE_INTENSITY,
+        "intensity_b": SINGLE_INTENSITY})
     time.sleep(LIGHT_SETTLE_S)
 
 
@@ -72,6 +89,22 @@ def is_observation_camera(detector):
     return not client.setup()["detectors"][detector]["forAcquisition"]
 
 
+def cameras():
+    """The cameras that give real frames.
+    A camera ImSwitch serves as a mock, or cannot report on, is left out and named in the report.
+    """
+    found = []
+    for detector in client.setup()["detectors"]:
+        status = client.get_json("/SettingsController/getCameraStatus", {"detectorName": detector})
+        if "error" in status or status.get("status") == "error":
+            note(f"{detector} left out: getCameraStatus failed: {status.get('error')}")
+        elif status.get("isMock") or str(status.get("model", "")).lower() == "mock":
+            note(f"{detector} left out: ImSwitch served a mock camera")
+        else:
+            found.append(detector)
+    return found
+
+
 def take_image(detector):
     """One small greyscale frame (PIL) of either kind of camera."""
     if is_observation_camera(detector):
@@ -100,10 +133,18 @@ def brightness(image):
     return ImageStat.Stat(image).mean[0]
 
 
+def exposure_and_gain(detector):
+    """ "exposure 20, gain 0" as the camera reports them; None for a value it does not report."""
+    values = [client.get_json("/SettingsController/getDetectorParameter",
+                              {"detectorName": detector, "parameterName": name})
+              for name in ("exposure", "gain")]
+    return f"exposure {values[0]}, gain {values[1]}"
+
+
 def dark_baseline(detector):
     """Measure the camera noise with the scene unchanged.
 
-    Returns (last frame, noise floor, change one LED must exceed).
+    Returns (last frame, noise floor, change a light must exceed).
     """
     previous = take_image(detector)
     drifts = []
@@ -147,6 +188,52 @@ def auto_expose(detector):
     time.sleep(AUTO_EXPOSURE_RESET_MS / 1000 + 0.1)
 
 
+def sees_one_led(detector, led):
+    """Every LED, then dark, then the one LED on and off, in front of one camera.
+
+    The exposure is set on every LED, the brightest scene, so that no frame saturates;
+    all frames of the camera share it.
+    The observation camera has no live view for the auto exposure to act on.
+    Returns what the camera did not see, as lines; empty when it saw everything.
+    """
+    observation = is_observation_camera(detector)
+    with contextlib.nullcontext() if observation else live_view(detector):
+        every_led_on()
+        if not observation:
+            auto_expose(detector)
+        every = take_image(detector)
+        all_lights_off()
+        dark, noise_floor, required = dark_baseline(detector)
+        only_led_on(led)
+        single = take_image(detector)
+        all_lights_off()
+        off = take_image(detector)
+        settings = exposure_and_gain(detector)
+    attach(f"{detector}: dark", dark)
+    attach(f"{detector}: LED {led} alone", single)
+    attach(f"{detector}: off again", off)
+    attach(f"{detector}: every LED", every)
+    on_change, off_change = image_difference(dark, single), image_difference(dark, off)
+    print(f"\n{detector}: LED {led} on changed {on_change:.2f}, "
+          f"off is {off_change:.2f} from dark, "
+          f"noise floor {noise_floor:.2f}, required {required:.2f}; brightness dark "
+          f"{brightness(dark):.2f}, single {brightness(single):.2f}, "
+          f"all {brightness(every):.2f}; {settings}")
+    missed = []
+    if on_change < required:
+        missed.append(f"{detector}: LED {led} alone changed the image only by {on_change:.2f}, "
+                      f"need >= {required:.2f} (noise floor {noise_floor:.2f}; {settings}) "
+                      f"- setLEDs may not have lit it")
+    if off_change >= required:
+        missed.append(f"{detector}: off is still {off_change:.2f} from dark, "
+                      f"need < {required:.2f}")
+    if brightness(every) <= brightness(single):
+        missed.append(f"{detector}: every LED ({brightness(every):.2f}) is not brighter than "
+                      f"LED {led} alone ({brightness(single):.2f}) - setLEDs may have lit more "
+                      f"than one LED, or the camera saturates")
+    return missed
+
+
 # --- fixtures ---------------------------------------------------------------------------------
 
 @pytest.fixture(scope="module", autouse=True)
@@ -155,32 +242,6 @@ def led_matrix():
         pytest.skip("the setup has no LED matrix")
     if client.get("/LEDMatrixController/setLEDs", params={"ledIds": ""}).status_code == 404:
         pytest.skip("this ImSwitch has no LEDMatrixController/setLEDs")
-
-
-@pytest.fixture(scope="module", params=["acquisition", "observation"])
-def camera(request):
-    """A camera that is ready to take frames; with it a test runs once per kind of camera.
-
-    The test sets the exposure itself, with every LED on, so that no frame saturates.
-    """
-    wanted = request.param == "observation"
-    names = [name for name in client.setup()["detectors"] if is_observation_camera(name) == wanted]
-    if not names:
-        pytest.skip(f"the setup has no {request.param} camera")
-    detector = names[0]
-    status = client.get_json("/SettingsController/getCameraStatus", {"detectorName": detector})
-    if "error" in status or status.get("status") == "error":
-        pytest.skip(f"{detector}: getCameraStatus failed: {status.get('error')}")
-    if status.get("isMock") or str(status.get("model", "")).lower() == "mock":
-        pytest.skip(f"{detector}: ImSwitch served a mock camera")
-
-    all_lights_off()
-    if wanted:
-        yield detector
-    else:
-        with live_view(detector):
-            yield detector
-    all_lights_off()
 
 
 @pytest.fixture
@@ -193,41 +254,14 @@ def dark():
 
 # --- tests ------------------------------------------------------------------------------------
 
-def test_single_led_is_visible_and_dimmer_than_all(camera, dark):
+def test_every_camera_sees_one_led_switch_on_and_off(dark):
+    found = cameras()
+    if not found:
+        pytest.skip("the setup has no camera that gives real frames")
     led, why = central_led()
-
-    # 1. Every LED on; the exposure is set on this, the brightest scene, so nothing saturates.
-    #    The observation camera has no live view for the auto exposure to act on.
-    client.get_json("/LEDMatrixController/setAllLED", {
-        "intensity_r": MATRIX_INTENSITY, "intensity_g": MATRIX_INTENSITY,
-        "intensity_b": MATRIX_INTENSITY})
-    time.sleep(LIGHT_SETTLE_S)
-    if not is_observation_camera(camera):
-        auto_expose(camera)
-    every = take_image(camera)
-
-    # 2. Only the one LED: setLEDs switches every other LED off.
-    client.get_json("/LEDMatrixController/setLEDs", {
-        "ledIds": str(led), "intensity_r": SINGLE_INTENSITY, "intensity_g": SINGLE_INTENSITY,
-        "intensity_b": SINGLE_INTENSITY})
-    time.sleep(LIGHT_SETTLE_S)
-    single = take_image(camera)
-
-    # 3. Dark, at the same exposure: the noise the single LED must exceed.
-    all_lights_off()
-    unlit, noise_floor, required = dark_baseline(camera)
-
-    attach("dark", unlit)
-    attach(f"LED {led} alone", single)
-    attach("every LED", every)
-    change = image_difference(unlit, single)
-    print(f"\nLED {led} ({why}): pixel_change={change:.2f} noise_floor={noise_floor:.2f} "
-          f"required={required:.2f}; brightness dark={brightness(unlit):.2f} "
-          f"single={brightness(single):.2f} all={brightness(every):.2f}")
-    assert change >= required, (
-        f"LED {led} alone changed the image only by {change:.2f}; camera noise floor is "
-        f"{noise_floor:.2f}, need >= {required:.2f} - setLEDs may not have lit it")
-    assert brightness(every) > brightness(single), (
-        f"every LED ({brightness(every):.2f}) is not brighter than LED {led} alone "
-        f"({brightness(single):.2f}) - setLEDs may have lit more than one LED, or the camera "
-        f"saturates")
+    note(f"LED {led}: {why}")
+    missed = []
+    # Every camera is measured before the verdict, so the report has the photos of all of them.
+    for detector in found:
+        missed += sees_one_led(detector, led)
+    assert not missed, "\n".join(missed)

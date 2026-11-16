@@ -1,9 +1,11 @@
-"""The LED matrix can be switched on, and the cameras see its light.
+"""The LED matrix can be switched on and off, and every camera sees it go on and off.
 
 SWITCHES LIGHT.
 
-The matrix counts as visible when it changes the image by more than the camera's own noise:
-take a few dark frames, measure how much they differ, then compare a dark and a lit frame.
+It passes only when every camera of the setup sees both switches.
+On: the image changes by more than the camera's own noise.
+Off: the image is back to dark, within that noise.
+The noise: take a few dark frames and measure how much they differ.
 """
 import base64
 import contextlib
@@ -14,7 +16,7 @@ import pytest
 from PIL import Image, ImageChops, ImageStat
 
 import hil_client as client
-from hil_report import attach
+from hil_report import attach, note
 
 MATRIX_INTENSITY = 500         # per colour, of setAllLED
 LIGHT_SETTLE_S = 0.5           # wait after switching a light, so the next frame shows it
@@ -39,12 +41,39 @@ def all_lights_off():
     time.sleep(LIGHT_SETTLE_S)
 
 
+def set_matrix(on):
+    """Every LED of the matrix on at MATRIX_INTENSITY, or off."""
+    if on:
+        client.get_json("/LEDMatrixController/setAllLED", {
+            "intensity_r": MATRIX_INTENSITY, "intensity_g": MATRIX_INTENSITY,
+            "intensity_b": MATRIX_INTENSITY})
+    else:
+        client.get_json("/LEDMatrixController/setAllLEDOff")
+    time.sleep(LIGHT_SETTLE_S)
+
+
 # --- cameras ----------------------------------------------------------------------------------
 # An acquisition detector ("forAcquisition": true) gives frames only while its live view runs.
 # The observation camera ("forAcquisition": false) gives them at any time.
 
 def is_observation_camera(detector):
     return not client.setup()["detectors"][detector]["forAcquisition"]
+
+
+def cameras():
+    """The cameras that give real frames.
+    A camera ImSwitch serves as a mock, or cannot report on, is left out and named in the report.
+    """
+    found = []
+    for detector in client.setup()["detectors"]:
+        status = client.get_json("/SettingsController/getCameraStatus", {"detectorName": detector})
+        if "error" in status or status.get("status") == "error":
+            note(f"{detector} left out: getCameraStatus failed: {status.get('error')}")
+        elif status.get("isMock") or str(status.get("model", "")).lower() == "mock":
+            note(f"{detector} left out: ImSwitch served a mock camera")
+        else:
+            found.append(detector)
+    return found
 
 
 def take_image(detector):
@@ -70,10 +99,23 @@ def image_difference(first, second):
     return ImageStat.Stat(ImageChops.difference(first, second)).mean[0]
 
 
+def brightness(image):
+    """Mean grey value of a frame."""
+    return ImageStat.Stat(image).mean[0]
+
+
+def exposure_and_gain(detector):
+    """ "exposure 20, gain 0" as the camera reports them; None for a value it does not report."""
+    values = [client.get_json("/SettingsController/getDetectorParameter",
+                              {"detectorName": detector, "parameterName": name})
+              for name in ("exposure", "gain")]
+    return f"exposure {values[0]}, gain {values[1]}"
+
+
 def dark_baseline(detector):
     """Measure the camera noise with the scene unchanged.
 
-    Returns (last frame, noise floor, change the matrix must exceed).
+    Returns (last frame, noise floor, change a light must exceed).
     """
     previous = take_image(detector)
     drifts = []
@@ -117,40 +159,57 @@ def auto_expose(detector):
     time.sleep(AUTO_EXPOSURE_RESET_MS / 1000 + 0.1)
 
 
+@contextlib.contextmanager
+def ready(detector):
+    """The camera ready to take frames inside a ``with`` block.
+
+    An acquisition detector streams, and its exposure is set once, in the dark,
+    so that the dark, the lit and the switched-off frames share it.
+    The observation camera is left alone: it has no live view for the auto exposure to act on.
+    """
+    if is_observation_camera(detector):
+        yield
+        return
+    with live_view(detector):
+        auto_expose(detector)
+        yield
+
+
+def sees_switching(detector, switch):
+    """Switch the light on and off in front of one camera; ``switch(on)`` switches it.
+
+    Returns what the camera did not see, as lines; empty when it saw both.
+    """
+    with ready(detector):
+        dark, noise_floor, required = dark_baseline(detector)
+        switch(True)
+        lit = take_image(detector)
+        switch(False)
+        off = take_image(detector)
+        settings = exposure_and_gain(detector)
+    attach(f"{detector}: dark", dark)
+    attach(f"{detector}: on", lit)
+    attach(f"{detector}: off again", off)
+    on_change, off_change = image_difference(dark, lit), image_difference(dark, off)
+    print(f"\n{detector}: on changed {on_change:.2f}, off is {off_change:.2f} from dark, "
+          f"noise floor {noise_floor:.2f}, required {required:.2f}; brightness dark "
+          f"{brightness(dark):.2f}, on {brightness(lit):.2f}; {settings}")
+    missed = []
+    if on_change < required:
+        missed.append(f"{detector}: on changed the image only by {on_change:.2f}, "
+                      f"need >= {required:.2f} (noise floor {noise_floor:.2f}; {settings})")
+    if off_change >= required:
+        missed.append(f"{detector}: off is still {off_change:.2f} from dark, "
+                      f"need < {required:.2f}")
+    return missed
+
+
 # --- fixtures ---------------------------------------------------------------------------------
 
 @pytest.fixture(scope="module", autouse=True)
 def led_matrix():
     if not client.setup()["LEDMatrixs"]:
         pytest.skip("the setup has no LED matrix")
-
-
-@pytest.fixture(scope="module", params=["acquisition", "observation"])
-def camera(request):
-    """A camera that is ready to take frames; with it a test runs once per kind of camera.
-
-    The exposure is set once, in the dark, so that the dark and the lit frames share it.
-    The observation camera is left alone: it has no live view for the auto exposure to act on.
-    """
-    wanted = request.param == "observation"
-    names = [name for name in client.setup()["detectors"] if is_observation_camera(name) == wanted]
-    if not names:
-        pytest.skip(f"the setup has no {request.param} camera")
-    detector = names[0]
-    status = client.get_json("/SettingsController/getCameraStatus", {"detectorName": detector})
-    if "error" in status or status.get("status") == "error":
-        pytest.skip(f"{detector}: getCameraStatus failed: {status.get('error')}")
-    if status.get("isMock") or str(status.get("model", "")).lower() == "mock":
-        pytest.skip(f"{detector}: ImSwitch served a mock camera")
-
-    all_lights_off()
-    if wanted:
-        yield detector
-    else:
-        with live_view(detector):
-            auto_expose(detector)
-            yield detector
-    all_lights_off()
 
 
 @pytest.fixture
@@ -167,20 +226,12 @@ def test_all_leds_off_is_accepted():
     client.get_json("/LEDMatrixController/setAllLEDOff", timeout=5)
 
 
-def test_led_matrix_is_visible_to_camera(camera, dark):
-    unlit, noise_floor, required = dark_baseline(camera)
-
-    client.get_json("/LEDMatrixController/setAllLED", {
-        "intensity_r": MATRIX_INTENSITY, "intensity_g": MATRIX_INTENSITY,
-        "intensity_b": MATRIX_INTENSITY})
-    time.sleep(LIGHT_SETTLE_S)
-    lit = take_image(camera)
-
-    attach("dark", unlit)
-    attach("bright", lit)
-    change = image_difference(unlit, lit)
-    print(f"\nLED matrix @ {MATRIX_INTENSITY}: pixel_change={change:.2f} "
-          f"noise_floor={noise_floor:.2f} required={required:.2f}")
-    assert lit.getextrema()[1] > 0, "the LED matrix is on but every pixel is still 0"
-    assert change >= required, (f"LED matrix: image changed only by {change:.2f}; camera noise "
-                                f"floor is {noise_floor:.2f}, need >= {required:.2f}")
+def test_every_camera_sees_the_matrix_switch_on_and_off(dark):
+    found = cameras()
+    if not found:
+        pytest.skip("the setup has no camera that gives real frames")
+    missed = []
+    # Every camera is measured before the verdict, so the report has the photos of all of them.
+    for detector in found:
+        missed += sees_switching(detector, set_matrix)
+    assert not missed, f"LED matrix @ {MATRIX_INTENSITY}:\n" + "\n".join(missed)

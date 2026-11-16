@@ -33,6 +33,7 @@ STOP_TIMEOUT = 60   # seconds a stopped calibration may take to end
 # The teardown turns every light to 0, so a kept value would be 0 in the next run: a black camera.
 TEST_SETTINGS = {"manualFocusFallback": False, "illuminationValue": 500}
 BACKUP_NAME = "setup_before_frame_calibration.json"
+CALIBRATION_PDF = "frame_calibration.pdf"  # the calibration's own report, in the report folder
 ENDED = ("finished", "failed", "aborted")
 
 
@@ -75,7 +76,11 @@ def collect_report(run):
     assert status()["startedAt"] == run["startedAt"], "calibration changed during PDF export"
     assert len(PdfReader(io.BytesIO(response.content)).pages), "calibration PDF has no pages"
     hil_report.append_pdf("FRAME calibration (original report)", response.content)
-    hil_report.note("Its own report follows on the last pages.")
+    # Also on its own, so it is in the report folder even when hil-report.pdf cannot be written.
+    folder = Path(os.environ.get("HIL_REPORT_DIR", "."))
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / CALIBRATION_PDF).write_bytes(response.content)
+    hil_report.note(f"Its own report follows on the last pages, and is saved as {CALIBRATION_PDF}.")
 
 
 def show_progress(steps, shown, live):

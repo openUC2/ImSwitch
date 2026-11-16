@@ -12,16 +12,22 @@ import hil_client as client
 ORDER = [
     "board_link", "firmware_server",                 # 1. the boards and their firmware versions
     "camera_capture",                                # 2. the cameras
-    "motor_axis_move",                               # 3. the motors, then homing: the stage is
-                                                     #    out of the light path for the tests below
-    "lightsource", "ledmatrix", "ledmatrix_single",  # 4. the lights
+    "motor_axis_move",                               # 3. the motors: 10 µm steps,
+    "stage_homing",                                  #    homing, ending at the transport position,
+    "motor_motion_camera",                           #    then moves the camera sees
+    "lightsource", "ledmatrix", "ledmatrix_single",  # 4. the lights, at the transport position
     "frame_calibration",                             # 5. the calibration
 ]
-# A test does not start when one of these failed before it. firmware_server is in no list:
-# a board on another firmware version fails that test, but can still move and be calibrated.
+# A test does not start when one of these failed before it.
+# firmware_server is in no list: a board on another firmware version fails that test,
+# but can still move and be calibrated.
+# Only --sync-firmware stops every test, when flashing fails (__main__.py).
 NEEDS = {
-    "frame_calibration": ["board_link", "motor_axis_move", "camera_capture",
-                          "lightsource", "ledmatrix", "ledmatrix_single"],
+    "stage_homing": ["motor_axis_move"],
+    # Its first move is absolute, so the stage must be homed.
+    "motor_motion_camera": ["motor_axis_move", "stage_homing"],
+    "frame_calibration": ["board_link", "camera_capture", "motor_axis_move", "stage_homing",
+                          "motor_motion_camera", "lightsource", "ledmatrix", "ledmatrix_single"],
 }
 
 _failed = []  # the names of the tests that failed so far in this run

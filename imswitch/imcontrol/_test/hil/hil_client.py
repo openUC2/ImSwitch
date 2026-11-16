@@ -68,10 +68,10 @@ def setup_file():
 def setup():
     """The content of setup_file(), as a dict.
 
-    ImSwitch parses the file before it answers, so a field the file leaves out comes back with
-    ImSwitch's default (e.g. "forAcquisition": false). The sections the tests use are
-    "detectors", "lasers", "LEDMatrixs", "positioners" and "objective". A section the rig does
-    not have is empty or None.
+    ImSwitch parses the file before it answers.
+    So a field the file leaves out comes back with ImSwitch's default ("forAcquisition": false).
+    The tests use "detectors", "lasers", "LEDMatrixs", "positioners" and "objective".
+    A section the rig does not have is empty or None.
     """
     return get_json("/UC2ConfigController/readSetupFile", {"setupFileName": setup_file()})
 
@@ -89,8 +89,8 @@ def wait_until(check, timeout, interval=0.1):
 def parametrize_from_rig(argnames, fetch, reason):
     """``pytest.mark.parametrize(argnames, fetch())`` for values the rig reports, e.g. its axes.
 
-    pytest reads the values while it collects the tests, where an error would stop the whole
-    run. So without a server, or with nothing to test, the test is skipped with ``reason``.
+    pytest reads the values while it collects the tests, where an error would stop the whole run.
+    So without a server, or with nothing to test, the test is skipped with ``reason``.
     """
     try:
         values = fetch()

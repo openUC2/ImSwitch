@@ -1,4 +1,6 @@
-"""Every laser/LED switches through the API, and every LED reaches the cameras. SWITCHES LIGHT.
+"""Each laser and LED can be switched on and off, and the cameras see the light of each LED.
+
+SWITCHES LIGHT.
 
 A light counts as visible when it changes the image by more than the camera's own noise:
 take a few dark frames, measure how much they differ, then compare a dark and a lit frame.
@@ -33,7 +35,8 @@ def light_sources():
 
 
 def leds():
-    """Names of the LEDs. The lasers are left out: on these rigs their beam misses the sensor.
+    """Names of the LEDs.
+    The lasers are left out: on these rigs their beam misses the sensor.
 
     The setup lists lasers and LEDs alike under "lasers", so only the name tells them apart.
     """
@@ -60,8 +63,8 @@ def all_lights_off():
 
 
 # --- cameras ----------------------------------------------------------------------------------
-# An acquisition detector ("forAcquisition": true in the setup) gives frames only while its
-# live view runs. The observation camera ("forAcquisition": false) gives them at any time.
+# An acquisition detector ("forAcquisition": true) gives frames only while its live view runs.
+# The observation camera ("forAcquisition": false) gives them at any time.
 
 def is_observation_camera(detector):
     return not client.setup()["detectors"][detector]["forAcquisition"]
@@ -143,8 +146,8 @@ def auto_expose(detector):
 def camera(request):
     """A camera that is ready to take frames; with it a test runs once per kind of camera.
 
-    The exposure is set once, in the dark, so that the dark and the lit frames share it. The
-    observation camera is left alone: it has no live view for the auto exposure to act on.
+    The exposure is set once, in the dark, so that the dark and the lit frames share it.
+    The observation camera is left alone: it has no live view for the auto exposure to act on.
     """
     wanted = request.param == "observation"
     names = [name for name in client.setup()["detectors"] if is_observation_camera(name) == wanted]

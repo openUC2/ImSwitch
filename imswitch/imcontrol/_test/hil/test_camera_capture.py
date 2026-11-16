@@ -1,9 +1,11 @@
-"""Every configured camera returns a frame, at the resolution it reports. Only reads.
+"""Each camera takes a picture, and the picture is as large as the camera says its sensor is.
+
+Only reads.
 
 ImSwitch reads the two kinds of camera in different ways:
-- an acquisition detector ("forAcquisition": true in the setup) with snapNumpyToFastAPI, which
-  only works while its live view runs; the runner (__main__.py) has started it;
-- the observation camera ("forAcquisition": false) with snapOverviewImage, at any time.
+- An acquisition detector ("forAcquisition": true in the setup) with snapNumpyToFastAPI.
+  That only works while its live view runs; the runner (__main__.py) has started it.
+- The observation camera ("forAcquisition": false) with snapOverviewImage, at any time.
 """
 import base64
 import io

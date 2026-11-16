@@ -8,8 +8,10 @@
 
 TEST is the name of a test file without "test_" and ".py": board_link is test_board_link.py.
 Without TEST every test runs, which MOVES THE STAGE AND SWITCHES LIGHT.
-REPORT_DIR receives junit.xml, report.html and summary.md; both reports name the ImSwitch
-setup file (ImSwitchConfig/imcontrol_setups/<name>.json) the rig ran with.
+REPORT_DIR receives hil-report.pdf and summary.md;
+both name the ImSwitch setup file (ImSwitchConfig/imcontrol_setups/<name>.json) the rig ran with.
+Use a new folder for every run: only these two files are replaced,
+a file a test saved there in an older run stays.
 
 Exit code: 0 all passed, 1 a test failed, 2 the tests could not run.
 The test rig (os-rpi) runs exactly this command inside the ImSwitch container.
@@ -41,25 +43,24 @@ def can_snap(detector, for_acquisition):
         if for_acquisition:
             return client.get("/RecordingController/snapNumpyToFastAPI", params={
                 "detectorName": detector, "resizeFactor": 0.1}).status_code == 200
-        # 400: no observation camera is connected. Waiting does not change that, and the
-        # tests that need it skip.
+        # 400: no observation camera is connected.
+        # Waiting does not change that, and the tests that need it skip.
         return client.post("/ExperimentController/snapOverviewImage", timeout=30, params={
             "slot_id": "1", "camera_name": "hil_ready_check"}).status_code in (200, 400)
     except requests.RequestException:
         return False
 
 
-def why_not_ready():
-    """Wait for ImSwitch and a readable setup. Returns None, or what is missing."""
-    if not client.wait_until(client.reachable, READY_API_TIMEOUT, interval=5):
-        return f"ImSwitch did not answer at {client.IMSWITCH_URL} within {READY_API_TIMEOUT}s"
-    client.setup()  # A readable setup is needed to collect the tests.
-    return None
+def wait_for_imswitch():
+    """Wait until ImSwitch answers and its setup can be read; the tests are collected from it."""
+    assert client.wait_until(client.reachable, READY_API_TIMEOUT, interval=5), (
+        f"ImSwitch did not answer at {client.IMSWITCH_URL} within {READY_API_TIMEOUT}s")
+    client.setup()
 
 
 def prepare_cameras():
-    """Give cameras time to start; record failures without blocking calibration."""
-    problems = []
+    """Give the cameras time to start. Returns {camera: what went wrong}, empty when all run."""
+    problems = {}
     for name, detector in client.setup()["detectors"].items():
         try:
             acquisition = detector["forAcquisition"]
@@ -70,14 +71,21 @@ def prepare_cameras():
             assert client.wait_until(lambda: can_snap(name, acquisition),
                                      READY_DETECTOR_TIMEOUT, interval=5), "no frame before timeout"
         except (requests.RequestException, AssertionError) as error:
-            problems.append(f"{name}: {error}")
+            problems[name] = str(error)
     return problems
 
+
+def give_up(report_dir, problem):
+    """Write a report that only says why the tests did not run."""
+    print(f"[hil] not running the tests: {problem}")
+    hil_report.record_problem("startup", problem)
+    hil_report.write_reports(report_dir, "unavailable")
+    return COULD_NOT_RUN
 
 
 def main():
     parser = argparse.ArgumentParser(prog="python -m imswitch.imcontrol._test.hil")
-    parser.add_argument("report_dir", help="folder for junit.xml, report.html and summary.md")
+    parser.add_argument("report_dir", help="folder for hil-report.pdf and summary.md")
     parser.add_argument("tests", nargs="*",
                         help="tests, e.g. board_link camera_capture; default all")
     parser.add_argument("--sync-firmware", action="store_true",
@@ -88,50 +96,43 @@ def main():
     report_dir.mkdir(parents=True, exist_ok=True)
     os.environ["HIL_REPORT_DIR"] = str(report_dir.resolve())
     hil_report.reset()
-    # A reused local report directory must not expose artifacts from an older run.
-    for name in ("hil-report.pdf", "test-report.pdf", "calibration-report.pdf",
-                 "calibration-status.json", "setup_before_frame_calibration.json", "report-error.txt",
-                 "report.html", "summary.md", "junit.xml"):
+    # A run that dies must not leave the report of an older run behind.
+    for name in ("hil-report.pdf", "summary.md"):
         (report_dir / name).unlink(missing_ok=True)
+    # The rig (os-rpi) passes the pallet and images it swapped in; a laptop run has none.
+    if os.environ.get("HIL_PALLET"):
+        print(f"[hil] pallet under test:\n{os.environ['HIL_PALLET']}", flush=True)
     files = [HERE / f"test_{name}.py" for name in args.tests]
     unknown = [name for name, file in zip(args.tests, files) if not file.is_file()]
     if unknown:
         known = " ".join(sorted(file.stem[len("test_"):] for file in HERE.glob("test_*.py")))
-        problem = f"no such test: {' '.join(unknown)}. There are: {known}"
-        hil_report.record_problem("startup", problem)
-        hil_report.write_reports(report_dir, "unavailable")
-        return COULD_NOT_RUN
+        return give_up(report_dir, f"no such test: {' '.join(unknown)}. There are: {known}")
 
     try:
-        problem = why_not_ready()
-        if problem is None:
-            print(f"[hil] setup: {client.setup_file()}", flush=True)
-        if problem is None and args.sync_firmware:
+        wait_for_imswitch()
+        print(f"[hil] setup: {client.setup_file()}", flush=True)
+        if args.sync_firmware:
             firmware_sync.sync()
     except (requests.RequestException, AssertionError, firmware_sync.SyncFailed) as error:
-        problem = str(error)
-    if problem:
-        print(f"[hil] not running the tests: {problem}")
-        hil_report.record_problem("startup", problem)
-        hil_report.write_reports(report_dir, "unavailable")
-        return COULD_NOT_RUN
+        return give_up(report_dir, str(error))
 
-    for problem in prepare_cameras():
-        hil_report.record_problem(f"camera preparation: {problem.split(':', 1)[0]}", problem)
+    # A camera that does not start is a problem in the report; the tests run anyway.
+    for name, error in prepare_cameras().items():
+        hil_report.record_problem(f"camera preparation: {name}", error)
 
     code = pytest.main(
         [*[str(file) for file in files or [HERE]],
-         "-c", str(HERE / "pytest.ini"), "-ra", f"--junitxml={report_dir / 'junit.xml'}"],
+         "-c", str(HERE / "pytest.ini"), "-ra"],
         plugins=[hil_report.ReportPlugin(report_dir, client.setup_file())])
 
     counts = hil_report.counts()
     print("[hil] " + " · ".join(f"{n} {status}" for status, n in counts.items()))
     if hil_report.report_error:
         return COULD_NOT_RUN
-    if code == pytest.ExitCode.TESTS_FAILED or counts["failed"] or counts["error"]:
+    if counts["failed"] or counts["error"]:
         return FAILED
     if code != pytest.ExitCode.OK:
-        return COULD_NOT_RUN
+        return COULD_NOT_RUN  # e.g. a test file that does not import
     if not counts["passed"]:
         print("[hil] every test skipped: nothing on this rig was actually tested")
         return COULD_NOT_RUN

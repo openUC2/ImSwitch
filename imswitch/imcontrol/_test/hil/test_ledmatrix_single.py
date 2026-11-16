@@ -1,9 +1,14 @@
-"""One LED of the matrix lights alone, and the cameras see it. SWITCHES LIGHT.
+"""One LED of the matrix can be lit on its own.
+The cameras see it, and it is dimmer than the whole matrix.
 
-setLEDs lights exactly the LEDs it is given. One LED must change the image by more than the
-camera's own noise, and the whole matrix must give a brighter image than that one LED.
-The LED is the one closest to the optical axis (from the DPC LED layout), so that it lights the
-sample in brightfield; without the DPC controller it is the centre of the setup's Nx x Ny grid.
+SWITCHES LIGHT.
+
+setLEDs lights exactly the LEDs it is given.
+One LED must change the image by more than the camera's own noise,
+and the whole matrix must give a brighter image than that one LED.
+The LED is the one closest to the optical axis (from the DPC LED layout),
+so that it lights the sample in brightfield;
+without the DPC controller it is the centre of the setup's Nx x Ny grid.
 """
 import base64
 import contextlib
@@ -43,9 +48,9 @@ def all_lights_off():
 def central_led():
     """Chain index of the LED closest to the optical axis.
 
-    The DPC controller knows every LED's illumination NA; the smallest NA is the most central
-    LED. Without it, the middle of the Nx x Ny grid the setup declares (ImSwitch's default
-    layout) is taken; its chain order is not known here, so that LED may lie off centre.
+    The DPC controller knows every LED's illumination NA; the smallest NA is the most central LED.
+    Without it, the LED in the middle of the setup's Nx x Ny grid is taken.
+    The order of the LEDs in the chain is not known here, so that LED may lie off centre.
     """
     response = client.get("/DPCController/get_led_layout")
     if response.status_code == 200:
@@ -60,8 +65,8 @@ def central_led():
 
 
 # --- cameras ----------------------------------------------------------------------------------
-# An acquisition detector ("forAcquisition": true in the setup) gives frames only while its
-# live view runs. The observation camera ("forAcquisition": false) gives them at any time.
+# An acquisition detector ("forAcquisition": true) gives frames only while its live view runs.
+# The observation camera ("forAcquisition": false) gives them at any time.
 
 def is_observation_camera(detector):
     return not client.setup()["detectors"][detector]["forAcquisition"]

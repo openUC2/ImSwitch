@@ -1,8 +1,10 @@
-"""Bring every board to the firmware server's version. FLASHES FIRMWARE.
+"""Bring every board to the firmware server's version.
 
-A sync, not an update: a board with a newer developer build is flashed back as well. The
-flashing itself is ImSwitch's own firmware update (startFirmwareUpdate), which checks every
-image and counts a board as done only when it reports the new version.
+FLASHES FIRMWARE.
+
+A sync, not an update: a board with a newer developer build is flashed back as well.
+The flashing itself is ImSwitch's own firmware update (startFirmwareUpdate),
+which checks every image and counts a board as done only when it reports the new version.
 """
 import time
 

@@ -1,4 +1,6 @@
-"""The LED matrix answers, and its light reaches the cameras. SWITCHES LIGHT.
+"""The LED matrix can be switched on, and the cameras see its light.
+
+SWITCHES LIGHT.
 
 The matrix counts as visible when it changes the image by more than the camera's own noise:
 take a few dark frames, measure how much they differ, then compare a dark and a lit frame.
@@ -38,8 +40,8 @@ def all_lights_off():
 
 
 # --- cameras ----------------------------------------------------------------------------------
-# An acquisition detector ("forAcquisition": true in the setup) gives frames only while its
-# live view runs. The observation camera ("forAcquisition": false) gives them at any time.
+# An acquisition detector ("forAcquisition": true) gives frames only while its live view runs.
+# The observation camera ("forAcquisition": false) gives them at any time.
 
 def is_observation_camera(detector):
     return not client.setup()["detectors"][detector]["forAcquisition"]
@@ -127,8 +129,8 @@ def led_matrix():
 def camera(request):
     """A camera that is ready to take frames; with it a test runs once per kind of camera.
 
-    The exposure is set once, in the dark, so that the dark and the lit frames share it. The
-    observation camera is left alone: it has no live view for the auto exposure to act on.
+    The exposure is set once, in the dark, so that the dark and the lit frames share it.
+    The observation camera is left alone: it has no live view for the auto exposure to act on.
     """
     wanted = request.param == "observation"
     names = [name for name in client.setup()["detectors"] if is_observation_camera(name) == wanted]
@@ -162,8 +164,7 @@ def dark():
 # --- tests ------------------------------------------------------------------------------------
 
 def test_all_leds_off_is_accepted():
-    response = client.get("/LEDMatrixController/setAllLEDOff", timeout=5)
-    assert response.status_code == 200, f"setAllLEDOff -> {response.status_code}: {response.text}"
+    client.get_json("/LEDMatrixController/setAllLEDOff", timeout=5)
 
 
 def test_led_matrix_is_visible_to_camera(camera, dark):

@@ -1,7 +1,10 @@
-"""The firmware server is usable and every board runs its version. Only reads, flashes nothing.
+"""The firmware server can be reached and has firmware files on it,
+and each board on the CAN bus runs the version the server has for it.
 
-checkFirmwareUpdates is ImSwitch's own comparison of the server's version.json with what each
-board reports. To flash before the tests, start the suite with --sync-firmware.
+Only reads, flashes nothing.
+
+checkFirmwareUpdates is how ImSwitch compares the server's version.json with each board.
+To flash before the tests, start the suite with --sync-firmware.
 """
 import pytest
 

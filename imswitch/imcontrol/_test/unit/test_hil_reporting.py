@@ -36,33 +36,43 @@ def pdf_bytes(text="Calibration evidence"):
     return data.getvalue()
 
 
-def test_pdf_merge_keeps_original_pages_and_long_failures(tmp_path):
-    original = tmp_path / "calibration-report.pdf"
-    original.write_bytes(pdf_bytes())
+def test_pdf_has_the_failure_the_note_and_the_appended_pdf(tmp_path):
     results = {"test_camera.py::test_capture": {
-        "status": "failed", "duration": 2., "details": "Diagnostic line\n" * 140 + "LAST ERROR LINE", "output": ""}}
-    hil_pdf.write_pdf(tmp_path, "FRAME.json", results, {},
-                      {"state": "finished", "pdf": str(original)}, 0)
+        "status": "failed", "duration": 2., "details": "Diagnostic line\n" * 140 + "E   LAST ERROR LINE"}}
+    hil_pdf.write_pdf(tmp_path / "hil-report.pdf", "FRAME.json", 0, results,
+                      {"test_camera.py": "Every camera returns a frame."}, {},
+                      {"test_camera.py": ["A NOTE OF THE TEST"]},
+                      [("Calibration", pdf_bytes())])
     reader = PdfReader(tmp_path / "hil-report.pdf")
-    assert len(reader.pages) > 3
-    text = "\n".join(page.extract_text() for page in reader.pages)
-    assert "LAST ERROR LINE" in text and "TEST RESULT: FAILED" in text
+    text = "\n".join(page.extract_text() for page in reader.pages[:-1])
+    assert "LAST ERROR LINE" in text and "Every camera returns a frame." in text
+    assert "A NOTE OF THE TEST" in text
+    assert "Diagnostic line" not in text  # only what went wrong, not the whole traceback
     assert "Calibration evidence" in reader.pages[-1].extract_text()
     assert len(reader.outline) == 2
+    assert [file.name for file in tmp_path.iterdir()] == ["hil-report.pdf"]
 
 
-def test_old_pdf_is_not_appended_without_current_run(tmp_path):
-    (tmp_path / "calibration-report.pdf").write_bytes(pdf_bytes("OLD RUN"))
+def test_what_a_test_checks_is_the_whole_first_paragraph_of_its_docstring():
+    hil_report.reset()
+    module = SimpleNamespace(__doc__="Every axis moves 10 um\nand steps back.\n\nMOVES HARDWARE.")
+    hil_report.ReportPlugin("out", "FRAME.json").pytest_itemcollected(
+        SimpleNamespace(nodeid="test_motor.py::test_it", module=module))
+    assert hil_report._descriptions["test_motor.py"] == "Every axis moves 10 um and steps back."
+
+
+def test_report_without_appended_pdf_has_only_the_test_pages(tmp_path):
     hil_report.reset()
     hil_report.record_problem("startup", "server unavailable")
     hil_report.write_reports(tmp_path, "unavailable")
-    text = "".join(p.extract_text() for p in PdfReader(tmp_path / "hil-report.pdf").pages)
-    assert "OLD RUN" not in text and "No calibration PDF" in text
+    reader = PdfReader(tmp_path / "hil-report.pdf")
+    assert "server unavailable" in "".join(page.extract_text() for page in reader.pages)
+    assert len(reader.outline) == 1
+    assert sorted(file.name for file in tmp_path.iterdir()) == ["hil-report.pdf", "summary.md"]
 
 
-def test_pdf_failure_preserves_other_reports_and_removes_stale_pdf(tmp_path, monkeypatch):
+def test_pdf_failure_still_writes_the_summary(tmp_path, monkeypatch):
     hil_report.reset()
-    (tmp_path / "hil-report.pdf").write_bytes(pdf_bytes("OLD RUN"))
     def fail(*args):
         raise ValueError("broken PDF")
     monkeypatch.setattr(hil_pdf, "write_pdf", fail)
@@ -70,7 +80,6 @@ def test_pdf_failure_preserves_other_reports_and_removes_stale_pdf(tmp_path, mon
     assert hil_report.report_error == "broken PDF"
     assert not (tmp_path / "hil-report.pdf").exists()
     assert "broken PDF" in (tmp_path / "summary.md").read_text()
-    assert (tmp_path / "report.html").exists()
 
 
 def test_stop_timeout_is_an_error(calibration_module, monkeypatch):
@@ -90,7 +99,7 @@ def test_poll_waits_for_thread_after_terminal_status(calibration_module, monkeyp
     monkeypatch.setattr(m, "running", lambda: next(states))
     monkeypatch.setattr(m.time, "sleep", lambda _: None)
     run = {}
-    assert m.run_calibration(run)["state"] == "finished"
+    assert m.run_calibration(run, lambda line: None)["state"] == "finished"
     assert run == {"accepted": True, "startedAt": "now"}
 
 
@@ -109,17 +118,36 @@ def test_failed_calibration_pdf_is_collected(calibration_module, monkeypatch, tm
     monkeypatch.setattr(m, "status", lambda: {"startedAt": "ours", "state": "failed", "message": "no focus"})
     monkeypatch.setattr(m.client, "get", lambda *a, **k: SimpleNamespace(status_code=200, content=pdf_bytes()))
     m.collect_report({"startedAt": "ours"})
-    assert hil_report.calibration["state"] == "failed"
-    assert (tmp_path / "calibration-report.pdf").exists()
+    (title, data), = hil_report._appended
+    assert data.startswith(b"%PDF-")
+    (notes,) = hil_report._notes.values()
+    assert notes[0] == "The calibration ended as failed: no focus"
+    assert "failed: no focus" in hil_report.summary("FRAME.json")
+    assert not list(tmp_path.iterdir())  # kept for hil-report.pdf, not written as a file
 
 
-def test_calibration_is_last_without_failure_guard():
+def test_calibration_progress_is_one_line_per_start_and_end(calibration_module):
+    steps = [{"name": "homing", "title": "Home", "status": "ok", "detail": "homed Z", "seconds": 12.4,
+              "warnings": ["slow"]},
+             {"name": "objective0", "title": "First objective", "status": "running", "detail": "",
+              "seconds": None, "warnings": []},
+             {"name": "save", "title": "Save", "status": "pending", "detail": "", "seconds": None,
+              "warnings": []}]
+    lines, shown = [], set()
+    calibration_module.show_progress(steps, shown, lines.append)
+    calibration_module.show_progress(steps, shown, lines.append)  # nothing changed: no new line
+    assert lines == ["calibration  1/3  Home ...", "calibration  1/3  ok (12 s) homed Z",
+                     "                  warning: slow", "calibration  2/3  First objective ..."]
+
+
+def test_tests_run_in_order_and_unlisted_ones_last():
     conf = load("hil_hooks", HIL / "conftest.py")
     items = [SimpleNamespace(nodeid=f"test_{name}.py::test_it", fspath=HIL / f"test_{name}.py",
-                             add_marker=lambda _: None) for name in ("frame_calibration", "new_test", "board_link")]
+                             add_marker=lambda _: None)
+             for name in ("frame_calibration", "new_test", "motor_axis_move", "board_link")]
     conf.pytest_collection_modifyitems(items)
-    assert conf.name_of(items[-1]) == "frame_calibration"
-    assert not hasattr(conf, "pytest_runtest_setup")
+    assert [conf.name_of(item) for item in items] == [
+        "board_link", "motor_axis_move", "frame_calibration", "new_test"]
 
 
 def test_calibration_summary_overflow_keeps_last_step(tmp_path):
@@ -136,8 +164,8 @@ def test_calibration_summary_overflow_keeps_last_step(tmp_path):
 def test_camera_preparation_failure_does_not_prevent_test_execution(tmp_path, monkeypatch):
     main = load("hil_main", HIL / "__main__.py")
     monkeypatch.setattr(sys, "argv", ["hil", str(tmp_path)])
-    monkeypatch.setattr(main, "why_not_ready", lambda: None)
-    monkeypatch.setattr(main, "prepare_cameras", lambda: ["camera A: no frame"])
+    monkeypatch.setattr(main, "wait_for_imswitch", lambda: None)
+    monkeypatch.setattr(main, "prepare_cameras", lambda: {"camera A": "no frame"})
     monkeypatch.setattr(main.client, "setup_file", lambda: "FRAME.json")
     called = []
     def tests(*args, **kwargs):
@@ -151,51 +179,76 @@ def test_camera_preparation_failure_does_not_prevent_test_execution(tmp_path, mo
 
 def test_unreachable_server_still_writes_report(tmp_path, monkeypatch):
     main = load("hil_main", HIL / "__main__.py")
-    (tmp_path / "calibration-report.pdf").write_bytes(pdf_bytes("old calibration"))
-    (tmp_path / "report-error.txt").write_text("old error")
+    (tmp_path / "hil-report.pdf").write_bytes(pdf_bytes("OLD RUN"))
     monkeypatch.setattr(sys, "argv", ["hil", str(tmp_path)])
-    monkeypatch.setattr(main, "why_not_ready", lambda: "server unavailable")
+    def unavailable():
+        raise AssertionError("server unavailable")
+    monkeypatch.setattr(main, "wait_for_imswitch", unavailable)
     assert main.main() == main.COULD_NOT_RUN
-    assert (tmp_path / "hil-report.pdf").exists()
-    assert not (tmp_path / "calibration-report.pdf").exists()
-    assert not (tmp_path / "report-error.txt").exists()
+    text = "".join(page.extract_text() for page in PdfReader(tmp_path / "hil-report.pdf").pages)
+    assert "server unavailable" in text and "OLD RUN" not in text
 
 
-def test_cleanup_error_does_not_prevent_lights_off_or_export(calibration_module, tmp_path, monkeypatch):
+def test_failed_calibration_is_stopped_and_its_report_collected(calibration_module, monkeypatch):
     m = calibration_module
-    monkeypatch.setenv("HIL_REPORT_DIR", str(tmp_path))
-    monkeypatch.setattr(m.client, "setup", lambda: {"positioners": {"stage": {}}, "lasers": {}, "LEDMatrixs": {}})
-    monkeypatch.setattr(m.client, "get", lambda *a, **k: SimpleNamespace(status_code=200))
-    monkeypatch.setattr(m.client, "json_of", lambda _: {"target": "plate", **m.TEST_SETTINGS})
-    monkeypatch.setattr(m, "running", lambda: False)
-    monkeypatch.setattr(m, "save_setup_backup", lambda: None)
-    monkeypatch.setattr(m, "set_settings", lambda _: None)
     called = []
-    def run(ctx):
-        ctx.update(accepted=True, startedAt="ours")
+    def fails(run, live):
+        run.update(accepted=True, startedAt="ours")
         raise AssertionError("original failure")
-    def stop():
-        raise AssertionError("stop timeout")
-    monkeypatch.setattr(m, "run_calibration", run)
-    monkeypatch.setattr(m, "stop_and_wait", stop)
+    monkeypatch.setattr(m, "run_calibration", fails)
+    monkeypatch.setattr(m, "stop_and_wait", lambda: called.append("stop"))
+    monkeypatch.setattr(m, "collect_report", lambda run: called.append("pdf"))
     monkeypatch.setattr(m, "all_lights_off", lambda: called.append("off"))
-    monkeypatch.setattr(m, "collect_report", lambda _: called.append("pdf"))
-    monkeypatch.setattr(m, "attach_figures", lambda _: called.append("figures"))
-    with pytest.raises(RuntimeError, match="original failure.*stop timeout"):
-        m.calibration.__wrapped__()
-    assert called == ["off", "pdf", "figures"]
+
+    # As pytest does it: the fixtures start in the order of ``calibration``'s arguments,
+    # and end in the reverse order.
+    run_fixture = m.run.__wrapped__()
+    lights_fixture = m.lights_off_afterwards.__wrapped__()
+    run = next(run_fixture)
+    next(lights_fixture)
+    with pytest.raises(AssertionError, match="original failure"):
+        m.calibration.__wrapped__(lambda line: None, run, None, None)
+    for fixture in (lights_fixture, run_fixture):
+        with pytest.raises(StopIteration):
+            next(fixture)
+    assert called == ["stop", "off", "pdf"]
 
 
-def test_pytest_continues_to_calibration_after_failure(tmp_path):
+def test_a_refused_calibration_is_not_stopped_and_gives_no_report(calibration_module, monkeypatch):
+    m = calibration_module
+    def refused(run, live):
+        raise AssertionError("startFrameCalibration refused")
+    monkeypatch.setattr(m, "run_calibration", refused)
+    monkeypatch.setattr(m, "stop_and_wait", lambda: pytest.fail("stopped another run"))
+    monkeypatch.setattr(m, "collect_report", lambda run: pytest.fail("took another run's report"))
+    run_fixture = m.run.__wrapped__()
+    run = next(run_fixture)
+    with pytest.raises(AssertionError, match="refused"):
+        m.calibration.__wrapped__(lambda line: None, run, None, None)
+    with pytest.raises(StopIteration):
+        next(run_fixture)
+
+
+@pytest.mark.parametrize("failing, watched, runs", [
+    ("firmware_server", "frame_calibration", True),   # another firmware version can still calibrate
+    ("board_link", "frame_calibration", False),
+    ("motor_axis_move", "frame_calibration", False),
+])
+def test_a_test_does_not_start_after_a_failure_it_depends_on(tmp_path, failing, watched, runs):
     import os
     import subprocess
     conf = (HIL / "conftest.py").read_text()
     (tmp_path / "conftest.py").write_text(conf + "\nclient.reachable = lambda: True\n")
-    (tmp_path / "test_board_link.py").write_text("def test_board():\n    assert False, 'offline simulated failure'\n")
-    (tmp_path / "test_frame_calibration.py").write_text(
-        "from pathlib import Path\ndef test_calibration():\n    Path(__file__).with_suffix('.ran').touch()\n")
+    (tmp_path / f"test_{failing}.py").write_text("def test_it():\n    assert False, 'offline simulated failure'\n")
+    (tmp_path / f"test_{watched}.py").write_text(
+        "from pathlib import Path\ndef test_it(live):\n    live('LIVE LINE')\n"
+        "    Path(__file__).with_suffix('.ran').touch()\n")
     env = dict(os.environ, PYTHONPATH=str(HIL), PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
-    result = subprocess.run([sys.executable, "-m", "pytest", str(tmp_path), "--confcutdir", str(tmp_path), "-q"],
+    result = subprocess.run([sys.executable, "-m", "pytest", str(tmp_path), "--confcutdir", str(tmp_path), "-q", "-rs"],
                             env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert (tmp_path / "test_frame_calibration.ran").exists()
+    assert (tmp_path / f"test_{watched}.ran").exists() == runs
+    # live() prints although pytest captures the output of a passing test
+    assert ("LIVE LINE" in result.stdout) == runs
+    if not runs:
+        assert f"not started, because {failing} failed" in result.stdout

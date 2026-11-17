@@ -227,14 +227,14 @@ def test_calibration_finishes(calibration):
 
 def test_every_step_succeeds(calibration):
     """Optional steps may fail without stopping the calibration; this test lists them."""
-    failed = [f"{step['title']}: {step['detail']}" for step in calibration["steps"]
-              if step["status"] in ("failed", "aborted")]
-    assert not failed, "steps that failed:\n" + "\n".join(failed)
-    warned = [f"{step['title']}: {'; '.join(step['warnings'])}" for step in calibration["steps"]
-              if step["warnings"]]
-    if warned:
-        print("\nwarnings:\n" + "\n".join(warned))
+    # Notes, not prints: a print only shows when the test fails.
+    for step in calibration["steps"]:
+        if step["warnings"]:
+            hil_report.note(f"Warning in {step['title']}: {'; '.join(step['warnings'])}")
     # A skipped step did not test its part of the rig, e.g. the turret without a second objective.
     skipped = [step["title"] for step in calibration["steps"] if step["status"] == "skipped"]
     if skipped:
-        print("\nskipped, so not tested:\n" + "\n".join(skipped))
+        hil_report.note(f"Skipped by the calibration, so not tested: {', '.join(skipped)}")
+    failed = [f"{step['title']}: {step['detail']}" for step in calibration["steps"]
+              if step["status"] in ("failed", "aborted")]
+    assert not failed, "steps that failed:\n" + "\n".join(failed)

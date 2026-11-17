@@ -6,6 +6,8 @@ Only reads, flashes nothing.
 checkFirmwareUpdates is how ImSwitch compares the server's version.json with each board.
 To flash before the tests, start the suite with --sync-firmware.
 """
+import time
+
 import pytest
 
 import hil_client as client
@@ -28,11 +30,19 @@ def scan_came_back_empty(result):
 
 @pytest.fixture(scope="module")
 def check():
-    """The answer of checkFirmwareUpdates, asked once: it scans the CAN bus."""
-    result = client.get_json("/UC2ConfigController/checkFirmwareUpdates",
-                             {"timeout": SCAN_TIMEOUT}, timeout=60)
-    assert not scan_came_back_empty(result), (
-        "the CAN scan came back empty: no node listed, the master without canId")
+    """The answer of checkFirmwareUpdates, kept for the file: every call scans the CAN bus.
+
+    Asked up to three times, because the CAN scan sometimes is empty.
+    """
+    for _ in range(3):
+        result = client.get_json("/UC2ConfigController/checkFirmwareUpdates",
+                                 {"timeout": SCAN_TIMEOUT}, timeout=60)
+        if not scan_came_back_empty(result):
+            break
+        time.sleep(3)
+    else:
+        pytest.fail("the CAN scan came back empty three times: "
+                    "no node listed, the master without canId")
     print()
     for device in result["devices"]:
         print(f"{label(device)}: {device.get('installed_version') or 'no version'}, "

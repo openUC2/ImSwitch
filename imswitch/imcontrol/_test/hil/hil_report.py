@@ -134,8 +134,11 @@ def summary(setup_file):
     lines.append("")
     for test, result in _results.items():
         if result["status"] in ("failed", "error"):
-            last_line = (result["details"].strip().splitlines() or [""])[-1]
-            lines.append(f"- **{result['status']}** `{test}`: {last_line[:300]}")
+            # The first "E   ..." line of a pytest traceback is the assertion's message;
+            # a problem outside the tests has no such line, there the last line says it.
+            details = result["details"].strip().splitlines() or [""]
+            errors = [line[1:].strip() for line in details if line.startswith("E ")]
+            lines.append(f"- **{result['status']}** `{test}`: {(errors or details[-1:])[0][:300]}")
     for file, notes in _notes.items():
         for text in notes:
             lines.append(f"- `{file}`: {text}")

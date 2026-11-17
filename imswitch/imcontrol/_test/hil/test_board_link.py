@@ -7,7 +7,8 @@ import hil_client as client
 
 
 def test_uc2_board_connected():
-    connected = client.get_json("/UC2ConfigController/is_connected", timeout=5)
+    # Not is_connected: that one only says that ImSwitch answers, it is always true.
+    connected = client.get_json("/UC2ConfigController/uc2_board_is_connected", timeout=5)
     assert connected is True, "UC2/ESP32 board is not reported as connected"
 
 

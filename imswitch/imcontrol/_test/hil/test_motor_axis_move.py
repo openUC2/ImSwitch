@@ -40,3 +40,6 @@ def test_axis_moves_by_step(positioner, axis):
             f"{positioner} {axis}: {before} -> {after}, expected {before + STEP_UM}")
     finally:
         move(positioner, axis, -STEP_UM)
+    back = position(positioner, axis)
+    assert back == pytest.approx(before, abs=0.1), (
+        f"{positioner} {axis}: back at {back}, expected {before}")

@@ -28,12 +28,15 @@ def is_observation_camera(detector):
 
 
 def camera_status(detector):
-    """getCameraStatus; skips the test if the camera has an error or is ImSwitch's mock camera."""
+    """getCameraStatus; fails the test if the camera has an error or is ImSwitch's mock camera.
+
+    The setup names the camera, so a mock in its place means the real one did not start.
+    """
     status = client.get_json("/SettingsController/getCameraStatus", {"detectorName": detector})
-    if "error" in status or status.get("status") == "error":
-        pytest.skip(f"{detector}: getCameraStatus failed: {status.get('error')}")
-    if status.get("isMock") or str(status.get("model", "")).lower() == "mock":
-        pytest.skip(f"{detector}: ImSwitch served a mock camera (model={status.get('model')!r})")
+    assert "error" not in status and status.get("status") != "error", (
+        f"{detector}: getCameraStatus failed: {status.get('error')}")
+    assert not status.get("isMock") and str(status.get("model", "")).lower() != "mock", (
+        f"{detector}: ImSwitch served a mock camera (model={status.get('model')!r})")
     return status
 
 

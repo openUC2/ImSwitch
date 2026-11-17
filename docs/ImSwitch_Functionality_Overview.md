@@ -100,6 +100,12 @@
 - **STORM reconstruction**
 - **Composite imaging** (multi-modal combinations)
   - ExperimentController where we provide a protocol for multi dimensional acquisitions (xyz, multi channel, autofocus )
+- **Spectrometer** (grating spectrometer on a camera, e.g. the openUC2 openRAMAN block;
+  `docs/SPECTROMETER.md`)
+  - live spectrum in pixels, nm or Raman shift (cm⁻¹), dark, averaging, spike removal, smile correction
+  - calibration wizard with lasers, NeoPixel R/G/B LEDs (reference spectra), sources switched by hand
+    (Q-Box 520 nm laser, neon or fluorescent lamp); grating model or polynomial fit with residuals
+  - grating alignment with a known line, resolution check, HDF5 or CSV + JSON export
 
 ### Computational Imaging
 - **DPC processing**

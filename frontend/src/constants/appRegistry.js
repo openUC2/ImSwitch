@@ -25,6 +25,7 @@ import {
   PhotoCamera as PhotoCameraIcon,
   Visibility as VisibilityIcon,
   ViewInAr as ViewInArIcon,
+  ShowChart as ShowChartIcon,
   // Coding-specific icons
   MenuBook as MenuBookIcon,
   Psychology as PsychologyIcon,
@@ -340,6 +341,20 @@ export const APP_REGISTRY = {
     keywords: ["opm", "oblique", "dvopm", "lightsheet", "twin", "deskew", "volume"],
     pluginId: "OPM",
     requiredControllers: ["OPMController"],
+  },
+
+  spectrometer: {
+    id: "spectrometer",
+    name: "Spectrometer",
+    description:
+      "Grating spectrometer on a camera: live spectrum in pixels, nm or cm⁻¹, dark and averaging, calibration wizard with lasers, NeoPixel LEDs or lamps, grating alignment, HDF5/CSV export.",
+    category: APP_CATEGORIES.APPS,
+    icon: ShowChartIcon,
+    enabled: false,
+    essential: false,
+    keywords: ["spectrometer", "spectrum", "raman", "oct", "wavelength", "calibration", "grating"],
+    pluginId: "Spectrometer",
+    requiredControllers: ["SpectrometerController"],
   },
 
   flowStop: {

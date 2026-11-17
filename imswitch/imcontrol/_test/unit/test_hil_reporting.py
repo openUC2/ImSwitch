@@ -117,19 +117,19 @@ def test_summary_has_one_row_per_test_file():
 
 def test_stop_timeout_is_an_error(calibration_module, monkeypatch):
     m = calibration_module
-    monkeypatch.setattr(m, "running", lambda: True)
-    monkeypatch.setattr(m, "status", lambda: {"state": "finished"})
+    monkeypatch.setattr(m, "status", lambda: {"state": "running"})
+    sent = []
+    monkeypatch.setattr(m.client, "post_json", lambda endpoint, **k: sent.append(endpoint))
     monkeypatch.setattr(m.client, "wait_until", lambda *a, **k: False)
     with pytest.raises(AssertionError, match="thread did not stop"):
         m.stop_and_wait()
+    assert sent == ["/FrameCalibrationController/stopFrameCalibration"]
 
 
-def test_poll_waits_for_thread_after_terminal_status(calibration_module, monkeypatch):
+def test_poll_returns_at_terminal_status(calibration_module, monkeypatch):
     m = calibration_module
     monkeypatch.setattr(m.client, "post_json", lambda *a, **k: {"success": True})
     monkeypatch.setattr(m, "status", lambda: {"state": "finished", "startedAt": "now", "steps": []})
-    states = iter([True, False])
-    monkeypatch.setattr(m, "running", lambda: next(states))
     monkeypatch.setattr(m.time, "sleep", lambda _: None)
     run = {}
     assert m.run_calibration(run, lambda line: None)["state"] == "finished"

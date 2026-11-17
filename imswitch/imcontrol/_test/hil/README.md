@@ -13,10 +13,8 @@ Each test file says at the top of its docstring what it checks and what it does 
 | `camera_capture` | each camera takes a picture as large as its sensor | reads |
 | `motor_axis_move` | each axis moves 10 µm and back, and ImSwitch reports the position it moved to | **moves** (10 µm) |
 | `stage_homing` | "Safe Global Homing" (`startFrameHoming`) homes Z, X and Y and reports each as done | **moves** (to the end stops, then to the transport position) |
-| `motor_motion_camera` | the observation camera sees every axis move: the image changes more than its noise | **moves** (transport position, 3 to 5 mm per axis), **light** |
 | `lightsource` | each laser and LED switches on and off; every camera sees each LED go on and off | **light** |
 | `ledmatrix` | every camera sees the LED matrix go on and off | **light** |
-| `ledmatrix_single` | one LED lights on its own (`setLEDs`), every camera sees it go on and off, and it is dimmer than the whole matrix | **light** |
 | `frame_calibration` | the FRAME calibration runs from start to end; needs the calibration target in the holder | **moves** (homes, turret), **light**, **writes the setup** (backup: `setup_before_frame_calibration.json`) |
 
 Hardware a setup does not have skips its tests.
@@ -24,7 +22,7 @@ Hardware that is there but does not work fails.
 A camera of the setup that ImSwitch serves as a mock fails `camera_capture`: the real one did not start.
 
 They run in the order of the table: the boards, the cameras, the motors, the lights, then the calibration.
-The homing ends at the transport position, and the motion and light tests run there.
+The homing ends at the transport position, and the light tests run there.
 The order is the list `ORDER` in `conftest.py`.
 
 A light test has one case per light, not one per camera.
@@ -35,13 +33,11 @@ Some tests do not start after a failure; they are skipped and say which test fai
 The table is `NEEDS` in `conftest.py`:
 
 - `stage_homing` needs `motor_axis_move`.
-- `motor_motion_camera` needs `motor_axis_move` and `stage_homing`: its first move is absolute, so the stage must be homed.
-- `frame_calibration` needs `board_link`, `camera_capture`, the three motor tests and the three light tests.
+- `frame_calibration` needs `board_link`, `camera_capture`, the two motor tests and the two light tests.
   It does not need `firmware_server`: a board on another firmware version fails that test, but can still be calibrated.
   Only `--sync-firmware` stops every test, when the flashing fails.
 
 `motor_axis_move` compares positions, which are the firmware's step count.
-`motor_motion_camera` is what shows that the stage really moved.
 `stage_homing` presses the same button as the FRAME settings page and checks the same per-axis "done".
 That "done" says that the homing command of the axis returned, not that its end stop was pressed.
 The turret (A) is homed by the calibration.
@@ -131,7 +127,6 @@ ImSwitch parses the file before it answers, so a field the file leaves out comes
 | `objective` | whether there is an objective turret |
 
 So a rig with other hardware needs another setup file in ImSwitch, not other tests.
-The exception is `Z_DIRECTION` in `motor_motion_camera`: which way Z is free is a constant at its top.
 
 ## Writing a test
 

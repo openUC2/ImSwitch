@@ -5,7 +5,7 @@ MOVES REAL HARDWARE: Z, X and Y drive to their end stops.
 This is the button "Start homing" under FRAME settings: the endpoint startFrameHoming.
 It homes Z and lifts it clear of the bottom, then homes X and Y.
 At the end X and Y go to the transport position, and Z goes back to its height from before.
-That is where motor_motion_camera and the light tests find the stage.
+That is where the light tests find the stage.
 The turret (A) is not homed here; the FRAME calibration homes it.
 
 The test passes when the homing ends as "done" with Z, X and Y "done", as the button shows it.

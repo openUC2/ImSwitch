@@ -4,7 +4,6 @@ MOVES REAL HARDWARE (10 µm).
 
 The position is the step count of the firmware, not a measurement.
 So this only shows that ImSwitch, the board and its bookkeeping follow the command.
-motor_motion_camera shows in the camera that the stage really moved.
 """
 import pytest
 

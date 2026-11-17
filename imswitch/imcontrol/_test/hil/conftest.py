@@ -14,8 +14,7 @@ ORDER = [
     "camera_capture",                                # 2. the cameras
     "motor_axis_move",                               # 3. the motors: 10 µm steps,
     "stage_homing",                                  #    homing, ending at the transport position,
-    "motor_motion_camera",                           #    then moves the camera sees
-    "lightsource", "ledmatrix", "ledmatrix_single",  # 4. the lights, at the transport position
+    "lightsource", "ledmatrix",                      # 4. the lights, at the transport position
     "frame_calibration",                             # 5. the calibration
 ]
 # A test does not start when one of these failed before it.
@@ -24,10 +23,8 @@ ORDER = [
 # Only --sync-firmware stops every test, when flashing fails (__main__.py).
 NEEDS = {
     "stage_homing": ["motor_axis_move"],
-    # Its first move is absolute, so the stage must be homed.
-    "motor_motion_camera": ["motor_axis_move", "stage_homing"],
     "frame_calibration": ["board_link", "camera_capture", "motor_axis_move", "stage_homing",
-                          "motor_motion_camera", "lightsource", "ledmatrix", "ledmatrix_single"],
+                          "lightsource", "ledmatrix"],
 }
 
 _failed = []  # the names of the tests that failed so far in this run

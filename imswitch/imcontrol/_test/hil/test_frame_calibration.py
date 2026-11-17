@@ -35,6 +35,7 @@ TEST_SETTINGS = {"manualFocusFallback": False, "illuminationValue": 500}
 BACKUP_NAME = "setup_before_frame_calibration.json"
 CALIBRATION_PDF = "frame_calibration.pdf"  # the calibration's own report, in the report folder
 ENDED = ("finished", "failed", "aborted")
+ACTIVE = ("running", "waiting")  # the states the FRAME calibration app shows as running
 
 
 # --- the calibration --------------------------------------------------------------------------
@@ -49,15 +50,20 @@ def set_settings(values):
 
 
 def running():
-    return client.get_json("/FrameCalibrationController/isFrameCalibrationRunning") is True
+    """Running as the app shows it, from the state of the status.
+
+    The state ends before the calibration thread does.
+    The thread then only resets the camera and writes its report folder.
+    It switches no light, moves no motor and leaves the setup file alone.
+    So nothing this test does afterwards collides with it.
+    """
+    return status()["state"] in ACTIVE
 
 
 def stop_and_wait():
-    """The terminal status alone does not mean cleanup/report writing has finished."""
     if not running():
         return
-    if status()["state"] not in ENDED:
-        client.post_json("/FrameCalibrationController/stopFrameCalibration")
+    client.post_json("/FrameCalibrationController/stopFrameCalibration")
     assert client.wait_until(lambda: not running(), STOP_TIMEOUT, interval=POLL_S), (
         f"calibration thread did not stop within {STOP_TIMEOUT}s")
 
@@ -119,7 +125,7 @@ def run_calibration(run, live):
         current = status()
         show_progress(current["steps"], shown, live)
         assert current["startedAt"] == run["startedAt"], "calibration replaced during polling"
-        if current["state"] in ENDED and not running():
+        if current["state"] in ENDED:
             return current
         # The test turned the manual focus off; a wait for the user would never end.
         assert current["state"] != "waiting", (

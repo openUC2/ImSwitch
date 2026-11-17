@@ -11,6 +11,7 @@ Units: wavelengths nm, Raman shift cm^-1, exposure ms, pixels are full-sensor co
 and rows. Lasers switched by the wizard run at ``laserPowerFraction`` of their range
 and are always switched off at the end, on cancel and on errors.
 """
+import io
 import math
 import threading
 import time
@@ -18,6 +19,7 @@ from collections import deque
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from imswitch.imcommon.model import APIExport, initLogger
@@ -64,6 +66,7 @@ class SpectrometerSettingsBody(BaseModel):
     colStop: Optional[int] = None
     collapse: Optional[str] = None
     nAverage: Optional[int] = None
+    frameCombine: Optional[str] = None
     removeSpikes: Optional[bool] = None
     spikeThreshold: Optional[float] = None
     subtractDark: Optional[bool] = None
@@ -266,7 +269,8 @@ class SpectrometerController(ImConWidgetController):
                "calibrated": bool(meta["calibration"].get("calibrated")),
                "model": meta["calibration"].get("model"),
                "metadata": {k: meta.get(k) for k in (
-                   "timestamp", "exposureMs", "gain", "bitDepth", "frames", "rows", "cols",
+                   "timestamp", "exposureMs", "gain", "bitDepth", "frames", "frameCombine",
+                   "integrationMs", "rows", "cols",
                    "darkSubtracted", "smileCorrected", "spikesRemoved", "saturation",
                    "laserNm", "liveAverage", "simulatedSources")},
                "live": dict(self._live)}
@@ -285,6 +289,23 @@ class SpectrometerController(ImConWidgetController):
         except Exception as exc:
             return {"image": None, "error": str(exc)}
 
+    @APIExport()
+    def getSpectrometerRoiArray(self, which: str = "auto", corrected: bool = False):
+        """The region of a spectrum as a NumPy .npy file (float32, rows x columns, full-sensor
+        rows/columns in the header X-Rows / X-Cols): raw mean (or sum) of the frames, or
+        corrected (dark, spikes, smile). For notebooks: np.load(io.BytesIO(r.content))."""
+        rec = self._record(which)
+        if rec is None:
+            return {"success": False, "error": "no spectrum yet (start live or acquire)"}
+        arr = np.asarray(rec["roi"] if corrected else rec["rawRoi"], dtype=np.float32)
+        buf = io.BytesIO()
+        np.save(buf, arr)
+        meta = rec["metadata"]
+        return Response(buf.getvalue(), media_type="application/octet-stream", headers={
+            "Content-Disposition": "attachment; filename=spectrometer_region.npy",
+            "X-Rows": f"{meta['rows'][0]},{meta['rows'][1]}",
+            "X-Cols": f"{meta['cols'][0]},{meta['cols'][1]}"})
+
     # ------------------------------------------------------------------ settings
     @APIExport()
     def setSpectrometerCamera(self, exposureMs: float = -1.0, gain: float = -1.0,
@@ -300,14 +321,16 @@ class SpectrometerController(ImConWidgetController):
     @APIExport(requestType="POST")
     def setSpectrometerSettings(self, settings: SpectrometerSettingsBody) -> Dict:
         """Region of interest (full-sensor rows/columns, stop exclusive, 0 = to the end),
-        collapse mean|sum, frames per acquisition, spikes, dark, smile, live average."""
+        rows combined by collapse mean|sum, frames per acquisition (nAverage) combined by
+        frameCombine mean|sum (sum = frame adding), spikes, dark, smile, live average."""
         vals = {k: v for k, v in settings.model_dump().items() if v is not None}
         live_avg = vals.pop("liveAverage", None)
         with self._mgr._lock:
             cur = self._mgr.settings.to_dict()
             cur.update(vals)
-            if cur.get("collapse") not in ("mean", "sum"):
-                return {"success": False, "error": "collapse must be mean or sum"}
+            if cur.get("collapse") not in ("mean", "sum") or \
+                    cur.get("frameCombine") not in ("mean", "sum"):
+                return {"success": False, "error": "collapse and frameCombine: mean or sum"}
             self._mgr.settings = P.ProcessingSettings.from_dict(cur)
             self._mgr.save()
         if live_avg is not None:
@@ -316,7 +339,7 @@ class SpectrometerController(ImConWidgetController):
                           "liveAverage": self._live["average"]})
 
     @APIExport()
-    def autoSpectrometerRoi(self, frac: float = 0.5, pad: float = 0.05) -> Dict:
+    def autoSpectrometerRoi(self, frac: float = 0.15, pad: float = 0.02) -> Dict:
         """Find the rows lit by the slit in a fresh frame and use them as the region."""
         try:
             frame, _ = self._mgr.grabFrame(fresh=False)

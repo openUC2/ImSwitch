@@ -75,6 +75,9 @@ the region changes. The rows run along the slit; the columns run along the dispe
    It is subtracted when the exposure and gain still match (a warning appears otherwise).
 3. **Averaging:** N fresh frames (a new frame counter, or two exposure times without one).
    Cosmic rays are removed with a per‑pixel median over the frames, in chunks of 8.
+   With `frameCombine: "sum"` the frames are added instead. This is for integrations
+   longer than the camera's longest exposure (1 s on the HIK). The metadata records
+   `integrationMs`.
 4. **Spikes in a single frame:** a median along the slit (5 rows). A spectral line is
    long in that direction, so it survives at any width, while a spike does not. The
    threshold follows the noise, which is measured from the frame itself (read noise plus
@@ -85,6 +88,22 @@ the region changes. The rows run along the slit; the columns run along the dispe
 6. **Combining the rows** (mean or sum) gives counts per column.
 7. **Axes:** nm from the calibration (or from the design, marked "not calibrated"), and
    the Raman shift in cm⁻¹ = 10⁷/λ_laser − 10⁷/λ.
+
+**Checked on the first‑light frames** (openuc2‑openraman `data/2026-11-15`, white LED
+with and without the FEL0500 filter, 8 bit), against that repository's own analysis:
+
+| Quantity | This pipeline | Analysis |
+| --- | --- | --- |
+| filter edge at 50 % | column 1398.0 | 1398.0 |
+| transmission plateau | 0.693 | 0.693 |
+| LED peak | column 2472–2476 | 2474 |
+| edge column per 256‑row band | 1384 → 1401 → 1393 | 1386 → 1402 → 1395 |
+| slit rows found | all 2048 | the slit fills all rows |
+
+The bands give the same bow; they are 1–2 px lower here because the steepest point of
+the edge is taken, not the 50 % crossing. The slit on that prototype is lit very
+unevenly: the top rows get 20–40 % of the brightest row. "Find slit" therefore uses
+15 % of the peak above the dark level, measured on the brightest 5 % of the columns.
 
 The camera should run in 12‑bit mode. The HIK driver already selects Mono12 on mono
 cameras; the 8‑bit BMPs of the first light came from the vendor viewer. The page shows
@@ -164,6 +183,7 @@ full‑sensor columns.
 | `startSpectrometerLive(periodMs)` / `stopSpectrometerLive` | process the latest frame every period |
 | `getSpectrometerSpectrum(which, maxPoints, withPeaks)` | `px`, `nm`, `ramanShiftCm1`, `counts`, metadata, peaks; which = auto / live / acquired |
 | `getSpectrometerImage(full, corrected, maxWidth)` | PNG data URL of the region, or of a full frame with the region rows |
+| `getSpectrometerRoiArray(which, corrected)` | the region as a NumPy `.npy` file (float32, raw or corrected; rows and columns in the headers `X-Rows` / `X-Cols`) |
 | `setSpectrometerCamera(exposureMs, gain, bitDepth)` | camera settings (negative or 0 keeps the value) |
 | `setSpectrometerSettings` (POST) | region, collapse, frames, spikes, dark, smile, live average |
 | `autoSpectrometerRoi(frac, pad)` | find the slit rows |

@@ -33,16 +33,27 @@ export const apiSpectrometerGetSpectrum = (which = "auto", maxPoints = 1536) =>
 export const apiSpectrometerGetImage = (full = false, corrected = false, maxWidth = 1536) =>
   get("getSpectrometerImage", { full, corrected, maxWidth });
 
+// region of a spectrum as a NumPy .npy blob (float32, rows x columns); corrected: dark,
+// spikes, smile applied. A JSON error comes back as a blob of type application/json.
+export const apiSpectrometerGetRoiArray = async (which = "auto", corrected = false) => {
+  const response = await createAxiosInstance().get(
+    "/SpectrometerController/getSpectrometerRoiArray",
+    { params: { which, corrected }, responseType: "blob" },
+  );
+  return response.data;
+};
+
 // negative / 0 keeps the current value
 export const apiSpectrometerSetCamera = ({ exposureMs = -1, gain = -1, bitDepth = 0 }) =>
   get("setSpectrometerCamera", { exposureMs, gain, bitDepth });
 
-// {rowStart, rowStop, colStart, colStop, collapse, nAverage, removeSpikes, spikeThreshold,
-//  subtractDark, smileCorrection, liveAverage}; only the given fields change
+// {rowStart, rowStop, colStart, colStop, collapse, nAverage, frameCombine (mean|sum),
+//  removeSpikes, spikeThreshold, subtractDark, smileCorrection, liveAverage};
+// only the given fields change
 export const apiSpectrometerSetSettings = (settings) =>
   post("setSpectrometerSettings", settings);
 
-export const apiSpectrometerAutoRoi = (frac = 0.5, pad = 0.05) =>
+export const apiSpectrometerAutoRoi = (frac = 0.15, pad = 0.02) =>
   get("autoSpectrometerRoi", { frac, pad });
 
 export const apiSpectrometerSetLaserWavelength = (laserNm) =>

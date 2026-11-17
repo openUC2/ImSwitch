@@ -428,10 +428,13 @@ class SpectrometerManager:
         dark = self._darkRoi(acq["rows"], acq["cols"], acq["frameShape"])
         out = P.process_roi(acq["roi"], acq["rows"], acq["cols"], self.settings, dark,
                             self.calibration.smile, despiked=acq.get("despiked", False))
-        rec = {"px": out["px"], "counts": out["counts"], **self.axes(out["px"]),
-               "dark": (P.collapse_rows(dark, self.settings.collapse) if dark is not None
+        # frame adding: the sum of the (dark-subtracted) frames instead of their mean
+        k = float(acq["frames"]) if self.settings.frameCombine == "sum" else 1.0
+        rec = {"px": out["px"], "counts": out["counts"] * k, **self.axes(out["px"]),
+               "dark": (P.collapse_rows(dark, self.settings.collapse) * k if dark is not None
                         else None),
-               "roi": out["roi"], "rawRoi": acq["roi"], "frameShape": acq["frameShape"],
+               "roi": out["roi"] * k, "rawRoi": acq["roi"] * k,
+               "frameShape": acq["frameShape"],
                "metadata": self._metadata(acq, out, dark is not None)}
         with self._lock:
             self.last = rec
@@ -467,7 +470,10 @@ class SpectrometerManager:
             "exposureMs": cam["exposureMs"], "gain": cam["gain"], "bitDepth": cam["bitDepth"],
             "frames": acq["frames"], "frameNumbers": acq["frameNumbers"][-8:],
             "rows": acq["rows"], "cols": acq["cols"], "frameShape": acq["frameShape"],
-            "collapse": self.settings.collapse, "darkSubtracted": dark,
+            "collapse": self.settings.collapse, "frameCombine": self.settings.frameCombine,
+            "integrationMs": (cam["exposureMs"] or 0.0)
+            * (acq["frames"] if self.settings.frameCombine == "sum" else 1),
+            "darkSubtracted": dark,
             "dark": {k: v for k, v in self.darkMeta.items() if k != "mean"} if dark else None,
             "smileCorrected": bool(self.calibration.smile and self.settings.smileCorrection),
             "spikesRemoved": acq["spikesRemoved"] + out["spikesRemoved"],

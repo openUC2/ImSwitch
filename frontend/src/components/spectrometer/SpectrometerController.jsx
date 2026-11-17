@@ -217,6 +217,26 @@ export default function SpectrometerController() {
     }
   };
 
+  // raw region of the shown spectrum as a NumPy file (for notebooks)
+  const downloadRegion = async () => {
+    try {
+      const blob = await api.apiSpectrometerGetRoiArray("auto", false);
+      if (blob.type && blob.type.includes("json")) {
+        const r = JSON.parse(await blob.text());
+        setMsg({ severity: "error", text: r.error || "no region yet" });
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${save.name || "spectrometer"}_region.npy`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setMsg({ severity: "error", text: String(e) });
+    }
+  };
+
   const toggleLive = async () => {
     if (live) await run(api.apiSpectrometerStopLive);
     else await run(() => api.apiSpectrometerStartLive(250));
@@ -381,6 +401,13 @@ export default function SpectrometerController() {
               onChange={(e) => applySettings({ removeSpikes: e.target.checked })} />} label="remove spikes" />
             <FormControlLabel control={<Switch size="small" checked={!!state?.processing?.smileCorrection}
               onChange={(e) => applySettings({ smileCorrection: e.target.checked })} />} label="smile correction" />
+            <TextField select size="small" label="acquired frames combined by"
+              value={state?.processing?.frameCombine || "mean"}
+              helperText="sum = frame adding, for more than the longest exposure"
+              onChange={(e) => applySettings({ frameCombine: e.target.value })}>
+              <MenuItem value="mean">mean</MenuItem>
+              <MenuItem value="sum">sum</MenuItem>
+            </TextField>
             <Typography variant="caption">live average: {state?.liveAverage ?? 1} spectra</Typography>
             <Slider size="small" min={1} max={20} step={1} value={state?.liveAverage ?? 1}
               onChangeCommitted={(_, v) => applySettings({ liveAverage: v })} />
@@ -493,6 +520,9 @@ export default function SpectrometerController() {
                 <Button size="small" variant="outlined"
                   onClick={() => run(() => api.apiSpectrometerSave({ ...save, which: "auto" }), (r) => `saved ${r.files?.join(", ")}`)}>
                   Save
+                </Button>
+                <Button size="small" onClick={downloadRegion}>
+                  Region .npy
                 </Button>
               </Stack>
             </Section>

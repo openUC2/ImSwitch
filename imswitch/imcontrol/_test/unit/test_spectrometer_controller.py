@@ -1,4 +1,5 @@
 """SpectrometerController endpoints on the simulated spectrometer with a fake master."""
+import io
 import json
 import os
 import time
@@ -147,6 +148,28 @@ def test_dark_acquire_save(ctrl):
     assert len(csv["files"]) == 2 and all(os.path.isfile(f) for f in csv["files"])
     c.clearSpectrometerDark()
     assert c.getSpectrometerState()["dark"] is None
+
+
+def test_frame_adding_and_region_array(ctrl):
+    c, _, _ = ctrl
+    c.setSpectrometerSource("laser:LASER488", True)
+    mean_peak = {}
+    for mode in ("mean", "sum"):
+        assert c.setSpectrometerSettings(SpectrometerSettingsBody(frameCombine=mode))["success"]
+        c.acquireSpectrometerSpectrum(nAverage=4)
+        wait(c.getSpectrometerAcquisition, lambda j: j["state"] != "running")
+        sp = c.getSpectrometerSpectrum(which="acquired", maxPoints=0)
+        mean_peak[mode] = max(sp["counts"])
+        assert sp["metadata"]["frameCombine"] == mode
+        assert sp["metadata"]["integrationMs"] == pytest.approx(10.0 * (4 if mode == "sum" else 1))
+    assert mean_peak["sum"] / mean_peak["mean"] == pytest.approx(4.0, rel=0.05)
+    assert not c.setSpectrometerSettings(SpectrometerSettingsBody(frameCombine="max"))["success"]
+    r = c.getSpectrometerRoiArray(which="acquired")
+    arr = np.load(io.BytesIO(r.body))
+    assert arr.dtype == np.float32 and arr.shape == (399, 3072)
+    assert r.headers["X-Rows"] == "57,456" and r.headers["X-Cols"] == "0,3072"
+    corr = np.load(io.BytesIO(c.getSpectrometerRoiArray(which="acquired", corrected=True).body))
+    assert corr.shape == arr.shape
 
 
 def test_wizard_with_lasers_qbox_and_neopixels(ctrl):

@@ -67,8 +67,11 @@ def test_slit_rows_smile_and_line_centres():
     sim, _ = make_sim()
     frame = sim.render(lines(488.0, 520.0, 635.0))
     dark = sim.render([]).astype(np.float32)
-    rows = P.find_slit_rows(frame)
-    assert abs(rows["rowStart"] - SLIT[0]) <= 3 and abs(rows["rowStop"] - SLIT[1]) <= 3
+    half = P.find_slit_rows(frame, frac=0.5)                      # half-height edges
+    assert abs(half["rowStart"] - SLIT[0]) <= 3 and abs(half["rowStop"] - SLIT[1]) <= 3
+    rows = P.find_slit_rows(frame)                                # default: 15 %, a bit wider
+    assert SLIT[0] - 10 <= rows["rowStart"] <= SLIT[0]
+    assert SLIT[1] <= rows["rowStop"] <= SLIT[1] + 10
     s = P.ProcessingSettings(rowStart=rows["rowStart"], rowStop=rows["rowStop"])
     raw = P.process(frame, s, dark=dark)
     smile = P.measure_smile(raw["roi"], rows["rowStart"])
@@ -82,6 +85,19 @@ def test_slit_rows_smile_and_line_centres():
     widths_raw = [K.peak_properties(raw["counts"], p["index"], p["base"])["fwhm"]
                   for p in K.find_peaks(raw["counts"])]
     assert max(widths) < min(widths_raw)          # the smile correction sharpens the lines
+
+
+def test_slit_lit_unevenly_over_all_rows():
+    """First light (2026-11-15): the slit image fills all 2048 rows, the top rows at
+    20-40 % of the brightest, with 10 % stripes; all rows must be taken."""
+    rng = np.random.default_rng(1)
+    rows, cols = 512, 3072
+    r = np.arange(rows)[:, None]
+    gain = (0.2 + 0.8 * r / rows) * (1 + 0.1 * np.sin(2 * np.pi * r / 72))
+    band = np.exp(-0.5 * ((np.arange(cols) - 2470) / 120.0) ** 2)[None, :]
+    frame = 5 + 200 * gain * band + rng.normal(0, 1.5, (rows, cols))
+    found = P.find_slit_rows(np.clip(frame, 0, 255).astype(np.uint8))
+    assert found["found"] and found["rowStart"] == 0 and found["rowStop"] == rows
 
 
 def test_spikes_removed_but_narrow_lines_kept():

@@ -18,8 +18,10 @@ class ProcessingSettings:
     colStart: int = 0
     colStop: int = 0              # exclusive; 0 = to the last column
     collapse: str = "mean"        # "mean" or "sum" over the rows of the region
-    nAverage: int = 1             # frames averaged per spectrum
-    removeSpikes: bool = True     # median of >= 3 frames, else a 3 x 3 median test
+    nAverage: int = 1             # frames per acquired spectrum
+    frameCombine: str = "mean"    # "mean" or "sum" (frame adding: counts x frames, for
+    #                               integrations longer than the camera's longest exposure)
+    removeSpikes: bool = True     # median of >= 3 frames, else a median along the slit
     spikeThreshold: float = 6.0   # in robust standard deviations
     subtractDark: bool = True
     smileCorrection: bool = True
@@ -175,25 +177,47 @@ def collapse_rows(roi: np.ndarray, mode: str = "mean") -> np.ndarray:
     return (roi.sum(axis=0) if mode == "sum" else roi.mean(axis=0)).astype(np.float64)
 
 
-def find_slit_rows(frame, frac: float = 0.5, pad: float = 0.0) -> Dict:
-    """Rows lit by the slit image: the contiguous band around the brightest row whose
-    mean is above base + frac x (peak - base). pad widens it by that fraction."""
+def _grow(lit: np.ndarray, i: int, gap: int, step: int) -> int:
+    """Last lit index reached from i in direction step, bridging dark gaps <= gap rows."""
+    j, k = i, i
+    while 0 <= k + step < lit.size:
+        k += step
+        if lit[k]:
+            j = k
+        elif abs(k - j) > gap:
+            break
+    return j
+
+
+def find_slit_rows(frame, frac: float = 0.15, pad: float = 0.0) -> Dict:
+    """Rows lit by the slit image: the band around the brightest row whose smoothed
+    profile lies above dark + frac x (peak - dark).
+
+    The profile is taken over the brightest 5 % of the columns (where the lines or bands
+    are, so a single narrow line still stands out), the dark level over the dimmest 10 %
+    (there are always unlit columns along the dispersion). A slit image that fills every
+    row is found as such; stripes along the slit (dips of a few rows) are bridged. The
+    first prototype's slit is lit very unevenly (top rows at 20-40 % of the brightest), hence
+    the low default. pad widens the band by that fraction."""
     mono = as_mono(frame)
-    prof = mono.mean(axis=1).astype(np.float64)
-    base, peak = np.percentile(prof, 5), np.percentile(prof, 99.5)
-    if peak - base <= 1e-9:
-        return {"rowStart": 0, "rowStop": int(prof.size), "found": False,
-                "profile": prof.tolist()}
-    lit = prof >= base + frac * (peak - base)
-    i = int(np.argmax(prof))
-    r0 = i
-    while r0 > 0 and lit[r0 - 1]:
-        r0 -= 1
-    r1 = i + 1
-    while r1 < prof.size and lit[r1]:
-        r1 += 1
+    colmean = mono.mean(axis=0)
+    bright = colmean >= np.percentile(colmean, 95)
+    dim = colmean <= np.percentile(colmean, 10)
+    prof = mono[:, bright].mean(axis=1).astype(np.float64)
+    n = prof.size
+    w = max(1, n // 50)
+    smooth = np.convolve(np.pad(prof, (w // 2, w - 1 - w // 2), mode="edge"),
+                         np.ones(w) / w, mode="valid")
+    dark = float(np.median(mono[:, dim].mean(axis=1)))
+    peak = float(np.percentile(smooth, 99.5))
+    if peak - dark <= 1e-9:
+        return {"rowStart": 0, "rowStop": n, "found": False, "profile": prof.tolist()}
+    lit = smooth >= dark + frac * (peak - dark)
+    i = int(np.argmax(smooth))
+    gap = max(2, n // 30)
+    r0, r1 = _grow(lit, i, gap, -1), _grow(lit, i, gap, +1) + 1
     extra = int(round(pad * (r1 - r0)))
-    return {"rowStart": max(0, r0 - extra), "rowStop": min(prof.size, r1 + extra),
+    return {"rowStart": max(0, r0 - extra), "rowStop": min(n, r1 + extra),
             "found": True, "profile": prof.tolist()}
 
 

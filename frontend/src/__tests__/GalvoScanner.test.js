@@ -17,6 +17,11 @@ import galvoReducer, {
   cancelCalibration,
   setXRange,
   getScanPhysical,
+  getScanInfo,
+  galvoScanWarnings,
+  galvoLineSamples,
+  FLIM_TIMING,
+  setConfig,
 } from '../state/slices/GalvoScannerSlice';
 import GalvoScanPreview from '../components/GalvoScanPreview';
 import { flimWebUiUrl } from '../components/FlimLabsPanel';
@@ -124,6 +129,40 @@ describe('getScanPhysical', () => {
 // ---------------------------------------------------------------------------
 // Preview: drag / resize / backdrop transform
 // ---------------------------------------------------------------------------
+describe('scan timing and FLIM warnings', () => {
+  const state = (patch = {}) => {
+    const s = { galvoScannerState: galvoReducer(undefined, { type: '@@init' }) };
+    s.galvoScannerState = galvoReducer(s.galvoScannerState, setConfig(patch));
+    return s;
+  };
+
+  test('frame time counts pre-blank, both overscans, fly-back and settle', () => {
+    const c = state().galvoScannerState.config;
+    expect(galvoLineSamples(c)).toBe(64 + 2 * 32 + 256 + 256 + 128);
+    const info = getScanInfo(state());
+    expect(info.lineSamples).toBe(768);
+    expect(info.imageShare).toBe(33);
+    expect(info.frameTime).toBe('4.93 s');              // 256 × (768 × 25 µs + 56 µs)
+    expect(galvoLineSamples({ ...c, bidirectional: true })).toBe(768 - 256);
+  });
+
+  test('the validated raster raises no warning, the as-found config raises three', () => {
+    expect(galvoScanWarnings(state().galvoScannerState.config)).toEqual([]);
+    const asFound = state({ sample_period_us: 1, pre_samples: 0, overscan_samples: 0, fly_samples: 0,
+      line_settle_samples: 0 }).galvoScannerState.config;
+    const w = galvoScanWarnings(asFound);
+    expect(w).toHaveLength(3);
+    expect(w[0]).toMatch(/22 µs/);
+    expect(w[1]).toMatch(/fly-back/);
+  });
+
+  test('recommended FLIM timing restores the timing but keeps resolution and window', () => {
+    const s = galvoReducer(state({ nx: 512, x_min: 1000, sample_period_us: 1, fly_samples: 0 }).galvoScannerState,
+      setConfig(FLIM_TIMING));
+    expect(s.config).toMatchObject({ nx: 512, x_min: 1000, sample_period_us: 25, fly_samples: 256, hw_pixel_clock: 0 });
+  });
+});
+
 describe('GalvoScanPreview', () => {
   const identity = { a11: 1, a12: 0, tx: 0, a21: 0, a22: 1, ty: 0 };
   const baseConfig = { x_min: 1000, x_max: 2000, y_min: 1000, y_max: 2000, nx: 8, ny: 8, bidirectional: false };

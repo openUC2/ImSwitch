@@ -41,6 +41,8 @@ import {
   getGalvoConfig,
   getGalvoStatus,
   getScanInfo,
+  galvoScanWarnings,
+  FLIM_TIMING,
   getActiveTab,
   setScannerNames,
   setSelectedScanner,
@@ -98,20 +100,20 @@ const PARAM_TOOLTIPS = {
   y_min: 'Top edge of the scan in DAC counts (0–4095).',
   y_max: 'Bottom edge of the scan in DAC counts (0–4095).',
   sample_period_us:
-    'Dwell time per sample in microseconds. 0 = go as fast as the DAC/loop allows. Larger = slower scan, brighter/less noisy pixels.',
+    'Dwell per sample in µs = the pixel time; photons per pixel grow with it. The board needs about 22 µs per sample, so below 25 µs (and at 0) pixel times become uneven and frames take longer than shown. FLIM: 25.',
   frame_count: 'Number of frames to acquire, then stop. 0 = scan continuously until you press Stop.',
   bidirectional:
     'Scan both sweep directions: even lines left→right, odd lines right→left. Roughly doubles frame rate but needs correct phase/settle to avoid a zig-zag offset.',
   pre_samples:
-    'Blanking samples emitted at the start of each line before imaging begins — lets the mirror reach constant velocity. Increase if the left edge is smeared.',
+    'Samples at the start of each line, right after the Y step, with X held at the start of the ramp; the line (and frame) marker goes out here. In FLIM LABS PLF the photons of pre-blank + lead-in overscan pile into column 0: crop it with a left offset of 1. FLIM: 64.',
   fly_samples:
-    'Fly-back samples between lines (cosine-eased) while the mirror returns for the next line. Increase if lines tear or overshoot.',
+    'Samples for the cosine-eased return to the start of the ramp (not used when bidirectional). Too few and the mirror cannot get back in time: the first columns of each line are distorted; 0 gave a dark, squeezed band at the left edge. FLIM: 256.',
   line_settle_samples:
-    'Extra settle samples held after the fly-back before the next line starts. Increase if the start of each line is distorted.',
+    'Samples held at the start of the ramp after the fly-back, before the next Y step, so ringing decays before the next line. FLIM: 128.',
   trig_delay_us:
-    'Gap between the frame marker and the line marker at the start of frame (µs). Both markers fire during pre-blanking, before the first pixel.',
+    'Gap between the frame marker and the line marker at the start of a frame (µs). Does not delay the pixel pulses.',
   trig_width_us:
-    'Trigger pulse width in µs for the frame/line markers and the pixel clock (pixel width is capped at half the dwell time; 0 = fastest possible pulse).',
+    'Pulse width in µs. Frame/line markers: 0 = 1 µs. Pixel pulse: software clock 0 = a few tens of ns (capped at half the dwell), hardware clock 0 = 1 µs. The PLF pixel size is set by the dwell, not by this. FLIM: 0.',
   enable_trigger: 'Emit the pixel/line trigger output during the scan. 0 = off, 1 = on.',
   apply_x_lut:
     'Apply a per-column X lookup table to linearize the mirror. 0 = off, 1 = on (requires an uploaded LUT).',
@@ -122,12 +124,16 @@ const PARAM_TOOLTIPS = {
   park_x: 'X position (DAC counts, 0–4095) the beam moves to when a scan stops.',
   park_y: 'Y position (DAC counts, 0–4095) the beam moves to when a scan stops.',
   overscan_samples:
-    'Extends the X ramp at the same per-pixel slope on both sides of the imaging window, so the mirror is already at constant velocity when triggers/laser start. Compensates the galvo lagging behind the DAC. Costs 2×overscan samples per line.',
+    'Ramp samples before and after the image at the same per-pixel slope, so the mirror already moves at constant speed when the first pixel starts (without it the left edge is squeezed). Costs 2×overscan samples per line; the ramp must stay inside 0–4095. FLIM: 32.',
   laser_blanking:
-    'Gate the laser (galvo laser pin) HIGH only during the imaging window — off during pre-blanking, overscan, fly-back and settle. Prevents fly-back photons from smearing the image (e.g. into a FLIM acquisition).',
+    'Gate the laser output HIGH only during the image samples (off during pre-blank, overscan, fly-back and settle). On the XIAO galvo board this pin (GPIO43) is also the console UART TX. FLIM: 0.',
   hw_pixel_clock:
-    'Generate the pixel clock with the ESP32-S3 RMT peripheral: exactly nx hardware-timed, equidistant pulses per line, decoupled from the DAC/SPI software loop. Falls back to software pulses on unsupported chips.',
+    'Make the pixel pulses with the ESP32-S3 RMT peripheral instead of the software loop. Removes the faint 1 ms dot lattice and the brighter columns 32/96/160/224 that interrupts cause with the software clock (bench test 2026-11-17). Needs dwell ≥ 2 µs and NX ≤ 1023, otherwise software pulses. Validated FLIM default: 0.',
 };
+
+// What the scan parameters do, and where FLIM image artefacts come from
+const SCAN_DOCS_URL = 'https://docs.openuc2.com/usage/disc/galvo-addon/reference/scan-parameters';
+const ARTEFACT_DOCS_URL = 'https://docs.openuc2.com/usage/disc/galvo-addon/explanation/flim-image-artefacts';
 
 const fmtUm = (um, digits) => {
   if (um == null || !isFinite(um)) return '–';
@@ -759,18 +765,34 @@ const GalvoScannerController = () => {
 
             <Box sx={{ mt: 2, p: 1, backgroundColor: 'rgba(0,150,255,0.1)', borderRadius: 1 }}>
               <Typography variant="body2">
-                Frame time: ~{scanInfo.frameTimeMs} ms | 
-                Rate: ~{scanInfo.frameRate} Hz
+                Frame ≈ {scanInfo.frameTime} ({scanInfo.frameRate} Hz) · {scanInfo.lineSamples} samples/line,
+                {' '}{scanInfo.imageShare} % of each line on image pixels
               </Typography>
             </Box>
+            {galvoScanWarnings(config).map((w) => (
+              <Alert key={w} severity="warning" sx={{ mt: 1 }}>
+                {w}{' '}
+                <a href={ARTEFACT_DOCS_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit' }}>Why</a>
+              </Alert>
+            ))}
           </Paper>
 
           {/* Advanced Parameters */}
           <Paper sx={{ p: 2, mb: 2 }}>
-            <Typography variant="subtitle1" gutterBottom>
-              Advanced Parameters
-            </Typography>
-            
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+              <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                Advanced Parameters
+              </Typography>
+              <Button size="small" href={SCAN_DOCS_URL} target="_blank" rel="noopener noreferrer">
+                What these do
+              </Button>
+              <Tooltip describeChild title="Dwell 25 µs, pre-blank 64, overscan 32, fly-back 256, settle 128, software pixel clock: the raster validated with FLIM LABS. Keeps NX/NY and the window.">
+                <Button size="small" variant="outlined" onClick={() => dispatch(setConfig(FLIM_TIMING))}>
+                  Recommended FLIM timing
+                </Button>
+              </Tooltip>
+            </Box>
+
             <Grid container spacing={2}>
               <Grid item xs={6}>
                 <TextField

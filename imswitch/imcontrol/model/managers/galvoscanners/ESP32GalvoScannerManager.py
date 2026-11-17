@@ -33,7 +33,7 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
                     "x_max": 3500,
                     "y_min": 500,
                     "y_max": 3500,
-                    "sample_period_us": 1,
+                    "sample_period_us": 25,
                     "frame_count": 0,
                     "bidirectional": false
                 }

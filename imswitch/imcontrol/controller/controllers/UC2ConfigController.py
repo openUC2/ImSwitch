@@ -6,6 +6,7 @@ from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcontrol.model.aufgaben.storage import save_image
 from .uc2config.can_network_api import CanNetworkApiMixin
+from .uc2config.display_api import DisplayApiMixin
 
 
 
@@ -13,7 +14,7 @@ def _one_frame(image):
     """A camera frame for saving: (Y, X) or RGB (Y, X, 3); a frame stack gives its first."""
     return image if image.ndim == 2 or image.shape[-1] == 3 else image[0]
 
-class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
+class UC2ConfigController(CanNetworkApiMixin, DisplayApiMixin, ImConWidgetController):
     """Linked to UC2ConfigWidget."""
 
     sigUC2SerialReadMessage = Signal(str)
@@ -80,6 +81,9 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
         # CAN network: bus scan, firmware (CAN OTA, USB flash), prompted
         # update — model/canbus, endpoints in uc2config/can_network_api.py
         self._init_can_network()
+
+        # status OLED on the master (device name + status line): uc2config/display_api.py
+        self._init_display()
 
     def processSerialWriteMessage(self, message):
         self.sigUC2SerialWriteMessage.emit(message)
@@ -182,6 +186,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
                     "timestamp": datetime.datetime.now().isoformat(),
                 }
                 self.sigBusStatusUpdate.emit(status)
+                self._commChannel.sigDisplayStatus.emit("E-STOP" if emergency_active else "", -1)
             except Exception as e:
                 self.__logger.error(f"Error in emergency_callback: {e}")
 
@@ -973,6 +978,8 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
         self.__logger.debug("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
         self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
+        if self._master.UC2ConfigManager.isConnected():
+            self._pushDeviceNameSoon()  # a replaced/re-flashed ESP has lost the stored name
 
     def closeConnection(self):
         self._master.UC2ConfigManager.closeSerial()

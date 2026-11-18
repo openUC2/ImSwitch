@@ -362,6 +362,15 @@ class TestCooling:
 class TestTemperatureMonitor:
     """readSaveTemperature CSV rows plus the over-temperature cutoff."""
 
+    @pytest.fixture(autouse=True)
+    def _stop_monitors(self):
+        """Stop every monitor after its test, also a failed one: a monitor left
+        running looks the data folder up anew and writes into the next test's."""
+        self._cams = []
+        yield
+        for cam in self._cams:
+            cam._stopTemperatureMonitor()
+
     def _cooled_logging_camera(self, tmp_path, monkeypatch):
         from imswitch.imcommon.model import dirtools
         from imswitch.imcontrol.model.interfaces import toupcamcamera
@@ -371,6 +380,7 @@ class TestTemperatureMonitor:
         monkeypatch.setattr(toupcamcamera, "TEMPERATURE_LOG_INTERVAL_S", 0.05)
         cam = _make_cooled_camera()
         cam.readSaveTemperature = True
+        self._cams.append(cam)
         # start_live/stop_live of the real driver touch the SDK handle; the
         # monitor is driven directly here, the way those two call it.
         return cam
@@ -382,8 +392,10 @@ class TestTemperatureMonitor:
         return tmp_path / "recordings" / day / TEMPERATURE_LOG_FILENAME
 
     def _rows(self, tmp_path):
+        """(header, rows); the file exists, empty, a moment before its first
+        row is written (it is opened for appending)."""
         rows = list(csv.reader(self._log_file(tmp_path).open()))
-        return rows[0], rows[1:]
+        return (rows[0], rows[1:]) if rows else ([], [])
 
     def _wait_rows(self, tmp_path, n, timeout=5.0):
         """Poll for n logged rows: a loaded macOS runner falls well behind the

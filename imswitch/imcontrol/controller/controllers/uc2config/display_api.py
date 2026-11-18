@@ -21,6 +21,7 @@ import time
 from imswitch.imcommon.model import APIExport
 
 DEVICE_NAME_ENV = "UC2_DEVICE_NAME"        # explicit override
+HOSTNAME_FILE = "/etc/hostname"            # the host's, bind-mounted into the openUC2 OS container
 SSID_MAX_LEN = 32                          # the hotspot SSID is the hostname cut to 32 characters
 DISPLAY_MIN_INTERVAL_S = 0.5               # at most 2 status updates per second
 NAME_PUSH_RETRIES = 12                     # the ESP may still be booting / not connected yet
@@ -28,32 +29,26 @@ NAME_PUSH_RETRY_S = 5
 _CONTAINER_ID = re.compile(r"^[0-9a-f]{12}$")   # Docker's default hostname: not a device name
 
 
-def _dbus_hostname():
-    """The host's hostname via systemd-hostnamed on the host's system bus.
+def _file_hostname(path=HOSTNAME_FILE):
+    """The host's name from /etc/hostname.
 
-    Inside the openUC2 OS container the bus socket is mounted for the pallet
-    upgrade (see startPalletUpgrade); socket.gethostname() would only return the
-    container id there.
+    In the openUC2 OS container that file is the host's, bind-mounted read-only by the
+    pallet (as for machine-admin); socket.gethostname() would only return the container
+    id there. Elsewhere (bare metal, dev machine) it is simply the local hostname, and
+    a plain Docker container's /etc/hostname holds the container id, which is skipped.
     """
-    from jeepney import DBusAddress, new_method_call
-    from jeepney.io.blocking import open_dbus_connection
-    from jeepney.wrappers import unwrap_msg
-    address = DBusAddress("/org/freedesktop/hostname1", bus_name="org.freedesktop.hostname1",
-                          interface="org.freedesktop.DBus.Properties")
-    with open_dbus_connection(bus="SYSTEM") as conn:
-        ((_, hostname),) = unwrap_msg(conn.send_and_get_reply(
-            new_method_call(address, "Get", "ss", ("org.freedesktop.hostname1", "Hostname")), timeout=3))
-    return hostname
+    with open(path) as f:
+        return f.read()
 
 
-def resolve_device_name(environ=None, dbus_hostname=_dbus_hostname, gethostname=socket.gethostname):
+def resolve_device_name(environ=None, read_hostname=_file_hostname, gethostname=socket.gethostname):
     """Name of the machine ImSwitch runs on, as it appears in the Wi-Fi list (or None).
 
-    Order: $UC2_DEVICE_NAME, the host's hostname over D-Bus, the local hostname.
+    Order: $UC2_DEVICE_NAME, /etc/hostname, the local hostname.
     Docker's random container id and "localhost" are no names and are skipped.
     """
     environ = os.environ if environ is None else environ
-    for source in (lambda: environ.get(DEVICE_NAME_ENV), dbus_hostname, gethostname):
+    for source in (lambda: environ.get(DEVICE_NAME_ENV), read_hostname, gethostname):
         try:
             name = (source() or "").strip()
         except Exception:

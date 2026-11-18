@@ -117,7 +117,9 @@ class ImSwitchMicroscope:
         self._exp._beginTriggeredAcquisition()
 
     def end(self) -> None:
-        self._exp._endTriggeredAcquisition()
+        exp = self._get("Experiment")   # absent on setups without it; nothing to restore
+        if exp is not None:
+            exp._endTriggeredAcquisition()
 
     # -- what is there ----------------------------------------------------------
     def capabilities(self) -> Set[str]:

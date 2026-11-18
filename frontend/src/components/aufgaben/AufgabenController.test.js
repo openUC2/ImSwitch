@@ -10,6 +10,7 @@ import * as api from "../../backendapi/apiAufgabenController";
 import catalog from "../../__tests__/fixtures/aufgabenCatalog.json";
 
 jest.mock("../../backendapi/apiAufgabenController");
+jest.mock("react-plotly.js", () => () => null);
 jest.mock("../../backendapi/apiPositionerControllerGetPositions");
 
 const mount = () => {

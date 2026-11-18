@@ -16,12 +16,12 @@ from imswitch.imcontrol.model.managers.rs232.VirtualESP32Manager import VirtualE
 
 
 def _boom():
-    raise OSError("no system bus")
+    raise OSError("no such file")
 
 
 # -- device name -------------------------------------------------------------
 
-def test_dbus_hostname_is_the_device_name():
+def test_hostname_file_is_the_device_name():
     assert resolve_device_name({}, lambda: "openuc2-metal-slope-23501", lambda: "3f9a1c2b7d4e") \
         == "openuc2-metal-slope-23501"
 
@@ -30,7 +30,7 @@ def test_env_overrides_everything():
     assert resolve_device_name({"UC2_DEVICE_NAME": "my-frame"}, lambda: "openuc2-x", lambda: "y") == "my-frame"
 
 
-def test_falls_back_to_the_local_hostname_without_a_system_bus():
+def test_falls_back_to_the_local_hostname_without_the_file():
     assert resolve_device_name({}, _boom, lambda: "openuc2-lab") == "openuc2-lab"
 
 
@@ -38,6 +38,15 @@ def test_container_id_and_localhost_are_no_names():
     assert resolve_device_name({}, _boom, lambda: "3f9a1c2b7d4e") is None
     assert resolve_device_name({}, lambda: "localhost", lambda: "localhost") is None
     assert resolve_device_name({}, lambda: "  ", _boom) is None
+
+
+def test_hostname_file_is_read_with_its_newline(tmp_path):
+    hostname = tmp_path / "hostname"
+    hostname.write_text("openuc2-metal-slope-23501\n")
+    assert resolve_device_name({}, lambda: display_api._file_hostname(str(hostname)), _boom) \
+        == "openuc2-metal-slope-23501"
+    assert resolve_device_name({}, lambda: display_api._file_hostname(str(tmp_path / "missing")),
+                               lambda: "openuc2-lab") == "openuc2-lab"
 
 
 def test_name_is_cut_like_the_hotspot_ssid():

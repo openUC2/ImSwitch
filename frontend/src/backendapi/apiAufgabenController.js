@@ -1,6 +1,6 @@
 // src/backendapi/apiAufgabenController.js
 // API wrappers for the AufgabenController (composable acquisition jobs).
-// One function per endpoint; the Aufgaben app is their only user.
+// One function per endpoint; used by the Aufgaben app and the Live View macros.
 
 import createAxiosInstance from "./createAxiosInstance";
 
@@ -44,5 +44,11 @@ export const apiAufgabenResumeJob = () => get("resumeAufgabenJob");
 export const apiAufgabenFinishJob = () => get("finishAufgabenJob");
 export const apiAufgabenAbortJob = (force = false) => get("abortAufgabenJob", { force });
 export const apiAufgabenGetStatus = () => get("getAufgabenStatus");
+export const apiAufgabenGetTimeline = (since = 0) => get("getAufgabenTimeline", { since });
 export const apiAufgabenAnswerQuestion = (answer) => get("answerAufgabenQuestion", { answer });
 export const apiAufgabenListRuns = (limit = 50) => get("listAufgabenRuns", { limit });
+
+// Macros: saved jobs with metadata.macro, run from Live View buttons
+export const apiAufgabenListMacros = () => get("listAufgabenMacros");
+export const apiAufgabenRunMacro = (name, parameters = {}, confirmed = false) =>
+  post("runAufgabenMacro", { name, parameters, confirmed });

@@ -28,6 +28,7 @@ import TuneIcon from "@mui/icons-material/Tune";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
 import CameraAltIcon from "@mui/icons-material/CameraAlt";
+import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
 import useDeviceProfile from "../hooks/useDeviceProfile";
 import TouchControlDock from "./touch/TouchControlDock.jsx";
 import TouchStagePanel from "./touch/TouchStagePanel.jsx";
@@ -57,6 +58,7 @@ import { selectHasController } from "../state/slices/BackendCapabilitiesSlice";
 import { setNotification } from "../state/slices/NotificationSlice";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
 import ExtendedLEDMatrixController from "./ExtendedLEDMatrixController.jsx";
+import AufgabenMacros from "./aufgaben/AufgabenMacros.jsx";
 
 /*
 <ImageViewport
@@ -794,6 +796,13 @@ export default function LiveView({ setFileManagerInitialPath }) {
         icon: <TuneIcon fontSize="small" />,
         render: () => (
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <AufgabenMacros
+              header={
+                <Typography variant="subtitle2" gutterBottom>
+                  Macros
+                </Typography>
+              }
+            />
             <Box>
               <Typography variant="subtitle2" gutterBottom>
                 All axes · homing · absolute moves
@@ -1136,6 +1145,16 @@ function RightPanelContent({
 }) {
   return (
     <>
+      <AufgabenMacros
+        sx={{ mb: 3 }}
+        header={
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+            <PlaylistPlayIcon fontSize="small" color="action" />
+            <Typography variant="h6">Macros</Typography>
+          </Box>
+        }
+      />
+
       <Box mb={3} data-tour="stage-control">
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <ControlCameraIcon fontSize="small" color="action" />

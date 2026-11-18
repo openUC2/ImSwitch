@@ -487,10 +487,19 @@ prescan and firmware stage scans, digital I/O, temperature; plan and format in
 - `startAufgabenJob(request{job, parameters, confirmed})` (POST) — refused while anything else
   drives the microscope; homing/objective steps need `confirmed`. **Ask first** on hardware.
 - `getAufgabenStatus()`, `pauseAufgabenJob`, `resumeAufgabenJob`, `finishAufgabenJob`,
-  `abortAufgabenJob(force)`, `answerAufgabenQuestion(answer)`
+  `abortAufgabenJob(force)`, `answerAufgabenQuestion(answer)`; `getAufgabenTimeline(since)` —
+  step start/end marks `[t_s, node, 1|0]` of the current or last run (poll with `since=next`)
 - `listAufgabenJobs`, `getAufgabenJob(name)`, `saveAufgabenJob(job)` (POST),
   `deleteAufgabenJob(name)`, `listAufgabenRuns(limit)`, `getAufgabenJobSchema()`
 - `importAufgabenUseq(sequence)` / `exportAufgabenUseq(job)` (POST) — useq-schema bridge
+- Macros: a saved job with `metadata.macro: true` (the "Macro button in Live View" switch) is a
+  button in the Live View sidebar. `listAufgabenMacros()` returns name, title, description and
+  parameters; `runAufgabenMacro(request{name, parameters, confirmed})` (POST) starts one with the
+  same refusals as `startAufgabenJob`. A macro leaves the light as its steps leave it (all off
+  only when it is stopped or fails) and gets a run folder only when it takes frames. Any job
+  switches the camera to software trigger only when it takes frames. `AufgabenController` is
+  loaded on every setup, listed in `availableWidgets` or not. **Ask first** before running a
+  macro on hardware, as for any job.
 - Frontend: the "Aufgaben" app (`frontend/src/components/aufgaben/`) edits, validates, starts and
   follows jobs; `sigAufgabenEvent` carries state, step, log, question and task-progress events.
 - Peripherals for jobs: the `pumps`, `valves` and `digitalIO` setup blocks (managers in

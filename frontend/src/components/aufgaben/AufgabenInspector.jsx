@@ -507,6 +507,26 @@ const JobPanel = ({ job }) => {
         minRows={2}
         onCommit={setField("description")}
       />
+      <Box>
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={!!job.metadata?.macro}
+              onChange={(e) => {
+                const { macro, ...rest } = job.metadata || {};
+                setField("metadata")(e.target.checked ? { ...rest, macro: true } : rest);
+              }}
+            />
+          }
+          label={t("Macro button in Live View")}
+        />
+        <Typography variant="caption" color="text.secondary" component="div">
+          {t(
+            "Saved macros are buttons in the Live View sidebar, with the run parameters in their menu. A macro leaves the light as its steps leave it and writes a run folder only when it takes images."
+          )}
+        </Typography>
+      </Box>
       <SectionTitle>{t("Storage")}</SectionTitle>
       <FormGroup row>
         {["ome-zarr", "ome-tiff"].map((format) => (

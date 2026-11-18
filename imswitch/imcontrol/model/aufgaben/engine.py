@@ -4,6 +4,8 @@
 thread; ``run()`` does the same synchronously. Control: ``pause``, ``resume``,
 ``finish`` (stop at the next node, keep data), ``abort(force=...)`` (also stop
 the stage and the pumps and switch the light off), ``answer`` for question nodes.
+A run ends with every light off; with ``lights_off_at_end=False`` (macros) a job
+that runs to its end leaves the light as its steps left it.
 
 Every node starts at a checkpoint: stop first, then pause. Loops push a frame
 (index, count, item) that expressions read as ``loop.<id>`` and that gives
@@ -28,14 +30,15 @@ import useq
 
 from . import expressions
 from .control import CONTROL_SPECS, MOVING_LOOPS, POSITION_LOOPS
-from .document import CaptureChannel, Job, Node, Retry, expression, resource_ref
+from .document import CaptureChannel, Job, Node, Retry, map_expressions, resource_ref
 from .focus_map import FocusMap
 from .hardware import DerivedImage, Frame, Microscope
 from .registry import FRAME_STEPS, REGISTRY, TaskSpec
 from .storage import FrameInfo, ImageSpec, NgffImage
-from .validate import FROM_KEY, validate
+from .validate import FROM_KEY, Report, validate
 
 POLL_S = 0.2
+TIMELINE_MAX = 400_000      # step marks kept per run (2 per step execution)
 
 
 class FrameSink(Protocol):
@@ -181,8 +184,9 @@ class Run:
                  sink: Optional[FrameSink] = None,
                  on_event: Optional[Callable[[dict], None]] = None,
                  tasks: Optional[Mapping[str, TaskSpec]] = None, run_dir=None,
-                 run_id: Optional[str] = None):
+                 run_id: Optional[str] = None, lights_off_at_end: bool = True):
         self.job, self.hw, self.sink = job, hw, sink
+        self.lights_off_at_end = lights_off_at_end
         self.tasks = REGISTRY if tasks is None else tasks
         self.on_event = on_event or (lambda event: None)
         self.run_id = run_id or uuid.uuid4().hex[:12]
@@ -206,6 +210,10 @@ class Run:
         self._resume.set()
         self._stop_state = "finished"
         self._t0 = time.monotonic()
+        self._ended: Optional[float] = None   # run time in s when the run ended
+        # [t_s, node_id, 1 start | 0 end], append-only, for the run view's timeline.
+        # ponytail: stops recording at TIMELINE_MAX entries; a ring buffer if runs get longer
+        self.timeline: List[list] = []
         self._thread: Optional[threading.Thread] = None
         self._ctx = _TaskContext(self)
         self._pixel_size: Optional[float] = None
@@ -213,12 +221,13 @@ class Run:
         self._lit: Optional[tuple] = None     # (key, channel) of the light that is on
 
     # -- public control -------------------------------------------------------
-    def prepare(self, confirmed: bool = False) -> None:
+    def prepare(self, confirmed: bool = False) -> Report:
         report = validate(self.job, self.tasks, capabilities=self.hw.capabilities())
         if not report.ok:
             raise ValueError("; ".join(f"{i.node}: {i.message}" for i in report.errors))
         if report.ask_first and not confirmed:
             raise PermissionError(f"confirm these steps first: {', '.join(report.ask_first)}")
+        return report
 
     def run(self, confirmed: bool = False) -> str:
         self.prepare(confirmed)
@@ -258,8 +267,30 @@ class Run:
         return {"run_id": self.run_id, "job": self.job.name, "state": self.state,
                 "message": self.message, "node": self.current, "frames": self.frames,
                 "path": [f"{lp.node_id}[{lp.index + 1}/{lp.count or '?'}]" for lp in self.loops],
-                "elapsed_s": round(time.monotonic() - self._t0, 2), "question": self.question,
+                "elapsed_s": self._ended if self._ended is not None else self._elapsed(),
+                "question": self.question,
                 "variables": dict(self.variables)}
+
+    def timeline_since(self, since: int = 0) -> dict:
+        """Step start/end marks from index ``since`` on, times in s since the run started.
+
+        With ``since=0`` the job's steps come along as ``rows`` (outline order, depth).
+        """
+        out = {"run_id": self.run_id, "state": self.state, "next": len(self.timeline),
+               "now": self._ended if self._ended is not None else self._elapsed(),
+               "truncated": len(self.timeline) >= TIMELINE_MAX,
+               "events": self.timeline[since:]}
+        if since == 0:
+            out["rows"] = [{"id": n.id, "task": n.task, "label": n.label, "depth": len(a)}
+                           for n, a in self.job.walk()]
+        return out
+
+    def _elapsed(self) -> float:
+        return round(time.monotonic() - self._t0, 3)
+
+    def _mark(self, node_id: str, start: int) -> None:
+        if len(self.timeline) < TIMELINE_MAX:
+            self.timeline.append([self._elapsed(), node_id, start])
 
     # -- lifecycle --------------------------------------------------------------
     def _request_stop(self, state: str, message: str) -> None:
@@ -268,27 +299,33 @@ class Run:
         self._resume.set()
 
     def _execute(self) -> None:
-        self._t0 = time.monotonic()
+        self._t0, self._ended, self.timeline = time.monotonic(), None, []
         self._set_state("running")
         self._record({"event": "start", "job": json.loads(self.job.to_json()),
                       "parameters": self.params, "time": time.time()})
-        final, message = "finished", ""
+        final, message, completed = "finished", "", False
         try:
             self._run_nodes(self.job.tasks)
+            completed = True
         except _Stop:
             final, message = self._stop_state, self.message
         except _End as e:
             final, message = e.state, e.message
+            completed = e.state == "finished"
         except RunFailed as e:
             final, message = "failed", str(e)
             self._record({"event": "error", "node": e.node_id, "traceback": "".join(
                 traceback.format_exception(e.cause))})
         finally:
             self.current = None
+            if completed and not self.lights_off_at_end:
+                self._try(self._dark)   # only the capture light the run itself switched on
+            else:
+                self._try(self.hw.illumination_off)
             self._lit = None
-            self._try(self.hw.illumination_off)
             if self.sink is not None:
                 self._try(self.sink.close)
+        self._ended = self._elapsed()
         self._record({"event": "end", "state": final, "message": message,
                       "frames": self.frames, "time": time.time()})
         self._set_state(final, message)
@@ -377,10 +414,8 @@ class Run:
                 values[key] = value
             elif (ref := resource_ref(value)) is not None:
                 values[key] = _resource_value(self.job.resources[ref])
-            elif (text := expression(value)) is not None:
-                values[key] = self._eval(text)
             else:
-                values[key] = value
+                values[key] = map_expressions(value, self._eval)
         return model.model_validate(values)
 
     # -- walking --------------------------------------------------------------
@@ -403,12 +438,23 @@ class Run:
         previous, self.current = self.current, node.id
         self._emit("node", node=node.id, task=node.task)
         started = time.monotonic()
+        self._mark(node.id, 1)
+        try:
+            self._attempt(node)
+        finally:
+            self._mark(node.id, 0)
+        self._record({"event": "node", "node": node.id, "task": node.task,
+                      "seconds": round(time.monotonic() - started, 3),
+                      "result": _plain(self.results.get(node.id))})
+        self.current = previous
+
+    def _attempt(self, node: Node) -> None:
         policy = node.on_error
         retries, then = (policy.retry, policy.then) if isinstance(policy, Retry) else (0, policy)
         for attempt in itertools.count():
             try:
                 self.results[node.id] = self._dispatch(node)
-                break
+                return
             except (_Stop, _End, _Break, _Continue, RunFailed):
                 raise
             except Exception as e:
@@ -417,14 +463,10 @@ class Run:
                     continue
                 self.results[node.id] = None
                 if then == "skip":
-                    break
+                    return
                 if then == "continue_loop" and self.loops:
                     raise _Continue() from e
                 raise RunFailed(node.id, e) from e
-        self._record({"event": "node", "node": node.id, "task": node.task,
-                      "seconds": round(time.monotonic() - started, 3),
-                      "result": _plain(self.results.get(node.id))})
-        self.current = previous
 
     def _dispatch(self, node: Node) -> Any:
         spec = CONTROL_SPECS.get(node.task)

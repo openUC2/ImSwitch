@@ -1,4 +1,5 @@
 import {
+  AccountTree as AccountTreeIcon,
   Apps as AppsIcon,
   Tune as TuneIcon,
   Code as CodeIcon,
@@ -244,6 +245,24 @@ const NavigationDrawer = ({
             collapsed={!sidebarVisible}
             nested={true}
           />
+
+          {/* Aufgaben - jobs and Live View macros; essential, so not checked
+              against the (possibly older, persisted) enabled-apps list */}
+          {isAppAvailableForControllers(
+            APP_REGISTRY.aufgaben,
+            availableControllers,
+          ) && (
+            <DrawerEntry
+              icon={<AccountTreeIcon />}
+              label={APP_REGISTRY.aufgaben.name}
+              selected={selectedPlugin === "Aufgaben"}
+              onClick={() => handlePluginChange("Aufgaben")}
+              tooltip={APP_REGISTRY.aufgaben.description}
+              color={SIDEBAR_COLORS.essentials}
+              collapsed={!sidebarVisible}
+              nested={true}
+            />
+          )}
 
           {/* App Manager - Customize workspace - Always show as it's essential */}
           <DrawerEntry

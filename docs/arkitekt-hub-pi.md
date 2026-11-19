@@ -2,6 +2,7 @@
 
 Branch `feat/arkitekt-hub-mikro`, started 2026-11-15 on FRAME ID10 *berry-muscle*
 (`openuc2-berry-muscle-26696`: Pi 5, 8 GB, 128 GB micro SD, Hikrobot MV-CS060 3072 × 2048 RGB).
+Handover for a second FRAME with an NVMe: [arkitekt-handover-frame.md](arkitekt-handover-frame.md).
 Brief: WP-423…426. Coordination server: **go.arkitekt.live** (decided). The data stays on the Pi.
 
 ## Status

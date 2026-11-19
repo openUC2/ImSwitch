@@ -26,7 +26,12 @@ class AndorServerManager(DetectorManager):
     Manager properties:
 
     - ``host`` / ``port`` / ``basePath`` -- where andor-server listens
-      (default ``andor-server``, ``8000``, ``""``)
+      (default ``andor-server``, ``8000``, ``""``). ``host`` may also be a
+      full URL, ``"auto"`` or a list; the configured entries are tried first,
+      then ``andor-server``, the Caddy route ``http://{localhost,127.0.0.1,
+      host.docker.internal}/andor`` and those hosts on ``port`` -- on every
+      reconnect, so the camera is found whether ImSwitch runs in docker or
+      natively. A candidate counts only if ``/info`` answers like andor-server.
     - ``connectTimeout`` -- seconds to wait for the server at start-up
       (default 30); after that the manager comes up disconnected and keeps
       reconnecting in the background

@@ -16,7 +16,7 @@ Robustness:
 import collections
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import requests
@@ -67,13 +67,22 @@ class AndorServerError(RuntimeError):
 
 
 class CameraAndorServer:
-    def __init__(self, host: str = 'andor-server', port: int = 8000, basePath: str = '',
+    # Tried after the configured host(s), in order: the compose service name
+    # (ImSwitch on the same docker network), the os-rpi Caddy ingress route
+    # /andor (ImSwitch on the host or in another container) and a directly
+    # published port. Bare names get ``:port`` + ``basePath``; URLs are used as is.
+    DEFAULT_HOSTS = ('andor-server',
+                     'http://localhost/andor', 'http://127.0.0.1/andor', 'http://host.docker.internal/andor',
+                     'localhost', '127.0.0.1', 'host.docker.internal')
+
+    def __init__(self, host: Union[str, Sequence[str]] = 'andor-server', port: int = 8000, basePath: str = '',
                  requestTimeout: float = 10.0, connectTimeout: float = 30.0,
                  settings: Optional[Dict[str, Any]] = None, cooler: Optional[Dict[str, Any]] = None,
                  flipImage: Tuple[bool, bool] = (False, False), longExposureMs: float = 2000.0,
                  sensorShape: Tuple[int, int] = (1024, 1024)):
         self.__logger = initLogger(self, tryInheritParent=False)
-        self.baseUrl = f'http://{host}:{int(port)}{basePath.rstrip("/")}'
+        self._candidates = self._buildCandidates(host, port, basePath)
+        self.baseUrl = self._candidates[0]
         self.requestTimeout = requestTimeout
         self.flipImage = flipImage
         self.longExposureMs = longExposureMs
@@ -82,6 +91,7 @@ class CameraAndorServer:
         self._session = requests.Session()
 
         self.model = 'Andor (andor-server)'
+        self.isRGB = False  # Andor scientific cameras are monochrome
         self.SensorWidth, self.SensorHeight = sensorShape
         self.pixelSizeUm = 13.0
         self.info: Dict[str, Any] = {}
@@ -108,7 +118,7 @@ class CameraAndorServer:
         deadline = time.monotonic() + connectTimeout
         while not self._connect():
             if time.monotonic() > deadline:
-                self.__logger.warning(f'andor-server at {self.baseUrl} not reachable; continuing '
+                self.__logger.warning(f'andor-server not reachable at {", ".join(self._candidates)}; continuing '
                                       f'disconnected and retrying in the background')
                 break
             time.sleep(1.0)
@@ -118,6 +128,38 @@ class CameraAndorServer:
         self._watch.start()
 
     # ------------------------------------------------------------------ HTTP
+    @classmethod
+    def _buildCandidates(cls, host, port: int, basePath: str) -> List[str]:
+        """Base URLs to try, configured ones first. ``host`` is a host name, a
+        full URL (``http://host.docker.internal/andor``), ``"auto"`` or a list
+        of those; the defaults are always appended as fallbacks."""
+        hosts = [host] if isinstance(host, str) else list(host or [])
+        hosts = [h for h in hosts if h and str(h).strip().lower() != 'auto'] + list(cls.DEFAULT_HOSTS)
+        urls: List[str] = []
+        for h in hosts:
+            h = str(h).strip()
+            if '://' in h:
+                url = h.rstrip('/')
+            else:
+                url = f'http://{h}:{int(port)}{basePath.rstrip("/")}'
+            if url not in urls:
+                urls.append(url)
+        return urls
+
+    def _probe(self) -> bool:
+        """Point ``baseUrl`` at the first candidate that answers like andor-server."""
+        for url in [self.baseUrl] + [u for u in self._candidates if u != self.baseUrl]:
+            try:
+                r = self._session.get(url + '/info', timeout=1.5)
+                if r.status_code == 200 and isinstance(r.json(), dict) and 'camera' in r.json():
+                    if url != self.baseUrl:
+                        self.__logger.info(f'andor-server found at {url}')
+                        self.baseUrl = url
+                    return True
+            except (requests.RequestException, ValueError):
+                continue
+        return False
+
     def _request(self, method: str, path: str, timeout: Optional[float] = None, **kwargs) -> requests.Response:
         try:
             r = self._session.request(method, self.baseUrl + path, timeout=timeout or self.requestTimeout, **kwargs)
@@ -136,6 +178,9 @@ class CameraAndorServer:
         return self._request(method, path, **kwargs).json()
 
     def _connect(self) -> bool:
+        if not self._probe():
+            self.__logger.debug(f'andor-server not found at any of {self._candidates}')
+            return False
         try:
             info = self._json('GET', '/info', timeout=3.0)
             status = self._json('GET', '/status', timeout=3.0)

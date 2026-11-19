@@ -27,6 +27,9 @@ const initialState = {
   processed_count: 0,
   last_process_time: 0.0,
   processing_fps: 0.0,
+  task: "", // "fpm" / "calibration" / "snap" while an LED scan runs
+  task_progress: 0.0,
+  task_message: "",
 
   // UI state
   isLoading: false,
@@ -51,6 +54,9 @@ const dpcSlice = createSlice({
       state.processed_count = stateUpdate.processed_count ?? state.processed_count;
       state.last_process_time = stateUpdate.last_process_time ?? state.last_process_time;
       state.processing_fps = stateUpdate.processing_fps ?? state.processing_fps;
+      state.task = stateUpdate.task ?? state.task;
+      state.task_progress = stateUpdate.task_progress ?? state.task_progress;
+      state.task_message = stateUpdate.task_message ?? state.task_message;
     },
 
     // Update single parameter

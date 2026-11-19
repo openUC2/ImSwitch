@@ -381,7 +381,7 @@ GalvoScannerController (23), I2CSensorController, TemperatureController, FocusLo
 **Wave 4 — long tail, port on demand:** holography suite (InLineHolo/OffAxisHolo — the
 reconstruction cores are numpy/scipy and port trivially as routines; UI later or as bloks),
 STORMRecon, Lightsheet, DPC/SIM, FlowStop, Lepmon, Goniometer, MazeGame/Demo/Debug (bloks),
-SiLA2/Hypha/Arkitekt bridges (re-evaluate: newswitch *is* rekuest/Arkitekt-native, so
+SiLA2/Arkitekt bridges (Hypha removed 2026-10-12) (re-evaluate: newswitch *is* rekuest/Arkitekt-native, so
 ArkitektController is obsolete by construction).
 
 **Do not port:** Qt-era alignment tools (AlignXY, AlignmentLine, ULenses, FFT — inert,

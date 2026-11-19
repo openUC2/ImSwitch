@@ -622,6 +622,42 @@ class ServerThread(threading.Thread):
             if self._asyncio_loop and self._asyncio_loop.is_running():
                 asyncio.run_coroutine_threadsafe(self.server.shutdown(), self._asyncio_loop)
             print("Server is stopping...")
+
+
+def includeAPIRoute(router: APIRouter, path: str, func):
+    """Register an APIExport-decorated function on ``router`` at ``path``.
+
+    How FastAPI runs the handler follows from the wrapper type:
+    - ``asyncExecution`` exports are coroutines and are awaited on the event loop.
+    - Synchronous POST exports, and synchronous GET exports flagged with
+      ``runInThreadpool``, get a plain ``def`` wrapper, which FastAPI runs in its
+      worker threadpool, so a slow call does not stall other requests.
+    - Other synchronous GET exports get an ``async def`` wrapper and therefore
+      run on the event loop thread. Code relies on that (DebugController
+      captures the running loop from its GET endpoints, and GET handlers have
+      always been serialised against each other), so it stays the default.
+    """
+    isPost = getattr(func, '_APIRequestType', "GET") == "POST"
+    route = router.post(path) if isPost else router.get(path)  # TODO: Perhaps we want POST instead?
+
+    if getattr(func, '_APIAsyncExecution', False):
+        @route
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            return await func(*args, **kwargs)  # sometimes we need to return a future
+    elif isPost or getattr(func, '_APIRunInThreadpool', False):
+        @route
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+    else:
+        @route
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+    return wrapper
+
+
 class ImSwitchServer(Worker):
 
     def __init__(self, api, uiapi, setupInfo):
@@ -732,30 +768,7 @@ class ImSwitchServer(Worker):
         functions = api_dict.keys()
 
         def includeAPI(str, func):
-            if hasattr(func, '_APIAsyncExecution') and func._APIAsyncExecution:
-                if hasattr(func, '_APIRequestType') and func._APIRequestType == "POST":
-                    @api_router.post(str)
-                    @wraps(func)
-                    async def wrapper(*args, **kwargs):
-                        return await func(*args, **kwargs)
-                else:
-                    @api_router.get(str) # TODO: Perhaps we want POST instead?
-                    @wraps(func)
-                    async def wrapper(*args, **kwargs):
-                        return await func(*args, **kwargs) # sometimes we need to return a future
-            else:
-                if hasattr(func, '_APIRequestType') and func._APIRequestType == "POST":
-                    @api_router.post(str)
-                    @wraps(func)
-                    def wrapper(*args, **kwargs):
-                        return func(*args, **kwargs)
-                else:
-                    @api_router.get(str) # TODO: Perhaps we want POST instead?
-                    @wraps(func)
-                    #@register
-                    async def wrapper(*args, **kwargs):
-                        return func(*args, **kwargs)
-            return wrapper
+            return includeAPIRoute(api_router, str, func)
 
         def includeUIAPI(str, func):
             # based on UIExport decorator, only get is supported

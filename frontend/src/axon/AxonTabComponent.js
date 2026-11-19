@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useDispatch } from "react-redux";
+import { useDispatch, useStore } from "react-redux";
 import LiveViewControlWrapper from "./LiveViewControlWrapper";
 import GenericTabBar from "./GenericTabBar";
 import WellSelectorComponent from "./WellSelectorComponent";
@@ -40,9 +40,15 @@ const AxonTabComponent = () => {
     fetchObjectiveControllerGetStatus(dispatch);
   }, [dispatch]);
 
-  // Ensure WellPlate starts with detector auto-exposure disabled.
+  // Ensure WellPlate starts with detector auto-exposure disabled. Only worth a
+  // message when it changed something (the camera was in auto) or a reachable
+  // backend refused; without a backend the connection badge already says so.
+  const store = useStore();
   useEffect(() => {
     let cancelled = false;
+    const { detectorParametersState, uc2State } = store.getState();
+    const wasAuto = detectorParametersState?.parameters?.mode === "auto";
+    const backendUp = Boolean(uc2State?.backendConnected);
 
     (async () => {
       try {
@@ -58,6 +64,7 @@ const AxonTabComponent = () => {
           }),
         );
 
+        if (!wasAuto) return;
         dispatch(
           setNotification({
             message:
@@ -67,7 +74,7 @@ const AxonTabComponent = () => {
           }),
         );
       } catch (error) {
-        if (cancelled) return;
+        if (cancelled || !backendUp) return;
         dispatch(
           setNotification({
             message:
@@ -82,7 +89,7 @@ const AxonTabComponent = () => {
     return () => {
       cancelled = true;
     };
-  }, [dispatch]);
+  }, [dispatch, store]);
 
   return (
     // Full-height flex column so the new workspace can split the left/right

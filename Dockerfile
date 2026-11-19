@@ -112,20 +112,14 @@ RUN \
   --mount=type=bind,source=uv.lock,target=uv.lock \
   /mnt/build/install-imswitch-deps.sh
 
-# Install Imswitch itself:
+# Install Imswitch itself. Every dependency, UC2-REST included, comes at the version in uv.lock
+# (move UC2-REST with `uv lock --upgrade-package uc2-rest`):
 COPY . /opt/imswitch
 RUN \
   --mount=type=cache,sharing=locked,target=/var/cache/apt \
   --mount=type=cache,sharing=locked,target=/var/lib/apt \
   --mount=type=cache,target=/root/.cache/uv \
-  uv sync --frozen
-
-# Install UC2-REST itself (from latest uc2-rest from github master using: uv pip install https://github.com/openUC2/UC2-REST/archive/refs/heads/master.zip --force-reinstall)
-RUN \
-  --mount=type=cache,sharing=locked,target=/var/cache/apt \
-  --mount=type=cache,sharing=locked,target=/var/lib/apt \
-  --mount=type=cache,target=/root/.cache/uv \
-  uv pip install https://github.com/openUC2/UC2-REST/archive/refs/heads/master.zip --force-reinstall
+  uv sync --frozen --inexact
 
 # Place executables in the environment at the front of the path
 ENV PATH="/opt/imswitch/.venv/bin:$PATH"

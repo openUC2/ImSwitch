@@ -460,21 +460,22 @@ const StreamControlOverlay = ({
           </Box>
         ) : (
           <>
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                mb: 1,
-              }}
-            >
-              <Typography
-                variant="h6"
-                sx={{ fontWeight: "bold", fontSize: "1rem" }}
+            {/* Embedded (forceExpanded) the host dialog names this panel. */}
+            {!forceExpanded && (
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  mb: 1,
+                }}
               >
-                Stream Controls
-              </Typography>
-              {!forceExpanded && (
+                <Typography
+                  variant="h6"
+                  sx={{ fontWeight: "bold", fontSize: "1rem" }}
+                >
+                  Stream Controls
+                </Typography>
                 <IconButton
                   size="small"
                   onClick={() => setIsExpanded(false)}
@@ -482,8 +483,8 @@ const StreamControlOverlay = ({
                 >
                   <ExpandLessIcon />
                 </IconButton>
-              )}
-            </Box>
+              </Box>
+            )}
 
             <Box
               sx={{

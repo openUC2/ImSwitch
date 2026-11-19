@@ -74,3 +74,27 @@ export const stopDpcProcessing = async (baseUrl) => {
 export const getDpcStreamUrl = (baseUrl, jpegQuality = 85) => {
   return `${baseUrl}/DPCController/mjpeg_stream_dpc?startStream=true&jpeg_quality=${jpegQuality}`;
 };
+
+/** PNG of the DPC weak-object transfer functions; params: wavelength, na, nai, nai_inner (unset: current) */
+export const getDpcWotfUrl = (baseUrl, params) =>
+  `${baseUrl}/DPCController/get_dpc_wotf?${new URLSearchParams(params)}`;
+
+const get = async (url) => (await axios.get(url)).data;
+
+/** LEDs with illumination NA (camera frame), DPC membership, brightfield flag, calibration */
+export const getLedLayout = (baseUrl) => get(`${baseUrl}/DPCController/get_led_layout`);
+
+/** Manual LED -> camera calibration: {rotation_deg, flip, offset_x_mm, offset_y_mm, offset_z_mm} */
+export const setLedCalibration = (baseUrl, cal) =>
+  get(`${baseUrl}/DPCController/set_led_calibration?${new URLSearchParams(cal)}`);
+
+/** LED scans running in the backend; progress via get_dpc_state (task, task_progress, task_message) */
+export const startLedCalibration = (baseUrl) => get(`${baseUrl}/DPCController/start_led_calibration`);
+export const startFpmAcquisition = (baseUrl) => get(`${baseUrl}/DPCController/start_fpm_acquisition`);
+export const snapDpc = (baseUrl) => get(`${baseUrl}/DPCController/snap_dpc`);
+export const stopDpcTask = (baseUrl) => get(`${baseUrl}/DPCController/stop_task`);
+
+/** Light exactly these LED chain indices (others off) */
+export const setLeds = (baseUrl, ids, [r, g, b]) =>
+  get(`${baseUrl}/LEDMatrixController/setLEDs?${new URLSearchParams({
+    ledIds: ids.join(","), intensity_r: r, intensity_g: g, intensity_b: b })}`);

@@ -1,13 +1,10 @@
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Optional, Tuple
 
-import numpy as np
+from fastapi import Query
 from pydantic import BaseModel
 
 from imswitch.imcommon.model import APIExport
 from imswitch.imcommon.framework import Signal, Timer
-from imswitch.imcontrol.model import configfiletools
-from imswitch.imcontrol.view import guitools as guitools
 from ..basecontrollers import ImConWidgetController
 
 
@@ -17,22 +14,53 @@ class SetDetectorParameterRequest(BaseModel):
     value: Any
 
 
-@dataclass
-class SettingsControllerParams:
-    model: Any
-    binning: Any
-    frameMode: Any
-    x0: Any
-    y0: Any
-    width: Any
-    height: Any
-    applyROI: Any
-    newROI: Any
-    abortROI: Any
-    saveMode: Any
-    deleteMode: Any
-    allDetectorsFrame: Any
+# Sensors want ROI offsets and sizes in multiples of this many pixels.
+_ROI_ALIGNMENT = 4
 
+
+def computeCropWindow(fullShape, frameStart, shape,
+                      alignment: int = _ROI_ALIGNMENT) -> Tuple[int, int, int, int]:
+    """ Validate an ROI against the full frame and align it for the sensor.
+
+    ``fullShape`` is ``(width, height)`` of the full frame, ``frameStart`` is
+    ``(x0, y0)`` and ``shape`` is ``(width, height)`` of the requested region,
+    all in the same pixels. Returns ``(hpos, vpos, hsize, vsize)`` for
+    ``DetectorManager.crop()``: the region widened outwards to multiples of
+    ``alignment`` and clipped to the frame, so it always contains the request
+    and never leaves the sensor. A size that ends at the sensor edge is kept as
+    is even if it is not a multiple of ``alignment``.
+
+    Raises ValueError if the region is malformed, empty or not inside the
+    full frame.
+    """
+    try:
+        fullWidth, fullHeight = (int(v) for v in fullShape[:2])
+        x0, y0 = (int(v) for v in frameStart)
+        width, height = (int(v) for v in shape)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f'frameStart and shape must be two integers each, got {frameStart!r} and {shape!r}'
+        )
+    if width <= 0 or height <= 0:
+        raise ValueError(f'ROI size must be positive, got {width}x{height}')
+    if x0 < 0 or y0 < 0:
+        raise ValueError(f'ROI start must not be negative, got ({x0}, {y0})')
+    if x0 + width > fullWidth or y0 + height > fullHeight:
+        raise ValueError(
+            f'ROI ({x0}, {y0}) {width}x{height} does not fit the full frame '
+            f'{fullWidth}x{fullHeight}'
+        )
+
+    step = max(1, int(alignment))
+
+    def align(start, size, limit):
+        lo = (start // step) * step
+        hi = min(-(-(start + size) // step) * step, limit)
+        return lo, hi - lo
+
+    hpos, hsize = align(x0, width, fullWidth)
+    vpos, vsize = align(y0, height, fullHeight)
+    return hpos, vpos, hsize, vsize
 
 
 class SettingsController(ImConWidgetController):
@@ -45,7 +73,6 @@ class SettingsController(ImConWidgetController):
         super().__init__(*args, **kwargs)
 
         self.settingAttr = False
-        self.allParams = {}
         self._perDetectorStreamParams = {}
         self._last_detector_params_snapshot = None
         self._detector_params_emit_interval_ms = 5000
@@ -61,8 +88,6 @@ class SettingsController(ImConWidgetController):
         
         # Connect our signal with CommunicationChannel for WebSocket broadcasting
         self.sigDetectorParametersUpdated.connect(self._commChannel.sigDetectorParametersUpdated.emit)
-
-        self.roiAdded = False
 
         self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
         self.detectorSwitched(self._master.detectorsManager.getCurrentDetectorName())
@@ -131,375 +156,15 @@ class SettingsController(ImConWidgetController):
         except Exception:
             pass
         
-    def addROI(self):
-        """ Adds the ROI to ImageWidget viewbox through the CommunicationChannel. """
-        if not self.roiAdded:
-            self._commChannel.sigAddItemToVb.emit(self._widget.getROIGraphicsItem())
-            self.roiAdded = True
-
-    def toggleROI(self, b, position=None, size=None):
-        """ Show or hide ROI. """
-        if b:
-            self.addROI()
-            self._widget.showROI(position, size)
-        else:
-            self._widget.hideROI()
-
-    def initParameters(self):
-        """ Take parameters from the detector Tree map. """
-        for detectorName in self._master.detectorsManager.getAllDeviceNames():
-            if self._master.detectorsManager[detectorName].forAcquisition:
-                detectorTree = self._widget.trees[detectorName]
-                framePar = detectorTree.p.param('Image frame')
-                self.allParams[detectorName] = SettingsControllerParams(
-                    model=detectorTree.p.param('Model'),
-                    binning=framePar.param('Binning'),
-                    frameMode=framePar.param('Mode'),
-                    x0=framePar.param('X0'),
-                    y0=framePar.param('Y0'),
-                    width=framePar.param('Width'),
-                    height=framePar.param('Height'),
-                    applyROI=framePar.param('Apply'),
-                    newROI=framePar.param('New ROI'),
-                    abortROI=framePar.param('Abort ROI'),
-                    saveMode=framePar.param('Save mode'),
-                    deleteMode=framePar.param('Delete mode'),
-                    allDetectorsFrame=framePar.param('Update all detectors')
-                )
-
-                params = self.allParams[detectorName]
-                params.binning.sigValueChanged.connect(self.updateBinning)
-                params.frameMode.sigValueChanged.connect(self.updateFrame)
-                params.applyROI.sigActivated.connect(self.adjustFrame)
-                params.newROI.sigActivated.connect(self.updateFrame)
-                params.abortROI.sigActivated.connect(self.abortROI)
-                params.saveMode.sigActivated.connect(self.saveMode)
-                params.deleteMode.sigActivated.connect(self.deleteMode)
-
-                def syncFrameParamsWithoutUpdates(): self.syncFrameParams(False, False)
-                params.x0.sigValueChanged.connect(syncFrameParamsWithoutUpdates)
-                params.y0.sigValueChanged.connect(syncFrameParamsWithoutUpdates)
-                params.width.sigValueChanged.connect(syncFrameParamsWithoutUpdates)
-                params.height.sigValueChanged.connect(syncFrameParamsWithoutUpdates)
-                params.allDetectorsFrame.sigValueChanged.connect(self.syncFrameParams)
-
-        detectorsParameters = self._master.detectorsManager.execOnAll(
-            lambda c: c.parameters, condition=lambda c: c.forAcquisition
-        )
-        for detectorName, detectorParameters in detectorsParameters.items():
-            for parameterName, parameter in detectorParameters.items():
-                paramInWidget = self._widget.trees[detectorName].p.param(parameter.group).param(
-                    parameterName
-                )
-                paramInWidget.sigValueChanged.connect(
-                    lambda _, value, detectorName=detectorName, parameterName=parameterName:
-                    self.setDetectorParameter(detectorName, parameterName, value)
-                )
-
-        detectorsActions = self._master.detectorsManager.execOnAll(
-            lambda c: c.actions, condition=lambda c: c.forAcquisition
-        )
-        for detectorName, detectorActions in detectorsActions.items():
-            for actionName, action in detectorActions.items():
-                paramInWidget = self._widget.trees[detectorName].p.param(action.group).param(
-                    actionName
-                )
-                paramInWidget.sigActivated.connect(action.func)
-
-    def adjustFrame(self, *, detector=None):
-        """ Crop detector and adjust frame. """
-
-        if detector is None:
-            self.getDetectorManagerFrameExecFunc()(lambda c: self.adjustFrame(detector=c))
-            return
-
-        # Adjust frame
-        params = self.allParams[detector.name]
-        try:
-            binning = int(params.binning.value())
-        except:
-            binning = 1
-        width = params.width.value()
-        height = params.height.value()
-        x0 = params.x0.value()
-        y0 = params.y0.value()
-
-        # Round to closest "divisable by 4" value.
-        hpos = binning * x0
-        vpos = binning * y0
-        hsize = binning * width
-        vsize = binning * height
-
-        hmodulus = 4
-        vmodulus = 4
-        vpos = int(vmodulus * np.ceil(vpos / vmodulus))
-        hpos = int(hmodulus * np.ceil(hpos / hmodulus))
-        vsize = int(vmodulus * np.ceil(vsize / vmodulus))
-        hsize = int(hmodulus * np.ceil(hsize / hmodulus))
-
-        detector.crop(hpos, vpos, hsize, vsize)
-
-        # Final shape values might differ from the user-specified one because of detector limitation
-        # x128
-        if detector.name == self._master.detectorsManager.getCurrentDetectorName():
-            self._commChannel.sigAdjustFrame.emit(detector.shape)
-            self._widget.hideROI()
-
-        self.updateParamsFromDetector(detector=detector)
-        self.updateSharedAttrs()
-
-    def ROIchanged(self):
-        """ Update parameters according to ROI. """
-        frameStart = self._master.detectorsManager.execOnCurrent(lambda c: c.frameStart)
-        ROI = self._widget.getROIGraphicsItem()
-        pos = ROI.position
-        size = ROI.size
-
-        currentParams = self.getCurrentParams()
-        currentParams.x0.setValue(frameStart[0] + int(pos[0]))
-        currentParams.y0.setValue(frameStart[1] + int(pos[1]))
-        currentParams.width.setValue(size[0])  # [0] is Width
-        currentParams.height.setValue(size[1])  # [1] is Height
-
-    def updateFrameActionButtons(self, *, detector=None):
-        """ Shows the frame-related buttons appropriate for the current frame
-        mode, and hides the others. """
-
-        if detector is None:
-            self.getDetectorManagerFrameExecFunc()(
-                lambda c: self.updateFrameActionButtons(detector=c)
-            )
-            return
-
-        params = self.allParams[detector.name]
-
-        params.applyROI.hide()
-        params.newROI.hide()
-        params.abortROI.hide()
-        params.saveMode.hide()
-        params.deleteMode.hide()
-
-        if params.frameMode.value() == 'Custom':
-            params.applyROI.show()
-            params.newROI.show()
-            params.abortROI.show()
-            params.saveMode.show()
-        elif params.frameMode.value() != 'Full chip':
-            params.deleteMode.show()
-
-    def abortROI(self):
-        """ Cancel and reset parameters of the ROI. """
-        self.toggleROI(False)
-        frameStart = self._master.detectorsManager.execOnCurrent(lambda c: c.frameStart)
-        shapes = self._master.detectorsManager.execOnCurrent(lambda c: c.shape)
-
-        currentParams = self.getCurrentParams()
-        currentParams.x0.setValue(frameStart[0])
-        currentParams.y0.setValue(frameStart[1])
-        currentParams.width.setValue(shapes[0])
-        currentParams.height.setValue(shapes[1])
-
-    def saveMode(self):
-        """ Save the current frame mode parameters to the mode list. """
-
-        currentParams = self.getCurrentParams()
-        x0, y0, width, height = (currentParams.x0.value(), currentParams.y0.value(),
-                                 currentParams.width.value(), currentParams.height.value())
-
-        name = guitools.askForTextInput(
-            self._widget,
-            'Add frame mode',
-            f'Enter a name for this mode:\n(X0: {x0}; Y0: {y0}; Width: {width}; Height: {height})')
-
-        if not name:  # No name provided
-            return
-
-        add = True
-        alreadyExists = False
-        if name in self._setupInfo.rois:
-            alreadyExists = True
-            add = guitools.askYesNoQuestion(
-                self._widget,
-                'Frame mode already exists',
-                f'A frame mode with the name "{name}" already exists. Do you want to overwrite it"?'
-            )
-
-        if add:
-            # Add in GUI
-            if not alreadyExists:
-                for params in self.allParams.values():
-                    newModeItems = params.frameMode.opts['limits'].copy()
-                    newModeItems.insert(len(newModeItems) - 1, name)
-                    params.frameMode.setLimits(newModeItems)
-
-            # Set in setup info
-            self._setupInfo.setROI(name, x0, y0, width, height)
-            configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
-
-            # Update selected ROI in GUI
-            for params in self.allParams.values():
-                params.frameMode.setValue(name)
-
-    def deleteMode(self):
-        """ Delete the current frame mode from the mode list (if it's a saved
-        custom ROI). """
-
-        currentParams = self.getCurrentParams()
-        modeToDelete = currentParams.frameMode.value()
-
-        confirmationResult = guitools.askYesNoQuestion(
-            self._widget,
-            'Delete frame mode?',
-            f'Are you sure you want to delete the mode "{modeToDelete}"?'
-        )
-
-        if confirmationResult:
-            # Remove in GUI
-            for params in self.allParams.values():
-                newModeItems = params.frameMode.opts['limits'].copy()
-                newModeItems = [value for value in newModeItems if value != modeToDelete]
-                params.frameMode.setLimits(newModeItems)
-
-            # Remove from setup info
-            self._setupInfo.removeROI(modeToDelete)
-            configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
-
-    def updateBinning(self):
-        """ Update a new binning to the detector. """
-        def set_binning(c):
-            if type(self.allParams[c.name].binning.value())!=int:
-                c.setBinning(1)
-            else:
-                c.setBinning(int(self.allParams[c.name].binning.value()))
-
-        self.getDetectorManagerFrameExecFunc()(set_binning)
-        self.updateSharedAttrs()
-
-    def updateParamsFromDetector(self, *, detector):
-        """ Update the parameter values from the detector. """
-        return
-        params = self.allParams[detector.name]
-
-        # Detector parameters
-        for parameterName, parameter in detector.parameters.items():
-            paramInWidget = self._widget.trees[detector.name].p.param(parameter.group).param(
-                parameterName
-            )
-            paramInWidget.setValue(parameter.value)
-
-        # Frame
-        params.binning.setValue(detector.binning)
-        frameStart = detector.frameStart
-        shape = detector.shape
-        fullShape = detector.fullShape # width, height of the full chip
-        params.x0.setValue(frameStart[0])
-        params.y0.setValue(frameStart[1])
-        params.width.setValue(shape[0])
-        params.width.setLimits((1, fullShape[0]))
-        params.height.setValue(shape[1])
-        params.height.setLimits((1, fullShape[1]))
-
-        # Model
-        params.model.setValue(detector.model)
-
-    def updateFrame(self, *, detector=None):
-        """ Change the image frame size and position in the sensor. """
-
-        if detector is None:
-            self.getDetectorManagerFrameExecFunc()(lambda c: self.updateFrame(detector=c))
-            return
-
-        params = self.allParams[detector.name]
-        frameMode = self.getCurrentParams().frameMode.value()
-        customFrame = frameMode == 'Custom'
-
-        params.x0.setWritable(customFrame)
-        params.y0.setWritable(customFrame)
-        params.width.setWritable(customFrame)
-        params.height.setWritable(customFrame)
-        # Call .show() to prevent view alignment issues
-        params.x0.show()
-        params.y0.show()
-        params.width.show()
-        params.height.show()
-
-        if customFrame:
-            ROIsize = (64, 64)
-            ROIcenter = self._commChannel.getCenterViewbox()
-
-            ROIpos = (ROIcenter[0] - 0.5 * ROIsize[0],
-                      ROIcenter[1] - 0.5 * ROIsize[1])
-
-            self.toggleROI(True, ROIpos, ROIsize)
-            self.ROIchanged()
-
-        else:
-            if frameMode == "":
-                pass
-            else:
-                if frameMode == 'Full chip':
-                    fullChipShape = detector.fullShape
-                    params.x0.setValue(0)
-                    params.y0.setValue(0)
-                    params.width.setValue(fullChipShape[0])
-                    params.height.setValue(fullChipShape[1])
-                else:
-                    roiInfo = self._setupInfo.rois[frameMode]
-                    params.x0.setValue(roiInfo.x)
-                    params.y0.setValue(roiInfo.y)
-                    params.width.setValue(roiInfo.w)
-                    params.height.setValue(roiInfo.h)
-
-                self.adjustFrame(detector=detector)
-
-        self.syncFrameParams(doAdjustFrame=False)
-
     def detectorSwitched(self, newDetectorName, _=None):
         """ Called when the user switches to another detector. """
         newDetectorShape = self._master.detectorsManager[newDetectorName].shape
         self._commChannel.sigAdjustFrame.emit(newDetectorShape)
         self._emit_detector_parameters_if_changed(force=True)
-        return
-        self._widget.setDisplayedDetector(newDetectorName)
-        self._widget.setImageFrameVisible(self._master.detectorsManager[newDetectorName].croppable)
 
     def detectorSwitchClicked(self, detectorName):
         """ Changes the current detector to the selected detector. """
         self._master.detectorsManager.setCurrentDetector(detectorName)
-
-    def detectorNextClicked(self):
-        """ Changes the current detector to the next detector. """
-        self._widget.selectNextDetector()
-
-    def syncFrameParams(self, doAdjustFrame=True, doUpdateFrameActionButtons=True):
-        currentParams = self.getCurrentParams()
-        shouldSync = currentParams.allDetectorsFrame.value()
-
-        for params in self.allParams.values():
-            params.allDetectorsFrame.setValue(shouldSync)
-            if shouldSync:
-                params.frameMode.setValue(currentParams.frameMode.value())
-                params.x0.setValue(currentParams.x0.value())
-                params.y0.setValue(currentParams.y0.value())
-                params.width.setValue(currentParams.width.value())
-                params.height.setValue(currentParams.height.value())
-
-        if shouldSync and doAdjustFrame:
-            self.adjustFrame()
-
-        if doUpdateFrameActionButtons:
-            self.updateFrameActionButtons()
-
-    def getCurrentParams(self):
-        return self.allParams[self._master.detectorsManager.getCurrentDetectorName()]
-
-    def getDetectorManagerFrameExecFunc(self):
-        """ Returns the detector manager exec function that should be used for
-        frame-related changes. """
-        currentParams = self.getCurrentParams()
-        detectorsManager = self._master.detectorsManager
-        return (detectorsManager.execOnAll if currentParams.allDetectorsFrame.value()
-                else detectorsManager.execOnCurrent)
 
     def attrChanged(self, key, value):
         if self.settingAttr or len(key) < 3 or key[0] != _attrCategory:
@@ -953,10 +618,6 @@ class SettingsController(ImConWidgetController):
             )
             return {'status': 'error', 'detectorName': detectorName, 'error': str(e)}
 
-        # Keep the (Qt-only) parameter tree in sync when it exists.
-        if detectorName in self.allParams:
-            self.allParams[detectorName].binning.setValue(binning)
-
         if detectorName == self._master.detectorsManager.getCurrentDetectorName():
             self._commChannel.sigAdjustFrame.emit(detector.shape)
 
@@ -970,21 +631,71 @@ class SettingsController(ImConWidgetController):
         }
 
     @APIExport(runOnUIThread=True)
-    def setDetectorROI(self, detectorName: str, frameStart: Tuple[int, int],
-                       shape: Tuple[int, int]) -> None:
-        """ Sets the ROI for the specified detector. frameStart is a tuple
-        (x0, y0) and shape is a tuple (width, height). """
+    def setDetectorROI(self, detectorName: Optional[str] = None,
+                       frameStart: Annotated[Optional[Tuple[int, int]], Query()] = None,
+                       shape: Annotated[Optional[Tuple[int, int]], Query()] = None,
+                       fullFrame: bool = False) -> Dict[str, Any]:
+        """ Crops the detector read-out to a region of interest.
 
-        detector = self._master.detectorsManager[detectorName]
+        ``frameStart`` is ``(x0, y0)`` and ``shape`` is ``(width, height)``, in
+        pixels of the detector's full frame (``fullShape`` in
+        ``getCameraStatus``: ``sensorWidth`` x ``sensorHeight``). Cameras whose
+        full frame shrinks with binning (Hik, Toupcam, Allied Vision) take
+        binned pixels. The window is widened to multiples of 4, which sensors
+        need, and clipped to the sensor edge; it always contains the requested
+        region. ``fullFrame=true``, or leaving out both ``frameStart`` and
+        ``shape``, restores the full sensor.
 
-        self.allParams[detectorName].frameMode.setValue('Custom')
-        self.updateFrame(detector=detector)
+        Over HTTP each tuple is passed as a repeated query parameter::
 
-        self.allParams[detectorName].x0.setValue(frameStart[0])
-        self.allParams[detectorName].y0.setValue(frameStart[1])
-        self.allParams[detectorName].width.setValue(shape[0])
-        self.allParams[detectorName].height.setValue(shape[1])
-        self.adjustFrame(detector=detector)
+            GET /api/SettingsController/setDetectorROI?frameStart=100&frameStart=200&shape=512&shape=512
+            GET /api/SettingsController/setDetectorROI?fullFrame=true
+
+        Returns ``status`` ("ok"/"error"), the ``frameStart`` and ``shape``
+        the detector reports after cropping, and its ``fullShape``.
+        """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+
+        def error(message):
+            self._logger.warning(f"setDetectorROI({detectorName}): {message}")
+            return {'status': 'error', 'detectorName': detectorName, 'error': message}
+
+        try:
+            detector = self._master.detectorsManager[detectorName]
+        except Exception:
+            return error(f'Unknown detector "{detectorName}"')
+        if not detector.croppable:
+            return error('Detector does not support cropping')
+
+        fullShape = (int(detector.fullShape[0]), int(detector.fullShape[1]))
+        if fullFrame or (frameStart is None and shape is None):
+            window = (0, 0, fullShape[0], fullShape[1])
+        elif frameStart is None or shape is None:
+            return error('Pass both frameStart and shape, or fullFrame=true')
+        else:
+            try:
+                window = computeCropWindow(fullShape, frameStart, shape)
+            except ValueError as e:
+                return error(str(e))
+
+        try:
+            detector.crop(*window)
+        except Exception as e:
+            self._logger.error(f"Cropping '{detectorName}' to {window} failed", exc_info=True)
+            return error(f'Crop failed: {e}')
+
+        if detectorName == self._master.detectorsManager.getCurrentDetectorName():
+            self._commChannel.sigAdjustFrame.emit(detector.shape)
+        self.updateSharedAttrs()
+        self._emit_detector_parameters_if_changed(force=True)
+        return {
+            'status': 'ok',
+            'detectorName': detectorName,
+            'frameStart': [int(v) for v in detector.frameStart[:2]],
+            'shape': [int(v) for v in detector.shape[:2]],
+            'fullShape': list(fullShape),
+        }
 
     def _coerceDetectorParamValue(self, detectorName: str, parameterName: str, value: Any) -> Any:
         """Convert a query-string value to the type the detector declares.
@@ -1030,18 +741,9 @@ class SettingsController(ImConWidgetController):
             return
         value = self._coerceDetectorParamValue(detectorName, parameterName, value)
 
-        if (parameterName in ['Trigger source'] and
-                self.getCurrentParams().allDetectorsFrame.value()):
-            # Special case for certain parameters that will follow the "update all detectors" option
-            execFunc = self._master.detectorsManager.execOnAll
-        else:
-            def execFunc(f):
-                self._master.detectorsManager.execOn(detectorName, f)
         try:
-            execFunc(
-                lambda c: (c.setParameter(parameterName, value) and
-                        self.updateParamsFromDetector(detector=c))
-            )
+            self._master.detectorsManager.execOn(
+                detectorName, lambda c: c.setParameter(parameterName, value))
         except Exception:
             self._logger.warning(
                 f"Failed to set parameter '{parameterName}' for detector '{detectorName}'",
@@ -1112,7 +814,6 @@ class SettingsController(ImConWidgetController):
                         detectorName,
                         lambda c: c.setParameter(mode_parameter_name, 'manual'),
                     )
-                    self.updateParamsFromDetector(detector=detector)
                     self.updateSharedAttrs()
                     self._emit_detector_parameters_if_changed(force=True)
                 except Exception:

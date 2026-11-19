@@ -247,16 +247,22 @@ def test_every_stitched_tiff_opens(multisite_run):
     tiffs = _stitched_tiffs(multisite_run["dir"])
     assert len(tiffs) == SITES, f"expected {SITES} stitched TIFFs, got {tiffs}"
 
-    expected_pages = GRID * GRID * len(CHANNELS) * Z_PLANES
+    # The stitched TIFF is the site's canvas (one plane per channel and Z, all
+    # tiles in it). Every tile of every plane must hold data: the old stitcher
+    # stopped at nx*ny frames and dropped the rest.
     for path in tiffs:
-        assert os.path.getsize(path) > 0, f"{path} is empty"
+        site = os.path.basename(os.path.dirname(path))
         with tifffile.TiffFile(path) as tif:
-            assert len(tif.pages) == expected_pages, (
-                f"{os.path.basename(os.path.dirname(path))}: "
-                f"{len(tif.pages)} pages, expected {expected_pages} "
-                "(the stitcher used to stop at nx*ny and drop the rest)"
-            )
-            assert tif.pages[0].asarray().size > 0
+            assert tif.is_ome, f"{site}: not an OME-TIFF"
+            series = tif.series[0]
+            assert series.shape[:-2] == (len(CHANNELS), Z_PLANES), f"{site}: {series.shape}"
+            planes = series.asarray().reshape(-1, *series.shape[-2:])
+        rows, cols = planes.shape[1] // GRID, planes.shape[2] // GRID
+        for k, plane in enumerate(planes):
+            for gy in range(GRID):
+                for gx in range(GRID):
+                    tile = plane[gy * rows:(gy + 1) * rows, gx * cols:(gx + 1) * cols]
+                    assert tile.max() > 0, f"{site}: plane {k}, tile ({gx}, {gy}) is blank"
 
 
 def test_aborted_run_still_finalizes(api_server):

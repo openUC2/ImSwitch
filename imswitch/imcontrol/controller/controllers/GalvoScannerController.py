@@ -440,11 +440,13 @@ class GalvoScannerController(ImConWidgetController):
         
         try:
             scanner = self._master.galvoScannersManager[scannerName]
-            scanner.stop_scan(timeout=timeout)
+            stopped = scanner.stop_scan(timeout=timeout)
+            if "error" in stopped:
+                return {"error": stopped["error"], "scannerName": scannerName}
 
             self.__logger.info(f"Stopped scan on {scannerName}")
-            result = {"status": "stopped", "scannerName": scannerName}
-            return result
+            return {"status": "stopped", "scannerName": scannerName,
+                    "park": stopped.get("park")}
         except Exception as e:
             self.__logger.error(f"Error stopping scan on {scannerName}: {e}")
             return {"error": str(e)}
@@ -556,13 +558,16 @@ class GalvoScannerController(ImConWidgetController):
             return {"error": "No galvo scanner available"}
         try:
             scanner = self._master.galvoScannersManager[scannerName]
-            result = scanner.park(timeout=timeout)
+            parked = scanner.park(timeout=timeout)
+            if "error" in parked:
+                return {"error": parked["error"], "scannerName": scannerName}
             self.__logger.info(f"Parked {scannerName}")
             # The ESP32 answers with a LIST (e.g. [{'return': 1, 'qid': 51}]);
             # returning it raw fails FastAPI's Dict[str, Any] response model
             # with a 500 before the caller ever sees it.
             return {"status": "parked", "scannerName": scannerName,
-                    "result": result}
+                    "x": parked["x"], "y": parked["y"],
+                    "result": parked["hardware_response"]}
         except Exception as e:
             self.__logger.error(f"Error parking {scannerName}: {e}")
             return {"error": str(e)}
@@ -649,10 +654,10 @@ class GalvoScannerController(ImConWidgetController):
             if not isinstance(point_list, list):
                 return {"error": "Points must be a JSON array"}
             
-            if len(point_list) > 265:
-                return {"error": f"Maximum 265 points supported, got {len(point_list)}"}
-            
             scanner = self._master.galvoScannersManager[scannerName]
+            if len(point_list) > scanner.MAX_ARBITRARY_POINTS:
+                return {"error": f"Maximum {scanner.MAX_ARBITRARY_POINTS} points supported, "
+                                 f"got {len(point_list)}"}
             
             # Apply affine transform if requested (camera coords → galvo DAC coords)
             if apply_affine:
@@ -662,6 +667,9 @@ class GalvoScannerController(ImConWidgetController):
                 points=point_list, laser_trigger=laser_trigger, timeout=timeout
             )
             
+            if "error" in result:
+                return {"error": result["error"], "scannerName": scannerName}
+
             self.__logger.info(f"Set {len(point_list)} arbitrary points on {scannerName}")
             return {
                 "status": "points_set",
@@ -705,7 +713,7 @@ class GalvoScannerController(ImConWidgetController):
     def stopArbitraryScan(self, scannerName: Optional[str] = None,
                           timeout: int = 1) -> Dict[str, Any]:
         """
-        Stop arbitrary point scanning.
+        Stop arbitrary point scanning, then park the beam if park_on_stop is set.
         
         Args:
             scannerName: Scanner device name
@@ -724,6 +732,8 @@ class GalvoScannerController(ImConWidgetController):
         try:
             scanner = self._master.galvoScannersManager[scannerName]
             result = scanner.stop_arbitrary_scan(timeout=timeout)
+            if "error" in result:
+                return {"error": result["error"], "scannerName": scannerName}
             return {"status": "stopped", "scannerName": scannerName, "result": result}
         except Exception as e:
             self.__logger.error(f"Error stopping arbitrary scan: {e}")
@@ -733,7 +743,10 @@ class GalvoScannerController(ImConWidgetController):
     def pauseArbitraryScan(self, scannerName: Optional[str] = None,
                            timeout: int = 1) -> Dict[str, Any]:
         """
-        Pause arbitrary point scanning (keeps current index).
+        Pause arbitrary point scanning.
+
+        The firmware has no pause command: this stops the scanner (the beam stays
+        where it is, no parking) and keeps the point list for resumeArbitraryScan.
         
         Args:
             scannerName: Scanner device name
@@ -752,6 +765,8 @@ class GalvoScannerController(ImConWidgetController):
         try:
             scanner = self._master.galvoScannersManager[scannerName]
             result = scanner.pause_arbitrary_scan(timeout=timeout)
+            if "error" in result:
+                return {"error": result["error"], "scannerName": scannerName}
             return {"status": "paused", "scannerName": scannerName, "result": result}
         except Exception as e:
             self.__logger.error(f"Error pausing arbitrary scan: {e}")
@@ -761,7 +776,8 @@ class GalvoScannerController(ImConWidgetController):
     def resumeArbitraryScan(self, scannerName: Optional[str] = None,
                             timeout: int = 1) -> Dict[str, Any]:
         """
-        Resume arbitrary point scanning from paused position.
+        Resume a paused arbitrary point scan by sending the stored points again.
+        The scan restarts at the first point, not where it was paused.
         
         Args:
             scannerName: Scanner device name
@@ -780,6 +796,8 @@ class GalvoScannerController(ImConWidgetController):
         try:
             scanner = self._master.galvoScannersManager[scannerName]
             result = scanner.resume_arbitrary_scan(timeout=timeout)
+            if "error" in result:
+                return {"error": result["error"], "scannerName": scannerName}
             return {"status": "resumed", "scannerName": scannerName, "result": result}
         except Exception as e:
             self.__logger.error(f"Error resuming arbitrary scan: {e}")

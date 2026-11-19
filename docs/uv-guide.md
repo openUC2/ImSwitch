@@ -23,16 +23,11 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 git clone https://github.com/openUC2/ImSwitch.git
 cd ImSwitch
 
-# Create a virtual environment
+# Create a virtual environment (on a Raspberry Pi: --system-site-packages, for picamera2)
 uv venv
 
-# Activate the environment
-source .venv/bin/activate  # Linux/macOS
-# or
-.venv\Scripts\activate  # Windows
-
-# Install ImSwitch in development mode
-uv pip install -e .[PyQt5,dev]
+# Install ImSwitch with every dependency at the version in uv.lock (dev: pytest)
+uv sync --extra dev
 ```
 
 ### Lock Files for Reproducible Builds
@@ -45,7 +40,14 @@ uv sync
 
 # Update lock file after changing dependencies
 uv lock
+
+# Move one dependency, e.g. UC2-REST, to its newest release
+uv lock --upgrade-package uc2-rest
 ```
+
+Do not fix up the environment with `uv pip install` afterwards: the next `uv sync` or `uv run`
+undoes it. For the same reason, an editable UC2-REST (`uv pip install -e ../UC2-REST`) needs
+`uv run --no-sync`.
 
 **Note**: When contributing code, commit the `uv.lock` file to ensure all developers use identical dependency versions.
 
@@ -86,7 +88,7 @@ For GitHub Actions and CI systems, UV installation is straightforward:
 - name: Install dependencies
   run: |
     export PATH="$HOME/.local/bin:$PATH"
-    uv pip install -e .[PyQt5]
+    uv sync --locked   # fails when uv.lock no longer matches pyproject.toml
 ```
 
 ## Troubleshooting
@@ -105,13 +107,10 @@ If you're currently using conda/mamba (Option D from README):
 # 1. Deactivate conda environment
 conda deactivate
 
-# 2. Create new UV-based environment
+# 2. Create new UV-based environment and install ImSwitch at the locked versions
 cd ~/Documents/ImSwitch
 uv venv
-source .venv/bin/activate  # On Windows: .venv\\Scripts\\activate
-
-# 3. Install ImSwitch with UV
-uv pip install -e .
+uv sync
 
 ```
 

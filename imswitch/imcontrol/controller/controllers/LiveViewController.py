@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from imswitch.imcommon.framework import Signal, Worker
 from imswitch.imcommon.model import APIExport, initLogger
+from imswitch.imcontrol.model.managers.detectors.DetectorManager import getDetectorExposureMs
 from ..basecontrollers import LiveUpdatedController
 
 
@@ -1144,32 +1145,6 @@ class LiveViewController(LiveUpdatedController):
 
         return bool(len(self._activeStreams) > 0)
 
-    def _getDetectorExposureMs(self, detector) -> float:
-        """Best-effort read of a detector's exposure time in milliseconds.
-
-        Exposure is stored in ms throughout ImSwitch, but the parameter key
-        differs between drivers. Returns 0.0 when it cannot be determined,
-        which callers treat as "not a long exposure".
-        """
-        try:
-            params = detector.parameters
-        except Exception:
-            return 0.0
-        for key in ("exposure", "exposureTime", "ExposureTime", "exposure_time"):
-            try:
-                param = params.get(key) if hasattr(params, "get") else params[key]
-            except Exception:
-                param = None
-            if param is None:
-                continue
-            try:
-                value = float(getattr(param, "value", param))
-            except (TypeError, ValueError):
-                continue
-            if value > 0:
-                return value
-        return 0.0
-
     @APIExport()
     def getLongExposureInfo(self, detectorName: Optional[str] = None) -> Dict[str, Any]:
         """Report whether the detector's exposure rules out a live stream.
@@ -1185,7 +1160,7 @@ class LiveViewController(LiveUpdatedController):
             if detectorName is None:
                 detectorName = self._master.detectorsManager.getCurrentDetectorName()
             detector = self._master.detectorsManager[detectorName]
-            exposureMs = self._getDetectorExposureMs(detector)
+            exposureMs = getDetectorExposureMs(detector)
             return {
                 "detector": detectorName,
                 "exposureMs": exposureMs,
@@ -1270,7 +1245,7 @@ class LiveViewController(LiveUpdatedController):
             # the worker's grab timeout, so it would spin on stale/None frames
             # and stop itself anyway. Refuse up front and tell the caller to
             # snap instead — unless it explicitly asked for it.
-            exposureMs = self._getDetectorExposureMs(detector)
+            exposureMs = getDetectorExposureMs(detector)
             if not force and exposureMs > LONG_EXPOSURE_THRESHOLD_MS:
                 self._logger.info(
                     f"Not starting live view on {detectorName}: exposure "

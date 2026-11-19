@@ -158,17 +158,6 @@
       ],
       "description": "WebRTC settings. Required to be defined to use WebRTC functionality."
     },
-    "hypha": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/HyphaInfo"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Hypha settings. Required to be defined to use Hypha functionality."
-    },
     "mockxx": {
       "anyOf": [
         {
@@ -201,17 +190,6 @@
         }
       ],
       "description": "Stresstest settings. Required to be defined to use Stresstest functionality."
-    },
-    "HistoScan": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/HistoScanInfo"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "HistoScan settings. Required to be defined to use HistoScan functionality."
     },
     "Workflow": {
       "anyOf": [
@@ -827,7 +805,24 @@
     },
     "UC2ConfigInfo": {
       "type": "object",
-      "properties": {}
+      "properties": {
+        "checkFirmwareOnConnect": {
+          "type": "boolean",
+          "description": "Compare the boards' firmware with the firmware server once after startup and offer an update (never flashes on its own).",
+          "default": false
+        },
+        "firmwareServerUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Firmware server (serves the images + version.json). None = the Docker default http://host.docker.internal/firmware."
+        }
+      }
     },
     "SIMInfo": {
       "type": "object",
@@ -1075,10 +1070,6 @@
       "type": "object",
       "properties": {}
     },
-    "HyphaInfo": {
-      "type": "object",
-      "properties": {}
-    },
     "MockXXInfo": {
       "type": "object",
       "properties": {}
@@ -1086,14 +1077,6 @@
     "JetsonNanoInfo": {
       "type": "object",
       "properties": {}
-    },
-    "HistoScanInfo": {
-      "type": "object",
-      "properties": {
-        "PreviewCamera": {
-          "type": "string"
-        }
-      }
     },
     "StresstestInfo": {
       "type": "object",
@@ -1428,6 +1411,67 @@
             }
           ],
           "description": "Stored calibration data from previous calibration runs. Contains position_data, focus_data, polynomial_coeffs, sensitivity, r_squared, linear_range, timestamp, and lookup_table."
+        },
+        "piKd": {
+          "type": "number",
+          "description": "Default kd value of feedback loop.",
+          "default": 0.0
+        },
+        "setPoint": {
+          "type": "number",
+          "description": "Initial focus setpoint. Overwritten by the measured value when the lock is engaged.",
+          "default": 0.0
+        },
+        "fovHeight": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Height of the focus lock field of view, in pixels. ``null`` uses ``fovWidth`` (a square FOV)."
+        },
+        "scaleUmPerUnit": {
+          "type": "number",
+          "description": "Microns of Z per unit of controller output. Only used until a calibration has run \u2014 after that the measured sensitivity replaces it.",
+          "default": 100.0
+        },
+        "minStepThreshold": {
+          "type": "number",
+          "description": "Deadband, in **microns**: corrections smaller than this are discarded. The historical default of 2 um is larger than most corrections a well-calibrated lock computes, which leaves the loop measuring but never moving. It is kept as the default so existing setups do not change behaviour; a real setup usually wants something like 0.05.",
+          "default": 2.0
+        },
+        "safetyMoveLimit": {
+          "type": "number",
+          "description": "Largest single Z correction the lock may command, in microns.",
+          "default": 50.0
+        },
+        "safetyDistanceLimit": {
+          "type": "number",
+          "description": "Total travel budget in microns; exceeding it releases the lock. Only enforced when ``safetyMotionActive`` is true.",
+          "default": 500.0
+        },
+        "safetyMotionActive": {
+          "type": "boolean",
+          "description": "Whether the travel budget above is enforced.",
+          "default": false
+        },
+        "integralLimit": {
+          "type": "number",
+          "description": "Anti-windup clamp on the integral term.",
+          "default": 100.0
+        },
+        "outputLowpassAlpha": {
+          "type": "number",
+          "description": "EMA smoothing of the controller output. 0 disables it.",
+          "default": 0.0
+        },
+        "measLowpassAlpha": {
+          "type": "number",
+          "description": "EMA smoothing of the measurement before it reaches the PI. 0 disables it. Useful on a noisy sensor; costs loop phase margin.",
+          "default": 0.0
         }
       },
       "required": [
@@ -1493,17 +1537,17 @@
         },
         "appName": {
           "type": "string",
-          "description": "App identifier this microscope registers as (lower-cased, spaces become dashes). The server tells microscopes apart by their device id.",
+          "description": "App identifier this microscope registers as (lower-cased, spaces become dashes). One agent per machine: the server tells microscopes apart by their device id.",
           "default": "imswitch"
         },
         "url": {
           "type": "string",
-          "description": "Arkitekt server to bind to, e.g. http://nas.local for a local deployment. Set from the Arkitekt panel when binding.",
+          "description": "Arkitekt server to bind to, e.g. ``http://nas.local`` for a local deployment. Set from the Arkitekt panel when binding.",
           "default": "https://go.arkitekt.live"
         },
         "redeemToken": {
           "type": "string",
-          "description": "Provisioning token for an unattended login (no browser approval). A credential: keep it out of shared setup files.",
+          "description": "Provisioning token for an unattended login (no browser approval). It is a credential: keep it out of setup files that are shared.",
           "default": ""
         },
         "autoConnect": {
@@ -1518,7 +1562,7 @@
         },
         "useMikro": {
           "type": "boolean",
-          "description": "Offer the image actions (acquire frame, tile scan), which store images in the server's mikro service.",
+          "description": "Offer the image actions (acquire frame, tile scan), which store images in the server's mikro service. Turn off for a server without mikro.",
           "default": true
         },
         "syncInAsync": {
@@ -1528,7 +1572,7 @@
         },
         "deconvolveActionHash": {
           "type": "string",
-          "description": "Unused since the move from arkitekt_next to arkitekt; kept so older setup files load.",
+          "description": "Unused since the move from arkitekt_next to arkitekt (actions are no longer looked up by hash); kept so older setup files load.",
           "default": ""
         }
       }

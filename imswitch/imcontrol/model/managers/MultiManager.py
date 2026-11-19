@@ -30,7 +30,7 @@ class MultiManager(ABC):
 
                 except Exception as e:
                     # try to import from the implugins
-                    self.__logger.error(e)
+                    self.__logger.error(e, exc_info=True)
                     try:
                         eps = entry_points(group=f'imswitch.implugins.{subManagersPackage}')
                         for entry_point in eps:

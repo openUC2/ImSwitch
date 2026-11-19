@@ -15,10 +15,10 @@ apt-get install -y \
 
 # Only install dependencies; this creates a separately-cached Docker image layer from the rapidly-changing source.
 
-uv sync --frozen --no-install-project
-
-# Reinstall psygnal from source to work around binary-wheel ABI issues
-uv pip install psygnal --no-binary :all:
+# --inexact keeps packages that are not in the lock file: pymmcore / pymmcore-plus, built from
+# source by build-micromanager.sh on arm64 (no aarch64 wheel), are only an optional extra.
+# psygnal is built from source by the sync itself ([tool.uv] no-binary-package in pyproject.toml).
+uv sync --frozen --inexact --no-install-project
 
 # Clean up build-only tools
 apt-get remove -y \

@@ -232,7 +232,6 @@ class OffAxisHoloController(LiveUpdatedController):
         # Connect to CommunicationChannel signal for frame updates
         self._commChannel.sigUpdateImage.connect(self.update)
 
-        # Legacy GUI setup
         self._logger.info("OffAxisHoloController initialized successfully")
         self._logger.info(f"  - Phase unwrap: {'skimage' if HAS_SKIMAGE_UNWRAP else 'numpy fallback'}")
         self._logger.info(f"  - Window functions: {'scipy' if HAS_SCIPY_SIGNAL else 'numpy fallback'}")
@@ -1231,95 +1230,6 @@ class OffAxisHoloController(LiveUpdatedController):
             "has_magnitude": result.get('crop_magnitude') is not None if result else False,
             "has_phase": result.get('unwrapped_phase') is not None if result else False,
         }
-
-    # =========================
-    # Legacy GUI compatibility (if not headless)
-    # =========================
-    def setShowOffAxisHolo(self, enabled):
-        """Legacy: Show or hide off-axis hologram processing"""
-        if enabled:
-            self.start_processing_offaxisholo()
-        else:
-            self.stop_processing_offaxisholo()
-
-    def changeRate(self, updateRate):
-        """Legacy: Change update rate"""
-        if updateRate == "" or updateRate <= 0:
-            updateRate = 1
-        self.set_parameters_offaxisholo({"update_freq": updateRate})
-
-    def offAxisValueChanged(self, magnitude):
-        """Legacy: Change off-axis propagation distance"""
-        dz = magnitude * 1e-4  # Convert to meters
-        self.set_dz_offaxisholo(dz)
-
-    def selectCCCenter(self):
-        """Legacy: Select cross-correlation center from GUI"""
-        if not hasattr(self, '_widget'):
-            return
-
-        try:
-            cc_center = self._widget.getCCCenterFromNapari()
-            cc_radius = self._widget.getCCRadius()
-
-            if cc_radius is None or cc_radius < 50:
-                cc_radius = 100
-
-            self.set_cc_roi_offaxisholo(cc_center[0], cc_center[1], cc_radius * 2, cc_radius * 2)
-        except Exception as e:
-            self._logger.warning(f"Failed to get CC center from GUI: {e}")
-
-    def updateCCCenter(self):
-        """Legacy: Update CC center from text fields"""
-        if not hasattr(self, '_widget'):
-            return
-
-        try:
-            centerX = int(self._widget.textEditCCCenterX.text())
-            centerY = int(self._widget.textEditCCCenterY.text())
-            self.set_cc_roi_offaxisholo(centerX, centerY, self._params.cc_radius * 2, self._params.cc_radius * 2)
-        except Exception as e:
-            self._logger.warning(f"Failed to update CC center: {e}")
-
-    def updateCCRadius(self):
-        """Legacy: Update CC radius from text field"""
-        if not hasattr(self, '_widget'):
-            return
-
-        try:
-            radius = int(self._widget.textEditCCRadius.text())
-            self.set_cc_params(self._params.cc_center, radius)
-        except Exception as e:
-            self._logger.warning(f"Failed to update CC radius: {e}")
-
-
-    def _setup_legacy_gui(self):
-        """Setup legacy GUI connections"""
-        if not hasattr(self, '_widget'):
-            return
-
-        try:
-            self._widget.sigShowOffAxisToggled.connect(self.setShowOffAxisHolo)
-            self._widget.sigUpdateRateChanged.connect(self.changeRate)
-            self._widget.sigOffAxisSliderValueChanged.connect(self.offAxisValueChanged)
-
-            if hasattr(self._widget, 'btnSelectCCCenter'):
-                self._widget.btnSelectCCCenter.clicked.connect(self.selectCCCenter)
-            if hasattr(self._widget, 'textEditCCCenterX'):
-                self._widget.textEditCCCenterX.textChanged.connect(self.updateCCCenter)
-            if hasattr(self._widget, 'textEditCCCenterY'):
-                self._widget.textEditCCCenterY.textChanged.connect(self.updateCCCenter)
-            if hasattr(self._widget, 'textEditCCRadius'):
-                self._widget.textEditCCRadius.textChanged.connect(self.updateCCRadius)
-
-            # Set initial values
-            if hasattr(self._widget, 'getUpdateRate'):
-                self.changeRate(self._widget.getUpdateRate())
-            if hasattr(self._widget, 'getShowOffAxisHoloChecked'):
-                self.setShowOffAxisHolo(self._widget.getShowOffAxisHoloChecked())
-
-        except Exception as e:
-            self._logger.warning(f"Could not setup all GUI connections: {e}")
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

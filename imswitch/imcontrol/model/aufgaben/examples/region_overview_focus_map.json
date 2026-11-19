@@ -1,0 +1,27 @@
+{
+  "schema": "aufgaben.job/1",
+  "name": "Overview, focus map and region tiles",
+  "description": "A fast prescan sweeps the slide into an overview image. Each tissue region gets its own focus surface from a 3 x 3 autofocus grid; the region is then covered with tiles at the surface Z, in brightfield and with a dark-field ring. The tiles are stitched per region after registering their overlaps (Ashlar).",
+  "parameters": {
+    "overlap": {"type": "number", "default": 0.1, "minimum": 0, "maximum": 0.5, "title": "Tile overlap", "ui": "wizard"}
+  },
+  "resources": {
+    "regions": {"kind": "regions", "regions": [
+      {"name": "tissue_a", "min_x": 2000, "max_x": 3200, "min_y": 3000, "max_y": 3900},
+      {"name": "tissue_b", "min_x": 8000, "max_x": 8800, "min_y": 3000, "max_y": 3600}]},
+    "af": {"kind": "autofocus", "mode": "software", "range_um": 40, "step_um": 4, "channel": "LED", "intensity": 300},
+    "surface": {"kind": "focus_map", "method": "spline"},
+    "channels": {"kind": "capture", "keep_light_on_between_channels": false, "channels": [
+      {"config": "LED", "exposure": 10, "intensity": 300},
+      {"config": "darkfield", "kind": "ring", "exposure": 40, "led_pattern": {"radius": 4}}]}
+  },
+  "storage": {"formats": ["ome-zarr", "ome-tiff"], "stitched_preview": true, "stitching": "ashlar"},
+  "tasks": [
+    {"id": "overview", "task": "stage_prescan", "params": {"x_min_um": 1000, "x_max_um": 10000, "y_min_um": 2000, "y_max_um": 5000, "line_step_um": 400, "source": "LED", "intensity": 300}},
+    {"id": "map", "task": "create_focus_map", "params": {"focus_map": "@surface", "autofocus": "@af", "regions": "@regions"}},
+    {"id": "region", "task": "loop_regions", "params": {"regions": "@regions"},
+     "body": [
+       {"id": "tile", "task": "loop_grid", "params": {"overlap": "${param.overlap}", "focus_map": "@surface"},
+        "body": [{"id": "img", "task": "capture", "params": {"channels": "@channels"}}]}]}
+  ]
+}

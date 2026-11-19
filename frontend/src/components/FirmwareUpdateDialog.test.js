@@ -3,12 +3,19 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import FirmwareUpdateDialog from "./FirmwareUpdateDialog";
 import apiStart from "../backendapi/apiUC2ConfigControllerStartFirmwareUpdate";
 import apiStatus from "../backendapi/apiUC2ConfigControllerGetFirmwareUpdateStatus";
+import apiCheck from "../backendapi/apiUC2ConfigControllerCheckFirmwareUpdates";
+import apiGetSource from "../backendapi/apiUC2ConfigControllerGetOTAFirmwareServer";
+import apiReleases from "../backendapi/apiUC2ConfigControllerListFirmwareReleases";
+import apiSetRelease from "../backendapi/apiUC2ConfigControllerSetOTAFirmwareRelease";
 
 jest.mock("../backendapi/apiUC2ConfigControllerCheckFirmwareUpdates");
 jest.mock("../backendapi/apiUC2ConfigControllerStartFirmwareUpdate");
 jest.mock("../backendapi/apiUC2ConfigControllerGetFirmwareUpdateStatus");
 jest.mock("../backendapi/apiUC2ConfigControllerCancelFirmwareUpdate");
 jest.mock("../backendapi/apiUC2ConfigControllerSetOTAFirmwareServer");
+jest.mock("../backendapi/apiUC2ConfigControllerGetOTAFirmwareServer");
+jest.mock("../backendapi/apiUC2ConfigControllerListFirmwareReleases");
+jest.mock("../backendapi/apiUC2ConfigControllerSetOTAFirmwareRelease");
 jest.mock("../backendapi/apiUC2ConfigControllerReassignCANId");
 jest.mock("./UsbFlashWizard", () => () => <div>usb flash panel</div>);
 jest.mock("react-redux", () => ({
@@ -111,4 +118,31 @@ test("reopening during an update shows the running update", async () => {
   render(<FirmwareUpdateDialog open onClose={() => {}} />);
   expect(await screen.findByText("Updating motor 12…")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Hide (keeps running)" })).toBeInTheDocument();
+});
+
+test("switches the firmware source to a GitHub release and checks again", async () => {
+  apiGetSource.mockResolvedValue({ source: "local", firmware_server_url: "http://fw/firmware",
+                                   github_repo: "youseetoo/uc2-esp32", github_release: null });
+  apiReleases.mockResolvedValue({ status: "success", releases: [
+    { tag: "v2026.01.19-3", prerelease: false, published_at: "2026-01-19T16:16:09Z",
+      image_count: 0 },
+    { tag: "v2026.0.0-beta.4", prerelease: true, published_at: "2026-09-18T06:56:12Z",
+      image_count: 36 },
+  ] });
+  apiSetRelease.mockResolvedValue({ status: "success", release_tag: "v2026.0.0-beta.4" });
+  apiCheck.mockResolvedValue(CHECK);
+  await openCan();
+  fireEvent.click(screen.getByRole("button", { name: "Change" }));
+  fireEvent.click(await screen.findByRole("button", { name: "GitHub release" }));
+  fireEvent.mouseDown(screen.getByLabelText("Release"));
+  expect(await screen.findByRole("option", { name: "Newest release (v2026.0.0-beta.4)" }))
+    .toBeInTheDocument();
+  // a release with only web-flasher images cannot be chosen
+  expect(screen.getByRole("option", { name: /v2026.01.19-3 · .* · no ImSwitch images/ }))
+    .toHaveAttribute("aria-disabled", "true");
+  fireEvent.click(screen.getByRole("option", { name: /v2026.0.0-beta.4 · pre-release/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Use" }));
+  await waitFor(() => expect(apiSetRelease).toHaveBeenCalledWith("v2026.0.0-beta.4"));
+  await waitFor(() => expect(apiCheck).toHaveBeenCalled());
+  expect(screen.queryByRole("button", { name: "Use" })).not.toBeInTheDocument();
 });

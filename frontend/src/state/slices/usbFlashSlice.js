@@ -6,7 +6,7 @@ import { createSlice } from "@reduxjs/toolkit";
  */
 
 const initialState = {
-  // Wizard step navigation (0: Firmware Server, 1: Select Firmware, 2: Port & Options, 3: Flash Progress, 4: CAN Address, 5: Complete)
+  // Wizard step navigation (0: Firmware Source, 1: Select Firmware, 2: Port & Options, 3: Flash Progress, 4: CAN Address, 5: Complete)
   currentStep: 0,
   isWizardOpen: false,
 
@@ -17,8 +17,6 @@ const initialState = {
   portMatch: "HAT", // Substring to identify HAT in port metadata
 
   // Firmware server configuration
-  firmwareServerUrl: "",
-  defaultFirmwareServerUrl: "",
   isLoadingFirmware: false,
 
   // Available firmware files (flat list from server)
@@ -122,12 +120,6 @@ const usbFlashSlice = createSlice({
     },
 
     // Firmware
-    setFirmwareServerUrl: (state, action) => {
-      state.firmwareServerUrl = action.payload;
-    },
-    setDefaultFirmwareServerUrl: (state, action) => {
-      state.defaultFirmwareServerUrl = action.payload;
-    },
     setFirmwareFiles: (state, action) => {
       state.firmwareFiles = action.payload;
     },
@@ -234,8 +226,6 @@ export const {
   setSelectedPort,
   setIsLoadingPorts,
   setPortMatch,
-  setFirmwareServerUrl,
-  setDefaultFirmwareServerUrl,
   setFirmwareFiles,
   setSelectedFirmware,
   setIsLoadingFirmware,

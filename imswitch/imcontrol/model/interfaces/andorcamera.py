@@ -35,6 +35,7 @@ class andorcamera:
         buffer_count: int = 5,
     ) -> None:
         self.__logger = initLogger(self, tryInheritParent=False)
+        self.isRGB = False
 
         # ---- SDK objects ---------------------------------------------------
         self._sdk = AndorSDK3()

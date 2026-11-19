@@ -163,7 +163,6 @@ Continue migrating remaining components using WebSocketContext:
 - StageOffsetCalibrationController.jsx
 - SelectSetupController.js
 - FlowStopController.js
-- TimelapseController.js
 - JoystickController.js
 - STORMController.js
 

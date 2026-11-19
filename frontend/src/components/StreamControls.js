@@ -27,11 +27,13 @@ import {
   FiberManualRecord,
   Stop as StopIcon,
   Videocam,
-  VideoLibrary,
+  PhotoCamera,
   Settings,
 } from "@mui/icons-material";
 import StreamControlOverlay from "../components/StreamControlOverlay";
 import StreamPresets from "./StreamPresets";
+import DetectorParameters from "./DetectorParameters";
+import CameraSettingsDialog from "./CameraSettingsDialog.jsx";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner";
 import { useSelector, useDispatch } from "react-redux";
@@ -39,6 +41,8 @@ import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 
 export default function StreamControls({
+  hostIP,
+  hostPort,
   isStreamRunning, // This prop is kept for backwards compatibility but we prefer Redux state
   isLongExposure = false,
   exposureMs = 0,
@@ -65,7 +69,10 @@ export default function StreamControls({
   // Internal state for file name
   // Default is empty - detector name is now automatically included in timestamp-based filename
   const [snapFileName, setSnapFileName] = useState("");
-  const [overlayOpen, setOverlayOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Bumped when the settings dialog closes so the parameter row re-reads
+  // whatever the full parameter tree may have changed.
+  const [paramsRefresh, setParamsRefresh] = useState(0);
   const [fijiInfoOpen, setFijiInfoOpen] = useState(false);
   // Track an in-flight snap so we can disable the buttons and show progress.
   // Snapping is allowed even when the live stream is off (e.g. long-exposure
@@ -377,7 +384,9 @@ export default function StreamControls({
         width: "100%",
       }}
     >
-      {/* Stream Control Section */}
+      {/* Camera: everything that sets up the image in one card — stream
+          on/off, the everyday detector parameters, presets, and one Settings
+          dialog for the full camera parameter tree plus stream encoding. */}
       <Box
         component="fieldset"
         data-tour="stream-controls"
@@ -387,9 +396,8 @@ export default function StreamControls({
           borderRadius: 1,
           p: 2,
           display: "flex",
-          gap: 1,
-          alignItems: "center",
-          flexWrap: "wrap",
+          flexDirection: "column",
+          gap: 1.5,
         }}
       >
         <Box
@@ -401,78 +409,94 @@ export default function StreamControls({
             px: 1,
           }}
         >
-          <VideoLibrary fontSize="small" sx={{ color: "text.secondary" }} />
+          <PhotoCamera fontSize="small" sx={{ color: "text.secondary" }} />
           <Typography variant="subtitle1" sx={{ fontWeight: "medium" }}>
-            Stream
+            Camera
           </Typography>
         </Box>
 
-        <Tooltip
-          arrow
-          title={
-            isLongExposure && !isLiveViewActive
-              ? `Exposure is ${Math.round(exposureMs)} ms (> ${longExposureThresholdMs} ms). ` +
-                `A live stream would deliver a frame slower than it times out — use Snap instead. ` +
-                `Starting anyway is allowed but will be very slow.`
-              : isLiveViewActive
-                ? "Stop the live stream"
-                : "Start the live stream"
-          }
+        <Box
+          sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}
         >
-          <span>
-            <Button
-              variant="contained"
-              color={
-                isLiveViewActive
-                  ? "error"
+          <Tooltip
+            arrow
+            title={
+              isLongExposure && !isLiveViewActive
+                ? `Exposure is ${Math.round(exposureMs)} ms (> ${longExposureThresholdMs} ms). ` +
+                  `A live stream would deliver a frame slower than it times out — use Snap instead. ` +
+                  `Starting anyway is allowed but will be very slow.`
+                : isLiveViewActive
+                  ? "Stop the live stream"
+                  : "Start the live stream"
+            }
+          >
+            <span>
+              <Button
+                variant="contained"
+                color={
+                  isLiveViewActive
+                    ? "error"
+                    : isLongExposure
+                      ? "warning"
+                      : "success"
+                }
+                size="small"
+                onClick={isLiveViewActive ? handleStopStream : handleStartStream}
+                startIcon={isLiveViewActive ? <Stop /> : <PlayArrow />}
+                sx={{ width: 150, whiteSpace: "nowrap" }}
+              >
+                {isLiveViewActive
+                  ? "Stop stream"
                   : isLongExposure
-                    ? "warning"
-                    : "success"
-              }
+                    ? "Start anyway"
+                    : "Start stream"}
+              </Button>
+            </span>
+          </Tooltip>
+
+          <FormControlLabel
+            control={
+              <Switch
+                checked={showHistogram}
+                onChange={(e) =>
+                  dispatch(liveStreamSlice.setShowHistogram(e.target.checked))
+                }
+                size="small"
+                color="success"
+              />
+            }
+            label="Histogram"
+            sx={{ ml: 1 }}
+          />
+
+          <Tooltip
+            arrow
+            title="All camera parameters (black level, trigger, cooling, …) and the live-stream format, compression and display range"
+          >
+            <Button
+              variant="outlined"
               size="small"
-              onClick={isLiveViewActive ? handleStopStream : handleStartStream}
-              startIcon={isLiveViewActive ? <Stop /> : <PlayArrow />}
-              sx={{ width: 150, whiteSpace: "nowrap" }}
+              onClick={() => setSettingsOpen(true)}
+              sx={{ ml: "auto" }}
+              startIcon={<Settings />}
+              data-tour="stream-settings-button"
             >
-              {isLiveViewActive
-                ? "Stop stream"
-                : isLongExposure
-                  ? "Start anyway"
-                  : "Start stream"}
+              Settings
             </Button>
-          </span>
-        </Tooltip>
+          </Tooltip>
+        </Box>
 
-        <FormControlLabel
-          control={
-            <Switch
-              checked={showHistogram}
-              onChange={(e) =>
-                dispatch(liveStreamSlice.setShowHistogram(e.target.checked))
-              }
-              size="small"
-              color="success"
-            />
-          }
-          label="Histogram"
-          sx={{ ml: 1 }}
-        />
+        <Box data-tour="camera-controls">
+          <DetectorParameters
+            hostIP={hostIP}
+            hostPort={hostPort}
+            refreshKey={paramsRefresh}
+          />
+        </Box>
 
-        <Button
-          variant="outlined"
-          size="small"
-          onClick={() => setOverlayOpen(true)}
-          sx={{ ml: "auto" }}
-          startIcon={<Settings />}
-          data-tour="stream-settings-button"
-        >
-          Settings
-        </Button>
+        {/* Named bundles of objective + exposure + gain + stream settings. */}
+        <StreamPresets />
       </Box>
-
-      {/* Stream presets / macros — recall named bundles of objective +
-          exposure + gain + livestream parameters. Frontend-only. */}
-      <StreamPresets />
 
       {/* Recording Controls Section */}
       <Box
@@ -787,13 +811,13 @@ export default function StreamControls({
         </DialogActions>
       </Dialog>
 
-      <Dialog
-        open={overlayOpen}
-        onClose={() => setOverlayOpen(false)}
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogContent sx={{ pt: 2 }}>
+      <CameraSettingsDialog
+        open={settingsOpen}
+        onClose={() => {
+          setSettingsOpen(false);
+          setParamsRefresh((n) => n + 1);
+        }}
+        streamPanel={
           <StreamControlOverlay
             stats={hudData.stats}
             featureSupport={hudData.featureSupport}
@@ -802,8 +826,8 @@ export default function StreamControls({
             viewTransform={hudData.viewTransform}
             forceExpanded={true}
           />
-        </DialogContent>
-      </Dialog>
+        }
+      />
     </Box>
   );
 }

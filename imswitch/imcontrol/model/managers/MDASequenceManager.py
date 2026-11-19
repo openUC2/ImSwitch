@@ -15,6 +15,7 @@ from typing import List, Dict, Any, Optional, Callable
 import time
 import numpy as np
 from imswitch.imcommon.model import initLogger
+from imswitch.imcontrol.model.aufgaben.storage import save_image
 from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowStep
 from psygnal import Signal as _PSignal
 
@@ -226,7 +227,13 @@ class MDASequenceManager:
                     wait_time = event.min_start_time - elapsed_time
                     if wait_time > 0:
                         self.__logger.debug(f"Waiting {wait_time:.2f}s for time point {event.index.get('t', 0)}")
-                        time.sleep(wait_time)
+                        # Sleep in short slices so stop() takes effect during
+                        # long time-lapse intervals.
+                        deadline = time.time() + wait_time
+                        while self._is_running and time.time() < deadline:
+                            time.sleep(min(0.1, max(0.0, deadline - time.time())))
+                        if not self._is_running:
+                            continue
 
                 # Run pre-event hooks
                 for hook in self._hooks_before_event:
@@ -299,10 +306,20 @@ class MDASequenceManager:
         if event.z_pos is not None:
             self._move_z(event.z_pos)
 
-        # Run autofocus if specified in the event's action
-        # Note: useq-schema can specify autofocus via autofocus_plan
-        if hasattr(event, 'action') and event.action and 'autofocus' in str(event.action).lower():
+        # Non-acquisition actions (useq >= 0.5): a HardwareAutofocus event only
+        # focuses and a CustomAction is not an acquisition either. Neither
+        # takes an image, as in pymmcore-plus.
+        action = getattr(event, 'action', None)
+        action_type = getattr(action, 'type', None) if action is not None else None
+        if action_type == 'hardware_autofocus' or (
+                action_type is None and action is not None and 'autofocus' in str(action).lower()):
             self._run_autofocus()
+            return None
+        if action_type == 'custom':
+            self.__logger.info(
+                f"CustomAction '{getattr(action, 'name', '')}' at event {event_idx} "
+                "has no handler in this engine; no image is acquired")
+            return None
 
         # Setup channel (illumination + exposure)
         if event.channel is not None:
@@ -502,12 +519,6 @@ class MDASequenceManager:
         """
         import os
 
-        try:
-            import tifffile
-        except ImportError:
-            self.__logger.warning("tifffile not available, cannot save images")
-            return
-
         # Create filename from event indices
         t_idx = event.index.get('t', 0)
         p_idx = event.index.get('p', 0)
@@ -532,7 +543,8 @@ class MDASequenceManager:
             metadata['sequence_metadata'] = self._current_sequence.metadata
 
         os.makedirs(output_path, exist_ok=True)
-        tifffile.imwrite(filepath, image, metadata=metadata)
+        save_image(filepath, image, channel_names=[metadata["channel"] or "C0"],
+                   exposure_ms=[event.exposure] if event.exposure else [], annotations=metadata)
 
         self.__logger.debug(f"Saved image to {filepath}")
 

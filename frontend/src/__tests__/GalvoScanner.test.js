@@ -4,7 +4,7 @@
  * camera<->scanner calibration, and the FLIM LABS web UI link.
  */
 import React from 'react';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 
@@ -321,6 +321,20 @@ describe('GalvoScannerController raster tab', () => {
     expect(screen.getByText(/Uncalibrated: camera frame is assumed/)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('galvo-clear-background'));
     expect(screen.queryByTestId('galvo-preview-background')).toBeNull();
+  });
+
+  test('Park now says parked only when the backend did, and shows its error otherwise', async () => {
+    routes.parkGalvo = { status: 'parked', x: 2048, y: 2048 };
+    const store = await mountController();
+    fireEvent.click(screen.getByRole('button', { name: /Park now/ }));
+    await waitFor(() =>
+      expect(store.getState().galvoScannerState.statusMessage).toBe('Beam parked'));
+    expect(store.getState().galvoScannerState.error).toBeNull();
+
+    routes.parkGalvo = { error: 'Park not acknowledged: No response received' };
+    fireEvent.click(screen.getByRole('button', { name: /Park now/ }));
+    await waitFor(() =>
+      expect(store.getState().galvoScannerState.error).toMatch(/Park not acknowledged/));
   });
 
   test('calibrated: µm labels appear in the range panel', async () => {

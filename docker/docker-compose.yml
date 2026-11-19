@@ -1,6 +1,11 @@
 services:
   imswitch-docker-noqt:
-    image: ghcr.io/openuc2/imswitch-noqt:sha-540a0a6
+    # `docker compose up` runs the image CI built from master (use a sha-<commit> tag for a fixed
+    # one); `docker compose up --build` builds this checkout, with the versions in uv.lock.
+    image: ghcr.io/openuc2/imswitch:edge
+    build:
+      context: ..
+      dockerfile: Dockerfile
     privileged: true
     ports:
       - "8001:8001" # frontend, HTTP API, WebSockets API

@@ -66,6 +66,9 @@ dependencies = [
     "numcodecs>=0.13.1",
     # OME-NGFF metadata models (built and checked on every write) and OME-XML for TIFFs.
     "ome-zarr-models>=1.0",
+    # pydantic-zarr 0.11 changed GroupSpec.from_zarr and 0.12 removed it.
+    # ome-zarr-models (up to 1.9.0) still calls the old from_zarr(group, depth=...).
+    "pydantic-zarr<0.11",
     "ome-types>=0.5",
     "jsonschema>=4.0",
     "aiohttp>=3.9.4",

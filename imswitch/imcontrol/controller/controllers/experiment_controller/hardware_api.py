@@ -23,7 +23,7 @@ class HardwareMixin:
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.mDetector = self._master.detectorsManager[allDetectorNames[0]]
-        self.isRGB = self.mDetector._camera.isRGB
+        self.isRGB = bool(getattr(self.mDetector._camera, 'isRGB', False))
         self.detectorPixelSize = self.mDetector.pixelSizeUm
 
         # select lasers

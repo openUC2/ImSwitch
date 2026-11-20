@@ -122,46 +122,83 @@ def write_pdf(path, status, settings, figures):
     with PdfPages(path) as pdf:
         fig = Figure(figsize=(8.27, 11.69))
         y = 0.96
-        fig.text(0.06, y, "FRAME calibration report", fontsize=16, weight="bold")
-        y -= 0.03
+
+        def lines(text, size=9, color="black", bold=False, indent=0.06, width=100):
+            nonlocal fig, y
+            for line in wrap(text, width).splitlines():
+                if y < 0.07:
+                    pdf.savefig(fig)
+                    fig = Figure(figsize=(8.27, 11.69))
+                    y = 0.96
+                    fig.text(0.06, y, "FRAME calibration report (continued)", fontsize=14, weight="bold")
+                    y -= 0.04
+                fig.text(indent, y, line, fontsize=size, family="monospace", va="top",
+                         color=color, weight="bold" if bold else "normal")
+                y -= max(0.016, size / 600)
+            y -= 0.007
+
+        lines("FRAME calibration report", size=16, bold=True)
         res = status.get("result") or {}
         cam = status.get("camera") or {}
-        for line in (f"state: {status.get('state')}   started {status.get('startedAt')}   finished {status.get('finishedAt')}",
-                     wrap(status.get("message", ""), 100), f"report folder: {status.get('reportDir', '')}",
-                     f"stored calibration: {res.get('timestamp', 'none')}   camera: exposure {cam.get('exposureMs')} ms, "
-                     f"gain {cam.get('gainDb')} dB ({cam.get('note', '')})"):
-            fig.text(0.06, y, line, fontsize=9, family="monospace", va="top")
-            y -= 0.022 * (1 + line.count("\n"))
-        y -= 0.01
+        lines(f"state: {status.get('state')}   started {status.get('startedAt')}   finished {status.get('finishedAt')}")
+        lines(status.get("message", ""))
+        lines(f"report folder: {status.get('reportDir', '')}")
+        lines(f"stored calibration: {res.get('timestamp', 'none')}   camera: exposure {cam.get('exposureMs')} ms, "
+              f"gain {cam.get('gainDb')} dB ({cam.get('note', '')})")
         for st in status.get("steps", []):
             head = f"[{st.get('status', ''):>7}] {st.get('title', '')}" + (f"  ({st['seconds']} s)" if st.get("seconds") is not None else "")
-            body = "\n".join(filter(None, [wrap(st.get("detail", ""), 100)] + [wrap("warning: " + w, 100) for w in st.get("warnings", [])]))
             color = {"failed": "tab:red", "warn": "tab:orange", "ok": "tab:green"}.get(st.get("status"), "black")
-            fig.text(0.06, y, head, fontsize=9, family="monospace", va="top", color=color, weight="bold")
-            y -= 0.018
-            if body:
-                fig.text(0.09, y, body, fontsize=7.5, family="monospace", va="top")
-                y -= 0.0145 * (1 + body.count("\n")) + 0.004
-            if y < 0.12:
-                break
+            lines(head, color=color, bold=True)
+            lines(st.get("detail", ""), size=7.5, indent=0.09)
+            for warning in st.get("warnings", []):
+                lines("warning: " + warning, size=7.5, indent=0.09)
         if settings:
-            fig.text(0.06, 0.08, wrap("settings: " + ", ".join(f"{k}={v}" for k, v in settings.items()), 120),
-                     fontsize=6.5, family="monospace", va="top", color="dimgray")
+            lines("settings: " + ", ".join(f"{k}={v}" for k, v in settings.items()),
+                  size=6.5, color="dimgray", width=120)
         pdf.savefig(fig)
 
-        for i in range(0, len(figures), 2):
+        def needs_full_page(f):
+            return (len(wrap(f.get("title", ""), 95).splitlines()) > 1 or
+                    len(wrap(f.get("expected", ""), 100).splitlines()) > 2 or
+                    len(wrap(f.get("measured", ""), 100).splitlines()) > 3)
+
+        i = 0
+        while i < len(figures):
             fig = Figure(figsize=(8.27, 11.69))
-            for j, f in enumerate(figures[i:i + 2]):
+            if needs_full_page(figures[i]):
+                f = figures[i]
+                y = 0.96
+                lines(f"{f.get('step', '')}: {f.get('title', '')}", size=10, bold=True)
                 img = cv2.imdecode(np.frombuffer(f["jpg"], np.uint8), cv2.IMREAD_COLOR)
-                top = 0.97 - j * 0.49
-                ax = fig.add_axes([0.06, top - 0.33, 0.88, 0.31])
+                if y < 0.5:
+                    pdf.savefig(fig)
+                    fig = Figure(figsize=(8.27, 11.69))
+                    y = 0.96
+                ax = fig.add_axes([0.06, y - 0.34, 0.88, 0.32])
                 ax.imshow(img[..., ::-1])
                 ax.set_axis_off()
-                ok = {True: " - ok", False: " - FAILED"}.get(f.get("ok"), "")
-                fig.text(0.06, top, f"{f.get('step', '')}: {f.get('title', '')}{ok}", fontsize=10, weight="bold", va="top",
-                         color="tab:red" if f.get("ok") is False else "black")
-                fig.text(0.06, top - 0.345, wrap("expected (yellow): " + f.get("expected", ""), 105), fontsize=8, va="top", color="#a07800")
-                fig.text(0.06, top - 0.395, wrap("measured (green): " + f.get("measured", ""), 105), fontsize=8, va="top", color="darkgreen")
+                y -= 0.36
+                lines("expected (yellow): " + f.get("expected", ""), size=8, color="#a07800")
+                lines("measured (green): " + f.get("measured", ""), size=8, color="darkgreen")
+                if f.get("ok") is not None:
+                    lines("Result: " + ("ok" if f["ok"] else "FAILED"), size=9)
+                i += 1
+            else:
+                group = [figures[i]]
+                if i + 1 < len(figures) and not needs_full_page(figures[i + 1]):
+                    group.append(figures[i + 1])
+                for j, f in enumerate(group):
+                    img = cv2.imdecode(np.frombuffer(f["jpg"], np.uint8), cv2.IMREAD_COLOR)
+                    top = 0.97 - j * 0.49
+                    ax = fig.add_axes([0.06, top - 0.33, 0.88, 0.31])
+                    ax.imshow(img[..., ::-1])
+                    ax.set_axis_off()
+                    ok = {True: " - ok", False: " - FAILED"}.get(f.get("ok"), "")
+                    fig.text(0.06, top, f"{f.get('step', '')}: {f.get('title', '')}{ok}", fontsize=10, weight="bold", va="top",
+                             color="tab:red" if f.get("ok") is False else "black")
+                    fig.text(0.06, top - 0.345, wrap("expected (yellow): " + f.get("expected", ""), 105), fontsize=8, va="top", color="#a07800")
+                    fig.text(0.06, top - 0.395, wrap("measured (green): " + f.get("measured", ""), 105), fontsize=8, va="top", color="darkgreen")
+                i += len(group)
             pdf.savefig(fig)
 
 

@@ -103,6 +103,10 @@ const initialExperimentUIState = {
     [DIMENSIONS.OUTPUT]: false,
     [DIMENSIONS.OBJECTIVE]: false,
   },
+
+  // "Don't ask again" for Positions Clear All. Session-only: this slice is not
+  // persisted (store.js), so it resets on reload.
+  skipClearPositionsConfirm: false,
 };
 
 // Create the slice
@@ -205,6 +209,10 @@ const experimentUISlice = createSlice({
       }
     },
 
+    setSkipClearPositionsConfirm: (state, action) => {
+      state.skipClearPositionsConfirm = action.payload;
+    },
+
     // Reset UI state
     resetUIState: () => {
       return initialExperimentUIState;
@@ -225,6 +233,7 @@ export const {
   setEstimates,
   toggleAdvancedVisible,
   setAdvancedVisible,
+  setSkipClearPositionsConfirm,
   resetUIState,
 } = experimentUISlice.actions;
 
@@ -234,6 +243,7 @@ export const getExpandedDimension = (state) => state.experimentUI.expandedDimens
 export const getDimension = (dimension) => (state) => state.experimentUI.dimensions[dimension];
 export const getEstimates = (state) => state.experimentUI.estimates;
 export const getAdvancedVisible = (dimension) => (state) => state.experimentUI.advancedVisible[dimension];
+export const getSkipClearPositionsConfirm = (state) => state.experimentUI.skipClearPositionsConfirm;
 
 // Selector for checking if a dimension is enabled
 export const isDimensionEnabled = (dimension) => (state) => 

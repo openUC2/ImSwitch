@@ -362,16 +362,8 @@ class TestCooling:
 class TestTemperatureMonitor:
     """readSaveTemperature CSV rows plus the over-temperature cutoff."""
 
-    @pytest.fixture(autouse=True)
-    def _stop_monitors(self):
-        """Stop every monitor after its test, also a failed one: a monitor left
-        running looks the data folder up anew and writes into the next test's."""
-        self._cams = []
-        yield
-        for cam in self._cams:
-            cam._stopTemperatureMonitor()
-
-    def _cooled_logging_camera(self, tmp_path, monkeypatch):
+    @pytest.fixture
+    def cam(self, tmp_path, monkeypatch):
         from imswitch.imcommon.model import dirtools
         from imswitch.imcontrol.model.interfaces import toupcamcamera
 
@@ -380,10 +372,11 @@ class TestTemperatureMonitor:
         monkeypatch.setattr(toupcamcamera, "TEMPERATURE_LOG_INTERVAL_S", 0.05)
         cam = _make_cooled_camera()
         cam.readSaveTemperature = True
-        self._cams.append(cam)
         # start_live/stop_live of the real driver touch the SDK handle; the
         # monitor is driven directly here, the way those two call it.
-        return cam
+        yield cam
+        # Also after a failed test, so its thread cannot write into the next test's folder.
+        cam._stopTemperatureMonitor()
 
     def _log_file(self, tmp_path):
         from imswitch.imcontrol.model.interfaces.toupcamcamera import (
@@ -392,10 +385,12 @@ class TestTemperatureMonitor:
         return tmp_path / "recordings" / day / TEMPERATURE_LOG_FILENAME
 
     def _rows(self, tmp_path):
-        """(header, rows); the file exists, empty, a moment before its first
-        row is written (it is opened for appending)."""
-        rows = list(csv.reader(self._log_file(tmp_path).open()))
-        return (rows[0], rows[1:]) if rows else ([], [])
+        with self._log_file(tmp_path).open(newline="") as f:
+            rows = list(csv.reader(f))
+        # The monitor thread creates the file before it writes the header, so it can be empty.
+        if not rows:
+            return [], []
+        return rows[0], rows[1:]
 
     def _wait_rows(self, tmp_path, n, timeout=5.0):
         """Poll for n logged rows: a loaded macOS runner falls well behind the
@@ -406,8 +401,7 @@ class TestTemperatureMonitor:
                 return
             time.sleep(0.02)
 
-    def test_rows_are_appended_while_armed(self, tmp_path, monkeypatch):
-        cam = self._cooled_logging_camera(tmp_path, monkeypatch)
+    def test_rows_are_appended_while_armed(self, cam, tmp_path):
         cam.set_temperature(-30)
         cam.is_streaming = True
 
@@ -426,10 +420,9 @@ class TestTemperatureMonitor:
         assert sample["streaming"] == "1"
         assert sample["over_temperature"] == "0"
 
-    def test_no_rows_while_idle_but_monitor_keeps_running(self, tmp_path, monkeypatch):
+    def test_no_rows_while_idle_but_monitor_keeps_running(self, cam, tmp_path):
         # The cooler runs when the camera is idle, so the safety monitor has to
         # keep polling -- it just must not log acquisition rows.
-        cam = self._cooled_logging_camera(tmp_path, monkeypatch)
         cam.is_streaming = False
 
         cam._startTemperatureMonitor()
@@ -439,8 +432,7 @@ class TestTemperatureMonitor:
 
         assert not self._log_file(tmp_path).exists()
 
-    def test_second_session_appends_to_the_same_file(self, tmp_path, monkeypatch):
-        cam = self._cooled_logging_camera(tmp_path, monkeypatch)
+    def test_second_session_appends_to_the_same_file(self, cam, tmp_path):
         cam.is_streaming = True
         for session in range(2):
             cam._startTemperatureMonitor()
@@ -452,8 +444,7 @@ class TestTemperatureMonitor:
         assert header == list(TEMPERATURE_LOG_COLUMNS)
         assert len(body) >= 4
 
-    def test_no_sensor_starts_nothing(self, tmp_path, monkeypatch):
-        cam = self._cooled_logging_camera(tmp_path, monkeypatch)
+    def test_no_sensor_starts_nothing(self, cam, tmp_path):
         cam._hasGetTemperature = False
         cam._startTemperatureMonitor()
         assert cam._tempMonitorThread is None

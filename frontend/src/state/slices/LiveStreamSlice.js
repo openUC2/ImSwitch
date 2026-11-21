@@ -49,6 +49,9 @@ const initialLiveStreamState = {
   histogramX: [],
   histogramY: [],
   showHistogram: false,
+  // Alignment aid: per-cell sharpness of the live frame (utils/sharpnessMap.js)
+  showSharpnessMap: false,
+  sharpnessGrid: null, // { cols, rows, values }
   // View transform state (optional - can be local to component)
   zoom: 1.0,
   translateX: 0,
@@ -155,6 +158,15 @@ const liveStreamSlice = createSlice({
       state.showHistogram = action.payload;
     },
 
+    setShowSharpnessMap: (state, action) => {
+      state.showSharpnessMap = action.payload;
+      if (!action.payload) state.sharpnessGrid = null;
+    },
+
+    setSharpnessGrid: (state, action) => {
+      state.sharpnessGrid = action.payload;
+    },
+
     setCropSize: (state, action) => {
       state.cropSize = action.payload;
     },
@@ -197,6 +209,8 @@ export const {
   setFovY,
   setHistogramData,
   setShowHistogram,
+  setShowSharpnessMap,
+  setSharpnessGrid,
   setCropSize,
   setPerDetectorSettings,
   updateDetectorSettings,

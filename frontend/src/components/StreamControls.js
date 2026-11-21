@@ -471,6 +471,22 @@ export default function StreamControls({
             sx={{ ml: 1 }}
           />
 
+          <Tooltip arrow title="Heat map of the sharpness across the field, with a guide through the FRAME's alignment screws (JPEG stream)">
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={!!liveStreamState.showSharpnessMap}
+                  onChange={(e) =>
+                    dispatch(liveStreamSlice.setShowSharpnessMap(e.target.checked))
+                  }
+                  size="small"
+                  color="success"
+                />
+              }
+              label="Alignment"
+            />
+          </Tooltip>
+
           <Tooltip
             arrow
             title="All camera parameters (black level, trigger, cooling, …) and the live-stream format, compression and display range"

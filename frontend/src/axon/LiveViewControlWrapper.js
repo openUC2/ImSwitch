@@ -28,6 +28,7 @@ import MJPEGViewer from "./MJPEGViewer";
 import PositionControllerComponent from "./PositionControllerComponent";
 import HistogramOverlay from "../components/HistogramOverlay";
 import DisplayRangeControl from "../components/DisplayRangeControl";
+import AlignmentOverlay from "../components/AlignmentOverlay";
 import apiPositionerControllerMovePositionerXYZ from "../backendapi/apiPositionerControllerMovePositionerXYZ";
 import { useSelector, useDispatch } from "react-redux";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
@@ -549,6 +550,8 @@ const LiveViewControlWrapper = ({
         >
           <DisplayRangeControl onDark />
         </HistogramOverlay>
+
+        <AlignmentOverlay />
 
         {/* Snap progress: a long exposure can run for a minute with no other
             feedback, so show how far along the capture is right over the

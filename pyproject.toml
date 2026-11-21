@@ -66,28 +66,32 @@ dependencies = [
     "numcodecs>=0.13.1",
     # OME-NGFF metadata models (built and checked on every write) and OME-XML for TIFFs.
     "ome-zarr-models>=1.0",
-    # pydantic-zarr 0.11 changed GroupSpec.from_zarr and 0.12 removed it.
-    # ome-zarr-models (up to 1.9.0) still calls the old from_zarr(group, depth=...).
+    # pydantic-zarr 0.11 (2026-11-13) dropped the from_zarr that ome-zarr-models (up to 1.9.0,
+    # which allows any pydantic-zarr>=0.8.2) calls, so open_ome_zarr rejects every image. Lift
+    # this once an ome-zarr-models release supports it.
     "pydantic-zarr<0.11",
     "ome-types>=0.5",
     "jsonschema>=4.0",
     "aiohttp>=3.9.4",
-    # arkitekt releases near-daily with sub-dep bounds that do not hold (5.0.1
-    # breaks on arkitekt-spec 3.19), so the family is pinned to the tested set.
-    "arkitekt[rekuest,mikro]==5.0.1",
-    "arkitekt-spec==3.0.0",
-    "arkitekt-runtime==4.1.1",
-    "rekuest==7.1.0",
-    "mikro==6.2.1",
-    "fakts==5.2.0",
-    "koil>=2.0.5",
+    # arkitekt releases near-daily with sub-dep bounds that do not hold, and its
+    # majors move together (arkitekt-runtime 10 speaks the agent protocol of
+    # rekuest-server 19, mikro 14 the API of mikro-server 15), so the family is
+    # pinned to the set tested against such a hub (docs/arkitekt-hub-pi.md).
+    "arkitekt[rekuest,mikro]==16.0.1",
+    "arkitekt-spec==10.1.0",
+    "arkitekt-runtime==10.0.0",
+    "rekuest==15.0.0",
+    "mikro[xarray]==14.0.0",
+    "fakts[crypto]==6.3.0",
+    "koil==3.3.7",
+    "kanne==2.6.0",
+    "rath==4.1.3",
     "msgpack>=1.0.4",
     "esptool",
     "av==13.1.0",
     "uc2-rest>=0.2.0.43",  # named stepper ids (axes beyond XYZA)
     "unitelabs-sila",
     "unitelabs-cdk",
-    "mikro-next>=1",
     "pip>=26.1",
     # Exactly ONE OpenCV wheel: all variants install into the same cv2/ folder and
     # overwrite each other. contrib-headless is the superset without Qt/GUI.

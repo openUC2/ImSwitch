@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#1e293b">
+  <title>Arkitekt hub on a FRAME: ImSwitch, the hub, the NVMe, go.arkitekt.live and Orkestrator</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+  </defs>
+  <rect width="960" height="560" fill="#ffffff"/>
+
+  <!-- FRAME -->
+  <rect x="20" y="20" width="600" height="520" rx="12" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+  <text x="40" y="46" font-size="15" font-weight="bold">FRAME · Raspberry Pi 5 · openUC2 OS</text>
+  <text x="40" y="64" fill="#475569">all containers deployed by the Forklift pallet (os-rpi)</text>
+
+  <!-- ImSwitch -->
+  <rect x="40" y="84" width="250" height="120" rx="8" fill="#ecfdf5" stroke="#047857"/>
+  <text x="56" y="108" font-weight="bold">ImSwitch container</text>
+  <text x="56" y="130">scan → one OME-Zarr canvas</text>
+  <text x="56" y="148">with its pyramid</text>
+  <text x="56" y="170">Arkitekt app: actions</text>
+  <text x="56" y="188">(Tile Scan, Acquire Frame …)</text>
+
+  <rect x="40" y="222" width="250" height="44" rx="8" fill="#ffffff" stroke="#64748b" stroke-dasharray="5 4"/>
+  <text x="56" y="249">andor-server (optional feature)</text>
+
+  <!-- Hub -->
+  <rect x="330" y="84" width="270" height="318" rx="8" fill="#eef2ff" stroke="#4338ca"/>
+  <text x="346" y="108" font-weight="bold">Arkitekt hub</text>
+  <text x="440" y="108" font-size="11" fill="#475569">deployment arkitekt-hub</text>
+  <rect x="346" y="120" width="238" height="44" rx="6" fill="#ffffff" stroke="#4338ca"/>
+  <text x="362" y="147">gateway (Caddy) :2754 / :2755</text>
+  <rect x="346" y="178" width="114" height="44" rx="6" fill="#ffffff" stroke="#4338ca"/>
+  <text x="362" y="198" font-weight="bold">rekuest</text>
+  <text x="362" y="214" font-size="11" fill="#475569">remote actions</text>
+  <rect x="470" y="178" width="114" height="44" rx="6" fill="#ffffff" stroke="#4338ca"/>
+  <text x="486" y="198" font-weight="bold">mikro</text>
+  <text x="486" y="214" font-size="11" fill="#475569">images</text>
+  <rect x="346" y="234" width="114" height="36" rx="6" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="362" y="257">Postgres</text>
+  <rect x="470" y="234" width="114" height="36" rx="6" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="486" y="257">Redis</text>
+  <rect x="346" y="282" width="238" height="36" rx="6" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="362" y="305">RustFS (S3 object store)</text>
+  <text x="346" y="344" font-size="12" fill="#475569">konstruktor writes the configs once</text>
+  <text x="346" y="362" font-size="12" fill="#475569">(arkitekt-hub-setup.service at boot)</text>
+  <text x="346" y="384" font-size="12" fill="#475569">hub connect: one approval in a browser</text>
+
+  <!-- ImSwitch -> gateway -->
+  <line x1="290" y1="142" x2="344" y2="142" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="296" y="134" font-size="11">upload</text>
+
+  <!-- NVMe -->
+  <rect x="40" y="420" width="560" height="100" rx="8" fill="#fff7ed" stroke="#c2410c"/>
+  <text x="56" y="444" font-weight="bold">NVMe · /mnt/nvme</text>
+  <text x="190" y="444" fill="#475569">ext4, label frame-nvme, systemd mount units</text>
+  <text x="56" y="466">/var/lib/containerd, /var/lib/docker: container images</text>
+  <text x="56" y="486">/home/pi/arkitekt: hub database and objects, ImSwitch's Arkitekt login</text>
+  <text x="56" y="508" font-size="11" fill="#475569">SD card: OS, Forklift stages, scan canvases in /home/pi/Datasets (can move to the NVMe too)</text>
+  <line x1="465" y1="318" x2="465" y2="418" stroke="#c2410c" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="472" y="412" font-size="11" fill="#c2410c">data</text>
+
+  <!-- Coordination -->
+  <rect x="680" y="40" width="260" height="120" rx="10" fill="#f1f5f9" stroke="#334155"/>
+  <text x="696" y="66" font-weight="bold">go.arkitekt.live</text>
+  <text x="696" y="88">coordination server:</text>
+  <text x="696" y="106">logins, organizations,</text>
+  <text x="696" y="124">which hubs exist and where</text>
+  <text x="696" y="146" font-size="11" fill="#475569">needs internet; no image data</text>
+
+  <!-- hub -> coordination -->
+  <line x1="600" y1="100" x2="678" y2="100" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="604" y="92" font-size="11">connect</text>
+
+  <!-- Mac -->
+  <rect x="680" y="380" width="260" height="120" rx="10" fill="#f1f5f9" stroke="#334155"/>
+  <text x="696" y="406" font-weight="bold">MacBook · Orkestrator 7.x</text>
+  <text x="696" y="428">1 log in, pick this FRAME's hub</text>
+  <text x="696" y="446">2 images and actions straight</text>
+  <text x="696" y="464">from the hub (LAN or tailnet)</text>
+  <text x="696" y="486" font-size="11" fill="#475569">macOS: allow Local Network</text>
+
+  <line x1="810" y1="378" x2="810" y2="162" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="818" y="270" font-size="11">1 login</text>
+  <polyline points="680,420 645,420 645,150 586,150" fill="none" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="652" y="300" font-size="11" transform="rotate(-90 652 300)">2 · port 2755</text>
+</svg>

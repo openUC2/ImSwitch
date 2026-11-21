@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from imswitch.imcontrol.controller.controllers import ArkitektController as controller_module
+from imswitch.imcontrol.model import arkitekt_hub as hub_module
 from imswitch.imcontrol.model.SetupInfo import ArkitektInfo
 
 manager_module = importlib.import_module("imswitch.imcontrol.model.managers.ArkitektManager")
@@ -72,6 +73,17 @@ class Detector:
 
     def getParameter(self, name):
         return 10.0
+
+
+@pytest.fixture(autouse=True)
+def user_dirs(tmp_path, monkeypatch):
+    """The upload queue and the tile-scan canvases go to a temporary folder, and
+    a FRAME's own hub state is never read."""
+    monkeypatch.setattr(hub_module, "STATUS_FILE", str(tmp_path / "hub-status" / "hub.json"))
+    dirs = controller_module.dirtools.UserFileDirs
+    monkeypatch.setattr(dirs, "Config", str(tmp_path / "config"))
+    monkeypatch.setattr(dirs, "getValidatedDataPath", staticmethod(lambda: str(tmp_path / "data")))
+    return tmp_path
 
 
 @pytest.fixture
@@ -272,10 +284,12 @@ def test_state_publishing_never_reads_the_device(no_arkitekt):
 
 
 class FakeMikro:
-    """create_array_dataset and create_coordinate_system, recorded."""
+    """create_array_dataset, get_array_dataset and create_coordinate_system,
+    recorded. *loses_a_level*: the server holds one level less than was sent."""
 
-    def __init__(self):
+    def __init__(self, loses_a_level=False):
         self.datasets, self.spaces = [], []
+        self.loses_a_level = loses_a_level
 
     def create_array_dataset(self, **kwargs):
         dataset = types.SimpleNamespace(id=f"ds{len(self.datasets)}", kwargs=kwargs,
@@ -283,35 +297,207 @@ class FakeMikro:
         self.datasets.append(dataset)
         return dataset
 
-    def create_coordinate_system(self, name, axes, registrations, epoch):
-        space = types.SimpleNamespace(name=name, registered=[], staged=[])
+    def get_array_dataset(self, id):
+        kwargs = next(d.kwargs for d in self.datasets if d.id == id)
+        shape = lambda array: tuple(getattr(array, "data", array).shape)  # noqa: E731
+        levels = [(0, shape(kwargs["data"]))] + [(s.level, shape(s.array))
+                                                 for s in kwargs.get("scales") or []]
+        if self.loses_a_level:
+            levels = levels[:-1]
+        return types.SimpleNamespace(id=id, data_arrays=[
+            types.SimpleNamespace(level=level, shape=s) for level, s in levels])
+
+    def create_coordinate_system(self, name, axes, **kwargs):
+        space = types.SimpleNamespace(name=name, kwargs=kwargs, registered=[])
         space.register = lambda dataset, scale=None, **offsets: space.registered.append(
             (dataset.id, scale, offsets))
-        space.stage = lambda name=None: space.staged.append(name)
         self.spaces.append(space)
         return space
 
 
-def test_tile_scan_places_tiles_in_one_space_and_restores_everything():
+def test_tile_scan_is_one_canvas_placed_in_the_stage_space(user_dirs):
     pytest.importorskip("arkitekt")
     pytest.importorskip("mikro")
+    import zarr
     from arkitekt import Task
     controller, positioner, master = make_controller()
-    controller.build_app("imswitch", "2.0.0")
+    controller.build_app("imswitch", controller_module.ARKITEKT_APP_VERSION)
     led = next(m for m in controller._actions["set_illumination"].__wrapped__
                .__annotations__["channel"] if m.value == "LED")
     mikro = FakeMikro()
-    tiles = list(controller._actions["run_tile_scan"](
+    # 4 x 3 tiles of 80 x 60 px at 0.5 µm, 50 % overlap, around (100, 200) µm
+    lens = controller._actions["run_tile_scan"](
         mikro=mikro, task=Task.local(), range_x_um=60.0, range_y_um=30.0, overlap_percent=50,
-        illumination=led, intensity=300, settle_s=0))
-    assert len(tiles) == 12 and len(mikro.datasets) == 12
-    xs = [offsets["x"] for _, _, offsets in mikro.spaces[0].registered]
-    assert xs[:4] == [70.0, 90.0, 110.0, 130.0] and xs[4:8] == [130.0, 110.0, 90.0, 70.0]
-    assert mikro.spaces[0].registered[0][1] == {"y": 0.5, "x": 0.5} and mikro.spaces[0].staged
-    assert mikro.datasets[0].kwargs["axes"] == ["c", "y", "x"]
+        illumination=led, intensity=300, settle_s=0)
+    assert lens.id == "lens" and len(mikro.datasets) == 1 and len(mikro.spaces) == 1
+    assert mikro.spaces[0].kwargs["reference"] == "stage"  # the same space every run
+    (_, scale, offsets), = mikro.spaces[0].registered
+    assert scale == {"y": 0.5, "x": 0.5}
+    assert offsets == {"x": 50.0, "y": 170.0}  # top-left of the first tile, centred at (70, 185)
+    uploaded = mikro.datasets[0].kwargs
+    assert uploaded["axes"] == ["c", "y", "x"] and uploaded["data"].data.shape == (1, 120, 200)
+    assert uploaded["anchors"][0].label.label == "LED"
+    path, = (user_dirs / "data" / "ArkitektController").glob("*_tile_scan.ome.zarr")
+    canvas = zarr.open_group(str(path), mode="r")["0"][0, :, 0]
+    assert (canvas > 0).all()  # tiles placed by stage position cover every pixel
     assert positioner.calls[-1][:3] == ("xy", 100.0, 200.0)  # back where it started
     led_device = master.lasersManager["LED"]
     assert led_device.enabled is False and led_device.power == 10  # restored
+
+
+def test_rgb_channels_are_named_for_mikro():
+    from imswitch.imcontrol.model.io.mikro_upload import channel_labels
+    assert channel_labels(["LED_rgb_r", "LED_rgb_g", "LED_rgb_b"]) == ["red", "green", "blue"]
+    assert channel_labels(["B", "G", "R"]) == ["blue", "green", "red"]
+    assert channel_labels(["DAPI", "GFP", "Red"]) == ["DAPI", "GFP", "Red"]  # not a photograph
+    assert channel_labels(["A_rgb_r", "A_rgb_g", "A_rgb_b", "B_rgb_r", "B_rgb_g", "B_rgb_b"])[0] \
+        == "A_rgb_r"
+
+
+def write_canvas(path, channels=("LED_rgb_r", "LED_rgb_g", "LED_rgb_b")):
+    from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage
+    spec = ImageSpec(shape=(1, len(channels), 1, 600, 800), dtype="uint8", pixel_size_um=0.5,
+                     origin_um=(10.0, 20.0, 0.0), channel_names=list(channels), name="region")
+    image = NgffImage.create(path, spec)
+    for c in range(len(channels)):
+        image.write(np.full((600, 800), 50 + c, np.uint8), 0, c, 0)
+    image.finalize(min_size=128)
+    return image
+
+
+def test_a_canvas_is_read_lazily_with_its_pyramid(tmp_path):
+    pytest.importorskip("dask")
+    from imswitch.imcontrol.model.io.mikro_upload import read_ngff
+    write_canvas(tmp_path / "r.ome.zarr")
+    canvas = read_ngff(tmp_path / "r.ome.zarr")
+    assert canvas.dims == ["c", "y", "x"]  # singleton t and z dropped, c kept
+    assert [level.shape for level in canvas.levels] == [(3, 600, 800), (3, 300, 400),
+                                                        (3, 150, 200)]
+    assert canvas.pixel_um == {"y": 0.5, "x": 0.5} and canvas.origin_um == {"y": 20.0, "x": 10.0}
+    assert canvas.labels == ["red", "green", "blue"] and canvas.name == "region"
+
+
+def test_upload_queue_survives_a_restart_and_gives_up_after_three_failures(tmp_path):
+    from imswitch.imcontrol.model.io.mikro_upload import UploadQueue
+    queue = UploadQueue(tmp_path / "q.json")
+    assert queue.add("/a", "A") and queue.add("/b") and not queue.add("/a")
+    queue.done(queue.next(), "ds1", 3.0)
+    assert not queue.add("/a")  # uploaded already
+    again = UploadQueue(tmp_path / "q.json")
+    assert again.next()["path"] == "/b"
+    for _ in range(3):
+        again.failed(again.next(), RuntimeError("hub down"))
+    state = UploadQueue(tmp_path / "q.json").snapshot()
+    assert state["pending"] == [] and state["uploaded"][0]["datasetId"] == "ds1"
+    assert state["failed"][0]["attempts"] == 3 and "hub down" in state["failed"][0]["error"]
+
+
+def test_finished_experiments_are_queued_and_uploaded_when_idle(tmp_path, monkeypatch):
+    pytest.importorskip("mikro")
+    write_canvas(tmp_path / "exp" / "region0.ome.zarr")
+    controller, _, _ = make_controller(info=ArkitektInfo(autoConnect=False))
+    payload = {"name": "Exp", "canvases": [str(tmp_path / "exp" / "region0.ome.zarr")]}
+    controller._on_experiment_finished(payload)
+    assert controller.getArkitektUploadQueue()["pending"] == []  # uploadExperiments is off
+    controller._manager.info.uploadExperiments = True
+    controller._on_experiment_finished(payload)
+    assert controller.getArkitektUploadQueue()["pending"][0]["name"] == "Exp region0"
+    mikro = FakeMikro()
+    monkeypatch.setattr(controller, "_idle_for_upload", lambda: "experiment running")
+    assert controller._upload_next(mikro) is False and not mikro.datasets
+    monkeypatch.setattr(controller, "_idle_for_upload", lambda: None)
+    assert controller._upload_next(mikro) is True
+    uploaded = mikro.datasets[0].kwargs
+    assert [s.level for s in uploaded["scales"]] == [1, 2]  # the levels on disk, not rebuilt
+    assert [a.label.label for a in uploaded["anchors"]] == ["red", "green", "blue"]
+    assert mikro.spaces[0].registered[0][2] == {"y": 20.0, "x": 10.0}
+    queue = controller.getArkitektUploadQueue()
+    assert queue["pending"] == [] and queue["uploaded"][0]["datasetId"] == "ds0"
+    assert controller.getArkitektUploads()[0]["thumbnail"]
+    # deleteAfterUpload is off: the canvas stays
+    assert (tmp_path / "exp" / "region0.ome.zarr").is_dir()
+    assert "localCopy" not in queue["uploaded"][0]
+
+
+def test_an_uploaded_canvas_is_deleted_only_once_mikro_holds_all_of_it(tmp_path, monkeypatch):
+    pytest.importorskip("mikro")
+    kept, gone = tmp_path / "exp" / "kept.ome.zarr", tmp_path / "exp" / "gone.ome.zarr"
+    write_canvas(kept)
+    write_canvas(gone)
+    controller, _, _ = make_controller(info=ArkitektInfo(
+        autoConnect=False, uploadExperiments=True, deleteAfterUpload=True))
+    monkeypatch.setattr(controller, "_idle_for_upload", lambda: None)
+    controller.queueArkitektUpload(str(kept))
+    assert controller._upload_next(FakeMikro(loses_a_level=True)) is True
+    assert kept.is_dir()  # the server is missing a level: keep the only full copy
+    controller.queueArkitektUpload(str(gone))
+    assert controller._upload_next(FakeMikro()) is True
+    assert not gone.exists()
+    uploaded = controller.getArkitektUploadQueue()["uploaded"]
+    assert uploaded[0]["localCopy"].startswith("kept: mikro holds levels")
+    assert uploaded[1]["localCopy"] == "deleted"
+    assert controller.getArkitektUploads()[0]["thumbnail"]  # taken before the canvas went
+
+
+def test_any_controller_can_send_an_image_or_a_canvas_to_mikro(tmp_path, monkeypatch):
+    pytest.importorskip("mikro")
+    controller, _, _ = make_controller()
+    rgb = np.zeros((60, 80, 3), np.uint8)
+    rgb[..., 1] = 200
+    sent = controller._on_upload_request({"image": rgb, "name": "Overview",
+                                          "positionUm": {"x": 100.0, "y": 50.0},
+                                          "pixelSizeUm": 0.5}).result()
+    assert sent.endswith("_Overview.ome.zarr")
+    write_canvas(tmp_path / "other.ome.zarr")
+    assert controller._on_upload_request({"path": str(tmp_path / "other.ome.zarr")}).result()
+    assert controller._on_upload_request({"path": str(tmp_path / "missing")}).result() is None
+    assert [e["name"] for e in controller.getArkitektUploadQueue()["pending"]] == ["Overview", None]
+    monkeypatch.setattr(controller, "_idle_for_upload", lambda: None)
+    mikro = FakeMikro()
+    assert controller._upload_next(mikro)
+    uploaded = mikro.datasets[0].kwargs
+    assert uploaded["data"].data.shape == (3, 60, 80)
+    assert [a.label.label for a in uploaded["anchors"]] == ["red", "green", "blue"]
+    # placed at its top-left corner: the centre minus half a field
+    assert mikro.spaces[0].registered[0][2] == {"x": 80.0, "y": 35.0}
+    controller._manager.info.enabled = False
+    assert controller._on_upload_request({"image": rgb}) is None  # nothing written
+
+
+def test_only_an_ome_zarr_image_folder_is_deleted(tmp_path):
+    pytest.importorskip("zarr")
+    from imswitch.imcontrol.model.io.mikro_upload import delete_canvas
+    (tmp_path / "notes.ome.zarr").mkdir()
+    (tmp_path / "notes.ome.zarr" / "keep.txt").write_text("not an image")
+    write_canvas(tmp_path / "region.zarr")
+    write_canvas(tmp_path / "real.ome.zarr")
+    (tmp_path / "link.ome.zarr").symlink_to(tmp_path / "real.ome.zarr")
+    for path in ("notes.ome.zarr", "region.zarr", "link.ome.zarr", "missing.ome.zarr"):
+        with pytest.raises((ValueError, FileNotFoundError)):
+            delete_canvas(tmp_path / path)
+    assert (tmp_path / "notes.ome.zarr" / "keep.txt").exists()
+    assert (tmp_path / "region.zarr").is_dir() and (tmp_path / "real.ome.zarr").is_dir()
+    delete_canvas(tmp_path / "real.ome.zarr")
+    assert not (tmp_path / "real.ome.zarr").exists()
+
+
+def test_a_bare_host_is_the_https_server(no_arkitekt):
+    manager = manager_module.ArkitektManager(ArkitektInfo(url=" go.arkitekt.live/ "))
+    assert manager.url == "https://go.arkitekt.live"  # one stored login, never plain http
+    assert manager_module.ArkitektManager(ArkitektInfo(url="http://nas.local")).url == \
+        "http://nas.local"
+
+
+def test_an_old_arkitekt_is_named_instead_of_failing_at_the_login(monkeypatch):
+    import importlib.metadata
+    monkeypatch.setattr(manager_module.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(importlib.metadata, "version",
+                        lambda name: "5.0.1" if name == "arkitekt" else "1.0.0")
+    manager = manager_module.ArkitektManager(ArkitektInfo(autoConnect=False))
+    status = manager.status()
+    assert status["state"] == "unavailable" and status["available"] is False
+    assert "arkitekt 5.0.1 is installed" in status["message"]
+    assert manager.bind()["status"] == "error"
 
 
 class FakeFakts:
@@ -429,7 +615,8 @@ def test_automatic_reconnect_with_an_invalid_stored_login_does_not_prompt(privat
     import json
     import os
     server = FakeFakts()
-    path = manager_module.cache_file("imswitch", "2.0.0", server.base)
+    path = manager_module.cache_file("imswitch", controller_module.ARKITEKT_APP_VERSION,
+                                     server.base)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         json.dump({}, f)  # a session fakts cannot use: it would fall back to a device code
@@ -440,21 +627,9 @@ def test_automatic_reconnect_with_an_invalid_stored_login_does_not_prompt(privat
     assert controller.unbindArkitekt()["hasStoredLogin"] is False
 
 
-def test_only_http_approval_links_reach_the_panel(no_arkitekt):
-    import asyncio
-    manager = manager_module.ArkitektManager(ArkitektInfo(autoConnect=False))
-    endpoint = types.SimpleNamespace(configure="javascript:alert('{code}')", base_url="x",
-                                     name="evil")
-    asyncio.run(manager._on_device_code(endpoint, "ABCD"))
-    assert manager.status()["userCode"] == "ABCD" and manager.status()["approveUrl"] is None
-    endpoint.configure = "https://lok.example/configure/{code}"
-    asyncio.run(manager._on_device_code(endpoint, "ABCD"))
-    assert manager.status()["approveUrl"] == "https://lok.example/configure/ABCD"
-
-
-def test_device_code_hook_takes_the_fakts_5_4_challenge(no_arkitekt):
-    """fakts 5.4+ (arkitekt 6) calls the hook with one DeviceCodeChallenge, not
-    (endpoint, code): the Bind button failed with a TypeError before this."""
+def test_device_code_hook_takes_the_challenge(no_arkitekt):
+    """fakts calls the hook with one DeviceCodeChallenge; only http(s) approval
+    links reach the panel, which renders them."""
     import asyncio
     manager = manager_module.ArkitektManager(ArkitektInfo(autoConnect=False))
     endpoint = types.SimpleNamespace(configure="https://lok.example/configure/{code}",
@@ -492,3 +667,121 @@ def test_frame_grab_without_frame_numbers(no_arkitekt):
 
     controller.mDetector = Plain()
     assert controller.grabCameraFrame(frameSync=1).shape == (4, 4)
+
+
+# ── this machine's own hub (openUC2 OS arkitekt-hub deployment) ─────────────
+
+def write_hub_state(path, **state):
+    import datetime
+    import json
+    import os
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    with open(path, "w") as f:
+        json.dump({"version": 1, "updatedAt": now, **state}, f)
+
+
+class FakeSystemd:
+    def __init__(self, error=None):
+        self.calls, self.error = [], error
+
+    def __call__(self, method, signature, body):
+        self.calls.append((method, body))
+        if self.error is not None:
+            raise self.error
+
+
+CONNECTED = dict(state="connected", connected=True, server="go.arkitekt.live", hubId="113",
+                 name="test", identifier="openuc2-separate-bath-30666", organizations=["7"],
+                 addresses=["192.168.178.53:2755"], services={"running": 8, "total": 8})
+
+
+def test_without_a_hub_on_this_machine_the_panel_shows_none(no_arkitekt):
+    controller, _, _ = make_controller()
+    assert controller.getArkitektStatus()["localHub"] == {"present": False}
+
+
+def test_the_hub_state_is_shown_and_an_unfinished_attempt_settles(tmp_path):
+    path = str(tmp_path / "hub.json")
+    hub = hub_module.LocalHub(path, systemd=FakeSystemd())
+    write_hub_state(path, state="awaiting_approval", connected=False, server="go.arkitekt.live",
+                    approveUrl="https://go.arkitekt.live/hubconfigure/ABC", code="ABC",
+                    token="never shown")
+    status = hub.status()
+    assert status["present"] and status["state"] == "awaiting_approval"
+    assert status["code"] == "ABC" and "token" not in status
+
+    # A connect that never wrote its result (the machine restarted): not waiting forever.
+    write_hub_state(path, state="awaiting_approval", connected=True, code="ABC",
+                    updatedAt="2026-01-01T00:00:00Z")
+    status = hub.status()
+    assert status["state"] == "connected" and status["code"] is None
+    assert "without a result" in status["error"]
+
+
+def test_connecting_the_hub_starts_only_its_host_unit(no_arkitekt, tmp_path):
+    controller, _, _ = make_controller(info=ArkitektInfo(url="https://go.arkitekt.live",
+                                                         autoConnect=False))
+    systemd = FakeSystemd()
+    controller._hub = hub_module.LocalHub(str(tmp_path / "hub.json"), systemd=systemd)
+    assert controller.connectArkitektHub()["status"] == "started"  # the Arkitekt url's server
+    assert systemd.calls == [("StartUnit", ("arkitekt-hub-connect@go.arkitekt.live.service",
+                                            "replace"))]
+    assert controller.connectArkitektHub(server="http://nas.local:8000")["status"] == "started"
+    assert systemd.calls[-1][1][0] == "arkitekt-hub-connect@nas.local:8000.service"
+    refused = controller.connectArkitektHub(server="evil.service; rm -rf")
+    assert refused["status"] == "error" and len(systemd.calls) == 2  # never reaches systemd
+    assert controller.refreshArkitektHub()["status"] == "started"
+    assert systemd.calls[-1] == ("StartUnit", ("arkitekt-hub-status.service", "replace"))
+
+    write_hub_state(str(tmp_path / "hub.json"), state="awaiting_approval",
+                    server="go.arkitekt.live")
+    assert controller.cancelArkitektHub()["status"] == "success"
+    assert systemd.calls[-1] == ("StopUnit", ("arkitekt-hub-connect@go.arkitekt.live.service",
+                                              "replace"))
+
+
+@pytest.mark.parametrize("error, hint", [
+    (FileNotFoundError("/var/run/dbus/system_bus_socket"), "enable-depl-feat imswitch arkitekt"),
+    (type("DBusErrorResponse", (Exception,), {"name": "org.freedesktop.systemd1.NoSuchUnit"})(),
+     "enable-depl arkitekt-hub"),
+    (type("DBusErrorResponse", (Exception,),
+          {"name": "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired"})(), "polkit"),
+])
+def test_why_the_hub_cannot_be_connected_is_explained(tmp_path, error, hint):
+    hub = hub_module.LocalHub(str(tmp_path / "hub.json"), systemd=FakeSystemd(error))
+    result = hub.connect("go.arkitekt.live")
+    assert result["status"] == "error" and hint in result["message"]
+
+
+def test_binding_preselects_this_machines_hub_on_the_approval_page(no_arkitekt, tmp_path):
+    import asyncio
+    controller, _, _ = make_controller(info=ArkitektInfo(url="https://go.arkitekt.live",
+                                                         autoConnect=False))
+    path = str(tmp_path / "hub.json")
+    controller._hub = hub_module.LocalHub(path, systemd=FakeSystemd())
+    assert controller._own_hub_on("https://go.arkitekt.live") is None  # no hub here
+    write_hub_state(path, **CONNECTED)
+    assert controller._own_hub_on("https://go.arkitekt.live") == "113"
+    assert controller._own_hub_on("http://nas.local") is None  # connected elsewhere
+
+    manager = controller._manager
+    manager._hub_hint = "113"
+    endpoint = types.SimpleNamespace(configure=None, base_url="https://go.arkitekt.live", name="go")
+    challenge = types.SimpleNamespace(endpoint=endpoint, user_code="WXYZ",
+                                      verification_uri_complete="https://go.arkitekt.live/f/configure/WXYZ")
+    asyncio.run(manager._on_device_code(challenge))
+    assert manager.status()["approveUrl"] == "https://go.arkitekt.live/f/configure/WXYZ?hub=113"
+
+
+def test_the_bound_hub_is_read_from_the_stored_login_without_its_tokens(no_arkitekt, tmp_path,
+                                                                        monkeypatch):
+    import json
+    manager = manager_module.ArkitektManager(ArkitektInfo(autoConnect=False))
+    assert manager.bound_hub() is None
+    stored = tmp_path / "imswitch-3.0.0-abc_fakts_cache.json"
+    stored.write_text(json.dumps({"fakts": {"self": {"hub": 113, "deployment_name": "test"},
+                                            "auth": {"access_token": "secret"}}}))
+    monkeypatch.setattr(manager, "_cache_file", lambda: str(stored))
+    assert manager.bound_hub() == {"id": "113", "name": "test"}
+    assert manager.status()["boundHub"] == {"id": "113", "name": "test"}

@@ -25,8 +25,8 @@ export const apiArkitektGetStatus = () => get("getArkitektStatus");
 
 // Starts the login in the background and returns at once; poll the status
 // (or listen to sigArkitektStatus) for the code to approve.
-export const apiArkitektBind = (url = "", redeemToken = "") =>
-  post("bindArkitekt", { url, redeemToken });
+export const apiArkitektBind = (url = "", mandateKey = "") =>
+  post("bindArkitekt", { url, mandateKey });
 
 // Stop a pending login or disconnect; the stored login is kept.
 export const apiArkitektCancel = () => post("cancelArkitekt");
@@ -34,10 +34,26 @@ export const apiArkitektCancel = () => post("cancelArkitekt");
 // Disconnect and forget the stored login on this microscope.
 export const apiArkitektUnbind = () => post("unbindArkitekt");
 
-// Only the given keys change: {url, appName, autoConnect, allowInsecureTransport, useMikro}
+// Only the given keys change: {url, appName, autoConnect, allowInsecureTransport, useMikro,
+// uploadExperiments, deleteAfterUpload}
 export const apiArkitektSetSettings = (settings) => post("setArkitektSettings", settings);
 
 // [{id, name, datasetId, shape, dtype, positionUm, pixelSizeUm, time, thumbnail}]
 export const apiArkitektGetUploads = () => get("getArkitektUploads");
 
 export const apiArkitektClearActivity = () => post("clearArkitektActivity");
+
+// This machine's own Arkitekt hub (openUC2 OS, arkitekt-hub deployment): {present} only,
+// without one; else {state, name, hubId, server, organizations, addresses, services,
+// approveUrl, code, expiresAt, message, error}. Also in getArkitektStatus as localHub.
+export const apiArkitektGetHub = () => get("getArkitektHub");
+
+// Connect it to a coordination server (a host name; empty = the Arkitekt url's). Runs on
+// the host and returns at once with {status, message, localHub}; the approval link follows.
+export const apiArkitektConnectHub = (server = "") => post("connectArkitektHub", { server });
+
+// Stop a running connect; the hub stays as it was.
+export const apiArkitektCancelHub = () => post("cancelArkitektHub");
+
+// Have the host report the hub's state again (a few seconds).
+export const apiArkitektRefreshHub = () => post("refreshArkitektHub");

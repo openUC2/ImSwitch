@@ -1543,6 +1543,40 @@ class LiveViewController(LiveUpdatedController):
                 "message": str(e)
             }
 
+    # --- Live-view presets (named bundles of objective, exposure, gain, stream settings) ---
+    # The frontend owns the preset format; the server only keeps one list per instrument, so a
+    # preset made on one browser shows up on every other one.
+
+    def _presetsPath(self):
+        from imswitch.imcommon.model import dirtools
+        return os.path.join(dirtools.UserFileDirs.Config, "liveview_presets.json")
+
+    @APIExport(runOnUIThread=False)
+    def getLiveViewPresets(self) -> Dict[str, Any]:
+        """The saved live-view presets: {"presets": [...]}, or {"presets": None} if none were
+        ever saved on this instrument (the frontend then uploads its browser copy once)."""
+        import json
+        try:
+            with open(self._presetsPath(), encoding="utf-8") as f:
+                return {"presets": json.load(f)}
+        except FileNotFoundError:
+            return {"presets": None}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setLiveViewPresets(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace the saved live-view presets with body["presets"] (a list)."""
+        import json
+        presets = body.get("presets")
+        if not isinstance(presets, list):
+            return {"status": "error", "message": "body needs a 'presets' list"}
+        path = self._presetsPath()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(presets, f, indent=1)
+        os.replace(tmp, path)  # a crash mid-write keeps the old list
+        return {"status": "saved", "count": len(presets)}
+
     @APIExport()
     def getStreamParameters(self, protocol: Optional[str] = None, detectorName: Optional[str] = None) -> Dict[str, Any]:
         """

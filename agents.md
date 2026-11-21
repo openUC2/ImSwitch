@@ -361,6 +361,8 @@ Backends live in `model/managers/detectors/`: `HikCamManager`, `ToupCamManager`,
 - `setDetectorStreamParameters(detectorName, params)` (POST)
 - `getStreamDiagnostics(detectorName)` — FPS, drops, backpressure
 - `mjpeg_stream(startStream=True, detectorName)` — plain MJPEG over HTTP
+- `getLiveViewPresets` / `setLiveViewPresets(body{presets})` (POST) — the instrument's saved
+  live-view presets (objective, exposure, gain, stream settings), shared by all browsers
 - `getLongExposureInfo` / `stopLiveViewForLongExposure` — live view must yield for exposures
   longer than the stream period
 - `webrtc_offer(request)` (POST) / `webrtc_ice_candidate`

@@ -5,6 +5,8 @@ test("raw range follows the brightest bin up to the next 2^n - 1", () => {
   expect(rangeMaxFor(false, [0, 1000, 3000], [5, 5, 1])).toBe(4095); // 12-bit
   expect(rangeMaxFor(false, [0, 1000, 70000], [5, 5, 0])).toBe(1023);
   expect(rangeMaxFor(false, [], [])).toBe(65535);
+  expect(rangeMaxFor(false, [0, 1000, 70000], [5, 5, 1], 12)).toBe(4095); // reported depth wins
+  expect(rangeMaxFor(true, [], [], 12)).toBe(255); // JPEG stays 8-bit
 });
 
 test("auto range clips the darkest and brightest 0.1 %", () => {

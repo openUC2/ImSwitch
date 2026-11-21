@@ -63,6 +63,16 @@ def computeCropWindow(fullShape, frameStart, shape,
     return hpos, vpos, hsize, vsize
 
 
+
+def bitDepthOf(detector):
+    """Bits per pixel of the raw frames (8, 10, 12, 14, 16), from the camera's preview maximum
+    (``previewMaxValue``, 2**bits - 1) where the manager reports it; None if unknown."""
+    try:
+        maxValue = int(detector.parameters['previewMaxValue'].value)
+    except Exception:
+        return None
+    return maxValue.bit_length() if maxValue > 0 else None
+
 class SettingsController(ImConWidgetController):
     """ Linked to SettingsWidget."""
 
@@ -407,6 +417,7 @@ class SettingsController(ImConWidgetController):
                 return getattr(parameter, 'valueMin', None), getattr(parameter, 'valueMax', None)
             except Exception:
                 return None, None
+        mBitDepth = bitDepthOf(detector)
         mExposureMin, mExposureMax = _limits('exposure')
         mGainMin, mGainMax = _limits('gain')
         mParameterDict = {
@@ -417,6 +428,7 @@ class SettingsController(ImConWidgetController):
             'supportedBinnings': mSupportedBinnings,
             'blacklevel': mBlacklevel,
             'isRGB': mRGB,
+            'bitDepth': mBitDepth,
             'mode': camMode,
             'exposureMin': mExposureMin,
             'exposureMax': mExposureMax,

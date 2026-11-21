@@ -6,12 +6,14 @@ import {
   setMinVal,
   setMaxVal,
 } from "../state/slices/LiveStreamSlice";
+import { getDetectorParameters } from "../state/slices/DetectorParametersSlice";
 
-// Highest value a frame can hold: 255 for JPEG. For raw frames the backend
-// does not report the bit depth yet, so take the smallest 2^n - 1 that holds the
-// brightest histogram bin (a 12-bit camera then gets 0–4095, not 0–65535).
-export function rangeMaxFor(isJpeg, histX = [], histY = []) {
+// Highest value a frame can hold: 255 for JPEG; for raw frames 2^bitDepth - 1 as
+// the backend reports it (getDetectorParameters.bitDepth). Cameras that do not
+// report one get the smallest 2^n - 1 that holds the brightest histogram bin.
+export function rangeMaxFor(isJpeg, histX = [], histY = [], bitDepth = null) {
   if (isJpeg) return 255;
+  if (bitDepth >= 8 && bitDepth <= 16) return 2 ** bitDepth - 1;
   let top = 0;
   for (let i = histY.length - 1; i >= 0; i--) {
     if (histY[i] > 0) {
@@ -52,8 +54,9 @@ export default function DisplayRangeControl({ onDark = false }) {
     histogramX = [],
     histogramY = [],
   } = useSelector(getLiveStreamState);
+  const { bitDepth } = useSelector(getDetectorParameters);
   const isJpeg = imageFormat === "jpeg";
-  const top = rangeMaxFor(isJpeg, histogramX, histogramY);
+  const top = rangeMaxFor(isJpeg, histogramX, histogramY, bitDepth);
   const lo = Math.min(minVal ?? 0, top);
   const hi = Math.min(maxVal ?? top, top);
 

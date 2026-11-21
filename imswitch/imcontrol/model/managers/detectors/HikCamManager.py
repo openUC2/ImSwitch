@@ -177,12 +177,11 @@ class HikCamManager(DetectorManager):
     def _getPreviewMaxValue(self):
         """Return max preview value based on the camera's active pixel format bit depth."""
         try:
-            fmt = getattr(self._camera, '_activePixelFormat', None)
-            if fmt is not None:
-                # Check against high-bit mono format set from hikcamera module
-                from imswitch.imcontrol.model.interfaces.hikcamera import _MONO_HIGHBIT_FORMATS
-                if fmt in _MONO_HIGHBIT_FORMATS:
-                    return 4095  # 12-bit
+            from imswitch.imcontrol.model.interfaces import hikcamera as hik
+            bits = {hik.PixelType_Gvsp_Mono10: 10, hik.PixelType_Gvsp_Mono12: 12,
+                    hik.PixelType_Gvsp_Mono16: 16}.get(getattr(self._camera, '_activePixelFormat', None))
+            if bits:
+                return (1 << bits) - 1
         except Exception:
             pass
         return 255  # 8-bit default

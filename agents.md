@@ -315,7 +315,7 @@ stage scans are not checked. A 409 is the answer — do not disable the limit to
 | Function | Notes |
 |---|---|
 | `getDetectorNames()` | |
-| `getDetectorParameters()` / `getDetectorParameter(detectorName, parameterName)` | |
+| `getDetectorParameters()` / `getDetectorParameter(detectorName, parameterName)` | `bitDepth` = bits of the raw frames (from `previewMaxValue`; null if the camera does not say) |
 | `getDetectorParameterTree(detectorName)` | Structured, typed parameter tree — best for agents |
 | `setDetectorParameterValue(body)` (POST) | Typed setter |
 | `setDetectorParameter(detectorName, parameterName, value)` | Generic setter |

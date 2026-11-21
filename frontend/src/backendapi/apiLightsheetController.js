@@ -274,6 +274,42 @@ export const apiSetGalvo = async ({
   }
 };
 
+/** Abort the running scan (what was acquired is still written). */
+export const apiStopLightsheet = async () =>
+  (await createAxiosInstance().get("/LightsheetController/stopLightsheet")).data;
+
+/** Lightsheet volumes on disk, newest first: [{name, folder, path, absolutePath, kind, mtime}]. */
+export const apiListVolumes = async () =>
+  (await createAxiosInstance().get("/LightsheetController/listVolumes")).data;
+
+/** Footprints of past scans (*.scan.json): tiles, fovUm, zRangeUm, files. */
+export const apiGetScannedVolumes = async (limit = 30) =>
+  (await createAxiosInstance().get("/LightsheetController/getScannedVolumes", { params: { limit } })).data;
+
+/**
+ * Small uint8 copy of a volume (OME-TIFF or OME-Zarr) for the 3D view.
+ * The body is: uint32 LE header length | JSON header | voxels (z, y, x).
+ * @returns {Promise<{header: Object, voxels: Uint8Array}>}
+ */
+export const apiGetVolumePreview = async (path, maxSize = 256) => {
+  const response = await createAxiosInstance().get("/LightsheetController/getVolumePreview", {
+    params: { path, maxSize },
+    responseType: "arraybuffer",
+  });
+  const buffer = response.data;
+  const n = new DataView(buffer).getUint32(0, true);
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, n)));
+  return { header, voxels: new Uint8Array(buffer, 4 + n) };
+};
+
+/** Simulated lightsheet optics ({available: false} on real hardware). */
+export const apiGetVirtualOptics = async () =>
+  (await createAxiosInstance().get("/LightsheetController/getVirtualOptics")).data;
+
+/** Illumination NA of the simulated sheet; returns the new optics. */
+export const apiSetVirtualIlluminationNA = async (na) =>
+  (await createAxiosInstance().get("/LightsheetController/setVirtualIlluminationNA", { params: { na } })).data;
+
 export default {
   apiStartStepAcquireScan,
   apiStartContinuousScanWithZarr,

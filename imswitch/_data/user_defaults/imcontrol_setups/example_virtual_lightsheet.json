@@ -1,0 +1,106 @@
+{
+  "positioners": {
+    "VirtualStage": {
+      "managerName": "VirtualStageManager",
+      "managerProperties": {
+        "rs232device": "VirtualMicroscope",
+        "isEnable": true,
+        "enableauto": false,
+        "stepsizeX": 1,
+        "stepsizeY": 1,
+        "stepsizeZ": 1,
+        "stepsizeA": 1,
+        "initialSpeed": {"X": 15000, "Y": 15000, "Z": 15000, "A": 15000}
+      },
+      "axes": ["X", "Y", "Z", "A"],
+      "forScanning": true,
+      "forPositioning": true
+    }
+  },
+  "rs232devices": {
+    "VirtualMicroscope": {
+      "managerName": "VirtualMicroscopeManager",
+      "managerProperties": {
+        "imagePath": "lightsheet",
+        "lightsheet": {
+          "width": 512,
+          "height": 512,
+          "magnification": 10,
+          "detectionNA": 0.2,
+          "illuminationNA": 0.05,
+          "cameraPixelUm": 3.45,
+          "excitationNm": 488,
+          "emissionNm": 520,
+          "refractiveIndex": 1.33,
+          "sheetWaistOffsetUm": 0,
+          "attenuationUm": 1500,
+          "focusOffsetUm": 0,
+          "sampleScanAxis": "Z",
+          "objectiveAxis": "A",
+          "sampleSizeUm": [1500, 1500, 800],
+          "nSpheroids": 40,
+          "nBeads": 30000,
+          "seed": 0,
+          "brightness": 150,
+          "background": 100,
+          "readNoise": 2,
+          "bitDepth": 12
+        }
+      }
+    }
+  },
+  "lasers": {
+    "488 Laser": {
+      "analogChannel": null,
+      "digitalLine": null,
+      "managerName": "VirtualLaserManager",
+      "managerProperties": {
+        "rs232device": "VirtualMicroscope",
+        "channel_index": 1
+      },
+      "wavelength": 488,
+      "valueRangeMin": 0,
+      "valueRangeMax": 1024
+    }
+  },
+  "detectors": {
+    "LightsheetCamera": {
+      "analogChannel": null,
+      "digitalLine": null,
+      "managerName": "VirtualCameraManager",
+      "managerProperties": {
+        "isRGB": 0,
+        "cameraListIndex": 0,
+        "virtcam": {
+          "exposure": 20,
+          "gain": 0,
+          "blacklevel": 100,
+          "image_width": 512,
+          "image_height": 512
+        }
+      },
+      "forAcquisition": true,
+      "forFocusLock": false
+    }
+  },
+  "PixelCalibration": {},
+  "availableWidgets": [
+    "Settings",
+    "Positioner",
+    "View",
+    "Recording",
+    "Image",
+    "Laser",
+    "Lightsheet",
+    "PixelCalibration"
+  ],
+  "nonAvailableWidgets": [
+    "STORMRecon",
+    "LEDMatrix",
+    "Joystick",
+    "ROIScan",
+    "MCT",
+    "ImSwitchServer",
+    "FocusLock"
+  ]
+}

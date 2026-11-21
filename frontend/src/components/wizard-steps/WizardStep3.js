@@ -257,7 +257,7 @@ const WizardStep3 = ({ hostIP, hostPort, onNext, onBack, activeStep, totalSteps 
               2. Adjust Position
             </Typography>
             <Typography variant="body2" sx={{ mb: 2 }}>
-              Current Position: <strong>{currentPosition || "Unknown"}</strong>
+              Current Position: <strong>{currentPosition ?? "Unknown"}</strong>
             </Typography>
             <Typography variant="body2" sx={{ mb: 2 }}>
               Use the buttons below to align the beam spot with the crosshair center:
@@ -287,7 +287,7 @@ const WizardStep3 = ({ hostIP, hostPort, onNext, onBack, activeStep, totalSteps 
               variant="contained"
               color="success"
               onClick={handleSaveX1Position}
-              disabled={!currentPosition}
+              disabled={currentPosition == null}
               startIcon={<SaveIcon />}
             >
               Save Current Position as X1

@@ -2,10 +2,10 @@
 // Live View macro buttons: one per saved Aufgaben job marked as a macro
 // (metadata.macro, the "Macro button in Live View" switch in the job panel).
 // The arrow next to a button opens its run parameters. A running macro's
-// button stops it. Renders nothing while this setup has no macros.
+// button stops it. Without macros it says how to make one.
 import React, { useCallback, useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { Box, Button, ButtonGroup, Popover, Stack } from "@mui/material";
+import { Box, Button, ButtonGroup, Popover, Stack, Typography } from "@mui/material";
 
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import PlayArrowOutlined from "@mui/icons-material/PlayArrowOutlined";
@@ -30,7 +30,7 @@ const AufgabenMacros = ({ header = null, sx }) => {
   const t = useT();
   const dispatch = useDispatch();
   const available = useSelector(selectHasController("AufgabenController"));
-  const [macros, setMacros] = useState([]);
+  const [macros, setMacros] = useState(null); // null until the list arrived
   const [values, setValues] = useState({}); // macro name -> parameter values the operator set
   const [running, setRunning] = useState(null); // { name, title, runId }
   const [menu, setMenu] = useState(null); // { name, anchor }
@@ -78,7 +78,17 @@ const AufgabenMacros = ({ header = null, sx }) => {
 
   const stop = () => apiAufgabenAbortJob(false).catch((e) => notify(aufgabenErrorText(e)));
 
-  if (!available || macros.length === 0) return null;
+  if (!available || macros === null) return null;
+  if (macros.length === 0) {
+    return (
+      <Box sx={sx}>
+        {header}
+        <Typography variant="body2" color="text.secondary">
+          {t("No macros yet. In Aufgaben, open or build a job, switch on \"Macro button in Live View\" in its Job tab and save it; it shows here as a button.")}
+        </Typography>
+      </Box>
+    );
+  }
   const open = menu ? macros.find((m) => m.name === menu.name) : null;
   const setValue = (macro, name) => (value) =>
     setValues((all) => ({ ...all, [macro]: { ...all[macro], [name]: value } }));

@@ -69,9 +69,22 @@ export const defaultParams = (entry) => {
   return params;
 };
 
+// A new step, with every required resource filled in: the first resource of
+// the right kind, or a new one from RESOURCE_TEMPLATES (added to the job), so
+// a Z-stack comes with a Z plan to edit instead of an empty "@" field.
 export const newNode = (job, entry) => {
   const node = { id: newNodeId(job, entry.id), task: entry.id, params: defaultParams(entry) };
   for (const branch of branchesOf(entry)) node[branch] = [];
+  const required = (entry.schema && entry.schema.required) || [];
+  for (const [param, kinds] of Object.entries(entry.ref_kinds || {})) {
+    if (!required.includes(param) || !RESOURCE_TEMPLATES[kinds[0]]) continue;
+    let name = resourcesOfKind(job, kinds)[0];
+    if (!name) {
+      name = freeName(job.resources || {}, kinds[0]);
+      job.resources = { ...job.resources, [name]: JSON.parse(JSON.stringify(RESOURCE_TEMPLATES[kinds[0]])) };
+    }
+    node.params[param] = `@${name}`;
+  }
   return node;
 };
 
@@ -294,6 +307,11 @@ export const renameResource = (job, name, newName) => {
   return true;
 };
 
+export const freeName = (resources, base) => {
+  if (!resources[base]) return base;
+  for (let n = 2; ; n += 1) if (!resources[`${base}_${n}`]) return `${base}_${n}`;
+};
+
 export const resourcesOfKind = (job, kinds) =>
   Object.entries(job.resources || {})
     .filter(([, resource]) => !kinds || kinds.includes(resource.kind))
@@ -323,4 +341,32 @@ export const aufgabenErrorText = (error) => {
     return detail.map((d) => `${(d.loc || []).join(".")}: ${d.msg}`).join("; ");
   }
   return error?.message || String(error);
+};
+
+// Plain words for where the names in a "${...}" value come from, e.g.
+// "param.objective_slot: job parameter "High-mag objective slot" (default 1),
+// set in the Job tab and asked in the start wizard". Empty for other values.
+export const explainExpression = (value, job) => {
+  if (!isExpression(value)) return "";
+  const text = value.slice(2, -1);
+  const seen = new Set();
+  const parts = [];
+  for (const [, ns, name] of text.matchAll(/\b(param|var|loop|result|device|job)\.(\w+)/g)) {
+    const key = `${ns}.${name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (ns === "param") {
+      const p = (job.parameters || {})[name];
+      if (!p) {
+        parts.push(`${key}: no job parameter "${name}" (add it in the Job tab)`);
+        continue;
+      }
+      const when = { wizard: "asked in the start wizard", hidden: "not asked" }[p.ui] || "asked before each run";
+      parts.push(`${key}: job parameter "${p.title || name}"${p.default != null ? ` (default ${p.default})` : ""}, set in the Job tab, ${when}`);
+    } else if (ns === "result") parts.push(`${key}: result of step "${name}"`);
+    else if (ns === "loop") parts.push(`${key}: current round of loop "${name}"`);
+    else if (ns === "var") parts.push(`${key}: job variable "${name}"`);
+    else parts.push(`${key}: ${ns === "device" ? "read from the microscope" : "about this run"}`);
+  }
+  return parts.length ? `Worked out when the step runs. ${parts.join("; ")}.` : "Worked out when the step runs.";
 };

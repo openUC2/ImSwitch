@@ -39,12 +39,15 @@ test("palette clicks build the outline and the step form follows the schema", as
   fireEvent.click(screen.getByText("Capture"));
   expect(store.getState().aufgabenState.job.tasks[0].body[0].task).toBe("capture");
 
-  fireEvent.click(screen.getByTestId("aufgaben-node-loop_positions"));
-  // the required positions parameter is a resource picker with a "New" button
-  fireEvent.click(screen.getByRole("button", { name: "New positions resource" }));
-  const job = store.getState().aufgabenState.job;
+  // the loop came with a positions resource; "New" adds a second one
+  let job = store.getState().aufgabenState.job;
   expect(job.resources.positions).toEqual({ kind: "positions", positions: [] });
   expect(job.tasks[0].params.source).toBe("@positions");
+  fireEvent.click(screen.getByTestId("aufgaben-node-loop_positions"));
+  expect(screen.getByText("Add current stage position")).toBeTruthy();   // edited in the step
+  fireEvent.click(screen.getByRole("button", { name: "New positions resource" }));
+  job = store.getState().aufgabenState.job;
+  expect(job.tasks[0].params.source).toBe("@positions_2");
 });
 
 test("validation marks the outline; Start needs the ask-first steps confirmed", async () => {

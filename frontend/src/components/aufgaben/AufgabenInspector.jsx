@@ -15,6 +15,7 @@ import {
   IconButton,
   Menu,
   MenuItem,
+  InputAdornment,
   Stack,
   Switch,
   Tab,
@@ -36,7 +37,9 @@ import apiPositionerControllerGetPositions from "../../backendapi/apiPositionerC
 import {
   RESOURCE_TEMPLATES,
   catalogById,
+  freeName,
   findNode,
+  isReference,
   isValidId,
   issuesFor,
   paramFields,
@@ -49,14 +52,14 @@ import { useT } from "../../i18n";
 
 const ON_ERROR = ["abort", "skip", "continue_loop", "retry"];
 
-const freeName = (resources, base) => {
-  if (!resources[base]) return base;
-  for (let n = 2; ; n += 1) if (!resources[`${base}_${n}`]) return `${base}_${n}`;
-};
-
 // Illumination sources of this setup, from the catalogue's device enums.
 const illuminationSources = (byId) =>
   byId.set_illumination?.schema?.properties?.source?.enum || [];
+
+const usedElsewhere = (job, name, nodeId) =>
+  [...walk(job.tasks)].some(
+    ({ node }) => node.id !== nodeId && Object.values(node.params || {}).includes(`@${name}`),
+  );
 
 // -- step ----------------------------------------------------------------------
 
@@ -249,16 +252,36 @@ const StepPanel = ({ node, entry, job, byId, validation }) => {
       </Stack>
       {fields.length > 0 && <SectionTitle>{t("Parameters")}</SectionTitle>}
       <Stack spacing={1.5}>
-        {fields.map((field) => (
-          <ParamField
-            key={field.name}
-            field={field}
-            value={node.params?.[field.name]}
-            job={job}
-            onChange={(value) => onParam(field.name, value)}
-            onCreateResource={onCreateResource}
-          />
-        ))}
+        {fields.map((field) => {
+          const value = node.params?.[field.name];
+          const ref = field.kind === "resource" && isReference(value) ? value.slice(1) : null;
+          const resource = ref && job.resources?.[ref];
+          return (
+            <Box key={field.name}>
+              <ParamField
+                field={field}
+                value={value}
+                job={job}
+                onChange={(v) => onParam(field.name, v)}
+                onCreateResource={onCreateResource}
+              />
+              {resource && (
+                <Box sx={{ borderLeft: 2, borderColor: "divider", pl: 1.5, mt: 0.5 }}>
+                  <ResourceBody
+                    resource={resource}
+                    sources={illuminationSources(byId)}
+                    onChange={(r) => dispatch(A.setResource({ name: ref, resource: r }))}
+                  />
+                  {usedElsewhere(job, ref, node.id) && (
+                    <Typography variant="caption" color="text.secondary">
+                      {t("Other steps use @{name} too; they change with it.", { name: ref })}
+                    </Typography>
+                  )}
+                </Box>
+              )}
+            </Box>
+          );
+        })}
       </Stack>
       <Button
         size="small"
@@ -409,13 +432,81 @@ const CaptureEditor = ({ resource, sources, onChange }) => {
   );
 };
 
+// What each kind of resource is, shown above its form.
+const KIND_HELP = {
+  z_plan: "The Z positions of a Z-stack, in µm. range + step: a stack of that height centred on the Z where the stack starts. Other forms: above + below + step (relative), top + bottom + step (absolute Z).",
+  time_plan: "Time-lapse rounds: interval between round starts (s) and the number of rounds (loops).",
+  grid: "Tiles around each position: rows × columns of fov_width × fov_height µm, overlap as a fraction (0.1 = 10 %).",
+  autofocus: "How autofocus searches: mode software (image sharpness) or hardware (focus lock), Z range and step in µm.",
+  capture: "One image per channel: light source, exposure (ms) and intensity in the source's own units.",
+  positions: "Stage positions in µm.",
+  regions: "Rectangles in stage µm; usually filled by a step such as Regions from overview.",
+  focus_map: "A focus surface fitted to measured points: spline, rbf or constant.",
+};
+
+const UNIT_SUFFIX = { um: "µm", ms: "ms", s: "s" };
+const KEY_UNITS = { range: "µm", step: "µm", above: "µm", below: "µm", top: "µm", bottom: "µm",
+  fov_width: "µm", fov_height: "µm", interval: "s", duration: "s" };
+
+// Scalar fields of a resource (or of its useq plan) as labelled inputs; JSON otherwise.
+const PlanForm = ({ resource, onChange }) => {
+  const { kind, ...rest } = resource;
+  const inPlan = rest.plan && typeof rest.plan === "object" && !Array.isArray(rest.plan);
+  const values = inPlan ? rest.plan : rest;
+  const scalar = Object.values(values).every((v) => v === null || typeof v !== "object");
+  const set = (key, value) => {
+    const next = { ...values, [key]: value };
+    if (value === undefined) delete next[key];
+    onChange(inPlan ? { ...resource, plan: next } : { kind, ...next });
+  };
+  if (!scalar) {
+    return <JsonField value={rest} minRows={4} onChange={(value) => onChange({ ...(value || {}), kind })} />;
+  }
+  return (
+    <Stack direction="row" flexWrap="wrap" gap={1}>
+      {Object.entries(values).map(([key, value]) => {
+        const suffix = key.match(/_(um|ms|s)$/)?.[1];
+        const unit = KEY_UNITS[key] || UNIT_SUFFIX[suffix];
+        const name = (suffix ? key.slice(0, -suffix.length - 1) : key).replace(/_/g, " ");
+        return (
+          <CommitField
+            key={key}
+            label={name.charAt(0).toUpperCase() + name.slice(1)}
+            value={value}
+            sx={{ width: 130 }}
+            InputProps={unit ? { endAdornment: <InputAdornment position="end">{unit}</InputAdornment> } : undefined}
+            onCommit={(text) => set(key, typeof value === "string" ? text : parseNumberInput(text))}
+          />
+        );
+      })}
+    </Stack>
+  );
+};
+
+const ResourceBody = ({ resource, sources, onChange }) => {
+  const t = useT();
+  const { kind } = resource;
+  return (
+    <Box>
+      {KIND_HELP[kind] && (
+        <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 1 }}>
+          {t(KIND_HELP[kind])}
+        </Typography>
+      )}
+      {kind === "positions" && <PositionsEditor resource={resource} onChange={onChange} />}
+      {kind === "capture" && <CaptureEditor resource={resource} sources={sources} onChange={onChange} />}
+      {kind !== "positions" && kind !== "capture" && <PlanForm resource={resource} onChange={onChange} />}
+    </Box>
+  );
+};
+
 const ResourceCard = ({ name, resource, sources }) => {
   const t = useT();
   const dispatch = useDispatch();
   const [open, setOpen] = useState(false);
   const [nameError, setNameError] = useState("");
   const onChange = (value) => dispatch(A.setResource({ name, resource: value }));
-  const { kind, ...body } = resource;
+  const { kind } = resource;
   return (
     <Box sx={{ borderBottom: 1, borderColor: "divider", py: 1 }}>
       <Stack direction="row" spacing={1} alignItems="center">
@@ -442,11 +533,7 @@ const ResourceCard = ({ name, resource, sources }) => {
       </Stack>
       <Collapse in={open} unmountOnExit>
         <Box sx={{ mt: 1 }}>
-          {kind === "positions" && <PositionsEditor resource={resource} onChange={onChange} />}
-          {kind === "capture" && <CaptureEditor resource={resource} sources={sources} onChange={onChange} />}
-          {kind !== "positions" && kind !== "capture" && (
-            <JsonField value={body} minRows={4} onChange={(value) => onChange({ ...(value || {}), kind })} />
-          )}
+          <ResourceBody resource={resource} sources={sources} onChange={onChange} />
         </Box>
       </Collapse>
     </Box>

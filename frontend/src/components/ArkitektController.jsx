@@ -2,8 +2,10 @@
 // Arkitekt panel: bind this microscope to an Arkitekt server (device-code
 // login: the server shows a code, someone approves it in a browser), unbind
 // it again, and see what Arkitekt may call, what it called and which images
-// the microscope sent to the server.
-import React, { useCallback, useEffect, useState } from "react";
+// the microscope sent to the server. On openUC2 OS with the arkitekt-hub
+// deployment it also shows this machine's own hub and connects it to the
+// organization (one more approval), so the whole setup needs no terminal.
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Alert,
@@ -43,9 +45,12 @@ import * as arkitektSlice from "../state/slices/ArkitektSlice";
 import {
   apiArkitektBind,
   apiArkitektCancel,
+  apiArkitektCancelHub,
   apiArkitektClearActivity,
+  apiArkitektConnectHub,
   apiArkitektGetStatus,
   apiArkitektGetUploads,
+  apiArkitektRefreshHub,
   apiArkitektSetSettings,
   apiArkitektUnbind,
 } from "../backendapi/apiArkitektController";
@@ -68,6 +73,33 @@ const STATE_LABELS = {
 // Bind steps: the server is found, someone approves, the agent provides.
 const STEPS = ["Find server", "Approve in a browser", "Provide actions"];
 const ACTIVE_STEP = { connecting: 0, awaiting_login: 1, connected: 3 };
+
+// This machine's hub: state -> [label, palette colour]
+const HUB_LABELS = {
+  absent: ["Not created yet", "text.disabled"],
+  not_connected: ["Not connected to an organization", "warning.main"],
+  connecting: ["Connecting…", "info.main"],
+  awaiting_approval: ["Waiting for approval", "warning.main"],
+  starting: ["Accepted, its services restart…", "info.main"],
+  connected: ["Connected", "success.main"],
+  unknown: ["Unknown", "text.secondary"],
+};
+const HUB_BUSY = ["connecting", "awaiting_approval", "starting"];
+
+// "https://go.arkitekt.live" -> "go.arkitekt.live": the coordination server a hub connects to
+const serverOf = (url) => {
+  try {
+    return new URL(url.includes("://") ? url : `https://${url}`).host;
+  } catch (_) {
+    return "";
+  }
+};
+
+const remaining = (iso) => {
+  if (!iso) return "";
+  const s = Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
 
 const time = (iso) => (iso ? new Date(iso).toLocaleTimeString() : "–");
 
@@ -125,10 +157,15 @@ const ArkitektController = () => {
   const [appName, setAppName] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [confirmUnbind, setConfirmUnbind] = useState(false);
+  const [hubPending, setHubPending] = useState(null); // "connect" | "cancel" | "refresh"
+  const [hubError, setHubError] = useState(null);
+  const hubRefreshed = useRef(false);
   const [, setTick] = useState(0);
 
   const state = status?.state;
   const busy = state === "connecting" || state === "awaiting_login";
+  const hub = status?.localHub;
+  const hubBusy = HUB_BUSY.includes(hub?.state);
 
   const refresh = useCallback(async () => {
     try {
@@ -153,12 +190,42 @@ const ArkitektController = () => {
       .catch(() => {});
   }, [uploadCount, dispatch]);
 
-  // the login timer
+  // the login timers
+  const hubWaiting = hub?.state === "awaiting_approval";
   useEffect(() => {
-    if (state !== "awaiting_login") return undefined;
+    if (state !== "awaiting_login" && !hubWaiting) return undefined;
     const id = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(id);
-  }, [state]);
+  }, [state, hubWaiting]);
+
+  // This machine's hub: one request to the host, its result merged into the status.
+  const runHub = useCallback(async (name, request) => {
+    setHubPending(name);
+    setHubError(null);
+    try {
+      const result = await request();
+      if (result?.localHub) dispatch(arkitektSlice.setStatus({ localHub: result.localHub }));
+      if (result?.status === "error") setHubError(result.message);
+    } catch (error) {
+      setHubError(error.message);
+    } finally {
+      setHubPending(null);
+    }
+  }, [dispatch]);
+
+  // The state file is written at boot and by every connect: ask the host once for a fresh one.
+  const hubPresent = !!hub?.present;
+  useEffect(() => {
+    if (!hubPresent || hubRefreshed.current) return;
+    hubRefreshed.current = true;
+    (async () => {
+      try {
+        await apiArkitektRefreshHub();
+      } catch (_) {
+        // the next poll shows the state file as it is
+      }
+    })();
+  }, [hubPresent]);
 
   const run = async (name, request) => {
     dispatch(arkitektSlice.setPending(name));
@@ -199,6 +266,126 @@ const ArkitektController = () => {
   const [stateLabel, stateColor] = STATE_LABELS[state] || [state, "text.secondary"];
   const shownUrl = url ?? status.url ?? "";
   const storedLogin = status.hasStoredLogin;
+
+  // ── this machine's hub (openUC2 OS) ───────────────────────────────────────
+  const hubServer = (hub?.state === "connected" && hub.server) || serverOf(shownUrl);
+  const hubName = hub?.name || hub?.identifier;
+  const boundHub = status.boundHub;
+  const usesThisHub = !!boundHub && !!hub?.hubId && String(boundHub.id) === String(hub.hubId);
+  const [hubLabel, hubColor] = HUB_LABELS[hub?.state] || [hub?.state, "text.secondary"];
+  const connectHub = () => runHub("connect", () => apiArkitektConnectHub(hubServer));
+  const cancelHub = () => runHub("cancel", apiArkitektCancelHub);
+  const refreshHub = () => runHub("refresh", apiArkitektRefreshHub);
+
+  const localHub = hub?.present && (
+    <Section
+      title={t("This machine's hub")}
+      action={
+        <Button size="small" onClick={refreshHub} disabled={hubBusy || !!hubPending}>
+          {t("Refresh")}
+        </Button>
+      }
+    >
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        {t("An Arkitekt hub runs on this machine. It stores the images (mikro) and passes on remote actions (rekuest). Connect it to your organization once, then bind the microscope to it.")}
+      </Typography>
+      <Typography variant="body2" sx={{ color: hubColor, fontWeight: 600, mb: 1.5 }}>
+        <Box component="span" sx={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", bgcolor: hubColor, mr: 1, verticalAlign: "middle" }} />
+        {t(hubLabel)}
+        {hub.state === "connected" && hubName && ` · ${hubName}`}
+      </Typography>
+
+      {hub.state === "absent" && hub.message && <Alert severity="info">{hub.message}</Alert>}
+
+      {hub.state === "not_connected" && (
+        <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
+          <Button variant="contained" onClick={connectHub} disabled={!!hubPending || !hubServer}>
+            {t("Connect hub to {server}", { server: hubServer || "…" })}
+          </Button>
+          <Typography variant="caption" color="text.secondary">
+            {t("Someone in your organization accepts it there, in a browser.")}
+          </Typography>
+        </Box>
+      )}
+
+      {(hub.state === "connecting" || hub.state === "starting") && (
+        <Box>
+          <LinearProgress sx={{ mb: 1 }} />
+          <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+            <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>{hub.message}</Typography>
+            {hub.state === "connecting" && (
+              <Button variant="outlined" size="small" onClick={cancelHub} disabled={!!hubPending}>{t("Cancel")}</Button>
+            )}
+          </Box>
+        </Box>
+      )}
+
+      {hub.state === "awaiting_approval" && hub.code && (
+        <Paper variant="outlined" sx={{ p: 2, borderColor: "warning.main" }}>
+          <Typography variant="body2" gutterBottom>
+            {t("Open the page, sign in to {server} and accept this hub into your organization. The code must match:", {
+              server: hub.server || hubServer,
+            })}
+          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, my: 1.5, flexWrap: "wrap" }}>
+            <Typography component="span" sx={{ fontFamily: "monospace", fontSize: "2rem", letterSpacing: "0.25em", fontWeight: 600 }}>
+              {hub.code}
+            </Typography>
+            <Tooltip title={t("Copy code")}>
+              <IconButton size="small" onClick={() => copy(hub.code)}><ContentCopyIcon fontSize="small" /></IconButton>
+            </Tooltip>
+          </Box>
+          <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
+            <Button variant="contained" color="warning" href={hub.approveUrl} target="_blank"
+              rel="noopener noreferrer" endIcon={<OpenInNewIcon />}>
+              {t("Accept the hub")}
+            </Button>
+            <Button variant="outlined" onClick={cancelHub} disabled={!!hubPending}>{t("Cancel")}</Button>
+            {hub.expiresAt && (
+              <Typography variant="caption" color="text.secondary">
+                {t("Valid for {left}", { left: remaining(hub.expiresAt) })}
+              </Typography>
+            )}
+          </Box>
+        </Paper>
+      )}
+
+      {hub.state === "connected" && (
+        <>
+          <Facts rows={[
+            [t("Name"), hubName],
+            hub.organizations?.length > 0 && [t("Organization"), hub.organizations.join(", ")],
+            [t("Server"), hub.server],
+            hub.addresses?.length > 0 && [t("Reached at"), hub.addresses.join("  ")],
+            hub.services?.total && [t("Services"), t("{running} of {total} running", hub.services)],
+          ]} />
+          {usesThisHub ? (
+            <Typography variant="body2" color="success.main" sx={{ mt: 1.5 }}>
+              {t("The microscope uses this hub.")}
+            </Typography>
+          ) : boundHub ? (
+            <Alert severity="warning" sx={{ mt: 1.5 }}>
+              {t("The microscope is bound to another hub ({name}). To use this one, unbind it and bind again: the approval page then preselects this hub.", {
+                name: boundHub.name || boundHub.id,
+              })}
+            </Alert>
+          ) : (
+            <Alert severity="info" sx={{ mt: 1.5 }}>
+              {t("Next: bind the microscope (Connection). The approval page preselects this hub.")}
+            </Alert>
+          )}
+          <Button size="small" sx={{ mt: 1, px: 0 }} onClick={connectHub} disabled={!!hubPending}>
+            {t("Connect again (after this machine's addresses changed)")}
+          </Button>
+        </>
+      )}
+
+      {hub.error && !hubBusy && <Alert severity="error" sx={{ mt: 1.5 }}>{hub.error}</Alert>}
+      {hubError && (
+        <Alert severity="warning" sx={{ mt: 1.5 }} onClose={() => setHubError(null)}>{hubError}</Alert>
+      )}
+    </Section>
+  );
 
   // ── connection ────────────────────────────────────────────────────────────
   const connection = (
@@ -501,6 +688,7 @@ const ArkitektController = () => {
       </Box>
 
       <Grid container spacing={2}>
+        {localHub && <Grid item xs={12}>{localHub}</Grid>}
         <Grid item xs={12} md={7}>{connection}</Grid>
         <Grid item xs={12} md={5}>{offered}</Grid>
         <Grid item xs={12}>{log}</Grid>

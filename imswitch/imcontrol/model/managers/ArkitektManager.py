@@ -20,6 +20,7 @@ import asyncio
 import datetime
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import threading
@@ -153,6 +154,7 @@ class ArkitektManager:
         self._stop_requested = False
         self._forget = False
         self._automatic = False
+        self._hub_hint: Optional[str] = None
         self._retry: Optional[threading.Timer] = None
         self._services: List[str] = []
         self._session: Dict[str, Any] = {}
@@ -205,6 +207,7 @@ class ArkitektManager:
                 "deleteAfterUpload": bool(getattr(self.info, "deleteAfterUpload", False)),
                 "hasMandateKey": bool(getattr(self.info, "mandateKey", "")),
                 "hasStoredLogin": self.has_stored_login(),
+                "boundHub": self.bound_hub(),
                 "insecureUrl": _is_insecure(url),
                 "services": list(self._services)}
 
@@ -212,17 +215,32 @@ class ArkitektManager:
         path = self._cache_file()
         return bool(path) and os.path.exists(path)
 
+    def bound_hub(self) -> Optional[dict]:
+        """The hub chosen at the approval, from the stored login: {id, name}
+        (fakts' self.hub and deployment_name; nothing else is read)."""
+        path = self._cache_file()
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            with open(path) as f:
+                own = ((json.load(f).get("fakts") or {}).get("self")) or {}
+        except (OSError, ValueError, AttributeError):
+            return None
+        hub = own.get("hub")
+        return {"id": str(hub), "name": own.get("deployment_name")} if hub else None
+
     # ── binding ─────────────────────────────────────────────────────────────
 
     def bind(self, url: Optional[str] = None, mandate_key: Optional[str] = None,
-             automatic: bool = False) -> dict:
+             automatic: bool = False, hub: Optional[str] = None) -> dict:
         """Connect in the background: discovery, login, then provide.
 
         Without a stored login or mandate key this is the device-code login:
         status() turns to "awaiting_login" with userCode and approveUrl for
-        someone to approve in a browser. Returns status() at once. *automatic*
-        (startup) retries a failed connect every RECONNECT_DELAY_S instead of
-        stopping at the error."""
+        someone to approve in a browser. *hub* (a hub id on the server, e.g.
+        this machine's own hub) is preselected on the approval page. Returns
+        status() at once. *automatic* (startup) retries a failed connect every
+        RECONNECT_DELAY_S instead of stopping at the error."""
         refusal = self._refusal()
         if refusal:
             return {**self.status(), "status": "error", "message": refusal}
@@ -235,6 +253,7 @@ class ArkitektManager:
             self._cancel_retry()
             self._stop_requested = self._forget = False
             self._automatic = automatic
+            self._hub_hint = str(hub) if hub and str(hub).isalnum() else None
             self._session = {}
             self._set(state=CONNECTING, message=f"Connecting to {self.url}…",
                       connectingSince=_now())
@@ -407,6 +426,8 @@ class ArkitektManager:
             approve = configure.replace("{code}", code) if configure else endpoint.base_url
         if urlparse(approve or "").scheme not in ("http", "https"):
             approve = None  # the panel renders it as a link: never javascript: and the like
+        elif self._hub_hint:  # preselected on the approval page
+            approve += ("&" if "?" in approve else "?") + f"hub={self._hub_hint}"
         self.__logger.info(f"Arkitekt login: approve code {code} at {approve}")
         self._set(state=AWAITING_LOGIN, userCode=code, approveUrl=approve,
                   serverName=getattr(endpoint, "name", None), loginStartedAt=_now(),

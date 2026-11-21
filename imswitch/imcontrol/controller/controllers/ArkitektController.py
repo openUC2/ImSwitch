@@ -7,7 +7,9 @@ the microscope's live state.
 
 ArkitektManager owns the connection (device-code login, unbind). This
 controller declares what is offered and serves the HTTP endpoints of the
-Arkitekt panel: status, bind, cancel, unbind, settings, activity and uploads.
+Arkitekt panel: status, bind, cancel, unbind, settings, activity and uploads,
+and this machine's own hub on openUC2 OS (arkitekt_hub.LocalHub): its state,
+and connecting it to the coordination server from the panel.
 
 Units: stage positions and distances in µm, in the ImSwitch user frame (what
 PositionerController reports). Exposure is in ms. Actions that move hardware
@@ -41,6 +43,7 @@ from imswitch.imcommon.framework import Signal
 from imswitch.imcontrol.controller.busy import busy_reasons
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
 from imswitch.imcontrol.model import configfiletools
+from imswitch.imcontrol.model.arkitekt_hub import LocalHub, server_of
 from ..basecontrollers import ImConWidgetController
 
 # The action interface's version. The server registers the app under it, and
@@ -98,6 +101,7 @@ class ArkitektController(ImConWidgetController):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
         self._manager = getattr(self._master, "arkitektManager", None)
+        self._hub = LocalHub()  # this machine's own hub, if it has one
         self._activity = collections.deque(maxlen=MAX_ACTIVITY)
         self._uploads = collections.deque(maxlen=MAX_UPLOADS)
         self._activity_lock = threading.Lock()
@@ -148,9 +152,11 @@ class ArkitektController(ImConWidgetController):
         the settings (autoConnect, allowInsecureTransport, useMikro), offered
         actions [{name, title, description, moves, images}], the latest
         remote calls (activity) and, when connected, publishedState (the
-        live MicroscopeState). Live updates: sigArkitektStatus."""
+        live MicroscopeState). boundHub: the hub chosen at the approval
+        ({id, name}). localHub: this machine's own hub (see getArkitektHub).
+        Live updates: sigArkitektStatus (without localHub)."""
         if self._manager is None:
-            return {"state": "unavailable", "available": False,
+            return {"state": "unavailable", "available": False, "localHub": self._hub.status(),
                     "message": "Arkitekt is not configured (no ArkitektManager)."}
         with self._activity_lock:
             activity = [dict(entry) for entry in self._activity]
@@ -158,25 +164,71 @@ class ArkitektController(ImConWidgetController):
         if status.get("state") == "connected":
             status["publishedState"] = self._state_snapshot()  # what Arkitekt shows live
         return {**status, "actions": self._offered or self._planned_actions(),
-                "activity": activity[::-1], "uploadCount": len(self._uploads)}
+                "activity": activity[::-1], "uploadCount": len(self._uploads),
+                "localHub": self._hub.status()}
 
     @APIExport(runOnUIThread=False, requestType="POST")
-    def bindArkitekt(self, url: str = "", mandateKey: str = "") -> dict:
+    def bindArkitekt(self, url: str = "", mandateKey: str = "", hub: str = "") -> dict:
         """Bind this microscope to the Arkitekt server at *url* (empty = the
         configured one; saved to the setup file). Returns at once.
 
         Without a stored login, the state becomes awaiting_login with a userCode
         and an approveUrl: open the link, sign in, pick the hub and approve, and
-        the state becomes connected. A mandateKey (issued for one hub on the
-        server) logs in without a browser; it is not saved. Network only:
-        nothing on the microscope moves."""
+        the state becomes connected. The approval page preselects *hub* (an id
+        on the server), by default this machine's own hub when it is connected
+        to that server. A mandateKey (issued for one hub on the server) logs in
+        without a browser; it is not saved. Network only: nothing on the
+        microscope moves."""
         if self._manager is None:
             return {"status": "error", "message": "Arkitekt is not configured."}
         url = (url or "").strip()
         if url and url != self._manager.info.url:
             self._manager.info.url = url
             self._save_settings()
-        return self._manager.bind(url=url or None, mandate_key=mandateKey or None)
+        return self._manager.bind(url=url or None, mandate_key=mandateKey or None,
+                                  hub=hub or self._own_hub_on(self._manager.url))
+
+    def _own_hub_on(self, url: str) -> Optional[str]:
+        """This machine's hub id, when it is connected to the server at *url*."""
+        local = self._hub.status()
+        if local.get("state") == "connected" and local.get("server") == server_of(url):
+            return local.get("hubId")
+        return None
+
+    # ── HTTP: this machine's own hub (openUC2 OS) ──────────────────────────
+
+    @APIExport(runOnUIThread=False)
+    def getArkitektHub(self) -> dict:
+        """This machine's own Arkitekt hub (the arkitekt-hub deployment of
+        openUC2 OS): {present: False} without one. Otherwise state: absent (not
+        created yet) | not_connected | connecting | awaiting_approval (open
+        approveUrl, check code, before expiresAt) | starting | connected (name,
+        hubId, organizations, addresses, services), and the last attempt's
+        error. Nothing secret."""
+        return self._hub.status()
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def connectArkitektHub(self, server: str = "") -> dict:
+        """Connect this machine's hub to a coordination server: *server* is a
+        host name (empty = the server of the Arkitekt url, e.g.
+        go.arkitekt.live). Runs on the host and returns at once; getArkitektHub
+        then shows the approval link. Someone accepts the hub into their
+        organization there; its services restart for a minute after that."""
+        target = (server or "").strip() or server_of(self._manager.url if self._manager
+                                                     else "") or ""
+        result = self._hub.connect(server_of(target) or target)
+        return {**result, "localHub": self._hub.status()}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def cancelArkitektHub(self) -> dict:
+        """Stop a running connect of this machine's hub; the hub stays as it was."""
+        return {**self._hub.cancel(), "localHub": self._hub.status()}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def refreshArkitektHub(self) -> dict:
+        """Have the host report this machine's hub again (takes a few seconds;
+        getArkitektHub shows the result)."""
+        return {**self._hub.refresh(), "localHub": self._hub.status()}
 
     @APIExport(runOnUIThread=False, requestType="POST")
     def cancelArkitekt(self) -> dict:

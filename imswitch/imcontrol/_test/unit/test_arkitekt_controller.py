@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from imswitch.imcontrol.controller.controllers import ArkitektController as controller_module
+from imswitch.imcontrol.model import arkitekt_hub as hub_module
 from imswitch.imcontrol.model.SetupInfo import ArkitektInfo
 
 manager_module = importlib.import_module("imswitch.imcontrol.model.managers.ArkitektManager")
@@ -76,7 +77,9 @@ class Detector:
 
 @pytest.fixture(autouse=True)
 def user_dirs(tmp_path, monkeypatch):
-    """The upload queue and the tile-scan canvases go to a temporary folder."""
+    """The upload queue and the tile-scan canvases go to a temporary folder, and
+    a FRAME's own hub state is never read."""
+    monkeypatch.setattr(hub_module, "STATUS_FILE", str(tmp_path / "hub-status" / "hub.json"))
     dirs = controller_module.dirtools.UserFileDirs
     monkeypatch.setattr(dirs, "Config", str(tmp_path / "config"))
     monkeypatch.setattr(dirs, "getValidatedDataPath", staticmethod(lambda: str(tmp_path / "data")))
@@ -664,3 +667,121 @@ def test_frame_grab_without_frame_numbers(no_arkitekt):
 
     controller.mDetector = Plain()
     assert controller.grabCameraFrame(frameSync=1).shape == (4, 4)
+
+
+# ── this machine's own hub (openUC2 OS arkitekt-hub deployment) ─────────────
+
+def write_hub_state(path, **state):
+    import datetime
+    import json
+    import os
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    with open(path, "w") as f:
+        json.dump({"version": 1, "updatedAt": now, **state}, f)
+
+
+class FakeSystemd:
+    def __init__(self, error=None):
+        self.calls, self.error = [], error
+
+    def __call__(self, method, signature, body):
+        self.calls.append((method, body))
+        if self.error is not None:
+            raise self.error
+
+
+CONNECTED = dict(state="connected", connected=True, server="go.arkitekt.live", hubId="113",
+                 name="test", identifier="openuc2-separate-bath-30666", organizations=["7"],
+                 addresses=["192.168.178.53:2755"], services={"running": 8, "total": 8})
+
+
+def test_without_a_hub_on_this_machine_the_panel_shows_none(no_arkitekt):
+    controller, _, _ = make_controller()
+    assert controller.getArkitektStatus()["localHub"] == {"present": False}
+
+
+def test_the_hub_state_is_shown_and_an_unfinished_attempt_settles(tmp_path):
+    path = str(tmp_path / "hub.json")
+    hub = hub_module.LocalHub(path, systemd=FakeSystemd())
+    write_hub_state(path, state="awaiting_approval", connected=False, server="go.arkitekt.live",
+                    approveUrl="https://go.arkitekt.live/hubconfigure/ABC", code="ABC",
+                    token="never shown")
+    status = hub.status()
+    assert status["present"] and status["state"] == "awaiting_approval"
+    assert status["code"] == "ABC" and "token" not in status
+
+    # A connect that never wrote its result (the machine restarted): not waiting forever.
+    write_hub_state(path, state="awaiting_approval", connected=True, code="ABC",
+                    updatedAt="2026-01-01T00:00:00Z")
+    status = hub.status()
+    assert status["state"] == "connected" and status["code"] is None
+    assert "without a result" in status["error"]
+
+
+def test_connecting_the_hub_starts_only_its_host_unit(no_arkitekt, tmp_path):
+    controller, _, _ = make_controller(info=ArkitektInfo(url="https://go.arkitekt.live",
+                                                         autoConnect=False))
+    systemd = FakeSystemd()
+    controller._hub = hub_module.LocalHub(str(tmp_path / "hub.json"), systemd=systemd)
+    assert controller.connectArkitektHub()["status"] == "started"  # the Arkitekt url's server
+    assert systemd.calls == [("StartUnit", ("arkitekt-hub-connect@go.arkitekt.live.service",
+                                            "replace"))]
+    assert controller.connectArkitektHub(server="http://nas.local:8000")["status"] == "started"
+    assert systemd.calls[-1][1][0] == "arkitekt-hub-connect@nas.local:8000.service"
+    refused = controller.connectArkitektHub(server="evil.service; rm -rf")
+    assert refused["status"] == "error" and len(systemd.calls) == 2  # never reaches systemd
+    assert controller.refreshArkitektHub()["status"] == "started"
+    assert systemd.calls[-1] == ("StartUnit", ("arkitekt-hub-status.service", "replace"))
+
+    write_hub_state(str(tmp_path / "hub.json"), state="awaiting_approval",
+                    server="go.arkitekt.live")
+    assert controller.cancelArkitektHub()["status"] == "success"
+    assert systemd.calls[-1] == ("StopUnit", ("arkitekt-hub-connect@go.arkitekt.live.service",
+                                              "replace"))
+
+
+@pytest.mark.parametrize("error, hint", [
+    (FileNotFoundError("/var/run/dbus/system_bus_socket"), "enable-depl-feat imswitch arkitekt"),
+    (type("DBusErrorResponse", (Exception,), {"name": "org.freedesktop.systemd1.NoSuchUnit"})(),
+     "enable-depl arkitekt-hub"),
+    (type("DBusErrorResponse", (Exception,),
+          {"name": "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired"})(), "polkit"),
+])
+def test_why_the_hub_cannot_be_connected_is_explained(tmp_path, error, hint):
+    hub = hub_module.LocalHub(str(tmp_path / "hub.json"), systemd=FakeSystemd(error))
+    result = hub.connect("go.arkitekt.live")
+    assert result["status"] == "error" and hint in result["message"]
+
+
+def test_binding_preselects_this_machines_hub_on_the_approval_page(no_arkitekt, tmp_path):
+    import asyncio
+    controller, _, _ = make_controller(info=ArkitektInfo(url="https://go.arkitekt.live",
+                                                         autoConnect=False))
+    path = str(tmp_path / "hub.json")
+    controller._hub = hub_module.LocalHub(path, systemd=FakeSystemd())
+    assert controller._own_hub_on("https://go.arkitekt.live") is None  # no hub here
+    write_hub_state(path, **CONNECTED)
+    assert controller._own_hub_on("https://go.arkitekt.live") == "113"
+    assert controller._own_hub_on("http://nas.local") is None  # connected elsewhere
+
+    manager = controller._manager
+    manager._hub_hint = "113"
+    endpoint = types.SimpleNamespace(configure=None, base_url="https://go.arkitekt.live", name="go")
+    challenge = types.SimpleNamespace(endpoint=endpoint, user_code="WXYZ",
+                                      verification_uri_complete="https://go.arkitekt.live/f/configure/WXYZ")
+    asyncio.run(manager._on_device_code(challenge))
+    assert manager.status()["approveUrl"] == "https://go.arkitekt.live/f/configure/WXYZ?hub=113"
+
+
+def test_the_bound_hub_is_read_from_the_stored_login_without_its_tokens(no_arkitekt, tmp_path,
+                                                                        monkeypatch):
+    import json
+    manager = manager_module.ArkitektManager(ArkitektInfo(autoConnect=False))
+    assert manager.bound_hub() is None
+    stored = tmp_path / "imswitch-3.0.0-abc_fakts_cache.json"
+    stored.write_text(json.dumps({"fakts": {"self": {"hub": 113, "deployment_name": "test"},
+                                            "auth": {"access_token": "secret"}}}))
+    monkeypatch.setattr(manager, "_cache_file", lambda: str(stored))
+    assert manager.bound_hub() == {"id": "113", "name": "test"}
+    assert manager.status()["boundHub"] == {"id": "113", "name": "test"}

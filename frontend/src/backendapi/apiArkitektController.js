@@ -42,3 +42,18 @@ export const apiArkitektSetSettings = (settings) => post("setArkitektSettings", 
 export const apiArkitektGetUploads = () => get("getArkitektUploads");
 
 export const apiArkitektClearActivity = () => post("clearArkitektActivity");
+
+// This machine's own Arkitekt hub (openUC2 OS, arkitekt-hub deployment): {present} only,
+// without one; else {state, name, hubId, server, organizations, addresses, services,
+// approveUrl, code, expiresAt, message, error}. Also in getArkitektStatus as localHub.
+export const apiArkitektGetHub = () => get("getArkitektHub");
+
+// Connect it to a coordination server (a host name; empty = the Arkitekt url's). Runs on
+// the host and returns at once with {status, message, localHub}; the approval link follows.
+export const apiArkitektConnectHub = (server = "") => post("connectArkitektHub", { server });
+
+// Stop a running connect; the hub stays as it was.
+export const apiArkitektCancelHub = () => post("cancelArkitektHub");
+
+// Have the host report the hub's state again (a few seconds).
+export const apiArkitektRefreshHub = () => post("refreshArkitektHub");

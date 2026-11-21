@@ -69,6 +69,27 @@ and click **Bind microscope**:
 The stored login is kept per app name, action-interface version (`ARKITEKT_APP_VERSION`, not the
 ImSwitch release) and server URL. Updating ImSwitch therefore does not ask for approval again.
 
+## This machine's own hub (openUC2 OS)
+
+With the `arkitekt-hub` deployment of openUC2 OS, a hub runs on the microscope's own computer
+(see [arkitekt-hub-pi.md](arkitekt-hub-pi.md)). The panel then starts with a card *This machine's
+hub*:
+
+- **Connect hub to go.arkitekt.live** (once): shows a code and an *Accept the hub* link. Someone
+  in the organization accepts the hub there; the hub's services restart for a minute or two, and
+  the card shows its name, organization, addresses and services.
+- **Bind microscope** then preselects this hub on the approval page (`?hub=<id>`), whenever the hub
+  is connected to the same server as the panel's url.
+- The card says whether the microscope uses this hub, from the stored login (`boundHub`), and
+  warns when it is bound to another one.
+
+ImSwitch does not run konstruktor itself. It reads the hub's state from
+`/home/pi/arkitekt/status/hub.json` (`IMSWITCH_ARKITEKT_HUB_STATUS`; nothing secret in it) and
+starts the host's `arkitekt-hub-connect@<server>.service` and `arkitekt-hub-status.service` over
+the system D-Bus. polkit allows user pi exactly those units (`20-arkitekt-hub.rules`). In Docker,
+the `arkitekt` feature of the `imswitch` deployment mounts the state folder and the D-Bus socket.
+Without a hub on the machine there is no state file, and the card is not shown.
+
 ## What Arkitekt can call
 
 Dropdowns list this setup's devices. Positions are in µm, in the ImSwitch user frame.
@@ -117,14 +138,17 @@ yet, and it is on the older `arkitekt-next` packages.
 
 | Endpoint | |
 |---|---|
-| `GET getArkitektStatus` | state (`unavailable`, `disabled`, `unbound`, `connecting`, `awaiting_login`, `connected`, `error`), userCode, approveUrl, settings, actions, activity, publishedState |
-| `POST bindArkitekt?url=&mandateKey=` | Starts the login in the background and returns at once. |
+| `GET getArkitektStatus` | state (`unavailable`, `disabled`, `unbound`, `connecting`, `awaiting_login`, `connected`, `error`), userCode, approveUrl, settings, actions, activity, publishedState, boundHub `{id, name}`, localHub |
+| `POST bindArkitekt?url=&mandateKey=&hub=` | Starts the login in the background and returns at once. `hub` is preselected on the approval page; by default this machine's own hub. |
 | `POST cancelArkitekt` | Stops a pending login or the connection. |
 | `POST unbindArkitekt` | Disconnects and forgets the stored login. |
 | `POST setArkitektSettings?url=&appName=&autoConnect=&allowInsecureTransport=&useMikro=&uploadExperiments=&deleteAfterUpload=` | Saved to the setup file. |
 | `POST queueArkitektUpload?path=&name=` | Queues an OME-Zarr canvas (e.g. an older experiment) for the background upload. |
 | `GET getArkitektUploadQueue` | `{pending, uploaded, failed}`, with dataset ids, durations, errors and, with `deleteAfterUpload`, what became of the local copy (`localCopy`). |
 | `GET getArkitektUploads` / `POST clearArkitektActivity` | |
+| `GET getArkitektHub` | This machine's hub: `{present: false}`, or state (`absent`, `not_connected`, `connecting`, `awaiting_approval`, `starting`, `connected`), name, hubId, server, organizations, addresses, services, approveUrl, code, expiresAt, error |
+| `POST connectArkitektHub?server=` | Connects this machine's hub (empty server: the url's). Returns at once; the approval link follows in `getArkitektHub`. |
+| `POST cancelArkitektHub` / `POST refreshArkitektHub` | Stops a running connect / has the host report the hub again. |
 
 Socket signals: `sigArkitektStatus`, `sigArkitektActivity`, `sigArkitektUpload`.
 

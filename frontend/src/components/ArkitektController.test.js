@@ -107,3 +107,58 @@ test("socket status updates keep the actions and the call log", () => {
   state = arkitektReducer(state, arkitektSlice.upsertActivity({ id: 2, status: "running" }));
   expect(state.activity.map((e) => [e.id, e.status])).toEqual([[2, "running"], [1, "failed"]]);
 });
+
+// ── this machine's hub (openUC2 OS) ─────────────────────────────────────────
+
+const HUB = {
+  present: true, state: "connected", name: "test", identifier: "openuc2-separate-bath-30666",
+  hubId: "113", server: "go.arkitekt.live", organizations: ["7"],
+  addresses: ["192.168.178.53:2755"], services: { running: 8, total: 8 },
+};
+
+test("without a hub on this machine there is no hub card", async () => {
+  mountPanel(status({ localHub: { present: false } }));
+  await screen.findByRole("button", { name: "Bind microscope" });
+  expect(screen.queryByText("This machine's hub")).not.toBeInTheDocument();
+  expect(api.apiArkitektRefreshHub).not.toHaveBeenCalled();
+});
+
+test("connects this machine's hub to the server of the Arkitekt url", async () => {
+  mountPanel(status({ url: "https://go.arkitekt.live", insecureUrl: false,
+                      localHub: { present: true, state: "not_connected" } }));
+  const connect = await screen.findByRole("button", { name: "Connect hub to go.arkitekt.live" });
+  await waitFor(() => expect(api.apiArkitektRefreshHub).toHaveBeenCalledTimes(1));
+  api.apiArkitektConnectHub.mockResolvedValue({
+    status: "started",
+    localHub: { present: true, state: "awaiting_approval", server: "go.arkitekt.live",
+                code: "M5CRW6NGGS", approveUrl: "https://go.arkitekt.live/hubconfigure/M5CRW6NGGS",
+                expiresAt: new Date(Date.now() + 600000).toISOString() },
+  });
+  fireEvent.click(connect);
+  await waitFor(() => expect(api.apiArkitektConnectHub).toHaveBeenCalledWith("go.arkitekt.live"));
+  expect(await screen.findByText("M5CRW6NGGS")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /Accept the hub/ }))
+    .toHaveAttribute("href", "https://go.arkitekt.live/hubconfigure/M5CRW6NGGS");
+  api.apiArkitektCancelHub.mockResolvedValue({ status: "success", localHub: { ...HUB, state: "not_connected" } });
+  const cancel = screen.getAllByRole("button", { name: "Cancel" })[0];
+  await waitFor(() => expect(cancel).toBeEnabled()); // once the connect request has returned
+  fireEvent.click(cancel);
+  await waitFor(() => expect(api.apiArkitektCancelHub).toHaveBeenCalled());
+});
+
+test("a connected hub says whether the microscope uses it", async () => {
+  mountPanel(status({ localHub: HUB, boundHub: { id: "111", name: "frame-id10" } }));
+  expect(await screen.findByText("8 of 8 running")).toBeInTheDocument();
+  expect(screen.getByText(/bound to another hub \(frame-id10\)/)).toBeInTheDocument();
+});
+
+test("the host's refusal is shown in the hub card", async () => {
+  mountPanel(status({ url: "https://go.arkitekt.live", insecureUrl: false,
+                      localHub: { present: true, state: "not_connected" } }));
+  api.apiArkitektConnectHub.mockResolvedValue({
+    status: "error", message: "Not allowed to start arkitekt-hub-connect@go.arkitekt.live.service",
+    localHub: { present: true, state: "not_connected" },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Connect hub to go.arkitekt.live" }));
+  expect(await screen.findByText(/Not allowed to start/)).toBeInTheDocument();
+});

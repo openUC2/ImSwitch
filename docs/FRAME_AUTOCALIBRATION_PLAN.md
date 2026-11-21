@@ -289,3 +289,27 @@ Frontend:
 
 See the chat summary (holder repeatability, Z semantics, manual-focus fallback, parcentricity
 compensation, rotation/stepsize apply, controller-vs-Aufgaben, who fixes the primitives).
+
+## 11. Next calibration work packages (2026-11-21)
+
+The one-button routine (S1–S12) is built. What comes next, in this order. IDs are the rows on the
+roadmap board (`docs/roadmap/board`, big WP BIG-ALIGN / BIG-SAFE). Each measurement is a pure
+function in `frame_calibration_tools.py` (numpy/cv2, no ImSwitch imports) plus a step in
+`FrameCalibrationController`, so the functions carry over to newswitch; only the step wiring is
+ImSwitch-only. CAD facts from the FRAME CAD answers of 2026-11-21 are marked (CAD).
+
+| # | ID | What | How, on the existing plate and routine | Needs |
+|---|---|---|---|---|
+| 1 | QCAL-zbacklash + **MTG-18** | Z backlash and the true Z step | focus at the via from above and below; then focus on the top and bottom of a structure of known height (cover glass of measured thickness, printed step) and compare with the commanded travel. Expect ≈2.6 µm of Z per full step: 2.5 µm actuator × 1.04 bell-crank (CAD). Writes `stepsizeZ` and `backlashZ` | — |
+| 2 | QCAL-tilt | signed objective tilt from a Z sweep | best focus per field tile on the sunburst, plane + curvature fit, per objective | 1 |
+| 3 | **MTG-13** | distortion and optical-axis offset from one grid image | grid slide (76 x 26 mm fits a bay of the HDS-SH-80120-IS4 holder (CAD); no glass-window target exists in the CAD): line straightness → radial distortion; image centre vs the optical axis found in QCAL-illum. Tilt comes from #2, not from one image | grid slide or QCAL-glass |
+| 4 | QCAL-sampletilt | sample-holder tilt | autofocus at the via-grid corners and far points, plane in µm/mm | 1 |
+| 5 | QCAL-screws, QCAL-screwguide | signed screw turns | screw positions from the CAD. Only the objective mount 0401 is kinematic (cone at (−30, 13), groove at (+30, 13), flat at (0, −17), M4 cone-point screws); the sample holders are bolted (CAD) | 2, 4 |
+| 6 | QCAL-illum, QCAL-flatfield, QCAL-chroma, QCAL-afparams | illumination axis, flat field, colour offsets, autofocus defaults | from the focus sweep and the open cutout | 1 |
+| 7 | **MTG-24** | crash-sensor threshold | with a protective cap/tape on the objective, drive Z up slowly against a flat until the thin-film sensor reads; set the threshold at a fraction of that, store per unit, verify the stop at working speed. The sensor sits under the flat support at (0, −17): by the mount's statics it sees **Y** lateral loads and Z, not X (CAD) — test both axes before trusting it | cap; ask-first (drives into a contact) |
+| 8 | **MTG-19** | drift | log best focus and the via position for 4 h from a cold start, motors energised and not; decide between warm-up + periodic refocus (software) and the thermal fixes of the design audit | QCAL-qc history |
+| 9 | QCAL-mtf, QCAL-qc, QCAL-glass, QCAL-psf | resolution map, one-minute QC, glass targets, PSF | after a glass target decision (QCAL-glass) | glass target |
+
+Prerequisite safety check before any Z work: the CAD shows the Z home edge at the top (sample plate
+up, away from the objective), so the post-homing lift (`-homeDirectionZ`) moves toward the
+objective. Verify on the unit and set `safeDistanceZHoming` before running steps 1–8.

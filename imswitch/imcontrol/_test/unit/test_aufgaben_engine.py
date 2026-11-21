@@ -235,6 +235,9 @@ def test_shutter_turret_homes_then_drives_to_the_slot(slot, drive_s):
     times = {"home_s": 0.2, "beta_s": 0.07, "shut_s": 0.14, "pause_s": 0, "drive": 500}
     run = Run(A.examples()["shutter_turret_macro"], hw,
               parameters={"position": slot, **times}, lights_off_at_end=False)
+    asked = {}   # the seconds each wait step asks for; wall-clock spans add runner overhead
+    do_wait = run._do_wait
+    run._do_wait = lambda node, p: (asked.__setitem__(node.id, p.seconds), do_wait(node, p))[1]
     run.run()
     assert run.state == "finished"
     pins = [c[1:] for c in hw.calls if c[0] == "light"]
@@ -242,12 +245,11 @@ def test_shutter_turret_homes_then_drives_to_the_slot(slot, drive_s):
     if drive_s:   # never both pins on: B is off before A turns on
         want += [("LASER", 500, True), ("LASER", None, False)]
     assert pins == want and not any(hw.on.values())
+    assert asked["home"] == pytest.approx(0.2)
+    assert asked.get("drive_to_slot") == (pytest.approx(drive_s) if drive_s else None)
     spans = _durations(run.timeline)
-    assert spans["home"][0] == pytest.approx(0.2, abs=0.05)
-    if drive_s:
-        assert spans["drive_to_slot"][0] == pytest.approx(drive_s, abs=0.05)
-    else:
-        assert "drive_to_slot" not in spans
+    assert spans["home"][0] >= 0.19   # it really waited
+    assert ("drive_to_slot" in spans) == bool(drive_s)
 
 
 def _durations(marks):

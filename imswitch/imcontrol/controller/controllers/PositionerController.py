@@ -346,6 +346,14 @@ class PositionerController(ImConWidgetController):
         """ Returns the positions of all positioners. """
         return self.getPos()
 
+    @APIExport()
+    def getStageTravelLimits(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Travel limits of every positioner, per axis, in the user frame (µm, the frame of
+        getPositionerPositions): {positioner: {axis: {"min", "max", "enabled"}}}. None = no
+        limit on that side. Moves outside an enabled range are refused (sigStageLimit)."""
+        return self._master.positionersManager.execOnAll(
+            lambda p: p.getTravelLimitsUser() if hasattr(p, 'getTravelLimitsUser') else {})
+
     @APIExport(runOnUIThread=True)
     def setPositionerStepSize(self, positionerName: str, stepSize: float) -> None:
         """Step size in µm used by stepPositionerUp/Down for this positioner."""

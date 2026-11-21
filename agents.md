@@ -295,6 +295,7 @@ setup declares its hardware.
 | `moveToTransportPosition` / `getTransportPosition` / `setTransportPosition` | **Ask first** |
 | `setMotorsEnabled(positionerName, is_enabled)` / `enalbeMotors(enable, enableauto)` | Note the upstream typo in the second name |
 | `getStageOffsetAxis` / `setStageOffsetAxis` / `resetStageOffsetAxis` | User-frame ↔ device-frame offset |
+| `getStageTravelLimits()` | Per positioner and axis `{min, max, enabled}` in the user frame; moves outside an enabled range are refused (409, `sigStageLimit`) |
 | `getDevicePositionAxis` / `getTruePositionerPositionWithoutOffset` | Raw device frame |
 | `startStageScan(xstart, xstep, nx, ystart, ystep, ny, tsettle)` (POST) / `stopStageScan` | Firmware-timed raster |
 | `startZStageSync` / `cancelZStageSync` / `getZStageSyncState` | |

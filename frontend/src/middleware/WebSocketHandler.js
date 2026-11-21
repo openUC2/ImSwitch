@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
+import { STAGE_LIMIT_EVENT } from "../utils/useTravelLimits";
 import { useDispatch, useSelector } from "react-redux";
 import store from "../state/store.js";
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice.js";
@@ -886,6 +887,7 @@ const WebSocketHandler = () => {
         //----------------------------------------------
       } else if (dataJson.name === "sigStageLimit") {
         // A move or jog into the no-go area outside the travel limits was refused.
+        window.dispatchEvent(new CustomEvent(STAGE_LIMIT_EVENT, { detail: dataJson.args?.p0 }));
         dispatch(
           notificationSlice.setNotification({
             message: dataJson.args?.p0?.message || "Move refused: outside the travel range",

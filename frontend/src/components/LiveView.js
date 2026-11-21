@@ -60,6 +60,7 @@ import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
 import ExtendedLEDMatrixController from "./ExtendedLEDMatrixController.jsx";
 import AufgabenMacros from "./aufgaben/AufgabenMacros.jsx";
 import DetectorParameters from "./DetectorParameters";
+import TravelLimitsNote from "./TravelLimitsNote";
 
 /*
 <ImageViewport
@@ -754,7 +755,12 @@ export default function LiveView({ setFileManagerInitialPath }) {
         key: "stage",
         label: "Stage",
         icon: <ControlCameraIcon fontSize="small" />,
-        render: () => <TouchStagePanel buttonSize={dockBeside ? 56 : 64} />,
+        render: () => (
+          <>
+            <TouchStagePanel buttonSize={dockBeside ? 56 : 64} />
+            <TravelLimitsNote />
+          </>
+        ),
       },
       {
         key: "light",
@@ -1186,6 +1192,7 @@ function RightPanelContent({
         {stageControlTab === 0 && (
           <AxisControl hostIP={hostIP} hostPort={hostPort} />
         )}
+        <TravelLimitsNote />
 
         {/* Joystick Control */}
         {stageControlTab === 1 && (

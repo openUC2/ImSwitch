@@ -184,6 +184,19 @@ class PositionerManager(ABC):
         if enabled is not None:
             self.limitEnabled[axis] = bool(enabled)
 
+    def getTravelLimitsUser(self):
+        """{axis: {"min", "max", "enabled"}} in the user frame (what getPosition reports):
+        the device-frame limits minus the stage offset; an open side is None."""
+        offsets = getattr(self, 'stageOffsetPositions', {}) or {}
+        limits = {}
+        for ax in getattr(self, 'minPos', {}):
+            off = float(offsets.get(ax, 0) or 0)
+            lo, hi = self.minPos[ax], self.maxPos[ax]
+            limits[ax] = {"min": lo - off if lo != -INF else None,
+                          "max": hi - off if hi != INF else None,
+                          "enabled": bool(self.limitEnabled.get(ax))}
+        return limits
+
     def _limitBlocked(self, message):
         comm = getattr(self, '_commChannel', None)
         signal = getattr(comm, 'sigStageLimit', None)

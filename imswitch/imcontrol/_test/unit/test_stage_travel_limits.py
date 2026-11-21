@@ -144,3 +144,13 @@ def test_frame_calibration_travel_step_stores_device_frame_limits():
     assert "X 0 .. 119500" in detail and "Z from the config: -100 .. 5000" in detail
     with pytest.raises(StageLimitError):
         stage.move(119600, "X", is_absolute=True)
+
+
+def test_limits_reported_in_the_user_frame():
+    import types
+    from imswitch.imcontrol.model.managers.positioners.PositionerManager import INF, PositionerManager
+    p = types.SimpleNamespace(minPos={"X": 0.0, "Z": -INF}, maxPos={"X": 90000.0, "Z": INF},
+                              limitEnabled={"X": True, "Z": False}, stageOffsetPositions={"X": 1000})
+    limits = PositionerManager.getTravelLimitsUser(p)
+    assert limits["X"] == {"min": -1000.0, "max": 89000.0, "enabled": True}
+    assert limits["Z"] == {"min": None, "max": None, "enabled": False}

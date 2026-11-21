@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ImSwitch FRAME work packages</title>
+<style>
+:root{--bg:#fff;--fg:#1f2328;--mute:#6b7280;--line:#e5e7eb;--card:#f6f8fa;--accent:#2563eb;--ms:#dc2626;--L:38%}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--fg:#e6e6e6;--mute:#9ca3af;--line:#2a2f37;--card:#171a21;--accent:#60a5fa;--L:72%}}
+*{box-sizing:border-box}
+body{margin:0;height:100vh;display:flex;flex-direction:column;font:14px/1.35 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+header{flex:none;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 16px;background:var(--bg);border-bottom:1px solid var(--line)}
+h1{font-size:16px;margin:0 8px 0 0}
+select,input,textarea,button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+button{cursor:pointer}
+button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+#saved{margin-left:auto;color:var(--mute)}
+.ro #new,.ro #del,.ro button[value=ok]{display:none}
+/* filters: a dropdown of checkboxes */
+.multi{position:relative}
+.multi summary{display:block;list-style:none;cursor:pointer;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:4px 8px;white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.multi summary::-webkit-details-marker{display:none}
+.multi summary::after{content:' ▾';color:var(--mute)}
+.multi[data-on] summary{border-color:var(--accent);color:var(--accent)}
+.multi>div{position:absolute;z-index:10;top:calc(100% + 4px);left:0;min-width:100%;max-height:70vh;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px;box-shadow:0 6px 20px rgb(0 0 0/.18)}
+.multi label{display:flex;gap:6px;align-items:center;padding:3px 6px;border-radius:4px;white-space:nowrap;cursor:pointer}
+.multi label:hover{background:var(--card)}
+.multi input{margin:0;padding:0}
+.multi [data-clear]{width:100%;margin-bottom:4px;font-size:12px}
+.pill{display:inline-block;padding:0 6px;border-radius:9px;font-size:12px;white-space:nowrap;background:hsl(var(--h) 70% 50%/.15);color:hsl(var(--h) 60% var(--L))}
+.mute{color:var(--mute);font-size:12px}
+/* board */
+main{flex:1;min-height:0;overflow:auto}
+#board{display:grid;grid-template-columns:repeat(7,minmax(220px,1fr));grid-auto-rows:max-content;gap:10px;padding:12px 16px}
+.col{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px;min-height:70vh}
+.solo .col{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;align-content:start}
+.solo .col h2{grid-column:1/-1}
+.solo .card{margin:0}
+.role{cursor:default}.role ul{margin:4px 0;padding-left:18px}.role .pill{margin:0 4px 2px 0}
+.col h2{display:flex;justify-content:space-between;font-size:13px;margin:0 0 8px}
+.col.over{outline:2px dashed var(--accent)}
+.big h2{cursor:pointer;display:block}
+.prog{height:4px;border-radius:2px;background:var(--line);margin:6px 0 2px}
+.prog i{display:block;height:100%;border-radius:2px;background:var(--accent)}
+.split{font-size:12px;color:var(--mute);border-top:1px dashed var(--line);margin:10px 0 6px;padding-top:4px}
+.card{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-bottom:6px;cursor:grab}
+.card .top{display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:2px}
+.card .top b{white-space:nowrap}
+.card .top .pill{overflow:hidden;text-overflow:ellipsis}
+.card.ui b{color:var(--accent)}
+/* gantt */
+.gw{position:relative}
+.gr{display:flex;min-height:24px;border-bottom:1px solid var(--line)}
+.gr[data-id]{cursor:pointer}
+.gr[data-id]:hover .lab{background:var(--card)}
+.lab{position:sticky;left:0;z-index:2;flex:0 0 340px;padding:3px 8px 3px 16px;background:var(--bg);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.track{position:relative;flex:none;background:repeating-linear-gradient(to right,var(--line) 0 1px,transparent 1px 42px)}
+.head{position:sticky;top:0;z-index:4;background:var(--bg)}
+.head .track span{position:absolute;top:2px;padding-left:3px;font-size:11px;line-height:1.2;color:var(--mute)}
+.head .lab{z-index:5}
+.gh .lab{padding-top:10px;font-weight:600}
+.bar{position:absolute;top:4px;height:16px;border-radius:4px;padding:0 4px;font-size:11px;line-height:16px;color:#fff;white-space:nowrap;overflow:hidden;background:hsl(var(--h) 60% 48%)}
+.bar.s-done{opacity:.4}
+.bar:not(.sum){cursor:grab;touch-action:none}.ro .bar{cursor:pointer}
+.bar.sum{top:8px;height:8px;background:var(--fg);opacity:.5}
+.bar.s-blocked{background-image:repeating-linear-gradient(45deg,transparent 0 5px,rgb(0 0 0/.3) 5px 10px)}
+.vl{position:absolute;top:0;bottom:0;z-index:3;border-left:2px dashed var(--ms);pointer-events:none}
+.vl span{position:sticky;top:30px;display:inline-block;margin-left:2px;padding:0 4px;font-size:11px;background:var(--ms);color:#fff;border-radius:3px}
+.vl.today{border-left:2px solid var(--accent)}
+.vl.today span{background:var(--accent)}
+/* dialog */
+dialog{border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);width:min(560px,94vw)}
+dialog form{display:grid;grid-template-columns:90px 1fr;gap:6px 10px;align-items:center}
+dialog label{display:contents}
+dialog menu{grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;padding:0;margin:8px 0 0}
+#del{margin-right:auto;color:var(--ms)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <h1>ImSwitch · FRAME work packages</h1>
+  <button id="vBoard">Board</button><button id="vBig">Big WPs</button><button id="vAreas">Areas</button><button id="vRoles">Roles</button><button id="vPeople">People</button><button id="vGantt">Gantt</button>
+  <details class="multi" id="fParent"><summary></summary><div></div></details>
+  <details class="multi" id="fArea"><summary></summary><div></div></details>
+  <details class="multi" id="fProject"><summary></summary><div></div></details>
+  <details class="multi" id="fOwner"><summary></summary><div></div></details>
+  <details class="multi" id="fStatus"><summary></summary><div></div></details>
+  <input id="fText" type="search" placeholder="filter id, title, group, note…">
+  <button id="new">+ New WP</button>
+  <a class="mute" href="https://youseetoo.github.io/projectmanagement/optikit-newswitch/">newswitch rows: optikit board</a>
+  <span id="saved"></span>
+</header>
+<main id="board"></main>
+<main id="gantt" hidden></main>
+
+<datalist id="people"></datalist><datalist id="groups"></datalist>
+<dialog id="dlg"><form method="dialog" id="frm">
+  <label>ID <input name="id" readonly placeholder="assigned on save"></label>
+  <label>Title <input name="title" required></label>
+  <label>Layer <select name="project"><option>ui</option><option>backend</option><option>firmware</option><option>hardware</option><option>docs</option><option>milestone</option><option>big</option></select></label>
+  <label>Area <select name="area"></select></label>
+  <label>Big WP <select name="parent"></select></label>
+  <label>Group <input name="group" list="groups"></label>
+  <label>Status <select name="status"></select></label>
+  <label>Lead <input name="lead" list="people" placeholder="the one main responsible"></label>
+  <label>Owner <input name="owner" list="people" placeholder="Bene, Claude — the lead goes first"></label>
+  <label>Tester <input name="tester" list="people" placeholder="someone other than the owner"></label>
+  <label>Start <input name="start" type="date"></label>
+  <label>End <input name="end" type="date"></label>
+  <label>After <input name="deps" placeholder="titles or ids, comma-separated"></label>
+  <label>Note <textarea name="note" rows="3"></textarea></label>
+  <menu><button id="del" type="button" onclick="dlg.close('del')">Delete</button><button type="button" onclick="dlg.close()">Cancel</button><button value="ok">Save</button></menu>
+</form></dialog>
+
+<script>
+const STATUS = {open: 'Open', doing: 'Doing', blocked: 'Blocked', decision: 'Needs decision', untested: 'Landed · untested', done: 'Done', later: 'Irrelevant / later'};
+const FIELDS = ['id', 'title', 'project', 'area', 'parent', 'group', 'status', 'lead', 'owner', 'tester', 'start', 'end', 'deps', 'note'];
+const AREAS = ['Live view & camera', 'Stage & safety', 'Calibration & alignment', 'Acquisition & scanning', 'Autofocus & focus lock',
+  'Aufgaben jobs & macros', 'Illumination & imaging modes', 'Data, storage & analysis', 'Firmware & board', 'System, UI shell & devices',
+  'Integrations', 'Facility, docs & academy', 'Release, CI & tests', 'newswitch migration'];
+const areaRank = a => { const i = AREAS.indexOf(a); return i < 0 ? AREAS.length : i; };
+const areaHue = a => areaRank(a) * 360 / AREAS.length;
+const DAY = 864e5, PX = 6;  // px per day; .track's grid repeats every 7*PX
+const $ = s => document.querySelector(s);
+const el = n => $('#frm').elements.namedItem(n);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const names = s => (s || '').split(/[,+]/).map(s => s.trim()).filter(Boolean);
+const team = w => [w.lead && `<b title="lead">${esc(w.lead)}</b>`, ...names(w.owner).filter(n => n !== w.lead).map(esc)].filter(Boolean).join(', ');
+const owners = w => names(w.owner), testers = w => names(w.tester), involved = w => [...new Set([...owners(w), ...testers(w)])];
+const fmt = t => t ? new Date(t).toLocaleDateString('en-US', {day: 'numeric', month: 'short', timeZone: 'UTC'}) : '';
+const isoWeek = t => { const d = new Date(t); d.setUTCDate(d.getUTCDate() + 3 - (d.getUTCDay() + 6) % 7); return 1 + Math.floor((d - Date.UTC(d.getUTCFullYear(), 0, 1)) / DAY / 7); };
+const short = b => b.title.split(':')[0];
+const bigs = () => wps.filter(w => w.project === 'big');
+const picked = id => [...$(id).querySelectorAll('input:checked')].map(i => i.value);
+const has = (id, v) => { const p = picked(id); return !p.length || p.includes(v); };  // nothing ticked = everything
+function multi(id, all, opts, keep = picked(id)) {
+  $(id).dataset.all = all;
+  $(id).querySelector('div').innerHTML = '<button type="button" data-clear>clear</button>'
+    + opts.map(([v, l]) => `<label><input type="checkbox" value="${esc(v)}"${keep.includes(v) ? ' checked' : ''}>${esc(l)}</label>`).join('');
+  sumUp(id);
+}
+function sumUp(id) {
+  const d = $(id), p = [...d.querySelectorAll('input:checked')].map(i => i.parentElement.textContent);
+  d.querySelector('summary').textContent = !p.length ? d.dataset.all : p.length < 3 ? p.join(', ') : `${p.length} ${d.dataset.all.replace(/^all /, '')}`;
+  d.toggleAttribute('data-on', p.length > 0);
+}
+const isUuid = id => /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(id);
+const label = w => isUuid(w.id) ? '' : w.id;  // uuid rows are known by their title only
+const depText = w => names(w.deps).map(d => { const t = wps.find(x => x.id === d); return t && isUuid(d) ? t.title : d; }).join(', ');
+const depIds = s => [...wps].sort((a, b) => b.title.length - a.title.length).reduce((r, x) => x.title.length > 3 ? r.split(x.title).join(x.id) : r, s);  // titles typed in deps become ids
+let wps = [], roles = [], editing = null;
+const SNAP = window.SNAPSHOT;  // set by `board.py export`: a read-only page
+
+async function load() {
+  if (SNAP) {
+    wps = SNAP.wps; roles = SNAP.roles; document.body.classList.add('ro'); $('#saved').textContent = `snapshot of ${SNAP.date}, read-only`;
+    for (const f of FIELDS) el(f).tagName === 'SELECT' ? el(f).disabled = true : el(f).readOnly = true;
+    return fillLists(), render();
+  }
+  const r = await fetch('wps.json', {cache: 'no-store'});
+  if (!r.ok) return $('#saved').textContent = 'cannot read wps.json — start board.py';
+  wps = await r.json();
+  roles = await fetch('people.json', {cache: 'no-store'}).then(r => r.ok ? r.json() : []).catch(() => []);
+  fillLists(); render();
+}
+async function save() {
+  try {
+    const r = await fetch('wps.json', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(wps)});
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    $('#saved').textContent = 'saved ' + new Date().toLocaleTimeString();
+  } catch (e) { $('#saved').textContent = 'NOT SAVED: ' + e.message; }
+}
+function fillLists() {
+  const people = [...new Set(wps.flatMap(involved))].sort(), groups = [...new Set(wps.map(w => w.group))].sort();
+  multi('#fOwner', 'all people', [['-', 'unassigned'], ...people.map(p => [p, p])]);
+  multi('#fParent', 'all big WPs', [...bigs().map(b => [b.id, short(b)]), ['-', 'in no big WP']]);
+  el('parent').innerHTML = '<option value=""></option>' + bigs().map(b => `<option value="${esc(b.id)}">${esc(b.id)} ${esc(short(b))}</option>`).join('');
+  $('#people').innerHTML = people.map(p => `<option value="${esc(p)}">`).join('');
+  $('#groups').innerHTML = groups.map(g => `<option value="${esc(g)}">`).join('');
+}
+function shown() {
+  const o = picked('#fOwner'), q = $('#fText').value.toLowerCase();
+  return wps.filter(w => !['milestone', 'big'].includes(w.project) && has('#fProject', w.project) && has('#fArea', w.area || '')
+    && has('#fStatus', w.status || 'open') && has('#fParent', w.parent || '-')
+    && (!o.length || o.some(n => n === '-' ? !involved(w).length : involved(w).includes(n)))
+    && (!q || FIELDS.some(f => String(w[f] || '').toLowerCase().includes(q))));
+}
+function render() {
+  const v = location.hash.slice(1);
+  $('#board').hidden = v === 'gantt'; $('#gantt').hidden = v !== 'gantt';
+  for (const [b, h] of VIEWS) $(b).ariaPressed = v === h;
+  ({big: renderBig, areas: renderAreas, roles: renderRoles, people: renderPeople, gantt: renderGantt}[v] || renderBoard)(shown());
+}
+const VIEWS = [['#vBoard', ''], ['#vBig', 'big'], ['#vAreas', 'areas'], ['#vRoles', 'roles'], ['#vPeople', 'people'], ['#vGantt', 'gantt']];
+function renderBig(list) {  // one column per big WP: its rows due by M1, then the rest
+  const m1 = wps.find(w => w.id === 'M1')?.start || '', order = Object.keys(STATUS), bs = bigs();
+  $('#board').className = ''; $('#board').style.gridTemplateColumns = `repeat(${bs.length},minmax(260px,1fr))`;
+  $('#board').innerHTML = bs.map(b => {
+    const all = wps.filter(w => w.parent === b.id), n = s => all.filter(w => w.status === s).length;
+    const dated = all.filter(w => w.start && w.end), from = dated.map(w => w.start).sort()[0], to = dated.map(w => w.end).sort().at(-1);
+    const kids = list.filter(w => w.parent === b.id).sort((x, y) => order.indexOf(x.status) - order.indexOf(y.status) || (x.end || '9').localeCompare(y.end || '9'));
+    const due = w => w.end && w.end <= m1, part = (h, ws) => `<div class="split">${h} · ${ws.length}</div>${ws.map(w => card(w, true)).join('')}`;
+    return `<section class="col big"><h2 data-id="${esc(b.id)}" title="${esc(b.note)}"><b>${esc(b.id)}</b> ${esc(b.title)}</h2>
+      <div class="mute">${team(b)} · ${n('done')} done, ${n('untested')} untested of ${all.length}${from ? ` · ${fmt(from)} → ${fmt(to)}` : ''}</div>
+      <div class="prog"><i style="width:${all.length ? 100 * n('done') / all.length : 0}%"></i></div>
+      ${part(`Due by M1 · ${fmt(m1)}`, kids.filter(due))}${part('After M1 or no dates', kids.filter(w => !due(w)))}</section>`;
+  }).join('');
+}
+function renderRoles(list) {  // people.json, plus the areas and open work of each person's rows
+  $('#board').className = 'solo'; $('#board').style.gridTemplateColumns = '1fr';
+  const cards = roles.map(r => {
+    const mine = list.filter(w => involved(w).includes(r.name)), act = mine.filter(w => ['open', 'doing', 'blocked', 'decision'].includes(w.status));
+    const areas = Object.entries(mine.reduce((m, w) => (w.area && (m[w.area] = (m[w.area] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]);
+    return `<article class="card role"><div class="top"><b>${esc(r.name)}</b>${mine.length ? `<a href="#people" data-who="${esc(r.name)}">leads ${act.filter(w => w.lead === r.name).length} · ${act.length} active of ${mine.length} rows</a>` : '<span class="mute">no rows yet</span>'}</div>
+      <ul>${r.does.map(d => `<li>${esc(d)}</li>`).join('')}</ul>
+      <div>${areas.map(([a, n]) => `<span class="pill" style="--h:${areaHue(a)}">${esc(a)} ${n}</span>`).join('')}</div></article>`;
+  });
+  $('#board').innerHTML = `<section class="col"><h2>Roles<span class="mute">people.json · pills: the areas of their rows</span></h2>${cards.join('')}</section>`;
+}
+function renderAreas(list) {  // one column per area, active rows first
+  const order = Object.keys(STATUS), cols = [...AREAS, ''].filter(a => a || list.some(w => !w.area));
+  $('#board').className = ''; $('#board').style.gridTemplateColumns = `repeat(${cols.length},minmax(230px,1fr))`;
+  $('#board').innerHTML = cols.map(a => {
+    const cards = list.filter(w => (w.area || '') === a).sort((x, y) => order.indexOf(x.status) - order.indexOf(y.status));
+    return `<section class="col"><h2><span class="pill" style="--h:${areaHue(a)}">${esc(a || 'No area')}</span><span class="mute">${cards.length}</span></h2>${cards.map(w => card(w, true)).join('')}</section>`;
+  }).join('');
+}
+
+function renderBoard(list) {
+  const keep = picked('#fStatus').length ? picked('#fStatus') : Object.keys(STATUS);
+  $('#board').className = keep.length === 1 ? 'solo' : '';
+  $('#board').style.gridTemplateColumns = keep.length < 4 ? `repeat(${keep.length},1fr)` : '';
+  $('#board').innerHTML = Object.entries(STATUS).filter(([s]) => keep.includes(s)).map(([s, label]) => {
+    const cards = list.filter(w => (w.status || 'open') === s);
+    return `<section class="col" data-s="${s}"><h2>${label}<span class="mute">${cards.length}</span></h2>${cards.map(card).join('')}</section>`;
+  }).join('');
+}
+function renderPeople(list) {
+  const who = [...new Set(list.flatMap(involved))].sort(), cols = [...who, ''];  // '' = unassigned
+  $('#board').className = ''; $('#board').style.gridTemplateColumns = `repeat(${cols.length},minmax(220px,1fr))`;
+  $('#board').innerHTML = cols.map(n => {
+    const cards = list.filter(w => n ? involved(w).includes(n) : !involved(w).length);
+    return `<section class="col"><h2>${esc(n || 'Unassigned')}<span class="mute">${cards.length}</span></h2>${cards.map(w => card(w, true)).join('')}</section>`;
+  }).join('');
+}
+const card = (w, st) => `<article class="card ${esc(w.project)}" draggable="true" tabindex="0" data-id="${esc(w.id)}" title="${esc(w.note)}">
+  <div class="top"><b>${esc(label(w))}</b><span class="pill" style="--h:${areaHue(w.area)}" title="${esc(w.group)}">${esc(w.area || w.group)}</span></div>
+  <div>${esc(w.title)}</div>
+  <div class="mute">${st ? `<b>${esc(STATUS[w.status] || w.status)}</b> · ` : ''}${w.owner || w.lead ? team(w) : '<i>unassigned</i>'}${w.tester ? ` · test: <b>${esc(w.tester)}</b>` : w.status === 'untested' ? ' · <i>no tester</i>' : ''}${w.start ? ` · ${fmt(w.start)} → ${fmt(w.end)}` : ''}${w.deps ? ` · after ${esc(depText(w))}` : ''}${w.parent ? ` · part of ${esc(w.parent)}` : ''}</div>
+</article>`;
+
+function renderGantt(list) {
+  const bs = bigs(), bRank = w => { const i = bs.findIndex(b => b.id === w.parent); return i < 0 ? bs.length : i; };
+  const key = w => bRank(w) < bs.length ? w.parent : 'area:' + (w.area || '');
+  const rows = list.filter(w => w.start && w.end).sort((a, b) => bRank(a) - bRank(b) || areaRank(a.area) - areaRank(b.area) || a.start.localeCompare(b.start));
+  const ms = wps.filter(w => w.project === 'milestone' && w.start);
+  const today = new Date().toISOString().slice(0, 10);
+  const ts = [...rows.flatMap(w => [w.start, w.end]), ...ms.map(m => m.start), today].map(Date.parse);
+  let t0 = Math.min(...ts); t0 -= (new Date(t0).getUTCDay() + 6) % 7 * DAY;  // back to a Monday
+  const t1 = Math.max(...ts) + 14 * DAY, W = (t1 - t0) / DAY * PX, x = s => (Date.parse(s) - t0) / DAY * PX;
+  let weeks = '';
+  for (let t = t0; t < t1; t += 7 * DAY) weeks += `<span style="left:${(t - t0) / DAY * PX}px">W${isoWeek(t)}<br>${fmt(t)}</span>`;
+  let html = `<div class="gr head"><div class="lab mute">${rows.length} scheduled · ${list.length - rows.length} without dates</div><div class="track" style="width:${W}px;height:32px">${weeks}</div></div>`;
+  let group;
+  for (const w of rows) {
+    if (key(w) !== group) {
+      group = key(w);
+      const b = bs.find(b => b.id === group), kids = rows.filter(r => r.parent === group);
+      const s = kids.map(r => r.start).sort()[0], e = kids.map(r => r.end).sort().at(-1);
+      html += b ? `<div class="gr gh" data-id="${esc(b.id)}"><div class="lab" title="${esc(b.title)}">${esc(b.id)} ${esc(short(b))}</div><div class="track" style="width:${W}px"><div class="bar sum" style="left:${x(s)}px;width:${x(e) - x(s) + PX}px" title="${fmt(s)} → ${fmt(e)}"></div></div></div>`
+        : `<div class="gr gh"><div class="lab"><span class="pill" style="--h:${areaHue(w.area)}">${esc(w.area || 'No area')}</span></div><div class="track" style="width:${W}px"></div></div>`;
+    }
+    html += `<div class="gr" data-id="${esc(w.id)}"><div class="lab" title="${esc(w.title)}"><b>${esc(label(w))}</b> ${esc(w.title)}</div>`
+      + `<div class="track" style="width:${W}px"><div class="bar s-${esc(w.status)}" style="--h:${areaHue(w.area)};left:${x(w.start)}px;width:${x(w.end) - x(w.start) + PX}px" title="${esc(STATUS[w.status] || w.status)} · ${fmt(w.start)} → ${fmt(w.end)}">${esc(w.lead || 'unassigned')}</div></div></div>`;
+  }
+  const lab = 340;  // .lab width
+  for (const m of ms) html += `<div class="vl" style="left:${lab + x(m.start)}px" title="${esc(m.title)}"><span>${esc(m.id)} · ${fmt(m.start)}</span></div>`;
+  html += `<div class="vl today" style="left:${lab + x(today)}px"><span>today</span></div>`;
+  $('#gantt').innerHTML = `<div class="gw" style="width:${lab + W}px">${html}</div>`;
+}
+
+function edit(id) {
+  editing = id;
+  const w = wps.find(w => w.id === id) || {status: 'open', project: picked('#fProject')[0] || 'backend'};
+  for (const f of FIELDS) el(f).value = w[f] || '';
+  el('end').min = el('start').value;
+  $('#del').hidden = !id;
+  $('#dlg').returnValue = '';
+  $('#dlg').showModal();
+}
+$('#dlg').onclose = () => {
+  const v = $('#dlg').returnValue;
+  if (SNAP) return;
+  if (v === 'del' && confirm(`Delete ${editing}?`)) wps = wps.filter(w => w.id !== editing);
+  else if (v === 'ok') {
+    const w = Object.fromEntries(FIELDS.map(f => [f, el(f).value.trim()]));
+    w.id ||= crypto.randomUUID(); w.deps = depIds(w.deps);
+    w.lead ||= names(w.owner)[0] || ''; if (w.lead) w.owner = [w.lead, ...names(w.owner).filter(n => n !== w.lead)].join(', ');  // the lead is the first owner
+    if (w.id !== editing && wps.some(o => o.id === w.id)) return alert(`${w.id} exists already`);
+    const i = wps.findIndex(o => o.id === editing);
+    i < 0 ? wps.push(w) : wps[i] = {...wps[i], ...w};
+  } else return;
+  save(); fillLists(); render();
+};
+el('start').onchange = () => el('end').min = el('start').value;
+for (const f of ['start', 'end']) el(f).onclick = () => { if (!el(f).readOnly) try { el(f).showPicker(); } catch {} };  // the calendar on any click, not only the icon
+el('status').innerHTML = Object.entries(STATUS).map(([s, l]) => `<option value="${s}">${l}</option>`).join('');
+el('area').innerHTML = '<option value=""></option>' + AREAS.map(a => `<option>${esc(a)}</option>`).join('');
+multi('#fArea', 'all areas', AREAS.map(a => [a, a]));
+multi('#fProject', 'all layers', [['ui', 'UI (React)'], ['backend', 'Backend (Python)'], ['firmware', 'Firmware'], ['hardware', 'Hardware & optics'], ['docs', 'Docs & training']]);
+multi('#fStatus', 'all statuses', Object.entries(STATUS), (new URLSearchParams(location.search).get('status') || '').replace('active', 'open,doing').split(','));
+
+// gantt: drag a bar to move it, its ends to change start or end; whole days
+const iso = t => new Date(t).toISOString().slice(0, 10);
+let drag = null;
+$('#gantt').onpointerdown = e => {
+  const b = e.target.closest('.bar:not(.sum)'), w = b && wps.find(w => w.id === cardId(e));
+  if (!w || SNAP) return;
+  const r = b.getBoundingClientRect(), edge = e.clientX - r.left < 6 ? 'start' : r.right - e.clientX < 6 ? 'end' : 'both';
+  drag = {w, b, edge, x: e.clientX, s: Date.parse(w.start), e: Date.parse(w.end), moved: false};
+  b.setPointerCapture(e.pointerId);
+};
+$('#gantt').onpointermove = e => {
+  const b = e.target.closest('.bar:not(.sum)');
+  if (b && !drag) { const r = b.getBoundingClientRect(); b.style.cursor = SNAP ? '' : e.clientX - r.left < 6 || r.right - e.clientX < 6 ? 'ew-resize' : ''; }
+  if (!drag) return;
+  const d = Math.round((e.clientX - drag.x) / PX) * DAY;
+  let s = drag.s + (drag.edge !== 'end' ? d : 0), en = drag.e + (drag.edge !== 'start' ? d : 0);
+  if (en < s) drag.edge === 'start' ? s = en : en = s;
+  drag.moved ||= d !== 0;
+  drag.b.style.left = `${parseFloat(drag.b.style.left) + (s - Date.parse(drag.w.start)) / DAY * PX}px`;
+  drag.b.style.width = `${(en - s) / DAY * PX + PX}px`;
+  drag.w.start = iso(s); drag.w.end = iso(en);
+  drag.b.title = `${fmt(drag.w.start)} → ${fmt(drag.w.end)}`;
+};
+$('#gantt').onpointerup = () => { if (drag?.moved) { save(); setTimeout(render); } else if (drag) drag.moved = false; const was = drag; drag = null; if (was?.moved) $('#gantt').dataset.dragged = 1; };
+
+// board: click/Enter edits, drag moves between columns
+const cardId = e => e.target.closest('[data-id]')?.dataset.id;
+$('#board').onclick = $('#gantt').onclick = e => {
+  if ($('#gantt').dataset.dragged) return delete $('#gantt').dataset.dragged; const who = e.target.closest('[data-who]'); if (who) { for (const i of $('#fOwner').querySelectorAll('input')) i.checked = i.value === who.dataset.who; sumUp('#fOwner'); } else if (cardId(e)) edit(cardId(e)); };
+$('#board').onkeydown = e => e.key === 'Enter' && cardId(e) && edit(cardId(e));
+$('#board').ondragstart = e => SNAP ? e.preventDefault() : e.dataTransfer.setData('text/plain', cardId(e));
+$('#board').ondragover = e => { const c = e.target.closest('.col'); if (c) { e.preventDefault(); c.classList.add('over'); } };
+$('#board').ondragleave = e => e.target.closest('.col')?.classList.remove('over');
+$('#board').ondrop = e => {
+  const c = e.target.closest('.col'), w = wps.find(w => w.id === e.dataTransfer.getData('text/plain'));
+  e.preventDefault();
+  if (!c || !w || !c.dataset.s || w.status === c.dataset.s) return render();
+  w.status = c.dataset.s; save(); render();
+};
+
+for (const [b, h] of VIEWS) $(b).onclick = () => { location.hash = h; };
+$('#new').onclick = () => edit(null);
+onhashchange = render;
+$('#fText').oninput = render;
+for (const id of ['#fParent', '#fArea', '#fProject', '#fOwner', '#fStatus']) {
+  $(id).onchange = () => { sumUp(id); render(); };
+  $(id).onclick = e => { if (e.target.matches('[data-clear]')) { for (const i of $(id).querySelectorAll('input')) i.checked = false; $(id).dispatchEvent(new Event('change')); } };
+}
+$('#fStatus').addEventListener('change', () => { const p = picked('#fStatus'); history.replaceState(null, '', (p.length ? '?status=' + p.join(',') : location.pathname) + location.hash); });
+document.addEventListener('click', e => { for (const d of document.querySelectorAll('.multi[open]')) if (!d.contains(e.target)) d.open = false; });
+load();
+</script>
+</body>
+</html>

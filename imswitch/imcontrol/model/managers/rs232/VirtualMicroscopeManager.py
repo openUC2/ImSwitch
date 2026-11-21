@@ -11,6 +11,7 @@ from queue import Queue, Empty
 from skimage.draw import line
 from scipy.signal import convolve2d
 from imswitch.imcommon.model import initLogger
+from .virtual_lightsheet import LightsheetSimulator
 
 try:
     import NanoImagingPack as nip
@@ -141,7 +142,7 @@ class VirtualMicroscopeManager:
 
         try:
             self._imagePath = rs232Info.managerProperties["imagePath"]
-            if self._imagePath not in ["simplant", "smlm", "astigmatism", "wellplatecalib", "april_tag","stage_offset_calib"]:
+            if self._imagePath not in ["simplant", "smlm", "astigmatism", "wellplatecalib", "april_tag", "stage_offset_calib", "lightsheet"]:
                 raise NameError
         except:
             package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -152,7 +153,7 @@ class VirtualMicroscopeManager:
                 "If you want to use the plant, use 'imagePath': 'simplant', 'astigmatism' in your setup.json"
             )
 
-        self._virtualMicroscope = VirtualMicroscopy(self._imagePath)
+        self._virtualMicroscope = VirtualMicroscopy(self._imagePath, lightsheet=self._settings.get("lightsheet"))
         self._positioner = self._virtualMicroscope.positioner
         self._camera = self._virtualMicroscope.camera
         self._illuminator = self._virtualMicroscope.illuminator
@@ -199,6 +200,18 @@ class VirtualMicroscopeManager:
             # /ObjectiveController/moveToObjective?slot=1
             self.currentObjective = 1
             self._camera.binning = False
+
+    # Lightsheet mode ("imagePath": "lightsheet"): optics that can change at runtime
+    def getLightsheetOptics(self):
+        sim = getattr(self._camera, "lightsheet", None)
+        return sim.optics() if sim is not None else None
+
+    def setLightsheetIlluminationNA(self, na: float):
+        sim = getattr(self._camera, "lightsheet", None)
+        if sim is None:
+            raise RuntimeError("The virtual microscope is not in lightsheet mode")
+        sim.setIlluminationNA(na)
+        return sim.optics()
 
     def finalize(self):
         self._virtualMicroscope.stop()
@@ -349,8 +362,8 @@ class Illuminator:
 
 
 class VirtualMicroscopy:
-    def __init__(self, filePath="path_to_image.jpeg"):
-        self.camera = Camera(self, filePath)
+    def __init__(self, filePath="path_to_image.jpeg", lightsheet=None):
+        self.camera = Camera(self, filePath, lightsheet=lightsheet)
         self.positioner = Positioner(self)
         self.illuminator = Illuminator(self)
         self.objective = Objective(self)
@@ -643,11 +656,17 @@ class VirtualGalvoScanner:
 
 
 class Camera:
-    def __init__(self, parent, filePath="path_to_image.jpeg"):
+    def __init__(self, parent, filePath="path_to_image.jpeg", lightsheet=None):
         self._parent = parent
         self.filePath = filePath
 
-        if self.filePath == "simplant":
+        self.lightsheet = None
+        if self.filePath == "lightsheet":
+            # 3D phantom through a Gaussian light sheet; see virtual_lightsheet.py
+            self.lightsheet = LightsheetSimulator(**(lightsheet or {}))
+            self.SensorHeight = self.lightsheet.height
+            self.SensorWidth = self.lightsheet.width
+        elif self.filePath == "simplant":
             self._image = createBranchingTree(width=5000, height=5000)
             self._image /= np.max(self._image)
             self.SensorHeight = 300  # self._image.shape[1]
@@ -726,7 +745,7 @@ class Camera:
 
         self.lock = threading.Lock()
         self.model = "VirtualCamera"
-        self.PixelSize = 1.0
+        self.PixelSize = self.lightsheet.pixelUm if self.lightsheet is not None else 1.0
         self.isRGB = False
         self.flipImage = (False, False)
         self.frameNumber = 0
@@ -823,6 +842,9 @@ class Camera:
             frame = self.produce_smlm_frame(x_offset, y_offset, light_intensity).astype(np.uint16)
         elif self.filePath == "astigmatism":
             frame = self.produce_astigmatism_frame(z_offset).astype(np.uint16)
+        elif self.lightsheet is not None:
+            frame = self.lightsheet.render(self._parent.positioner.get_position(), light_intensity,
+                                           float(self.properties.get("exposure") or 1.0))
         else:
             # Removed lock here since we're using cached parameters
             # add noise

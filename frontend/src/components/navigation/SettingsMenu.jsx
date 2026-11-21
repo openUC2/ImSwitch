@@ -15,6 +15,7 @@ import {
   Chip,
   ToggleButton,
   ToggleButtonGroup,
+  Snackbar,
 } from "@mui/material";
 import {
   Settings,
@@ -30,6 +31,8 @@ import {
   Language as LanguageIcon,
   TouchApp,
   Dialpad,
+  PowerSettingsNew,
+  RestartAlt,
 } from "@mui/icons-material";
 import { useDeveloperMode } from "../../utils/useDeveloperMode";
 
@@ -48,6 +51,34 @@ import {
   TRI_STATE,
 } from "../../state/slices/UIPreferencesSlice.js";
 import useDeviceProfile from "../../hooks/useDeviceProfile";
+import ConfirmDialog from "../../mobile/components/ConfirmDialog.jsx";
+import apiUC2ConfigControllerPowerOffHost from "../../backendapi/apiUC2ConfigControllerPowerOffHost";
+import apiUC2ConfigControllerRestartImSwitch from "../../backendapi/apiUC2ConfigControllerRestartImSwitch";
+
+// Power actions in the main menu, each behind a confirm dialog.
+const POWER_ACTIONS = {
+  restartImSwitch: {
+    label: "Restart ImSwitch",
+    secondary: "Restart the software only",
+    title: "Restart ImSwitch?",
+    text: "The software restarts; running scans and recordings stop. The page reconnects after about a minute.",
+    run: () => apiUC2ConfigControllerRestartImSwitch(),
+  },
+  reboot: {
+    label: "Restart computer",
+    secondary: "Reboot the microscope's computer",
+    title: "Restart the computer?",
+    text: "Motors stop and lights go off, then the computer reboots. Everyone connected loses the microscope for a few minutes.",
+    run: () => apiUC2ConfigControllerPowerOffHost(true),
+  },
+  shutdown: {
+    label: "Shut down",
+    secondary: "Power off safely before unplugging",
+    title: "Shut down the microscope's computer?",
+    text: "Motors stop and lights go off, then the computer powers off. Wait until its light stops blinking before you unplug it. To start it again, power-cycle it.",
+    run: () => apiUC2ConfigControllerPowerOffHost(false),
+  },
+};
 
 // Auto / On / Off selector used by the touch-related preferences.
 const TriStateToggle = ({ value, onChange }) => (
@@ -116,6 +147,24 @@ const SettingsMenu = ({ onNavigate }) => {
 
   const handleClose = () => {
     setAnchorEl(null);
+  };
+
+  const [powerAction, setPowerAction] = useState(null); // key of POWER_ACTIONS
+  const [powerMessage, setPowerMessage] = useState("");
+  const runPowerAction = async () => {
+    const action = POWER_ACTIONS[powerAction];
+    setPowerAction(null);
+    try {
+      const result = await action.run();
+      setPowerMessage(
+        result?.status === "error"
+          ? `Not possible here: ${result.message}`
+          : `${action.label}: ${result?.status || result?.message || "started"}`,
+      );
+    } catch (e) {
+      // The connection drops while the host goes down; that is expected.
+      setPowerMessage(`${action.label}: request sent (${e.message})`);
+    }
   };
 
   // Handle navigation items (close menu)
@@ -506,6 +555,28 @@ const SettingsMenu = ({ onNavigate }) => {
           />
         </MenuItem>
 
+        <Divider />
+        {Object.entries(POWER_ACTIONS).map(([key, action]) => (
+          <MenuItem
+            key={key}
+            disabled={!isBackendConnected}
+            onClick={() => {
+              handleClose();
+              setPowerAction(key);
+            }}
+          >
+            <ListItemIcon>
+              {key === "shutdown" ? (
+                <PowerSettingsNew fontSize="small" color="error" />
+              ) : (
+                <RestartAlt fontSize="small" />
+              )}
+            </ListItemIcon>
+            <ListItemText primary={action.label} secondary={action.secondary} />
+          </MenuItem>
+        ))}
+        <Divider />
+
         {/* About - Always available (static information) */}
         <MenuItem onClick={() => handleNavigationClick("About")}>
           <ListItemIcon>
@@ -517,6 +588,21 @@ const SettingsMenu = ({ onNavigate }) => {
           />
         </MenuItem>
       </Menu>
+      <ConfirmDialog
+        open={Boolean(powerAction)}
+        danger
+        title={POWER_ACTIONS[powerAction]?.title}
+        text={POWER_ACTIONS[powerAction]?.text}
+        confirmLabel={POWER_ACTIONS[powerAction]?.label}
+        onCancel={() => setPowerAction(null)}
+        onConfirm={runPowerAction}
+      />
+      <Snackbar
+        open={Boolean(powerMessage)}
+        autoHideDuration={8000}
+        onClose={() => setPowerMessage("")}
+        message={powerMessage}
+      />
     </>
   );
 };

@@ -6,6 +6,7 @@ from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcontrol.model.aufgaben.storage import save_image
 from .uc2config.can_network_api import CanNetworkApiMixin
+from .uc2config.display_api import DisplayApiMixin
 
 
 
@@ -13,7 +14,7 @@ def _one_frame(image):
     """A camera frame for saving: (Y, X) or RGB (Y, X, 3); a frame stack gives its first."""
     return image if image.ndim == 2 or image.shape[-1] == 3 else image[0]
 
-class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
+class UC2ConfigController(CanNetworkApiMixin, DisplayApiMixin, ImConWidgetController):
     """Linked to UC2ConfigWidget."""
 
     sigUC2SerialReadMessage = Signal(str)
@@ -80,6 +81,9 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
         # CAN network: bus scan, firmware (CAN OTA, USB flash), prompted
         # update — model/canbus, endpoints in uc2config/can_network_api.py
         self._init_can_network()
+
+        # status OLED on the master (device name + status line): uc2config/display_api.py
+        self._init_display()
 
     def processSerialWriteMessage(self, message):
         self.sigUC2SerialWriteMessage.emit(message)
@@ -182,6 +186,7 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
                     "timestamp": datetime.datetime.now().isoformat(),
                 }
                 self.sigBusStatusUpdate.emit(status)
+                self._commChannel.sigDisplayStatus.emit("E-STOP" if emergency_active else "", -1)
             except Exception as e:
                 self.__logger.error(f"Error in emergency_callback: {e}")
 
@@ -973,6 +978,8 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
         self.__logger.debug("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
         self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
+        if self._master.UC2ConfigManager.isConnected():
+            self._pushDeviceNameSoon()  # a replaced/re-flashed ESP has lost the stored name
 
     def closeConnection(self):
         self._master.UC2ConfigManager.closeSerial()
@@ -1003,11 +1010,12 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
     _PALLET_UPGRADE_UNIT = "imswitch-pallet-upgrade.service"
 
     def _callSystemd(self, method, signature, body, path="/org/freedesktop/systemd1",
-                     interface="org.freedesktop.systemd1.Manager"):
+                     interface="org.freedesktop.systemd1.Manager",
+                     bus_name="org.freedesktop.systemd1"):
         from jeepney import DBusAddress, new_method_call
         from jeepney.io.blocking import open_dbus_connection
         from jeepney.wrappers import unwrap_msg
-        address = DBusAddress(path, bus_name="org.freedesktop.systemd1", interface=interface)
+        address = DBusAddress(path, bus_name=bus_name, interface=interface)
         with open_dbus_connection(bus="SYSTEM") as conn:
             return unwrap_msg(conn.send_and_get_reply(
                 new_method_call(address, method, signature, body), timeout=5))
@@ -1045,6 +1053,40 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
         except OSError:
             log = ""
         return {"state": state, "log": log}
+
+    def _lightsOff(self):
+        """Switch off every laser/LED channel; errors are logged, not raised."""
+        for managerName in ("lasersManager", "LEDsManager"):
+            manager = getattr(self._master, managerName, None)
+            if manager is None:
+                continue
+            for name in manager.getAllDeviceNames():
+                try:
+                    manager[name].setEnabled(False)
+                except Exception as e:
+                    self._logger.error(f"Could not switch off {name}: {e}")
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def powerOffHost(self, reboot: bool = False):
+        """Shut down (reboot=False) or restart (reboot=True) the computer ImSwitch runs on.
+
+        Ask first: this ends the session for everyone. Motors stop and lights go off
+        first; open files close when the container receives SIGTERM during shutdown.
+        Reaches logind over the host D-Bus socket (openUC2 OS); outside the OS image,
+        or without a polkit rule allowing org.freedesktop.login1.power-off / reboot for
+        the container user, it returns status "error" and nothing happens.
+        """
+        self._stopAllMotors()
+        self._lightsOff()
+        try:
+            self._callSystemd("Reboot" if reboot else "PowerOff", "b", (False,),
+                              path="/org/freedesktop/login1",
+                              interface="org.freedesktop.login1.Manager",
+                              bus_name="org.freedesktop.login1")
+        except Exception as e:
+            self._logger.error(f"Could not {'reboot' if reboot else 'power off'} the host: {e}")
+            return {"status": "error", "message": str(e)}
+        return {"status": "rebooting" if reboot else "shutting down"}
 
     @APIExport(runOnUIThread=False)
     def getDataPath(self):
@@ -1618,11 +1660,14 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
             motorSettings = {}
             for ax, current in axisSettings.items():
                 motion, homing = current.get('motion', {}), current.get('homing', {})
+                limits = current.get('limits', {})
                 motorSettings[f'stepsize{ax}'] = motion.get('stepSize', 1)
                 motorSettings[f'maxSpeed{ax}'] = motion.get('maxSpeed', 10000)
                 motorSettings[f'initialSpeed{ax}'] = motion.get('speed', 10000)  # current speed
-                motorSettings[f'min{ax}'] = motion.get('minPos')  # None (= no limit) is not saved
+                motorSettings[f'min{ax}'] = motion.get('minPos')  # None (= no limit) removes the key
                 motorSettings[f'max{ax}'] = motion.get('maxPos')
+                motorSettings[f'limit{ax}enabled'] = bool(limits.get('enabled', False))
+                motorSettings[f'hardLimitsEnabled{ax}'] = bool(limits.get('hardLimitsEnabled', True))
                 motorSettings[f'backlash{ax}'] = motion.get('backlash', 0)
                 motorSettings[f'homeSpeed{ax}'] = homing.get('speed', 15000)
                 motorSettings[f'homeDirection{ax}'] = homing.get('direction', -1)
@@ -1670,9 +1715,12 @@ class UC2ConfigController(CanNetworkApiMixin, ImConWidgetController):
                 # Update the positioner's managerProperties in setupInfo
                 if hasattr(self._setupInfo, 'positioners') and positionerName in self._setupInfo.positioners:
                     # Update existing properties
+                    props = self._setupInfo.positioners[positionerName].managerProperties
                     for key, value in motorSettings.items():
                         if value is not None:
-                            self._setupInfo.positioners[positionerName].managerProperties[key] = value
+                            props[key] = value
+                        else:
+                            props.pop(key, None)
 
                     # Save the updated setupInfo to disk
                     import imswitch.imcontrol.model.configfiletools as configfiletools

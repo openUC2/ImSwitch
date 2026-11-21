@@ -780,8 +780,7 @@
         "LEDMatrix",
         "Composite",
         "LiveView",
-        "Demo",
-        "Arkitekt"
+        "Spectometer"
     ],
     "stageOffsets": {},
     "Flatfield": null,

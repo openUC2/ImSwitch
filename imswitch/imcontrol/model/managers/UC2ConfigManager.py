@@ -327,6 +327,32 @@ class UC2ConfigManager(SignalInterface):
         except Exception:
             return {}
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Status OLED (0.91" SSD1306 on the CAN-HAT master)
+    # ──────────────────────────────────────────────────────────────────────
+    def getDisplay(self):
+        """{present,on,addr,name,status,progress,fw,flip,contrast,splash}; {} if the firmware has no display."""
+        try:
+            return self.ESP32.display.get_display()
+        except Exception:
+            return {}
+
+    def setDisplayName(self, name):
+        """Title line (the device name). "" restores the default "openuc2"."""
+        return self.ESP32.display.set_name(name)
+
+    def setDisplayStatus(self, status, progress=None):
+        """Status line; progress 0-100 shows a bar, -1 hides it."""
+        return self.ESP32.display.set_status(status, progress=progress)
+
+    def setDisplayEnabled(self, enabled):
+        """Switch the display on or off entirely."""
+        return self.ESP32.display.set_on(enabled)
+
+    def setDisplayFlip(self, flip):
+        """Rotate the picture by 180 degrees."""
+        return self.ESP32.display.set_flip(flip)
+
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

@@ -1,0 +1,102 @@
+{
+  "rs232devices": {
+    "VirtualMicroscope": {
+      "managerName": "VirtualMicroscopeManager",
+      "managerProperties": {}
+    }
+  },
+  "detectors": {
+    "SpectrometerCamera": {
+      "analogChannel": null,
+      "digitalLine": null,
+      "managerName": "VirtualCameraManager",
+      "managerProperties": {
+        "isRGB": 0,
+        "cameraListIndex": 0,
+        "cameraEffPixelsize": 2.4,
+        "virtcam": {
+          "exposure": 0,
+          "gain": 0,
+          "blacklevel": 100,
+          "image_width": 1000,
+          "image_height": 1000
+        }
+      },
+      "forAcquisition": true,
+      "forFocusLock": false
+    }
+  },
+  "lasers": {
+    "LASER488": {
+      "analogChannel": null,
+      "digitalLine": null,
+      "managerName": "VirtualLaserManager",
+      "managerProperties": {"rs232device": "VirtualMicroscope", "channel_index": 1},
+      "valueRangeMin": 0,
+      "valueRangeMax": 1024,
+      "wavelength": 488,
+      "freqRangeMin": 0,
+      "freqRangeMax": 0,
+      "freqRangeInit": 0,
+      "valueRangeStep": 1.0
+    },
+    "LASER635": {
+      "analogChannel": null,
+      "digitalLine": null,
+      "managerName": "VirtualLaserManager",
+      "managerProperties": {"rs232device": "VirtualMicroscope", "channel_index": 2},
+      "valueRangeMin": 0,
+      "valueRangeMax": 1024,
+      "wavelength": 635,
+      "freqRangeMin": 0,
+      "freqRangeMax": 0,
+      "freqRangeInit": 0,
+      "valueRangeStep": 1.0
+    }
+  },
+  "positioners": {
+    "VirtualStage": {
+      "analogChannel": null,
+      "digitalLine": null,
+      "managerName": "VirtualStageManager",
+      "managerProperties": {"rs232device": "VirtualMicroscope", "isEnable": true},
+      "axes": ["X", "Y", "Z", "A"],
+      "isPositiveDirection": true,
+      "forPositioning": true,
+      "forScanning": true,
+      "resetOnClose": true
+    }
+  },
+  "spectrometer": {
+    "name": "virtual_spectrometer",
+    "simulate": true,
+    "laserWavelengthNm": 532.0,
+    "alignmentTargetNm": 555.0,
+    "design": {
+      "cameraFocalLengthMm": 32.0,
+      "centerWavelengthNm": 550.0,
+      "leverArmMm": 25.0
+    },
+    "simulation": {
+      "focalLengthMm": 30.0,
+      "centerNm": 555.0
+    },
+    "processing": {
+      "rowStart": 57,
+      "rowStop": 456,
+      "nAverage": 5
+    }
+  },
+  "availableWidgets": [
+    "Settings",
+    "View",
+    "Recording",
+    "Image",
+    "Laser",
+    "Positioner",
+    "LiveView",
+    "UC2Config",
+    "Spectrometer"
+  ],
+  "nonAvailableWidgets": []
+}

@@ -1,7 +1,8 @@
 // src/components/aufgaben/AufgabenRun.jsx
 // Starting and following a run: the start dialog (what the job will do, the
 // ask-first steps to confirm, run parameters), the operator question dialog,
-// and the monitor with pause / resume / finish / abort and the event log.
+// and the monitor with pause / resume / finish / abort, the step timeline and
+// the event log.
 import React, { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -44,6 +45,7 @@ import {
 } from "../../backendapi/apiAufgabenController";
 import { aufgabenErrorText, catalogById, findNode } from "../../utils/aufgabenJob";
 import { CommitField } from "./AufgabenFields";
+import AufgabenTimeline from "./AufgabenTimeline";
 import { useT } from "../../i18n";
 
 const STATE_COLORS = {
@@ -64,10 +66,10 @@ const clock = (seconds) => {
 };
 
 // Parameters the operator sets when the job starts.
-const runtimeParameters = (job) =>
+export const runtimeParameters = (job) =>
   Object.entries(job.parameters || {}).filter(([, p]) => (p.ui || "runtime") !== "hidden" && p.ui !== "wizard");
 
-const ParameterInput = ({ name, spec, value, onChange }) => {
+export const ParameterInput = ({ name, spec, value, onChange }) => {
   const label = `${spec.title || name}${spec.unit ? ` (${spec.unit})` : ""}`;
   if (spec.type === "boolean") {
     return (
@@ -358,6 +360,10 @@ export const RunMonitor = () => {
           {error}
         </Alert>
       )}
+      <Typography variant="overline" color="text.secondary" component="div" sx={{ mt: 3 }}>
+        {t("Timeline")}
+      </Typography>
+      <AufgabenTimeline />
       <Stack direction="row" alignItems="center" sx={{ mt: 3 }}>
         <Typography variant="overline" color="text.secondary">
           {t("Events")}

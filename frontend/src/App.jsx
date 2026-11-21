@@ -42,6 +42,7 @@ import { PWAProvider } from "./context/PWAContext.js";
 import DemoController from "./components/DemoController.js";
 import StageMapController from "./components/StageMapController.jsx";
 import OPMController from "./components/OPMController.jsx";
+import SpectrometerController from "./components/spectrometer/SpectrometerController.jsx";
 import AufgabenController from "./components/aufgaben/AufgabenController.jsx";
 import ArkitektController from "./components/ArkitektController.jsx";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
@@ -478,6 +479,12 @@ function App() {
   // Get Vizarr viewer state
   const vizarrViewerState = useSelector(vizarrViewerSlice.getVizarrViewerState);
 
+  // Any openViewer dispatch (e.g. the experiment's "Open Vizarr (offline)") shows the viewer.
+  const lastViewerOpen = vizarrViewerState.recentFiles[0]?.timestamp;
+  useEffect(() => {
+    if (lastViewerOpen) setSelectedPlugin("VizarrViewer");
+  }, [lastViewerOpen]);
+
   // Handler to close Vizarr viewer
   const handleCloseVizarr = () => {
     dispatch(vizarrViewerSlice.closeViewer());
@@ -874,6 +881,7 @@ function App() {
               {selectedPlugin === "DemoController" && <DemoController />}
               {selectedPlugin === "StageMap" && <StageMapController />}
               {selectedPlugin === "OPM" && <OPMController />}
+              {selectedPlugin === "Spectrometer" && <SpectrometerController />}
               {selectedPlugin === "Aufgaben" && <AufgabenController />}
               {selectedPlugin === "FrameCalibration" && <FrameCalibrationApp />}
               {selectedPlugin === "Arkitekt" && <ArkitektController />}

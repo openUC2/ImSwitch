@@ -243,6 +243,10 @@ class GalvoScannerManager(ABC):
         self._park_x = int(props.get('park_x', 2048))
         self._park_y = int(props.get('park_y', 2048))
         self._park_on_stop = bool(props.get('park_on_stop', True))
+        # Gain of each output channel relative to nominal (driver trimmers differ): every DAC
+        # value is scaled about the centre 2048 before it goes to the board, see to_board()
+        self._scale_x = float(props.get('scale_x', 1.0))
+        self._scale_y = float(props.get('scale_y', 1.0))
         self.__logger = initLogger(self, instanceName=name)
         # Edits made in the UI win over the setup-JSON defaults above
         self._load_park_config()
@@ -384,6 +388,8 @@ class GalvoScannerManager(ABC):
                 saved = json.load(f)
             self.set_park_config(park_x=saved.get('park_x'), park_y=saved.get('park_y'),
                                  park_on_stop=saved.get('park_on_stop'), persist=False)
+            self.set_axis_scale(scale_x=saved.get('scale_x'), scale_y=saved.get('scale_y'),
+                                persist=False)
             return True
         except Exception as e:
             self.__logger.warning(f"Ignoring unreadable park config {path}: {e}")
@@ -407,14 +413,53 @@ class GalvoScannerManager(ABC):
         if park_on_stop is not None:
             self._park_on_stop = bool(park_on_stop)
         if persist:
-            path = self._park_config_path()
-            try:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, 'w') as f:
-                    json.dump(self.get_park_config(), f, indent=2)
-            except OSError as e:
-                self.__logger.warning(f"Could not save park config to {path}: {e}")
+            self._save_output_settings()
         return self.get_park_config()
+
+    def _save_output_settings(self) -> None:
+        """Park position and axis scale share one file: ~/.imswitch/galvo_park_<name>.json"""
+        path = self._park_config_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w') as f:
+                json.dump({**self.get_park_config(), **self.get_axis_scale()}, f, indent=2)
+        except OSError as e:
+            self.__logger.warning(f"Could not save galvo settings to {path}: {e}")
+
+    # ========================
+    # Axis scale
+    # ========================
+
+    def get_axis_scale(self) -> Dict[str, float]:
+        """Current output scale of the X and Y channel (1.0 = nominal)."""
+        return {'scale_x': self._scale_x, 'scale_y': self._scale_y}
+
+    def set_axis_scale(self, scale_x: float = None, scale_y: float = None,
+                       persist: bool = True) -> Dict[str, float]:
+        """
+        Set the output scale of each channel and save it, so it survives a restart.
+
+        Compensates different gains of the X and Y galvo drivers: with the right factors a
+        square window in DAC counts scans a square field. Every DAC value (raster window,
+        points, park) is scaled about the centre 2048 before it is sent. 1.0 = no change,
+        allowed 0.1-2.0. Re-run the scanner-camera calibration after changing it.
+        """
+        for attr, value in (('_scale_x', scale_x), ('_scale_y', scale_y)):
+            if value is None:
+                continue
+            value = float(value)
+            if not 0.1 <= value <= 2.0:
+                raise ValueError(f"axis scale must be 0.1-2.0, got {value}")
+            setattr(self, attr, value)
+        if persist:
+            self._save_output_settings()
+        return self.get_axis_scale()
+
+    def to_board(self, x: float, y: float) -> tuple:
+        """Nominal DAC counts -> the counts sent to the board (axis scale about 2048, clipped)."""
+        def one(v, s):
+            return max(0, min(4095, int(round(2048 + s * (v - 2048)))))
+        return one(x, self._scale_x), one(y, self._scale_y)
 
     def park(self, timeout: int = 1) -> Dict[str, Any]:
         """

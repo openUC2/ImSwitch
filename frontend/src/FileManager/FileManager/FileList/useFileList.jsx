@@ -192,7 +192,7 @@ const useFileList = (onRefresh, enableFilePreview, triggerAction, onFileOpen, on
       divider: !canOpenWithVizarr(lastSelectedFile),
     },
     {
-      title: "Open with Vizarr",
+      title: "Open in OME-Zarr Viewer",
       icon: <MdViewInAr size={18} />,
       onClick: handleOpenWithVizarr,
       hidden: !canOpenWithVizarr(lastSelectedFile) || selectedFiles.length > 1 || !onOpenWithVizarr,

@@ -167,13 +167,13 @@ def autofocus(mode: Literal["software", "hardware"] = "software",
 
 @task(category="Objective", locks=STAGE_LOCK, effects="IRREVERSIBLE",
       flags=TaskFlags(moves_z=True, confirm=True, needs=("objective",)))
-def set_objective(slot: Annotated[int, Gt(-1)], *, hw: Microscope) -> None:
+def set_objective(slot: Annotated[int, Gt(-1), Lt(2)], *, hw: Microscope) -> None:
     """Change objective
 
     Moves the turret; the objective sweeps under the sample.
 
     Args:
-        slot: Turret slot, starting at 0.
+        slot: Turret slot, 0 or 1 (as in the objective panel).
     """
     hw.set_objective(slot)
 

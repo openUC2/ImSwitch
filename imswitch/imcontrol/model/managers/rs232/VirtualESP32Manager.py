@@ -257,6 +257,34 @@ class _Fan:
         return {"fan": {"mode": self.mode, "wiper": self.wiper}}
 
 
+class _Display:
+    """The status OLED of the CAN-HAT master: keeps what a real one would show."""
+
+    def __init__(self):
+        self.state = {"present": 1, "on": 1, "addr": 60, "name": "", "status": "", "progress": -1,
+                      "fw": "virtual", "flip": 0, "contrast": 143, "splash": 0}
+
+    def get_display(self, timeout=1):
+        return dict(self.state)
+
+    def is_present(self, timeout=1):
+        return bool(self.state["present"])
+
+    def set_name(self, name):
+        self.state["name"] = str(name)
+
+    def set_status(self, status, progress=None):
+        self.state["status"] = str(status)
+        if progress is not None:
+            self.state["progress"] = int(max(-1, min(100, progress)))
+
+    def set_on(self, on=True):
+        self.state["on"] = int(bool(on))
+
+    def set_flip(self, flip=True):
+        self.state["flip"] = int(bool(flip))
+
+
 class _State:
     def __init__(self, client):
         self._client = client
@@ -423,6 +451,7 @@ class VirtualUC2Client:
         self.digitalin = _DigitalIn(self, props.get("digitalIn"))
         self.i2c = _I2C(self, props.get("humidityPct", 45.0), props.get("lux", 120.0))
         self.fan = _Fan(self)
+        self.display = _Display()
         self.state = _State(self)
         self.serial = _Serial(self)
         self.message = _CallbackStub()

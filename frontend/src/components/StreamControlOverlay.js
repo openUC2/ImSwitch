@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import DisplayRangeControl from "./DisplayRangeControl";
 import {
   Box,
   Paper,
@@ -21,7 +22,6 @@ import {
 } from "@mui/material";
 import {
   ExpandLess as ExpandLessIcon,
-  AutoMode as AutoModeIcon,
   Settings as SettingsIcon,
   Save as SaveIcon,
   Refresh as RefreshIcon,
@@ -252,16 +252,6 @@ const StreamControlOverlay = ({
   }, []); // Only load on mount, imageFormat is captured from closure
 
   // Auto contrast function
-  const handleAutoContrast = () => {
-    if (isJpeg) {
-      dispatch(setMinVal(0));
-      dispatch(setMaxVal(255));
-    } else {
-      dispatch(setMinVal(0));
-      dispatch(setMaxVal(32768));
-    }
-  };
-
   // Build the protocol-specific param object that goes to the backend
   // AND the per-detector save blob, from a single draft. Centralising
   // the shape here so the rest of handleSubmitSettings can be flat.
@@ -575,56 +565,11 @@ const StreamControlOverlay = ({
             {activeTab === 0 && (
               <Box sx={{ p: 2 }}>
                 <Box sx={{ mb: 2 }}>
-                  <Box
-                    sx={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 1,
-                      mb: 1,
-                    }}
-                  >
-                    <Typography variant="body2" sx={{ fontWeight: "medium" }}>
-                      Window/Level
-                    </Typography>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      startIcon={<AutoModeIcon />}
-                      onClick={handleAutoContrast}
-                      sx={{ ml: "auto", fontSize: "0.75rem", py: 0.25 }}
-                    >
-                      Auto
-                    </Button>
-                  </Box>
-
+                  <Typography variant="body2" sx={{ fontWeight: "medium" }}>
+                    Display range (min/max)
+                  </Typography>
                   <Box sx={{ mb: 2 }}>
-                    <Typography variant="caption" color="textSecondary">
-                      Window: {minVal}
-                    </Typography>
-                    <Slider
-                      value={minVal || 0}
-                      onChange={(_, value) => dispatch(setMinVal(value))}
-                      min={0}
-                      max={maxRange}
-                      step={1}
-                      valueLabelDisplay="auto"
-                      size="small"
-                    />
-                  </Box>
-
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="caption" color="textSecondary">
-                      Level: {maxVal}
-                    </Typography>
-                    <Slider
-                      value={maxVal || maxRange}
-                      onChange={(_, value) => dispatch(setMaxVal(value))}
-                      min={0}
-                      max={maxRange}
-                      step={1}
-                      valueLabelDisplay="auto"
-                      size="small"
-                    />
+                    <DisplayRangeControl />
                   </Box>
 
                   {!isJpeg && (

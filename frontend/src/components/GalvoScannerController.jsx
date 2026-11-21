@@ -41,6 +41,8 @@ import {
   getGalvoConfig,
   getGalvoStatus,
   getScanInfo,
+  galvoScanWarnings,
+  FLIM_TIMING,
   getActiveTab,
   setScannerNames,
   setSelectedScanner,
@@ -76,6 +78,8 @@ import {
   apiStopGalvoScan,
   apiGetGalvoParkConfig,
   apiSetGalvoParkConfig,
+  apiGetGalvoAxisScale,
+  apiSetGalvoAxisScale,
   apiParkGalvo,
   apiGetAffineTransform,
   apiGetGalvoCameraCalibration,
@@ -98,20 +102,20 @@ const PARAM_TOOLTIPS = {
   y_min: 'Top edge of the scan in DAC counts (0–4095).',
   y_max: 'Bottom edge of the scan in DAC counts (0–4095).',
   sample_period_us:
-    'Dwell time per sample in microseconds. 0 = go as fast as the DAC/loop allows. Larger = slower scan, brighter/less noisy pixels.',
+    'Dwell per sample in µs = the pixel time; photons per pixel grow with it. The board needs about 22 µs per sample, so below 25 µs (and at 0) pixel times become uneven and frames take longer than shown. FLIM: 25.',
   frame_count: 'Number of frames to acquire, then stop. 0 = scan continuously until you press Stop.',
   bidirectional:
     'Scan both sweep directions: even lines left→right, odd lines right→left. Roughly doubles frame rate but needs correct phase/settle to avoid a zig-zag offset.',
   pre_samples:
-    'Blanking samples emitted at the start of each line before imaging begins — lets the mirror reach constant velocity. Increase if the left edge is smeared.',
+    'Samples at the start of each line, right after the Y step, with X held at the start of the ramp; the line (and frame) marker goes out here. In FLIM LABS PLF the photons of pre-blank + lead-in overscan pile into column 0: crop it with a left offset of 1. FLIM: 64.',
   fly_samples:
-    'Fly-back samples between lines (cosine-eased) while the mirror returns for the next line. Increase if lines tear or overshoot.',
+    'Samples for the cosine-eased return to the start of the ramp (not used when bidirectional). Too few and the mirror cannot get back in time: the first columns of each line are distorted; 0 gave a dark, squeezed band at the left edge. FLIM: 256.',
   line_settle_samples:
-    'Extra settle samples held after the fly-back before the next line starts. Increase if the start of each line is distorted.',
+    'Samples held at the start of the ramp after the fly-back, before the next Y step, so ringing decays before the next line. FLIM: 128.',
   trig_delay_us:
-    'Gap between the frame marker and the line marker at the start of frame (µs). Both markers fire during pre-blanking, before the first pixel.',
+    'Gap between the frame marker and the line marker at the start of a frame (µs). Does not delay the pixel pulses.',
   trig_width_us:
-    'Trigger pulse width in µs for the frame/line markers and the pixel clock (pixel width is capped at half the dwell time; 0 = fastest possible pulse).',
+    'Pulse width in µs. Frame/line markers: 0 = 1 µs. Pixel pulse: software clock 0 = a few tens of ns (capped at half the dwell), hardware clock 0 = 1 µs. The PLF pixel size is set by the dwell, not by this. FLIM: 0.',
   enable_trigger: 'Emit the pixel/line trigger output during the scan. 0 = off, 1 = on.',
   apply_x_lut:
     'Apply a per-column X lookup table to linearize the mirror. 0 = off, 1 = on (requires an uploaded LUT).',
@@ -122,12 +126,16 @@ const PARAM_TOOLTIPS = {
   park_x: 'X position (DAC counts, 0–4095) the beam moves to when a scan stops.',
   park_y: 'Y position (DAC counts, 0–4095) the beam moves to when a scan stops.',
   overscan_samples:
-    'Extends the X ramp at the same per-pixel slope on both sides of the imaging window, so the mirror is already at constant velocity when triggers/laser start. Compensates the galvo lagging behind the DAC. Costs 2×overscan samples per line.',
+    'Ramp samples before and after the image at the same per-pixel slope, so the mirror already moves at constant speed when the first pixel starts (without it the left edge is squeezed). Costs 2×overscan samples per line; the ramp must stay inside 0–4095. FLIM: 32.',
   laser_blanking:
-    'Gate the laser (galvo laser pin) HIGH only during the imaging window — off during pre-blanking, overscan, fly-back and settle. Prevents fly-back photons from smearing the image (e.g. into a FLIM acquisition).',
+    'Gate the laser output HIGH only during the image samples (off during pre-blank, overscan, fly-back and settle). On the XIAO galvo board this pin (GPIO43) is also the console UART TX. FLIM: 0.',
   hw_pixel_clock:
-    'Generate the pixel clock with the ESP32-S3 RMT peripheral: exactly nx hardware-timed, equidistant pulses per line, decoupled from the DAC/SPI software loop. Falls back to software pulses on unsupported chips.',
+    'Make the pixel pulses with the ESP32-S3 RMT peripheral instead of the software loop. Removes the faint 1 ms dot lattice and the brighter columns 32/96/160/224 that interrupts cause with the software clock (bench test 2026-11-17). Needs dwell ≥ 2 µs and NX ≤ 1023, otherwise software pulses. Validated FLIM default: 0.',
 };
+
+// What the scan parameters do, and where FLIM image artefacts come from
+const SCAN_DOCS_URL = 'https://docs.openuc2.com/usage/disc/galvo-addon/reference/scan-parameters';
+const ARTEFACT_DOCS_URL = 'https://docs.openuc2.com/usage/disc/galvo-addon/explanation/flim-image-artefacts';
 
 const fmtUm = (um, digits) => {
   if (um == null || !isFinite(um)) return '–';
@@ -220,6 +228,8 @@ const GalvoScannerController = () => {
     park_y: 2048,
     park_on_stop: true,
   });
+  // Output gain of each galvo channel (server-side, saved with the park settings)
+  const [axisScale, setAxisScale] = useState({ scale_x: 1, scale_y: 1 });
 
   // ========================
   // API Functions
@@ -259,10 +269,23 @@ const GalvoScannerController = () => {
           park_on_stop: data.park_on_stop ?? true,
         });
       }
+      const scale = await apiGetGalvoAxisScale(hostIP, hostPort, selectedScanner);
+      if (!scale.error) setAxisScale({ scale_x: scale.scale_x ?? 1, scale_y: scale.scale_y ?? 1 });
     } catch (err) {
       console.error('Failed to fetch park config:', err);
     }
   }, [hostIP, hostPort, selectedScanner]);
+
+  const saveAxisScale = useCallback(async (partial) => {
+    setAxisScale((s) => ({ ...s, ...partial }));
+    if (!selectedScanner) return;
+    try {
+      const data = await apiSetGalvoAxisScale(hostIP, hostPort, selectedScanner, partial);
+      if (data.error) dispatch(setError(data.error));
+    } catch (err) {
+      console.error('Failed to save axis scale:', err);
+    }
+  }, [hostIP, hostPort, selectedScanner, dispatch]);
 
   const saveParkConfig = useCallback(async (partial) => {
     const next = { ...parkConfig, ...partial };
@@ -759,18 +782,34 @@ const GalvoScannerController = () => {
 
             <Box sx={{ mt: 2, p: 1, backgroundColor: 'rgba(0,150,255,0.1)', borderRadius: 1 }}>
               <Typography variant="body2">
-                Frame time: ~{scanInfo.frameTimeMs} ms | 
-                Rate: ~{scanInfo.frameRate} Hz
+                Frame ≈ {scanInfo.frameTime} ({scanInfo.frameRate} Hz) · {scanInfo.lineSamples} samples/line,
+                {' '}{scanInfo.imageShare} % of each line on image pixels
               </Typography>
             </Box>
+            {galvoScanWarnings(config).map((w) => (
+              <Alert key={w} severity="warning" sx={{ mt: 1 }}>
+                {w}{' '}
+                <a href={ARTEFACT_DOCS_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit' }}>Why</a>
+              </Alert>
+            ))}
           </Paper>
 
           {/* Advanced Parameters */}
           <Paper sx={{ p: 2, mb: 2 }}>
-            <Typography variant="subtitle1" gutterBottom>
-              Advanced Parameters
-            </Typography>
-            
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+              <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                Advanced Parameters
+              </Typography>
+              <Button size="small" href={SCAN_DOCS_URL} target="_blank" rel="noopener noreferrer">
+                What these do
+              </Button>
+              <Tooltip describeChild title="Dwell 25 µs, pre-blank 64, overscan 32, fly-back 256, settle 128, software pixel clock: the raster validated with FLIM LABS. Keeps NX/NY and the window.">
+                <Button size="small" variant="outlined" onClick={() => dispatch(setConfig(FLIM_TIMING))}>
+                  Recommended FLIM timing
+                </Button>
+              </Tooltip>
+            </Box>
+
             <Grid container spacing={2}>
               <Grid item xs={6}>
                 <TextField
@@ -959,6 +998,55 @@ const GalvoScannerController = () => {
                 Park now
               </Button>
             </Box>
+          </Paper>
+
+          {/* X/Y output scale */}
+          <Paper sx={{ p: 2, mb: 2 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              X/Y Output Scale
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+              Compensates different gains of the two galvo drivers, so that a square window scans a
+              square field. Every value sent to the board becomes 2048 + scale × (value − 2048); the
+              values shown here stay nominal. 1 = no change. Re-run the scanner–camera calibration after
+              changing it.
+            </Typography>
+            <Grid container spacing={2}>
+              {['scale_x', 'scale_y'].map((k) => (
+                <Grid item xs={6} key={k}>
+                  <TextField
+                    label={k === 'scale_x' ? 'X scale' : 'Y scale'}
+                    type="number"
+                    size="small"
+                    fullWidth
+                    value={axisScale[k]}
+                    onChange={(e) => setAxisScale((s) => ({ ...s, [k]: e.target.value }))}
+                    onBlur={(e) => saveAxisScale({ [k]: Number(e.target.value) })}
+                    inputProps={{ min: 0.1, max: 2, step: 0.01 }}
+                  />
+                </Grid>
+              ))}
+            </Grid>
+            {cameraCal.calibrated && physical && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, flexWrap: 'wrap' }}>
+                <Typography variant="body2" sx={{ flexGrow: 1 }}>
+                  Calibration: X/Y = {(physical.umPerDacX / physical.umPerDacY).toFixed(3)}
+                </Typography>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    const m = Math.min(physical.umPerDacX, physical.umPerDacY);
+                    saveAxisScale({
+                      scale_x: +(Number(axisScale.scale_x) * m / physical.umPerDacX).toFixed(4),
+                      scale_y: +(Number(axisScale.scale_y) * m / physical.umPerDacY).toFixed(4),
+                    });
+                  }}
+                >
+                  Equalise from calibration
+                </Button>
+              </Box>
+            )}
           </Paper>
 
           {/* Apply & Start Button */}

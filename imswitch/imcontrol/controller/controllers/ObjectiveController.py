@@ -108,7 +108,7 @@ class ObjectiveController(LiveUpdatedController):
 
             if calibrateOnStart:
                 self._logger.info("Calibrating objective on startup...")
-                self.calibrateObjective()
+                self.calibrateObjective(isBlocking=True)
                 # After calibration, move to the first objective position (slot 0)
                 self._moveMotorToSlot(0)
                 self._currentObjective = 0
@@ -123,7 +123,7 @@ class ObjectiveController(LiveUpdatedController):
                 elif abs(mPositionObjective - self._objectivePositions[1]) <= slotTolerance:
                     self._currentObjective = 1
                 else:
-                    self.calibrateObjective()
+                    self.calibrateObjective(isBlocking=True)
                     self._moveMotorToSlot(0)
                     self._currentObjective = 0
                 self._logger.info(f"Skipping calibration, objective at slot {self._currentObjective}")
@@ -257,13 +257,17 @@ class ObjectiveController(LiveUpdatedController):
             return False
 
     @APIExport(runOnUIThread=True)
-    def calibrateObjective(self, homeDirection: int = None, homePolarity: int = None):
+    def calibrateObjective(self, homeDirection: int = None, homePolarity: int = None,
+                           isBlocking: bool = False):
         """
         Calibrate (home) the objective turret using ESP32StageManager axis A.
         
         Args:
             homeDirection: Override home direction (optional)
             homePolarity: Override home polarity (optional)
+            isBlocking: Wait until homing is done. Startup passes True: the slot move that
+                follows must not start while the turret is still homing, or the homing
+                zeroes A under it and the turret ends up off its slot.
         """
         if not self._hasMotor or self._positioner is None:
             self._logger.error("No motor available for objective calibration")
@@ -273,7 +277,7 @@ class ObjectiveController(LiveUpdatedController):
 
         try:
             # Home axis A using ESP32StageManager
-            self._positioner.home_a(isBlocking=False)
+            self._positioner.home_a(isBlocking=isBlocking)
             self._isHomed = True
             self._logger.info("Objective homing completed successfully")
         except Exception as e:
@@ -397,7 +401,9 @@ class ObjectiveController(LiveUpdatedController):
                 if not success and self._hasMotor:
                     last_error = f"Failed to move objective motor to slot {slot}"
 
-        if success or not self._hasMotor:
+        # no turret motor (virtual or manual turret): a valid slot counts as reached
+        success = success or (not self._hasMotor and last_error is None)
+        if success:
             self._currentObjective = slot
             self._updatePixelSize()
 

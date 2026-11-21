@@ -295,6 +295,7 @@ setup declares its hardware.
 | `moveToTransportPosition` / `getTransportPosition` / `setTransportPosition` | **Ask first** |
 | `setMotorsEnabled(positionerName, is_enabled)` / `enalbeMotors(enable, enableauto)` | Note the upstream typo in the second name |
 | `getStageOffsetAxis` / `setStageOffsetAxis` / `resetStageOffsetAxis` | User-frame ↔ device-frame offset |
+| `getStageTravelLimits()` | Per positioner and axis `{min, max, enabled}` in the user frame; moves outside an enabled range are refused (409, `sigStageLimit`) |
 | `getDevicePositionAxis` / `getTruePositionerPositionWithoutOffset` | Raw device frame |
 | `startStageScan(xstart, xstep, nx, ystart, ystep, ny, tsettle)` (POST) / `stopStageScan` | Firmware-timed raster |
 | `startZStageSync` / `cancelZStageSync` / `getZStageSyncState` | |
@@ -303,6 +304,11 @@ setup declares its hardware.
 offset. `getPositionerPositions` gives the user frame; `getDevicePositionAxis` gives the raw
 device frame. Absolute moves are interpreted in the user frame. If the two disagree,
 investigate the offset before moving.
+
+**Travel limits.** `min<ax>` / `max<ax>` / `limit<ax>enabled` (setup managerProperties, measured for X/Y by
+the FRAME calibration step `travel`) are in the **device frame**. A move outside them returns **409** with the
+reason and a `sigStageLimit` toast; a jog stops at the limit. Homing, transport, sample loading and firmware
+stage scans are not checked. A 409 is the answer — do not disable the limit to get past it.
 
 ### 4.2 Cameras and detectors — `SettingsController`
 
@@ -361,6 +367,8 @@ Backends live in `model/managers/detectors/`: `HikCamManager`, `ToupCamManager`,
 - `setDetectorStreamParameters(detectorName, params)` (POST)
 - `getStreamDiagnostics(detectorName)` — FPS, drops, backpressure
 - `mjpeg_stream(startStream=True, detectorName)` — plain MJPEG over HTTP
+- `getLiveViewPresets` / `setLiveViewPresets(body{presets})` (POST) — the instrument's saved
+  live-view presets (objective, exposure, gain, stream settings), shared by all browsers
 - `getLongExposureInfo` / `stopLiveViewForLongExposure` — live view must yield for exposures
   longer than the stream period
 - `webrtc_offer(request)` (POST) / `webrtc_ice_candidate`
@@ -487,10 +495,20 @@ prescan and firmware stage scans, digital I/O, temperature; plan and format in
 - `startAufgabenJob(request{job, parameters, confirmed})` (POST) — refused while anything else
   drives the microscope; homing/objective steps need `confirmed`. **Ask first** on hardware.
 - `getAufgabenStatus()`, `pauseAufgabenJob`, `resumeAufgabenJob`, `finishAufgabenJob`,
-  `abortAufgabenJob(force)`, `answerAufgabenQuestion(answer)`
+  `abortAufgabenJob(force)`, `answerAufgabenQuestion(answer)`; `getAufgabenTimeline(since)` —
+  step start/end marks `[t_s, node, 1|0]` of the current or last run (poll with `since=next`)
 - `listAufgabenJobs`, `getAufgabenJob(name)`, `saveAufgabenJob(job)` (POST),
   `deleteAufgabenJob(name)`, `listAufgabenRuns(limit)`, `getAufgabenJobSchema()`
 - `importAufgabenUseq(sequence)` / `exportAufgabenUseq(job)` (POST) — useq-schema bridge
+- Macros: a saved job with `metadata.macro: true` (the "Macro button in Live View" switch) is a
+  button in the Live View sidebar. `listAufgabenMacros()` returns name, title, description and
+  parameters; `runAufgabenMacro(request{name, parameters, confirmed})` (POST) starts one with the
+  same refusals as `startAufgabenJob`. `listAufgabenMacroTemplates()` lists the bundled example
+  macros (autofocus, shutter) that the Live View "From template" button copies under a new name. A macro leaves the light as its steps leave it (all off
+  only when it is stopped or fails) and gets a run folder only when it takes frames. Any job
+  switches the camera to software trigger only when it takes frames. `AufgabenController` is
+  loaded on every setup, listed in `availableWidgets` or not. **Ask first** before running a
+  macro on hardware, as for any job.
 - Frontend: the "Aufgaben" app (`frontend/src/components/aufgaben/`) edits, validates, starts and
   follows jobs; `sigAufgabenEvent` carries state, step, log, question and task-progress events.
 - Peripherals for jobs: the `pumps`, `valves` and `digitalIO` setup blocks (managers in
@@ -584,6 +602,7 @@ Confirm before calling:
 - Triggers/GPIO: `setDigitalOut`, `setupDigitalOutPin`, `setTrigger(...)`, `sendTrigger`,
   `resetTriggerTable`, `getDigitalIn`, `actDigitalIn`
 - Lifecycle: `espRestart`, `restartCANDevice`, `stopImSwitch`, `restartImSwitch`,
+  `powerOffHost(reboot)` (POST; stops motors, lights off, then logind power-off/reboot on the host),
   `moveToSampleMountingPosition`
 - **OS upgrade (experimental, openUC2 OS only):** `startPalletUpgrade()` starts the host unit
   `imswitch-pallet-upgrade.service` over the mounted D-Bus socket, which runs
@@ -620,6 +639,7 @@ Present only when the setup enables them. Discover with `getAvailableControllers
 | `InLineHoloController`, `OffAxisHoloController`, `HoloController` | Digital holography |
 | `LightsheetController` | Light-sheet scanning |
 | `OPMController` | dvOPM digital twin (`model/opm`, model axes linked to stage axes by setup `opm.axisMap`; `moveOPMAxes(virtual=True)` shifts the drawing onto the real sheet without moving, `setOPMReference` resets it), launch ray trace, sample-X stage scan placed by the measured speed and camera frame counter, optional deskew. `moveOPMAxes` / `setOPMMedium` move linked axes: **ask first** on hardware; `force=True` skips only the twin's own travel check, never the stage's soft limits |
+| `SpectrometerController` | Grating spectrometer on a camera (`model/spectrometer`, setup block `spectrometer`, `docs/SPECTROMETER.md`): live spectrum (px / nm / cm⁻¹), dark, averaging, smile, calibration wizard (`startSpectrometerWizard` → `getSpectrometerWizard` → `continueSpectrometerWizard` for sources switched by hand → `applySpectrometerWizard`), grating alignment with a known line, HDF5/CSV export. The wizard and `setSpectrometerSource` switch lasers (at `laserPowerFraction` of the range) and LED-matrix channels: **ask first** on hardware, like a laser |
 | `GalvoScannerController` | Galvo scanning, incl. FLIM Labs bridge |
 | `SLMController` | SLM / DMD on an external display conjugate to the sample (`docs/SLM.md`): `showSLMPattern` / `showSLMImage` / `showSLMCameraMask` (mask drawn over the camera, warped with the camera→display affine), `runSLMAutoCalibration` / `computeSLMAffine`, `uploadSLMSequence` + `startSLMSequenceAcquisition` (one software-triggered camera frame per pattern, OME-TIFF). On hardware every `show*` is illumination: **ask first** like a laser |
 | `FLIMLabsController` | FLIM acquisition |

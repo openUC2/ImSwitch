@@ -117,7 +117,9 @@ class ImSwitchMicroscope:
         self._exp._beginTriggeredAcquisition()
 
     def end(self) -> None:
-        self._exp._endTriggeredAcquisition()
+        exp = self._get("Experiment")   # absent on setups without it; nothing to restore
+        if exp is not None:
+            exp._endTriggeredAcquisition()
 
     # -- what is there ----------------------------------------------------------
     def capabilities(self) -> Set[str]:
@@ -228,8 +230,20 @@ class ImSwitchMicroscope:
                                    illuminationChannel="", af_algorithm=algorithm,
                                    af_settle_time=settle_s, max_attempts=max_attempts)
 
-    def set_objective(self, slot: int) -> None:
-        self._get("Objective").moveToObjective(slot)
+    def set_objective(self, slot: int, timeout_s: float = 120) -> None:
+        # moveToObjective only starts the move (or refuses it): wait for the turret,
+        # so the next capture is not taken mid-sweep, and fail the step when refused
+        obj = self._get("Objective")
+        reply = obj.moveToObjective(slot)
+        if not reply.get("accepted"):
+            raise RuntimeError(f"objective slot {slot}: {reply.get('reason')}")
+        deadline = time.monotonic() + timeout_s
+        while obj._isMovingObjective:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"objective slot {slot}: still moving after {timeout_s} s")
+            time.sleep(0.05)
+        if obj._lastMoveError:
+            raise RuntimeError(f"objective slot {slot}: {obj._lastMoveError}")
 
     # -- scans -------------------------------------------------------------------------
     def fast_stage_scan(self, x0_um, y0_um, nx, ny, step_x_um, step_y_um, sources, intensities,

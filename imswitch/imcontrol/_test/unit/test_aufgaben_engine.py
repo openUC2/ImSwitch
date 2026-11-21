@@ -207,6 +207,92 @@ def test_ask_first_steps_need_confirmation():
     assert _run(job).state == "finished"
 
 
+def test_macro_keeps_its_light_unless_stopped():
+    pulse = [{"id": "on", "task": "set_illumination",
+              "params": {"source": "LED", "intensity": 5, "on": True}},
+             {"id": "hold", "task": "wait", "params": {"seconds": "${param.hold_s}"}}]
+    job = _job(pulse, parameters={"hold_s": {"type": "number", "default": 0}})
+    assert not A.validate(job).uses_camera
+    assert A.validate(_job([{"id": "c", "task": "capture", "params": {
+        "channels": [{"config": "LED", "exposure": 5}]}}])).uses_camera
+    hw = SimulatedMicroscope(sources=SOURCES)
+    _run(job, hw)   # a job ends with all light off
+    assert ("all_off",) in hw.calls and not hw.on["LED"]
+    hw = SimulatedMicroscope(sources=SOURCES)
+    assert _run(job, hw, lights_off_at_end=False).state == "finished"
+    assert hw.on["LED"] and ("all_off",) not in hw.calls
+    run = Run(job, hw, parameters={"hold_s": 30}, lights_off_at_end=False)
+    run.start()
+    assert _wait_for(lambda: run.current == "hold")
+    run.abort()   # stopped half way: everything off, as for any job
+    run.join(5)
+    assert run.state == "aborted" and not hw.on["LED"]
+
+
+@pytest.mark.parametrize("slot, drive_s", [("open", None), ("beta", 0.07), ("shut", 0.14)])
+def test_shutter_turret_homes_then_drives_to_the_slot(slot, drive_s):
+    hw = SimulatedMicroscope(sources=("LED", "LASER"))
+    times = {"home_s": 0.2, "beta_s": 0.07, "shut_s": 0.14, "pause_s": 0, "drive": 500}
+    run = Run(A.examples()["shutter_turret_macro"], hw,
+              parameters={"position": slot, **times}, lights_off_at_end=False)
+    run.run()
+    assert run.state == "finished"
+    pins = [c[1:] for c in hw.calls if c[0] == "light"]
+    want = [("LASER", None, False), ("LED", 500, True), ("LED", None, False)]
+    if drive_s:   # never both pins on: B is off before A turns on
+        want += [("LASER", 500, True), ("LASER", None, False)]
+    assert pins == want and not any(hw.on.values())
+    spans = _durations(run.timeline)
+    assert spans["home"][0] == pytest.approx(0.2, abs=0.05)
+    if drive_s:
+        assert spans["drive_to_slot"][0] == pytest.approx(drive_s, abs=0.05)
+    else:
+        assert "drive_to_slot" not in spans
+
+
+def _durations(marks):
+    """{node: [duration, ...]} from the run's timeline marks."""
+    out, start = {}, {}
+    for t, node, begin in marks:
+        if begin:
+            start[node] = t
+        else:
+            out.setdefault(node, []).append(t - start.pop(node))
+    return out
+
+
+def test_expressions_inside_nested_params():
+    stack = {"id": "stack", "task": "zstack",
+             "params": {"plan": {"range": "${param.range_um}", "step": 1}},
+             "body": [{"id": "img", "task": "capture", "params": {"channels": [
+                 {"config": "LED", "intensity": 5, "exposure": "${param.exposure_ms}"}]}}]}
+    job = _job([stack], parameters={"range_um": {"type": "number", "default": 2},
+                                    "exposure_ms": {"type": "number", "default": 7}})
+    assert A.validate(job).ok
+    hw = SimulatedMicroscope(sources=SOURCES)
+    assert _run(job, hw, parameters={"range_um": 4}).state == "finished"
+    snaps = [c for c in hw.calls if c[0] == "snap"]
+    assert len(snaps) == 5 and {c[3] for c in snaps} == {7}   # 5 planes over 4 µm, 7 ms
+    stack["params"]["plan"]["step"] = "${param.nope}"
+    assert any("param.nope" in i.message for i in A.validate(_job([stack])).errors)
+
+
+def test_timeline_marks_every_step_start_and_end():
+    job = _job([{"id": "loop", "task": "repeat", "params": {"count": 3}, "body": [
+        {"id": "hold", "task": "wait", "params": {"seconds": 0.01}}]}])
+    run = _run(job)
+    t = run.timeline_since(0)
+    assert [r["id"] for r in t["rows"]] == ["loop", "hold"] and t["rows"][1]["depth"] == 1
+    marks = [(node, start) for _, node, start in t["events"]]
+    assert marks == [("loop", 1)] + [("hold", 1), ("hold", 0)] * 3 + [("loop", 0)]
+    times = [e[0] for e in t["events"]]
+    assert times == sorted(times) and t["now"] >= times[-1] and t["next"] == 8
+    time.sleep(0.05)   # a finished run's clock stands still
+    assert run.status()["elapsed_s"] == t["now"] == run.timeline_since(0)["now"]
+    later = run.timeline_since(6)   # incremental: only the marks after index 6, no rows
+    assert later["events"] == t["events"][6:] and "rows" not in later
+
+
 def test_parameters_are_checked():
     job = _job([], parameters={"k": {"type": "integer", "default": 2, "minimum": 1}})
     with pytest.raises(ValueError, match="unknown"):

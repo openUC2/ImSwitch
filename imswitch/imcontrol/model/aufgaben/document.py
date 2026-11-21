@@ -3,7 +3,8 @@
 A job is a tree of nodes that runs top to bottom. Container nodes (loops,
 conditions, blocks) hold child nodes in ``body``. Resources are declared once at
 the top and referenced by name with an ``"@name"`` string. ``"${...}"`` strings
-are expressions evaluated at run time.
+are expressions evaluated at run time, also inside nested dicts and lists of a
+node's params (e.g. a z plan's ``range``).
 
 Acquisition geometry reuses useq-schema models unchanged: positions, well-plate
 plans, grid plans, z plans, time plans and channels are the same objects that
@@ -16,7 +17,8 @@ to another host application unchanged.
 """
 from __future__ import annotations
 
-from typing import Annotated, Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
+from typing import (Annotated, Any, Callable, Dict, Iterator, List, Literal, Optional, Tuple,
+                    Union)
 
 import useq
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -318,3 +320,23 @@ def expression(value: Any) -> Optional[str]:
     if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
         return value[2:-1].strip()
     return None
+
+
+def map_expressions(value: Any, fn: Callable[[str], Any]) -> Any:
+    """``value`` with every ``"${...}"`` string replaced by ``fn(text)``, nested dicts
+    and lists included."""
+    text = expression(value)
+    if text is not None:
+        return fn(text)
+    if isinstance(value, dict):
+        return {k: map_expressions(v, fn) for k, v in value.items()}
+    if isinstance(value, list):
+        return [map_expressions(v, fn) for v in value]
+    return value
+
+
+def expressions_in(value: Any) -> List[str]:
+    """Every expression text in ``value``, nested dicts and lists included."""
+    found: List[str] = []
+    map_expressions(value, found.append)
+    return found

@@ -14,10 +14,12 @@ from pydantic import TypeAdapter, ValidationError
 
 from . import expressions
 from .control import CONTROL_SPECS, MOVING_LOOPS, POSITION_LOOPS, ControlSpec
-from .document import Job, Node, expression, resource_ref
+from .document import Job, Node, expression, expressions_in, resource_ref
 from .registry import FRAME_STEPS, REGISTRY, TaskSpec
 
 FROM_KEY = "$from"  # node param that pulls defaults from a resource
+CAPTURE_NODES = ("capture", "loop_channels", "mda", "create_focus_map")
+CAMERA_CATEGORIES = ("Focus", "Stage scan", "Scripts")   # task categories that take frames
 
 
 @dataclass
@@ -34,6 +36,7 @@ class Report:
     moves_xy: bool = False
     moves_z: bool = False
     emits_light: bool = False
+    uses_camera: bool = False   # the run takes frames, so it needs the camera to itself
 
     @property
     def errors(self) -> List[Issue]:
@@ -46,7 +49,8 @@ class Report:
     def as_dict(self) -> dict:
         return {"ok": self.ok, "issues": [i.__dict__ for i in self.issues],
                 "ask_first": self.ask_first, "moves_xy": self.moves_xy,
-                "moves_z": self.moves_z, "emits_light": self.emits_light}
+                "moves_z": self.moves_z, "emits_light": self.emits_light,
+                "uses_camera": self.uses_camera}
 
 
 def _field_types(model) -> Dict[str, Tuple[Any, bool]]:
@@ -157,8 +161,7 @@ class _Validator:
                 self.check_value(node, spec, name, annotation, params[name], scope)
             elif required:
                 self.err(node.id, f"{node.task} needs {name!r}")
-        literal = not any(isinstance(v, str) and (resource_ref(v) or expression(v))
-                          for v in params.values())
+        literal = not any(resource_ref(v) or expressions_in(v) for v in params.values())
         if spec and literal:
             try:
                 model.model_validate(params)
@@ -177,9 +180,10 @@ class _Validator:
         if ref is not None:
             self.check_ref(node, spec, name, ref)
             return
-        text = expression(value)
-        if text is not None:
-            self.check_expr(node.id, text, scope)
+        texts = expressions_in(value)   # types are known only once these are evaluated
+        if texts:
+            for text in texts:
+                self.check_expr(node.id, text, scope)
             return
         try:
             TypeAdapter(annotation).validate_python(value)
@@ -232,14 +236,15 @@ class _Validator:
             r.moves_xy |= node.task != "zstack"
             r.moves_z |= node.task in ("zstack", "loop_positions") or \
                 node.params.get("focus_map") is not None
-        if node.task in ("capture", "loop_channels", "create_focus_map"):
-            r.emits_light = True
+        if node.task in CAPTURE_NODES:
+            r.emits_light = r.uses_camera = True
         if node.task in ("create_focus_map", "move_to_focus_surface"):
             r.moves_z = True
             r.moves_xy |= node.task == "create_focus_map"
         if tspec is None:
             return
         f = tspec.flags
+        r.uses_camera |= tspec.category in CAMERA_CATEGORIES
         r.moves_xy |= f.moves_xy
         r.moves_z |= f.moves_z
         r.emits_light |= f.emits_light

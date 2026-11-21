@@ -477,6 +477,17 @@ def home_status(reply):
     return f"error: {reply!r}"
 
 
+def travel_limits(start, end, margin, min_span=10000.0):
+    """Device-frame [lo, hi] from the homed position ``start`` and the position ``end``
+    where the far end switch stopped the axis, ``margin`` inside the switch. (None, None)
+    when no switch was hit (``end`` None) or the span is implausibly short (switch still
+    pressed, wrong polarity)."""
+    if end is None or abs(end - start) < max(min_span, 2 * margin):
+        return None, None
+    far = end - math.copysign(margin, end - start)
+    return min(start, far), max(start, far)
+
+
 def _demo():
     rng = np.random.default_rng(0)
     # disc detection incl. a disc cut by the frame edge

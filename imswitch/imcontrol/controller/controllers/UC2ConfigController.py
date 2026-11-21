@@ -1660,11 +1660,14 @@ class UC2ConfigController(CanNetworkApiMixin, DisplayApiMixin, ImConWidgetContro
             motorSettings = {}
             for ax, current in axisSettings.items():
                 motion, homing = current.get('motion', {}), current.get('homing', {})
+                limits = current.get('limits', {})
                 motorSettings[f'stepsize{ax}'] = motion.get('stepSize', 1)
                 motorSettings[f'maxSpeed{ax}'] = motion.get('maxSpeed', 10000)
                 motorSettings[f'initialSpeed{ax}'] = motion.get('speed', 10000)  # current speed
-                motorSettings[f'min{ax}'] = motion.get('minPos')  # None (= no limit) is not saved
+                motorSettings[f'min{ax}'] = motion.get('minPos')  # None (= no limit) removes the key
                 motorSettings[f'max{ax}'] = motion.get('maxPos')
+                motorSettings[f'limit{ax}enabled'] = bool(limits.get('enabled', False))
+                motorSettings[f'hardLimitsEnabled{ax}'] = bool(limits.get('hardLimitsEnabled', True))
                 motorSettings[f'backlash{ax}'] = motion.get('backlash', 0)
                 motorSettings[f'homeSpeed{ax}'] = homing.get('speed', 15000)
                 motorSettings[f'homeDirection{ax}'] = homing.get('direction', -1)
@@ -1712,9 +1715,12 @@ class UC2ConfigController(CanNetworkApiMixin, DisplayApiMixin, ImConWidgetContro
                 # Update the positioner's managerProperties in setupInfo
                 if hasattr(self._setupInfo, 'positioners') and positionerName in self._setupInfo.positioners:
                     # Update existing properties
+                    props = self._setupInfo.positioners[positionerName].managerProperties
                     for key, value in motorSettings.items():
                         if value is not None:
-                            self._setupInfo.positioners[positionerName].managerProperties[key] = value
+                            props[key] = value
+                        else:
+                            props.pop(key, None)
 
                     # Save the updated setupInfo to disk
                     import imswitch.imcontrol.model.configfiletools as configfiletools

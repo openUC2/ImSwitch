@@ -106,6 +106,8 @@ class CommunicationChannel(SignalInterface):
 
     sigDiskFull = Signal(dict)  # (diskInfoDict) - storage is (nearly) full; tell the user to free space
 
+    sigStageLimit = Signal(dict)  # ({positioner, message}) - a move into the no-go area was refused
+
     sigUpdateLaserPower = Signal(dict)  # (laserPowerDict) - updates laser power values from device callbacks
 
     sigUpdateCANDevices = Signal(list)  # (canDevicesList) - updates CAN device scan results from callbacks

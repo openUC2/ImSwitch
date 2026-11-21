@@ -48,6 +48,9 @@ DEFAULT_SETTINGS = {
     "overviewIlluminationValue": 60,  # overview frames by room light first (open rig); the LED is practically off below ~100
     "overviewExposureMs": 10.0,  # else full LED, overview camera at this manual exposure (then /2, x2): auto exposure saturates the holes
     "homeTurret": True,
+    "measureTravel": True,       # X/Y travel range up to the far end switches = no-go area beyond
+    "travelMaxUm": 200000,       # give up (no far end switch) after this distance from the home switch
+    "travelMarginUm": 500,       # the limit stays this far inside the far end switch
     "secondObjective": True,
     "searchRadiusUm": 4000,      # plate placement tolerance around the nominal via
     "searchRadius2Um": 2000,     # parcentricity tolerance of the second objective (Pi rig 2026-11-02: ~1.5 mm)
@@ -71,6 +74,7 @@ DEFAULT_SETTINGS = {
 STEPS = [  # (name, title, critical)
     ("preflight", "Preflight: cameras, light, stage", True),
     ("homing", "Home Z, X, Y and turret (verified)", True),
+    ("travel", "Travel range X/Y (end switches)", False),
     ("axes", "Motion directions (overview camera)", False),
     ("objective0", "First objective: find via, focus, affine", True),
     ("offset", "Stage offset: stage = plate coordinates", True),
@@ -360,6 +364,41 @@ class FrameCalibrationController(ImConWidgetController):
         if oc is not None:
             oc._currentObjective = None   # turret re-referenced: force the next slot move
         return "homed " + ", ".join(out)
+
+    def _step_travel(self, s):
+        """X/Y travel range in the device frame: from the homed position to the far end
+        switch (firmware hard limit) minus a margin. Stored as min/max<ax> with
+        limit<ax>enabled in the setup, so move() and the jog refuse the no-go area.
+        Z is never probed (it would drive towards the sample): its limits come from the
+        configuration."""
+        stage = self._stageManager()
+        if not s["measureTravel"] or not hasattr(stage, "probeTravelEnd"):
+            return "skipped"
+        props = self._setupInfo.positioners[stage.name].managerProperties
+        margin, out = float(s["travelMarginUm"]), []
+        for ax in "XY":
+            self._checkAbort()
+            try:
+                start, end = stage.probeTravelEnd(ax, float(s["travelMaxUm"]), backoffUm=margin)
+            except Exception as e:
+                self._warn(f"{ax} travel not measured: {e}")
+                continue
+            lo, hi = fct.travel_limits(start, end, margin)
+            if lo is None:
+                seen = (f"stopped after {abs(end - start):.0f} µm (too short)" if end is not None
+                        else f"no end switch within {float(s['travelMaxUm']):.0f} µm")
+                self._warn(f"{ax}: {seen} - limits left unchanged; check the end switch and its polarity")
+                continue
+            stage.setTravelLimits(ax, lo, hi, enabled=True)
+            props.update({f"min{ax}": lo, f"max{ax}": hi, f"limit{ax}enabled": True})
+            self._ctx.setdefault("travel", {})[ax] = [lo, hi]
+            out.append(f"{ax} {lo:.0f} .. {hi:.0f} µm")
+        if not out:
+            raise StepError("no travel range measured")
+        self._saveSetup()
+        z = "Z from the config: " + (f"{stage.minPos['Z']:.0f} .. {stage.maxPos['Z']:.0f} µm"
+                                     if stage.limitEnabled.get("Z") else "no limits")
+        return "device frame " + ", ".join(out) + "; " + z
 
     def _step_axes(self, s):
         """Track the round hole in the overview camera for +/- moves on each axis. A
@@ -1497,7 +1536,7 @@ class FrameCalibrationController(ImConWidgetController):
                 "objectives": {str(k): {"metrics": r["metrics"], "rmsPx": r["rmsPx"], "z": r["z"]} for k, r in c["obj"].items()},
                 **{k: c[k] for k in ("offset", "placement", "backlash", "xyOffsets", "overview", "overviewJ", "focus", "plateShift",
                                      "pixelSizeMeasured",
-                                     "repeatUm", "switchBackUm", "verifyUm") if k in c}}
+                                     "repeatUm", "switchBackUm", "verifyUm", "travel") if k in c}}
 
     def _fc(self):
         if self._setupInfo.frameCalibration is None:

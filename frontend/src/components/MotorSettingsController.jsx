@@ -196,7 +196,7 @@ const AxisSettingsPanel = ({ axis, settings, onChange, onSave, isSaving, baseURL
                     e.target.value ? parseFloat(e.target.value) : null
                   )
                 }
-                helperText="Leave empty for no limit"
+                helperText="Device frame µm (stage offset not applied); empty = no limit"
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
@@ -213,7 +213,7 @@ const AxisSettingsPanel = ({ axis, settings, onChange, onSave, isSaving, baseURL
                     e.target.value ? parseFloat(e.target.value) : null
                   )
                 }
-                helperText="Leave empty for no limit"
+                helperText="Device frame µm; measured by the FRAME calibration"
               />
             </Grid>
           </Grid>
@@ -356,6 +356,17 @@ const AxisSettingsPanel = ({ axis, settings, onChange, onSave, isSaving, baseURL
         </AccordionSummary>
         <AccordionDetails>
           <Grid container spacing={2}>
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={limits.enabled ?? false}
+                    onChange={(e) => handleChange("limits", "enabled", e.target.checked)}
+                  />
+                }
+                label="Refuse moves and stop jogs outside Min/Max Position (travel range)"
+              />
+            </Grid>
             <Grid item xs={12}>
               <Divider sx={{ my: 1 }} />
               <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>

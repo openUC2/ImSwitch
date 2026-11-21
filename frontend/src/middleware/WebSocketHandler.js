@@ -884,6 +884,15 @@ const WebSocketHandler = () => {
           console.error("Error in sigHomingState handler:", error);
         }
         //----------------------------------------------
+      } else if (dataJson.name === "sigStageLimit") {
+        // A move or jog into the no-go area outside the travel limits was refused.
+        dispatch(
+          notificationSlice.setNotification({
+            message: dataJson.args?.p0?.message || "Move refused: outside the travel range",
+            type: "warning",
+          }),
+        );
+        //----------------------------------------------
       } else if (dataJson.name === "sigDiskFull") {
         // Storage is (nearly) full: warn the user with a persistent error snackbar.
         try {

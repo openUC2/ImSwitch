@@ -25,6 +25,8 @@ class VirtualStageManager(PositionerManager):
             "Z": positionerInfo.stageOffsets.get('stageOffsetPositionZ', 0),
             "A": positionerInfo.stageOffsets.get('stageOffsetPositionA', 0),
         }
+        # Travel limits (no-go area), device frame, as on ESP32StageManager
+        self._initTravelLimits(positionerInfo.managerProperties, ("X", "Y", "Z", "A"))
         # Simulated strobed sweep (see startStrobeSweep).
         self._strobeCallbacks = []
         self._strobeThread = None
@@ -55,6 +57,11 @@ class VirtualStageManager(PositionerManager):
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=1):
         # For absolute moves the caller passes user coordinates; the simulated
         # device sees user + offset (same convention as ESP32StageManager).
+        axes = list(axis) if axis in ("XY", "XYZ") else [axis]
+        values = list(value) if len(axes) > 1 else [value]
+        offsets = self.stageOffsetPositions
+        self.checkTravelLimits({ax: (v if is_absolute else self._position.get(ax, 0) + v) + offsets.get(ax, 0)
+                                for ax, v in zip(axes, values)})
         before = dict(self._positioner.position)
         ox = self.stageOffsetPositions.get("X", 0)
         oy = self.stageOffsetPositions.get("Y", 0)

@@ -8,6 +8,7 @@ from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import initLogger
 from typing import Optional
 from imswitch.imcontrol.model import configfiletools
+from imswitch.imcontrol.model.managers.positioners.PositionerManager import StageLimitError
 
 
 class PositionerMoveResult(BaseModel):
@@ -120,6 +121,8 @@ class PositionerController(ImConWidgetController):
             if dist is None:
                 self.__logger.info(f"Moving {positionerName}, axis {axis}, at speed {str(speed)}")
                 self._master.positionersManager[positionerName].moveForeverByAxis(speed=speed, axis=axis, is_stop=abs(speed) == 0)
+        except StageLimitError:
+            raise   # refused: never retry as another move
         except Exception as e:
             # if the positioner does not have the move method, use the default move method
             self._logger.error(e)
@@ -212,7 +215,10 @@ class PositionerController(ImConWidgetController):
         if not positionerName or positionerName not in self._master.positionersManager:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         step = self._stepSizes.get(positionerName, self.DEFAULT_STEP_UM)
-        self.move(positionerName, axis, sign * step, isAbsolute=False, isBlocking=False)
+        try:
+            self.move(positionerName, axis, sign * step, isAbsolute=False, isBlocking=False)
+        except StageLimitError as e:
+            raise HTTPException(status_code=409, detail=str(e))
 
     def setSpeed(self, positionerName, axis, speed=(1000, 1000, 1000)):
         if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
@@ -355,6 +361,8 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         try: # uc2 only
             self.move(positionerName, axis, dist, isAbsolute=isAbsolute, isBlocking=isBlocking, speed=speed)
+        except StageLimitError as e:
+            raise HTTPException(status_code=409, detail=str(e))
         except Exception as e:
             self.__logger.error(e)
             self.move(positionerName, axis, dist)
@@ -409,8 +417,11 @@ class PositionerController(ImConWidgetController):
             f"Moving {positionerName} {'to' if isAbsolute else 'by'} "
             f"{targets} as {[g[0] for g in groups]}"
         )
-        for axis, value in groups:
-            self._moveAxisGroup(manager, axis, value, isAbsolute, isBlocking, speed)
+        try:
+            for axis, value in groups:
+                self._moveAxisGroup(manager, axis, value, isAbsolute, isBlocking, speed)
+        except StageLimitError as e:
+            raise HTTPException(status_code=409, detail=str(e))
 
         return PositionerMoveResult(
             positionerName=positionerName,

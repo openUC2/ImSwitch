@@ -2,6 +2,12 @@ from abc import ABC, abstractmethod
 
 from typing import Dict, List, Optional
 
+INF = float("inf")
+
+
+class StageLimitError(ValueError):
+    """A move target lies in the no-go area outside an axis' travel limits."""
+
 
 class PositionerManager(ABC):
     """ Abstract base class for managers that control positioners. Each type of
@@ -153,6 +159,49 @@ class PositionerManager(ABC):
     def moveToSampleMountingPosition(self) -> None:
         """ Move to sample mounting position. """
         pass
+
+    # ------------------------------------------------------------------ #
+    # Travel limits (no-go area). Device frame: user position + stage offset,
+    # so moving the user origin (setStageOffsetAxis, FRAME calibration) does
+    # not move the window. Setup keys: min<ax>, max<ax> (µm), limit<ax>enabled.
+    # ------------------------------------------------------------------ #
+
+    def _initTravelLimits(self, managerProperties, axes):
+        def num(key, default):
+            v = managerProperties.get(key)
+            return default if v is None else float(v)
+        self.minPos = {ax: num(f'min{ax}', -INF) for ax in axes}
+        self.maxPos = {ax: num(f'max{ax}', INF) for ax in axes}
+        self.limitEnabled = {ax: bool(managerProperties.get(f'limit{ax}enabled', False))
+                             for ax in axes}
+
+    def setTravelLimits(self, axis, minPos=None, maxPos=None, enabled=None):
+        """Set an axis' travel limits (device frame, µm; None = unchanged)."""
+        if minPos is not None:
+            self.minPos[axis] = float(minPos)
+        if maxPos is not None:
+            self.maxPos[axis] = float(maxPos)
+        if enabled is not None:
+            self.limitEnabled[axis] = bool(enabled)
+
+    def _limitBlocked(self, message):
+        comm = getattr(self, '_commChannel', None)
+        signal = getattr(comm, 'sigStageLimit', None)
+        if signal is not None:
+            signal.emit({"positioner": self.name, "message": message})
+        return StageLimitError(message)
+
+    def checkTravelLimits(self, deviceTargets):
+        """Raise StageLimitError (and tell the UI) when a device-frame target
+        {axis: µm} lies outside an enabled axis' [min, max]."""
+        for ax, target in deviceTargets.items():
+            if not getattr(self, 'limitEnabled', {}).get(ax):
+                continue
+            lo, hi = self.minPos[ax], self.maxPos[ax]
+            if not lo <= target <= hi:
+                raise self._limitBlocked(
+                    f"{self.name} {ax}: move refused, target {target:.0f} µm (device frame) is "
+                    f"outside the travel range [{lo:.0f}, {hi:.0f}] µm")
 
     def getDevicePositionAxis(self, axis="X"):
         """Raw device position (no offset applied) for the given axis.

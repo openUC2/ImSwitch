@@ -304,6 +304,11 @@ offset. `getPositionerPositions` gives the user frame; `getDevicePositionAxis` g
 device frame. Absolute moves are interpreted in the user frame. If the two disagree,
 investigate the offset before moving.
 
+**Travel limits.** `min<ax>` / `max<ax>` / `limit<ax>enabled` (setup managerProperties, measured for X/Y by
+the FRAME calibration step `travel`) are in the **device frame**. A move outside them returns **409** with the
+reason and a `sigStageLimit` toast; a jog stops at the limit. Homing, transport, sample loading and firmware
+stage scans are not checked. A 409 is the answer — do not disable the limit to get past it.
+
 ### 4.2 Cameras and detectors — `SettingsController`
 
 | Function | Notes |

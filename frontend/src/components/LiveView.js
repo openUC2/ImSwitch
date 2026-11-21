@@ -59,6 +59,7 @@ import { setNotification } from "../state/slices/NotificationSlice";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
 import ExtendedLEDMatrixController from "./ExtendedLEDMatrixController.jsx";
 import AufgabenMacros from "./aufgaben/AufgabenMacros.jsx";
+import DetectorParameters from "./DetectorParameters";
 
 /*
 <ImageViewport
@@ -727,6 +728,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
     <StreamControls
       hostIP={hostIP}
       hostPort={hostPort}
+      showDetectorParameters={compactLayout}
       isStreamRunning={isStreamRunning}
       isLongExposure={isLongExposure}
       exposureMs={exposureMs}
@@ -1028,6 +1030,12 @@ export default function LiveView({ setFileManagerInitialPath }) {
           >
             <MenuIcon />
           </IconButton>
+        </Box>
+
+        {/* Exposure, gain, binning right above the image: on a large screen the
+            Camera card below the image is out of view while you watch it. */}
+        <Box data-tour="camera-controls" sx={{ mb: 1 }}>
+          <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
         </Box>
 
         {/* Live View Container */}

@@ -47,6 +47,8 @@ export default function StreamControls({
   isLongExposure = false,
   exposureMs = 0,
   longExposureThresholdMs = 2000,
+  // false: the caller shows the exposure row elsewhere (desktop: above the image)
+  showDetectorParameters = true,
   onToggleStream,
   onSnap,
   onSnapAndDownload,
@@ -486,13 +488,15 @@ export default function StreamControls({
           </Tooltip>
         </Box>
 
-        <Box data-tour="camera-controls">
-          <DetectorParameters
-            hostIP={hostIP}
-            hostPort={hostPort}
-            refreshKey={paramsRefresh}
-          />
-        </Box>
+        {showDetectorParameters && (
+          <Box data-tour="camera-controls">
+            <DetectorParameters
+              hostIP={hostIP}
+              hostPort={hostPort}
+              refreshKey={paramsRefresh}
+            />
+          </Box>
+        )}
 
         {/* Named bundles of objective + exposure + gain + stream settings. */}
         <StreamPresets />

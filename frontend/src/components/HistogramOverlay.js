@@ -10,6 +10,7 @@ export default function HistogramOverlay({
   y,
   options,
   dataObj,
+  children, // e.g. the display-range control, drawn under the bars
 }) {
   if (!active || !visible) return null;
 
@@ -23,7 +24,6 @@ export default function HistogramOverlay({
         top: 10,
         left: 10,
         width: 250,
-        height: 200,
         backgroundColor: "rgba(0,0,0,0.7)",
         zIndex: 5,
         p: 1,
@@ -31,7 +31,9 @@ export default function HistogramOverlay({
       }}
     >
       {hasData ? (
-        <Bar data={dataObj} options={options} />
+        <Box sx={{ height: 150 }}>
+          <Bar data={dataObj} options={options} />
+        </Box>
       ) : (
         <Typography sx={{ color: "#fff", fontSize: "12px" }}>
           Waiting for histogram data...
@@ -43,6 +45,7 @@ export default function HistogramOverlay({
           </Typography>
         </Typography>
       )}
+      {children}
     </Box>
   );
 }

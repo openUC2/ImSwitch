@@ -177,14 +177,14 @@ export const APP_REGISTRY = {
 
   wellSelector: {
     id: "wellSelector",
-    name: "Well Plate",
+    name: "Multi-dimensional acquisition",
     description:
-      "Multi-well plate navigation and selection. Choose wells for automated experiments and sample screening.",
+      "Plan XYZ, time and channel acquisitions on well plates, slides and samples: pick wells or positions, tile, z-stack and run.",
     category: APP_CATEGORIES.APPS,
     icon: GridOnIcon,
     enabled: false,
     essential: false,
-    keywords: ["well", "plate", "multiwell", "selection", "screening"],
+    keywords: ["well", "plate", "multiwell", "selection", "screening", "mda", "acquisition", "slide", "tiling"],
     pluginId: "WellPlate",
   },
 

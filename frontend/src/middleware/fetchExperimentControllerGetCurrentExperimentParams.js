@@ -1,6 +1,8 @@
 import * as parameterRangeSlice from "../state/slices/ParameterRangeSlice.js";
 
 import apiGetCurrentExperimentParams from "../backendapi/apiExperimentControllerGetCurrentExperimentParams.js";
+import apiLaserControllerGetLaserNames from "../backendapi/apiLaserControllerGetLaserNames.js";
+import apiLaserControllerGetLaserValueRanges from "../backendapi/apiLaserControllerGetLaserValueRanges.js";
 
   
 
@@ -46,8 +48,27 @@ const fetchExperimentControllerGetCurrentExperimentParams = (dispatch) => {
       dispatch(parameterRangeSlice.setIsDarkfieldpossible(data.isDarkfieldpossible || false));
 
     })
-    .catch((err) => {
-      console.error("Failed to fetch experiment parameters", err);
+    .catch(async (err) => {
+      // Setups without the Experiment widget (e.g. a lightsheet) have no
+      // ExperimentController: take the channels from the LaserController instead,
+      // otherwise the UI keeps the persisted list of the previous setup.
+      console.warn("No experiment parameters, using LaserController for the channel list", err);
+      try {
+        const names = await apiLaserControllerGetLaserNames();
+        const ranges = await Promise.all(
+          names.map((n) => apiLaserControllerGetLaserValueRanges(n).catch(() => [0, 1023])),
+        );
+        dispatch(parameterRangeSlice.setIllumination(names));
+        dispatch(parameterRangeSlice.setIlluSources(names));
+        dispatch(parameterRangeSlice.setIlluSourceKinds(names.map(() => "default")));
+        dispatch(parameterRangeSlice.setSyntheticChannels([]));
+        dispatch(parameterRangeSlice.setLedMatrixInfo(null));
+        dispatch(parameterRangeSlice.setIlluSourceMinIntensities(ranges.map((r) => r?.[0] ?? 0)));
+        dispatch(parameterRangeSlice.setIlluSourceMaxIntensities(ranges.map((r) => r?.[1] ?? 1023)));
+        dispatch(parameterRangeSlice.setilluIntensities(names.map(() => 0)));
+      } catch (laserErr) {
+        console.error("Failed to fetch the laser channels", laserErr);
+      }
     });
 };
 

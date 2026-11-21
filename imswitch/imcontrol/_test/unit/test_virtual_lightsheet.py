@@ -1,4 +1,4 @@
-"""Virtual lightsheet: stage moves the sample, A defocuses, the illumination NA sets the sheet."""
+"""Virtual lightsheet: X/Y/A move the sample, Z (objective) defocuses, the illumination NA sets the sheet."""
 import cv2
 import numpy as np
 import pytest
@@ -28,7 +28,7 @@ def test_objective_out_of_focus_blurs(sim):
     def sharpness(frame):   # edge energy above the shot noise
         smooth = cv2.GaussianBlur(frame.astype(np.float32), (0, 0), 2)
         return cv2.Laplacian(smooth, cv2.CV_32F).var()
-    assert sharpness(sim.render({"A": 0}, 1024, 10)) > 3 * sharpness(sim.render({"A": 80}, 1024, 10))
+    assert sharpness(sim.render({"Z": 0}, 1024, 10)) > 3 * sharpness(sim.render({"Z": 80}, 1024, 10))   # Z: objective
 
 
 def test_illumination_na_sets_the_sheet():

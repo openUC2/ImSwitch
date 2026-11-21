@@ -5,7 +5,7 @@ and y (rows). The sheet travels along +x (enters at the left edge of the image),
 thin in z and wide in y, and has its waist in the centre of the image at z = 0.
 
 Stage (configurable): X, Y move the sample in the image plane, ``sampleScanAxis``
-(default Z) pushes it through the sheet, ``objectiveAxis`` (default A) moves the
+(default A, as on the openUC2 rig) pushes it through the sheet, ``objectiveAxis`` (default Z) moves the
 detection objective (focal plane at z = objective + focusOffsetUm).
 A sample point s therefore shows up at lab position s + (X, Y, scan).
 
@@ -35,8 +35,8 @@ DEFAULTS = dict(
     sheetWaistOffsetUm=0.0,          # waist position along x relative to the image centre
     attenuationUm=1500.0,            # illumination 1/e decay into the sample (scattering)
     focusOffsetUm=0.0,               # objective focal plane at z = A + this (0: in focus at A = 0)
-    sampleScanAxis="Z",              # stage axis that moves the sample through the sheet
-    objectiveAxis="A",               # stage axis that moves the detection objective
+    sampleScanAxis="A",              # stage axis that moves the sample through the sheet (openUC2: A)
+    objectiveAxis="Z",               # stage axis that moves the detection objective
     sampleSizeUm=(1500.0, 1500.0, 800.0),
     nSpheroids=40, nBeads=30000, seed=0,
     brightness=150.0,                # counts per ms at full laser for a cell in the sheet waist
@@ -118,7 +118,7 @@ class LightsheetSimulator:
         p = self.p
         W, H, px = self.width, self.height, self.pixelUm
         X, Y = float(position.get("X", 0.0)), float(position.get("Y", 0.0))
-        Z = float(position.get(p["sampleScanAxis"], 0.0))
+        Z = float(position.get(p["sampleScanAxis"], 0.0))   # Z: sample through the sheet, A: objective (lab names)
         A = float(position.get(p["objectiveAxis"], 0.0))
         x_lab = (np.arange(W, dtype=np.float32) - W / 2 + 0.5) * px
         w = self._sheetThickness(x_lab)

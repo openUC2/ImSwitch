@@ -479,6 +479,12 @@ function App() {
   // Get Vizarr viewer state
   const vizarrViewerState = useSelector(vizarrViewerSlice.getVizarrViewerState);
 
+  // Any openViewer dispatch (e.g. the experiment's "Open Vizarr (offline)") shows the viewer.
+  const lastViewerOpen = vizarrViewerState.recentFiles[0]?.timestamp;
+  useEffect(() => {
+    if (lastViewerOpen) setSelectedPlugin("VizarrViewer");
+  }, [lastViewerOpen]);
+
   // Handler to close Vizarr viewer
   const handleCloseVizarr = () => {
     dispatch(vizarrViewerSlice.closeViewer());

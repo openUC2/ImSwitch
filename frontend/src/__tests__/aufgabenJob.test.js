@@ -19,6 +19,7 @@ import {
   catalogById,
   duplicateNode,
   paramSummary,
+  explainExpression,
 } from "../utils/aufgabenJob";
 
 const byId = catalogById(catalog);
@@ -137,4 +138,30 @@ test("a code parameter gets the code editor", () => {
     schema: { properties: { code: { type: "string", "x-widget": "code" } }, required: ["code"] },
   };
   expect(paramFields(entry)[0]).toMatchObject({ name: "code", kind: "code", required: true });
+});
+
+test("a new step that needs a resource gets one: the first of its kind, else a new template", () => {
+  const job = emptyJob();
+  const stack = newNode(job, byId.zstack);
+  expect(stack.params.plan).toBe("@z_plan");
+  expect(job.resources.z_plan).toEqual({ kind: "z_plan", plan: { range: 10, step: 1 } });
+  job.resources.z_plan.plan.range = 4;   // the template itself is not shared
+  expect(newNode(job, byId.zstack).params.plan).toBe("@z_plan");
+  expect(Object.keys(job.resources)).toEqual(["z_plan"]);
+  expect(newNode(emptyJob(), byId.zstack).params.plan).toBe("@z_plan");
+  const fresh = emptyJob();
+  newNode(fresh, byId.zstack);
+  expect(fresh.resources.z_plan.plan.range).toBe(10);
+  expect(newNode(job, byId.capture).params.channels).toBeUndefined();   // optional: left empty
+});
+
+test("expressions say where their names come from", () => {
+  const job = { ...emptyJob(), parameters: {
+    slot: { type: "integer", default: 1, title: "High-mag objective slot", ui: "wizard" } } };
+  const text = explainExpression("${param.slot}", job);
+  expect(text).toContain('job parameter "High-mag objective slot" (default 1)');
+  expect(text).toContain("start wizard");
+  expect(explainExpression("${param.nope}", job)).toContain('no job parameter "nope"');
+  expect(explainExpression("${len(result.find.regions)}", job)).toContain('result of step "find"');
+  expect(explainExpression(5, job)).toBe("");
 });

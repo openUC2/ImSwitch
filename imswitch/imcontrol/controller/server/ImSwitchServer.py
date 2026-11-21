@@ -351,6 +351,43 @@ def metadata_file(file_path: str):
         return JSONResponse({"error": str(e)}, status_code=200)
 
 
+_IMAGE_SUFFIXES = (".zarr", ".ome.tif", ".ome.tiff")
+
+
+def find_datasets(directory: Path, base_path: Path, limit: int = 2000) -> List[Dict]:
+    """Every *.zarr folder and *.ome.tif(f) file below ``directory``, newest first.
+
+    Unlike ``list_items`` this never walks into a zarr store, so it stays fast on a data
+    folder with millions of chunk files.
+    """
+    found = []
+    for root, dirs, files in os.walk(directory):
+        root_path = Path(root)
+        for name in [d for d in dirs if d.endswith(".zarr")] + \
+                [f for f in files if f.lower().endswith(_IMAGE_SUFFIXES[1:])]:
+            path = root_path / name
+            found.append({
+                "name": name,
+                "path": _make_rel_path(base_path, path),
+                "folder": _make_rel_path(base_path, root_path),
+                "format": "zarr" if name.endswith(".zarr") else "tiff",
+                "modifiedTime": path.stat().st_mtime,
+            })
+        dirs[:] = [d for d in dirs if not d.endswith(".zarr") and not d.startswith(".")]
+    found.sort(key=lambda item: item["modifiedTime"], reverse=True)
+    return found[:limit]
+
+
+@api_router.get("/FileManager/datasets")
+def get_datasets(path: str = "", limit: int = 2000):
+    """OME-Zarr stores and OME-TIFF files below ``path`` (relative to the data folder)."""
+    base_path = _get_base_path()
+    directory = _safe_resolve_path(base_path, path)
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="Path not found")
+    return find_datasets(directory, base_path, limit)
+
+
 @api_router.get("/FileManager/")
 def get_items(path: str = ""):
     base_path = _get_base_path()

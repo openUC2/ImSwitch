@@ -817,7 +817,8 @@ class ESP32StageManager(PositionerManager):
         if override_endstop_z and "Z" in self._axes:
             self.__logger.warning("Overriding Z endstops to move to transport position.")
             self.hardLimitsEnabled["Z"] = False
-            self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=False)
+            self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=False,
+                polarity=int(self.homeParams["Z"]["endstoppolarity"]))
 
         self._moveDevice({ax: self.transportPositions[ax] for ax in ("X", "Y", "Z") if ax in self._axes},
                          speed, is_absolute=True, is_blocking=is_blocking)
@@ -938,7 +939,8 @@ class ESP32StageManager(PositionerManager):
                 self._emitZSyncState(phase="disabling_limit", message="Disabling Z limit switch")
                 self.hardLimitsEnabled["Z"] = False
                 self.limitEnabled["Z"] = False
-                self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=False)
+                self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=False,
+                polarity=int(self.homeParams["Z"]["endstoppolarity"]))
                 if aborted():
                     return
 
@@ -960,7 +962,8 @@ class ESP32StageManager(PositionerManager):
                 self._emitZSyncState(phase="enabling_limit", message="Re-enabling Z limit switch")
                 self.hardLimitsEnabled["Z"] = restoreHard
                 self.limitEnabled["Z"] = restoreSoft
-                self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=restoreHard)
+                self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=restoreHard,
+                polarity=int(self.homeParams["Z"]["endstoppolarity"]))
                 if aborted():
                     return
 
@@ -988,7 +991,8 @@ class ESP32StageManager(PositionerManager):
                 try:
                     self.hardLimitsEnabled["Z"] = restoreHard
                     self.limitEnabled["Z"] = restoreSoft
-                    self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=restoreHard)
+                    self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=restoreHard,
+                polarity=int(self.homeParams["Z"]["endstoppolarity"]))
                 except Exception as e:
                     self.__logger.error(f"Could not restore Z limits after sync: {e}")
 
@@ -1250,7 +1254,8 @@ class ESP32StageManager(PositionerManager):
                     self.hardLimitsEnabled[axis] = enabled
                     # Push the new setting to the hardware immediately
                     try:
-                        self._motor.set_hard_limits(axis=self.axisIds[axis], enabled=enabled)
+                        self._motor.set_hard_limits(axis=self.axisIds[axis], enabled=enabled,
+                            polarity=int(self.homeParams[axis]["endstoppolarity"]))
                     except Exception as _e:
                         result['errors'].append(f'Failed to set hard limits on device: {_e}')
                     result['updated'].append('limits.hardLimitsEnabled')

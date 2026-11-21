@@ -328,3 +328,35 @@ def test_arbitrary_stop_and_pause_surface_errors(method):
     ctrl.setArbitraryPoints(json.dumps(POINTS), apply_affine=False)
     galvo.replies["stop_galvo_scan"] = "No response received"
     assert "error" in getattr(ctrl, method)()
+
+
+def test_axis_scale_reaches_every_dac_write_and_survives_restart():
+    """X/Y gain mismatch: values stay nominal, the board gets 2048 + s * (v - 2048)."""
+    mgr, galvo = make_manager()
+    assert mgr.get_axis_scale() == {"scale_x": 1.0, "scale_y": 1.0}
+    assert mgr.to_board(500, 3500) == (500, 3500)            # default: unchanged
+    mgr.set_axis_scale(scale_x=0.5)
+    assert mgr.to_board(500, 3500) == (1274, 3500)
+    assert mgr.to_board(-10000, 0) == (0, 0)                 # clipped to the DAC range
+
+    mgr.set_park_config(park_x=1048, park_y=2048)
+    mgr.park()
+    assert galvo.calls[-1] == ("set_position", (1548, 2048))
+    mgr.set_arbitrary_points([{"x": 4048, "y": 100, "dwell_us": 10}])
+    assert galvo.calls[-1][1][0] == [{"x": 3048, "y": 100, "dwell_us": 10}]
+    assert mgr.get_arbitrary_points() == [{"x": 4048, "y": 100, "dwell_us": 10}]   # nominal kept
+
+    with pytest.raises(ValueError):
+        mgr.set_axis_scale(scale_y=5)
+    mgr2, _ = make_manager()                                  # restart: scale and park restored
+    assert mgr2.get_axis_scale() == {"scale_x": 0.5, "scale_y": 1.0}
+    assert mgr2.get_park_config()["park_x"] == 1048
+
+
+def test_axis_scale_applies_to_the_raster_window():
+    mgr, galvo = make_manager(scale_y=1.25)
+    seen = {}
+    galvo.set_galvo_scan = lambda **kw: seen.update(kw) or {"return": 1}
+    mgr.start_scan(x_min=1048, x_max=3048, y_min=1048, y_max=3048)
+    assert (seen["x_min"], seen["x_max"], seen["y_min"], seen["y_max"]) == (1048, 3048, 798, 3298)
+    assert mgr.config.y_min == 1048                           # the config stays nominal

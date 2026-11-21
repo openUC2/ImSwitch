@@ -140,14 +140,17 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
             hw_pixel_clock=hw_pixel_clock
         )
         
+        # The window is in nominal counts; the board gets it through the axis scale
+        bx_min, by_min = self.to_board(self._config.x_min, self._config.y_min)
+        bx_max, by_max = self.to_board(self._config.x_max, self._config.y_max)
         try:
             result = self._galvo.set_galvo_scan(
                 nx=self._config.nx,
                 ny=self._config.ny,
-                x_min=self._config.x_min,
-                x_max=self._config.x_max,
-                y_min=self._config.y_min,
-                y_max=self._config.y_max,
+                x_min=bx_min,
+                x_max=bx_max,
+                y_min=by_min,
+                y_max=by_max,
                 sample_period_us=self._config.sample_period_us,
                 frame_count=self._config.frame_count,
                 bidirectional=self._config.bidirectional,
@@ -235,7 +238,7 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
         if self._galvo is None:
             return {"error": "Galvo not initialized"}
         try:
-            result = self._galvo.set_position(self._park_x, self._park_y,
+            result = self._galvo.set_position(*self.to_board(self._park_x, self._park_y),
                                               timeout=timeout)
         except Exception as e:
             self.__logger.error(f"Failed to park galvo: {e}")
@@ -390,9 +393,13 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
         if len(points) == 0:
             return {"error": "At least 1 point required"}
 
+        board_points = []
+        for p in points:
+            bx, by = self.to_board(p['x'], p['y'])
+            board_points.append({**p, 'x': bx, 'y': by})
         try:
             result = self._galvo.set_arbitrary_points(
-                points=points, laser_trigger=laser_trigger, timeout=timeout
+                points=board_points, laser_trigger=laser_trigger, timeout=timeout
             )
         except Exception as e:
             self.__logger.error(f"Failed to set arbitrary points: {e}")

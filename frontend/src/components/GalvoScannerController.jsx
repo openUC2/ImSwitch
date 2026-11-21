@@ -78,6 +78,8 @@ import {
   apiStopGalvoScan,
   apiGetGalvoParkConfig,
   apiSetGalvoParkConfig,
+  apiGetGalvoAxisScale,
+  apiSetGalvoAxisScale,
   apiParkGalvo,
   apiGetAffineTransform,
   apiGetGalvoCameraCalibration,
@@ -226,6 +228,8 @@ const GalvoScannerController = () => {
     park_y: 2048,
     park_on_stop: true,
   });
+  // Output gain of each galvo channel (server-side, saved with the park settings)
+  const [axisScale, setAxisScale] = useState({ scale_x: 1, scale_y: 1 });
 
   // ========================
   // API Functions
@@ -265,10 +269,23 @@ const GalvoScannerController = () => {
           park_on_stop: data.park_on_stop ?? true,
         });
       }
+      const scale = await apiGetGalvoAxisScale(hostIP, hostPort, selectedScanner);
+      if (!scale.error) setAxisScale({ scale_x: scale.scale_x ?? 1, scale_y: scale.scale_y ?? 1 });
     } catch (err) {
       console.error('Failed to fetch park config:', err);
     }
   }, [hostIP, hostPort, selectedScanner]);
+
+  const saveAxisScale = useCallback(async (partial) => {
+    setAxisScale((s) => ({ ...s, ...partial }));
+    if (!selectedScanner) return;
+    try {
+      const data = await apiSetGalvoAxisScale(hostIP, hostPort, selectedScanner, partial);
+      if (data.error) dispatch(setError(data.error));
+    } catch (err) {
+      console.error('Failed to save axis scale:', err);
+    }
+  }, [hostIP, hostPort, selectedScanner, dispatch]);
 
   const saveParkConfig = useCallback(async (partial) => {
     const next = { ...parkConfig, ...partial };
@@ -981,6 +998,55 @@ const GalvoScannerController = () => {
                 Park now
               </Button>
             </Box>
+          </Paper>
+
+          {/* X/Y output scale */}
+          <Paper sx={{ p: 2, mb: 2 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              X/Y Output Scale
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+              Compensates different gains of the two galvo drivers, so that a square window scans a
+              square field. Every value sent to the board becomes 2048 + scale × (value − 2048); the
+              values shown here stay nominal. 1 = no change. Re-run the scanner–camera calibration after
+              changing it.
+            </Typography>
+            <Grid container spacing={2}>
+              {['scale_x', 'scale_y'].map((k) => (
+                <Grid item xs={6} key={k}>
+                  <TextField
+                    label={k === 'scale_x' ? 'X scale' : 'Y scale'}
+                    type="number"
+                    size="small"
+                    fullWidth
+                    value={axisScale[k]}
+                    onChange={(e) => setAxisScale((s) => ({ ...s, [k]: e.target.value }))}
+                    onBlur={(e) => saveAxisScale({ [k]: Number(e.target.value) })}
+                    inputProps={{ min: 0.1, max: 2, step: 0.01 }}
+                  />
+                </Grid>
+              ))}
+            </Grid>
+            {cameraCal.calibrated && physical && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, flexWrap: 'wrap' }}>
+                <Typography variant="body2" sx={{ flexGrow: 1 }}>
+                  Calibration: X/Y = {(physical.umPerDacX / physical.umPerDacY).toFixed(3)}
+                </Typography>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    const m = Math.min(physical.umPerDacX, physical.umPerDacY);
+                    saveAxisScale({
+                      scale_x: +(Number(axisScale.scale_x) * m / physical.umPerDacX).toFixed(4),
+                      scale_y: +(Number(axisScale.scale_y) * m / physical.umPerDacY).toFixed(4),
+                    });
+                  }}
+                >
+                  Equalise from calibration
+                </Button>
+              </Box>
+            )}
           </Paper>
 
           {/* Apply & Start Button */}

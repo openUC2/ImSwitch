@@ -1010,11 +1010,12 @@ class UC2ConfigController(CanNetworkApiMixin, DisplayApiMixin, ImConWidgetContro
     _PALLET_UPGRADE_UNIT = "imswitch-pallet-upgrade.service"
 
     def _callSystemd(self, method, signature, body, path="/org/freedesktop/systemd1",
-                     interface="org.freedesktop.systemd1.Manager"):
+                     interface="org.freedesktop.systemd1.Manager",
+                     bus_name="org.freedesktop.systemd1"):
         from jeepney import DBusAddress, new_method_call
         from jeepney.io.blocking import open_dbus_connection
         from jeepney.wrappers import unwrap_msg
-        address = DBusAddress(path, bus_name="org.freedesktop.systemd1", interface=interface)
+        address = DBusAddress(path, bus_name=bus_name, interface=interface)
         with open_dbus_connection(bus="SYSTEM") as conn:
             return unwrap_msg(conn.send_and_get_reply(
                 new_method_call(address, method, signature, body), timeout=5))
@@ -1052,6 +1053,40 @@ class UC2ConfigController(CanNetworkApiMixin, DisplayApiMixin, ImConWidgetContro
         except OSError:
             log = ""
         return {"state": state, "log": log}
+
+    def _lightsOff(self):
+        """Switch off every laser/LED channel; errors are logged, not raised."""
+        for managerName in ("lasersManager", "LEDsManager"):
+            manager = getattr(self._master, managerName, None)
+            if manager is None:
+                continue
+            for name in manager.getAllDeviceNames():
+                try:
+                    manager[name].setEnabled(False)
+                except Exception as e:
+                    self._logger.error(f"Could not switch off {name}: {e}")
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def powerOffHost(self, reboot: bool = False):
+        """Shut down (reboot=False) or restart (reboot=True) the computer ImSwitch runs on.
+
+        Ask first: this ends the session for everyone. Motors stop and lights go off
+        first; open files close when the container receives SIGTERM during shutdown.
+        Reaches logind over the host D-Bus socket (openUC2 OS); outside the OS image,
+        or without a polkit rule allowing org.freedesktop.login1.power-off / reboot for
+        the container user, it returns status "error" and nothing happens.
+        """
+        self._stopAllMotors()
+        self._lightsOff()
+        try:
+            self._callSystemd("Reboot" if reboot else "PowerOff", "b", (False,),
+                              path="/org/freedesktop/login1",
+                              interface="org.freedesktop.login1.Manager",
+                              bus_name="org.freedesktop.login1")
+        except Exception as e:
+            self._logger.error(f"Could not {'reboot' if reboot else 'power off'} the host: {e}")
+            return {"status": "error", "message": str(e)}
+        return {"status": "rebooting" if reboot else "shutting down"}
 
     @APIExport(runOnUIThread=False)
     def getDataPath(self):

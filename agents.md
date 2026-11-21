@@ -593,6 +593,7 @@ Confirm before calling:
 - Triggers/GPIO: `setDigitalOut`, `setupDigitalOutPin`, `setTrigger(...)`, `sendTrigger`,
   `resetTriggerTable`, `getDigitalIn`, `actDigitalIn`
 - Lifecycle: `espRestart`, `restartCANDevice`, `stopImSwitch`, `restartImSwitch`,
+  `powerOffHost(reboot)` (POST; stops motors, lights off, then logind power-off/reboot on the host),
   `moveToSampleMountingPosition`
 - **OS upgrade (experimental, openUC2 OS only):** `startPalletUpgrade()` starts the host unit
   `imswitch-pallet-upgrade.service` over the mounted D-Bus socket, which runs

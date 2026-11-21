@@ -497,7 +497,8 @@ prescan and firmware stage scans, digital I/O, temperature; plan and format in
 - Macros: a saved job with `metadata.macro: true` (the "Macro button in Live View" switch) is a
   button in the Live View sidebar. `listAufgabenMacros()` returns name, title, description and
   parameters; `runAufgabenMacro(request{name, parameters, confirmed})` (POST) starts one with the
-  same refusals as `startAufgabenJob`. A macro leaves the light as its steps leave it (all off
+  same refusals as `startAufgabenJob`. `listAufgabenMacroTemplates()` lists the bundled example
+  macros (autofocus, shutter) that the Live View "From template" button copies under a new name. A macro leaves the light as its steps leave it (all off
   only when it is stopped or fails) and gets a run folder only when it takes frames. Any job
   switches the camera to software trigger only when it takes frames. `AufgabenController` is
   loaded on every setup, listed in `availableWidgets` or not. **Ask first** before running a

@@ -2,20 +2,25 @@
 // Live View macro buttons: one per saved Aufgaben job marked as a macro
 // (metadata.macro, the "Macro button in Live View" switch in the job panel).
 // The arrow next to a button opens its run parameters. A running macro's
-// button stops it. Without macros it says how to make one.
+// button stops it. "From template" copies a bundled macro (autofocus, shutter,
+// ...) under a name the operator picks; adapt the copy in the Aufgaben app.
 import React, { useCallback, useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { Box, Button, ButtonGroup, Popover, Stack, Typography } from "@mui/material";
+import { Box, Button, ButtonGroup, Menu, MenuItem, ListItemText, Popover, Stack, Typography } from "@mui/material";
 
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import PlayArrowOutlined from "@mui/icons-material/PlayArrowOutlined";
 import StopOutlined from "@mui/icons-material/StopOutlined";
+import AddOutlined from "@mui/icons-material/AddOutlined";
 
 import {
   apiAufgabenAbortJob,
+  apiAufgabenGetJob,
   apiAufgabenGetStatus,
+  apiAufgabenListMacroTemplates,
   apiAufgabenListMacros,
   apiAufgabenRunMacro,
+  apiAufgabenSaveJob,
 } from "../../backendapi/apiAufgabenController";
 import { selectHasController } from "../../state/slices/BackendCapabilitiesSlice";
 import { setNotification } from "../../state/slices/NotificationSlice";
@@ -40,12 +45,62 @@ const AufgabenMacros = ({ header = null, sx }) => {
     [dispatch]
   );
 
+  const [templates, setTemplates] = useState([]);
+  const [templateMenu, setTemplateMenu] = useState(null); // anchor element
+
+  const loadMacros = useCallback(
+    () =>
+      apiAufgabenListMacros()
+        .then((list) => setMacros(Array.isArray(list) ? list : []))
+        .catch(() => setMacros([])),
+    []
+  );
   useEffect(() => {
     if (!available) return;
-    apiAufgabenListMacros()
-      .then((list) => setMacros(Array.isArray(list) ? list : []))
-      .catch(() => setMacros([]));
-  }, [available]);
+    loadMacros();
+    apiAufgabenListMacroTemplates()
+      .then((list) => setTemplates(Array.isArray(list) ? list : []))
+      .catch(() => setTemplates([]));
+  }, [available, loadMacros]);
+
+  // Copy a bundled template under the operator's name; it then shows as a button.
+  const fromTemplate = async (template) => {
+    setTemplateMenu(null);
+    const title = window.prompt(t("Name of your macro"), template.title)?.trim();
+    if (!title) return;
+    if (macros.some((m) => m.title === title) && !window.confirm(t("A macro with this name exists. Replace it?"))) return;
+    try {
+      const job = await apiAufgabenGetJob(template.name);
+      await apiAufgabenSaveJob({ ...job, name: title, metadata: { ...job.metadata, macro: true } });
+      await loadMacros();
+      notify(t("Saved. Adapt its steps in the Aufgaben app."), "success");
+    } catch (e) {
+      notify(`${title}: ${aufgabenErrorText(e)}`);
+    }
+  };
+  const templateButton = templates.length > 0 && (
+    <>
+      <Button
+        size="small"
+        startIcon={<AddOutlined />}
+        onClick={(e) => setTemplateMenu(e.currentTarget)}
+        sx={{ textTransform: "none" }}
+      >
+        {t("From template")}
+      </Button>
+      <Menu anchorEl={templateMenu} open={!!templateMenu} onClose={() => setTemplateMenu(null)}>
+        {templates.map((tpl) => (
+          <MenuItem key={tpl.name} onClick={() => fromTemplate(tpl)} sx={{ maxWidth: 360 }}>
+            <ListItemText
+              primary={tpl.title}
+              secondary={tpl.description}
+              secondaryTypographyProps={{ sx: { whiteSpace: "normal" } }}
+            />
+          </MenuItem>
+        ))}
+      </Menu>
+    </>
+  );
 
   // Follow the run until it ends; say so when it did not finish cleanly.
   useEffect(() => {
@@ -84,8 +139,9 @@ const AufgabenMacros = ({ header = null, sx }) => {
       <Box sx={sx}>
         {header}
         <Typography variant="body2" color="text.secondary">
-          {t("No macros yet. In Aufgaben, open or build a job, switch on \"Macro button in Live View\" in its Job tab and save it; it shows here as a button.")}
+          {t("No macros yet. Start from a template, or in Aufgaben switch on \"Macro button in Live View\" in a job's Job tab and save it; it shows here as a button.")}
         </Typography>
+        {templateButton}
       </Box>
     );
   }
@@ -126,6 +182,7 @@ const AufgabenMacros = ({ header = null, sx }) => {
             </ButtonGroup>
           );
         })}
+        {templateButton}
       </Stack>
       <Popover
         open={!!open}

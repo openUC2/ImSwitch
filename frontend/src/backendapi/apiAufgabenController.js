@@ -50,5 +50,6 @@ export const apiAufgabenListRuns = (limit = 50) => get("listAufgabenRuns", { lim
 
 // Macros: saved jobs with metadata.macro, run from Live View buttons
 export const apiAufgabenListMacros = () => get("listAufgabenMacros");
+export const apiAufgabenListMacroTemplates = () => get("listAufgabenMacroTemplates");
 export const apiAufgabenRunMacro = (name, parameters = {}, confirmed = false) =>
   post("runAufgabenMacro", { name, parameters, confirmed });

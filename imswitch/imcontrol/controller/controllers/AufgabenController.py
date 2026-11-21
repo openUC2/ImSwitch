@@ -62,6 +62,18 @@ def _macro(path: Path) -> Optional[dict]:
     return job if isinstance(job, dict) and (job.get("metadata") or {}).get("macro") else None
 
 
+def _macro_entries(folder: Path) -> list:
+    """name, title, description and parameters of every macro job in ``folder``."""
+    macros = []
+    for path in sorted(folder.glob("*.json")):
+        job = _macro(path)
+        if job is not None:
+            macros.append({"name": path.stem, "title": job.get("name") or path.stem,
+                           "description": job.get("description", ""),
+                           "parameters": job.get("parameters") or {}})
+    return macros
+
+
 class AufgabenController(ImConWidgetController):
     sigAufgabenEvent = Signal(dict)
 
@@ -270,14 +282,14 @@ class AufgabenController(ImConWidgetController):
         Returns per macro its file ``name`` (for runAufgabenMacro), ``title``,
         ``description`` and the ``parameters`` asked for before a run.
         """
-        macros = []
-        for path in sorted(self._jobs_dir.glob("*.json")):
-            job = _macro(path)
-            if job is not None:
-                macros.append({"name": path.stem, "title": job.get("name") or path.stem,
-                               "description": job.get("description", ""),
-                               "parameters": job.get("parameters") or {}})
-        return macros
+        return _macro_entries(self._jobs_dir)
+
+    @APIExport()
+    def listAufgabenMacroTemplates(self) -> list:
+        """Bundled example macros (autofocus, shutter, ...) to copy: load one with
+        getAufgabenJob(name), rename it and save it with saveAufgabenJob. Same fields as
+        listAufgabenMacros."""
+        return _macro_entries(aufgaben.EXAMPLES_DIR)
 
     @APIExport(requestType="POST")
     def runAufgabenMacro(self, request: RunAufgabenMacroRequest) -> dict:

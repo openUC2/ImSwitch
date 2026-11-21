@@ -1,0 +1,17 @@
+{
+  "schema": "aufgaben.job/1",
+  "name": "Autofocus here",
+  "description": "Macro: software autofocus at the current XY. Z sweeps the given half range around the current focus and stays at the sharpest plane. Set the light it focuses with in the step (empty keeps the light as it is), then save it under your own name.",
+  "parameters": {
+    "range_um": {"type": "number", "default": 30, "minimum": 2, "maximum": 300, "unit": "µm",
+                 "title": "Half range"},
+    "step_um": {"type": "number", "default": 3, "minimum": 0.5, "maximum": 50, "unit": "µm",
+                "title": "Step"}
+  },
+  "tasks": [
+    {"id": "focus", "task": "autofocus", "label": "Focus",
+     "params": {"mode": "software", "range_um": "${param.range_um}", "step_um": "${param.step_um}"}},
+    {"id": "report", "task": "log", "params": {"message": "Focused at Z = ${result.focus} µm"}}
+  ],
+  "metadata": {"macro": true}
+}

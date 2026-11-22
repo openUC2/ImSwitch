@@ -1,7 +1,9 @@
 /**
  * Deconvolution panel of the OME-Zarr viewer (docs/DECONVOLUTION.md).
  *
- * Preview: the crop in the dashed box (the middle of the view) is deconvolved on the Pi with the
+ * PSF: modelled from the optics (scalar, vectorial, Gaussian) or measured from a bead stack, shown
+ * in xy and xz with its FWHM. Preview: the crop in the dashed box (the middle of the view) is
+ * deconvolved on the Pi with the
  * settings here, so the regularisation can be tuned before the whole stack runs. Whole stack: a job
  * on the registered processing worker, or on the Pi for small stacks; the result is a new OME-Zarr
  * next to the source.
@@ -25,10 +27,12 @@ import { Close } from "@mui/icons-material";
 
 import {
   apiProcessingCancelJob,
+  apiProcessingDistillPSF,
   apiProcessingGetDefaults,
   apiProcessingGetStatus,
   apiProcessingGetWorker,
   apiProcessingPreview,
+  apiProcessingPreviewPSF,
   apiProcessingSetWorker,
   apiProcessingStartJob,
 } from "../../backendapi/apiProcessingController";
@@ -37,32 +41,74 @@ import { autoWindow } from "./omeZarrModel";
 const message = (e) => e?.response?.data?.detail || e?.message || String(e);
 const decode = (b64) => new Float32Array(Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0)).buffer);
 const PLANES = [8, 16, 32, 64];
-
-/** Grey image of a float plane, 0.1 / 99.9 percentile window. */
-function drawGray(canvas, data, w, h) {
-  if (!canvas || !data) return;
-  canvas.width = w;
-  canvas.height = h;
-  const { start, end } = autoWindow(data);
-  const ctx = canvas.getContext("2d");
-  const img = ctx.createImageData(w, h);
-  const scale = 255 / (end - start);
-  for (let i = 0; i < data.length; i++) {
-    const v = (data[i] - start) * scale; // the clamped array clips to 0..255
-    img.data[4 * i] = v;
-    img.data[4 * i + 1] = v;
-    img.data[4 * i + 2] = v;
-    img.data[4 * i + 3] = 255;
+const PSF_KEY = "imswitch.deconvolution.lastPsf"; // the last distilled PSF, per browser
+const MODELS = [
+  ["scalar", "Scalar (Fourier optics)"],
+  ["vectorial", "Vectorial (Richards–Wolf)"],
+  ["gaussian", "Gaussian (set widths)"],
+  ["measured", "Measured (beads)"],
+];
+const remembered = () => {
+  try {
+    return localStorage.getItem(PSF_KEY) || "";
+  } catch {
+    return "";
   }
-  ctx.putImageData(img, 0, 0);
+};
+
+/** A PSF plane scaled to its maximum; log spans four decades, so rings and the cone show. */
+function drawPSF(canvas, data, w, h, log, stretch = 1) {
+  if (!canvas || !data) return;
+  let max = 0;
+  for (let i = 0; i < data.length; i++) max = Math.max(max, data[i]);
+  const grey = data.map((v) => {
+    const r = max > 0 ? v / max : 0;
+    return log ? 255 * (1 + Math.log10(Math.max(r, 1e-4)) / 4) : 255 * r;
+  });
+  paint(canvas, grey, w, h, stretch);
 }
 
-/** Optics as the form edits them: strings, emission in nm. */
+/**
+ * Put grey values (0..255 per pixel of a w x h plane) on a canvas, rows stretched by `stretch`
+ * (z step / pixel size for an xz section), so the canvas has the sample's aspect ratio.
+ */
+function paint(canvas, grey, w, h, stretch = 1) {
+  const src = document.createElement("canvas");
+  src.width = w;
+  src.height = h;
+  const img = src.getContext("2d").createImageData(w, h);
+  for (let i = 0; i < grey.length; i++) {
+    img.data[4 * i] = grey[i]; // the clamped array clips to 0..255
+    img.data[4 * i + 1] = grey[i];
+    img.data[4 * i + 2] = grey[i];
+    img.data[4 * i + 3] = 255;
+  }
+  src.getContext("2d").putImageData(img, 0, 0);
+  canvas.width = w;
+  canvas.height = Math.max(1, Math.round(h * stretch));
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(src, 0, 0, canvas.width, canvas.height);
+}
+
+/** Grey image of a float plane, 0.1 / 99.9 percentile window. */
+function drawGray(canvas, data, w, h, stretch = 1) {
+  if (!canvas || !data) return;
+  const { start, end } = autoWindow(data);
+  const scale = 255 / (end - start);
+  paint(canvas, data.map((v) => (v - start) * scale), w, h, stretch);
+}
+
+/** Optics as the form edits them: strings ("" for unset), emission in nm. */
 const toForm = (o) => ({
-  ...Object.fromEntries(Object.entries(o).map(([k, v]) => [k, String(v)])),
+  ...Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v == null ? "" : String(v)])),
   emission_nm: String(Math.round(o.emission_um * 1000)),
 });
 const fromForm = (f) => ({
+  psf_model: f.psf_model || "scalar",
+  fwhm_xy_um: f.fwhm_xy_um === "" ? null : Number(f.fwhm_xy_um),
+  fwhm_z_um: f.fwhm_z_um === "" ? null : Number(f.fwhm_z_um),
+  psf_path: f.psf_path || "",
   pixel_um: Number(f.pixel_um),
   z_step_um: Number(f.z_step_um),
   na: Number(f.na),
@@ -105,8 +151,18 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
   const [scope, setScope] = useState("all");
   const [workerUrl, setWorkerUrl] = useState("");
   const [worker, setWorker] = useState(null);
+  const [psfView, setPsfView] = useState(null);
+  const [psfError, setPsfError] = useState(null);
+  const [psfLog, setPsfLog] = useState(true);
+  const [beadWindow, setBeadWindow] = useState("");
+  const [distilling, setDistilling] = useState(false);
+  const [distilled, setDistilled] = useState(null);
+  const [lastPsf, setLastPsf] = useState(remembered);
   const xyRef = useRef(null);
   const xzRef = useRef(null);
+  const psfXYRef = useRef(null);
+  const psfXZRef = useRef(null);
+  const psfRequest = useRef(0);
 
   useEffect(() => {
     let live = true;
@@ -150,11 +206,39 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
     return () => clearInterval(id);
   }, [job?.state]);
 
+  // the PSF of the current channel's optics, shortly after they stop changing
+  const current = optics[channel] || optics[0];
+  const psfKey = current ? JSON.stringify(current) : "";
+  useEffect(() => {
+    if (!current || !defaults) return undefined;
+    const id = setTimeout(() => {
+      const n = ++psfRequest.current;
+      apiProcessingPreviewPSF({ optics: fromForm(current), planes: Math.min(Math.max(defaults.shape.z, 8), 64) })
+        .then((r) => {
+          if (n !== psfRequest.current) return;
+          setPsfView({ ...r, xyData: decode(r.xy), xzData: decode(r.xz) });
+          setPsfError(null);
+        })
+        .catch((e) => {
+          if (n !== psfRequest.current) return;
+          setPsfView(null);
+          setPsfError(message(e));
+        });
+    }, 400);
+    return () => clearTimeout(id);
+  }, [psfKey, defaults]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!psfView) return;
+    drawPSF(psfXYRef.current, psfView.xyData, psfView.width, psfView.width, psfLog);
+    drawPSF(psfXZRef.current, psfView.xzData, psfView.width, psfView.planes, psfLog, psfView.z_step_um / psfView.pixel_um);
+  }, [psfView, psfLog]);
+
   useEffect(() => {
     if (!preview) return;
     const { crop } = preview;
     drawGray(xyRef.current, showAfter ? preview.afterXY : preview.beforeXY, crop.width, crop.height);
-    drawGray(xzRef.current, showAfter ? preview.afterXZ : preview.beforeXZ, crop.width, crop.planes);
+    drawGray(xzRef.current, showAfter ? preview.afterXZ : preview.beforeXZ, crop.width, crop.planes, preview.aspect);
   }, [preview, showAfter]);
 
   const header = (
@@ -244,6 +328,39 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
     }
   };
 
+  const setModel = (model) =>
+    setOptics((list) =>
+      list.map((o, i) =>
+        i === channel ? { ...o, psf_model: model, psf_path: o.psf_path || (model === "measured" ? lastPsf : "") } : o,
+      ),
+    );
+
+  const distill = async () => {
+    setDistilling(true);
+    setError(null);
+    try {
+      const r = await apiProcessingDistillPSF({
+        path,
+        image,
+        t,
+        c: channel,
+        window_um: beadWindow === "" ? 0 : Number(beadWindow),
+      });
+      setDistilled(r);
+      setLastPsf(r.path);
+      try {
+        localStorage.setItem(PSF_KEY, r.path);
+      } catch {
+        // the path stays for this page only
+      }
+      setOptics((list) => list.map((o, i) => (i === channel ? { ...o, psf_model: "measured", psf_path: r.path } : o)));
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setDistilling(false);
+    }
+  };
+
   const saveWorker = () =>
     apiProcessingSetWorker(workerUrl.trim())
       .then(setWorker)
@@ -314,6 +431,94 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
         {opticsFrom.pixel_um === "unknown" ? "unknown, enter them" : "from the dataset"}; emission guessed from the
         channel name. The PSF is computed from these: check them.
       </Typography>
+
+      <Section>PSF</Section>
+      <TextField
+        select
+        size="small"
+        label="Model"
+        value={form.psf_model || "scalar"}
+        onChange={(e) => setModel(e.target.value)}
+      >
+        {MODELS.filter(([m]) => (defaults.psfModels || ["scalar"]).includes(m)).map(([m, label]) => (
+          <MenuItem key={m} value={m} dense>
+            {label}
+          </MenuItem>
+        ))}
+      </TextField>
+      {form.psf_model === "gaussian" && (
+        <Box sx={{ display: "flex", gap: 1 }}>
+          <Field
+            label="FWHM xy"
+            unit="µm"
+            value={form.fwhm_xy_um}
+            placeholder={psfView ? String(psfView.expected_fwhm_um[0]) : "auto"}
+            onChange={(v) => setOwn("fwhm_xy_um", v)}
+          />
+          <Field
+            label="FWHM z"
+            unit="µm"
+            value={form.fwhm_z_um}
+            placeholder={psfView ? String(psfView.expected_fwhm_um[1]) : "auto"}
+            onChange={(v) => setOwn("fwhm_z_um", v)}
+          />
+        </Box>
+      )}
+      {form.psf_model === "measured" && (
+        <>
+          <Field
+            label="PSF file"
+            value={form.psf_path}
+            placeholder="/beads_psf.ome.zarr"
+            onChange={(v) => setOwn("psf_path", v)}
+          />
+          <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
+            <Field label="Bead window" unit="µm" value={beadWindow} placeholder="auto" onChange={setBeadWindow} />
+            <Button onClick={distill} disabled={distilling} sx={{ flex: 1.4, mt: 0.25 }}>
+              Distill from this image
+            </Button>
+          </Box>
+          {distilling && <LinearProgress />}
+          {distilled && (
+            <Typography variant="caption" color="text.secondary">
+              Averaged {distilled.used} of {distilled.found} beads ({distilled.crowded} crowded, {distilled.edge} at
+              the edge, {distilled.bright} clumps, {distilled.shallow} at the top or bottom of the stack). Saved as{" "}
+              {distilled.path}.
+            </Typography>
+          )}
+        </>
+      )}
+      {psfError && (
+        <Typography variant="caption" color="warning.main">
+          {psfError}
+        </Typography>
+      )}
+      {psfView && (
+        <>
+          <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
+            <canvas
+              ref={psfXYRef}
+              title="PSF in the focal plane"
+              style={{ width: "50%", aspectRatio: "1 / 1", imageRendering: "pixelated", background: "#000" }}
+            />
+            <canvas
+              ref={psfXZRef}
+              title="PSF xz section through its centre"
+              style={{ width: "50%", maxHeight: 260, objectFit: "contain", imageRendering: "pixelated", background: "#000" }}
+            />
+          </Box>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+              xy at focus and xz, {(psfView.width * psfView.pixel_um).toFixed(1)} µm wide. FWHM {psfView.fwhm_xy_um} µm
+              lateral, {psfView.fwhm_z_um} µm axial; these optics lead one to expect {psfView.expected_fwhm_um[0]} /{" "}
+              {psfView.expected_fwhm_um[1]} µm.
+            </Typography>
+            <ToggleButton size="small" value="log" selected={psfLog} onChange={() => setPsfLog((v) => !v)}>
+              Log
+            </ToggleButton>
+          </Box>
+        </>
+      )}
 
       <Section>Settings</Section>
       <Box sx={{ display: "flex", gap: 1 }}>
@@ -424,13 +629,7 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
           </Typography>
           <canvas
             ref={xzRef}
-            style={{
-              width: "100%",
-              maxHeight: 220,
-              aspectRatio: `${preview.crop.width} / ${preview.crop.planes * preview.aspect}`,
-              imageRendering: "pixelated",
-              background: "#000",
-            }}
+            style={{ width: "100%", maxHeight: 220, objectFit: "contain", imageRendering: "pixelated", background: "#000" }}
           />
           <Typography variant="caption" color="text.secondary">
             Wide-field stacks keep their missing cone: haze goes and detail sharpens, the stack does not become

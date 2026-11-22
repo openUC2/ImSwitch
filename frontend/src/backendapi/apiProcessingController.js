@@ -22,6 +22,10 @@ export const apiProcessingGetDefaults = (path, image = "") => get("getProcessing
 export const apiProcessingPreview = (request) => post("previewProcessing", request);
 /** Whole image in the background, on the worker or the Pi; poll apiProcessingGetStatus. */
 export const apiProcessingStartJob = (request) => post("startProcessingJob", request);
+/** The PSF the optics give (xy at focus, xz through the centre) with its FWHM. */
+export const apiProcessingPreviewPSF = (request) => post("previewProcessingPSF", request);
+/** Average the beads of a bead stack into a measured PSF, saved next to it as <stack>_psf.ome.zarr. */
+export const apiProcessingDistillPSF = (request) => post("distillProcessingPSF", request);
 export const apiProcessingGetStatus = () => get("getProcessingStatus");
 export const apiProcessingCancelJob = () => get("cancelProcessingJob");
 export const apiProcessingGetWorker = () => get("getProcessingWorker");

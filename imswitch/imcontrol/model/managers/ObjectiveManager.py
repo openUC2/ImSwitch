@@ -51,6 +51,7 @@ class ObjectiveManager(SignalInterface):
         self._NAs = list(self.__ObjectiveInfo.NAs)
         self._magnifications = list(self.__ObjectiveInfo.magnifications)
         self._objectiveNames = list(self.__ObjectiveInfo.objectiveNames)
+        self._immersions = list(getattr(self.__ObjectiveInfo, 'immersions', None) or [])
         self._objectivePositions = list(self.__ObjectiveInfo.objectivePositions)
         # Z positions (focus offsets) for each objective - default to [0, 0] if not present
         self._zPositions = list(getattr(self.__ObjectiveInfo, 'zPositions', [0, 0]))
@@ -84,6 +85,11 @@ class ObjectiveManager(SignalInterface):
     def objectiveNames(self):
         """Get objective names from config"""
         return list(self._objectiveNames)
+
+    @property
+    def immersions(self):
+        """Immersion per slot from config (OME names); may be shorter than the slots"""
+        return list(self._immersions)
 
     @property
     def objectivePositions(self):

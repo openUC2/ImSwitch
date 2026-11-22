@@ -3,6 +3,7 @@ from imswitch.imcommon.model import APIExport
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from imswitch.imcontrol.controller.basecontrollers import LiveUpdatedController
+from imswitch.imcontrol.model.aufgaben import storage
 
 
 
@@ -66,6 +67,7 @@ class ObjectiveController(LiveUpdatedController):
         self._NAs = list(self._configManager.NAs)
         self._magnifications = list(self._configManager.magnifications)
         self._objectiveNames = list(self._configManager.objectiveNames)
+        self._immersions = list(getattr(self._configManager, "immersions", []) or [])
 
         # Compute which slots are actually configured (name truthy AND magnification > 0)
         self._isSlotConfigured = self._computeIsSlotConfigured()
@@ -134,6 +136,8 @@ class ObjectiveController(LiveUpdatedController):
 
         # Update detector with current pixel size
         self._updatePixelSize()
+        # every image file records the objective it was taken with
+        storage.current_objective = self.objectiveMetadata
 
     # === State Property Accessors ===
 
@@ -199,6 +203,27 @@ class ObjectiveController(LiveUpdatedController):
         if self._currentObjective is not None and 0 <= self._currentObjective < len(self._magnifications):
             return self._magnifications[self._currentObjective]
         return None
+
+    def _getCurrentImmersion(self) -> Optional[str]:
+        """The current objective's immersion: the setup's ``immersions``, else guessed from the NA."""
+        slot = self._currentObjective
+        if slot is not None and 0 <= slot < len(self._immersions) and self._immersions[slot]:
+            return self._immersions[slot]
+        try:
+            return storage.immersion_for(float(self._getCurrentNA()))
+        except (TypeError, ValueError):
+            return None
+
+    def objectiveMetadata(self) -> Optional[dict]:
+        """The current objective as image files record it (storage.current_objective): name, NA,
+        magnification, immersion; None while no configured slot is in place."""
+        slot = self._currentObjective
+        if slot is None or not (0 <= slot < len(self._isSlotConfigured)) \
+                or not self._isSlotConfigured[slot]:
+            return None
+        return {"name": self._getCurrentObjectiveName(), "na": self._getCurrentNA(),
+                "magnification": self._getCurrentMagnification(),
+                "immersion": self._getCurrentImmersion()}
 
     def _getCurrentObjectiveName(self) -> str:
         """Get the name of the current objective."""
@@ -750,6 +775,7 @@ class ObjectiveController(LiveUpdatedController):
             "pixelsize": self._getCurrentPixelSize(),
             "NA": self._getCurrentNA(),
             "magnification": self._getCurrentMagnification(),
+            "immersion": self._getCurrentImmersion(),
             "FOV": self._getCurrentFOV(),
 
             "availableObjectives": [0, 1],
@@ -826,6 +852,7 @@ class ObjectiveController(LiveUpdatedController):
         self.setSharedAttr(_nameAttr, self._getCurrentObjectiveName())
         self.setSharedAttr(_magnificationAttr, self._getCurrentMagnification())
         self.setSharedAttr(_naAttr, self._getCurrentNA())
+        self.setSharedAttr(_immersionAttr, self._getCurrentImmersion())
         self.setSharedAttr(_pixelSizeAttr, self._getCurrentPixelSize())
         self.setSharedAttr(_slotAttr, self._currentObjective)
         
@@ -839,6 +866,7 @@ _attrCategory = 'Objective'
 _nameAttr = 'Name'
 _magnificationAttr = 'Magnification'
 _naAttr = 'NA'
+_immersionAttr = 'Immersion'
 _pixelSizeAttr = 'PixelSizeUm'
 _slotAttr = 'TurretIndex'
 _fovUmAttr = 'FOVUm'

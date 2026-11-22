@@ -296,6 +296,9 @@ class ObjectiveInfo:
     magnifications: List
     objectiveNames: List
     objectivePositions: List
+    immersions: List = field(default_factory=list)
+    """ Immersion per slot as OME names: Air, Water, WaterDipping, Oil, Glycerol, Multi, Other.
+    Written into every image file with NA, magnification and name; empty: guessed from the NA. """
     zPositions: List = field(default_factory=lambda: [0, 0])
     xyOffsets: List = field(default_factory=lambda: [[0, 0], [0, 0]])
     """ Parcentricity per slot (µm, stage XY). Switching slots moves XY by the

@@ -42,8 +42,9 @@ import numcodecs
 import numpy as np
 import tifffile
 import zarr
-from ome_types import OME
-from ome_types.model import (AnnotationRef, Channel, Image, Map, MapAnnotation, Pixels, Plane,
+from ome_types import OME, from_xml
+from ome_types.model import (AnnotationRef, Channel, Image, Instrument, InstrumentRef, Map,
+                             MapAnnotation, Objective, ObjectiveSettings, Pixels, Plane,
                              StructuredAnnotations, TiffData)
 from ome_zarr_models.v04.hcs import HCSAttrs as _Hcs04
 from ome_zarr_models.v04.image import ImageAttrs as _Image04
@@ -86,6 +87,8 @@ class ImageSpec:
     bit_depth: Optional[int] = None         # camera bits; sets the display window
     display_end: Sequence[float] = ()       # per channel: end of the display window (float data)
     annotations: Dict[str, Any] = field(default_factory=dict)   # acquisition key/values
+    objective: Optional[Dict[str, Any]] = None  # name, na, magnification, immersion; None: the
+                                                # current objective when the file is created
 
 
     def channels(self, n: int) -> List[Tuple[str, str]]:
@@ -98,6 +101,68 @@ class ImageSpec:
         if self.bit_depth:
             return float(2 ** self.bit_depth - 1)
         return float(np.iinfo(self.dtype).max) if np.dtype(self.dtype).kind in "ui" else 1.0
+
+
+# The objective images are taken with: a function returning {"name", "na", "magnification",
+# "immersion"} (values may be None) or None. ObjectiveController sets it; an ImageSpec whose
+# objective is None takes it once, when its file is created, so every writer records it.
+current_objective = None
+IMMERSIONS = ("Air", "Water", "WaterDipping", "Oil", "Glycerol", "Multi", "Other")   # OME enum
+_OBJECTIVE_KEYS = ("name", "na", "magnification", "immersion")
+
+
+def immersion_for(na: float) -> str:
+    """The usual immersion of an objective with this NA, for setups that do not name it."""
+    return "Air" if na <= 0.95 else "Water" if na <= 1.25 else "Oil"
+
+
+def _objective(spec: ImageSpec) -> Dict[str, Any]:
+    """The spec's objective, taken from ``current_objective`` the first time it is None; only
+    the values that are set, immersion as one of IMMERSIONS."""
+    if spec.objective is None:
+        try:
+            found = current_objective() if current_objective else None
+        except Exception:   # the objective must never keep an image from being written
+            found = None
+        spec.objective = dict(found or {})
+    o = {k: spec.objective[k] for k in _OBJECTIVE_KEYS if spec.objective.get(k) not in (None, "")}
+    for k in ("na", "magnification"):   # numbers, or left out: OME-XML would refuse the file
+        try:
+            o[k] = float(o[k])
+        except (KeyError, TypeError, ValueError):
+            o.pop(k, None)
+    if "immersion" in o:
+        o["immersion"] = next((i for i in IMMERSIONS if i.lower() == str(o["immersion"]).lower()),
+                              "Other")
+    return o
+
+
+def objective_of(acquisition: Dict[str, Any]) -> Dict[str, Any]:
+    """An image's objective from its ``acquisition`` attrs: the objective_* keys storage.py
+    writes, or the Objective:* attributes older snapshots carry."""
+    out: Dict[str, Any] = {}
+    for key, value in (acquisition or {}).items():
+        k = key.lower()
+        for name, old in (("name", "objective:name"), ("na", "objective:na"),
+                          ("magnification", "objective:magnification"),
+                          ("immersion", "objective:immersion")):
+            if k == f"objective_{name}" or (k.endswith(old) and name not in out):
+                out[name] = value
+    return out
+
+
+def objective_from_ome(xml: str) -> Dict[str, Any]:
+    """The objective of the first image of an OME-XML (Instrument / Objective it links to)."""
+    ome = from_xml(xml)
+    if not ome.images or ome.images[0].objective_settings is None:
+        return {}
+    ref = ome.images[0].objective_settings.id
+    for o in (o for i in ome.instruments for o in i.objectives if o.id == ref):
+        return {k: v for k, v in (("name", o.model), ("na", o.lens_na),
+                                  ("magnification", o.nominal_magnification),
+                                  ("immersion", o.immersion.value if o.immersion else None))
+                if v is not None}
+    return {}
 
 
 def _flat(values: Dict[str, Any], prefix: str = "") -> Dict[str, str]:
@@ -189,13 +254,23 @@ def ome_xml(spec: ImageSpec, rgb: bool = False) -> str:
                           samples_per_pixel=samples, **({} if rgb else {"color": f"#{color}"}))
                   for name, color in channels],
         planes=planes, tiff_data_blocks=[TiffData(plane_count=len(planes))])
+    o, extra, refs = _objective(spec), {}, {}
+    if o:     # Instrument / Objective, linked from the Image
+        objective = Objective(id="Objective:0", model=str(o["name"]) if "name" in o else None,
+                              lens_na=o.get("na"), nominal_magnification=o.get("magnification"),
+                              immersion=o.get("immersion"))
+        extra["instruments"] = [Instrument(id="Instrument:0", objectives=[objective])]
+        refs = {"instrument_ref": InstrumentRef(id="Instrument:0"),
+                "objective_settings": ObjectiveSettings(id=objective.id)}
     if not spec.annotations:
-        return OME(images=[Image(name=spec.name, pixels=pixels)], creator="ImSwitch").to_xml()
+        return OME(images=[Image(name=spec.name, pixels=pixels, **refs)], creator="ImSwitch",
+                   **extra).to_xml()
     note = MapAnnotation(namespace="openuc2.org/imswitch/acquisition", value=Map(ms=[
         Map.M(k=k, value=v) for k, v in _flat(spec.annotations).items()]))
-    image = Image(name=spec.name, pixels=pixels, annotation_refs=[AnnotationRef(id=note.id)])
+    image = Image(name=spec.name, pixels=pixels, annotation_refs=[AnnotationRef(id=note.id)],
+                  **refs)
     return OME(images=[image], structured_annotations=StructuredAnnotations(map_annotations=[note]),
-               creator="ImSwitch").to_xml()
+               creator="ImSwitch", **extra).to_xml()
 
 
 def _tiff_tile(y: int, x: int) -> Tuple[int, int]:
@@ -262,7 +337,7 @@ def save_image(path, data: np.ndarray, axes: Optional[str] = None, *,
                channel_names: Sequence[str] = (), channel_colors: Sequence[str] = (),
                exposure_ms: Sequence[Optional[float]] = (), bit_depth: Optional[int] = None,
                name: Optional[str] = None, annotations: Optional[Dict[str, Any]] = None,
-               version: str = "0.4") -> Path:
+               objective: Optional[Dict[str, Any]] = None, version: str = "0.4") -> Path:
     """Write one image as OME-TIFF (``*.tif``, ``*.tiff``) or OME-Zarr (``*.zarr``).
 
     Args:
@@ -282,6 +357,8 @@ def save_image(path, data: np.ndarray, axes: Optional[str] = None, *,
         name: Image name; default the file name.
         annotations: Acquisition key/values (nested dicts are flattened); an OME
             MapAnnotation in TIFF, ``attrs["acquisition"]`` in zarr.
+        objective: name, na, magnification, immersion; None: the current objective
+            (``current_objective``), {}: none, e.g. for data taken earlier.
         version: NGFF version for OME-Zarr.
 
     Returns the path written. Large images get a pyramid (SubIFDs or zarr levels).
@@ -305,7 +382,8 @@ def save_image(path, data: np.ndarray, axes: Optional[str] = None, *,
                      channel_names=[f"{n}_rgb_{s}" for n in names for s in "rgb"] if rgb
                      else names, channel_colors=() if rgb else channel_colors,
                      exposure_ms=[e for e in exposure_ms for _ in range(3 if rgb else 1)],
-                     name=name or path.name.split(".")[0], annotations=dict(annotations or {}))
+                     name=name or path.name.split(".")[0], annotations=dict(annotations or {}),
+                     objective=objective)
     if path.suffix.lower() in (".tif", ".tiff"):
         return _write_ome_tiff(path, _pyramid(array), spec, rgb=rgb)
     if path.suffix.lower() != ".zarr":
@@ -354,8 +432,10 @@ class NgffImage:
         body = {"multiscales": [_multiscales(self.spec, self.levels, self.version)],
                 "omero": _omero(self.spec, self.array.shape[1], self.version)}
         self.group.attrs.update(_group_attrs(self.version, "image", body))
-        if self.spec.annotations:
-            self.group.attrs["acquisition"] = _flat(self.spec.annotations)
+        acquisition = {**_flat(self.spec.annotations),
+                       **{f"objective_{k}": v for k, v in _objective(self.spec).items()}}
+        if acquisition:
+            self.group.attrs["acquisition"] = acquisition
 
     def write(self, plane: np.ndarray, t: int, c: int, z: int, y0: int = 0, x0: int = 0) -> None:
         if t >= self.array.shape[0]:   # grow in doubling steps; finalize trims the rest

@@ -241,3 +241,31 @@ def test_save_image_axes_formats_and_unknown_metadata(tmp_path):
         save_image(tmp_path / "bad.ome.tif", zyx)                  # 3-D needs axes
     with pytest.raises(ValueError, match="use .tif"):
         save_image(tmp_path / "bad.png", zyx[0])
+
+
+def test_every_image_records_its_objective(tmp_path, monkeypatch):
+    from imswitch.imcontrol.model.aufgaben import storage
+    now = {"name": "Plan 20x", "na": 0.75, "magnification": 20, "immersion": "air"}
+    monkeypatch.setattr(storage, "current_objective", lambda: dict(now))
+    image = NgffImage.create(tmp_path / "a.ome.zarr", _spec(shape=(1, 1, 2, 64, 64)))
+    now.update(name="Plan 40x", na=0.95)          # changed while the image is being written
+    for z in range(2):
+        image.write(np.ones((64, 64), np.uint16), 0, 0, z)
+    image.finalize()
+    acquisition = zarr.open_group(str(tmp_path / "a.ome.zarr"), mode="r").attrs["acquisition"]
+    assert {k: v for k, v in acquisition.items() if k.startswith("objective_")} == {
+        "objective_name": "Plan 20x", "objective_na": 0.75, "objective_magnification": 20,
+        "objective_immersion": "Air"}
+    image.export_ome_tiff(tmp_path / "a.ome.tif")
+    storage.save_image(tmp_path / "b.ome.tif", np.ones((8, 8), np.uint16))   # 40x by now
+    for name, na in (("a.ome.tif", 0.75), ("b.ome.tif", 0.95)):
+        ome = ome_types.from_tiff(tmp_path / name)
+        objective = ome.instruments[0].objectives[0]
+        assert (objective.lens_na, objective.immersion.value) == (na, "Air")
+        assert ome.images[0].instrument_ref.id == ome.instruments[0].id
+        assert ome.images[0].objective_settings.id == objective.id
+    storage.save_image(tmp_path / "c.ome.tif", np.ones((8, 8), np.uint16), objective={})
+    assert not ome_types.from_tiff(tmp_path / "c.ome.tif").instruments   # {}: data taken earlier
+    monkeypatch.setattr(storage, "current_objective", lambda: 1 / 0)
+    storage.save_image(tmp_path / "d.ome.zarr", np.ones((8, 8), np.uint16))   # still written
+    assert "acquisition" not in zarr.open_group(str(tmp_path / "d.ome.zarr"), mode="r").attrs

@@ -1,6 +1,7 @@
 import {
   autoWindow,
   compositeRGBA,
+  cropAt,
   dataUrl,
   describeImage,
   groupByFolder,
@@ -137,4 +138,11 @@ test("data URLs are built below /imswitch/data exactly once", () => {
   expect(dataUrl("http://pi", 80, "http://other/x.zarr")).toBe("http://other/x.zarr");
   // a TIFF is read through the server's zarr view of the file
   expect(dataUrl("http://pi", 80, "/run/a.ome.tif")).toBe("http://pi:80/imswitch/api/FileManager/tiffzarr/run/a.ome.tif");
+});
+
+test("the preview crop sits at the view centre and stays inside the image", () => {
+  const view = { x: 100, y: 50, zoom: 2 }; // canvas 400 x 300 shows image x 100..300, y 50..200
+  expect(cropAt(view, 400, 300, 64, 1000, 800)).toEqual({ x0: 168, y0: 93, w: 64, h: 64, cx: 200, cy: 125 });
+  expect(cropAt({ x: -500, y: -500, zoom: 1 }, 400, 300, 256, 1000, 800)).toMatchObject({ x0: 0, y0: 0 });
+  expect(cropAt(view, 400, 300, 512, 300, 200)).toMatchObject({ x0: 0, y0: 0, w: 300, h: 200 }); // image smaller
 });

@@ -32,9 +32,11 @@ import { Close, FitScreen, Refresh } from "@mui/icons-material";
 
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice";
 import apiFileManagerGetDatasets from "../backendapi/apiFileManagerGetDatasets";
+import DeconvolutionPanel from "./omezarr/DeconvolutionPanel";
 import {
   autoWindow,
   compositeRGBA,
+  cropAt,
   dataUrl,
   describeImage,
   fitView,
@@ -122,6 +124,8 @@ const VizarrViewer = ({ zarrUrl = null, onClose = null, embedded = false, height
   const [loading, setLoading] = useState(false);
   const [reload, setReload] = useState(0);
   const [status, setStatus] = useState({ zoom: 1, level: 0, pending: 0 });
+  const [deconv, setDeconv] = useState(false);
+  const [cropSize, setCropSize] = useState(256);
 
   const canvasRef = useRef(null);
   const boxRef = useRef(null);
@@ -307,12 +311,21 @@ const VizarrViewer = ({ zarrUrl = null, onClose = null, embedded = false, height
     };
     drawLevel(coarsest); // whole image at once, so panning never shows holes
     if (best !== coarsest) drawLevel(best);
+    if (deconv) {
+      // the crop a deconvolution preview takes: the middle of the view
+      const crop = cropAt(view, box.clientWidth, box.clientHeight, cropSize, info.sizes.x, info.sizes.y);
+      ctx.setLineDash([6 * dpr, 4 * dpr]);
+      ctx.strokeStyle = "#ffd54f";
+      ctx.lineWidth = dpr;
+      ctx.strokeRect((crop.x0 - v.x) * v.zoom, (crop.y0 - v.y) * v.zoom, crop.w * v.zoom, crop.h * v.zoom);
+      ctx.setLineDash([]);
+    }
     setStatus((s) =>
       s.zoom === view.zoom && s.level === best && s.pending === pending ? s : { zoom: view.zoom, level: best, pending },
     );
   };
 
-  useEffect(requestDraw, [image, channels, t, z, requestDraw]);
+  useEffect(requestDraw, [image, channels, t, z, requestDraw, deconv, cropSize]);
 
   // Resize, wheel zoom (non-passive so the page does not scroll) and drag to pan.
   useEffect(() => {
@@ -379,6 +392,14 @@ const VizarrViewer = ({ zarrUrl = null, onClose = null, embedded = false, height
 
   const group = useMemo(() => groups.find((g) => g.folder === folder), [groups, folder]);
   const info = image?.info;
+  const remote = /^https?:/.test(path);
+  // the image inside the store (a plate field such as A/1/0); "" for the store itself
+  const imageRel = image && !remote ? image.url.slice(dataUrl(ip, apiPort, path).length).replace(/^\//, "") : "";
+  const getCrop = () => {
+    const box = boxRef.current;
+    if (!viewRef.current || !box || !info) return null;
+    return cropAt(viewRef.current, box.clientWidth, box.clientHeight, cropSize, info.sizes.x, info.sizes.y);
+  };
   const name = path.split("/").pop();
   const level = info?.levels[status.level];
 
@@ -449,6 +470,19 @@ const VizarrViewer = ({ zarrUrl = null, onClose = null, embedded = false, height
             </Typography>
           )}
           <Box sx={{ flex: 1 }} />
+          <Tooltip title="Deconvolve: preview on a crop, then the whole stack">
+            <span>
+              <Button
+                size="small"
+                variant={deconv ? "contained" : "text"}
+                disableElevation
+                onClick={() => setDeconv((d) => !d)}
+                disabled={!info || remote}
+              >
+                Deconvolve
+              </Button>
+            </span>
+          </Tooltip>
           <Button size="small" onClick={oneToOne} disabled={!info}>
             1:1
           </Button>
@@ -544,6 +578,22 @@ const VizarrViewer = ({ zarrUrl = null, onClose = null, embedded = false, height
           </Box>
         )}
       </Box>
+      {deconv && info && !remote && (
+        <DeconvolutionPanel
+          path={path}
+          image={imageRel}
+          t={t}
+          z={z}
+          getCrop={getCrop}
+          cropSize={cropSize}
+          setCropSize={setCropSize}
+          onClose={() => setDeconv(false)}
+          onOpen={(result) => {
+            setPath(result);
+            setReload((n) => n + 1);
+          }}
+        />
+      )}
     </Box>
   );
 };

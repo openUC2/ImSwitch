@@ -133,6 +133,18 @@ export function fitView(w, h, width, height) {
   return { zoom, x: w / 2 - width / zoom / 2, y: h / 2 - height / zoom / 2 };
 }
 
+/**
+ * The crop a deconvolution preview uses: size x size full-resolution pixels centred on the view and
+ * kept inside the image, the way the server places it. cx, cy is the centre to send.
+ */
+export function cropAt(view, width, height, size, imgW, imgH) {
+  const w = Math.min(size, imgW);
+  const h = Math.min(size, imgH);
+  const x0 = Math.round(Math.min(Math.max(view.x + width / view.zoom / 2 - w / 2, 0), imgW - w));
+  const y0 = Math.round(Math.min(Math.max(view.y + height / view.zoom / 2 - h / 2, 0), imgH - h));
+  return { x0, y0, w, h, cx: x0 + Math.floor(w / 2), cy: y0 + Math.floor(h / 2) };
+}
+
 /** Zoom by `factor` keeping the image point under canvas pixel (sx, sy) fixed. */
 export function zoomAt(view, sx, sy, factor) {
   const zoom = Math.min(64, Math.max(1e-4, view.zoom * factor));

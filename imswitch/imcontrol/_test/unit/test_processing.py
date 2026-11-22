@@ -14,13 +14,15 @@ from fastapi import HTTPException
 
 from imswitch.imcommon.model import dirtools
 from imswitch.imcontrol.controller.controllers.ProcessingController import (
+    DistillRequest,
     ProcessingController,
     PreviewRequest,
     ProcessingJobRequest,
+    PSFViewRequest,
     _Source,
 )
 from imswitch.imcontrol.model.aufgaben import deconvolution as recipe
-from imswitch.imcontrol.model.aufgaben import worker
+from imswitch.imcontrol.model.aufgaben import storage, worker
 from imswitch.imcontrol.model.aufgaben.storage import save_image
 
 FAST = {"iterations": 4}
@@ -198,3 +200,55 @@ def test_refusals_and_cancel(data):
     ctl.cancelProcessingJob()
     assert wait(ctl)["state"] == "cancelled"
     assert not (data[0] / "run" / "a_deconvolved.ome.zarr").exists()
+
+
+def test_psf_from_beads_and_the_datasets_objective(data, worker_url, monkeypatch):
+    root, _ = data
+    o = recipe.Optics(pixel_um=0.12, z_step_um=0.5, na=0.75)
+    points = np.zeros((16, 128, 128), np.float32)
+    points[8, 16::32, 16::32] = 1.0  # 16 beads in focus at plane 8
+    kernel = recipe.psf(o, points.shape)
+    blurred = np.fft.irfftn(np.fft.rfftn(points) * np.fft.rfftn(kernel), s=points.shape)
+    beads = np.random.default_rng(0).poisson(np.maximum(blurred, 0) * 3000 / kernel.max() + 100)
+    taken_with = {"name": "20x", "na": 0.75, "magnification": 20, "immersion": "Air"}
+    save_image(
+        root / "run" / "beads.ome.zarr",
+        beads.astype(np.uint16),
+        "ZYX",
+        pixel_size_um=0.12,
+        z_step_um=0.5,
+        channel_names=["LED 488"],
+        objective=taken_with,
+    )
+    # today's objective is another one: files of earlier data keep theirs
+    monkeypatch.setattr(storage, "current_objective", lambda: {"name": "4x", "na": 0.1})
+    ctl = controller(worker_url)
+    defaults = ctl.getProcessingDefaults("/run/beads.ome.zarr")
+    assert defaults["optics"][0]["na"] == 0.75 and defaults["opticsFrom"]["na"] == "dataset"
+    assert "measured" in defaults["psfModels"]
+
+    made = ctl.distillProcessingPSF(DistillRequest(path="/run/beads.ome.zarr", window_um=2.0))
+    assert made["path"] == "/run/beads_psf.ome.zarr" and (made["found"], made["used"]) == (16, 16)
+    psf_attrs = zarr.open_group(str(root / "run" / "beads_psf.ome.zarr"), mode="r").attrs
+    assert storage.objective_of(psf_attrs["acquisition"]) == taken_with
+    optics = {**defaults["optics"][0], "psf_model": "measured", "psf_path": made["path"]}
+    measured = ctl.previewProcessingPSF(PSFViewRequest(optics=optics, planes=16))
+    model = ctl.previewProcessingPSF(PSFViewRequest(optics=defaults["optics"][0], planes=16))
+    assert abs(measured["fwhm_xy_um"] / model["fwhm_xy_um"] - 1) < 0.1
+    assert len(base64.b64decode(model["xz"])) == model["planes"] * model["width"] * 4
+
+    outputs = []
+    for runner in ("worker", "pi"):  # the measured PSF travels to the worker in the spec
+        ctl.startProcessingJob(
+            ProcessingJobRequest(
+                path="/run/beads.ome.zarr", optics=[optics], parameters=FAST, runner=runner
+            )
+        )
+        status = wait(ctl)
+        assert status["state"] == "done", status
+        outputs.append(zarr.open_group(str(root / status["output"].lstrip("/")), mode="r"))
+    np.testing.assert_allclose(outputs[0]["0"][:], outputs[1]["0"][:], rtol=1e-4, atol=1e-6)
+    assert storage.objective_of(outputs[0].attrs["acquisition"]) == taken_with
+    with pytest.raises(HTTPException) as e:
+        ctl.previewProcessingPSF(PSFViewRequest(optics={**optics, "psf_path": ""}))
+    assert e.value.status_code == 422

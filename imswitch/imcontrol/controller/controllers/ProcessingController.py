@@ -9,6 +9,7 @@ it. Nothing computes on the Pi while the microscope is busy (controller/busy.py)
 
 import base64
 import json
+import math
 import shutil
 import threading
 import time
@@ -26,13 +27,16 @@ from pydantic import BaseModel, Field
 
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
 from imswitch.imcontrol.model.aufgaben import deconvolution as recipe
-from imswitch.imcontrol.model.aufgaben import tiffzarr, worker
+from imswitch.imcontrol.model.aufgaben import storage, tiffzarr, worker
 from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage
 from ..basecontrollers import ImConWidgetController
 from ..busy import busy_reasons
 
 PI_MAX_VOXELS = 10_000_000  # one volume on the Pi; 32 x 512 x 512 takes about 1.5 min there
 PREVIEW_MAX_VOXELS = 64 * 256 * 256
+PSF_VIEW_VOXELS = 4_000_000  # the grid the PSF view is computed on
+DISTILL_MAX_VOXELS = 80_000_000  # a bead stack is read whole
+INDEX = {"air": 1.0, "water": 1.333, "waterdipping": 1.333, "glycerol": 1.47, "oil": 1.515}
 RUNNERS = ("auto", "pi", "worker")
 _SUFFIXES = (".ome.zarr", ".zarr", ".ome.tiff", ".ome.tif", ".tiff", ".tif")
 
@@ -62,6 +66,19 @@ class ProcessingJobRequest(BaseModel):
     runner: str = Field("auto", description="auto (the worker if one is registered), pi or worker")
 
 
+class PSFViewRequest(BaseModel):
+    optics: Dict[str, Any] = Field(..., description="recipe Optics, psf_model included")
+    planes: int = Field(32, description="Planes of the grid the PSF is shown on")
+
+
+class DistillRequest(BaseModel):
+    path: str = Field(..., description="Bead stack below the data folder: a .zarr store or a TIFF")
+    image: str = Field("", description="Image inside the store, e.g. a plate field A/1/0")
+    t: int = 0
+    c: int = 0
+    window_um: float = Field(0.0, description="Lateral window around a bead; 0: 15 px, >= 3 µm")
+
+
 class _Source:
     """One image below the data folder: an OME-Zarr image (or a field of a plate) or a TIFF.
 
@@ -76,10 +93,14 @@ class _Source:
             attrs = json.loads(tiffzarr.read(path, ".zattrs"))
             level = json.loads(tiffzarr.read(path, "0/.zarray"))
             shape, self.dtype = level["shape"], np.dtype(level["dtype"])
+            with tifffile.TiffFile(path) as tif:
+                xml = tif.ome_metadata
+            self.objective = storage.objective_from_ome(xml) if xml else {}
         else:
             group = zarr.open_group(str(path / self.image), mode="r")
             attrs = group.attrs.asdict()
             self.acquisition = attrs.get("acquisition") or {}
+            self.objective = storage.objective_of(self.acquisition)  # the data's, not today's
             attrs = attrs.get("ome", attrs)  # NGFF 0.5 nests under "ome"
             self.array = group[attrs["multiscales"][0]["datasets"][0]["path"]]
             shape, self.dtype = self.array.shape, self.array.dtype
@@ -194,24 +215,24 @@ class ProcessingController(ImConWidgetController):
             raise HTTPException(status_code=415, detail=f"Cannot read {path} {image}: {e}") from e
 
     def _optics(self, source: _Source):
-        """Optics per channel from the dataset, the current objective, the channel names."""
-        na = next(
-            (v for k, v in source.acquisition.items() if k.lower().endswith("objective_na")), None
-        )
-        na_from = "dataset"
-        if na is None:
+        """Optics per channel from the dataset's objective (else the current one), the dataset's
+        pixel size and z step, the channel names."""
+        objective, na_from = source.objective, "dataset"
+        if objective.get("na") is None:
             try:
-                na, na_from = (
-                    self._master.getController("Objective").getstatus().get("NA"),
-                    "current objective",
-                )
+                status = self._master.getController("Objective").getstatus()
+                objective = {"na": status.get("NA"), "immersion": status.get("immersion")}
+                na_from = "current objective"
             except Exception:
-                na = None
+                objective = {}
         try:
-            na = float(na)
+            na = float(objective.get("na"))
         except (TypeError, ValueError):
             na, na_from = recipe.Optics.na, "default"
-        immersion = 1.0 if na < 0.95 else 1.33 if na <= 1.25 else 1.515
+        immersion = (
+            INDEX.get(str(objective.get("immersion")).lower())
+            or INDEX[storage.immersion_for(na).lower()]
+        )
         optics = []
         for name in source.channels:
             try:
@@ -260,18 +281,52 @@ class ProcessingController(ImConWidgetController):
         return "pi"
 
     @staticmethod
-    def _output(source: _Source) -> Path:
+    def _output(source: _Source, what: str = "deconvolved") -> Path:
         stem = source.path.name
         stem = next((stem[: -len(s)] for s in _SUFFIXES if stem.lower().endswith(s)), stem)
         if source.image:
             stem += "_" + source.image.replace("/", "-")
         for n in range(1, 1000):
-            path = source.path.parent / f"{stem}_deconvolved{'' if n == 1 else f'_{n}'}.ome.zarr"
+            path = source.path.parent / f"{stem}_{what}{'' if n == 1 else f'_{n}'}.ome.zarr"
             if not path.exists():
                 return path
-        raise HTTPException(
-            status_code=409, detail="Too many deconvolved copies next to the source"
+        raise HTTPException(status_code=409, detail=f"Too many {what} copies next to the source")
+
+    def _measured(self, optics: recipe.Optics):
+        """(array, voxel_um) of the measured PSF the optics name, or None for a modelled PSF."""
+        if optics.psf_model != "measured":
+            return None
+        if not optics.psf_path:
+            raise HTTPException(status_code=422, detail="The measured PSF model needs a PSF file")
+        source = self._source(optics.psf_path)
+        if not source.pixel_um:
+            raise HTTPException(status_code=422, detail=f"{optics.psf_path} has no pixel size")
+        return source.read(0, 0).astype(np.float32), (
+            source.z_step_um,
+            source.pixel_um,
+            source.pixel_um,
         )
+
+    @staticmethod
+    def _psf_view(centred: np.ndarray, optics: recipe.Optics, half: int) -> Dict[str, Any]:
+        """A PSF centred in its array as the panel shows it: the focal plane (xy) and the xz
+        section through the centre, ``half`` pixels to both sides, base64 float32."""
+        zc, yc, xc = (n // 2 for n in centred.shape)
+        half = min(half, yc, xc)
+        crop = centred[:, yc - half : yc + half + 1, xc - half : xc + half + 1]
+        fxy, fz = recipe.widths(centred, optics)
+        exy, ez = recipe.expected_fwhm(optics)
+        return {
+            "xy": _b64(crop[zc]),
+            "xz": _b64(crop[:, half]),
+            "width": 2 * half + 1,
+            "planes": int(crop.shape[0]),
+            "pixel_um": optics.pixel_um,
+            "z_step_um": optics.z_step_um,
+            "fwhm_xy_um": round(fxy, 3),
+            "fwhm_z_um": round(fz, 3),
+            "expected_fwhm_um": [round(exy, 3), round(ez, 3)],
+        }
 
     # -- API -----------------------------------------------------------------------------------
     @APIExport(runInThreadpool=True)
@@ -293,6 +348,7 @@ class ProcessingController(ImConWidgetController):
             "limits": recipe.LIMITS,
             "optics": [asdict(o) for o in optics],
             "opticsFrom": origin,
+            "psfModels": recipe.PSF_MODELS,
             "channels": source.channels,
             "shape": dict(zip("tczyx", source.shape)),
             "dtype": str(source.dtype),
@@ -345,7 +401,11 @@ class ProcessingController(ImConWidgetController):
         started = time.monotonic()
         try:
             after = recipe.deconvolve(
-                crop, optics, parameters, progress=lambda _: self._preview != number
+                crop,
+                optics,
+                parameters,
+                progress=lambda _: self._preview != number,
+                measured=self._measured(optics),
             )
         except recipe.Cancelled:
             return {"cancelled": True}
@@ -384,6 +444,13 @@ class ProcessingController(ImConWidgetController):
             raise HTTPException(status_code=422, detail=f"optics needs one entry per channel ({C})")
         optics = [_parse(recipe.Optics, o) for o in request.optics]
         parameters = _parse(recipe.Parameters, request.parameters)
+        specs = {}
+        for c in channels:
+            spec = {"optics": asdict(optics[c]), "parameters": asdict(parameters)}
+            measured = self._measured(optics[c])
+            if measured is not None:
+                spec["psf"] = recipe.encode_psf(*measured)
+            specs[c] = spec
         runner = self._runner(request.runner, Z * Y * X)
         with self._lock:
             if self._job.get("state") == "running":
@@ -407,13 +474,13 @@ class ProcessingController(ImConWidgetController):
             }
         threading.Thread(
             target=self._run,
-            args=(source, channels, optics, parameters, output, request),
+            args=(source, channels, specs, output, request),
             daemon=True,
             name="processing-job",
         ).start()
         return self.getProcessingStatus()
 
-    def _run(self, source, channels, optics, parameters, output, request):
+    def _run(self, source, channels, specs, output, request):
         T, _, Z, Y, X = source.shape
         job, started = self._job, time.monotonic()
         try:
@@ -429,6 +496,7 @@ class ProcessingController(ImConWidgetController):
                     channel_names=[source.channels[c] for c in channels],
                     channel_colors=[source.colors[c] for c in channels],
                     name=output.name.split(".")[0],
+                    objective=dict(source.objective),
                     annotations={
                         "processing": {
                             "recipe": recipe.NAME,
@@ -447,7 +515,7 @@ class ProcessingController(ImConWidgetController):
                     job.update(progress=round((k + fraction) / len(volumes), 4), volume=k + 1)
                     return self._stop.is_set()
 
-                spec = {"optics": asdict(optics[c]), "parameters": asdict(parameters)}
+                spec = specs[c]
                 if job["runner"] == "worker":
                     planes = worker.run_remote(
                         job["worker"],
@@ -491,6 +559,82 @@ class ProcessingController(ImConWidgetController):
             )
             shutil.rmtree(output, ignore_errors=True)  # only the store this job created
         job["seconds"] = round(time.monotonic() - started, 1)
+
+    @APIExport(requestType="POST")
+    def previewProcessingPSF(self, request: PSFViewRequest) -> Dict[str, Any]:
+        """The PSF the optics give, as the panel shows it: the focal plane (xy) and the xz section
+        through the centre (base64 float32, ``width`` pixels wide, ``planes`` planes), its FWHM
+        and the FWHM the optics lead one to expect (µm). Computed on the Pi on a grid of
+        ``planes`` planes at the optics' voxels; a measured PSF is resampled to them. 409 while
+        the microscope acquires.
+        """
+        self._refuse_on_pi()
+        optics = _parse(recipe.Optics, request.optics)
+        measured = self._measured(optics)
+        nz = max(8, min(int(request.planes), 128))
+        reach = recipe.overlap_px(optics, nz, measured)
+        n = max(32, 2 * min(reach + 8, int(math.sqrt(PSF_VIEW_VOXELS / nz) / 2)))
+        try:
+            psf = np.fft.fftshift(recipe.psf(optics, (nz, n, n), measured))
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        return {"model": optics.psf_model, **self._psf_view(psf, optics, min(reach + 4, 64))}
+
+    @APIExport(requestType="POST")
+    def distillProcessingPSF(self, request: DistillRequest) -> Dict[str, Any]:
+        """Average the beads of a bead stack into a measured PSF (recipe.distill_psf) and save it
+        as <source>_psf.ome.zarr next to the stack (float32, the stack's voxels and objective).
+
+        ``window_um``: lateral window around a bead; beads closer than it to another bead or to
+        the edge are left out. Returns the PSF's path below the data folder, the bead counts
+        (found, used and why the others were left out) and the PSF view (previewProcessingPSF).
+        409 while the microscope acquires.
+        """
+        self._refuse_on_pi()
+        source = self._source(request.path, request.image)
+        T, C, Z, Y, X = source.shape
+        if not (0 <= request.t < T and 0 <= request.c < C):
+            raise HTTPException(status_code=422, detail="t or c is outside the image")
+        if not source.pixel_um:
+            raise HTTPException(status_code=422, detail="The bead stack has no pixel size")
+        if Z * Y * X > DISTILL_MAX_VOXELS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"A bead stack may have {DISTILL_MAX_VOXELS / 1e6:.0f} M voxels; crop it",
+            )
+        window = request.window_um or max(15 * source.pixel_um, 3.0)
+        try:
+            psf, info = recipe.distill_psf(
+                source.read(request.t, request.c), int(round(window / source.pixel_um)) | 1
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        output = self._output(source, "psf")
+        storage.save_image(
+            output,
+            psf,
+            "ZYX",
+            pixel_size_um=source.pixel_um,
+            z_step_um=source.z_step_um,
+            channel_names=[source.channels[request.c]],
+            objective=dict(source.objective),
+            annotations={
+                "psf": {
+                    "source": request.path,
+                    "image": request.image,
+                    "channel": source.channels[request.c],
+                    "beads": info["used"],
+                    "found": info["found"],
+                }
+            },
+        )
+        base = Path(dirtools.UserFileDirs.getValidatedDataPath()).resolve()
+        optics = recipe.Optics(pixel_um=source.pixel_um, z_step_um=source.z_step_um)
+        return {
+            "path": "/" + output.relative_to(base).as_posix(),
+            **{k: v for k, v in info.items() if k != "beads"},
+            **self._psf_view(psf, optics, psf.shape[2] // 2),
+        }
 
     @APIExport()
     def getProcessingStatus(self) -> Dict[str, Any]:

@@ -10,7 +10,6 @@ from datetime import datetime
 from dataclasses import dataclass, asdict
 from typing import Dict, Any, Optional
 import cv2
-import tifffile
 from scipy.ndimage import uniform_filter
 
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
@@ -454,7 +453,7 @@ class DPCController(ImConWidgetController):
         p = self._params
         os.makedirs(p.save_directory, exist_ok=True)
         stem = os.path.join(p.save_directory, datetime.now().strftime("%Y_%m_%d-%H-%M-%S") + "_FPM")
-        tifffile.imwrite(stem + ".tif", stack)
+        save_image(stem + ".tif", stack, "TYX" if stack.ndim == 3 else "TYXS")  # one per LED
         cal = self.ledMatrix.calibration
         na_led = ledgeometry.illumination_na(self.ledMatrix.positions, {"offset_mm": cal["offset_mm"]})
         meta = {

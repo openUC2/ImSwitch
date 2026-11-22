@@ -111,6 +111,8 @@
 - **DPC processing**
 - **Phase retrieval**
 - **Flatfield correction**
+- **3D deconvolution** of stored stacks (wide field, light sheet): preview on a crop in the OME-Zarr
+  viewer, whole stacks on the Pi or a processing worker container (`docs/DECONVOLUTION.md`)
 
 ## Data Acquisition & Storage
 

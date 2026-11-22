@@ -159,7 +159,9 @@ imswitch/
                                controllers/uc2config/can_network_api.py)
     model/aufgaben/            Aufgaben job format, tasks, validator, useq bridge (no ImSwitch
                                imports; plan in docs/AUFGABEN_ROADMAP.md); storage.py is the one
-                               OME-Zarr/OME-TIFF writer for all of ImSwitch (save_image, NgffImage)
+                               OME-Zarr/OME-TIFF writer for all of ImSwitch (save_image, NgffImage);
+                               deconvolution.py is the deconvolution recipe, worker.py the HTTP
+                               processing worker that runs it off the Pi (docker/processing-worker)
     model/SetupInfo.py         setup-JSON schema (dataclasses)
     model/io/recording_service.py   SaveFormat / RecMode enums, writers
     _test/                     unit + api tests
@@ -570,6 +572,20 @@ OME-TIFF files, for the viewer), `folder` (POST), `upload`, `download/{path}`, r
 delete, `tiffzarr/{file}/{key}` (a TIFF read as a Zarr v2 store, one tile per chunk; the OME-Zarr
 viewer opens OME-TIFF through it). `/imswitch/data/…` serves the data folder as it is now, also
 after `set_active_path`.
+
+`ProcessingController` — 3D deconvolution of stored stacks (`docs/DECONVOLUTION.md`; loaded on
+every setup). The recipe is `model/aufgaben/deconvolution.py`; large stacks go to a processing
+worker (`model/aufgaben/worker.py`, image `docker/processing-worker`) that the Pi sends planes to:
+
+- `getProcessingDefaults(path, image)` — recipe defaults and limits, optics per channel (µm; NA
+  from the dataset or the current objective, emission from the channel name) and their origin
+- `previewProcessing(request)` (POST) — a crop deconvolved on the Pi, before/after (xy, xz) as
+  base64 float32; refused (409) while the microscope acquires
+- `startProcessingJob(request)` (POST) — every volume of an image on the registered worker, or
+  on the Pi up to 10 M voxels per volume; writes `<source>_deconvolved.ome.zarr` with
+  `recipe.json` next to the source. `getProcessingStatus`, `cancelProcessingJob`
+- `getProcessingWorker` / `setProcessingWorker(url)` — the worker URL, saved in the setup file as
+  `processing.workerUrl`
 
 Logs: `/imswitch/api/LogController/listLogFiles`, `…/downloadLogFile?filename=…`.
 

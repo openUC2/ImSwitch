@@ -1,11 +1,13 @@
 # 3D deconvolution for FRAME: DeconvOptim.jl, where to run it, what to build around it
 
-Status 2026-11-22. An exploration, not a feature: nothing here is wired into ImSwitch yet.
-It covers what the `new_methods` branch of [DeconvOptim.jl](https://github.com/beniroquai/DeconvOptim.jl/tree/new_methods)
-can do, how fast it is, whether to keep it in Julia or port it, where it should run (Raspberry Pi,
-worker, Arkitekt), what the button in ImSwitch / newswitch should look like, and which other
-computational features are within reach. All timings are from one Apple M1 Pro laptop on synthetic
-stacks. **Nothing was run on a Raspberry Pi or on real FRAME data.**
+Status 2026-11-22. Sections 2–4 are the exploration: what the `new_methods` branch of
+[DeconvOptim.jl](https://github.com/beniroquai/DeconvOptim.jl/tree/new_methods) can do, how fast it
+is, whether to keep it in Julia or port it. Sections 5–6 say where it runs and what the button does,
+and DEC-1 to DEC-3 of section 8 are built: the numpy recipe in ImSwitch, the "Deconvolve" panel with
+a preview in the OME-Zarr viewer, and a processing worker container. None of it uses Julia; Julia
+stays the reference the tests compare with. Laptop timings are from one Apple M1 Pro; one stack
+size was also run on a Raspberry Pi. **Everything ran on synthetic stacks and the virtual
+microscope; nothing on real FRAME data.**
 
 ## 1. In short
 
@@ -14,17 +16,17 @@ stacks. **Nothing was run on a Raspberry Pi or on real FRAME data.**
 - **It works and it is fast enough.** A 32 × 512 × 512 stack takes 14 s with the new `map_cj_lean`
   solver (4 CPU threads); a 64 × 1024 × 1024 stack takes 3 min and 4 GB.
 - **Port one solver to Python, keep Julia as the reference.** A numpy port of `map_cj_lean`
-  (`scripts/deconvolution/deconv_numpy.py`, 200 lines with the PSF models, no new dependency) gives the same result
-  (correlation 0.99–0.9995 with the Julia output) and is 1.3–2.1 times slower. Rust would not be
-  faster: the time goes into FFTs, which are native code already.
-- **Raspberry Pi: light version only.** Preview on a crop and small stacks (up to about
-  32 × 512 × 512) fit. Larger stacks need more memory and time than a Pi that is also running the
-  microscope has. They belong on a worker: a Docker container on a laptop, GPU box or NAS.
+  (now `imswitch/imcontrol/model/aufgaben/deconvolution.py`, with the PSF models, no new dependency)
+  gives the same result (correlation 0.99–0.9995 with the Julia output) and is 1.3–2.1 times
+  slower. Rust would not be faster: the time goes into FFTs, which are native code already.
+- **Raspberry Pi: light version only.** Measured: 18 s for the MAP solver on 32 × 256 × 256, 3.7
+  times the laptop's time, the same result. Preview on a crop and small stacks (up to about
+  32 × 512 × 512) fit. Larger stacks belong on a worker: a Docker container on a laptop, GPU box or NAS.
 - **Arkitekt + mikro is the second way to reach the same worker**, for labs that run an Arkitekt
   server. The worker should not depend on it.
-- **The button**: a "Process" panel in the dataset viewer. It reads the optics from the setup, shows
-  a before/after preview on a crop, then runs the whole stack as a job and stores the result next to
-  the original.
+- **The button** is built: "Deconvolve" in the OME-Zarr viewer. It reads the optics from the
+  dataset and the objective, shows a before/after preview on a crop (on the Pi), then runs the whole
+  stack as a job on the worker (or the Pi) and stores the result next to the original.
 - **Cheapest next wins**: flat-field correction, haze removal, full focus from a z-stack, a measured
   PSF from beads. Section 7 lists these and the advanced ones.
 
@@ -177,41 +179,42 @@ stacks. New solvers land in Julia first and get ported only when they prove usef
 
 ## 5. Where it should run
 
-A Raspberry Pi 5 has four Cortex-A76 cores, 8 GB of RAM shared with ImSwitch and the camera
-buffers, and no GPU that runs FFTs. Expect it to be 5–10 times slower than the laptop above. That
-factor is an estimate; work package DEC-0 measures it.
+A Raspberry Pi 5 has four Cortex-A76 cores, up to 8 GB of RAM shared with ImSwitch and the camera
+buffers, and no GPU that runs FFTs. Measured on a Raspberry Pi (2026-11-22, `benchmark.py run`,
+4 threads, 32 × 256 × 256): Richardson–Lucy 5.5 s, MAP 18.2 s, with the laptop's correlations to
+four digits. That is 3.7–4.3 times the laptop's time, better than the 5–10 times estimated before.
+The larger rows are the laptop times scaled by 3.7 (≈) until they are run on the Pi. ImSwitch runs a
+volume on the Pi up to 10 M voxels (`PI_MAX_VOXELS`), and never while the microscope acquires.
 
-| Stack | numpy port on the laptop | Estimate for a Pi 5 | Verdict for the Pi |
+| Stack | numpy port on the laptop | Raspberry Pi | Verdict for the Pi |
 |---|---|---|---|
-| crop 32 × 256 × 256 | 5 s · 0.5 GB | 25–50 s | yes: this is the preview |
-| 32 × 512 × 512 | 23 s · 1.1 GB | 2–4 min | yes, when no scan is running |
-| 64 × 512 × 512 | 55 s · 1.9 GB | 5–9 min | borderline |
-| 32 × 1024 × 1024 | 2.5 min · 3.0 GB | 12–25 min | no |
-| 64 × 1024 × 1024 | 6 min · 5.2 GB | 30–60 min | no |
-| full sensor, 32 × 2048 × 3072 | not run; about 15 GB by scaling | – | no; the worker needs tiles or a GPU |
+| crop 32 × 256 × 256 | 5 s · 0.5 GB | 18 s, measured | yes: this is the preview |
+| 32 × 512 × 512 | 23 s · 1.1 GB | ≈ 1.5 min | yes, when no scan is running |
+| 64 × 512 × 512 | 55 s · 1.9 GB | ≈ 3.5 min | no: above 10 M voxels |
+| 32 × 1024 × 1024 | 2.5 min · 3.0 GB | ≈ 9 min | no |
+| 64 × 1024 × 1024 | 6 min · 5.2 GB | ≈ 23 min | no |
+| full sensor, 32 × 2048 × 3072 | not run; about 15 GB in one piece, about 2 GB in 512-pixel tiles | – | no; the worker, in tiles |
 
 ```mermaid
 flowchart LR
-    subgraph FR["FRAME, Raspberry Pi 5"]
-        UI["Dataset viewer<br/>Process panel"]
-        API["Processing endpoints<br/>recipes, preview, jobs"]
-        LIGHT["Light runner<br/>numpy: preview, small stacks"]
-        ZARR[("OME-Zarr store")]
+    subgraph FR["FRAME, Raspberry Pi"]
+        UI["OME-Zarr viewer<br/>Deconvolve panel"]
+        API["ProcessingController<br/>defaults, preview, jobs"]
+        LIGHT["Recipe on the Pi<br/>preview, volumes up to 10 M voxels"]
+        ZARR[("OME-Zarr and OME-TIFF<br/>in the data folder")]
         UI --> API --> LIGHT
-        LIGHT --> ZARR
+        ZARR -- "planes" --> API
+        API -- "result planes, storage.py" --> ZARR
     end
-    subgraph WK["Worker: Docker on a laptop, GPU box or NAS"]
-        CORE["Recipe core<br/>numpy or CuPy port"]
-        JL["DeconvOptim.jl<br/>warm Julia process"]
-        CORE --- JL
+    subgraph WK["Processing worker: Docker on a laptop, GPU box or NAS"]
+        CORE["The same recipe file<br/>numpy, one job at a time"]
     end
-    subgraph AK["Arkitekt server, optional"]
+    subgraph AK["Arkitekt server, optional, not built"]
         RK["rekuest<br/>action: deconvolve"]
         MK[("mikro<br/>images and provenance")]
     end
-    API -- "job over HTTP" --> CORE
-    ZARR -- "chunks over HTTP" --> CORE
-    CORE -- "result stack" --> ZARR
+    API -- "planes over HTTP" --> CORE
+    CORE -- "result planes" --> API
     API -. "assign action" .-> RK
     RK -.-> CORE
     CORE -. "image in, image out" .-> MK
@@ -219,61 +222,92 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Q1{"More than about<br/>10 million voxels?"} -- no --> PI["Run on the Pi<br/>when no scan is running"]
-    Q1 -- yes --> Q2{"Worker registered?"}
-    Q2 -- yes --> W["Send to the worker"]
-    Q2 -- no --> Q3{"Arkitekt bound?"}
-    Q3 -- yes --> AKT["Assign the Arkitekt action"]
-    Q3 -- no --> T["Offer: crop, bin 2x, or<br/>queue on the Pi overnight"]
+    Q0{"Worker registered?"} -- yes --> W["Send to the worker"]
+    Q0 -- no --> Q1{"One volume above<br/>10 million voxels?"}
+    Q1 -- no --> PI["Run on the Pi<br/>refused while the microscope acquires"]
+    Q1 -- yes --> T["Refused: register a worker,<br/>or crop or bin the stack"]
 ```
 
 - **One recipe, several runners.** This is the "one recipe, three runners" plan of
   `FRAME_FACILITY_ROADMAP.md` part B with deconvolution as its first heavy recipe: a pure function
   from a stack and typed parameters to a stack, no ImSwitch imports. In newswitch the recipe becomes
   an action and the worker a sidecar or a remote Arkitekt app (`NEWSWITCH_PLUGIN_ARCHITECTURE.md`).
-- **Plain HTTP worker first.** A stand-alone FRAME plus a laptop needs no server: the worker reads
-  OME-Zarr chunks from the instrument's `/data` mount and writes the result back.
+- **Plain HTTP worker, and the Pi pushes.** A stand-alone FRAME plus a laptop needs no server. The
+  Pi reads the planes (OME-Zarr or OME-TIFF), sends them as it reads them, and writes the result
+  planes as they come back. The worker never connects to the microscope: no route back to the Pi,
+  no certificates, no zarr or codecs in the container, and `storage.py` stays the only writer. The
+  Pi never holds more than one plane of a worker job. (Planned first: the worker reads the chunks
+  from `/data` itself; dropped for these reasons.)
 - **Arkitekt as a second door.** ImSwitch already uploads images to mikro and declares actions
   (`ArkitektController`). The same worker registers a `deconvolve` action; the result is a new mikro
   image linked to the original. An earlier Arkitekt integration called a remote deconvolution after
   a snap; the call is still in `RecordingController.snapImageToPath`, commented out.
-- **Julia stays on the worker**, behind the same recipe signature, for the solvers that are not
-  ported (TGV, Hessian–Schatten, weighted noise).
+- **No Julia in it.** A Julia backend on the worker, behind the same recipe signature
+  (`run(stack, spec, progress)`), stays possible for the solvers that are not ported (TGV,
+  Hessian–Schatten, weighted noise). It was left out on purpose.
 
 ## 6. The button
 
 ```mermaid
 sequenceDiagram
     actor U as User
-    participant V as Dataset viewer
-    participant A as ImSwitch API
-    participant R as Runner, Pi or worker
-    U->>V: open a stack, choose Process, Deconvolve
-    V->>A: list recipes
-    A-->>V: parameter schema, presets from the setup
-    U->>V: draw a crop, press Preview
-    V->>A: preview(crop, parameters)
-    A->>R: run on the crop
-    R-->>V: before and after
-    U->>V: run on the whole stack
-    V->>A: start job
-    A->>R: stack reference and parameters
-    loop until done
-        R-->>V: progress and current result
+    participant V as OME-Zarr viewer
+    participant A as ProcessingController on the Pi
+    participant W as Worker
+    U->>V: open a stack, press Deconvolve
+    V->>A: getProcessingDefaults
+    A-->>V: parameters, optics from the dataset and the objective
+    U->>V: move the dashed box, press Preview
+    V->>A: previewProcessing(crop, optics, parameters)
+    A-->>V: before and after, xy and xz, computed on the Pi
+    U->>V: deconvolve the whole stack
+    V->>A: startProcessingJob
+    loop every volume, time point x channel
+        A->>W: planes over HTTP
+        W-->>A: result planes
     end
-    R->>A: deconvolved stack and recipe.json
-    A-->>V: result opens next to the original
+    A->>A: write the result next to the source, with recipe.json
+    V->>A: getProcessingStatus, every second
+    A-->>V: done, path of the result
+    U->>V: Open result
 ```
 
 | Piece | Proposal |
 |---|---|
-| Where | "Process" in the dataset viewer (`VizarrViewer`), and on a finished volume in the light-sheet app. Not in Live View: deconvolution works on stored stacks |
-| Presets | PSF from the setup: objective NA and magnification, pixel size, z step, emission wavelength per channel, modality (wide field, light sheet + sheet thickness). All editable |
-| Parameters shown | method (fast = Richardson–Lucy, standard = MAP-CG), iterations, regularisation (one slider), background (auto from the stack), padding (auto per modality). The rest behind "advanced" |
-| Preview | a crop of about 32 × 256 × 256 on the Pi, before/after slider, xy and xz. This is where the user finds the regularisation weight |
-| Job | queued, cancellable, refused on the Pi while a scan runs (`controller/busy.py`); progress with the current iterate |
-| Result | `deconvolved.ome.zarr` next to the source through `model/aufgaben/storage.py`, with `recipe.json` (recipe name and version, parameters, PSF, runner). The same file reruns the job from the UI, an Aufgaben step or a notebook |
-| API sketch | `listProcessingRecipes`, `previewProcessing` (POST), `startProcessingJob` (POST), `getProcessingStatus`, `cancelProcessingJob`. The panel is built from the recipe's JSON schema, so the next recipe needs no new UI |
+| Where | Built: "Deconvolve" in the header of the OME-Zarr viewer (`VizarrViewer`), panel `omezarr/DeconvolutionPanel.jsx`. Not in Live View: deconvolution works on stored stacks. The light-sheet app is not wired yet |
+| Presets | Built: NA from the dataset or else the current objective, pixel size and z step from the dataset, emission wavelength from the channel name, immersion index from the NA, modality (wide field, light sheet + sheet thickness). All editable; the panel says where each came from |
+| Parameters shown | method (Regularised MAP, Richardson–Lucy), iterations, regularisation (one log slider), background (empty: estimated; the preview shows the estimate). Padding is fixed (25 % along z), tiles default to 512 px |
+| Preview | the dashed box in the middle of the view: 128, 256 or 512 px and up to 64 planes (at most 4.2 M voxels), on the Pi. Before/after toggle, xy plane and xz section at the true aspect. 5.6 s for 256 × 256 × 32 on the laptop |
+| Job | one at a time, cancellable (the unfinished result is removed), refused on the Pi while the microscope acquires (`controller/busy.py`; acquisitions are refused while the Pi deconvolves); progress per volume, no current-iterate preview |
+| Result | `<source>_deconvolved.ome.zarr` next to the source through `model/aufgaben/storage.py`: float32, the source's pixel size, z step and channel names, a display window from the data, and `recipe.json` inside it (recipe, version, the request, runner, time). The request is the body of `startProcessingJob`, so it reruns the job |
+| API | `getProcessingDefaults`, `previewProcessing` (POST), `startProcessingJob` (POST), `getProcessingStatus`, `cancelProcessingJob`, `getProcessingWorker`, `setProcessingWorker` (`ProcessingController`, AGENTS.md §4.10). The panel is written for this one recipe; one built from the recipe's schema is DEC-5 |
+
+### The processing worker
+
+```bash
+docker build -f docker/processing-worker/Dockerfile -t imswitch-processing-worker imswitch/imcontrol/model/aufgaben
+docker run --rm -p 8090:8090 imswitch-processing-worker
+```
+
+Without Docker, on any computer with numpy and scipy:
+`python imswitch/imcontrol/model/aufgaben/worker.py --port 8090`. Then in the viewer's Deconvolve
+panel, Worker URL `http://<that computer>:8090`, Save (stored in the setup as
+`processing.workerUrl`). The image is 365 MB: Python, numpy, scipy and two files. The protocol is in
+the docstring of `worker.py`: POST a volume, poll the job, GET the result, DELETE it.
+
+Tried on the laptop (2026-11-22): the worker in Docker Desktop (a Linux VM with 4 CPUs and 8 GB),
+ImSwitch on the virtual microscope, the job started from the Deconvolve panel. A 64 × 1024 × 1024
+uint16 stack, MAP with 30 iterations, 2 × 2 tiles of 512 px: 638 s from start to the written
+result, 3.6 GB peak in the worker. ImSwitch used 0.57 of a CPU core during the job and 0.58
+before it (the virtual camera's live stream), so reading the planes and writing the result do not
+show. The first attempt without tiles needed about 6 GB, swapped in the 8 GB VM and took 218 s
+per iteration instead of 12 s; hence the 512 px default. Cancel takes effect at the end of the
+current iteration.
+
+The optics matter more than the runner. The panel took NA 0.5 from the virtual objective while the
+stack was simulated at NA 0.75: correlation with the object 0.21 → 0.54. With NA 0.75 the same
+crop reaches 0.76. ImSwitch's writers do not store the objective NA with a dataset yet, so the
+default comes from the objective in use now; the panel says so.
 
 ## 7. Beyond deconvolution
 
@@ -304,12 +338,12 @@ pycudadecon (CUDA, with deskew), `psfmodels` (Gibson–Lanni and vectorial PSFs)
 
 Not on the roadmap board yet. Sizes: S up to 2 days, M up to 2 weeks.
 
-| ID | What | Done when | Size |
+| ID | What | Done when | Size · status |
 |---|---|---|---|
-| DEC-0 | Run `scripts/deconvolution/benchmark.py` on a Pi 5, and on one real FRAME stack with beads | the estimate column of section 5 is replaced by numbers | S |
-| DEC-1 | Recipe: move the numpy solvers into a module without ImSwitch imports, PSF from optics metadata, test against stored Julia outputs | `deconvolve(stack, optics, parameters)` passes the comparison test | S |
-| DEC-2 | Preview endpoint on the Pi and the crop + before/after view | a user finds the regularisation weight on a crop without leaving the viewer | M |
-| DEC-3 | Worker container: recipe core, job API, reads and writes OME-Zarr over HTTP; optional Julia backend with a warm process | a 64 × 1024 × 1024 stack is deconvolved from the UI with the Pi idle | M |
+| DEC-0 | Run `scripts/deconvolution/benchmark.py` on a Pi 5, and on one real FRAME stack with beads | the estimate column of section 5 is replaced by numbers | S · **partly**: 32 × 256 × 256 on a Pi; the larger sizes and a bead stack are open |
+| DEC-1 | Recipe: move the numpy solvers into a module without ImSwitch imports, PSF from optics metadata, test against stored Julia outputs | `deconvolve(stack, optics, parameters)` passes the comparison test | S · **done**: `model/aufgaben/deconvolution.py`, `test_deconvolution.py` (0.995 / 0.996 with Julia's projections), tiles |
+| DEC-2 | Preview endpoint on the Pi and the crop + before/after view | a user finds the regularisation weight on a crop without leaving the viewer | M · **done**: `previewProcessing`, Deconvolve panel; laptop and virtual microscope only |
+| DEC-3 | Worker container: recipe core, job API; the Pi sends the planes and writes the result; optional Julia backend with a warm process | a 64 × 1024 × 1024 stack is deconvolved from the UI with the Pi idle | M · **done** without the Julia backend: `worker.py`, `docker/processing-worker`, `startProcessingJob`; tried with Docker on the laptop |
 | DEC-4 | Arkitekt app around the worker: `deconvolve` action on mikro images | the action shows in the Arkitekt UI and returns a linked image | S |
 | DEC-5 | Process panel built from the recipe schema; job list; `recipe.json` | a second recipe (flat field) appears without UI work | M |
 | DEC-6 | PSF: theoretical per objective and channel; measured from beads | deconvolution with the measured PSF beats the theoretical one on a bead slide | M |
@@ -327,9 +361,13 @@ Order: DEC-0 → DEC-1 → DEC-2 → DEC-3 → DEC-5 → DEC-6, then DEC-4, DEC-
   does not turn a wide-field stack into a confocal one. Say so in the UI.
 - **Quantitative use.** A regularised result is not linear in the object. Keep the raw data, store
   the parameters, and label deconvolved images as such.
-- **Memory on the worker.** A full-sensor stack does not fit a laptop in one piece. Tiling with
-  overlap is not in DeconvOptim.jl and is part of DEC-3.
-- **Pi numbers are estimates** until DEC-0.
+- **Memory on the worker.** A full-sensor stack does not fit a laptop in one piece. The recipe tiles
+  planes wider than 512 px, with an overlap from the PSF's reach over the stack depth; the tiled
+  result correlates 0.995 with the whole-plane one. A tile still holds every plane, so a very deep
+  stack needs a smaller tile or a GPU.
+- **Pi numbers**: one size measured, the rest scaled from it (DEC-0).
+- **Untested** on hardware, on real FRAME data, on float64 or int64 stacks, and with a worker
+  on another computer: the worker ran in Docker on the same laptop as ImSwitch.
 - **ADMM / Chambolle–Pock convergence** on sparse objects needs a look upstream before these
   solvers are offered in a UI.
 
@@ -337,8 +375,9 @@ Order: DEC-0 → DEC-1 → DEC-2 → DEC-3 → DEC-5 → DEC-6, then DEC-4, DEC-
 
 | File | Purpose |
 |---|---|
-| `scripts/deconvolution/deconv_numpy.py` | PSF models, Richardson–Lucy and the `map_cj_lean` port; `python deconv_numpy.py` runs a self-check |
-| `scripts/deconvolution/benchmark.py` | test stacks (`data`), numpy timings (`run`), table (`table`), figures (`figures`) |
+| `imswitch/imcontrol/model/aufgaben/deconvolution.py` | the recipe: PSF models, Richardson–Lucy, the `map_cj_lean` port, tiles, the synthetic test object (was `scripts/deconvolution/deconv_numpy.py`) |
+| `imswitch/imcontrol/_test/unit/test_deconvolution.py` | the comparison with DeconvOptim.jl (stored projections in `deconvolution_julia_reference.npz`), tiles, PSF, refusals |
+| `scripts/deconvolution/benchmark.py` | test stacks (`data`), numpy timings (`run`), table (`table`), figures (`figures`). On a Pi: copy it and `deconvolution.py` into one folder, `python3 -m venv .venv && .venv/bin/pip install numpy scipy`, then `data` and `run` per size; `run` reports peak memory on Linux too |
 | `scripts/deconvolution/benchmark.jl` | DeconvOptim.jl on the same stacks; every solver twice (first call, warm) |
 
 Machine: Apple M1 Pro, 16 GB, macOS; Julia 1.13.3; DeconvOptim.jl `new_methods` at `c72a2c8`;

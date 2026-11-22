@@ -586,6 +586,17 @@ worker (`model/aufgaben/worker.py`, image `docker/processing-worker`) that the P
   `recipe.json` next to the source. `getProcessingStatus`, `cancelProcessingJob`
 - `getProcessingWorker` / `setProcessingWorker(url)` — the worker URL, saved in the setup file as
   `processing.workerUrl`
+- `previewProcessingPSF(request{optics, planes})` (POST) — the PSF of `optics.psf_model` (scalar,
+  vectorial, gaussian, measured with `psf_path`): xy and xz as base64 float32, FWHM and the FWHM the
+  optics lead one to expect (µm)
+- `distillProcessingPSF(request{path, image, t, c, window_um})` (POST) — averages the beads of a
+  bead stack into `<stack>_psf.ome.zarr` (the stack's voxels and objective); bead counts and the view
+
+Every OME-TIFF and OME-Zarr `storage.py` writes records the objective it was taken with (OME
+Instrument / Objective linked from the Image; zarr `acquisition` keys `objective_name`,
+`objective_na`, `objective_magnification`, `objective_immersion`), from `ObjectiveController`
+unless the writer passes another (`ImageSpec.objective`, `save_image(objective=)`; `{}` for none).
+Immersion comes from the setup's `objective.immersions` (OME names) or is guessed from the NA.
 
 Logs: `/imswitch/api/LogController/listLogFiles`, `…/downloadLogFile?filename=…`.
 

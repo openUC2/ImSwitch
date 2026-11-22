@@ -4,7 +4,9 @@ Status 2026-11-22. Sections 2–4 are the exploration: what the `new_methods` br
 [DeconvOptim.jl](https://github.com/beniroquai/DeconvOptim.jl/tree/new_methods) can do, how fast it
 is, whether to keep it in Julia or port it. Sections 5–6 say where it runs and what the button does,
 and DEC-1 to DEC-3 of section 8 are built: the numpy recipe in ImSwitch, the "Deconvolve" panel with
-a preview in the OME-Zarr viewer, and a processing worker container. None of it uses Julia; Julia
+a preview in the OME-Zarr viewer, and a processing worker container. DEC-6 is built up to its test on
+a real bead slide: four PSF models, a PSF distilled from a bead stack, a PSF view, and every image
+ImSwitch writes now records its objective. None of it uses Julia; Julia
 stays the reference the tests compare with. Laptop timings are from one Apple M1 Pro; one stack
 size was also run on a Raspberry Pi. **Everything ran on synthetic stacks and the virtual
 microscope; nothing on real FRAME data.**
@@ -27,8 +29,10 @@ microscope; nothing on real FRAME data.**
 - **The button** is built: "Deconvolve" in the OME-Zarr viewer. It reads the optics from the
   dataset and the objective, shows a before/after preview on a crop (on the Pi), then runs the whole
   stack as a job on the worker (or the Pi) and stores the result next to the original.
-- **Cheapest next wins**: flat-field correction, haze removal, full focus from a z-stack, a measured
-  PSF from beads. Section 7 lists these and the advanced ones.
+- **The PSF**: scalar, vectorial (Richards–Wolf) or Gaussian from the optics, or measured from a
+  bead stack in the same panel, which shows the PSF and its FWHM (section 6).
+- **Cheapest next wins**: flat-field correction, haze removal, full focus from a z-stack. Section 7
+  lists these and the advanced ones.
 
 ## 2. What DeconvOptim.jl does
 
@@ -275,12 +279,49 @@ sequenceDiagram
 | Piece | Proposal |
 |---|---|
 | Where | Built: "Deconvolve" in the header of the OME-Zarr viewer (`VizarrViewer`), panel `omezarr/DeconvolutionPanel.jsx`. Not in Live View: deconvolution works on stored stacks. The light-sheet app is not wired yet |
-| Presets | Built: NA from the dataset or else the current objective, pixel size and z step from the dataset, emission wavelength from the channel name, immersion index from the NA, modality (wide field, light sheet + sheet thickness). All editable; the panel says where each came from |
+| Presets | Built: NA and immersion from the objective the dataset records (else the current objective), pixel size and z step from the dataset, emission wavelength from the channel name, modality (wide field, light sheet + sheet thickness), PSF model. All editable; the panel says where each came from |
 | Parameters shown | method (Regularised MAP, Richardson–Lucy), iterations, regularisation (one log slider), background (empty: estimated; the preview shows the estimate). Padding is fixed (25 % along z), tiles default to 512 px |
 | Preview | the dashed box in the middle of the view: 128, 256 or 512 px and up to 64 planes (at most 4.2 M voxels), on the Pi. Before/after toggle, xy plane and xz section at the true aspect. 5.6 s for 256 × 256 × 32 on the laptop |
 | Job | one at a time, cancellable (the unfinished result is removed), refused on the Pi while the microscope acquires (`controller/busy.py`; acquisitions are refused while the Pi deconvolves); progress per volume, no current-iterate preview |
 | Result | `<source>_deconvolved.ome.zarr` next to the source through `model/aufgaben/storage.py`: float32, the source's pixel size, z step and channel names, a display window from the data, and `recipe.json` inside it (recipe, version, the request, runner, time). The request is the body of `startProcessingJob`, so it reruns the job |
-| API | `getProcessingDefaults`, `previewProcessing` (POST), `startProcessingJob` (POST), `getProcessingStatus`, `cancelProcessingJob`, `getProcessingWorker`, `setProcessingWorker` (`ProcessingController`, AGENTS.md §4.10). The panel is written for this one recipe; one built from the recipe's schema is DEC-5 |
+| API | `getProcessingDefaults`, `previewProcessing` (POST), `previewProcessingPSF` (POST), `distillProcessingPSF` (POST), `startProcessingJob` (POST), `getProcessingStatus`, `cancelProcessingJob`, `getProcessingWorker`, `setProcessingWorker` (`ProcessingController`, AGENTS.md §4.10). The panel is written for this one recipe; one built from the recipe's schema is DEC-5 |
+
+### The PSF
+
+| Model | What it is | When |
+|---|---|---|
+| Scalar | the pupil propagated plane by plane, \|ifft2(pupil · defocus)\|² | the default |
+| Vectorial | Richards–Wolf for an isotropic emitter, \|I0\|² + 2\|I1\|² + \|I2\|² with the aplanatic √cos θ apodisation: the integrals [cgohlke/psf](https://github.com/cgohlke/psf) evaluates in C, here Gauss–Legendre in numpy on a radial profile per plane | high NA; at NA 0.75 it is 5 % wider than the scalar one and its Airy zeros are filled |
+| Gaussian | 3D Gaussian; FWHM 0.51 λ/NA and 0.88 λ/(n − √(n² − NA²)) unless typed in | only the widths are known, e.g. from beads. No missing cone, so wide-field haze stays |
+| Measured | a bead stack averaged into a PSF, resampled to the stack's voxels | the real optics: cover glass, tube lens, aberrations |
+
+The panel shows the PSF of the chosen model (xy at focus, xz through the centre, log or linear) with
+its FWHM next to the FWHM the optics lead one to expect. "Distill from this image" on a bead stack
+(`distill_psf`, the approach of [PSFDistiller.jl](https://github.com/bionanoimaging/PSFDistiller.jl)
+in numpy): beads are the local maxima of the smoothed maximum projection above 10 % of the
+brightest; a bead is left out when another one lies within the window, it is at the edge or within
+2 planes of the top or bottom, or it is brighter than 1.6 times the median (a clump). Each bead's
+window loses its border median, is shifted sub-pixel onto its centroid (Fourier shift), is scaled
+to the light around focus and averaged; along z the beads are aligned to whole planes only. The PSF
+is saved as `<stack>_psf.ome.zarr` next to the bead stack, with the stack's voxels and objective,
+and the panel offers the last one when the model is switched to Measured. On a synthetic bead stack
+(49 beads, NA 0.75): FWHM 0.359 / 1.382 µm against 0.36 / 1.392 µm of the PSF that made it. A
+measured PSF travels to the worker inside the job's spec, so the worker never reads files.
+
+cgohlke/psf (BSD-3) publishes a Linux aarch64 wheel (abi3, Python ≥ 3.12, numpy ≥ 2.1), so it would
+install in the Pi image; it is not used because the vectorial model above is 30 lines of numpy and
+scipy. Its confocal and two-photon PSFs are what it would be worth adding for.
+
+**The objective in every image.** `storage.py` writes the current objective (name, NA,
+magnification, immersion) into every OME-TIFF (Instrument / Objective, linked from the Image by
+InstrumentRef and ObjectiveSettings) and every OME-Zarr (`acquisition`: `objective_name`,
+`objective_na`, `objective_magnification`, `objective_immersion`); `ObjectiveController` provides
+it, and a writer can pass the objective of earlier data instead (deconvolved results and distilled
+PSFs keep their source's). Immersion comes from the setup's objective `immersions` list (OME names:
+Air, Water, WaterDipping, Oil, Glycerol) or is guessed from the NA. The panel reads NA and immersion
+from there, which removes the NA mix-up of the first worker test (0.5 from the virtual objective for
+data taken at 0.75). The DPC FPM stack and the FLIM intensity image, the last TIFFs written
+around `storage.py`, now go through it. Not covered: PNG, JPG and MP4, which have no place for it.
 
 ### The processing worker
 
@@ -346,7 +387,7 @@ Not on the roadmap board yet. Sizes: S up to 2 days, M up to 2 weeks.
 | DEC-3 | Worker container: recipe core, job API; the Pi sends the planes and writes the result; optional Julia backend with a warm process | a 64 × 1024 × 1024 stack is deconvolved from the UI with the Pi idle | M · **done** without the Julia backend: `worker.py`, `docker/processing-worker`, `startProcessingJob`; tried with Docker on the laptop |
 | DEC-4 | Arkitekt app around the worker: `deconvolve` action on mikro images | the action shows in the Arkitekt UI and returns a linked image | S |
 | DEC-5 | Process panel built from the recipe schema; job list; `recipe.json` | a second recipe (flat field) appears without UI work | M |
-| DEC-6 | PSF: theoretical per objective and channel; measured from beads | deconvolution with the measured PSF beats the theoretical one on a bead slide | M |
+| DEC-6 | PSF: theoretical per objective and channel; measured from beads | deconvolution with the measured PSF beats the theoretical one on a bead slide | M · **built, test open**: scalar, vectorial, Gaussian and measured models, `distillProcessingPSF`, PSF view, the objective in every image; synthetic beads only |
 | DEC-7 | Light sheet: sheet thickness in the PSF, deskew for OPM stacks | the virtual light-sheet volume deconvolves end to end | M |
 | DEC-8 | GPU on the worker (CuPy / PyTorch backend, or CUDA.jl) | the full-sensor stack runs in minutes | S |
 
@@ -356,7 +397,9 @@ Order: DEC-0 → DEC-1 → DEC-2 → DEC-3 → DEC-5 → DEC-6, then DEC-4, DEC-
 
 - **The PSF decides the result.** FRAME's tube lens is unknown in detail, objectives corrected for
   0.17 mm cover glass are used through 1 mm plastic, and the field is not fully lit in the corners.
-  A theoretical PSF will be optimistic; a measured one (DEC-6) is the fix.
+  A theoretical PSF will be optimistic; a measured one (DEC-6, built) is the fix, still to be shown
+  on a real bead slide. The distilled PSF is only as wide as its window: light further out is
+  treated as background.
 - **Wide-field stacks have a missing cone.** Deconvolution removes haze and sharpens laterally; it
   does not turn a wide-field stack into a confocal one. Say so in the UI.
 - **Quantitative use.** A regularised result is not linear in the object. Keep the raw data, store

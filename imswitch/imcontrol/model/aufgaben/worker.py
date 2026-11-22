@@ -6,18 +6,20 @@ ImSwitch sends one volume and fetches the result. The worker never connects to t
 it only has to be reachable from the Pi. Jobs run one at a time, in arrival order; a result is kept
 until it is deleted, at most an hour after the job ended.
 
-    POST   /jobs?recipe=deconvolution&shape=Z,Y,X&dtype=<u2&spec=<JSON>   body: C-order pixels
-           -> 201 {"id", "state": "queued", ...}
+    POST   /jobs?recipe=deconvolution&shape=Z,Y,X&dtype=<u2&spec_bytes=N
+           body: N bytes of JSON spec, then the C-order pixels -> 201 {"id", "state": "queued", ..}
     GET    /jobs/<id>          -> {"id", "state", "progress", "error", "seconds"}
     GET    /jobs/<id>/result   -> float32 little endian, same shape, once the state is "done"
     DELETE /jobs/<id>          -> stops a queued or running job and forgets it
     GET    /                   -> {"worker": "imswitch-processing", "recipes": {name: version}}
 
-``spec`` is what the recipe's ``run`` takes ({"optics": .., "parameters": ..} for deconvolution).
+``spec`` is what the recipe's ``run`` takes ({"optics": .., "parameters": ..} for deconvolution,
+plus a measured PSF); it travels in the body because it can hold an array.
 numpy and the recipe's own imports only, no ImSwitch imports. ``run_remote`` is the client.
 """
 
 import argparse
+import itertools
 import json
 import queue
 import threading
@@ -38,6 +40,7 @@ except ImportError:  # a flat copy next to deconvolution.py (the container)
 RECIPES = {deconvolution.NAME: deconvolution}
 KEEP_S = 3600  # finished jobs are forgotten after an hour
 MAX_BYTES = 16 << 30  # one volume
+MAX_SPEC = 64 << 20  # the JSON spec, a measured PSF included
 
 
 class Worker:
@@ -149,36 +152,48 @@ class Handler(BaseHTTPRequestHandler):
         for plane in result.reshape((-1,) + result.shape[-2:]):  # one plane at a time
             self.wfile.write(np.ascontiguousarray(plane, "<f4").tobytes())
 
+    def _job_request(self):
+        """recipe, shape, dtype, spec bytes and pixel bytes of a POST /jobs; ValueError if bad."""
+        query = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+        recipe = query.get("recipe", deconvolution.NAME)
+        shape = tuple(int(n) for n in query["shape"].split(","))
+        dtype = np.dtype(query["dtype"])
+        spec_bytes = int(query.get("spec_bytes", 0))
+        size = int(np.prod(shape)) * dtype.itemsize
+        if recipe not in RECIPES:
+            raise ValueError(f"unknown recipe {recipe!r}; this worker has {sorted(RECIPES)}")
+        if not (
+            2 <= len(shape) <= 3
+            and min(shape) >= 1
+            and dtype.kind in "uif"
+            and dtype.itemsize <= 8
+            and 0 <= spec_bytes <= MAX_SPEC
+        ):
+            raise ValueError(
+                "expected shape Z,Y,X or Y,X, an integer or float dtype, a spec of "
+                f"{MAX_SPEC >> 20} MiB at most"
+            )
+        if int(self.headers.get("Content-Length", -1)) != spec_bytes + size:
+            raise ValueError("Content-Length does not match spec_bytes, shape and dtype")
+        return recipe, shape, dtype, spec_bytes, size
+
     def do_POST(self):
-        url = urlparse(self.path)
-        if url.path.strip("/") != "jobs":
+        if urlparse(self.path).path.strip("/") != "jobs":
             return self._reply(404, {"error": "not found"})
+        read = 0
         try:
-            query = {k: v[0] for k, v in parse_qs(url.query).items()}
-            recipe = query.get("recipe", deconvolution.NAME)
-            shape = tuple(int(n) for n in query["shape"].split(","))
-            dtype = np.dtype(query["dtype"])
-            spec = json.loads(query.get("spec", "{}"))
-            size = int(np.prod(shape)) * dtype.itemsize
-            if recipe not in RECIPES:
-                raise ValueError(f"unknown recipe {recipe!r}; this worker has {sorted(RECIPES)}")
-            if not (
-                2 <= len(shape) <= 3
-                and min(shape) >= 1
-                and dtype.kind in "uif"
-                and dtype.itemsize <= 8
-                and isinstance(spec, dict)
-            ):
-                raise ValueError(
-                    "expected shape Z,Y,X or Y,X, an integer or float dtype, a JSON spec"
+            recipe, shape, dtype, read, size = self._job_request()
+            if size > MAX_BYTES:
+                self._drain()
+                return self._reply(
+                    413, {"error": f"a volume may have at most {MAX_BYTES >> 30} GiB"}
                 )
-            if int(self.headers.get("Content-Length", -1)) != size:
-                raise ValueError("Content-Length does not match shape and dtype")
+            spec = json.loads(self.rfile.read(read) or b"{}")
+            if not isinstance(spec, dict):
+                raise ValueError("the spec is not a JSON object")
         except (KeyError, ValueError, TypeError) as e:
-            self._drain()
+            self._drain(read)
             return self._reply(400, {"error": str(e)})
-        if size > MAX_BYTES:
-            return self._reply(413, {"error": f"a volume may have at most {MAX_BYTES >> 30} GiB"})
         volume = np.empty(shape, dtype)
         view, got = memoryview(volume).cast("B"), 0
         while got < size:
@@ -188,13 +203,14 @@ class Handler(BaseHTTPRequestHandler):
             got += n
         self._reply(201, self.worker.submit(recipe, spec, volume))
 
-    def _drain(self):
-        """Read and drop the request body, so the client gets the answer, not a broken pipe."""
+    def _drain(self, done: int = 0):
+        """Read and drop the rest of the request body (``done`` bytes are read already), so the
+        client gets the answer, not a broken pipe."""
         try:
-            left = int(self.headers.get("Content-Length", 0))
+            left = int(self.headers.get("Content-Length", 0)) - done
         except ValueError:
             return
-        while 0 < left <= MAX_BYTES:
+        while 0 < left <= MAX_BYTES + MAX_SPEC:
             chunk = self.rfile.read(min(left, 1 << 20))
             if not chunk:
                 break
@@ -249,10 +265,11 @@ def run_remote(
     """
     url, (nz, ny, nx) = url.rstrip("/"), shape
     dt = np.dtype(dtype).newbyteorder("<")
+    head = json.dumps(spec).encode()
     query = urlencode(
-        {"recipe": recipe, "shape": f"{nz},{ny},{nx}", "dtype": dt.str, "spec": json.dumps(spec)}
+        {"recipe": recipe, "shape": f"{nz},{ny},{nx}", "dtype": dt.str, "spec_bytes": len(head)}
     )
-    body = (np.ascontiguousarray(plane, dt).tobytes() for plane in planes)
+    body = itertools.chain([head], (np.ascontiguousarray(plane, dt).tobytes() for plane in planes))
     key = _call(
         Request(
             f"{url}/jobs?{query}",
@@ -260,7 +277,7 @@ def run_remote(
             method="POST",
             headers={
                 "Content-Type": "application/octet-stream",
-                "Content-Length": str(nz * ny * nx * dt.itemsize),
+                "Content-Length": str(len(head) + nz * ny * nx * dt.itemsize),
             },
         ),
         timeout=600,

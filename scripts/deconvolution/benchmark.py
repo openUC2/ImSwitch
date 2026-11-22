@@ -15,13 +15,16 @@ import time
 from pathlib import Path
 
 import numpy as np
-from scipy import fft
 
-import deconv_numpy as dn
+# The recipe lives in ImSwitch; put a copy next to this file to run it without ImSwitch (e.g. on a Pi).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "imswitch/imcontrol/model/aufgaben"))
+import deconvolution as dn  # noqa: E402
 
-PX_UM, DZ_UM, NA = 0.12, 0.5, 0.75          # FRAME, 20x/0.75, unbinned IMX178
-BACKGROUND, PHOTONS = 5.0, 300.0            # counts per voxel: offset, and peak of the blurred object
-PADDING = (0.25, 0, 0)                      # wide-field light leaves the stack along z
+dn.WORKERS = 4                              # as Julia: 4 threads, comparable timings
+FRAME = dn.Optics(pixel_um=0.12, z_step_um=0.5, na=0.75)   # 20x/0.75, unbinned IMX178
+PX_UM, DZ_UM = FRAME.pixel_um, FRAME.z_step_um
+BACKGROUND = 5.0                            # counts per voxel; the object peaks at 300 after blurring
+PADDING = dn.PADDING                        # wide-field light leaves the stack along z
 GAMMA = 1e-4                                # Good's roughness weight (counts); the sparse test object wants little smoothing
 ITER = 30
 SOLVERS = {"py_rl": "Richardson-Lucy, numpy", "jl_rl": "Richardson-Lucy, Julia",
@@ -37,43 +40,10 @@ def voxels(s):
     return int(np.prod([int(n) for n in s.split("x")]))
 
 
-def make_object(shape, rng):
-    """Beads, filaments, a hollow shell and three line pairs, kept away from the z ends."""
-    nz, ny, nx = shape
-    obj = np.zeros(shape, np.float32)
-    for _ in range(40 * nx // 256):                                  # beads
-        obj[rng.integers(nz // 4, 3 * nz // 4), rng.integers(8, ny - 8), rng.integers(8, nx - 8)] += rng.uniform(40, 120)
-    t = np.linspace(0, 1, 4 * nx)
-    for _ in range(6 * nx // 256):                                   # filaments, slightly tilted in z
-        p0 = np.array([rng.uniform(0.3, 0.7) * nz, rng.uniform(0.1, 0.9) * ny, rng.uniform(0.1, 0.9) * nx])
-        p1 = np.array([rng.uniform(0.3, 0.7) * nz, rng.uniform(0.1, 0.9) * ny, rng.uniform(0.1, 0.9) * nx])
-        z, y, x = (p0[:, None] + (p1 - p0)[:, None] * t).round().astype(int)
-        obj[z, y, x] = 6
-    zz, yy, xx = np.ogrid[:nz, :ny, :nx]                             # hollow shell ("cell")
-    r = np.sqrt(((zz - nz / 2) * DZ_UM / PX_UM / 6) ** 2 + (yy - 0.3 * ny) ** 2 + (xx - 0.7 * nx) ** 2)
-    obj[np.abs(r - 0.12 * nx) < 1] += 2
-    for i, gap in enumerate((3, 5, 8)):                              # line pairs 3, 5 and 8 pixels apart
-        x0 = int(0.2 * nx) + i * nx // 10
-        obj[nz // 2, int(0.6 * ny):int(0.85 * ny), [x0, x0 + gap]] = 8
-    return obj
-
-
-def simulate(shape, rng, make_psf):
-    """truth, measured (Poisson, with background), psf on the measured grid. make_psf(shape) -> psf."""
-    nz, ny, nx = shape
-    truth = make_object(shape, rng)
-    big = (2 * nz, ny, nx)                                           # the light may leave the stack along z
-    padded = np.zeros(big, np.float32)
-    padded[nz // 2:nz // 2 + nz] = truth
-    otf = fft.rfftn(make_psf(big), workers=dn.WORKERS)
-    blurred = fft.irfftn(fft.rfftn(padded, workers=dn.WORKERS) * otf, s=big, workers=dn.WORKERS)[nz // 2:nz // 2 + nz]
-    scale = PHOTONS / blurred.max()
-    measured = rng.poisson(np.maximum(blurred * scale, 0) + BACKGROUND).astype(np.float32)
-    return truth * scale, measured, make_psf(shape)
-
-
-def widefield(shape):
-    return dn.widefield_psf(shape, PX_UM, DZ_UM, NA)
+def maxrss_mb():
+    """Peak memory of this process: ru_maxrss is bytes on macOS and KiB on Linux."""
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return round(peak / 2 ** (20 if sys.platform == "darwin" else 10))
 
 
 def ncc(a, b):
@@ -93,8 +63,8 @@ def results(out):
 
 
 def cmd_data(out, shape):
-    truth, measured, psf = simulate(shape, np.random.default_rng(1), widefield)
-    for name, a in (("truth", truth), ("measured", measured), ("psf", psf)):
+    truth, measured = dn.synthetic(shape, FRAME, seed=1, background=BACKGROUND)
+    for name, a in (("truth", truth), ("measured", measured), ("psf", dn.psf(FRAME, shape))):
         a.astype(np.float32).tofile(out / f"{tag(shape)}_{name}.f32")
     print("data", tag(shape), "peak counts", float(measured.max()))
 
@@ -112,7 +82,7 @@ def cmd_run(out, shape):
         result.astype(np.float32).tofile(out / f"{tag(shape)}_{name}.f32")
         row = {"shape": tag(shape), "solver": name, "seconds": round(seconds, 2), "ncc": round(ncc(result, truth), 4),
                "ncc_measured": round(ncc(measured, truth), 4),
-               "maxrss_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2 ** 20)}   # ru_maxrss is bytes on macOS
+               "maxrss_mb": maxrss_mb()}
         if shape[1] <= 256:                                          # convergence curve on the small stack only
             curve = []
             solve(lambda it, obj: curve.append(round(ncc(obj, truth), 4)) and False)
@@ -177,12 +147,10 @@ def cmd_figures(out, figdir):
     _panels(panels, shape, PX_UM, DZ_UM, figdir / "deconvolution_result.png", int(0.3 * shape[1]))
 
     # 2. light sheet: same solver, the PSF is the detection PSF times the sheet profile
-    px, dz = 0.33, 1.0                                               # 10x/0.3 detection, 4 um thick sheet
-
-    def make_psf(s):
-        return dn.lightsheet_psf(s, px, dz, 0.3, sheet_fwhm_um=4.0)
-
-    truth, measured, psf = simulate(shape, np.random.default_rng(2), make_psf)
+    sheet = dn.Optics(pixel_um=0.33, z_step_um=1.0, na=0.3, modality="lightsheet", sheet_um=4.0)
+    px, dz = sheet.pixel_um, sheet.z_step_um                         # 10x/0.3 detection, 4 um thick sheet
+    truth, measured = dn.synthetic(shape, sheet, seed=2, background=BACKGROUND)
+    psf = dn.psf(sheet, shape)
     t0 = time.perf_counter()
     deconvolved = dn.map_lean(measured, psf, gamma=GAMMA, iterations=ITER, background=BACKGROUND, padding=(0.1, 0, 0))
     print(f"light sheet: measured {ncc(measured, truth):.3f}, deconvolved {ncc(deconvolved, truth):.3f}, "

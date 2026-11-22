@@ -68,7 +68,7 @@ async function readAttrs(url) {
 /** The images of a dataset: the store itself, or every field of a plate or well. */
 async function listImages(url) {
   const meta = await readAttrs(url);
-  if (!meta) throw new Error("No zarr metadata (.zattrs / zarr.json) at this path.");
+  if (!meta) throw new Error("No image here: not an OME-Zarr store, or a TIFF layout the viewer cannot read.");
   const ngff = readNgff(meta.attrs);
   if (ngff.kind === "image") return [{ label: "", url }];
   if (ngff.kind !== "plate" && ngff.kind !== "well") throw new Error("Not an OME-NGFF image or plate.");

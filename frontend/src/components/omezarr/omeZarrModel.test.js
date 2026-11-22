@@ -128,11 +128,13 @@ test("datasets are grouped per run folder, newest first, zarr only", () => {
     { name: "x.ome.tif", folder: "/A/new", format: "tiff", modifiedTime: 9 },
   ]);
   expect(groups.map((g) => g.folder)).toEqual(["/A/new", "/A/old"]);
-  expect(groups[0].items.map((i) => i.name)).toEqual(["x_2.ome.zarr", "x_10.ome.zarr"]);
+  expect(groups[0].items.map((i) => i.name)).toEqual(["x_2.ome.zarr", "x_10.ome.zarr", "x.ome.tif"]);
 });
 
 test("data URLs are built below /imswitch/data exactly once", () => {
   expect(dataUrl("http://pi", 80, "/Aufgaben/run/a.ome.zarr/")).toBe("http://pi:80/imswitch/data/Aufgaben/run/a.ome.zarr");
   expect(dataUrl("http://pi", 80, "/imswitch/data/x.zarr")).toBe("http://pi:80/imswitch/data/x.zarr");
   expect(dataUrl("http://pi", 80, "http://other/x.zarr")).toBe("http://other/x.zarr");
+  // a TIFF is read through the server's zarr view of the file
+  expect(dataUrl("http://pi", 80, "/run/a.ome.tif")).toBe("http://pi:80/imswitch/api/FileManager/tiffzarr/run/a.ome.tif");
 });

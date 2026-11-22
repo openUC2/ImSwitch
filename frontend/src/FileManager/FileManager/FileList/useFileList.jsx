@@ -23,13 +23,8 @@ const canOpenWithImJoy = (file) => {
   return imjoyImageExtensions.includes(extension);
 };
 
-// Helper function to check if a file/folder can be opened with Vizarr (OME-Zarr)
-const canOpenWithVizarr = (file) => {
-  if (!file) return false;
-  // OME-Zarr files are typically directories ending in .zarr or .ome.zarr
-  const name = file.name?.toLowerCase() || "";
-  return name.endsWith(".zarr") || name.endsWith(".ome.zarr");
-};
+// The dataset viewer opens OME-Zarr folders and, through the server, TIFF files
+const canOpenWithVizarr = (file) => /\.(zarr|tiff?)$/i.test(file?.name || "");
 
 const useFileList = (onRefresh, enableFilePreview, triggerAction, onFileOpen, onOpenWithVizarr, onOpenInNapari) => {
   const [selectedFileIndexes, setSelectedFileIndexes] = useState([]);

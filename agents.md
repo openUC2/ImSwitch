@@ -565,7 +565,11 @@ prescan and firmware stage scans, digital I/O, temperature; plan and format in
   `get_config_paths()`, `update_config_paths(config_path, data_path, persist)`
 
 File manager (plain FastAPI routes, not `@APIExport`) under `/imswitch/api/FileManager/…`:
-list, `folder` (POST), `upload`, `download/{path}`, rename, copy/move, delete.
+list (a `*.zarr` store is one folder, its chunks are not listed), `datasets` (OME-Zarr stores and
+OME-TIFF files, for the viewer), `folder` (POST), `upload`, `download/{path}`, rename, copy/move,
+delete, `tiffzarr/{file}/{key}` (a TIFF read as a Zarr v2 store, one tile per chunk; the OME-Zarr
+viewer opens OME-TIFF through it). `/imswitch/data/…` serves the data folder as it is now, also
+after `set_active_path`.
 
 Logs: `/imswitch/api/LogController/listLogFiles`, `…/downloadLogFile?filename=…`.
 

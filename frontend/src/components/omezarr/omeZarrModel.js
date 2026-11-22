@@ -10,11 +10,18 @@ const PALETTE = [
   [0, 0, 255],
 ];
 
-/** Absolute URL of a path below the server's data folder (/imswitch/data). */
+/** A TIFF file: the server reads it as a zarr store (/FileManager/tiffzarr). */
+export const isTiff = (name) => /\.tiff?$/i.test(name || "");
+
+/**
+ * Absolute URL of the zarr store for a path below the server's data folder: the folder
+ * itself (/imswitch/data), or for a TIFF the server's zarr view of the file.
+ */
 export function dataUrl(ip, port, path) {
   if (/^https?:\/\//.test(path)) return path.replace(/\/+$/, "");
   const rel = path.replace(/^\/imswitch\/data/, "").replace(/\/+$/, "");
-  return `${ip}:${port}/imswitch/data${rel.startsWith("/") ? rel : `/${rel}`}`;
+  const root = isTiff(rel) ? "/imswitch/api/FileManager/tiffzarr" : "/imswitch/data";
+  return `${ip}:${port}${root}${rel.startsWith("/") ? rel : `/${rel}`}`;
 }
 
 /** What an NGFF group is: an image, a plate, a well, or something else. */
@@ -170,7 +177,6 @@ export function compositeRGBA(planes, channels, out) {
 export function groupByFolder(datasets) {
   const groups = new Map();
   for (const d of datasets) {
-    if (d.format !== "zarr") continue;
     const g = groups.get(d.folder) || { folder: d.folder, modifiedTime: 0, items: [] };
     g.items.push(d);
     g.modifiedTime = Math.max(g.modifiedTime, d.modifiedTime);

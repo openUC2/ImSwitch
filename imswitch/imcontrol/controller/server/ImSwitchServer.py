@@ -11,8 +11,9 @@ from imswitch.imcontrol.view.guitools.ViewSetupInfo import ViewSetupInfo
 import dataclasses
 from typing import List
 import os
+import re
 import shutil
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 import zipfile
 import uvicorn
 from fastapi.exceptions import RequestValidationError
@@ -56,6 +57,20 @@ app = FastAPI(root_path="/imswitch", docs_url=None, redoc_url=None)
 api_router = APIRouter(prefix="/api")
 
 
+class _DataStaticFiles(StaticFiles):
+    """The data folder, wherever it is now.
+
+    The folder can change while the server runs (StorageController.set_active_path, a USB
+    drive that appears); a mount fixed at start-up then answers 404 for every new dataset.
+    """
+
+    def lookup_path(self, path):
+        directory = dirtools.UserFileDirs.getValidatedDataPath()
+        if directory != self.directory:
+            self.directory, self.all_directories = directory, [directory]
+        return super().lookup_path(path)
+
+
 class _SPAStaticFiles(StaticFiles):
     """React build: the HTML shell is never answered with 304.
 
@@ -86,7 +101,7 @@ try:app.mount("/ui", _SPAStaticFiles(directory=imswitchapp_dir), name="imswitch"
 except:print("Could not mount /imcontrol ui static files since directory is missing/a symlink. Please copy the react build files to:", imswitchapp_dir)
 app.mount("/images", StaticFiles(directory=images_dir), name="images") # serve images for GUI
 # provide data path via static files
-app.mount("/data", StaticFiles(directory=dirtools.UserFileDirs.getValidatedDataPath()), name="data")  # serve user data files
+app.mount("/data", _DataStaticFiles(directory=dirtools.UserFileDirs.getValidatedDataPath()), name="data")  # serve user data files
 # manifests for the react app
 _ui_manifests = []
 
@@ -265,6 +280,11 @@ def _unique_destination(dest_dir: Path, name: str) -> Path:
 
 # Utility: List files/folders
 def list_items(directory: Path, base_path: Path) -> List[Dict]:
+    """Every file and folder below ``directory``, newest first.
+
+    A ``*.zarr`` store is listed as one folder and not entered: a scan has millions of chunk
+    files. Asking for a path inside a store still lists that part of it.
+    """
     items = []
 
     def scan_directory(path: Path):
@@ -273,7 +293,7 @@ def list_items(directory: Path, base_path: Path) -> List[Dict]:
                 try:
                     full_path = Path(entry.path)
                     items.append(_build_item_metadata(full_path, base_path))
-                    if entry.is_dir():
+                    if entry.is_dir() and not entry.name.endswith(".zarr"):
                         scan_directory(full_path)
                 except Exception as e:
                     print(f"Error scanning {entry.path}: {e}")
@@ -349,6 +369,29 @@ def metadata_file(file_path: str):
         return _thumbnails.extract_metadata(str(absolute_path))
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=200)
+
+
+@api_router.get("/FileManager/tiffzarr/{file_path:path}")
+def tiff_as_zarr(file_path: str):
+    """One key of a TIFF read as a Zarr v2 store (NGFF 0.4), e.g. ``run/a.ome.tif/0/.zarray``.
+
+    ``file_path`` is the TIFF relative to the data folder plus the store key (``.zattrs``,
+    ``<level>/.zarray``, ``<level>/<chunk>``). The dataset viewer opens OME-TIFF through this;
+    one chunk is one TIFF tile, sent uncompressed.
+    """
+    from imswitch.imcontrol.model.aufgaben import tiffzarr
+    match = re.match(r"(.+?\.tiff?)/(.+)$", file_path, re.IGNORECASE)
+    tiff = _safe_resolve_path(_get_base_path(), match.group(1)) if match else None
+    if tiff is None or not tiff.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        content = tiffzarr.read(tiff, match.group(2))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such key")
+    except Exception as e:                    # a layout the reader does not handle, a codec
+        raise HTTPException(status_code=415, detail=str(e))
+    is_json = match.group(2).rsplit("/", 1)[-1].startswith(".z")
+    return Response(content, media_type="application/json" if is_json else "application/octet-stream")
 
 
 _IMAGE_SUFFIXES = (".zarr", ".ome.tif", ".ome.tiff")

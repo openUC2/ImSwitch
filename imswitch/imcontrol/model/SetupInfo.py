@@ -1007,6 +1007,11 @@ class SetupInfo:
     channel), ``DigitalOutValveManager`` (board outputs), ``VirtualValveManager``;
     ``managerProperties.positions`` names the positions a job can switch to. """
 
+    processing: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
+    """ Processing options. ``{"workerUrl": "http://lab-pc:8090"}`` sends deconvolution jobs
+    to a processing worker (docker/processing-worker); set it with
+    ProcessingController.setProcessingWorker. """
+
     aufgaben: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
     """ Aufgaben options. ``{"allowScripts": true}`` offers the python_script and
     external_process steps (unsandboxed code; a run with them must be confirmed). """

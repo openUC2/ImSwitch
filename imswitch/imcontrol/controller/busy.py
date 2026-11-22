@@ -3,7 +3,8 @@
 One check for everything that must not start while something else runs: an
 Aufgaben job, an experiment, a recording, a workflow, the stage map or its
 prescan, a focus-lock calibration, an SLM sequence acquisition, Arkitekt
-actions, an unattended firmware update. A check that fails is logged and does not block.
+actions, an unattended firmware update, a deconvolution computing on the
+Pi. A check that fails is logged and does not block.
 """
 BUSY_STATES = ("running", "paused", "stopping")
 
@@ -28,6 +29,7 @@ CHECKS = {
     "OPM": ("an OPM scan is running", lambda c: c.isOPMScanRunning()),
     "SLM": ("an SLM sequence acquisition or calibration is running", lambda c: c.isSLMBusy()),
     "FrameCalibration": ("a FRAME calibration is running", lambda c: c.isFrameCalibrationRunning()),
+    "Processing": ("a deconvolution is computing on the Pi", lambda c: c.isProcessingBusy()),
 }
 
 

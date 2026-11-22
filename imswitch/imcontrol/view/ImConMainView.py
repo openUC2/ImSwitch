@@ -28,9 +28,9 @@ class ImConMainViewNoQt(object):
             else self.viewSetupInfo.availableWidgets
         # PixelCalibration is mandatory: it is the single source of truth for
         # per-detector pixel size and flip. Aufgaben holds the jobs and the
-        # Live View macros. Always load both regardless of whether the setup
-        # config opted in.
-        for key in ("PixelCalibration", "Aufgaben"):
+        # Live View macros; Processing deconvolves stored stacks. Always load
+        # them regardless of whether the setup config opted in.
+        for key in ("PixelCalibration", "Aufgaben", "Processing"):
             if isinstance(enabledDockKeys, list) and key not in enabledDockKeys:
                 enabledDockKeys.append(key)
         disabledKeys = ["Image"]

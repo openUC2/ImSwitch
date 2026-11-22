@@ -497,8 +497,6 @@ class HikCamManager(DetectorManager):
 
         # Add HIK-specific information
         status['cameraType'] = 'HIK'
-        status['isMock'] = self._mocktype != "normal" if hasattr(self, '_mocktype') else False
-        status['isConnected'] = self._camera is not None and hasattr(self._camera, 'cam')
 
         # Add acquisition status
         status['isAcquiring'] = self._running

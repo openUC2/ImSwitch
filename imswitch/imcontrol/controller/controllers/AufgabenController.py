@@ -27,7 +27,7 @@ from imswitch.imcontrol.model import aufgaben
 from imswitch.imcontrol.model.aufgaben.engine import Run
 from imswitch.imcontrol.model.aufgaben.storage import OmeStore
 from ..basecontrollers import ImConWidgetController
-from ..busy import busy_reasons
+from ..busy import busy_reasons, camera_reasons
 from .aufgaben import ImSwitchMicroscope
 from .aufgaben.host import register_labware
 
@@ -260,6 +260,9 @@ class AufgabenController(ImConWidgetController):
                 raise HTTPException(status_code=403, detail=str(e)) from e
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e)) from e
+            fake = camera_reasons(self._master) if report.uses_camera else []
+            if fake:
+                raise HTTPException(status_code=409, detail=f"Refused: {', '.join(fake)}")
             folder = None
             if report.uses_camera or not macro:
                 folder = self._runs_dir() / f"{datetime.now():%Y%m%d_%H%M%S}_{_safe(job.name)}"

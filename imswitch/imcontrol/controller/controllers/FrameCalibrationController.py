@@ -177,7 +177,7 @@ class FrameCalibrationController(ImConWidgetController):
     def startFrameCalibration(self) -> dict:
         if self.isFrameCalibrationRunning():
             return {"success": False, "error": "A FRAME calibration is already running."}
-        busy = busy_reasons(self._master, self._logger, ignore=("FrameCalibration",))
+        busy = busy_reasons(self._master, self._logger, ignore=("FrameCalibration",), camera=True)
         if busy:
             return {"success": False, "error": f"Busy: {', '.join(busy)}."}
         self._abort.clear()

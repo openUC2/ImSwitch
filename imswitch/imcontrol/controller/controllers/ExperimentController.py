@@ -170,7 +170,7 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
             raise HTTPException(
                 status_code=400, detail="An experiment is already being started."
             )
-        others = busy_reasons(self._master, self._logger, ignore=("Experiment",))
+        others = busy_reasons(self._master, self._logger, ignore=("Experiment",), camera=True)
         if others:
             raise HTTPException(status_code=409, detail=f"Refused: {', '.join(others)}.")
         self._experiment_starting = True

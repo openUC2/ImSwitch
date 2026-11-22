@@ -366,6 +366,11 @@ Backends live in `model/managers/detectors/`: `HikCamManager`, `ToupCamManager`,
 - `setStreamParameters(protocol, params)` (POST) / `getStreamParameters`
 - `setDetectorStreamParameters(detectorName, params)` (POST)
 - `getStreamDiagnostics(detectorName)` — FPS, drops, backpressure
+- `getCameraHealth()` — per camera `placeholder` (the real camera did not open; a simulated one
+  stands in and its images are fake) and `stalled` (the live stream gets no new frames, e.g.
+  unplugged). Recordings, saved snaps, experiments, stage map, FRAME calibration and jobs that take
+  frames refuse to start (409) while an acquisition camera is a placeholder; restarting ImSwitch
+  re-opens the cameras
 - `mjpeg_stream(startStream=True, detectorName)` — plain MJPEG over HTTP
 - `getLiveViewPresets` / `setLiveViewPresets(body{presets})` (POST) — the instrument's saved
   live-view presets (objective, exposure, gain, stream settings), shared by all browsers

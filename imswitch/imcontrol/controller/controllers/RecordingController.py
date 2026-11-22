@@ -34,6 +34,7 @@ from imswitch.imcontrol.model.io import (
     SnapResult,
 )
 from ..basecontrollers import ImConWidgetController
+from ..busy import camera_reasons
 
 
 class RecordingController(ImConWidgetController):
@@ -609,6 +610,12 @@ class RecordingController(ImConWidgetController):
             job["error"] = error
             job["finishedAt"] = time.time()
 
+    def _refuseStandInCamera(self):
+        """Saved images from a simulated stand-in camera would look like data: refuse (409)."""
+        reasons = camera_reasons(self._master)
+        if reasons:
+            raise HTTPException(status_code=409, detail=f"Refused: {', '.join(reasons)}")
+
     @APIExport(runOnUIThread=False)
     def startSnap(self, fileName: Optional[str] = None,
                   saveFormat: int = SaveFormat.TIFF,
@@ -627,6 +634,7 @@ class RecordingController(ImConWidgetController):
         Returns a dict with ``jobId``, ``status`` and ``expectedDurationMs``
         (an exposure-based estimate the UI can count down against).
         """
+        self._refuseStandInCamera()
         detectorNames = self.getDetectorNamesToCapture()
         jobId = uuid.uuid4().hex
         job = {
@@ -993,7 +1001,7 @@ class RecordingController(ImConWidgetController):
         )
         print(deconvoled_image)
         '''
-        # do nothing here
+        self._refuseStandInCamera()
         return self.snap(name=fileName, mSaveFormat=saveFormat,
                          returnPreview=returnPreview, previewMaxSize=previewMaxSize)
 
@@ -1123,6 +1131,7 @@ class RecordingController(ImConWidgetController):
         # we probably call from the FASTAPI server
         if self.recording:  # Already recording
             return self._build_recording_response()
+        self._refuseStandInCamera()
 
         # Use ISO 8601 date format, consistent with snap() method
         timeStampDay = datetime.datetime.now().strftime("%Y-%m-%d")

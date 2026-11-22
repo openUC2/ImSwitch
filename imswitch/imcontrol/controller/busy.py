@@ -31,10 +31,31 @@ CHECKS = {
 }
 
 
-def busy_reasons(master, logger=None, ignore=()) -> list:
+def placeholder_cameras(master) -> list:
+    """Acquisition cameras whose real camera did not open, so a simulated one stands in."""
+    names = []
+    try:
+        manager = master.detectorsManager
+        for name in manager.getAllDeviceNames():
+            detector = manager[name]
+            if detector.forAcquisition and detector.isPlaceholder is True:
+                names.append(name)
+    except Exception:   # no detectors manager (tests, partial setups): nothing to refuse
+        pass
+    return names
+
+
+def camera_reasons(master) -> list:
+    """Why frame-taking work must not start: its images would be fake test images."""
+    return [f"camera {name} did not open and a simulated camera stands in (plug it in and "
+            f"restart ImSwitch)" for name in placeholder_cameras(master)]
+
+
+def busy_reasons(master, logger=None, ignore=(), camera=False) -> list:
     """Lower-case reasons, e.g. ["an experiment is running"]; empty when idle.
 
     ``ignore`` names controllers not to check (a controller asking about itself).
+    ``camera=True`` (work that takes frames) also refuses a stand-in camera.
     """
     get = getattr(master, "getController", lambda name: None)
     reasons = []
@@ -48,4 +69,4 @@ def busy_reasons(master, logger=None, ignore=()) -> list:
         except Exception as e:
             if logger is not None:
                 logger.warning(f"Busy check '{label}' failed (not blocking): {e}")
-    return reasons
+    return reasons + (camera_reasons(master) if camera else [])

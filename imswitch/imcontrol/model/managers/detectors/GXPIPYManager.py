@@ -417,7 +417,6 @@ class GXPIPYManager(DetectorManager):
 
         # Add GXIPY-specific information
         status['cameraType'] = 'GXIPY'
-        status['isMock'] = False  # GXIPY cameras are always real hardware
         status['isConnected'] = self._camera is not None and hasattr(self._camera, 'camera')
 
         # Add acquisition status

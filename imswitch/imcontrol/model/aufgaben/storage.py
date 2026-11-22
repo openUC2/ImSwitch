@@ -84,6 +84,7 @@ class ImageSpec:
     chunks_yx: Optional[Tuple[int, int]] = None   # default: up to 1024 x 1024
     exposure_ms: List[Optional[float]] = field(default_factory=list)   # per channel
     bit_depth: Optional[int] = None         # camera bits; sets the display window
+    display_end: Sequence[float] = ()       # per channel: end of the display window (float data)
     annotations: Dict[str, Any] = field(default_factory=dict)   # acquisition key/values
 
 
@@ -140,10 +141,11 @@ def _multiscales(spec: ImageSpec, levels: int, version: str) -> dict:
 
 def _omero(spec: ImageSpec, n_channels: int, version: str) -> dict:
     top = spec.display_max()
+    ends = list(spec.display_end) + [top] * n_channels
     channels = [{"label": name, "color": color, "active": True, "coefficient": 1.0,
                  "family": "linear", "inverted": False,
-                 "window": {"min": 0.0, "max": top, "start": 0.0, "end": top}}
-                for name, color in spec.channels(n_channels)]
+                 "window": {"min": 0.0, "max": max(top, end), "start": 0.0, "end": end}}
+                for (name, color), end in zip(spec.channels(n_channels), ends)]
     return _versioned(version, {"channels": channels, "rdefs": {
         "model": "color", "defaultT": 0, "defaultZ": spec.shape[2] // 2}})
 

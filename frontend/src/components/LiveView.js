@@ -61,6 +61,7 @@ import ExtendedLEDMatrixController from "./ExtendedLEDMatrixController.jsx";
 import AufgabenMacros from "./aufgaben/AufgabenMacros.jsx";
 import DetectorParameters from "./DetectorParameters";
 import TravelLimitsNote from "./TravelLimitsNote";
+import CameraHealthBanner from "./CameraHealthBanner";
 
 /*
 <ImageViewport
@@ -779,7 +780,12 @@ export default function LiveView({ setFileManagerInitialPath }) {
         key: "camera",
         label: "Camera",
         icon: <PhotoCameraIcon fontSize="small" />,
-        render: () => streamControls,
+        render: () => (
+          <>
+            <CameraHealthBanner sx={{ mb: 1 }} />
+            {streamControls}
+          </>
+        ),
       },
       {
         key: "focus",
@@ -1040,6 +1046,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
         {/* Exposure, gain, binning right above the image: on a large screen the
             Camera card below the image is out of view while you watch it. */}
+        <CameraHealthBanner sx={{ mb: 1 }} />
         <Box data-tour="camera-controls" sx={{ mb: 1 }}>
           <DetectorParameters hostIP={hostIP} hostPort={hostPort} />
         </Box>

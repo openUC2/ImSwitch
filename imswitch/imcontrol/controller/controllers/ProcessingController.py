@@ -1,8 +1,9 @@
 """Processing of stored datasets: 3D deconvolution, previewed on a crop (docs/DECONVOLUTION.md).
 
-The recipe (model/aufgaben/deconvolution.py) runs here, on the Pi, for previews and small stacks.
-Larger stacks go to a processing worker (model/aufgaben/worker.py, docker/processing-worker)
-registered by URL; the Pi then only reads the planes and writes the result. The result is an
+The recipe (uc2deconvolution.recipe, github.com/openUC2/uc2-deconvolution) runs here, on the Pi,
+for previews and small stacks. Larger stacks go to a processing worker (uc2deconvolution.worker,
+image ghcr.io/openuc2/uc2-deconvolution) registered by URL; the Pi then only reads the planes and
+writes the result. The result is an
 OME-Zarr next to the source, written through storage.py, with the request in recipe.json inside
 it. Nothing computes on the Pi while the microscope is busy (controller/busy.py).
 """
@@ -25,10 +26,10 @@ import tifffile
 import zarr
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
+from uc2deconvolution import recipe, worker
 
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
-from imswitch.imcontrol.model.aufgaben import deconvolution as recipe
-from imswitch.imcontrol.model.aufgaben import storage, tiffzarr, worker
+from imswitch.imcontrol.model.aufgaben import storage, tiffzarr
 from imswitch.imcontrol.model.aufgaben.storage import ImageSpec, NgffImage
 from ..basecontrollers import ImConWidgetController
 from ..busy import busy_reasons

@@ -1012,8 +1012,8 @@ class SetupInfo:
 
     processing: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
     """ Processing options. ``{"workerUrl": "http://lab-pc:8090"}`` sends deconvolution jobs
-    to a processing worker (docker/processing-worker); set it with
-    ProcessingController.setProcessingWorker. """
+    to a processing worker (uc2-deconvolution, image ghcr.io/openuc2/uc2-deconvolution); set it
+    with ProcessingController.setProcessingWorker. """
 
     aufgaben: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
     """ Aufgaben options. ``{"allowScripts": true}`` offers the python_script and

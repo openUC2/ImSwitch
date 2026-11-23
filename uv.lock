@@ -1836,6 +1836,7 @@ dependencies = [
     { name = "send2trash" },
     { name = "setuptools" },
     { name = "tifffile" },
+    { name = "uc2-deconvolution" },
     { name = "uc2-rest" },
     { name = "uc2canopen" },
     { name = "unitelabs-cdk" },
@@ -1932,6 +1933,7 @@ requires-dist = [
     { name = "smbus", marker = "extra == 'lepmon'" },
     { name = "smbus2", marker = "extra == 'lepmon'" },
     { name = "tifffile", specifier = ">=2020.11.26" },
+    { name = "uc2-deconvolution", git = "https://github.com/openUC2/uc2-deconvolution?rev=v0.1.0" },
     { name = "uc2-rest", specifier = ">=0.2.0.43" },
     { name = "uc2canopen", specifier = ">=0.1.4" },
     { name = "unitelabs-cdk" },
@@ -5430,6 +5432,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8b/2e/c14812d3d4d9cd1773c6be938f89e5735a1f11a9f184ac3639b93cef35d5/tzlocal-5.3.1.tar.gz", hash = "sha256:cceffc7edecefea1f595541dbd6e990cb1ea3d19bf01b2809f362a03dd7921fd", size = 30761, upload-time = "2025-03-05T21:17:41.549Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/14/e2a54fabd4f08cd7af1c07030603c3356b74da07f7cc056e600436edfa17/tzlocal-5.3.1-py3-none-any.whl", hash = "sha256:eb1a66c3ef5847adf7a834f1be0800581b683b5608e74f86ecbcef8ab91bb85d", size = 18026, upload-time = "2025-03-05T21:17:39.857Z" },
+]
+
+[[package]]
+name = "uc2-deconvolution"
+version = "0.1.0"
+source = { git = "https://github.com/openUC2/uc2-deconvolution?rev=v0.1.0#78f91740ba1b3680b6fdd0e51ad7adae447f2a1a" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
 ]
 
 [[package]]

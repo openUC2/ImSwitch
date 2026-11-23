@@ -80,6 +80,9 @@ dependencies = [
     "esptool",
     "av==13.1.0",
     "uc2-rest>=0.2.0.43",  # named stepper ids (axes beyond XYZA)
+    # the Deconvolve recipe and worker (ProcessingController). A git URL until it is on PyPI;
+    # PyPI refuses uploads that depend on URLs, so change it to "uc2-deconvolution>=0.1" then.
+    "uc2-deconvolution @ git+https://github.com/openUC2/uc2-deconvolution@v0.1.0",
     "unitelabs-sila",
     "unitelabs-cdk",
     "mikro-next>=1",

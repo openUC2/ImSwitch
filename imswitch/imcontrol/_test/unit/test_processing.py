@@ -1,4 +1,5 @@
-"""ProcessingController and the worker: preview, whole-stack jobs on the Pi and on a worker."""
+"""ProcessingController: preview, whole-stack jobs on the Pi and on a worker (uc2-deconvolution
+tests the recipe and the worker themselves)."""
 
 import base64
 import json
@@ -21,9 +22,9 @@ from imswitch.imcontrol.controller.controllers.ProcessingController import (
     PSFViewRequest,
     _Source,
 )
-from imswitch.imcontrol.model.aufgaben import deconvolution as recipe
-from imswitch.imcontrol.model.aufgaben import storage, worker
+from imswitch.imcontrol.model.aufgaben import storage
 from imswitch.imcontrol.model.aufgaben.storage import save_image
+from uc2deconvolution import recipe, worker
 
 FAST = {"iterations": 4}
 
@@ -151,24 +152,6 @@ def test_a_job_on_a_worker_gives_the_pi_result(data, worker_url):
     out = zarr.open_group(str(root / "run" / "a_deconvolved.ome.zarr"), mode="r")["0"]
     expected = recipe.run(stack[1], {"optics": defaults["optics"][1], "parameters": FAST})
     np.testing.assert_allclose(out[0, 0], expected, rtol=1e-5)
-
-
-def test_worker_reports_failures_and_cancels(worker_url):
-    volume = np.ones((4, 32, 32), np.uint16)
-    bad = {"optics": {"pixel_um": 0.12, "na": 1.1}}
-    with pytest.raises(RuntimeError, match="NA 1.1"):
-        list(worker.run_remote(worker_url, volume, volume.shape, volume.dtype, bad, poll_s=0.01))
-    slow = {"optics": {"pixel_um": 0.12}, "parameters": {"iterations": 500}}
-    big = np.ones((8, 128, 128), np.uint16)  # still running at the first poll, however busy
-    with pytest.raises(recipe.Cancelled):
-        list(
-            worker.run_remote(
-                worker_url, big, big.shape, big.dtype, slow, progress=lambda f: True, poll_s=0.01
-            )
-        )
-    with pytest.raises(RuntimeError, match="unknown recipe"):
-        list(worker.run_remote(worker_url, volume, volume.shape, volume.dtype, slow, recipe="nope"))
-    assert worker.info(worker_url)["jobs"] == 0  # every job above was deleted
 
 
 def test_refusals_and_cancel(data):

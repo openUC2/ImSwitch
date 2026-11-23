@@ -57,6 +57,14 @@ const LOSSES = [
 const PENALTIES = [
   ["good", "Good's roughness"],
   ["hessian", "Hessian (edges, lines; slower)"],
+  ["tv", "Total variation (edges)"],
+];
+// the solvers (uc2-deconvolution); getProcessingDefaults says which noise models and penalties each takes
+const METHODS = [
+  ["map", "Regularised (MAP)"],
+  ["lbfgs", "L-BFGS (best per iteration)"],
+  ["admm", "ADMM (slow on sparse samples)"],
+  ["rl", "Richardson–Lucy (fast)"],
 ];
 const remembered = () => {
   try {
@@ -128,7 +136,15 @@ const fromForm = (f) => ({
   sheet_um: Number(f.sheet_um),
 });
 
-/** Axial FWHM (µm) the optics lead one to expect, as deconvolution.py's expected_fwhm. */
+/** Nyquist sampling (µm) of the wide-field detection PSF: lateral λ / (4 NA), axial λ / (2 n (1 − cos α)). */
+const nyquist = (o) => {
+  const n = Number(o.immersion_n) || 1;
+  const na = Math.min(Number(o.na) || 0, n);
+  const lambda = Number(o.emission_nm) / 1000;
+  return [lambda / (4 * na), lambda / (2 * (n - Math.sqrt(n * n - na * na)))];
+};
+
+/** Axial FWHM (µm) the optics lead one to expect, as the recipe's expected_fwhm. */
 const axialFwhm = (o) => {
   const n = Number(o.immersion_n) || 1;
   const na = Math.min(Number(o.na) || 0, n);
@@ -293,6 +309,26 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
     background: params.background === "" ? null : Number(params.background),
   });
   const { shape, opticsFrom } = defaults;
+  const [nyquistXY, nyquistZ] = nyquist(form);
+  const undersampled = [
+    Number(form.pixel_um) > nyquistXY * 1.05 && `pixel ${form.pixel_um} µm (Nyquist ${nyquistXY.toFixed(2)} µm)`,
+    shape.z > 1 &&
+      form.modality !== "lightsheet" &&
+      Number(form.z_step_um) > nyquistZ * 1.05 &&
+      `z step ${form.z_step_um} µm (Nyquist ${nyquistZ.toFixed(2)} µm)`,
+  ].filter(Boolean);
+  const supported = (key) => defaults.methods?.[params.method]?.[key === "loss" ? "losses" : "penalties"];
+  const setMethod = (method) =>
+    setParams((p) => {
+      const ok = defaults.methods?.[method];
+      if (!ok) return { ...p, method };
+      return {
+        ...p,
+        method,
+        loss: ok.losses.includes(p.loss) ? p.loss : ok.losses[0],
+        penalty: ok.penalties.includes(p.penalty) ? p.penalty : ok.penalties[0],
+      };
+    });
   const voxels = shape.z * shape.y * shape.x;
   const maxPlanes = (size) => Math.floor(defaults.previewMaxVoxels / (size * size));
   const planeOptions = [...new Set(PLANES.map((p) => Math.min(p, shape.z)))].filter((p) => p <= maxPlanes(cropSize));
@@ -455,6 +491,12 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
         {opticsFrom.pixel_um === "unknown" ? "unknown, enter them" : "from the dataset"}; emission guessed from the
         channel name. The PSF is computed from these: check them.
       </Typography>
+      {undersampled.length > 0 && (
+        <Typography variant="caption" color="warning.main">
+          Undersampled for these optics: {undersampled.join(", ")}. Deconvolution cannot recover what the sampling
+          missed; expect little sharpening.
+        </Typography>
+      )}
 
       <Section>PSF</Section>
       <TextField
@@ -561,19 +603,18 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
           size="small"
           label="Method"
           value={params.method}
-          onChange={(e) => setParams((p) => ({ ...p, method: e.target.value }))}
+          onChange={(e) => setMethod(e.target.value)}
           sx={{ flex: 2 }}
         >
-          <MenuItem value="map" dense>
-            Regularised (MAP)
-          </MenuItem>
-          <MenuItem value="rl" dense>
-            Richardson–Lucy (fast)
-          </MenuItem>
+          {METHODS.filter(([m]) => !defaults.methods || m in defaults.methods).map(([m, text]) => (
+            <MenuItem key={m} value={m} dense>
+              {text}
+            </MenuItem>
+          ))}
         </TextField>
         <Field label="Iterations" value={params.iterations} onChange={(v) => setParams((p) => ({ ...p, iterations: v }))} />
       </Box>
-      <Box sx={{ display: "flex", gap: 1, opacity: params.method === "map" ? 1 : 0.4 }}>
+      <Box sx={{ display: "flex", gap: 1, opacity: params.method !== "rl" ? 1 : 0.4 }}>
         {[
           ["loss", "Noise model", LOSSES],
           ["penalty", "Penalty", PENALTIES],
@@ -584,11 +625,11 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
             size="small"
             label={label}
             value={params[key]}
-            disabled={params.method !== "map"}
+            disabled={params.method === "rl"}
             onChange={(e) => setParams((p) => ({ ...p, [key]: e.target.value }))}
             sx={{ flex: 1, minWidth: 0 }}
           >
-            {options.map(([value, text]) => (
+            {options.filter(([value]) => !supported(key) || supported(key).includes(value)).map(([value, text]) => (
               <MenuItem key={value} value={value} dense>
                 {text}
               </MenuItem>
@@ -596,7 +637,7 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
           </TextField>
         ))}
       </Box>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, opacity: params.method === "map" ? 1 : 0.4 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, opacity: params.method !== "rl" ? 1 : 0.4 }}>
         <Typography variant="body2" sx={{ width: 100 }}>
           Regularisation
         </Typography>
@@ -606,7 +647,7 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
           max={-1}
           step={0.25}
           value={Math.log10(params.regularization)}
-          disabled={params.method !== "map"}
+          disabled={params.method === "rl"}
           onChange={(_, v) => setParams((p) => ({ ...p, regularization: 10 ** v }))}
           aria-label="Regularisation weight"
         />
@@ -736,7 +777,7 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
       {onPi && voxels > defaults.piMaxVoxels && (
         <Alert severity="info">
           One volume has {(voxels / 1e6).toFixed(0)} M voxels; the Pi takes {(defaults.piMaxVoxels / 1e6).toFixed(0)} M
-          at most. Register a worker (docker/processing-worker), or crop the stack.
+          at most. Register a worker (image ghcr.io/openuc2/uc2-deconvolution), or crop the stack.
         </Alert>
       )}
       <Button variant="outlined" onClick={startJob} disabled={job?.state === "running"}>

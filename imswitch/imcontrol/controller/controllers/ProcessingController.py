@@ -369,6 +369,8 @@ class ProcessingController(ImConWidgetController):
             "optics": [asdict(o) for o in optics],
             "opticsFrom": origin,
             "psfModels": recipe.PSF_MODELS,
+            "methods": {m: {"losses": losses, "penalties": penalties}
+                        for m, (losses, penalties) in recipe.SUPPORTED.items()},
             "channels": source.channels,
             "shape": dict(zip("tczyx", source.shape)),
             "dtype": str(source.dtype),

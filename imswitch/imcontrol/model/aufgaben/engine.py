@@ -478,6 +478,8 @@ class Run:
         kwargs = {name: getattr(params, name) for name in task.params_model.model_fields}
         for name, kind in task.injected.items():
             kwargs[name] = self.hw if kind == "hw" else self._ctx
+        if "objective" in task.flags.needs:   # the pixel size follows the objective: read again
+            self._pixel_size = None
         result = task.function(**kwargs)
         return self._save_derived(node, result) if isinstance(result, DerivedImage) else result
 

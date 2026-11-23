@@ -45,6 +45,9 @@ ANSCOMBE = np.float32(3 / 8)          # offset of the Anscombe transform, in cou
 MODALITIES = ("widefield", "lightsheet")
 PSF_MODELS = ("scalar", "vectorial", "gaussian", "measured")
 LIMITS = {"iterations": (1, 500), "regularization": (0.0, 10.0), "tile": (64, 16384)}
+# peak memory of deconvolve() per voxel of a padded tile (tracemalloc, 2026-11-23; the same for
+# every shape tried) times 1.25 for the FFT's own buffers: 32, 61 and 100 bytes measured
+TILE_BYTES = {"rl": 40, "map": 75, "hessian": 125}
 
 
 class Cancelled(Exception):
@@ -681,6 +684,19 @@ def map_lean(measured, psf, gamma=0.0, iterations=60, background=0.0, padding=(0
 
 
 # --- the recipe -------------------------------------------------------------------------------
+
+def memory_bytes(shape, optics: Optics, parameters: Optional[Parameters] = None, itemsize=2,
+                 measured=None) -> int:
+    """About the peak memory deconvolve() needs for a (z, y, x) stack of ``itemsize`` bytes per
+    voxel: the stack, its float32 copy and the result, plus the working set of one tile."""
+    p = parameters or Parameters()
+    nz, ny, nx = shape
+    margin = overlap_px(optics, nz, measured)
+    ys, xs = _tiles(ny, p.tile, margin), _tiles(nx, p.tile, margin)
+    tile = _padded_shape((nz, ys[0][1] - ys[0][0], xs[0][1] - xs[0][0]), PADDING)
+    kind = p.method if p.method == "rl" or p.penalty != "hessian" else "hessian"
+    return nz * ny * nx * (itemsize + 8) + math.prod(tile) * TILE_BYTES[kind]
+
 
 def deconvolve(stack, optics: Optics, parameters: Optional[Parameters] = None, progress=None,
                measured=None):

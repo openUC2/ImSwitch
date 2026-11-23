@@ -20,6 +20,7 @@ from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 import numpy as np
+import psutil
 import tifffile
 import zarr
 from fastapi import HTTPException
@@ -36,6 +37,7 @@ PI_MAX_VOXELS = 10_000_000  # one volume on the Pi; 32 x 512 x 512 takes about 1
 PREVIEW_MAX_VOXELS = 64 * 256 * 256
 PSF_VIEW_VOXELS = 4_000_000  # the grid the PSF view is computed on
 DISTILL_MAX_VOXELS = 80_000_000  # a bead stack is read whole
+PI_MEMORY_SHARE = 0.75  # of the memory free when a run starts on the Pi; the rest is ImSwitch's
 INDEX = {"air": 1.0, "water": 1.333, "waterdipping": 1.333, "glycerol": 1.47, "oil": 1.515}
 RUNNERS = ("auto", "pi", "worker")
 _SUFFIXES = (".ome.zarr", ".zarr", ".ome.tiff", ".ome.tif", ".tiff", ".tif")
@@ -254,14 +256,27 @@ class ProcessingController(ImConWidgetController):
             "emission_um": "channel name",
         }
 
-    def _refuse_on_pi(self) -> None:
+    def _refuse_on_pi(self, need: int = 0) -> None:
+        """409 while the microscope acquires, or when the run would need more than its share of
+        the free memory (``need`` bytes, recipe.memory_bytes): running out would end ImSwitch."""
         reasons = busy_reasons(self._master, self._logger, ignore=("Processing",))
         if self._job.get("state") == "running" and self._job.get("runner") == "pi":
             reasons.append("a processing job runs on the Pi")
         if reasons:
             raise HTTPException(status_code=409, detail="Not on the Pi while " + ", ".join(reasons))
+        free = psutil.virtual_memory().available
+        if need > PI_MEMORY_SHARE * free:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"This needs about {need / 2**30:.1f} GB of memory and the Pi has "
+                    f"{free / 2**30:.1f} GB free. Use a smaller crop, fewer planes, a smaller "
+                    f"tile, Good's roughness instead of the Hessian penalty, or a processing "
+                    f"worker."
+                ),
+            )
 
-    def _runner(self, requested: str, voxels: int) -> str:
+    def _runner(self, requested: str, voxels: int, need: int = 0) -> str:
         if requested not in RUNNERS:
             raise HTTPException(status_code=422, detail=f"runner must be one of {RUNNERS}")
         if requested == "worker" or (requested == "auto" and self._worker_url()):
@@ -277,7 +292,7 @@ class ProcessingController(ImConWidgetController):
                     f"or crop or bin the stack."
                 ),
             )
-        self._refuse_on_pi()
+        self._refuse_on_pi(need)
         return "pi"
 
     @staticmethod
@@ -365,9 +380,9 @@ class ProcessingController(ImConWidgetController):
         and ``planes`` planes around ``z``, at most PREVIEW_MAX_VOXELS. Returns the crop's origin,
         the plane ``z`` (xy) and the centre row (xz) before and after as base64 float32
         (little endian), the background used (counts) and the time taken. A newer preview stops
-        this one ({"cancelled": true}). 409 while the microscope acquires.
+        this one ({"cancelled": true}). 409 while the microscope acquires or when the crop needs
+        more memory than the Pi has free.
         """
-        self._refuse_on_pi()
         source = self._source(request.path, request.image)
         T, C, Z, Y, X = source.shape
         if not (0 <= request.t < T and 0 <= request.c < C and 0 <= request.z < Z):
@@ -389,6 +404,8 @@ class ProcessingController(ImConWidgetController):
         y0, x0 = min(max(request.y - sy // 2, 0), Y - sy), min(max(request.x - sx // 2, 0), X - sx)
         optics = _parse(recipe.Optics, request.optics)
         parameters = _parse(recipe.Parameters, request.parameters)
+        measured = self._measured(optics)
+        self._refuse_on_pi(recipe.memory_bytes((nz, sy, sx), optics, parameters, 4, measured))
         crop = source.read(
             request.t, request.c, slice(z0, z0 + nz), slice(y0, y0 + sy), slice(x0, x0 + sx)
         ).astype(np.float32)
@@ -405,7 +422,7 @@ class ProcessingController(ImConWidgetController):
                 optics,
                 parameters,
                 progress=lambda _: self._preview != number,
-                measured=self._measured(optics),
+                measured=measured,
             )
         except recipe.Cancelled:
             return {"cancelled": True}
@@ -444,14 +461,20 @@ class ProcessingController(ImConWidgetController):
             raise HTTPException(status_code=422, detail=f"optics needs one entry per channel ({C})")
         optics = [_parse(recipe.Optics, o) for o in request.optics]
         parameters = _parse(recipe.Parameters, request.parameters)
-        specs = {}
+        specs, need = {}, 0
         for c in channels:
             spec = {"optics": asdict(optics[c]), "parameters": asdict(parameters)}
             measured = self._measured(optics[c])
             if measured is not None:
                 spec["psf"] = recipe.encode_psf(*measured)
             specs[c] = spec
-        runner = self._runner(request.runner, Z * Y * X)
+            need = max(
+                need,
+                recipe.memory_bytes(
+                    (Z, Y, X), optics[c], parameters, source.dtype.itemsize, measured
+                ),
+            )
+        runner = self._runner(request.runner, Z * Y * X, need)
         with self._lock:
             if self._job.get("state") == "running":
                 raise HTTPException(status_code=409, detail="A processing job is running")

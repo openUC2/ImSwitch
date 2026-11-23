@@ -71,6 +71,21 @@ def test_hessian_gradient_and_curvature():
                       (value(f + t * e) - 2 * value(f) + value(f - t * e)) / t ** 2, rtol=1e-5)
 
 
+@pytest.mark.parametrize("settings", [{"method": "rl"}, {}, {"penalty": "hessian"}])
+def test_memory_estimate_covers_the_peak(settings):
+    import tracemalloc
+    measured = d.synthetic((12, 160, 96), FRAME)[1].astype(np.uint16)
+    p = d.Parameters(iterations=3, background=5.0, tile=64, **settings)   # several tiles
+    tracemalloc.start()
+    try:
+        d.deconvolve(measured, FRAME, p)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    estimate = d.memory_bytes(measured.shape, FRAME, p, measured.itemsize)
+    assert peak < estimate < 2 * peak
+
+
 def test_tiles_give_the_whole_plane_result():
     truth, measured = d.synthetic((8, 256, 256), FRAME, seed=3)
     whole = d.deconvolve(measured, FRAME, d.Parameters(iterations=20))

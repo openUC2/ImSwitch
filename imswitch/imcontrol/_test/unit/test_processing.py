@@ -202,6 +202,24 @@ def test_refusals_and_cancel(data):
     assert not (data[0] / "run" / "a_deconvolved.ome.zarr").exists()
 
 
+def test_runs_on_the_pi_need_the_memory(data, monkeypatch):
+    from imswitch.imcontrol.controller.controllers import ProcessingController as module
+    ctl = controller()
+    defaults = ctl.getProcessingDefaults("/run/a.ome.zarr")
+    little = types.SimpleNamespace(available=1 << 20)
+    monkeypatch.setattr(module.psutil, "virtual_memory", lambda: little)
+    for call in (
+        lambda: ctl.startProcessingJob(job(ctl, defaults, runner="pi")),
+        lambda: ctl.previewProcessing(
+            PreviewRequest(path="/run/a.ome.zarr", z=0, y=0, x=0, optics=defaults["optics"][0])
+        ),
+    ):
+        with pytest.raises(HTTPException) as e:
+            call()
+        assert e.value.status_code == 409 and "memory" in e.value.detail
+    assert ctl.getProcessingStatus()["state"] == "idle"
+
+
 def test_psf_from_beads_and_the_datasets_objective(data, worker_url, monkeypatch):
     root, _ = data
     o = recipe.Optics(pixel_um=0.12, z_step_um=0.5, na=0.75)

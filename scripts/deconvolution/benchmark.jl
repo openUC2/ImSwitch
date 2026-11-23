@@ -20,6 +20,14 @@ bg_norm = BACKGROUND / mean(measured)  # deconvolution() normalises the data to 
 
 solvers = Dict(
     "map_lean" => () -> map_cj_lean(measured, psf; gamma=GAMMA, iterations=ITER, background=BACKGROUND, padding=pad),
+    # the other data terms and the Hessian penalty (test_deconvolution.py); the recipe multiplies
+    # gamma by 2 * (mean - background) for the Gauss loss
+    "map_lean_anscombe" => () -> map_cj_lean(measured, psf; loss=:anscombe, gamma=GAMMA, iterations=ITER,
+                                             background=BACKGROUND, padding=pad),
+    "map_lean_gauss" => () -> map_cj_lean(measured, psf; loss=:gauss, gamma=GAMMA * 2 * max(mean(measured) - BACKGROUND, 1),
+                                          iterations=ITER, background=BACKGROUND, padding=pad),
+    "map_lean_hessian" => () -> map_cj_lean(measured, psf; penalty=:hessian_frobenius, gamma=10 * GAMMA, iterations=ITER,
+                                            background=BACKGROUND, padding=pad),
     "rl" => () -> richardson_lucy_iterative(measured, psf; regularizer=nothing, iterations=ITER),
     "admm_tv" => () -> first(deconvolution(measured, psf; regularizer=TV(num_dims=3), λ=0.01f0, background=bg_norm,
                                            opt=ADMM(iterations=50), padding=pad)),

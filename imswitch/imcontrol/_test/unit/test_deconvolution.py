@@ -2,7 +2,9 @@
 
 deconvolution_julia_reference.npz holds the z and y maximum projections (scaled to 1, float16) of
 DeconvOptim.jl's map_cj_lean (branch new_methods, c72a2c8) on synthetic((32, 256, 256), FRAME)
-with gamma 1e-4, 30 iterations, background 5 and z padding 0.25 (scripts/deconvolution).
+with gamma 1e-4, 30 iterations, background 5 and z padding 0.25: mip_z / mip_y with the default
+Poisson loss and Good's roughness, <case>_mip_z / <case>_mip_y for the cases of
+scripts/deconvolution/benchmark.jl (solvers map_lean_<case>).
 """
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -30,6 +32,43 @@ def test_matches_deconvoptim_jl():
     assert ncc(result.max(0), julia["mip_z"].astype(np.float32)) > 0.99
     assert ncc(result.max(1), julia["mip_y"].astype(np.float32)) > 0.99
     assert ncc(measured.max(0), julia["mip_z"].astype(np.float32)) < 0.6
+
+
+@pytest.mark.parametrize("case, settings", [
+    ("anscombe", {"loss": "anscombe"}),
+    ("gauss", {"loss": "gauss"}),
+    ("hessian", {"penalty": "hessian", "regularization": 1e-3}),
+])
+def test_other_losses_and_the_hessian_penalty_match_deconvoptim_jl(case, settings):
+    _, measured = d.synthetic((32, 256, 256), FRAME)
+    p = d.Parameters(**{"regularization": 1e-4, "background": 5.0, **settings})
+    result = d.deconvolve(measured, FRAME, p)
+    julia = np.load(REFERENCE)
+    # 1.0 for anscombe and hessian, 0.995 for gauss (as for the Poisson default)
+    assert ncc(result.max(0), julia[f"{case}_mip_z"].astype(np.float32)) > 0.99
+    assert ncc(result.max(1), julia[f"{case}_mip_y"].astype(np.float32)) > 0.99
+    # each case gives its own result: the test would notice the setting being dropped
+    assert ncc(result.max(0), julia["mip_z"].astype(np.float32)) < 0.995
+
+
+def test_hessian_gradient_and_curvature():
+    rng = np.random.default_rng(0)
+    f, e = rng.random((5, 7, 6)), rng.random((5, 7, 6))
+    pairs, eps2 = d._hessian_pairs(f.shape, (1, 2, 0.5)), 1e-6
+    for a, c, w, _ in pairs:
+        q = rng.random(f.shape)
+        assert np.isclose((d._hessian_entry(f, a, c, w) * q).sum(),
+                          (f * d._hessian_adjoint(q, a, c, w)).sum())
+    entries = []
+    r = d._hessian_norm(f, pairs, eps2, entries)
+    value = lambda f: d._hessian_norm(f, pairs, eps2).sum()     # noqa: E731
+    step = 1e-6
+    numeric = np.array([(value(f + step * u) - value(f - step * u)) / (2 * step)
+                        for u in np.eye(f.size).reshape((f.size,) + f.shape)]).reshape(f.shape)
+    np.testing.assert_allclose(d._hessian_gradient(r, entries, pairs), numeric, atol=1e-6)
+    t = 1e-4
+    assert np.isclose(d._hessian_curvature(r, entries, e, pairs),
+                      (value(f + t * e) - 2 * value(f) + value(f - t * e)) / t ** 2, rtol=1e-5)
 
 
 def test_tiles_give_the_whole_plane_result():

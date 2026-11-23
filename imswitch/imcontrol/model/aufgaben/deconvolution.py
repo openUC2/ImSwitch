@@ -7,10 +7,11 @@ docker/processing-worker) and in scripts/deconvolution/benchmark.py.
     out = deconvolve(stack, Optics(pixel_um=0.12, z_step_um=0.5, na=0.75), Parameters())
 
 Two solvers. ``rl`` is Richardson-Lucy. ``map`` ports DeconvOptim.jl's map_cj_lean (branch
-new_methods, src/map_cj_lean.jl, MIT licence): Poisson deviance plus Good's roughness,
-object = x**2, Fletcher-Reeves conjugate gradients, one Newton step per iteration with Armijo
-backtracking, three FFT convolutions per iteration. test_deconvolution.py checks it against stored
-DeconvOptim.jl output.
+new_methods, src/map_cj_lean.jl, MIT licence): a data term (Poisson deviance, Anscombe or Gauss)
+plus a penalty (Good's roughness or the Frobenius norm of the Hessian), object = x**2,
+Fletcher-Reeves conjugate gradients, one Newton step per iteration with Armijo backtracking, three
+FFT convolutions per iteration. test_deconvolution.py checks it against stored DeconvOptim.jl
+output.
 
 Arrays are (z, y, x) float32 and a PSF is centred at index (0, 0, 0). ``padding`` is one fraction
 per axis, as in DeconvOptim.jl: the grid grows by that fraction and the border is left unconstrained
@@ -38,6 +39,9 @@ WORKERS = os.cpu_count() or 4        # FFT threads
 EPS = np.float32(1e-7)
 PADDING = (0.25, 0, 0)               # z only: light from planes outside the stack
 METHODS = ("map", "rl")
+LOSSES = ("poisson", "anscombe", "gauss")
+PENALTIES = ("good", "hessian")
+ANSCOMBE = np.float32(3 / 8)          # offset of the Anscombe transform, in counts
 MODALITIES = ("widefield", "lightsheet")
 PSF_MODELS = ("scalar", "vectorial", "gaussian", "measured")
 LIMITS = {"iterations": (1, 500), "regularization": (0.0, 10.0), "tile": (64, 16384)}
@@ -91,13 +95,18 @@ class Optics:
 class Parameters:
     method: str = "map"                   # "map" (regularised) or "rl" (Richardson-Lucy, fast)
     iterations: int = 30
-    regularization: float = 1e-4          # weight of Good's roughness in measured counts; map only
+    regularization: float = 1e-4          # weight of the penalty in measured counts; map only
+    loss: str = "poisson"                 # map: "poisson", "anscombe" or "gauss" (the noise model)
+    penalty: str = "good"                 # map: "good" (Good's roughness) or "hessian" (Frobenius
+                                          # norm of the Hessian: keeps edges and fine lines)
     background: Optional[float] = None    # camera offset + dark counts; None: estimated
     tile: int = 512                       # planes wider than this are split into tiles; a
                                           # 64-plane tile then needs about 3 GB
 
     def __post_init__(self):
         _check(self.method in METHODS, f"method must be one of {METHODS}")
+        _check(self.loss in LOSSES, f"loss must be one of {LOSSES}")
+        _check(self.penalty in PENALTIES, f"penalty must be one of {PENALTIES}")
         self.iterations, self.tile = int(self.iterations), int(self.tile)
         self.regularization = float(self.regularization)
         for name, (lo, hi) in LIMITS.items():
@@ -449,36 +458,174 @@ def _laplacian(x, weights):
     return lap
 
 
-def map_lean(measured, psf, gamma=0.0, iterations=60, background=0.0, padding=(0, 0, 0),  # noqa: C901
-             weights=(1, 1, 1), saddle_escape=1.0, escape_threshold=1e-4, callback=None):
-    # one function, as in map_cj_lean.jl, so the two can be read side by side
-    """MAP deconvolution, Poisson noise + gamma * Good's roughness, object = x**2 >= 0.
+def _poisson(data, mask, b):
+    """Poisson noise as a deviance (Float32 sums stay accurate at high counts)."""
+    logdata = np.log(np.where(data > 0, data, 1))
 
-    gamma is in units of the measured counts (the data are not normalised). Returns the object.
+    def value(mu):
+        mt = np.maximum(mu + b, EPS)
+        dev = np.where(data > 0, mt - data + data * (logdata - np.log(mt)), mt)
+        return float(np.sum(dev, where=mask, dtype=np.float64))
+
+    def residual(mu):
+        return np.where(mask, 1 - data / np.maximum(mu + b, EPS), 0).astype(np.float32)
+
+    def second(mu):
+        return np.where(mask, data / np.maximum(mu + b, EPS) ** 2, 0)
+    return value, residual, second
+
+
+def _anscombe(data, mask, b):
+    """sum (sqrt(mu + b + 3/8) - sqrt(data + 3/8))**2."""
+    root = np.sqrt(np.maximum(data, 0) + ANSCOMBE)
+
+    def value(mu):
+        err = np.sqrt(np.maximum(mu + b, 0) + ANSCOMBE) - root
+        return float(np.sum(err * err, where=mask, dtype=np.float64))
+
+    def residual(mu):
+        return np.where(mask, 1 - root / np.sqrt(np.maximum(mu + b, 0) + ANSCOMBE),
+                        0).astype(np.float32)
+
+    def second(mu):
+        m = np.maximum(mu + b, 0) + ANSCOMBE
+        return np.where(mask, root / (2 * m * np.sqrt(m)), 0)
+    return value, residual, second
+
+
+def _gauss(data, mask, b):
+    """sum (mu + b - data)**2; the noise variance is in gamma."""
+    def value(mu):
+        err = mu + b - data
+        return float(np.sum(err * err, where=mask, dtype=np.float64))
+
+    def residual(mu):
+        return np.where(mask, 2 * (mu + b - data), 0).astype(np.float32)
+
+    def second(mu):
+        return np.where(mask, np.float32(2), np.float32(0))
+    return value, residual, second
+
+
+# the data terms of map_cj_lean.jl: value(mu), residual(mu) = dL/dmu and second(mu) = d2L/dmu2,
+# zero in the padding border (mask False)
+DATA_TERMS = {"poisson": _poisson, "anscombe": _anscombe, "gauss": _gauss}
+
+
+def _along(ndim, axis, s):
+    return tuple(s if k == axis else slice(None) for k in range(ndim))
+
+
+def _hessian_pairs(shape, weights):
+    """(axis a, axis b, stencil weight, weight in the norm) of the Hessian entries, as
+    map_cj.jl's _mappr_hessian_pairs: the diagonal once, each mixed entry twice."""
+    axes = [a for a, n in enumerate(shape) if n > 1]
+    return ([(a, a, float(weights[a]), 1.0) for a in axes]
+            + [(a, c, math.sqrt(weights[a] * weights[c]), 2.0)
+               for i, a in enumerate(axes) for c in axes[i + 1:]])
+
+
+def _hessian_entry(f, a, c, w):
+    """One weighted Hessian entry: the second difference along a with clamped ends (a == c),
+    else the forward mixed difference, zero on the last row along a or c."""
+    out = np.zeros_like(f)
+    if a == c:
+        n = f.ndim
+        d = np.diff(f, axis=a)                  # f[i+1] - f[i]; the ends take one side only
+        out[_along(n, a, slice(None, -1))] = d
+        out[_along(n, a, slice(1, None))] -= d
+        out *= np.float32(w)
+        return out
+    inner = tuple(slice(None, -1) if k in (a, c) else slice(None) for k in range(f.ndim))
+    out[inner] = np.float32(w) * np.diff(np.diff(f, axis=a), axis=c)
+    return out
+
+
+def _hessian_adjoint(q, a, c, w):
+    """The transpose of _hessian_entry (the clamped second difference is symmetric)."""
+    if a == c:
+        return _hessian_entry(q, a, a, w)
+    v = q[tuple(slice(None, -1) if k in (a, c) else slice(None) for k in range(q.ndim))]
+    for axis in (a, c):
+        v = -np.diff(np.pad(v, [(1, 1) if k == axis else (0, 0) for k in range(v.ndim)]),
+                     axis=axis)
+    return np.float32(w) * v
+
+
+def _hessian_norm(f, pairs, eps2, entries=None):
+    """r = sqrt(eps**2 + ||Hessian(f)||_F**2) per voxel; the penalty is its sum. ``entries``,
+    a list, receives the Hessian entries."""
+    s = np.full(f.shape, eps2, f.dtype)
+    for a, c, w, pw in pairs:
+        h = _hessian_entry(f, a, c, w)
+        s += np.float32(pw) * h * h
+        if entries is not None:
+            entries.append(h)
+    return np.sqrt(s, out=s)
+
+
+def _hessian_gradient(r, entries, pairs):
+    """d/df of sum(_hessian_norm(f)), from the r and entries _hessian_norm gave for f."""
+    out = np.zeros_like(r)
+    for (a, c, w, pw), h in zip(pairs, entries):
+        out += _hessian_adjoint(np.float32(pw) * h / r, a, c, w)
+    return out
+
+
+def _hessian_curvature(r, entries, e, pairs):
+    """Second derivative of sum(_hessian_norm(f + t e)) at t = 0, from f's r and entries, without
+    the term with the second derivative of f itself (map_lean adds that through the object-space
+    gradient)."""
+    cross, slope = np.zeros_like(r), np.zeros_like(r)
+    for (a, c, w, pw), h in zip(pairs, entries):
+        hp = _hessian_entry(e, a, c, w)
+        cross += np.float32(pw) * h * hp
+        slope += np.float32(pw) * hp * hp
+    return float(np.sum(slope / r - cross * cross / (r * r * r), dtype=np.float64))
+
+
+def map_lean(measured, psf, gamma=0.0, iterations=60, background=0.0, padding=(0, 0, 0),  # noqa: C901
+             weights=(1, 1, 1), saddle_escape=1.0, escape_threshold=1e-4, callback=None,
+             loss="poisson", penalty="good", epsilon=None):
+    # one function, as in map_cj_lean.jl, so the two can be read side by side
+    """MAP deconvolution, data term ``loss`` + gamma * ``penalty``, object = x**2 >= 0.
+
+    loss: "poisson" (deviance), "anscombe" or "gauss"; penalty: "good" (Good's roughness) or
+    "hessian" (sum sqrt(epsilon**2 + ||Hessian(object)||_F**2), map_cj_lean's
+    :hessian_frobenius; epsilon defaults to sqrt of the float32 machine epsilon). gamma is in
+    units of the measured counts (the data are not normalised). Returns the object.
     callback(iteration, object) may return True to stop early.
     """
     g, data, mask, conv = _setup(measured, psf, padding)
     b = np.float32(background)
     centre = _centre(data.shape, g.shape)
     x = np.full(data.shape, np.sqrt(max(float(g.mean()) - background, 1e-7)), np.float32)
-    logdata = np.log(np.where(data > 0, data, 1))
+    value, residual, second = DATA_TERMS[loss](data, mask, b)
+    hessian = penalty == "hessian" and gamma > 0
+    good = penalty == "good" and gamma > 0
+    pairs = _hessian_pairs(data.shape, weights) if hessian else []
+    eps = math.sqrt(float(np.finfo(np.float32).eps)) if epsilon is None else float(epsilon)
+    eps2 = np.float32(eps * eps)
 
     def objective(x, mu):
-        mt = np.maximum(mu + b, EPS)
-        deviance = np.where(data > 0, mt - data + data * (logdata - np.log(mt)), mt)
-        return (float(np.sum(deviance, where=mask, dtype=np.float64))
-                + (gamma * _good(x, weights) if gamma else 0.0))
+        if hessian:
+            return value(mu) + gamma * float(np.sum(_hessian_norm(x * x, pairs, eps2),
+                                                    dtype=np.float64))
+        return value(mu) + (gamma * _good(x, weights) if good else 0.0)
 
     mu = conv(x * x)
     psi = objective(x, mu)
     direction = np.zeros_like(x)
     gnorm_prev, alpha_prev, restart = 0.0, 1.0, True
     for it in range(1, iterations + 1):
-        mt = np.maximum(mu + b, EPS)
-        # gradient in object space
-        g_f = conv(np.where(mask, 1 - data / mt, 0).astype(np.float32), True)
+        # object-space gradient g_f (with the Hessian penalty's part), then the one in x
+        g_f = conv(residual(mu), True)
+        if hessian:     # ponytail: the trial step's entries are recomputed here; keep them if
+            entries = []    # the Hessian penalty's run time (about 3x Good's) matters
+            r = _hessian_norm(x * x, pairs, eps2, entries)
+            g_f += np.float32(gamma) * _hessian_gradient(r, entries, pairs)
         grad = 2 * x * g_f
-        if gamma:
+        if good:
             grad -= np.float32(8 * gamma) * _laplacian(x, weights)
         gnorm = float(np.sum(grad * grad, dtype=np.float64))
         beta = 0.0 if (restart or gnorm_prev == 0) else gnorm / gnorm_prev
@@ -489,7 +636,7 @@ def map_lean(measured, psf, gamma=0.0, iterations=60, background=0.0, padding=(0
         gnorm_prev, restart = gnorm, False
 
         if saddle_escape > 0:       # voxels stuck at x = 0 although the data ask them to grow
-            shift = 8 * gamma * sum(weights)
+            shift = 8 * gamma * sum(weights) if good else 0.0
             pull = np.where((x * x <= escape_threshold * float((x * x).max())) & (g_f + shift < 0),
                             -(g_f + shift), 0)
             rms = float(np.sqrt(np.mean(direction * direction, dtype=np.float64)))
@@ -500,9 +647,12 @@ def map_lean(measured, psf, gamma=0.0, iterations=60, background=0.0, padding=(0
         dphi = float(np.sum(grad * direction, dtype=np.float64))
         h = conv(2 * x * direction)
         curvature = float(np.sum(2 * g_f * direction * direction, dtype=np.float64))
-        curvature += float(np.sum(np.where(mask, data / (mt * mt), 0) * h * h, dtype=np.float64))
-        if gamma:
+        curvature += float(np.sum(second(mu) * h * h, dtype=np.float64))
+        if good:
             curvature += gamma * 2 * _good(direction, weights)
+        elif hessian:
+            curvature += gamma * _hessian_curvature(r, entries, 2 * x * direction, pairs)
+            del entries, r
         alpha = -dphi / curvature if (np.isfinite(curvature) and curvature > 0) else 2 * alpha_prev
         if not (np.isfinite(alpha) and alpha > 0):
             alpha = alpha_prev
@@ -547,6 +697,10 @@ def deconvolve(stack, optics: Optics, parameters: Optional[Parameters] = None, p
     _check(data.ndim == 3 and data.size > 0, f"expected a (z, y, x) stack, got shape {data.shape}")
     _check(bool(np.isfinite(data).all()), "the stack holds NaN or infinite values")
     background = estimate_background(data) if p.background is None else p.background
+    # the Gauss loss is about 2 * counts times the Poisson deviance: scale gamma by that so one
+    # regularisation value means about the same with every noise model
+    gamma = p.regularization * (2 * max(float(data.mean()) - background, 1.0)
+                                if p.loss == "gauss" else 1.0)
     nz, ny, nx = data.shape
     margin = overlap_px(optics, nz, measured)
     ys, xs = _tiles(ny, p.tile, margin), _tiles(nx, p.tile, margin)
@@ -561,8 +715,8 @@ def deconvolve(stack, optics: Optics, parameters: Optional[Parameters] = None, p
         if p.method == "rl":
             result = richardson_lucy(window, kernel, p.iterations, background, PADDING, step)
         else:
-            result = map_lean(window, kernel, p.regularization, p.iterations, background, PADDING,
-                              callback=step)
+            result = map_lean(window, kernel, gamma, p.iterations, background, PADDING,
+                              callback=step, loss=p.loss, penalty=p.penalty)
         out[:, cy0:cy1, cx0:cx1] = result[:, cy0 - y0:cy1 - y0, cx0 - x0:cx1 - x0]
     return out[0] if plane else out
 

@@ -2,8 +2,9 @@
 
 The recipe (uc2deconvolution.recipe, github.com/openUC2/uc2-deconvolution) runs here, on the Pi,
 for previews and small stacks. Larger stacks go to a processing worker (uc2deconvolution.worker,
-image ghcr.io/openuc2/uc2-deconvolution) registered by URL; the Pi then only reads the planes and
-writes the result. The result is an
+image ghcr.io/openuc2/uc2-deconvolution) registered by URL, or given by
+IMSWITCH_PROCESSING_WORKER_URL (os-rpi runs one beside ImSwitch); the Pi then only reads the planes
+and writes the result. The result is an
 OME-Zarr next to the source, written through storage.py, with the request in recipe.json inside
 it. Nothing computes on the Pi while the microscope is busy (controller/busy.py).
 """
@@ -11,6 +12,7 @@ it. Nothing computes on the Pi while the microscope is busy (controller/busy.py)
 import base64
 import json
 import math
+import os
 import shutil
 import threading
 import time
@@ -41,6 +43,7 @@ DISTILL_MAX_VOXELS = 80_000_000  # a bead stack is read whole
 PI_MEMORY_SHARE = 0.75  # of the memory free when a run starts on the Pi; the rest is ImSwitch's
 INDEX = {"air": 1.0, "water": 1.333, "waterdipping": 1.333, "glycerol": 1.47, "oil": 1.515}
 RUNNERS = ("auto", "pi", "worker")
+WORKER_ENV = "IMSWITCH_PROCESSING_WORKER_URL"  # the worker when the setup names none (os-rpi)
 _SUFFIXES = (".ome.zarr", ".zarr", ".ome.tiff", ".ome.tif", ".tiff", ".tif")
 
 
@@ -202,7 +205,8 @@ class ProcessingController(ImConWidgetController):
 
     # -- helpers ---------------------------------------------------------------------------------
     def _worker_url(self) -> str:
-        return (getattr(self._setupInfo, "processing", None) or {}).get("workerUrl") or ""
+        setup = (getattr(self._setupInfo, "processing", None) or {}).get("workerUrl")
+        return setup or os.environ.get(WORKER_ENV, "").strip().rstrip("/")
 
     def _source(self, path: str, image: str = "") -> _Source:
         base = Path(dirtools.UserFileDirs.getValidatedDataPath()).resolve()
@@ -691,7 +695,8 @@ class ProcessingController(ImConWidgetController):
 
     @APIExport(runInThreadpool=True)
     def setProcessingWorker(self, url: str = "") -> Dict[str, Any]:
-        """Register the processing worker, e.g. http://lab-pc:8090; an empty url removes it.
+        """Register the processing worker, e.g. http://lab-pc:8090; an empty url goes back to
+        IMSWITCH_PROCESSING_WORKER_URL (the worker beside ImSwitch on os-rpi), if set.
 
         Saved in the setup file (``processing.workerUrl``). Returns getProcessingWorker.
         """

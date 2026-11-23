@@ -1013,7 +1013,8 @@ class SetupInfo:
     processing: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
     """ Processing options. ``{"workerUrl": "http://lab-pc:8090"}`` sends deconvolution jobs
     to a processing worker (uc2-deconvolution, image ghcr.io/openuc2/uc2-deconvolution); set it
-    with ProcessingController.setProcessingWorker. """
+    with ProcessingController.setProcessingWorker. Without it, ImSwitch uses
+    IMSWITCH_PROCESSING_WORKER_URL (os-rpi sets it for the worker it runs beside ImSwitch). """
 
     aufgaben: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
     """ Aufgaben options. ``{"allowScripts": true}`` offers the python_script and

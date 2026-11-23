@@ -154,6 +154,13 @@ def test_a_job_on_a_worker_gives_the_pi_result(data, worker_url):
     np.testing.assert_allclose(out[0, 0], expected, rtol=1e-5)
 
 
+def test_the_worker_beside_imswitch_needs_no_setting(worker_url, monkeypatch):
+    from imswitch.imcontrol.controller.controllers import ProcessingController as module
+    monkeypatch.setenv(module.WORKER_ENV, worker_url + "/")
+    assert controller().getProcessingWorker()["ok"]                 # no worker in the setup
+    assert controller("http://lab-pc:8090").getProcessingWorker()["url"] == "http://lab-pc:8090"
+
+
 def test_refusals_and_cancel(data):
     _, _ = data
     ctl = controller(experiment="running")

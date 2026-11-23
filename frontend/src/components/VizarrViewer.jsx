@@ -347,22 +347,27 @@ const VizarrViewer = ({ zarrUrl = null, onClose = null, embedded = false, height
     };
   }, [requestDraw]);
 
+  // The box captures the pointer, so the moves and the release arrive at the box, not at the canvas
+  // under the pointer; listening on the canvas kept the pan going after the button was released.
   const onPointerDown = (e) => {
-    if (!viewRef.current) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
+    if (!viewRef.current || e.button !== 0) return;
+    const box = e.currentTarget;
+    box.setPointerCapture(e.pointerId);
     let last = [e.clientX, e.clientY];
     const move = (ev) => {
+      if (ev.pointerId !== e.pointerId) return;
       const v = viewRef.current;
       viewRef.current = { ...v, x: v.x - (ev.clientX - last[0]) / v.zoom, y: v.y - (ev.clientY - last[1]) / v.zoom };
       last = [ev.clientX, ev.clientY];
       requestDraw();
     };
-    const up = () => {
-      e.target.removeEventListener("pointermove", move);
-      e.target.removeEventListener("pointerup", up);
+    const end = (ev) => {
+      if (ev.pointerId !== e.pointerId) return;
+      box.removeEventListener("pointermove", move);
+      box.removeEventListener("lostpointercapture", end);
     };
-    e.target.addEventListener("pointermove", move);
-    e.target.addEventListener("pointerup", up);
+    box.addEventListener("pointermove", move);
+    box.addEventListener("lostpointercapture", end); // after pointerup, pointercancel or a lost window
   };
 
   const fit = () => {

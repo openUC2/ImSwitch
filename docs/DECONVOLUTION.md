@@ -331,8 +331,9 @@ around `storage.py`, now go through it. Not covered: PNG, JPG and MP4, which hav
 
 ### The processing worker
 
-The recipe and the worker are the package [uc2-deconvolution](https://github.com/openUC2/uc2-deconvolution)
-(MIT; its GitHub Actions test it on x86 and arm64 and build the image for amd64 and arm64):
+The worker lives in its own repo, [uc2-deconvolution](https://github.com/openUC2/uc2-deconvolution)
+(recipe, worker and image for amd64 and arm64); `worker.py` here is the client ImSwitch uses and the
+in-process server the tests run.
 
 ```bash
 docker run --rm -p 8090:8090 ghcr.io/openuc2/uc2-deconvolution

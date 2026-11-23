@@ -75,6 +75,12 @@ def controller(url="", experiment="idle"):
     return ctl
 
 
+def test_worker_url_from_the_environment(monkeypatch):
+    monkeypatch.setenv("IMSWITCH_PROCESSING_WORKER_URL", "http://processing-worker:8090/")
+    assert controller()._worker_url() == "http://processing-worker:8090"
+    assert controller("http://lab-pc:8090")._worker_url() == "http://lab-pc:8090"  # setup wins
+
+
 def wait(ctl, timeout=60):
     end = time.monotonic() + timeout
     while ctl.getProcessingStatus()["state"] == "running" and time.monotonic() < end:

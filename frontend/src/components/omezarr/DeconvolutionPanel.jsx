@@ -48,6 +48,16 @@ const MODELS = [
   ["gaussian", "Gaussian (set widths)"],
   ["measured", "Measured (beads)"],
 ];
+// the MAP solver's data term and penalty (deconvolution.py LOSSES, PENALTIES)
+const LOSSES = [
+  ["poisson", "Poisson (photon counts)"],
+  ["anscombe", "Anscombe"],
+  ["gauss", "Gauss (read noise)"],
+];
+const PENALTIES = [
+  ["good", "Good's roughness"],
+  ["hessian", "Hessian (edges, lines; slower)"],
+];
 const remembered = () => {
   try {
     return localStorage.getItem(PSF_KEY) || "";
@@ -141,7 +151,14 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
   const [error, setError] = useState(null);
   const [channel, setChannel] = useState(0);
   const [optics, setOptics] = useState([]);
-  const [params, setParams] = useState({ method: "map", iterations: "30", regularization: 1e-4, background: "" });
+  const [params, setParams] = useState({
+    method: "map",
+    iterations: "30",
+    regularization: 1e-4,
+    loss: "poisson",
+    penalty: "good",
+    background: "",
+  });
   const [planes, setPlanes] = useState(32);
   const [preview, setPreview] = useState(null);
   const [showAfter, setShowAfter] = useState(true);
@@ -538,6 +555,29 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
           </MenuItem>
         </TextField>
         <Field label="Iterations" value={params.iterations} onChange={(v) => setParams((p) => ({ ...p, iterations: v }))} />
+      </Box>
+      <Box sx={{ display: "flex", gap: 1, opacity: params.method === "map" ? 1 : 0.4 }}>
+        {[
+          ["loss", "Noise model", LOSSES],
+          ["penalty", "Penalty", PENALTIES],
+        ].map(([key, label, options]) => (
+          <TextField
+            key={key}
+            select
+            size="small"
+            label={label}
+            value={params[key]}
+            disabled={params.method !== "map"}
+            onChange={(e) => setParams((p) => ({ ...p, [key]: e.target.value }))}
+            sx={{ flex: 1, minWidth: 0 }}
+          >
+            {options.map(([value, text]) => (
+              <MenuItem key={value} value={value} dense>
+                {text}
+              </MenuItem>
+            ))}
+          </TextField>
+        ))}
       </Box>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, opacity: params.method === "map" ? 1 : 0.4 }}>
         <Typography variant="body2" sx={{ width: 100 }}>

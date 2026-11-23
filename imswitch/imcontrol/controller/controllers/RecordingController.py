@@ -316,7 +316,11 @@ class RecordingController(ImConWidgetController):
                             break
 
         if saved_full_path is None:
-            saved_full_path = savename
+            # Nothing was written (no frame, a format snaps cannot write, a failed write): fail
+            # with the reason; a startSnap job then ends "error" instead of "done".
+            reasons = "; ".join(f"{n}: {getattr(r, 'error', r)}" for n, r in result.items())
+            raise HTTPException(status_code=500, detail="Snap failed: " + (
+                reasons or f"no frame from {', '.join(detectorNames)}"))
 
         data_root = dirtools.UserFileDirs.getValidatedDataPath()
         relative_file_path = None
@@ -593,7 +597,7 @@ class RecordingController(ImConWidgetController):
             if result.get("cancelled"):
                 status = "cancelled"
         except Exception as e:
-            status, error = "error", str(e)
+            status, error = "error", str(getattr(e, "detail", e))   # HTTPException: no "500: "
             self.__logger.error(f"Snap job {jobId} failed: {e}")
             self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
 

@@ -128,6 +128,13 @@ const fromForm = (f) => ({
   sheet_um: Number(f.sheet_um),
 });
 
+/** Axial FWHM (µm) the optics lead one to expect, as deconvolution.py's expected_fwhm. */
+const axialFwhm = (o) => {
+  const n = Number(o.immersion_n) || 1;
+  const na = Math.min(Number(o.na) || 0, n);
+  return (0.88 * (Number(o.emission_nm) / 1000)) / (n - Math.sqrt(n * n - na * na));
+};
+
 const Field = ({ label, value, onChange, unit, ...props }) => (
   <TextField
     size="small"
@@ -496,6 +503,16 @@ const DeconvolutionPanel = ({ path, image, t, z, getCrop, cropSize, setCropSize,
             </Button>
           </Box>
           {distilling && <LinearProgress />}
+          {!distilled && (
+            <Typography variant="caption" color="text.secondary">
+              No bead stack yet? In Live View, "From template" copies the "Bead PSF stack" macro: run it on a sparse
+              slide of sub-resolution beads, open the stack here and distill it.
+              {Number.isFinite(axialFwhm(form)) &&
+                ` For these optics: step ${(axialFwhm(form) / 3).toFixed(2)} µm or less, range about ${Math.ceil(
+                  axialFwhm(form) * 6,
+                )} µm.`}
+            </Typography>
+          )}
           {distilled && (
             <Typography variant="caption" color="text.secondary">
               Averaged {distilled.used} of {distilled.found} beads ({distilled.crowded} crowded, {distilled.edge} at

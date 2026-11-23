@@ -2,7 +2,7 @@
 
 The recipe of docs/DECONVOLUTION.md. numpy and scipy only, no ImSwitch imports: the same file runs
 in ImSwitch (preview and small stacks on the Pi), in the processing worker (``worker.py``,
-docker/processing-worker) and in scripts/deconvolution/benchmark.py.
+the uc2-deconvolution image) and in scripts/deconvolution/benchmark.py.
 
     out = deconvolve(stack, Optics(pixel_um=0.12, z_step_um=0.5, na=0.75), Parameters())
 

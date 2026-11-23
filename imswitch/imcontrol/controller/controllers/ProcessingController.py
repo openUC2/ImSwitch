@@ -1,7 +1,7 @@
 """Processing of stored datasets: 3D deconvolution, previewed on a crop (docs/DECONVOLUTION.md).
 
 The recipe (model/aufgaben/deconvolution.py) runs here, on the Pi, for previews and small stacks.
-Larger stacks go to a processing worker (model/aufgaben/worker.py, docker/processing-worker)
+Larger stacks go to a processing worker (model/aufgaben/worker.py; the uc2-deconvolution image)
 registered by URL; the Pi then only reads the planes and writes the result. The result is an
 OME-Zarr next to the source, written through storage.py, with the request in recipe.json inside
 it. Nothing computes on the Pi while the microscope is busy (controller/busy.py).
@@ -10,6 +10,7 @@ it. Nothing computes on the Pi while the microscope is busy (controller/busy.py)
 import base64
 import json
 import math
+import os
 import shutil
 import threading
 import time
@@ -199,7 +200,12 @@ class ProcessingController(ImConWidgetController):
 
     # -- helpers ---------------------------------------------------------------------------------
     def _worker_url(self) -> str:
-        return (getattr(self._setupInfo, "processing", None) or {}).get("workerUrl") or ""
+        """The setup's ``processing.workerUrl``, else IMSWITCH_PROCESSING_WORKER_URL (on openUC2 OS
+        the uc2-deconvolution sidecar of the imswitch deployment's processing-worker feature)."""
+        return (
+            (getattr(self._setupInfo, "processing", None) or {}).get("workerUrl")
+            or os.environ.get("IMSWITCH_PROCESSING_WORKER_URL", "").rstrip("/")
+        )
 
     def _source(self, path: str, image: str = "") -> _Source:
         base = Path(dirtools.UserFileDirs.getValidatedDataPath()).resolve()

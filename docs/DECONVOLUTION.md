@@ -325,16 +325,20 @@ around `storage.py`, now go through it. Not covered: PNG, JPG and MP4, which hav
 
 ### The processing worker
 
+The worker lives in its own repo, [uc2-deconvolution](https://github.com/openUC2/uc2-deconvolution)
+(recipe, worker and image for amd64 and arm64); `worker.py` here is the client ImSwitch uses and the
+in-process server the tests run.
+
 ```bash
-docker build -f docker/processing-worker/Dockerfile -t imswitch-processing-worker imswitch/imcontrol/model/aufgaben
-docker run --rm -p 8090:8090 imswitch-processing-worker
+docker run --rm -p 8090:8090 ghcr.io/openuc2/uc2-deconvolution
 ```
 
-Without Docker, on any computer with numpy and scipy:
-`python imswitch/imcontrol/model/aufgaben/worker.py --port 8090`. Then in the viewer's Deconvolve
-panel, Worker URL `http://<that computer>:8090`, Save (stored in the setup as
-`processing.workerUrl`). The image is 365 MB: Python, numpy, scipy and two files. The protocol is in
-the docstring of `worker.py`: POST a volume, poll the job, GET the result, DELETE it.
+Then in the viewer's Deconvolve panel, Worker URL `http://<that computer>:8090`, Save (stored in
+the setup as `processing.workerUrl`). On openUC2 OS the same image runs beside ImSwitch (the imswitch
+deployment's `processing-worker` feature, on by default), and ImSwitch finds it through
+`IMSWITCH_PROCESSING_WORKER_URL` when the setup names no worker. The protocol is in the docstring of
+`worker.py`: POST a volume, poll the job, GET the result, DELETE it. The worker refuses with 409 a
+job that does not fit in its free memory.
 
 Tried on the laptop (2026-11-22): the worker in Docker Desktop (a Linux VM with 4 CPUs and 8 GB),
 ImSwitch on the virtual microscope, the job started from the Deconvolve panel. A 64 × 1024 × 1024
@@ -384,7 +388,7 @@ Not on the roadmap board yet. Sizes: S up to 2 days, M up to 2 weeks.
 | DEC-0 | Run `scripts/deconvolution/benchmark.py` on a Pi 5, and on one real FRAME stack with beads | the estimate column of section 5 is replaced by numbers | S · **partly**: 32 × 256 × 256 on a Pi; the larger sizes and a bead stack are open |
 | DEC-1 | Recipe: move the numpy solvers into a module without ImSwitch imports, PSF from optics metadata, test against stored Julia outputs | `deconvolve(stack, optics, parameters)` passes the comparison test | S · **done**: `model/aufgaben/deconvolution.py`, `test_deconvolution.py` (0.995 / 0.996 with Julia's projections), tiles |
 | DEC-2 | Preview endpoint on the Pi and the crop + before/after view | a user finds the regularisation weight on a crop without leaving the viewer | M · **done**: `previewProcessing`, Deconvolve panel; laptop and virtual microscope only |
-| DEC-3 | Worker container: recipe core, job API; the Pi sends the planes and writes the result; optional Julia backend with a warm process | a 64 × 1024 × 1024 stack is deconvolved from the UI with the Pi idle | M · **done** without the Julia backend: `worker.py`, `docker/processing-worker`, `startProcessingJob`; tried with Docker on the laptop |
+| DEC-3 | Worker container: recipe core, job API; the Pi sends the planes and writes the result; optional Julia backend with a warm process | a 64 × 1024 × 1024 stack is deconvolved from the UI with the Pi idle | M · **done** without the Julia backend: `worker.py`, the uc2-deconvolution image, `startProcessingJob`; tried with Docker on the laptop |
 | DEC-4 | Arkitekt app around the worker: `deconvolve` action on mikro images | the action shows in the Arkitekt UI and returns a linked image | S |
 | DEC-5 | Process panel built from the recipe schema; job list; `recipe.json` | a second recipe (flat field) appears without UI work | M |
 | DEC-6 | PSF: theoretical per objective and channel; measured from beads | deconvolution with the measured PSF beats the theoretical one on a bead slide | M · **built, test open**: scalar, vectorial, Gaussian and measured models, `distillProcessingPSF`, PSF view, the objective in every image; synthetic beads only |

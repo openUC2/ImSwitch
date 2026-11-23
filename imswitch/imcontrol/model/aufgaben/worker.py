@@ -1,6 +1,7 @@
 """Processing worker: runs a recipe for ImSwitch on another computer, over plain HTTP.
 
-    python worker.py --port 8090        (docker/processing-worker builds an image of it)
+    python worker.py --port 8090        (tests; deployed as ghcr.io/openuc2/uc2-deconvolution,
+                                         https://github.com/openUC2/uc2-deconvolution)
 
 ImSwitch sends one volume and fetches the result. The worker never connects to the microscope, so
 it only has to be reachable from the Pi. Jobs run one at a time, in arrival order; a result is kept
@@ -32,10 +33,7 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 
-try:
-    from . import deconvolution
-except ImportError:  # a flat copy next to deconvolution.py (the container)
-    import deconvolution
+from . import deconvolution
 
 RECIPES = {deconvolution.NAME: deconvolution}
 KEEP_S = 3600  # finished jobs are forgotten after an hour

@@ -78,7 +78,7 @@ no automatic differentiation.
 | L-BFGS | `deconvolution(...)` | automatic differentiation (Zygote) + Optim.jl | several convolutions, history arrays | most flexible: every loss, regulariser and custom forward model; most memory |
 | Richardson–Lucy | `richardson_lucy_iterative` | multiplicative update | 2 convolutions | simple, slow to converge |
 | **MAP-CG** | `map_cj` | object = x², conjugate gradients, analytic Newton line search | 3 convolutions | Poisson or Anscombe; Good or Hessian penalty; saddle escape for voxels stuck at zero |
-| **MAP-CG lean** | `map_cj_lean` | same, one Newton step + backtracking, stencils computed on the fly | 3 convolutions, **5 arrays** | adds Gauss loss, per-pixel noise weights, a strictly positive mapping. The one to port |
+| **MAP-CG lean** | `map_cj_lean` | same, one Newton step + backtracking, stencils computed on the fly | 3 convolutions, **5 arrays** | adds Gauss loss, per-pixel noise weights, a strictly positive mapping. The one ported: its Poisson, Anscombe and Gauss data terms and its Good and Hessian (Frobenius) penalties are in the recipe; the noise weights and the strictly positive mapping are not |
 | **MAP-CG exact** | `map_cj_exact` | exact line search after Verveer and Jovin (MAPGR / MAPPR); closed form for Gauss + Good | 3 convolutions, 6 arrays | fewest iterations per result |
 | **ADMM** | `opt=ADMM()` | splitting; every sub-step solved exactly, linear step is one division in Fourier space | about 2 convolutions + proximal steps | exact TV / TH / HS / L1, exact positivity, result depends on λ rather than on the iteration count |
 | **Chambolle–Pock** | `opt=ChambollePock()` | primal–dual, no linear solve | same | everything ADMM has, plus `TGV` |
@@ -188,7 +188,10 @@ buffers, and no GPU that runs FFTs. Measured on a Raspberry Pi (2026-11-22, `ben
 4 threads, 32 × 256 × 256): Richardson–Lucy 5.5 s, MAP 18.2 s, with the laptop's correlations to
 four digits. That is 3.7–4.3 times the laptop's time, better than the 5–10 times estimated before.
 The larger rows are the laptop times scaled by 3.7 (≈) until they are run on the Pi. ImSwitch runs a
-volume on the Pi up to 10 M voxels (`PI_MAX_VOXELS`), and never while the microscope acquires.
+volume on the Pi up to 10 M voxels (`PI_MAX_VOXELS`), never while the microscope acquires, and
+only when the run needs at most 75 % of the memory free at its start (`memory_bytes`: the stack,
+its float32 copy and result, plus 40 / 75 / 125 bytes per voxel of a padded tile for
+Richardson–Lucy, MAP and MAP with the Hessian penalty; measured peaks times 1.25).
 
 | Stack | numpy port on the laptop | Raspberry Pi | Verdict for the Pi |
 |---|---|---|---|
@@ -280,7 +283,7 @@ sequenceDiagram
 |---|---|
 | Where | Built: "Deconvolve" in the header of the OME-Zarr viewer (`VizarrViewer`), panel `omezarr/DeconvolutionPanel.jsx`. Not in Live View: deconvolution works on stored stacks. The light-sheet app is not wired yet |
 | Presets | Built: NA and immersion from the objective the dataset records (else the current objective), pixel size and z step from the dataset, emission wavelength from the channel name, modality (wide field, light sheet + sheet thickness), PSF model. All editable; the panel says where each came from |
-| Parameters shown | method (Regularised MAP, Richardson–Lucy), iterations, regularisation (one log slider), background (empty: estimated; the preview shows the estimate). Padding is fixed (25 % along z), tiles default to 512 px |
+| Parameters shown | method (Regularised MAP, Richardson–Lucy), iterations, noise model (Poisson, Anscombe, Gauss) and penalty (Good's roughness, Hessian) for MAP, regularisation (one log slider; for the Gauss loss the recipe multiplies it by twice the mean signal, so one value means about the same with every noise model), background (empty: estimated; the preview shows the estimate). Padding is fixed (25 % along z), tiles default to 512 px. The Hessian penalty matches DeconvOptim.jl exactly and takes about 2.6 times as long as Good's (Julia: 1.9 times) |
 | Preview | the dashed box in the middle of the view: 128, 256 or 512 px and up to 64 planes (at most 4.2 M voxels), on the Pi. Before/after toggle, xy plane and xz section at the true aspect. 5.6 s for 256 × 256 × 32 on the laptop |
 | Job | one at a time, cancellable (the unfinished result is removed), refused on the Pi while the microscope acquires (`controller/busy.py`; acquisitions are refused while the Pi deconvolves); progress per volume, no current-iterate preview |
 | Result | `<source>_deconvolved.ome.zarr` next to the source through `model/aufgaben/storage.py`: float32, the source's pixel size, z step and channel names, a display window from the data, and `recipe.json` inside it (recipe, version, the request, runner, time). The request is the body of `startProcessingJob`, so it reruns the job |
@@ -387,7 +390,7 @@ Not on the roadmap board yet. Sizes: S up to 2 days, M up to 2 weeks.
 | DEC-3 | Worker container: recipe core, job API; the Pi sends the planes and writes the result; optional Julia backend with a warm process | a 64 × 1024 × 1024 stack is deconvolved from the UI with the Pi idle | M · **done** without the Julia backend: `worker.py`, `docker/processing-worker`, `startProcessingJob`; tried with Docker on the laptop |
 | DEC-4 | Arkitekt app around the worker: `deconvolve` action on mikro images | the action shows in the Arkitekt UI and returns a linked image | S |
 | DEC-5 | Process panel built from the recipe schema; job list; `recipe.json` | a second recipe (flat field) appears without UI work | M |
-| DEC-6 | PSF: theoretical per objective and channel; measured from beads | deconvolution with the measured PSF beats the theoretical one on a bead slide | M · **built, test open**: scalar, vectorial, Gaussian and measured models, `distillProcessingPSF`, PSF view, the objective in every image; synthetic beads only |
+| DEC-6 | PSF: theoretical per objective and channel; measured from beads | deconvolution with the measured PSF beats the theoretical one on a bead slide | M · **built, test open**: scalar, vectorial, Gaussian and measured models, `distillProcessingPSF`, PSF view, the objective in every image, the "Bead PSF stack" macro template that takes the bead stack (the panel suggests its step and range); synthetic beads only |
 | DEC-7 | Light sheet: sheet thickness in the PSF, deskew for OPM stacks | the virtual light-sheet volume deconvolves end to end | M |
 | DEC-8 | GPU on the worker (CuPy / PyTorch backend, or CUDA.jl) | the full-sensor stack runs in minutes | S |
 

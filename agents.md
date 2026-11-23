@@ -386,7 +386,9 @@ Backends live in `model/managers/detectors/`: `HikCamManager`, `ToupCamManager`,
 `JPG=6`, `OME_TIFF=7`, `OME_ZARR=8`, `STITCHED_TIFF=9`.
 
 - `startSnap(fileName, saveFormat=1, returnPreview=True, previewMaxSize=1024)` — async job;
-  poll `getSnapStatus(jobId)`, abort with `cancelSnap(jobId)`
+  poll `getSnapStatus(jobId)`, abort with `cancelSnap(jobId)`. Snaps write OME-TIFF (1, 7),
+  OME-Zarr (3, 8) through `storage.py`, PNG or JPG; any other format, or a write that fails,
+  ends the job as `error` with the reason
 - `snapImageToPath(fileName, saveFormat, …)` — snap straight to disk
 - `snapImage(output=False, toList=True)` — return pixels in the response
 - `snapNumpyToFastAPI(detectorName, resizeFactor)` — single frame as an image response
@@ -511,7 +513,7 @@ prescan and firmware stage scans, digital I/O, temperature; plan and format in
   button in the Live View sidebar. `listAufgabenMacros()` returns name, title, description and
   parameters; `runAufgabenMacro(request{name, parameters, confirmed})` (POST) starts one with the
   same refusals as `startAufgabenJob`. `listAufgabenMacroTemplates()` lists the bundled example
-  macros (autofocus, shutter) that the Live View "From template" button copies under a new name. A macro leaves the light as its steps leave it (all off
+  macros (autofocus, shutter, bead PSF stack) that the Live View "From template" button copies under a new name. A macro leaves the light as its steps leave it (all off
   only when it is stopped or fails) and gets a run folder only when it takes frames. Any job
   switches the camera to software trigger only when it takes frames. `AufgabenController` is
   loaded on every setup, listed in `availableWidgets` or not. **Ask first** before running a
@@ -580,9 +582,11 @@ worker (`model/aufgaben/worker.py`, image `docker/processing-worker`) that the P
 - `getProcessingDefaults(path, image)` — recipe defaults and limits, optics per channel (µm; NA
   from the dataset or the current objective, emission from the channel name) and their origin
 - `previewProcessing(request)` (POST) — a crop deconvolved on the Pi, before/after (xy, xz) as
-  base64 float32; refused (409) while the microscope acquires
+  base64 float32; refused (409) while the microscope acquires, and when the run would need more
+  than 75 % of the memory free (`recipe.memory_bytes`). Parameters: `method` map | rl,
+  `loss` poisson | anscombe | gauss, `penalty` good | hessian, `regularization`, `iterations`
 - `startProcessingJob(request)` (POST) — every volume of an image on the registered worker, or
-  on the Pi up to 10 M voxels per volume; writes `<source>_deconvolved.ome.zarr` with
+  on the Pi up to 10 M voxels per volume and within the same memory check; writes `<source>_deconvolved.ome.zarr` with
   `recipe.json` next to the source. `getProcessingStatus`, `cancelProcessingJob`
 - `getProcessingWorker` / `setProcessingWorker(url)` — the worker URL, saved in the setup file as
   `processing.workerUrl`

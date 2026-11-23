@@ -1,10 +1,13 @@
 # 3D deconvolution for FRAME: DeconvOptim.jl, where to run it, what to build around it
 
-Status 2026-11-22. Sections 2–4 are the exploration: what the `new_methods` branch of
+Status 2026-11-23. Sections 2–4 are the exploration: what the `new_methods` branch of
 [DeconvOptim.jl](https://github.com/beniroquai/DeconvOptim.jl/tree/new_methods) can do, how fast it
 is, whether to keep it in Julia or port it. Sections 5–6 say where it runs and what the button does,
-and DEC-1 to DEC-3 of section 8 are built: the numpy recipe in ImSwitch, the "Deconvolve" panel with
-a preview in the OME-Zarr viewer, and a processing worker container. DEC-6 is built up to its test on
+and DEC-1 to DEC-3 of section 8 are built: the numpy recipe, the "Deconvolve" panel with
+a preview in the OME-Zarr viewer, and a processing worker container. Since 2026-11-23 the recipe and
+the worker are their own package, [uc2-deconvolution](https://github.com/openUC2/uc2-deconvolution)
+(MIT), with DeconvOptim.jl's MAP, L-BFGS, ADMM and TV ported and checked against Julia; os-rpi runs
+its worker beside ImSwitch. DEC-6 is built up to its test on
 a real bead slide: four PSF models, a PSF distilled from a bead stack, a PSF view, and every image
 ImSwitch writes now records its objective. None of it uses Julia; Julia
 stays the reference the tests compare with. Laptop timings are from one Apple M1 Pro; one stack
@@ -18,7 +21,7 @@ microscope; nothing on real FRAME data.**
 - **It works and it is fast enough.** A 32 × 512 × 512 stack takes 14 s with the new `map_cj_lean`
   solver (4 CPU threads); a 64 × 1024 × 1024 stack takes 3 min and 4 GB.
 - **Port one solver to Python, keep Julia as the reference.** A numpy port of `map_cj_lean`
-  (now `imswitch/imcontrol/model/aufgaben/deconvolution.py`, with the PSF models, no new dependency)
+  (now the package [uc2-deconvolution](https://github.com/openUC2/uc2-deconvolution), with the PSF models)
   gives the same result (correlation 0.99–0.9995 with the Julia output) and is 1.3–2.1 times
   slower. Rust would not be faster: the time goes into FFTs, which are native code already.
 - **Raspberry Pi: light version only.** Measured: 18 s for the MAP solver on 32 × 256 × 256, 3.7
@@ -283,7 +286,7 @@ sequenceDiagram
 |---|---|
 | Where | Built: "Deconvolve" in the header of the OME-Zarr viewer (`VizarrViewer`), panel `omezarr/DeconvolutionPanel.jsx`. Not in Live View: deconvolution works on stored stacks. The light-sheet app is not wired yet |
 | Presets | Built: NA and immersion from the objective the dataset records (else the current objective), pixel size and z step from the dataset, emission wavelength from the channel name, modality (wide field, light sheet + sheet thickness), PSF model. All editable; the panel says where each came from |
-| Parameters shown | method (Regularised MAP, Richardson–Lucy), iterations, noise model (Poisson, Anscombe, Gauss) and penalty (Good's roughness, Hessian) for MAP, regularisation (one log slider; for the Gauss loss the recipe multiplies it by twice the mean signal, so one value means about the same with every noise model), background (empty: estimated; the preview shows the estimate). Padding is fixed (25 % along z), tiles default to 512 px. The Hessian penalty matches DeconvOptim.jl exactly and takes about 2.6 times as long as Good's (Julia: 1.9 times) |
+| Parameters shown | method (Regularised MAP, L-BFGS, ADMM, Richardson–Lucy), iterations, noise model (Poisson, Anscombe, Gauss for MAP; Poisson for L-BFGS and ADMM) and penalty (Good's roughness, Hessian, total variation, as each method takes them), regularisation (one log slider; for the Gauss loss the recipe multiplies it by twice the mean signal, so one value means about the same with every noise model), background (empty: estimated; the preview shows the estimate). Padding is fixed (25 % along z), tiles default to 512 px. The Hessian penalty matches DeconvOptim.jl exactly and takes about 2.6 times as long as Good's (Julia: 1.9 times) |
 | Preview | the dashed box in the middle of the view: 128, 256 or 512 px and up to 64 planes (at most 4.2 M voxels), on the Pi. Before/after toggle, xy plane and xz section at the true aspect. 5.6 s for 256 × 256 × 32 on the laptop |
 | Job | one at a time, cancellable (the unfinished result is removed), refused on the Pi while the microscope acquires (`controller/busy.py`; acquisitions are refused while the Pi deconvolves); progress per volume, no current-iterate preview |
 | Result | `<source>_deconvolved.ome.zarr` next to the source through `model/aufgaben/storage.py`: float32, the source's pixel size, z step and channel names, a display window from the data, and `recipe.json` inside it (recipe, version, the request, runner, time). The request is the body of `startProcessingJob`, so it reruns the job |
@@ -328,16 +331,35 @@ around `storage.py`, now go through it. Not covered: PNG, JPG and MP4, which hav
 
 ### The processing worker
 
+The recipe and the worker are the package [uc2-deconvolution](https://github.com/openUC2/uc2-deconvolution)
+(MIT; its GitHub Actions test it on x86 and arm64 and build the image for amd64 and arm64):
+
 ```bash
-docker build -f docker/processing-worker/Dockerfile -t imswitch-processing-worker imswitch/imcontrol/model/aufgaben
-docker run --rm -p 8090:8090 imswitch-processing-worker
+docker run --rm -p 8090:8090 ghcr.io/openuc2/uc2-deconvolution
 ```
 
-Without Docker, on any computer with numpy and scipy:
-`python imswitch/imcontrol/model/aufgaben/worker.py --port 8090`. Then in the viewer's Deconvolve
-panel, Worker URL `http://<that computer>:8090`, Save (stored in the setup as
-`processing.workerUrl`). The image is 365 MB: Python, numpy, scipy and two files. The protocol is in
-the docstring of `worker.py`: POST a volume, poll the job, GET the result, DELETE it.
+Without Docker, on any computer with Python: `pip install
+"uc2-deconvolution @ git+https://github.com/openUC2/uc2-deconvolution@v0.1.0"`, then
+`uc2-deconvolution-worker --port 8090`. Then in the viewer's Deconvolve panel, Worker URL
+`http://<that computer>:8090`, Save (stored in the setup as `processing.workerUrl`). The image is
+365 MB: Python, numpy, scipy and the package. The protocol is in the docstring of
+`uc2deconvolution/worker.py`: POST a volume, poll the job, GET the result, DELETE it. The worker
+refuses (409) a job that would not fit in its free memory.
+
+**On the Raspberry Pi** os-rpi's imswitch deployment runs the same image beside ImSwitch (feature
+`processing-worker`, on by default): a sidecar container on a private network, reached at
+`http://processing-worker:8090`, which ImSwitch uses without any setting
+(`IMSWITCH_PROCESSING_WORKER_URL`). It computes on the same CPU as ImSwitch, so the gain is not
+speed but safety: the kernel kills the worker rather than ImSwitch if memory runs out
+(`oom_score_adj` 1000), ImSwitch keeps the CPU while both are busy (`cpu_shares` 256), and the
+whole-stack jobs are no longer limited to 10 M voxels. A faster computer is still one Worker URL
+away.
+
+**Why HTTP and not a shared folder.** The planes cross the network once either way: through a
+share the worker would read the zarr chunks itself, which needs the share, the codecs and path
+mapping on the worker, and a second writer into the Pi's data folder. Sending raw C-order bytes
+costs no encoding (numpy `tobytes` and `readinto`); a 64 × 1024 × 1024 uint16 stack is 128 MB,
+about a second on Gigabit Ethernet against minutes of deconvolution.
 
 Tried on the laptop (2026-11-22): the worker in Docker Desktop (a Linux VM with 4 CPUs and 8 GB),
 ImSwitch on the virtual microscope, the job started from the Deconvolve panel. A 64 × 1024 × 1024
@@ -384,10 +406,10 @@ Not on the roadmap board yet. Sizes: S up to 2 days, M up to 2 weeks.
 
 | ID | What | Done when | Size · status |
 |---|---|---|---|
-| DEC-0 | Run `scripts/deconvolution/benchmark.py` on a Pi 5, and on one real FRAME stack with beads | the estimate column of section 5 is replaced by numbers | S · **partly**: 32 × 256 × 256 on a Pi; the larger sizes and a bead stack are open |
-| DEC-1 | Recipe: move the numpy solvers into a module without ImSwitch imports, PSF from optics metadata, test against stored Julia outputs | `deconvolve(stack, optics, parameters)` passes the comparison test | S · **done**: `model/aufgaben/deconvolution.py`, `test_deconvolution.py` (0.995 / 0.996 with Julia's projections), tiles |
+| DEC-0 | Run uc2-deconvolution's `benchmark/benchmark.py` on a Pi 5, and on one real FRAME stack with beads | the estimate column of section 5 is replaced by numbers | S · **partly**: 32 × 256 × 256 on a Pi; the larger sizes and a bead stack are open |
+| DEC-1 | Recipe: move the numpy solvers into a module without ImSwitch imports, PSF from optics metadata, test against stored Julia outputs | `deconvolve(stack, optics, parameters)` passes the comparison test | S · **done**: the recipe of uc2-deconvolution, its `tests/test_recipe.py` (0.995 / 0.996 with Julia's projections; L-BFGS, ADMM, TV 1.000), tiles |
 | DEC-2 | Preview endpoint on the Pi and the crop + before/after view | a user finds the regularisation weight on a crop without leaving the viewer | M · **done**: `previewProcessing`, Deconvolve panel; laptop and virtual microscope only |
-| DEC-3 | Worker container: recipe core, job API; the Pi sends the planes and writes the result; optional Julia backend with a warm process | a 64 × 1024 × 1024 stack is deconvolved from the UI with the Pi idle | M · **done** without the Julia backend: `worker.py`, `docker/processing-worker`, `startProcessingJob`; tried with Docker on the laptop |
+| DEC-3 | Worker container: recipe core, job API; the Pi sends the planes and writes the result; optional Julia backend with a warm process | a 64 × 1024 × 1024 stack is deconvolved from the UI with the Pi idle | M · **done** without the Julia backend: uc2-deconvolution's worker and image, `startProcessingJob`; tried with Docker on the laptop; os-rpi feature `processing-worker` runs it beside ImSwitch |
 | DEC-4 | Arkitekt app around the worker: `deconvolve` action on mikro images | the action shows in the Arkitekt UI and returns a linked image | S |
 | DEC-5 | Process panel built from the recipe schema; job list; `recipe.json` | a second recipe (flat field) appears without UI work | M |
 | DEC-6 | PSF: theoretical per objective and channel; measured from beads | deconvolution with the measured PSF beats the theoretical one on a bead slide | M · **built, test open**: scalar, vectorial, Gaussian and measured models, `distillProcessingPSF`, PSF view, the objective in every image, the "Bead PSF stack" macro template that takes the bead stack (the panel suggests its step and range); synthetic beads only |
@@ -414,17 +436,19 @@ Order: DEC-0 → DEC-1 → DEC-2 → DEC-3 → DEC-5 → DEC-6, then DEC-4, DEC-
 - **Pi numbers**: one size measured, the rest scaled from it (DEC-0).
 - **Untested** on hardware, on real FRAME data, on float64 or int64 stacks, and with a worker
   on another computer: the worker ran in Docker on the same laptop as ImSwitch.
-- **ADMM / Chambolle–Pock convergence** on sparse objects needs a look upstream before these
-  solvers are offered in a UI.
+- **ADMM convergence** on sparse objects: ported faithfully (matches DeconvOptim.jl, correlation
+  1.000) and offered, but it reaches only 0.37 / 0.45 / 0.50 after 50 / 100 / 200 iterations at the
+  best rho (1e-3), against 0.98 for L-BFGS + TV after 60; one rho serves every split. Worth
+  reporting upstream. Chambolle–Pock is not ported.
 
 ## 10. How the numbers were made
 
 | File | Purpose |
 |---|---|
-| `imswitch/imcontrol/model/aufgaben/deconvolution.py` | the recipe: PSF models, Richardson–Lucy, the `map_cj_lean` port, tiles, the synthetic test object (was `scripts/deconvolution/deconv_numpy.py`) |
-| `imswitch/imcontrol/_test/unit/test_deconvolution.py` | the comparison with DeconvOptim.jl (stored projections in `deconvolution_julia_reference.npz`), tiles, PSF, refusals |
-| `scripts/deconvolution/benchmark.py` | test stacks (`data`), numpy timings (`run`), table (`table`), figures (`figures`). On a Pi: copy it and `deconvolution.py` into one folder, `python3 -m venv .venv && .venv/bin/pip install numpy scipy`, then `data` and `run` per size; `run` reports peak memory on Linux too |
-| `scripts/deconvolution/benchmark.jl` | DeconvOptim.jl on the same stacks; every solver twice (first call, warm) |
+| `src/uc2deconvolution/recipe.py` in [uc2-deconvolution](https://github.com/openUC2/uc2-deconvolution) | the recipe: PSF models, Richardson–Lucy, the ports of `map_cj_lean`, L-BFGS, ADMM and TV, tiles, the synthetic test object (until 2026-11-23 `imswitch/imcontrol/model/aufgaben/deconvolution.py`) |
+| `tests/test_recipe.py` there | the comparison with DeconvOptim.jl (stored projections in `deconvolution_julia_reference.npz`), tiles, PSF, refusals |
+| `benchmark/benchmark.py` there | test stacks (`data`), numpy timings (`run`), table (`table`), figures (`figures`). On a Pi: install the package, then `data` and `run` per size; `run` reports peak memory on Linux too |
+| `benchmark/benchmark.jl` there | DeconvOptim.jl on the same stacks; every solver twice (first call, warm) |
 
 Machine: Apple M1 Pro, 16 GB, macOS; Julia 1.13.3; DeconvOptim.jl `new_methods` at `c72a2c8`;
 numpy 2.1, scipy 1.16; 4 threads for FFTs and Julia.

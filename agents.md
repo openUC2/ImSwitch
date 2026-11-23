@@ -159,9 +159,9 @@ imswitch/
                                controllers/uc2config/can_network_api.py)
     model/aufgaben/            Aufgaben job format, tasks, validator, useq bridge (no ImSwitch
                                imports; plan in docs/AUFGABEN_ROADMAP.md); storage.py is the one
-                               OME-Zarr/OME-TIFF writer for all of ImSwitch (save_image, NgffImage);
-                               deconvolution.py is the deconvolution recipe, worker.py the HTTP
-                               processing worker that runs it off the Pi (docker/processing-worker)
+                               OME-Zarr/OME-TIFF writer for all of ImSwitch (save_image, NgffImage).
+                               The deconvolution recipe and its HTTP worker are the package
+                               uc2-deconvolution (github.com/openUC2/uc2-deconvolution)
     model/SetupInfo.py         setup-JSON schema (dataclasses)
     model/io/recording_service.py   SaveFormat / RecMode enums, writers
     _test/                     unit + api tests
@@ -576,8 +576,12 @@ viewer opens OME-TIFF through it). `/imswitch/data/…` serves the data folder a
 after `set_active_path`.
 
 `ProcessingController` — 3D deconvolution of stored stacks (`docs/DECONVOLUTION.md`; loaded on
-every setup). The recipe is `model/aufgaben/deconvolution.py`; large stacks go to a processing
-worker (`model/aufgaben/worker.py`, image `docker/processing-worker`) that the Pi sends planes to:
+every setup). The recipe is the package `uc2-deconvolution` (`uc2deconvolution.recipe`, its own
+repo, git-pinned in `pyproject.toml`); large stacks go to a processing worker
+(`uc2deconvolution.worker`, image `ghcr.io/openuc2/uc2-deconvolution`) that the Pi sends planes to.
+The worker URL is the setup's `processing.workerUrl`, else `IMSWITCH_PROCESSING_WORKER_URL`, which
+os-rpi's `processing-worker` feature sets for the worker it runs beside ImSwitch. Methods: `map`,
+`rl`, `lbfgs`, `admm` (`getProcessingDefaults` returns the noise models and penalties each takes):
 
 - `getProcessingDefaults(path, image)` — recipe defaults and limits, optics per channel (µm; NA
   from the dataset or the current objective, emission from the channel name) and their origin

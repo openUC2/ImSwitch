@@ -318,6 +318,11 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
                     self._logger.error(f"Post-workflow writer cleanup failed: {err}")
             self._endTriggeredAcquisition()
             self._export_step_timings_plot(ctx.dir_path)
+            finished = getattr(self._commChannel, "sigExperimentFinished", None)
+            if finished is not None:  # e.g. the Arkitekt upload of the canvases
+                canvases = [url for url in (getattr(w, "get_zarr_url", lambda: None)()
+                                            for w in writers) if url]
+                finished.emit({"name": ctx.exp_name, "dir": ctx.dir_path, "canvases": canvases})
 
         threading.Thread(target=_cleanup, daemon=True, name="TriggeredAcqCleanup").start()
         # Ashlar is never started automatically; use runAshlarStitching().

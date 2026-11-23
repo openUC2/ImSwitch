@@ -93,10 +93,13 @@ def test_arkitekt_accepts_every_primitive_unchanged():
     structures = registry.StructureRegistry()
     for cls, identifier in A.MEMORY_STRUCTURES.items():   # what an app declares once
         structures.register_as_memory_structure(cls, identifier=identifier)
+    # hw is handed in by the agent: arkitekt 16 knows it as the app context
+    # (run(context=...)), where 5 took omitkeys=["hw"]
+    structures.app_context(Microscope)
     for task_id, spec in A.REGISTRY.items():
         if spec.category in FRAME_STEPS:   # engine-only: read ctx.frame, return mixed data
             continue
-        definition = define.prepare_definition(spec.function, structures, omitkeys=["hw"])
+        definition = define.prepare_definition(spec.function, structures)
         keys = [a.key for a in definition.args]
         assert keys == list(spec.params_model.model_fields), task_id
         assert "ctx" not in keys  # injected through the task marker

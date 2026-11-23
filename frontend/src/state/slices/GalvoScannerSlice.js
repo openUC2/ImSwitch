@@ -631,16 +631,39 @@ export const {
 } = galvoScannerSlice.actions;
 
 // Default values for when state is not yet initialized
-const defaultConfig = {
-  nx: 256,
-  ny: 256,
-  x_min: 500,
-  x_max: 3500,
-  y_min: 500,
-  y_max: 3500,
-  sample_period_us: 1,
-  frame_count: 0,
-  bidirectional: false
+const defaultConfig = initialState.config;
+
+// Timing part of the validated FLIM raster (everything except resolution and window).
+// Docs: https://docs.openuc2.com/usage/disc/galvo-addon/reference/scan-parameters
+const TIMING_KEYS = ['sample_period_us', 'pre_samples', 'overscan_samples', 'fly_samples',
+  'line_settle_samples', 'trig_delay_us', 'trig_width_us', 'enable_trigger', 'hw_pixel_clock',
+  'laser_blanking', 'bidirectional', 'apply_x_lut'];
+export const FLIM_TIMING = Object.fromEntries(TIMING_KEYS.map((k) => [k, initialState.config[k]]));
+
+// Samples per line as the firmware builds it (HighSpeedScannerCore::buildLineProfile)
+export const galvoLineSamples = (c) => (c.pre_samples || 0) + 2 * (c.overscan_samples || 0) + c.nx
+  + (c.bidirectional ? 0 : (c.fly_samples || 0)) + (c.line_settle_samples || 0);
+
+// Settings that are known to spoil a FLIM image (bench test 2026-11-17, see the docs above)
+export const galvoScanWarnings = (c) => {
+  const w = [];
+  if (c.sample_period_us < 25) {
+    w.push('Dwell below 25 µs: the board needs about 22 µs per sample, so pixel times become uneven and frames take longer than shown.');
+  }
+  if (!c.bidirectional && !c.fly_samples) {
+    w.push('No fly-back: the mirror cannot jump back in one sample, so the first columns of every line are taken while it is still moving.');
+  }
+  if (!c.pre_samples && !c.overscan_samples) {
+    w.push('No pre-blank or overscan: the first pixels are taken while the mirror is still accelerating (squeezed left edge).');
+  }
+  if (c.hw_pixel_clock && (c.sample_period_us < 2 || c.nx > 1023)) {
+    w.push('The hardware pixel clock needs a dwell of at least 2 µs and NX ≤ 1023; the board falls back to software pulses.');
+  }
+  const over = c.nx > 1 ? ((c.x_max - c.x_min) / (c.nx - 1)) * (c.overscan_samples || 0) : 0;
+  if (c.x_min - over < 0 || c.x_max + over > 4095) {
+    w.push('The overscan ramp runs past the DAC range (0–4095) and is clipped: move the window inwards or reduce the overscan.');
+  }
+  return w;
 };
 
 const defaultStatus = {
@@ -751,12 +774,17 @@ export const getScanPhysical = (state) => {
 export const getScanInfo = (state) => {
   const config = state.galvoScannerState?.config || defaultConfig;
   const totalPixels = config.nx * config.ny;
-  const frameTimeMs = (totalPixels * config.sample_period_us) / 1000;
-  const frameRate = config.sample_period_us > 0 ? 1000 / frameTimeMs : Infinity;
+  const lineSamples = galvoLineSamples(config);
+  // ~56 µs per line for the Y step and line marker (measured at 25 µs dwell)
+  const frameTimeMs = (config.ny * (lineSamples * config.sample_period_us + 56)) / 1000;
   return {
     totalPixels,
-    frameTimeMs: frameTimeMs.toFixed(2),
-    frameRate: isFinite(frameRate) ? frameRate.toFixed(1) : '∞'
+    lineSamples,
+    imageShare: Math.round((100 * config.nx) / Math.max(lineSamples, 1)),
+    frameTime: config.sample_period_us > 0
+      ? (frameTimeMs >= 1000 ? `${(frameTimeMs / 1000).toFixed(2)} s` : `${frameTimeMs.toFixed(1)} ms`)
+      : 'unknown (dwell 0)',
+    frameRate: config.sample_period_us > 0 ? (1000 / frameTimeMs).toFixed(2) : '–',
   };
 };
 

@@ -34,6 +34,7 @@ from imswitch.imcontrol.model.io import (
     SnapResult,
 )
 from ..basecontrollers import ImConWidgetController
+from ..busy import camera_reasons
 
 
 class RecordingController(ImConWidgetController):
@@ -315,7 +316,11 @@ class RecordingController(ImConWidgetController):
                             break
 
         if saved_full_path is None:
-            saved_full_path = savename
+            # Nothing was written (no frame, a format snaps cannot write, a failed write): fail
+            # with the reason; a startSnap job then ends "error" instead of "done".
+            reasons = "; ".join(f"{n}: {getattr(r, 'error', r)}" for n, r in result.items())
+            raise HTTPException(status_code=500, detail="Snap failed: " + (
+                reasons or f"no frame from {', '.join(detectorNames)}"))
 
         data_root = dirtools.UserFileDirs.getValidatedDataPath()
         relative_file_path = None
@@ -592,7 +597,7 @@ class RecordingController(ImConWidgetController):
             if result.get("cancelled"):
                 status = "cancelled"
         except Exception as e:
-            status, error = "error", str(e)
+            status, error = "error", str(getattr(e, "detail", e))   # HTTPException: no "500: "
             self.__logger.error(f"Snap job {jobId} failed: {e}")
             self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
 
@@ -608,6 +613,12 @@ class RecordingController(ImConWidgetController):
             job["result"] = result
             job["error"] = error
             job["finishedAt"] = time.time()
+
+    def _refuseStandInCamera(self):
+        """Saved images from a simulated stand-in camera would look like data: refuse (409)."""
+        reasons = camera_reasons(self._master)
+        if reasons:
+            raise HTTPException(status_code=409, detail=f"Refused: {', '.join(reasons)}")
 
     @APIExport(runOnUIThread=False)
     def startSnap(self, fileName: Optional[str] = None,
@@ -627,6 +638,7 @@ class RecordingController(ImConWidgetController):
         Returns a dict with ``jobId``, ``status`` and ``expectedDurationMs``
         (an exposure-based estimate the UI can count down against).
         """
+        self._refuseStandInCamera()
         detectorNames = self.getDetectorNamesToCapture()
         jobId = uuid.uuid4().hex
         job = {
@@ -993,7 +1005,7 @@ class RecordingController(ImConWidgetController):
         )
         print(deconvoled_image)
         '''
-        # do nothing here
+        self._refuseStandInCamera()
         return self.snap(name=fileName, mSaveFormat=saveFormat,
                          returnPreview=returnPreview, previewMaxSize=previewMaxSize)
 
@@ -1123,6 +1135,7 @@ class RecordingController(ImConWidgetController):
         # we probably call from the FASTAPI server
         if self.recording:  # Already recording
             return self._build_recording_response()
+        self._refuseStandInCamera()
 
         # Use ISO 8601 date format, consistent with snap() method
         timeStampDay = datetime.datetime.now().strftime("%Y-%m-%d")

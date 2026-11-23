@@ -1,0 +1,40 @@
+{
+  "schema": "aufgaben.job/1",
+  "name": "Shutter turret",
+  "description": "Macro for a 3-slot turret (open, beta light, shut) on a DC motor with a friction clutch, driven like an H-bridge by two laser channels: pin A turns towards shut, pin B towards open. Every run first drives towards open for longer than the full travel, so the clutch slips at the end stop and the turret starts from a known place, then drives towards shut for the time of the chosen slot. Pick your setup's channels in the four light steps (LASER = pin A, LED = pin B in the virtual setup), set the times on the real turret, save it.",
+  "parameters": {
+    "position": {"type": "choice", "choices": ["open", "beta", "shut"], "default": "shut",
+                 "title": "Slot"},
+    "home_s": {"type": "number", "default": 2.0, "minimum": 0.1, "maximum": 10, "unit": "s",
+               "title": "Home (towards open)",
+               "description": "Longer than open to shut, so the clutch slips at the end stop"},
+    "beta_s": {"type": "number", "default": 0.7, "minimum": 0.05, "maximum": 10, "unit": "s",
+               "title": "Open to beta light"},
+    "shut_s": {"type": "number", "default": 1.4, "minimum": 0.05, "maximum": 10, "unit": "s",
+               "title": "Open to shut"},
+    "pause_s": {"type": "number", "default": 0.2, "minimum": 0, "maximum": 5, "unit": "s",
+                "title": "Pause before reversing", "ui": "hidden"},
+    "drive": {"type": "number", "default": 1023, "minimum": 0, "title": "Pin value when on",
+              "ui": "hidden", "description": "In the channel's own units; lower it to slow the motor (PWM)"}
+  },
+  "tasks": [
+    {"id": "pin_a_off", "task": "set_illumination", "label": "Pin A off",
+     "params": {"source": "LASER", "on": false}},
+    {"id": "pin_b_on", "task": "set_illumination", "label": "Home: pin B on",
+     "params": {"source": "LED", "intensity": "${param.drive}", "on": true}},
+    {"id": "home", "task": "wait", "params": {"seconds": "${param.home_s}"}},
+    {"id": "pin_b_off", "task": "set_illumination", "label": "Pin B off",
+     "params": {"source": "LED", "on": false}},
+    {"id": "to_slot", "task": "condition", "label": "Slot is not open",
+     "params": {"expr": "param.position != 'open'"}, "body": [
+      {"id": "pause", "task": "wait", "params": {"seconds": "${param.pause_s}"}},
+      {"id": "pin_a_on", "task": "set_illumination", "label": "Pin A on",
+       "params": {"source": "LASER", "intensity": "${param.drive}", "on": true}},
+      {"id": "drive_to_slot", "task": "wait",
+       "params": {"seconds": "${param.beta_s if param.position == 'beta' else param.shut_s}"}},
+      {"id": "pin_a_stop", "task": "set_illumination", "label": "Pin A off",
+       "params": {"source": "LASER", "on": false}}
+    ]}
+  ],
+  "metadata": {"macro": true}
+}

@@ -3,7 +3,7 @@
   "name": "Overview, regions, high-mag Z-stacks",
   "description": "A fast prescan maps the slide at low resolution; regions_from_overview turns every piece of sample into a rectangle (pieces closer than the margin merge). The objective is then switched and each region is tiled with Z-stacks. Check the prescan area and the objective slot before running.",
   "parameters": {
-    "objective_slot": {"type": "integer", "default": 2, "minimum": 1, "title": "High-mag objective slot", "ui": "wizard"}
+    "objective_slot": {"type": "integer", "default": 1, "minimum": 0, "maximum": 1, "title": "High-mag objective slot", "description": "Turret slot of the objective for the Z-stacks: 0 or 1", "ui": "wizard"}
   },
   "resources": {
     "z": {"kind": "z_plan", "plan": {"range": 8.0, "step": 1.0}},

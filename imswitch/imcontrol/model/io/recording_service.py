@@ -2,7 +2,7 @@
 Unified Recording Service for ImSwitch.
 
 This is the central service for all recording operations:
-- Single image capture (snap) with metadata: TIFF, PNG, JPG
+- Single image capture (snap) with metadata: OME-TIFF, OME-Zarr, PNG, JPG
 - Video recording with start/stop: MP4
 - Streaming recordings: OME-Zarr, OME-TIFF
 - Stitched mosaic output: 2D stitched OME-TIFF
@@ -200,11 +200,9 @@ class BackgroundStorageWorker:
                 try:
                     self._execute_task(task)
                     self._tasks_completed += 1
-                except Exception as e:
+                except Exception as e:   # _execute_task already told the callback
                     self._logger.error(f"Task execution failed: {e}")
                     self._tasks_failed += 1
-                    if task.callback:
-                        task.callback(False, str(e))
                 finally:
                     self._task_queue.task_done()
             except queue.Empty:
@@ -224,15 +222,14 @@ class BackgroundStorageWorker:
         message = "OK"
         
         try:
-            if task.task_type == 'snap_tiff':
-                self._write_tiff(task.filepath, task.data, task.metadata)
+            if task.task_type == 'snap_ome':
+                save_snap(task.filepath, task.data, task.metadata)
             elif task.task_type == 'snap_png':
                 self._write_png(task.filepath, task.data)
             elif task.task_type == 'snap_jpg':
                 self._write_jpg(task.filepath, task.data)
             else:
-                message = f"Unknown task type: {task.task_type}"
-                success = False
+                raise ValueError(f"Unknown task type: {task.task_type}")
         except Exception as e:
             success = False
             message = str(e)
@@ -241,10 +238,6 @@ class BackgroundStorageWorker:
             if task.callback:
                 task.callback(success, message)
     
-    def _write_tiff(self, filepath: str, data: np.ndarray, metadata: Dict = None):
-        """A snap as OME-TIFF through the shared OME writer."""
-        save_snap_tiff(filepath, data, metadata)
-
     def _write_png(self, filepath: str, data: np.ndarray):
         """Write PNG file."""
         os.makedirs(os.path.dirname(filepath), exist_ok=True) if os.path.dirname(filepath) else None
@@ -253,19 +246,22 @@ class BackgroundStorageWorker:
             img = cv2.convertScaleAbs(img)
         if img.ndim == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-        cv2.imwrite(filepath, img)
-    
+        if not cv2.imwrite(filepath, img):   # OpenCV reports a failed write only this way
+            raise OSError(f"Could not write {filepath}")
+
     def _write_jpg(self, filepath: str, data: np.ndarray):
         """Write JPEG file."""
         os.makedirs(os.path.dirname(filepath), exist_ok=True) if os.path.dirname(filepath) else None
         img = data.copy()
         if img.ndim == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-        cv2.imwrite(filepath, img)
+        if not cv2.imwrite(filepath, img):
+            raise OSError(f"Could not write {filepath}")
 
 
-def save_snap_tiff(filepath: str, image: np.ndarray, metadata: Dict = None) -> None:
-    """A snap as OME-TIFF with what the snap metadata knows.
+def save_snap(filepath: str, image: np.ndarray, metadata: Dict = None) -> None:
+    """A snap as OME-TIFF (``*.tif[f]``) or OME-Zarr (``*.zarr``), by the path's suffix,
+    with what the snap metadata knows.
 
     ``metadata`` as built by ``RecordingService._build_metadata``: PhysicalSizeX (µm),
     PositionX/Y/Z (stage, µm, field centre), ExposureTime (s), Channel, Detector.
@@ -992,14 +988,16 @@ class RecordingService(SignalInterface):
             task_type=task_type,
             filepath=filepath,
             data=image.copy(),
-            metadata=metadata if format == SaveFormat.TIFF else None,
+            metadata=metadata,
             callback=lambda ok, msg: callback(SnapResult(
                 success=ok, detector_name=detector_name, filepath=filepath, error=msg if not ok else None
             )) if callback else None
         )
-        
-        self._storage_worker.submit(task)
-        
+
+        if not self._storage_worker.submit(task):
+            return SnapResult(success=False, detector_name=detector_name, filepath=filepath,
+                              error="Storage worker stopped or its queue is full")
+
         return SnapResult(
             success=True,
             detector_name=detector_name,
@@ -1010,29 +1008,11 @@ class RecordingService(SignalInterface):
     def _snap_sync(self, detector_name: str, image: np.ndarray,
                    filepath: str, format: SaveFormat,
                    metadata: Dict = None) -> SnapResult:
-        """Write image synchronously."""
+        """Write image now, with the background worker's writers."""
         try:
-            dirname = os.path.dirname(filepath)
-            if dirname:
-                os.makedirs(dirname, exist_ok=True)
-            
-            if format in (SaveFormat.TIFF, SaveFormat.OME_TIFF):
-                save_snap_tiff(filepath, image, metadata)
-            elif format == SaveFormat.PNG:
-                img = image.copy()
-                if img.dtype in (np.float32, np.float64):
-                    img = cv2.convertScaleAbs(img)
-                if img.ndim == 2:
-                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-                cv2.imwrite(filepath, img)
-            elif format == SaveFormat.JPG:
-                img = image.copy()
-                if img.ndim == 2:
-                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-                cv2.imwrite(filepath, img)
-            else:
-                raise ValueError(f"Unsupported format for snap: {format}")
-            
+            self._storage_worker._execute_task(StorageTask(
+                task_type=self._format_to_task_type(format), filepath=filepath,
+                data=image, metadata=metadata))
             return SnapResult(
                 success=True,
                 detector_name=detector_name,
@@ -1051,14 +1031,17 @@ class RecordingService(SignalInterface):
     def _format_to_task_type(self, format: SaveFormat) -> str:
         """Convert SaveFormat to task type string."""
         mapping = {
-            SaveFormat.TIFF: 'snap_tiff',
-            SaveFormat.OME_TIFF: 'snap_tiff',
+            SaveFormat.TIFF: 'snap_ome',
+            SaveFormat.OME_TIFF: 'snap_ome',
+            SaveFormat.ZARR: 'snap_ome',       # OME-Zarr, as ZARR recordings are
+            SaveFormat.OME_ZARR: 'snap_ome',
             SaveFormat.PNG: 'snap_png',
             SaveFormat.JPG: 'snap_jpg',
         }
         task_type = mapping.get(format)
         if task_type is None:
-            raise ValueError(f"Unsupported format for snap: {format}. Only TIFF, PNG, JPG are supported.")
+            raise ValueError(f"Unsupported format for snap: {format}. "
+                             "Snaps write OME-TIFF, OME-Zarr, PNG or JPG.")
         return task_type
     
     def _generate_filepath(self, basepath: str, detector_name: str, format: SaveFormat) -> str:
@@ -1068,8 +1051,8 @@ class RecordingService(SignalInterface):
             SaveFormat.OME_TIFF: '.ome.tiff',
             SaveFormat.PNG: '.png',
             SaveFormat.JPG: '.jpg',
-            SaveFormat.ZARR: '.zarr',
-            SaveFormat.OME_ZARR: '.zarr',
+            SaveFormat.ZARR: '.ome.zarr',
+            SaveFormat.OME_ZARR: '.ome.zarr',
             SaveFormat.MP4: '.mp4',
         }
         ext = ext_map.get(format, '.tiff')

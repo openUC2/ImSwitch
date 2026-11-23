@@ -61,11 +61,14 @@ const FIELDS = [
   ["illuminationValue", "Light value (0 = keep)"],
   ["overviewIlluminationValue", "Light for overview camera (room light)"],
   ["overviewExposureMs", "Overview exposure at full light (ms)"],
+  ["travelMaxUm", "Travel probe: max distance from home (µm)"],
+  ["travelMarginUm", "Travel limit margin inside the end switch (µm)"],
 ];
 const FLAGS = [
   ["maxGain", "Maximum camera gain during the run"],
   ["autoExposure", "Set the camera exposure automatically"],
   ["homeTurret", "Home turret"],
+  ["measureTravel", "Measure X/Y travel range (drives to the far end switches)"],
   ["secondObjective", "Second objective"],
   ["placementCheck", "Placement check"],
   ["measureBacklash", "Measure backlash"],

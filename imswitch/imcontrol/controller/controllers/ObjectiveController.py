@@ -3,6 +3,7 @@ from imswitch.imcommon.model import APIExport
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from imswitch.imcontrol.controller.basecontrollers import LiveUpdatedController
+from imswitch.imcontrol.model.aufgaben import storage
 
 
 
@@ -66,6 +67,7 @@ class ObjectiveController(LiveUpdatedController):
         self._NAs = list(self._configManager.NAs)
         self._magnifications = list(self._configManager.magnifications)
         self._objectiveNames = list(self._configManager.objectiveNames)
+        self._immersions = list(getattr(self._configManager, "immersions", []) or [])
 
         # Compute which slots are actually configured (name truthy AND magnification > 0)
         self._isSlotConfigured = self._computeIsSlotConfigured()
@@ -108,7 +110,7 @@ class ObjectiveController(LiveUpdatedController):
 
             if calibrateOnStart:
                 self._logger.info("Calibrating objective on startup...")
-                self.calibrateObjective()
+                self.calibrateObjective(isBlocking=True)
                 # After calibration, move to the first objective position (slot 0)
                 self._moveMotorToSlot(0)
                 self._currentObjective = 0
@@ -123,7 +125,7 @@ class ObjectiveController(LiveUpdatedController):
                 elif abs(mPositionObjective - self._objectivePositions[1]) <= slotTolerance:
                     self._currentObjective = 1
                 else:
-                    self.calibrateObjective()
+                    self.calibrateObjective(isBlocking=True)
                     self._moveMotorToSlot(0)
                     self._currentObjective = 0
                 self._logger.info(f"Skipping calibration, objective at slot {self._currentObjective}")
@@ -134,6 +136,8 @@ class ObjectiveController(LiveUpdatedController):
 
         # Update detector with current pixel size
         self._updatePixelSize()
+        # every image file records the objective it was taken with
+        storage.current_objective = self.objectiveMetadata
 
     # === State Property Accessors ===
 
@@ -200,6 +204,27 @@ class ObjectiveController(LiveUpdatedController):
             return self._magnifications[self._currentObjective]
         return None
 
+    def _getCurrentImmersion(self) -> Optional[str]:
+        """The current objective's immersion: the setup's ``immersions``, else guessed from the NA."""
+        slot = self._currentObjective
+        if slot is not None and 0 <= slot < len(self._immersions) and self._immersions[slot]:
+            return self._immersions[slot]
+        try:
+            return storage.immersion_for(float(self._getCurrentNA()))
+        except (TypeError, ValueError):
+            return None
+
+    def objectiveMetadata(self) -> Optional[dict]:
+        """The current objective as image files record it (storage.current_objective): name, NA,
+        magnification, immersion; None while no configured slot is in place."""
+        slot = self._currentObjective
+        if slot is None or not (0 <= slot < len(self._isSlotConfigured)) \
+                or not self._isSlotConfigured[slot]:
+            return None
+        return {"name": self._getCurrentObjectiveName(), "na": self._getCurrentNA(),
+                "magnification": self._getCurrentMagnification(),
+                "immersion": self._getCurrentImmersion()}
+
     def _getCurrentObjectiveName(self) -> str:
         """Get the name of the current objective."""
         if self._currentObjective is not None and 0 <= self._currentObjective < len(self._objectiveNames):
@@ -257,13 +282,17 @@ class ObjectiveController(LiveUpdatedController):
             return False
 
     @APIExport(runOnUIThread=True)
-    def calibrateObjective(self, homeDirection: int = None, homePolarity: int = None):
+    def calibrateObjective(self, homeDirection: int = None, homePolarity: int = None,
+                           isBlocking: bool = False):
         """
         Calibrate (home) the objective turret using ESP32StageManager axis A.
         
         Args:
             homeDirection: Override home direction (optional)
             homePolarity: Override home polarity (optional)
+            isBlocking: Wait until homing is done. Startup passes True: the slot move that
+                follows must not start while the turret is still homing, or the homing
+                zeroes A under it and the turret ends up off its slot.
         """
         if not self._hasMotor or self._positioner is None:
             self._logger.error("No motor available for objective calibration")
@@ -273,7 +302,7 @@ class ObjectiveController(LiveUpdatedController):
 
         try:
             # Home axis A using ESP32StageManager
-            self._positioner.home_a(isBlocking=False)
+            self._positioner.home_a(isBlocking=isBlocking)
             self._isHomed = True
             self._logger.info("Objective homing completed successfully")
         except Exception as e:
@@ -397,7 +426,9 @@ class ObjectiveController(LiveUpdatedController):
                 if not success and self._hasMotor:
                     last_error = f"Failed to move objective motor to slot {slot}"
 
-        if success or not self._hasMotor:
+        # no turret motor (virtual or manual turret): a valid slot counts as reached
+        success = success or (not self._hasMotor and last_error is None)
+        if success:
             self._currentObjective = slot
             self._updatePixelSize()
 
@@ -744,6 +775,7 @@ class ObjectiveController(LiveUpdatedController):
             "pixelsize": self._getCurrentPixelSize(),
             "NA": self._getCurrentNA(),
             "magnification": self._getCurrentMagnification(),
+            "immersion": self._getCurrentImmersion(),
             "FOV": self._getCurrentFOV(),
 
             "availableObjectives": [0, 1],
@@ -820,6 +852,7 @@ class ObjectiveController(LiveUpdatedController):
         self.setSharedAttr(_nameAttr, self._getCurrentObjectiveName())
         self.setSharedAttr(_magnificationAttr, self._getCurrentMagnification())
         self.setSharedAttr(_naAttr, self._getCurrentNA())
+        self.setSharedAttr(_immersionAttr, self._getCurrentImmersion())
         self.setSharedAttr(_pixelSizeAttr, self._getCurrentPixelSize())
         self.setSharedAttr(_slotAttr, self._currentObjective)
         
@@ -833,6 +866,7 @@ _attrCategory = 'Objective'
 _nameAttr = 'Name'
 _magnificationAttr = 'Magnification'
 _naAttr = 'NA'
+_immersionAttr = 'Immersion'
 _pixelSizeAttr = 'PixelSizeUm'
 _slotAttr = 'TurretIndex'
 _fovUmAttr = 'FOVUm'

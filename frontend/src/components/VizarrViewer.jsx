@@ -1,937 +1,604 @@
 /**
- * VizarrViewer.jsx
- * 
- * An offline-capable OME-Zarr viewer component using zarrita + Canvas rendering.
- * This provides similar functionality to the online vizarr viewer but works
- * entirely offline within the application.
- * 
- * Uses Canvas-based rendering for maximum compatibility, avoiding deck.gl
- * version conflicts with viv.
- * 
- * Supports both multiscale and single-scale OME-Zarr files.
+ * OME-Zarr viewer for what ImSwitch writes (ExperimentController scans, Aufgaben runs).
+ *
+ * Reads NGFF 0.4 / 0.5 straight from the server's /imswitch/data mount with zarrita and
+ * draws only the chunks under the canvas, from the pyramid level that matches the zoom,
+ * on top of the coarsest level. Works offline: no external viewer, no CDN.
+ *
+ * Left: datasets below the data folder, grouped by run folder, and the fields of a plate.
+ * Pure logic (levels, tiles, contrast, compositing) lives in omezarr/omeZarrModel.js.
  */
-
-import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { useSelector, useDispatch } from "react-redux";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSelector } from "react-redux";
 import * as zarr from "zarrita";
 import {
-  Box,
-  IconButton,
-  Slider,
-  Typography,
-  Tooltip,
-  Paper,
-  CircularProgress,
   Alert,
+  Box,
   Button,
-  Stack,
-  Collapse,
+  Checkbox,
   Divider,
+  IconButton,
   LinearProgress,
+  List,
+  ListItemButton,
+  ListItemText,
+  MenuItem,
+  Slider,
+  TextField,
+  Tooltip,
+  Typography,
 } from "@mui/material";
-import {
-  ZoomIn,
-  ZoomOut,
-  FitScreen,
-  Settings,
-  Close,
-  Refresh,
-  OpenInNew,
-  NavigateBefore,
-  NavigateNext,
-  Visibility,
-  VisibilityOff,
-} from "@mui/icons-material";
+import { Close, FitScreen, Refresh } from "@mui/icons-material";
 
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice";
-import * as vizarrViewerSlice from "../state/slices/VizarrViewerSlice";
+import apiFileManagerGetDatasets from "../backendapi/apiFileManagerGetDatasets";
+import DeconvolutionPanel from "./omezarr/DeconvolutionPanel";
+import {
+  autoWindow,
+  compositeRGBA,
+  cropAt,
+  dataUrl,
+  describeImage,
+  fitView,
+  groupByFolder,
+  pickLevel,
+  readNgff,
+  tilesInView,
+  zoomAt,
+} from "./omezarr/omeZarrModel";
 
-// Default channel colors for multi-channel images
-const DEFAULT_CHANNEL_COLORS = [
-  [255, 0, 0],    // Red
-  [0, 255, 0],    // Green
-  [0, 0, 255],    // Blue
-  [255, 255, 0],  // Yellow
-  [255, 0, 255],  // Magenta
-  [0, 255, 255],  // Cyan
-  [255, 128, 0],  // Orange
-  [128, 0, 255],  // Purple
-];
+const CACHE_TILES = 400; // raw chunk planes kept in memory (LRU)
 
-/**
- * Normalize zarr dtype string to a standard format
- */
-function normalizeDtype(dtype) {
-  const dtypeStr = String(dtype).toLowerCase();
-  if (dtypeStr.includes("uint8") || dtypeStr === "<u1" || dtypeStr === "|u1" || dtypeStr === ">u1") return "uint8";
-  if (dtypeStr.includes("uint16") || dtypeStr === "<u2" || dtypeStr === ">u2") return "uint16";
-  if (dtypeStr.includes("uint32") || dtypeStr === "<u4" || dtypeStr === ">u4") return "uint32";
-  if (dtypeStr.includes("int8") || dtypeStr === "<i1" || dtypeStr === "|i1" || dtypeStr === ">i1") return "int8";
-  if (dtypeStr.includes("int16") || dtypeStr === "<i2" || dtypeStr === ">i2") return "int16";
-  if (dtypeStr.includes("int32") || dtypeStr === "<i4" || dtypeStr === ">i4") return "int32";
-  if (dtypeStr.includes("float32") || dtypeStr === "<f4" || dtypeStr === ">f4") return "float32";
-  if (dtypeStr.includes("float64") || dtypeStr === "<f8" || dtypeStr === ">f8") return "float64";
-  return "uint8";
+const relPath = (p) => (p || "").replace(/^\/imswitch\/data/, "").replace(/\/+$/, "");
+const parentOf = (p) => p.slice(0, p.lastIndexOf("/")) || "/";
+const toHex = (rgb) => `#${rgb.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+const fromHex = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+async function fetchJson(url) {
+  const r = await fetch(url);
+  return r.ok ? r.json() : null;
 }
 
-/**
- * Get max value for dtype for normalization
- */
-function getMaxValueForDtype(dtype) {
-  switch (dtype) {
-    case "uint8": return 255;
-    case "uint16": return 65535;
-    case "uint32": return 4294967295;
-    case "int8": return 127;
-    case "int16": return 32767;
-    case "int32": return 2147483647;
-    case "float32":
-    case "float64":
-      return 1.0; // Assume normalized floats, will auto-scale
-    default: return 255;
-  }
+/** Group attributes of a zarr v2 (.zattrs) or v3 (zarr.json) node. */
+async function readAttrs(url) {
+  const v2 = await fetchJson(`${url}/.zattrs`);
+  if (v2) return { attrs: v2, version: 2 };
+  const v3 = await fetchJson(`${url}/zarr.json`);
+  return v3 ? { attrs: v3.attributes || {}, version: 3 } : null;
 }
 
-const VizarrViewer = ({ 
-  zarrUrl: propZarrUrl = null, 
-  onClose = null,
-  embedded = false,
-  height = "100%",
-  width = "100%"
-}) => {
-  const dispatch = useDispatch();
-  const canvasRef = useRef(null);
-  const containerRef = useRef(null);
-  
-  // Get connection settings for building full URL
-  const connectionSettings = useSelector(connectionSettingsSlice.getConnectionSettingsState);
-  
-  // Get Vizarr viewer state from Redux
-  const vizarrState = useSelector(vizarrViewerSlice.getVizarrViewerState);
-  
-  // Determine the URL to use (prop takes precedence over Redux state)
-  const zarrUrl = propZarrUrl || vizarrState.currentUrl;
-  
-  // Local component state
-  const [loading, setLoading] = useState(true);
-  const [loadingProgress, setLoadingProgress] = useState(0);
+/** The images of a dataset: the store itself, or every field of a plate or well. */
+async function listImages(url) {
+  const meta = await readAttrs(url);
+  if (!meta) throw new Error("No image here: not an OME-Zarr store, or a TIFF layout the viewer cannot read.");
+  const ngff = readNgff(meta.attrs);
+  if (ngff.kind === "image") return [{ label: "", url }];
+  if (ngff.kind !== "plate" && ngff.kind !== "well") throw new Error("Not an OME-NGFF image or plate.");
+  const wells = ngff.kind === "plate" ? ngff.wells : [""];
+  const fields = await Promise.all(
+    wells.map(async (w) => {
+      const wellUrl = w ? `${url}/${w}` : url;
+      const well = w ? readNgff((await readAttrs(wellUrl))?.attrs) : ngff;
+      return (well.images || []).map((i) => ({ label: [w, i].filter(Boolean).join(" / "), url: `${wellUrl}/${i}` }));
+    }),
+  );
+  return fields.flat();
+}
+
+async function openImage(url) {
+  const meta = await readAttrs(url);
+  const ngff = readNgff(meta?.attrs);
+  if (ngff.kind !== "image") throw new Error("Not an OME-NGFF image.");
+  const root = zarr.root(new zarr.FetchStore(url));
+  const arrays = await Promise.all(
+    ngff.multiscales.datasets.map((d) =>
+      meta.version === 2
+        ? zarr.open.v2(root.resolve(d.path), { kind: "array", attrs: false })
+        : zarr.open.v3(root.resolve(d.path), { kind: "array" }),
+    ),
+  );
+  return { url, arrays, info: describeImage(ngff, arrays.map((a) => a.shape), arrays[0].dtype) };
+}
+
+/** One y/x block of one channel at (t, z). */
+async function readBlock(arr, axes, t, c, z, y0, y1, x0, x1) {
+  const sel = axes.map((a) =>
+    a === "t" ? t : a === "c" ? c : a === "z" ? z : a === "y" ? zarr.slice(y0, y1) : a === "x" ? zarr.slice(x0, x1) : 0,
+  );
+  return (await zarr.get(arr, sel)).data;
+}
+
+const VizarrViewer = ({ zarrUrl = null, onClose = null, embedded = false, height = "100%", width = "100%" }) => {
+  const { ip, apiPort } = useSelector(connectionSettingsSlice.getConnectionSettingsState);
+
+  const [groups, setGroups] = useState([]);
+  const [folder, setFolder] = useState("");
+  const [path, setPath] = useState(relPath(zarrUrl));
+  const [images, setImages] = useState([]);
+  const [imageIndex, setImageIndex] = useState(0);
+  const [image, setImage] = useState(null);
+  const [channels, setChannels] = useState([]);
+  const [t, setT] = useState(0);
+  const [z, setZ] = useState(0);
   const [error, setError] = useState(null);
-  const [showSettings, setShowSettings] = useState(false);
-  const [metadata, setMetadata] = useState(null);
-  
-  // Image data state
-  const [imageData, setImageData] = useState(null);
-  const [dimensions, setDimensions] = useState({ width: 0, height: 0, channels: 1, z: 1, t: 1 });
-  const [dtype, setDtype] = useState("uint8");
-  
-  // View state
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  
-  // Channel-specific settings
-  const [channelSettings, setChannelSettings] = useState([]);
-  
-  // Current slice indices for z-stack and time series
-  const [currentZ, setCurrentZ] = useState(0);
-  const [currentT, setCurrentT] = useState(0);
-  
-  // Store zarr arrays for on-demand loading
-  const [zarrArrays, setZarrArrays] = useState(null);
-  const [axisLabels, setAxisLabels] = useState(["y", "x"]);
-  
-  // Build the full URL for the Zarr file
-  const fullUrl = useMemo(() => {
-    if (!zarrUrl) return null;
-    
-    // If URL already contains protocol, use as is
-    if (zarrUrl.startsWith("http://") || zarrUrl.startsWith("https://")) {
-      return zarrUrl;
-    }
-    
-    // Build URL from connection settings
-    // Check if zarrUrl already starts with /imswitch/data/ to avoid double prefix
-    const urlPath = zarrUrl.startsWith("/imswitch/data/") || zarrUrl.startsWith("/imswitch/data") 
-      ? zarrUrl 
-      : `/imswitch/data${zarrUrl}`;
-    return `${connectionSettings.ip}:${connectionSettings.apiPort}${urlPath}`;
-  }, [zarrUrl, connectionSettings.ip, connectionSettings.apiPort]);
-  
-  // Initialize channel settings when dimensions change
-  const initializeChannelSettings = useCallback((numChannels, dataDtype) => {
-    const maxVal = getMaxValueForDtype(dataDtype);
-    const settings = Array.from({ length: numChannels }, (_, i) => ({
-      visible: i === 0 || numChannels <= 3, // Show first channel or all if <= 3
-      color: numChannels === 1 ? [255, 255, 255] : DEFAULT_CHANNEL_COLORS[i % DEFAULT_CHANNEL_COLORS.length],
-      contrastMin: 0,
-      contrastMax: maxVal,
-      opacity: 1.0,
-    }));
-    setChannelSettings(settings);
-  }, []);
-  
-  /**
-   * Load a specific Z/T slice from the zarr array
-   */
-  const loadSlice = useCallback(async (arr, labels, shape, z, t, numChannels, setProgress) => {
-    console.log("[VizarrViewer] Loading slice z:", z, "t:", t);
-    if (setProgress) setProgress(70);
-    
-    try {
-      const xIdx = labels.indexOf("x");
-      const yIdx = labels.indexOf("y");
-      const cIdx = labels.indexOf("c");
-      const zIdx = labels.indexOf("z");
-      const tIdx = labels.indexOf("t");
-      
-      // Build selection for all channels at this Z/T position
-      const channelData = [];
-      
-      for (let c = 0; c < numChannels; c++) {
-        // Build selection array - null means full slice for that dimension
-        const selection = shape.map((_, idx) => {
-          if (idx === xIdx) return null; // Full x slice
-          if (idx === yIdx) return null; // Full y slice
-          if (idx === cIdx) return c;
-          if (idx === zIdx) return z;
-          if (idx === tIdx) return t;
-          return 0; // Default for unknown dimensions
-        });
-        
-        try {
-          const result = await zarr.get(arr, selection);
-          
-          // Determine width and height from result shape
-          // Result shape should be 2D [height, width] after slicing
-          const resultShape = result.shape;
-          const resultWidth = resultShape[resultShape.length - 1];
-          const resultHeight = resultShape[resultShape.length - 2] || 1;
-          
-          channelData.push({
-            data: result.data,
-            width: resultWidth,
-            height: resultHeight,
-          });
-        } catch (err) {
-          console.error(`[VizarrViewer] Error loading channel ${c}:`, err);
-          // Create empty channel data on error
-          const imgWidth = xIdx >= 0 ? shape[xIdx] : shape[shape.length - 1];
-          const imgHeight = yIdx >= 0 ? shape[yIdx] : shape[shape.length - 2];
-          channelData.push({
-            data: new Uint8Array(imgWidth * imgHeight),
-            width: imgWidth,
-            height: imgHeight,
-          });
-        }
-        
-        if (setProgress) setProgress(70 + Math.round(30 * (c + 1) / numChannels));
-      }
-      
-      setImageData(channelData);
-      console.log("[VizarrViewer] Loaded", channelData.length, "channels");
-      
-      return channelData;
-    } catch (err) {
-      console.error("[VizarrViewer] Error loading slice:", err);
-      throw err;
-    }
-  }, []);
-  
-  /**
-   * Load OME-Zarr metadata and structure using zarrita
-   */
+  const [loading, setLoading] = useState(false);
+  const [reload, setReload] = useState(0);
+  const [status, setStatus] = useState({ zoom: 1, level: 0, pending: 0 });
+  const [deconv, setDeconv] = useState(false);
+  const [cropSize, setCropSize] = useState(256);
+
+  const canvasRef = useRef(null);
+  const boxRef = useRef(null);
+  const viewRef = useRef(null);
+  const rawRef = useRef(new Map()); // key -> {data} | {pending: true} | {error}
+  const tileRef = useRef(new Map()); // key -> {sig, canvas}
+  const frameRef = useRef(0);
+  const drawRef = useRef(() => {});
+
+  // A new dataset from the File Manager / experiment button replaces the current one.
   useEffect(() => {
-    if (!fullUrl) {
-      setError("No OME-Zarr URL provided");
-      setLoading(false);
-      return;
+    if (zarrUrl) setPath(relPath(zarrUrl));
+  }, [zarrUrl]);
+
+  // Datasets below the data folder (skipped for absolute URLs on another host).
+  const loadDatasets = useCallback(() => {
+    apiFileManagerGetDatasets()
+      .then((list) => setGroups(groupByFolder(list)))
+      .catch((e) => setError(`Could not list datasets: ${e.message}`));
+  }, []);
+  useEffect(() => {
+    if (!embedded) loadDatasets();
+  }, [embedded, loadDatasets, ip, apiPort, reload]);
+  useEffect(() => {
+    if (path && !/^https?:/.test(path)) setFolder(parentOf(path));
+    else if (!path && groups.length) setFolder((f) => f || groups[0].folder);
+  }, [path, groups]);
+
+  // Dataset -> list of images (fields of a plate, or the image itself).
+  useEffect(() => {
+    if (!path) return undefined;
+    let live = true;
+    setError(null);
+    setImages([]);
+    setImage(null);
+    listImages(dataUrl(ip, apiPort, path))
+      .then((list) => {
+        if (!live) return;
+        setImages(list);
+        setImageIndex(0);
+      })
+      .catch((e) => live && setError(e.message));
+    return () => {
+      live = false;
+    };
+  }, [path, ip, apiPort, reload]);
+
+  // Image -> arrays, metadata, initial contrast from the coarsest level.
+  useEffect(() => {
+    const entry = images[imageIndex];
+    if (!entry) return undefined;
+    let live = true;
+    setLoading(true);
+    rawRef.current.clear();
+    tileRef.current.clear();
+    (async () => {
+      const img = await openImage(entry.url);
+      const { info, arrays } = img;
+      const z0 = Math.floor(info.sizes.z / 2);
+      const coarse = arrays[arrays.length - 1];
+      const [h, w] = info.levels[info.levels.length - 1].shape.slice(-2);
+      const chans = await Promise.all(
+        info.channels.map(async (ch, c) => {
+          const stats = autoWindow(await readBlock(coarse, info.axes, 0, c, z0, 0, h, 0, w));
+          const range = Math.max(stats.max, ch.auto ? 0 : ch.end, 1);
+          return ch.auto ? { ...ch, start: stats.start, end: stats.end, range } : { ...ch, range };
+        }),
+      );
+      if (!live) return;
+      const box = boxRef.current;
+      viewRef.current = fitView(info.sizes.x, info.sizes.y, box.clientWidth, box.clientHeight);
+      setT(0);
+      setZ(z0);
+      setChannels(chans);
+      setImage(img);
+    })()
+      .catch((e) => live && setError(`Could not open ${entry.url}: ${e.message}`))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [images, imageIndex]);
+
+  const requestDraw = useCallback(() => {
+    if (!frameRef.current) {
+      frameRef.current = requestAnimationFrame(() => {
+        frameRef.current = 0;
+        drawRef.current();
+      });
     }
-    
-    const loadMetadata = async () => {
-      console.log("[VizarrViewer] Loading OME-Zarr from:", fullUrl);
-      setLoading(true);
-      setLoadingProgress(0);
-      setError(null);
-      setImageData(null);
-      
-      try {
-        // Fetch .zattrs to get OME-Zarr metadata
-        const attrsUrl = `${fullUrl}/.zattrs`;
-        let attrs = {};
-        
-        try {
-          const attrsResponse = await fetch(attrsUrl);
-          if (attrsResponse.ok) {
-            attrs = await attrsResponse.json();
-          }
-        } catch (e) {
-          console.log("[VizarrViewer] No .zattrs at root, trying zarr v3 format");
+  }, []);
+
+  // Raw plane of one chunk; starts the fetch and redraws when it arrives.
+  const raw = useCallback(
+    (key, load) => {
+      const cache = rawRef.current;
+      const hit = cache.get(key);
+      if (hit) {
+        if (hit.data) {
+          cache.delete(key); // LRU: move to the end
+          cache.set(key, hit);
         }
-        
-        // Also try zarr.json for v3
-        if (Object.keys(attrs).length === 0) {
-          try {
-            const zarrJsonUrl = `${fullUrl}/zarr.json`;
-            const zarrJsonResponse = await fetch(zarrJsonUrl);
-            if (zarrJsonResponse.ok) {
-              const zarrJson = await zarrJsonResponse.json();
-              attrs = zarrJson.attributes || {};
-            }
-          } catch (e) {
-            console.log("[VizarrViewer] No zarr.json found");
+        return hit.data || null;
+      }
+      cache.set(key, { pending: true });
+      load()
+        .then((data) => cache.set(key, { data }))
+        .catch((e) => {
+          cache.set(key, { error: e });
+          setError(`Could not read a chunk: ${e.message}`);
+        })
+        .finally(() => {
+          while (cache.size > CACHE_TILES) cache.delete(cache.keys().next().value);
+          requestDraw();
+        });
+      return null;
+    },
+    [requestDraw],
+  );
+
+  drawRef.current = () => {
+    const canvas = canvasRef.current;
+    const box = boxRef.current;
+    const view = viewRef.current;
+    if (!canvas || !box || !image || !view) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.round(box.clientWidth * dpr);
+    const H = Math.round(box.clientHeight * dpr);
+    if (canvas.width !== W || canvas.height !== H) {
+      canvas.width = W;
+      canvas.height = H;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, W, H);
+    // view is in CSS pixels; draw in device pixels
+    const v = { x: view.x, y: view.y, zoom: view.zoom * dpr };
+    const { info, arrays } = image;
+    const sig = JSON.stringify(channels.map((c) => [c.visible, c.rgb, c.start, c.end]));
+    const coarsest = info.levels.length - 1;
+    const best = pickLevel(info.levels, v.zoom);
+    let pending = 0;
+    const drawLevel = (li) => {
+      const level = info.levels[li];
+      const chunk = arrays[li].chunks.slice(-2);
+      for (const tile of tilesInView(level, chunk, v, W, H)) {
+        const base = `${li}|${t}|${z}|${tile.ty}|${tile.tx}`;
+        let entry = tileRef.current.get(base);
+        if (!entry || entry.sig !== sig) {
+          const planes = channels.map((ch, c) =>
+            ch.visible
+              ? raw(`${base}|${c}`, () =>
+                  readBlock(arrays[li], info.axes, t, c, z, tile.y0, tile.y0 + tile.h, tile.x0, tile.x0 + tile.w),
+                )
+              : null,
+          );
+          if (planes.some((p, c) => channels[c].visible && !p)) {
+            pending += 1;
+            continue;
           }
+          const tc = entry?.canvas || document.createElement("canvas");
+          tc.width = tile.w;
+          tc.height = tile.h;
+          const tctx = tc.getContext("2d");
+          const img = tctx.createImageData(tile.w, tile.h);
+          compositeRGBA(planes, channels, img.data);
+          tctx.putImageData(img, 0, 0);
+          entry = { sig, canvas: tc };
+          tileRef.current.set(base, entry);
+          if (tileRef.current.size > CACHE_TILES) tileRef.current.delete(tileRef.current.keys().next().value);
         }
-        
-        console.log("[VizarrViewer] Root attributes:", attrs);
-        setMetadata(attrs);
-        setLoadingProgress(20);
-        
-        let arrayPath = "0";
-        let labels = ["y", "x"];
-        
-        // Check if this is multiscale OME-Zarr
-        if (attrs.multiscales && Array.isArray(attrs.multiscales) && attrs.multiscales.length > 0) {
-          console.log("[VizarrViewer] Found multiscale OME-Zarr");
-          const multiscale = attrs.multiscales[0];
-          const datasets = multiscale.datasets || [];
-          
-          // Use highest resolution (first dataset)
-          if (datasets.length > 0) {
-            arrayPath = datasets[0].path;
-          }
-          
-          // Get axis information if available
-          if (multiscale.axes) {
-            labels = multiscale.axes.map(a => typeof a === "string" ? a : a.name);
-          }
-        }
-        
-        setAxisLabels(labels);
-        setLoadingProgress(40);
-        
-        // Load the array using zarrita
-        const arrayUrl = `${fullUrl}/${arrayPath}`;
-        console.log("[VizarrViewer] Loading array from:", arrayUrl);
-        
-        const store = new zarr.FetchStore(arrayUrl);
-        const arr = await zarr.open(store, { kind: "array" });
-        
-        console.log("[VizarrViewer] Loaded array:", arr.shape, "dtype:", arr.dtype);
-        setLoadingProgress(60);
-        
-        // Extract dimensions from shape based on axis labels
-        const shape = arr.shape;
-        const xIdx = labels.indexOf("x");
-        const yIdx = labels.indexOf("y");
-        const cIdx = labels.indexOf("c");
-        const zIdx = labels.indexOf("z");
-        const tIdx = labels.indexOf("t");
-        
-        const imgWidth = xIdx >= 0 ? shape[xIdx] : shape[shape.length - 1];
-        const imgHeight = yIdx >= 0 ? shape[yIdx] : shape[shape.length - 2];
-        const channels = cIdx >= 0 ? shape[cIdx] : 1;
-        const zSlices = zIdx >= 0 ? shape[zIdx] : 1;
-        const timePoints = tIdx >= 0 ? shape[tIdx] : 1;
-        
-        const dataDtype = normalizeDtype(arr.dtype);
-        setDtype(dataDtype);
-        setDimensions({ width: imgWidth, height: imgHeight, channels, z: zSlices, t: timePoints });
-        initializeChannelSettings(channels, dataDtype);
-        
-        // Store zarr array reference and labels for later slice loading
-        setZarrArrays({ arr, labels, shape });
-        
-        console.log("[VizarrViewer] Dimensions:", { width: imgWidth, height: imgHeight, channels, z: zSlices, t: timePoints });
-        
-        // Load initial slice
-        await loadSlice(arr, labels, shape, 0, 0, channels, setLoadingProgress);
-        
-        setLoading(false);
-        
-      } catch (err) {
-        console.error("[VizarrViewer] Error loading OME-Zarr:", err);
-        setError(`Failed to load OME-Zarr: ${err.message}`);
-        setLoading(false);
+        const f = level.factor;
+        ctx.imageSmoothingEnabled = f * v.zoom < 1;
+        ctx.drawImage(
+          entry.canvas,
+          (tile.x0 * f - v.x) * v.zoom,
+          (tile.y0 * f - v.y) * v.zoom,
+          tile.w * f * v.zoom,
+          tile.h * f * v.zoom,
+        );
       }
     };
-    
-    loadMetadata();
-  }, [fullUrl, initializeChannelSettings, vizarrState.refreshKey, loadSlice]);
-  
-  // Reload slice when Z or T changes
-  useEffect(() => {
-    if (!zarrArrays || loading) {
-      return;
+    drawLevel(coarsest); // whole image at once, so panning never shows holes
+    if (best !== coarsest) drawLevel(best);
+    if (deconv) {
+      // the crop a deconvolution preview takes: the middle of the view
+      const crop = cropAt(view, box.clientWidth, box.clientHeight, cropSize, info.sizes.x, info.sizes.y);
+      ctx.setLineDash([6 * dpr, 4 * dpr]);
+      ctx.strokeStyle = "#ffd54f";
+      ctx.lineWidth = dpr;
+      ctx.strokeRect((crop.x0 - v.x) * v.zoom, (crop.y0 - v.y) * v.zoom, crop.w * v.zoom, crop.h * v.zoom);
+      ctx.setLineDash([]);
     }
+    setStatus((s) =>
+      s.zoom === view.zoom && s.level === best && s.pending === pending ? s : { zoom: view.zoom, level: best, pending },
+    );
+  };
 
-    const { arr, labels, shape } = zarrArrays;
+  useEffect(requestDraw, [image, channels, t, z, requestDraw, deconv, cropSize]);
 
-    loadSlice(
-      arr,
-      labels,
-      shape,
-      currentZ,
-      currentT,
-      dimensions.channels,
-      setLoadingProgress  // Pass the correct progress setter function
-    );
-  }, [currentZ, currentT, zarrArrays, loading, dimensions.channels, loadSlice, setLoadingProgress]);
-  
-  /**
-   * Render image data to canvas
-   */
+  // Resize, wheel zoom (non-passive so the page does not scroll) and drag to pan.
   useEffect(() => {
-    if (!imageData || !canvasRef.current || imageData.length === 0) return;
-    
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    
-    const { width: imgWidth, height: imgHeight } = dimensions;
-    
-    // Set canvas size to match image
-    canvas.width = imgWidth;
-    canvas.height = imgHeight;
-    
-    // Create output image data
-    const outputData = ctx.createImageData(imgWidth, imgHeight);
-    const output = outputData.data;
-    
-    // Combine channels
-    for (let y = 0; y < imgHeight; y++) {
-      for (let x = 0; x < imgWidth; x++) {
-        const pixelIdx = y * imgWidth + x;
-        const outputIdx = pixelIdx * 4;
-        
-        let r = 0, g = 0, b = 0;
-        
-        // Blend all visible channels
-        for (let c = 0; c < imageData.length; c++) {
-          const settings = channelSettings[c];
-          if (!settings || !settings.visible) continue;
-          
-          const channelPixels = imageData[c].data;
-          const rawValue = channelPixels[pixelIdx] || 0;
-          
-          // Apply contrast limits
-          const { contrastMin, contrastMax, color } = settings;
-          const normalized = Math.max(0, Math.min(1, 
-            (rawValue - contrastMin) / Math.max(1, contrastMax - contrastMin)
-          ));
-          
-          // Add channel contribution
-          r += normalized * color[0];
-          g += normalized * color[1];
-          b += normalized * color[2];
-        }
-        
-        // Clamp and write to output
-        output[outputIdx] = Math.min(255, Math.round(r));
-        output[outputIdx + 1] = Math.min(255, Math.round(g));
-        output[outputIdx + 2] = Math.min(255, Math.round(b));
-        output[outputIdx + 3] = 255; // Full opacity
-      }
-    }
-    
-    ctx.putImageData(outputData, 0, 0);
-    
-  }, [imageData, channelSettings, dimensions]);
-  
-  // Zoom controls
-  const handleZoomIn = useCallback(() => {
-    setZoom(prev => Math.min(10, prev * 1.2));
-  }, []);
-  
-  const handleZoomOut = useCallback(() => {
-    setZoom(prev => Math.max(0.1, prev / 1.2));
-  }, []);
-  
-  const handleFitToScreen = useCallback(() => {
-    if (!containerRef.current || !dimensions.width) return;
-    
-    const container = containerRef.current;
-    const containerWidth = container.clientWidth - 40;
-    const containerHeight = container.clientHeight - 40;
-    
-    const scaleX = containerWidth / dimensions.width;
-    const scaleY = containerHeight / dimensions.height;
-    const newZoom = Math.min(scaleX, scaleY, 1);
-    
-    setZoom(newZoom);
-    setPan({ x: 0, y: 0 });
-  }, [dimensions]);
-  
-  // Mouse handlers for panning
-  const handleMouseDown = useCallback((e) => {
-    setIsDragging(true);
-    setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-  }, [pan]);
-  
-  const handleMouseMove = useCallback((e) => {
-    if (!isDragging) return;
-    setPan({
-      x: e.clientX - dragStart.x,
-      y: e.clientY - dragStart.y,
+    const box = boxRef.current;
+    if (!box) return undefined;
+    const ro = new ResizeObserver(requestDraw);
+    ro.observe(box);
+    const onWheel = (e) => {
+      if (!viewRef.current) return;
+      e.preventDefault();
+      const r = box.getBoundingClientRect();
+      viewRef.current = zoomAt(viewRef.current, e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.2 : 1 / 1.2);
+      requestDraw();
+    };
+    box.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      ro.disconnect();
+      box.removeEventListener("wheel", onWheel);
+    };
+  }, [requestDraw]);
+
+  // The box captures the pointer, so the moves and the release arrive at the box, not at the canvas
+  // under the pointer; listening on the canvas kept the pan going after the button was released.
+  const onPointerDown = (e) => {
+    if (!viewRef.current || e.button !== 0) return;
+    const box = e.currentTarget;
+    box.setPointerCapture(e.pointerId);
+    let last = [e.clientX, e.clientY];
+    const move = (ev) => {
+      if (ev.pointerId !== e.pointerId) return;
+      const v = viewRef.current;
+      viewRef.current = { ...v, x: v.x - (ev.clientX - last[0]) / v.zoom, y: v.y - (ev.clientY - last[1]) / v.zoom };
+      last = [ev.clientX, ev.clientY];
+      requestDraw();
+    };
+    const end = (ev) => {
+      if (ev.pointerId !== e.pointerId) return;
+      box.removeEventListener("pointermove", move);
+      box.removeEventListener("lostpointercapture", end);
+    };
+    box.addEventListener("pointermove", move);
+    box.addEventListener("lostpointercapture", end); // after pointerup, pointercancel or a lost window
+  };
+
+  const fit = () => {
+    if (!image) return;
+    const box = boxRef.current;
+    viewRef.current = fitView(image.info.sizes.x, image.info.sizes.y, box.clientWidth, box.clientHeight);
+    requestDraw();
+  };
+  const oneToOne = () => {
+    const box = boxRef.current;
+    const v = viewRef.current;
+    if (!v) return;
+    viewRef.current = zoomAt(v, box.clientWidth / 2, box.clientHeight / 2, 1 / (v.zoom * (window.devicePixelRatio || 1)));
+    requestDraw();
+  };
+
+  const setChannel = (c, patch) => setChannels((list) => list.map((ch, i) => (i === c ? { ...ch, ...patch } : ch)));
+  const autoChannel = (c) => {
+    const { info, arrays } = image;
+    const li = info.levels.length - 1;
+    const [h, w] = info.levels[li].shape.slice(-2);
+    readBlock(arrays[li], info.axes, t, c, z, 0, h, 0, w).then((data) => {
+      const s = autoWindow(data);
+      setChannel(c, { start: s.start, end: s.end, range: Math.max(channels[c].range, s.max) });
     });
-  }, [isDragging, dragStart]);
-  
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
-  
-  const handleWheel = useCallback((e) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setZoom(prev => Math.max(0.1, Math.min(10, prev * delta)));
-  }, []);
-  
-  // Channel setting updates
-  const updateChannelSetting = useCallback((channelIndex, key, value) => {
-    setChannelSettings(prev => {
-      const newSettings = [...prev];
-      newSettings[channelIndex] = { ...newSettings[channelIndex], [key]: value };
-      return newSettings;
-    });
-  }, []);
-  
-  // Toggle channel visibility
-  const toggleChannelVisibility = useCallback((channelIndex) => {
-    setChannelSettings(prev => {
-      const newSettings = [...prev];
-      newSettings[channelIndex] = { 
-        ...newSettings[channelIndex], 
-        visible: !newSettings[channelIndex].visible 
-      };
-      return newSettings;
-    });
-  }, []);
-  
-  // Auto-contrast for a channel
-  const autoContrast = useCallback((channelIndex) => {
-    if (!imageData || !imageData[channelIndex]) return;
-    
-    const data = imageData[channelIndex].data;
-    let min = Infinity, max = -Infinity;
-    
-    // Sample data to find min/max (sample for performance)
-    const step = Math.max(1, Math.floor(data.length / 10000));
-    for (let i = 0; i < data.length; i += step) {
-      const val = data[i];
-      if (val < min) min = val;
-      if (val > max) max = val;
-    }
-    
-    // Add some padding
-    const range = max - min;
-    min = Math.max(0, min - range * 0.05);
-    max = max + range * 0.05;
-    
-    setChannelSettings(prev => {
-      const newSettings = [...prev];
-      newSettings[channelIndex] = { 
-        ...newSettings[channelIndex], 
-        contrastMin: min,
-        contrastMax: max,
-      };
-      return newSettings;
-    });
-  }, [imageData]);
-  
-  // Auto-contrast all channels
-  const autoContrastAll = useCallback(() => {
-    if (!imageData) return;
-    for (let i = 0; i < imageData.length; i++) {
-      autoContrast(i);
-    }
-  }, [imageData, autoContrast]);
-  
-  // Refresh handler
-  const handleRefresh = useCallback(() => {
-    dispatch(vizarrViewerSlice.refreshViewer());
-  }, [dispatch]);
-  
-  // Open in external viewer
-  const handleOpenExternal = useCallback(() => {
-    if (fullUrl) {
-      const externalUrl = `https://hms-dbmi.github.io/vizarr/?source=${encodeURIComponent(fullUrl)}`;
-      window.open(externalUrl, "_blank");
-    }
-  }, [fullUrl]);
-  
-  // Close handler
-  const handleClose = useCallback(() => {
-    if (onClose) {
-      onClose();
-    } else {
-      dispatch(vizarrViewerSlice.closeViewer());
-    }
-  }, [onClose, dispatch]);
-  
-  // Render error state
-  if (error && !loading) {
-    return (
-      <Box
-        sx={{
-          height: embedded ? height : "100vh",
-          width: embedded ? width : "100%",
-          display: "flex",
-          flexDirection: "column",
-          bgcolor: "background.default",
-        }}
-      >
-        <Box sx={{ p: 2, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <Typography variant="h6">OME-Zarr Viewer</Typography>
-          <IconButton onClick={handleClose}>
-            <Close />
-          </IconButton>
-        </Box>
-        <Box sx={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", p: 3 }}>
-          <Alert 
-            severity="error" 
-            sx={{ maxWidth: 600 }}
-            action={
-              <Stack direction="row" spacing={1}>
-                <Button color="inherit" size="small" onClick={handleRefresh}>
-                  Retry
-                </Button>
-                <Button 
-                  color="inherit" 
-                  size="small" 
-                  onClick={handleOpenExternal}
-                  startIcon={<OpenInNew />}
-                >
-                  Open in Vizarr
-                </Button>
-              </Stack>
-            }
-          >
-            <Typography variant="body2">{error}</Typography>
-            {fullUrl && (
-              <Typography variant="caption" display="block" sx={{ mt: 1, wordBreak: "break-all" }}>
-                URL: {fullUrl}
-              </Typography>
-            )}
-          </Alert>
-        </Box>
-      </Box>
-    );
-  }
-  
-  // Render loading state
-  if (loading) {
-    return (
-      <Box
-        sx={{
-          height: embedded ? height : "100vh",
-          width: embedded ? width : "100%",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          bgcolor: "background.default",
-        }}
-      >
-        <CircularProgress size={60} />
-        <Typography variant="body1" sx={{ mt: 2 }}>
-          Loading OME-Zarr...
-        </Typography>
-        <Box sx={{ width: 300, mt: 2 }}>
-          <LinearProgress variant="determinate" value={loadingProgress} />
-        </Box>
-        <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
-          {loadingProgress}%
-        </Typography>
-      </Box>
-    );
-  }
-  
-  // Render empty state
-  if (!imageData) {
-    return (
-      <Box
-        sx={{
-          height: embedded ? height : "100vh",
-          width: embedded ? width : "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          bgcolor: "background.default",
-        }}
-      >
-        <Typography variant="body1" color="text.secondary">
-          No image data loaded
-        </Typography>
-      </Box>
-    );
-  }
-  
+  };
+
+  const group = useMemo(() => groups.find((g) => g.folder === folder), [groups, folder]);
+  const info = image?.info;
+  const remote = /^https?:/.test(path);
+  // the image inside the store (a plate field such as A/1/0); "" for the store itself
+  const imageRel = image && !remote ? image.url.slice(dataUrl(ip, apiPort, path).length).replace(/^\//, "") : "";
+  const getCrop = () => {
+    const box = boxRef.current;
+    if (!viewRef.current || !box || !info) return null;
+    return cropAt(viewRef.current, box.clientWidth, box.clientHeight, cropSize, info.sizes.x, info.sizes.y);
+  };
+  const name = path.split("/").pop();
+  const level = info?.levels[status.level];
+
   return (
-    <Box
-      sx={{
-        height: embedded ? height : "100vh",
-        width: embedded ? width : "100%",
-        display: "flex",
-        flexDirection: "column",
-        bgcolor: "background.default",
-        overflow: "hidden",
-      }}
-    >
-      {/* Header */}
-      <Paper
-        elevation={1}
-        sx={{
-          p: 1,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          borderRadius: 0,
-        }}
-      >
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography variant="subtitle1" sx={{ fontWeight: 500 }}>
-            OME-Zarr Viewer
+    <Box sx={{ height: embedded ? height : "100%", width, display: "flex", bgcolor: "background.default", minHeight: 0 }}>
+      {!embedded && (
+        <Box sx={{ width: 300, flexShrink: 0, borderRight: 1, borderColor: "divider", display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <Box sx={{ p: 1, display: "flex", alignItems: "center", gap: 1 }}>
+            <TextField
+              select
+              size="small"
+              fullWidth
+              label="Run folder"
+              value={group ? folder : ""}
+              onChange={(e) => setFolder(e.target.value)}
+            >
+              {groups.map((g) => (
+                <MenuItem key={g.folder} value={g.folder} dense>
+                  {g.folder}
+                </MenuItem>
+              ))}
+            </TextField>
+            <Tooltip title="Reload list">
+              <IconButton size="small" onClick={() => setReload((n) => n + 1)}>
+                <Refresh fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+          {!groups.length && (
+            <Typography variant="body2" color="text.secondary" sx={{ px: 2 }}>
+              No OME-Zarr datasets in the data folder yet.
+            </Typography>
+          )}
+          <List dense sx={{ overflow: "auto", flex: 1, py: 0 }}>
+            {(group?.items || []).map((d) => (
+              <ListItemButton key={d.path} selected={d.path === path} onClick={() => setPath(d.path)}>
+                <ListItemText primary={d.name.replace(/\.ome\.zarr$|\.zarr$/, "")} primaryTypographyProps={{ noWrap: true, title: d.name }} />
+              </ListItemButton>
+            ))}
+          </List>
+          {images.length > 1 && (
+            <>
+              <Divider />
+              <Typography variant="caption" color="text.secondary" sx={{ px: 2, pt: 1 }}>
+                Fields ({images.length})
+              </Typography>
+              <List dense sx={{ overflow: "auto", maxHeight: "35%", py: 0 }}>
+                {images.map((im, i) => (
+                  <ListItemButton key={im.url} selected={i === imageIndex} onClick={() => setImageIndex(i)}>
+                    <ListItemText primary={im.label} />
+                  </ListItemButton>
+                ))}
+              </List>
+            </>
+          )}
+        </Box>
+      )}
+
+      <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+        <Box sx={{ px: 1, py: 0.5, display: "flex", alignItems: "center", gap: 1, borderBottom: 1, borderColor: "divider" }}>
+          <Typography variant="subtitle2" noWrap title={path} sx={{ minWidth: 0 }}>
+            {name || "OME-Zarr Viewer"}
           </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {dimensions.width} × {dimensions.height}
-            {dimensions.channels > 1 && ` • ${dimensions.channels}ch`}
-            {dimensions.z > 1 && ` • ${dimensions.z}z`}
-            {dimensions.t > 1 && ` • ${dimensions.t}t`}
-          </Typography>
-        </Stack>
-        
-        <Stack direction="row" spacing={0.5}>
-          <Tooltip title="Zoom In">
-            <IconButton size="small" onClick={handleZoomIn}>
-              <ZoomIn fontSize="small" />
-            </IconButton>
+          {info && (
+            <Typography variant="caption" color="text.secondary" noWrap>
+              {info.sizes.x} × {info.sizes.y} px · {info.sizes.c} c · {info.sizes.z} z · {info.sizes.t} t ·{" "}
+              {image.arrays[0].dtype} · {info.levels.length} levels
+            </Typography>
+          )}
+          <Box sx={{ flex: 1 }} />
+          <Tooltip title="Deconvolve: preview on a crop, then the whole stack">
+            <span>
+              <Button
+                size="small"
+                variant={deconv ? "contained" : "text"}
+                disableElevation
+                onClick={() => setDeconv((d) => !d)}
+                disabled={!info || remote}
+              >
+                Deconvolve
+              </Button>
+            </span>
           </Tooltip>
-          <Tooltip title="Zoom Out">
-            <IconButton size="small" onClick={handleZoomOut}>
-              <ZoomOut fontSize="small" />
-            </IconButton>
+          <Button size="small" onClick={oneToOne} disabled={!info}>
+            1:1
+          </Button>
+          <Tooltip title="Fit">
+            <span>
+              <IconButton size="small" onClick={fit} disabled={!info}>
+                <FitScreen fontSize="small" />
+              </IconButton>
+            </span>
           </Tooltip>
-          <Tooltip title="Fit to Screen">
-            <IconButton size="small" onClick={handleFitToScreen}>
-              <FitScreen fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Typography variant="caption" sx={{ alignSelf: "center", minWidth: 50, textAlign: "center" }}>
-            {Math.round(zoom * 100)}%
-          </Typography>
-          <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
-          <Tooltip title="Settings">
-            <IconButton size="small" onClick={() => setShowSettings(!showSettings)}>
-              <Settings fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Open in External Vizarr">
-            <IconButton size="small" onClick={handleOpenExternal}>
-              <OpenInNew fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Refresh">
-            <IconButton size="small" onClick={handleRefresh}>
+          <Tooltip title="Reload">
+            <IconButton size="small" onClick={() => setReload((n) => n + 1)}>
               <Refresh fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Close">
-            <IconButton size="small" onClick={handleClose}>
-              <Close fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Stack>
-      </Paper>
-      
-      {/* Settings Panel */}
-      <Collapse in={showSettings}>
-        <Paper elevation={0} sx={{ p: 2, borderBottom: 1, borderColor: "divider" }}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-            <Typography variant="subtitle2">
-              Channel Settings
+          {onClose && (
+            <Tooltip title="Close">
+              <IconButton size="small" onClick={onClose}>
+                <Close fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
+        {(loading || status.pending > 0) && <LinearProgress sx={{ height: 2 }} />}
+        {error && (
+          <Alert severity="error" onClose={() => setError(null)} sx={{ borderRadius: 0 }}>
+            {error}
+          </Alert>
+        )}
+
+        <Box
+          ref={boxRef}
+          onPointerDown={onPointerDown}
+          sx={{ flex: 1, position: "relative", overflow: "hidden", bgcolor: "#000", cursor: "grab", touchAction: "none", minHeight: 200 }}
+        >
+          <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+          {!path && (
+            <Typography color="text.secondary" sx={{ position: "absolute", top: "45%", width: "100%", textAlign: "center" }}>
+              Pick a dataset on the left, or use "Open" on a .zarr in the File Manager.
             </Typography>
-            <Button size="small" onClick={autoContrastAll}>
-              Auto Contrast All
-            </Button>
-          </Stack>
-          
-          <Stack spacing={2}>
-            {channelSettings.map((settings, idx) => (
-              <Box key={idx}>
-                <Stack direction="row" alignItems="center" spacing={1}>
-                  <IconButton 
-                    size="small" 
-                    onClick={() => toggleChannelVisibility(idx)}
-                  >
-                    {settings.visible ? <Visibility fontSize="small" /> : <VisibilityOff fontSize="small" />}
-                  </IconButton>
-                  <Box
-                    sx={{
-                      width: 20,
-                      height: 20,
-                      borderRadius: 1,
-                      bgcolor: `rgb(${settings.color.join(",")})`,
-                      border: 1,
-                      borderColor: "divider",
-                    }}
-                  />
-                  <Typography variant="body2" sx={{ minWidth: 80 }}>
-                    Channel {idx + 1}
+          )}
+        </Box>
+
+        {info && (
+          <Box sx={{ px: 2, py: 1, borderTop: 1, borderColor: "divider", maxHeight: "40%", overflow: "auto" }}>
+            {[
+              ["T", info.sizes.t, t, setT],
+              ["Z", info.sizes.z, z, setZ],
+            ]
+              .filter(([, n]) => n > 1)
+              .map(([label, n, value, set]) => (
+                <Box key={label} sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+                  <Typography variant="body2" sx={{ width: 90 }}>
+                    {label} {value + 1} / {n}
                   </Typography>
-                  <Button size="small" onClick={() => autoContrast(idx)}>
-                    Auto
-                  </Button>
-                </Stack>
-                
-                {settings.visible && (
-                  <Box sx={{ ml: 5, mt: 1 }}>
-                    <Typography variant="caption" color="text.secondary">
-                      Contrast: {Math.round(settings.contrastMin)} - {Math.round(settings.contrastMax)}
-                    </Typography>
-                    <Slider
-                      size="small"
-                      value={[settings.contrastMin, settings.contrastMax]}
-                      onChange={(_, value) => {
-                        setChannelSettings(prev => {
-                          const newSettings = [...prev];
-                          newSettings[idx] = { 
-                            ...newSettings[idx], 
-                            contrastMin: value[0],
-                            contrastMax: value[1],
-                          };
-                          return newSettings;
-                        });
-                      }}
-                      min={0}
-                      max={getMaxValueForDtype(dtype)}
-                      sx={{ width: 200 }}
-                    />
-                  </Box>
-                )}
+                  <Slider size="small" min={0} max={n - 1} step={1} value={value} onChange={(_, val) => set(val)} />
+                </Box>
+              ))}
+            {channels.map((ch, c) => (
+              <Box key={c} sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <Checkbox size="small" checked={ch.visible} onChange={(e) => setChannel(c, { visible: e.target.checked })} sx={{ p: 0.5 }} />
+                <input
+                  type="color"
+                  value={toHex(ch.rgb)}
+                  onChange={(e) => setChannel(c, { rgb: fromHex(e.target.value) })}
+                  style={{ width: 22, height: 22, padding: 0, border: "none", background: "none" }}
+                  aria-label={`${ch.label} colour`}
+                />
+                <Typography variant="body2" noWrap sx={{ width: 110 }} title={ch.label}>
+                  {ch.label}
+                </Typography>
+                <Slider
+                  size="small"
+                  min={0}
+                  max={ch.range}
+                  step={ch.range > 10 ? 1 : ch.range / 1000}
+                  value={[ch.start, ch.end]}
+                  onChange={(_, [start, end]) => setChannel(c, { start, end: Math.max(end, start + 1e-6) })}
+                />
+                <Typography variant="caption" sx={{ width: 110, fontFamily: "monospace", textAlign: "right" }}>
+                  {Math.round(ch.start)}–{Math.round(ch.end)}
+                </Typography>
+                <Button size="small" onClick={() => autoChannel(c)}>
+                  Auto
+                </Button>
               </Box>
             ))}
-          </Stack>
-          
-          {/* Z-Stack Slider */}
-          {dimensions.z > 1 && (
-            <Box sx={{ mt: 2 }}>
-              <Stack direction="row" alignItems="center" spacing={1}>
-                <Typography variant="body2">Z-Slice:</Typography>
-                <IconButton 
-                  size="small" 
-                  onClick={() => setCurrentZ(prev => Math.max(0, prev - 1))}
-                  disabled={currentZ === 0}
-                >
-                  <NavigateBefore fontSize="small" />
-                </IconButton>
-                <Typography variant="body2" sx={{ minWidth: 60, textAlign: "center" }}>
-                  {currentZ + 1} / {dimensions.z}
-                </Typography>
-                <IconButton 
-                  size="small" 
-                  onClick={() => setCurrentZ(prev => Math.min(dimensions.z - 1, prev + 1))}
-                  disabled={currentZ === dimensions.z - 1}
-                >
-                  <NavigateNext fontSize="small" />
-                </IconButton>
-                <Slider
-                  size="small"
-                  value={currentZ}
-                  onChange={(_, value) => setCurrentZ(value)}
-                  min={0}
-                  max={dimensions.z - 1}
-                  step={1}
-                  sx={{ width: 200, ml: 2 }}
-                />
-              </Stack>
-            </Box>
-          )}
-          
-          {/* Time Slider */}
-          {dimensions.t > 1 && (
-            <Box sx={{ mt: 2 }}>
-              <Stack direction="row" alignItems="center" spacing={1}>
-                <Typography variant="body2">Time:</Typography>
-                <IconButton 
-                  size="small" 
-                  onClick={() => setCurrentT(prev => Math.max(0, prev - 1))}
-                  disabled={currentT === 0}
-                >
-                  <NavigateBefore fontSize="small" />
-                </IconButton>
-                <Typography variant="body2" sx={{ minWidth: 60, textAlign: "center" }}>
-                  {currentT + 1} / {dimensions.t}
-                </Typography>
-                <IconButton 
-                  size="small" 
-                  onClick={() => setCurrentT(prev => Math.min(dimensions.t - 1, prev + 1))}
-                  disabled={currentT === dimensions.t - 1}
-                >
-                  <NavigateNext fontSize="small" />
-                </IconButton>
-                <Slider
-                  size="small"
-                  value={currentT}
-                  onChange={(_, value) => setCurrentT(value)}
-                  min={0}
-                  max={dimensions.t - 1}
-                  step={1}
-                  sx={{ width: 200, ml: 2 }}
-                />
-              </Stack>
-            </Box>
-          )}
-        </Paper>
-      </Collapse>
-      
-      {/* Main Canvas Area */}
-      <Box
-        ref={containerRef}
-        sx={{
-          flex: 1,
-          overflow: "hidden",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          bgcolor: "#1a1a1a",
-          cursor: isDragging ? "grabbing" : "grab",
-        }}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
-      >
-        <canvas
-          ref={canvasRef}
-          style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-            imageRendering: zoom > 1 ? "pixelated" : "auto",
-            maxWidth: "none",
-            maxHeight: "none",
+            <Typography variant="caption" color="text.secondary" component="div" sx={{ fontFamily: "monospace", mt: 0.5 }}>
+              level {status.level} (1:{level?.factor}) · zoom {(status.zoom * 100).toFixed(status.zoom < 0.1 ? 1 : 0)} %
+              {info.pixelSize ? ` · ${info.pixelSize} ${info.unit === "micrometer" ? "µm" : info.unit}/px` : ""}
+              {images.length > 1 ? ` · field ${images[imageIndex]?.label}` : ""}
+            </Typography>
+          </Box>
+        )}
+      </Box>
+      {deconv && info && !remote && (
+        <DeconvolutionPanel
+          path={path}
+          image={imageRel}
+          t={t}
+          z={z}
+          getCrop={getCrop}
+          cropSize={cropSize}
+          setCropSize={setCropSize}
+          onClose={() => setDeconv(false)}
+          onOpen={(result) => {
+            setPath(result);
+            setReload((n) => n + 1);
           }}
         />
-      </Box>
-      
-      {/* Status Bar */}
-      <Paper
-        elevation={1}
-        sx={{
-          p: 0.5,
-          px: 2,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          borderRadius: 0,
-          bgcolor: "background.paper",
-        }}
-      >
-        <Typography variant="caption" color="text.secondary">
-          {dtype.toUpperCase()} • {dimensions.channels} channel{dimensions.channels !== 1 ? "s" : ""}
-        </Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ wordBreak: "break-all", maxWidth: "60%" }}>
-          {zarrUrl}
-        </Typography>
-      </Paper>
+      )}
     </Box>
   );
 };

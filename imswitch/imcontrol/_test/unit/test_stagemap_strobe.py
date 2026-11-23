@@ -204,6 +204,7 @@ def esp32_stage(motor, offsetX=0.0):
     stage = ESP32StageManager.__new__(ESP32StageManager)
     stage._motor = motor
     stage._ESP32StageManager__logger = logging.getLogger("test")
+    stage._PositionerManager__name = "ESP32Stage"
     stage.stageOffsetPositions = {"X": offsetX, "Y": 0, "Z": 0, "A": 0}
     stage._strobeAxis, stage._strobeCallbacks = "X", {}
     stage._speed = {"X": 1000, "Y": 1000, "Z": 1000, "A": 1000}

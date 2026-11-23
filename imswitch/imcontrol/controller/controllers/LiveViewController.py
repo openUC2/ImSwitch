@@ -19,6 +19,7 @@ from imswitch.imcommon.framework import Signal, Worker
 from imswitch.imcommon.model import APIExport, initLogger
 from imswitch.imcontrol.model.managers.detectors.DetectorManager import getDetectorExposureMs
 from ..basecontrollers import LiveUpdatedController
+from ..busy import busy_reasons
 
 
 # Above this exposure a live stream delivers less than one frame every two
@@ -170,6 +171,15 @@ def apply_center_crop(frame: np.ndarray, crop_size: int) -> np.ndarray:
         return frame[y_start:y_end, x_start:x_end, :]
 
 
+def _freeRunning(detector) -> bool:
+    """False when the camera waits for software or hardware triggers (frames come on demand)."""
+    try:
+        mode = str(detector.getCurrentTriggerType()).lower()
+    except Exception:
+        return True
+    return not any(k in mode for k in ("soft", "ext", "hard", "trigger"))
+
+
 class StreamWorker(Worker):
     """
     Base class for protocol-specific stream workers.
@@ -193,6 +203,11 @@ class StreamWorker(Worker):
         self._logger = initLogger(self)
         self._last_frame_time = 0
         self._was_running = False
+        # When the camera last delivered a NEW frame (its frame number changed).
+        # A lost camera keeps returning its last buffered frame, so without this
+        # the live view freezes silently; getCameraHealth reports the age.
+        self.lastNewFrameAt = time.monotonic()
+        self.stoppedOnFailure = False
 
         # Frame broadcasting is disabled by default to avoid performance issues
         # Enable via enableFrameBroadcast() if controllers need frame updates
@@ -286,8 +301,13 @@ class StreamWorker(Worker):
                     if frame is not None and self._broadcast_frames:
                         self.sigUpdateFrame.emit(self._detector.name, frame, False, False, self._detector.pixelSizeUm, True) # (str, np.ndarray, bool, bool, float, bool)
 
+                    if frame is not None and (detector_frame_number is None
+                                              or detector_frame_number != last_detector_frame_number):
+                        self.lastNewFrameAt = time.monotonic()
+
                     if (frame is None and last_detector_frame_number == detector_frame_number) and frameReadAttempts > 3:
                         self._logger.warning("Frame capture failed, stopping worker (Frame none or no new frame: {})".format(detector_frame_number==last_detector_frame_number))
+                        self.stoppedOnFailure = True
                         self._running = False
                         break  # No frame available, but not an error - keep running
                     else:
@@ -322,6 +342,7 @@ class StreamWorker(Worker):
                     # Only stop on explicit failure, not on None frames
                     if frameResult is False and frameReadAttempts > 3:  # Explicitly check for False, not None
                         self._logger.warning("Frame capture failed, stopping worker")
+                        self.stoppedOnFailure = True
                         self._running = False
                         break
                     else:
@@ -1542,6 +1563,76 @@ class LiveViewController(LiveUpdatedController):
                 "status": "error",
                 "message": str(e)
             }
+
+    # --- Live-view presets (named bundles of objective, exposure, gain, stream settings) ---
+    # The frontend owns the preset format; the server only keeps one list per instrument, so a
+    # preset made on one browser shows up on every other one.
+
+    def _presetsPath(self):
+        from imswitch.imcommon.model import dirtools
+        return os.path.join(dirtools.UserFileDirs.Config, "liveview_presets.json")
+
+    @APIExport(runOnUIThread=False)
+    def getLiveViewPresets(self) -> Dict[str, Any]:
+        """The saved live-view presets: {"presets": [...]}, or {"presets": None} if none were
+        ever saved on this instrument (the frontend then uploads its browser copy once)."""
+        import json
+        try:
+            with open(self._presetsPath(), encoding="utf-8") as f:
+                return {"presets": json.load(f)}
+        except FileNotFoundError:
+            return {"presets": None}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setLiveViewPresets(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace the saved live-view presets with body["presets"] (a list)."""
+        import json
+        presets = body.get("presets")
+        if not isinstance(presets, list):
+            return {"status": "error", "message": "body needs a 'presets' list"}
+        path = self._presetsPath()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(presets, f, indent=1)
+        os.replace(tmp, path)  # a crash mid-write keeps the old list
+        return {"status": "saved", "count": len(presets)}
+
+    @APIExport(runOnUIThread=False)
+    def getCameraHealth(self) -> Dict[str, Dict[str, Any]]:
+        """Per camera: {"placeholder", "stalled", "secondsSinceNewFrame", "message"}.
+
+        placeholder: the real camera did not open at startup and a simulated camera stands
+        in (its images are fake; recordings, snaps to disk and frame-taking jobs refuse to
+        start). stalled: the live stream got no new frame for longer than
+        max(3 s, 3 x exposure + 1 s), or stopped itself after failed grabs, e.g. the camera
+        was unplugged. Both are fixed by plugging the camera in and restarting ImSwitch
+        (restartImSwitch). Reads cached state only, never the camera.
+        """
+        health = {}
+        manager = self._master.detectorsManager
+        for name in manager.getAllDeviceNames():
+            detector = manager[name]
+            placeholder = bool(getattr(detector, 'isPlaceholder', False))
+            entry = self._activeStreams.get(name)
+            worker = entry[1] if entry else None
+            age = None if worker is None else round(time.monotonic() - worker.lastNewFrameAt, 1)
+            limit = max(3.0, 3 * getDetectorExposureMs(detector) / 1000.0 + 1.0)
+            # Triggered cameras and running jobs/scans leave gaps between frames by design
+            waiting = not _freeRunning(detector) or bool(busy_reasons(self._master))
+            stalled = worker is not None and (worker.stoppedOnFailure
+                                              or (age > limit and not waiting))
+            if placeholder:
+                message = (f"Camera {name} did not open; a simulated camera shows test images. "
+                           "Plug it in and restart ImSwitch.")
+            elif stalled:
+                message = (f"No new frames from camera {name} for {age:.0f} s. Is it unplugged? "
+                           "Plug it in and restart ImSwitch.")
+            else:
+                message = ""
+            health[name] = {"placeholder": placeholder, "stalled": stalled,
+                            "secondsSinceNewFrame": age, "message": message}
+        return health
 
     @APIExport()
     def getStreamParameters(self, protocol: Optional[str] = None, detectorName: Optional[str] = None) -> Dict[str, Any]:

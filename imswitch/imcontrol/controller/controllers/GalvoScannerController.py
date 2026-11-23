@@ -504,6 +504,51 @@ class GalvoScannerController(ImConWidgetController):
             self.__logger.error(f"Error setting park config for {scannerName}: {e}")
             return {"error": str(e)}
 
+    @APIExport(runOnUIThread=True)
+    def getGalvoAxisScale(self, scannerName: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Output scale of the X and Y channel (1.0 = nominal), see setGalvoAxisScale.
+
+        Example:
+            GET /api/GalvoScannerController/getGalvoAxisScale
+        """
+        scanner = self._galvoOrNone(scannerName)
+        if scanner is None:
+            return {"error": "No galvo scanner available"}
+        return {**scanner.get_axis_scale(), "scannerName": scanner.name}
+
+    @APIExport(runOnUIThread=True)
+    def setGalvoAxisScale(self, scannerName: Optional[str] = None,
+                          scale_x: Optional[float] = None,
+                          scale_y: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Set the output scale of each galvo channel (dimensionless, 0.1-2.0, default 1.0).
+
+        Compensates different gains of the X and Y drivers so that a square window in DAC
+        counts scans a square field: every DAC value sent to the board (raster window,
+        arbitrary points, park position) becomes 2048 + scale * (value - 2048). The values
+        in the UI stay nominal. Saved with the park settings, so it survives a restart. Takes
+        effect at the next scan, point list or park. Re-run the scanner-camera calibration
+        afterwards. Does not move the beam.
+
+        Example:
+            GET /api/GalvoScannerController/setGalvoAxisScale?scale_x=0.85
+        """
+        scanner = self._galvoOrNone(scannerName)
+        if scanner is None:
+            return {"error": "No galvo scanner available"}
+        try:
+            return {**scanner.set_axis_scale(scale_x=scale_x, scale_y=scale_y),
+                    "scannerName": scanner.name}
+        except ValueError as e:
+            return {"error": str(e)}
+
+    def _galvoOrNone(self, scannerName: Optional[str]):
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return None
+        scannerName = self._resolveScanner(scannerName)
+        return None if scannerName is None else self._master.galvoScannersManager[scannerName]
+
     @APIExport()
     def getFlimLabsConfig(self) -> Dict[str, Any]:
         """

@@ -333,8 +333,10 @@ class AutofocusController(ImConWidgetController):
         try:
             # Try to get limits from stage manager (ESP32StageManager has these)
             if isinstance(getattr(self.stages, 'minPos', None), dict) and 'Z' in self.stages.minPos:
-                # ESP32StageManager: per-axis dicts
-                self._minZ, self._maxZ = self.stages.minPos['Z'], self.stages.maxPos['Z']
+                # per-axis travel limits are device frame; autofocus works in the user frame
+                offset = float(getattr(self.stages, 'stageOffsetPositions', {}).get('Z', 0))
+                self._minZ = self.stages.minPos['Z'] - offset
+                self._maxZ = self.stages.maxPos['Z'] - offset
             if hasattr(self.stages, 'minZ'):
                 self._minZ = self.stages.minZ
             if hasattr(self.stages, 'maxZ'):

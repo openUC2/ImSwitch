@@ -1829,7 +1829,7 @@ class StageMapController(ImConWidgetController):
         return self._isRunning or self._prescanThread is not None or self._strobeCalibrating
 
     def _otherWorkRunning(self) -> str:
-        reasons = busy_reasons(self._master, self._logger, ignore=("StageMap",))
+        reasons = busy_reasons(self._master, self._logger, ignore=("StageMap",), camera=True)
         return f"Refused: {'; '.join(reasons)}." if reasons else ""
 
     @APIExport()

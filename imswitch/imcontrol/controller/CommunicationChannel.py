@@ -87,6 +87,11 @@ class CommunicationChannel(SignalInterface):
     sigUploadToMikro = Signal(dict)
     #sigRequestScannersInScan = Signal()
 
+    # Status line of the OLED on the CAN-HAT master: (text, progress 0-100 or -1 for no bar).
+    # Emitted by the ExperimentController (its steps) and UC2ConfigController (E-stop); handled
+    # in UC2ConfigController/uc2config/display_api.py, which throttles it. "" clears the line.
+    sigDisplayStatus = Signal(str, int)
+
 
     sigAutoFocus =  Signal(float, float) # scanrange and stepsize
     sigAutoFocusRunning = Signal(bool) # indicate if autofocus is running or not
@@ -109,6 +114,8 @@ class CommunicationChannel(SignalInterface):
     sigHomingState = Signal(dict)  # (homingStateDict) - per-axis frame-homing progress for the frontend
 
     sigDiskFull = Signal(dict)  # (diskInfoDict) - storage is (nearly) full; tell the user to free space
+
+    sigStageLimit = Signal(dict)  # ({positioner, message}) - a move into the no-go area was refused
 
     sigUpdateLaserPower = Signal(dict)  # (laserPowerDict) - updates laser power values from device callbacks
 

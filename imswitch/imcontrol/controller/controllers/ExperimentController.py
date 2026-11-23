@@ -170,7 +170,7 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
             raise HTTPException(
                 status_code=400, detail="An experiment is already being started."
             )
-        others = busy_reasons(self._master, self._logger, ignore=("Experiment",))
+        others = busy_reasons(self._master, self._logger, ignore=("Experiment",), camera=True)
         if others:
             raise HTTPException(status_code=409, detail=f"Refused: {', '.join(others)}.")
         self._experiment_starting = True
@@ -216,6 +216,7 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
             self._focus_map_fit_by_region = focusMapConfig.fit_by_region
             self._focus_map_settle_ms = focusMapConfig.settle_ms
             self._focus_map_active = bool(getattr(focusMapConfig, "apply_during_scan", True))
+            self._announceDisplay("Focus mapping")
             self._run_focus_map_phase(self._last_scan_areas, focusMapConfig,
                                       af_kwargs=self._focus_map_af_kwargs(p))
         self._switch_off_all_illumination()
@@ -273,14 +274,20 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
             file_writers.extend(result["file_writers"])
 
         self._step_timings = []  # per-step timings for the post-run violin plot
+        stepsDone = 0            # drives the progress bar on the status display
 
         def sendProgress(payload):
+            nonlocal stepsDone
             try:
                 if isinstance(payload, dict) and payload.get("status") == "completed":
                     self._step_timings.append({
                         "name": payload.get("name", "step"),
                         **{k: float(payload.get(k, 0.0) or 0.0) for k in ("pre_time", "main_time", "post_time")},
                     })
+                    stepsDone = int(payload.get("step_id", stepsDone)) + 1
+                elif isinstance(payload, dict) and payload.get("status") == "started":
+                    # current step name on the OLED; the display throttles bursts of these
+                    self._announceDisplay(payload.get("name", ""), 100 * stepsDone // max(len(workflow_steps), 1))
             except Exception:
                 pass
             self.sigExperimentWorkflowUpdate.emit(payload)

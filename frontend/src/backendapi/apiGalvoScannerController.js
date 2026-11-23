@@ -103,6 +103,27 @@ export const apiSetGalvoParkConfig = async (hostIP, hostPort, scannerName, park)
 };
 
 /**
+ * Output scale of the X and Y channel ({scale_x, scale_y}, 1.0 = nominal)
+ */
+export const apiGetGalvoAxisScale = async (hostIP, hostPort, scannerName = null) => {
+  const params = scannerName ? `?scannerName=${scannerName}` : '';
+  const response = await fetch(`${getApiBase(hostIP, hostPort)}/getGalvoAxisScale${params}`);
+  return response.json();
+};
+
+/**
+ * Set the output scale of the X and/or Y channel (0.1-2.0); saved on the server
+ * @param {{scale_x?: number, scale_y?: number}} scale
+ */
+export const apiSetGalvoAxisScale = async (hostIP, hostPort, scannerName, scale) => {
+  const params = new URLSearchParams({ scannerName });
+  if (scale.scale_x !== undefined) params.append('scale_x', String(scale.scale_x));
+  if (scale.scale_y !== undefined) params.append('scale_y', String(scale.scale_y));
+  const response = await fetch(`${getApiBase(hostIP, hostPort)}/setGalvoAxisScale?${params}`);
+  return response.json();
+};
+
+/**
  * Get persisted FLIM LABS bridge settings from the ImSwitch setup file
  */
 export const apiGetFlimLabsConfig = async (hostIP, hostPort) => {

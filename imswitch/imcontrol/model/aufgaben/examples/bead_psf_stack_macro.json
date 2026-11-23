@@ -1,0 +1,21 @@
+{
+  "schema": "aufgaben.job/1",
+  "name": "Bead PSF stack",
+  "description": "Macro: a fine Z-stack around the current focus, for a measured PSF. Focus on a sparse slide of beads smaller than the resolution (100 to 200 nm), set light and exposure in the capture step so the brightest bead is not saturated, then run it. Z moves half the range up and down: check the objective's clearance first. Step: a third of the axial FWHM or less; range: about six times it (the Deconvolve panel's PSF view shows the FWHM). Then open the stack in the OME-Zarr viewer, Deconvolve, PSF model Measured, Distill from this image.",
+  "parameters": {
+    "range_um": {"type": "number", "default": 20, "minimum": 1, "maximum": 200, "unit": "µm",
+                 "title": "Range"},
+    "step_um": {"type": "number", "default": 0.5, "minimum": 0.05, "maximum": 10, "unit": "µm",
+                "title": "Step"}
+  },
+  "resources": {
+    "beads": {"kind": "capture", "channels": [{"config": "LED", "exposure": 50, "intensity": 300}]}
+  },
+  "storage": {"formats": ["ome-zarr"]},
+  "tasks": [
+    {"id": "stack", "task": "zstack", "label": "Z-stack",
+     "params": {"plan": {"range": "${param.range_um}", "step": "${param.step_um}"}}, "body": [
+      {"id": "beads", "task": "capture", "params": {"channels": "@beads"}}]}
+  ],
+  "metadata": {"macro": true}
+}

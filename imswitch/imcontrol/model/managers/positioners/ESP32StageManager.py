@@ -1,5 +1,5 @@
 from imswitch.imcommon.model import initLogger
-from .PositionerManager import PositionerManager
+from .PositionerManager import PositionerManager, StageLimitError
 import time
 import threading
 import numpy as np
@@ -79,10 +79,10 @@ class ESP32StageManager(PositionerManager):
         if self.isDualAxis and "Z" in self.stepSizes:
             self.stepSizes["A"] = self.stepSizes["Z"]
 
-        # Soft limits in µm, checked by move() when limit<axis>enabled is set
-        self.minPos = perAxis('min', -np.inf)
-        self.maxPos = perAxis('max', np.inf)
-        self.limitEnabled = {ax: mp.get(f'limit{ax}enabled', False) for ax in self._axes}
+        # Travel limits (no-go area) in µm, DEVICE frame, checked by move() and the jog
+        # when limit<axis>enabled is set; measured by the FRAME calibration (probeTravelEnd)
+        self._initTravelLimits(mp, self._axes)
+        self._limitJogs = set()   # axes jogging as an absolute move to their limit
         # Hardware hard limits - enable physical endstop protection per axis (default True)
         self.hardLimitsEnabled = perAxis('hardLimitsEnabled', True)
 
@@ -227,10 +227,12 @@ class ESP32StageManager(PositionerManager):
         except Exception as e:
             self.__logger.warning(f"Could not apply speed multiplier settings: {e}")
 
-        # Dummy move to get the motor to the right position
+        # Dummy move to get the motor to the right position (net zero: not limit-checked,
+        # a stage parked on its limit must still start)
         for iAxis in positionerInfo.axes:
-            self.move(value=-1, speed=1000, axis=iAxis, is_absolute=False, is_blocking=True, isEnable=True, timeout=0.2)
-            self.move(value=1, speed=1000, axis=iAxis, is_absolute=False, is_blocking=True, isEnable=True, timeout=0.2)
+            for v in (-1, 1):
+                self._moveDevice({iAxis: v}, 1000, is_absolute=False, is_blocking=True, isEnable=True,
+                                 timeout=0.2, is_reduced=True)
 
         # optional: home on startup
         for ax in self._axes:
@@ -353,11 +355,12 @@ class ESP32StageManager(PositionerManager):
         # its position and a board message that arrives meanwhile pushes that into
         # self._position, so adding v afterwards counted a relative move twice.
         targets = {ax: v if is_absolute else self._position.get(ax, 0) + v for ax, v in zip(axes, values)}
-        # don't move to invalid positions (check both min and max limits)
-        for ax, target in targets.items():
-            if self.limitEnabled[ax] and not self.minPos[ax] <= target <= self.maxPos[ax]:
-                self.__logger.warning(f"{ax} move blocked: target {target} outside [{self.minPos[ax]}, {self.maxPos[ax]}]")
-                return
+        # refuse targets in the no-go area (device frame: user target + offset)
+        try:
+            self.checkTravelLimits({ax: t + self.stageOffsetPositions[ax] for ax, t in targets.items()})
+        except StageLimitError as e:
+            self.__logger.warning(str(e))
+            raise
         # Apply offset for absolute moves: convert from user position to device position
         device = {ax: v + self.stageOffsetPositions[ax] if is_absolute else v for ax, v in zip(axes, values)}
         self._moveDevice(device, dict(zip(axes, speeds)), dict(zip(axes, accelerations)), is_absolute=is_absolute,
@@ -397,13 +400,78 @@ class ESP32StageManager(PositionerManager):
                                              PID_updaterate=PID_updaterate)
 
     def moveForeverByAxis(self, speed=0, axis="X", is_stop=False):
-        self._motor.move_forever(speed={self.axisIds[axis]: speed}, is_stop=is_stop)
+        self.moveForever(speed={axis: speed}, is_stop=is_stop)
 
     def moveForever(self, speed=(0, 0, 0, 0), is_stop:bool=False):
-        """speed: {axis: speed} or the legacy tuple (A, X, Y, Z)."""
+        """speed: {axis: speed} or the legacy tuple (A, X, Y, Z).
+
+        An axis with travel limits enabled jogs as an absolute move to the limit in the
+        direction of travel, so it stops there; it is stopped again with is_stop/speed 0.
+        The board's own gamepad jogs in the firmware and is not limited here.
+        """
         if not isinstance(speed, dict):
             speed = dict(zip(("A", "X", "Y", "Z"), speed))
-        self._motor.move_forever(speed={self.axisIds[ax]: v for ax, v in speed.items()}, is_stop=is_stop)
+        free = {}
+        for ax, v in speed.items():
+            if not self.limitEnabled.get(ax):
+                free[ax] = v
+            elif is_stop or not v:
+                if ax in self._limitJogs:
+                    self._limitJogs.discard(ax)
+                    self._motor.stop(axis=self.axisIds[ax])
+            else:
+                self._jogToLimit(ax, v)
+        if free:
+            self._motor.move_forever(speed={self.axisIds[ax]: v for ax, v in free.items()}, is_stop=is_stop)
+
+    def _jogToLimit(self, axis, speed):
+        end = self.maxPos[axis] if speed > 0 else self.minPos[axis]
+        if not np.isfinite(end):        # open on this side: plain jog
+            self._motor.move_forever(speed={self.axisIds[axis]: speed})
+            return
+        here = self._position.get(axis, 0) + self.stageOffsetPositions[axis]
+        if (end - here) * speed <= 0:
+            self._limitBlocked(f"{self._name} {axis}: at the travel limit {end:.0f} µm (device frame), "
+                               "jog refused")
+            return
+        target = {axis: end}
+        if self.isCoreXY and axis in ("X", "Y"):     # absolute CoreXY moves need both coordinates
+            other = "Y" if axis == "X" else "X"
+            target[other] = self._position.get(other, 0) + self.stageOffsetPositions[other]
+        self._moveDevice(target, abs(speed), is_absolute=True, is_blocking=False)
+        self._limitJogs.add(axis)
+
+    def probeTravelEnd(self, axis, maxUm, speed=None, backoffUm=500.0):
+        """Measure where an axis' far end switch is (FRAME calibration).
+
+        Drives ``axis`` up to ``maxUm`` away from its home switch with the firmware hard
+        limit on: the end switch stops the motor there. Then backs off ``backoffUm``
+        (the firmware allows moves away from a tripped switch; leaving it clears the
+        lockout). Bypasses the travel limits: the old ones may be wrong.
+        Returns (start, end) in the device frame (µm); end is None when the axis ran
+        the full distance without a switch. Call with the axis homed and Z retracted.
+        """
+        if not self.hardLimitsEnabled.get(axis):
+            raise RuntimeError(f"hard limits are off for {axis} (hardLimitsEnabled{axis}): "
+                               "without them the probe would ram the mechanical stop")
+        if self.isCoreXY:
+            raise RuntimeError("travel probing is not supported on CoreXY stages")
+        hp = self.homeParams[axis]
+        speed = speed or hp["speed"]
+        away = -hp["direction"]
+
+        def seconds(um):
+            return abs(um) / max(abs(self.stepSizes[axis]), 1e-9) / speed * 1.5 + 5
+
+        start = self.getDevicePositionAxis(axis)
+        self._moveDevice({axis: away * maxUm}, speed, is_absolute=False, is_blocking=True,
+                         timeout=seconds(maxUm))
+        end = self.getDevicePositionAxis(axis)
+        self._moveDevice({axis: -away * backoffUm}, speed, is_absolute=False, is_blocking=True,
+                         timeout=seconds(backoffUm))
+        self._position = self.getPosition()
+        tripped = abs(end - start) < 0.98 * maxUm
+        return start, (end if tripped else None)
 
     def setEnabled(self, is_enabled):
         self.is_enabled = is_enabled
@@ -501,8 +569,10 @@ class ESP32StageManager(PositionerManager):
             self.move(value=self._zPositionPriorHoming + self._safeDistanceZHoming, speed=self.homeParams["Z"]["speed"], axis="Z", is_absolute=True, is_blocking=True)
         if abs(hp["steps"]) > 0:
             # no endstop: move by homeSteps, release, call that 0
-            self.move(value=hp["steps"], speed=hp["speed"], axis=axis, is_absolute=False, is_blocking=True)
-            self.move(value=-np.sign(hp["steps"])*np.abs(hp["endposrelease"]), speed=hp["speed"], axis=axis, is_absolute=False, is_blocking=True)
+            # blind homing drives into the mechanical stop on purpose: not limit-checked
+            self._moveDevice({axis: hp["steps"]}, hp["speed"], is_absolute=False, is_blocking=True)
+            self._moveDevice({axis: -np.sign(hp["steps"])*np.abs(hp["endposrelease"])}, hp["speed"],
+                             is_absolute=False, is_blocking=True)
             self.setPosition(axis=axis, value=0)
             self.setPositionOnDevice(value=0, axis=axis)
         elif hp["enabled"]:
@@ -759,7 +829,9 @@ class ESP32StageManager(PositionerManager):
                 self._emitHomingState(phase="homing_x", axis="X", axisStatus="homing",
                                       message="Homing X axis")
                 self.home_x(isBlocking=True)
-                self.move(value=1000, speed=self.homeParams["X"]["speed"], axis="X", is_absolute=True, is_blocking=False)
+                # part of homing: not limit-checked (same target as before: user 1000)
+                self._moveDevice({"X": 1000 + self.stageOffsetPositions["X"]}, self.homeParams["X"]["speed"],
+                                 is_absolute=True, is_blocking=False)
                 self._emitHomingState(axis="X", axisStatus="done")
                 if aborted():
                     return
@@ -768,7 +840,9 @@ class ESP32StageManager(PositionerManager):
                 self._emitHomingState(phase="homing_y", axis="Y", axisStatus="homing",
                                       message="Homing Y axis")
                 self.home_y(isBlocking=True)
-                self.move(value=1000, speed=self.homeParams["Y"]["speed"], axis="Y", is_absolute=True, is_blocking=False)
+                # part of homing: not limit-checked (same target as before: user 1000)
+                self._moveDevice({"Y": 1000 + self.stageOffsetPositions["Y"]}, self.homeParams["Y"]["speed"],
+                                 is_absolute=True, is_blocking=False)
                 self._emitHomingState(axis="Y", axisStatus="done")
                 if aborted():
                     return
@@ -817,7 +891,8 @@ class ESP32StageManager(PositionerManager):
         if override_endstop_z and "Z" in self._axes:
             self.__logger.warning("Overriding Z endstops to move to transport position.")
             self.hardLimitsEnabled["Z"] = False
-            self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=False)
+            self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=False,
+                polarity=int(self.homeParams["Z"]["endstoppolarity"]))
 
         self._moveDevice({ax: self.transportPositions[ax] for ax in ("X", "Y", "Z") if ax in self._axes},
                          speed, is_absolute=True, is_blocking=is_blocking)
@@ -938,7 +1013,8 @@ class ESP32StageManager(PositionerManager):
                 self._emitZSyncState(phase="disabling_limit", message="Disabling Z limit switch")
                 self.hardLimitsEnabled["Z"] = False
                 self.limitEnabled["Z"] = False
-                self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=False)
+                self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=False,
+                polarity=int(self.homeParams["Z"]["endstoppolarity"]))
                 if aborted():
                     return
 
@@ -960,7 +1036,8 @@ class ESP32StageManager(PositionerManager):
                 self._emitZSyncState(phase="enabling_limit", message="Re-enabling Z limit switch")
                 self.hardLimitsEnabled["Z"] = restoreHard
                 self.limitEnabled["Z"] = restoreSoft
-                self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=restoreHard)
+                self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=restoreHard,
+                polarity=int(self.homeParams["Z"]["endstoppolarity"]))
                 if aborted():
                     return
 
@@ -988,7 +1065,8 @@ class ESP32StageManager(PositionerManager):
                 try:
                     self.hardLimitsEnabled["Z"] = restoreHard
                     self.limitEnabled["Z"] = restoreSoft
-                    self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=restoreHard)
+                    self._motor.set_hard_limits(axis=self.axisIds["Z"], enabled=restoreHard,
+                polarity=int(self.homeParams["Z"]["endstoppolarity"]))
                 except Exception as e:
                     self.__logger.error(f"Could not restore Z limits after sync: {e}")
 
@@ -1051,16 +1129,15 @@ class ESP32StageManager(PositionerManager):
             self.__logger.warning("uc2rest has no Motor.start_strobe_sweep; update UC2-REST")
             return False
         axis = str(axis).upper()
-        # Same soft limits as move(); a blocked sweep is refused, never forced.
+        # Same travel limits as move(); a blocked sweep is refused, never forced.
         if axis not in self._axes:
             self.__logger.warning(f"Strobe sweep: {axis} is not an axis of {self._name}")
             return False
-        if self.limitEnabled[axis]:
-            lo, hi = self.minPos[axis], self.maxPos[axis]
-            if not (lo <= target <= hi):
-                self.__logger.warning(
-                    f"Strobe sweep blocked: {axis} target {target} outside [{lo}, {hi}]")
-                return False
+        try:
+            self.checkTravelLimits({axis: float(target) + float(self.stageOffsetPositions.get(axis, 0))})
+        except StageLimitError as e:
+            self.__logger.warning(f"Strobe sweep blocked: {e}")
+            return False
         if speed is None:
             speed = self.speed.get(axis, 0)
         self._strobeAxis = axis
@@ -1250,7 +1327,8 @@ class ESP32StageManager(PositionerManager):
                     self.hardLimitsEnabled[axis] = enabled
                     # Push the new setting to the hardware immediately
                     try:
-                        self._motor.set_hard_limits(axis=self.axisIds[axis], enabled=enabled)
+                        self._motor.set_hard_limits(axis=self.axisIds[axis], enabled=enabled,
+                            polarity=int(self.homeParams[axis]["endstoppolarity"]))
                     except Exception as _e:
                         result['errors'].append(f'Failed to set hard limits on device: {_e}')
                     result['updated'].append('limits.hardLimitsEnabled')

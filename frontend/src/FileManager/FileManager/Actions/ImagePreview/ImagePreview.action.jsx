@@ -146,9 +146,7 @@ const ImagePreviewAction = ({ onOpenWithVizarr, onOpenInNapari, triggerAction })
   const cleanPath = file.path.startsWith("/") ? file.path.slice(1) : file.path;
   const downloadUrl = `${base}/download/${cleanPath}`;
 
-  const isZarr =
-    file.name?.toLowerCase().endsWith(".zarr") ||
-    file.name?.toLowerCase().endsWith(".ome.zarr");
+  const isZarr = /\.(zarr|tiff?)$/i.test(file.name || ""); // what the dataset viewer opens
 
   const handleDownload = () => {
     const link = document.createElement("a");

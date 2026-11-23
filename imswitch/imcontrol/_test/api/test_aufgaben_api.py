@@ -187,3 +187,39 @@ def test_smart_microscopy_demo_on_the_virtual_sample(api_server):
                .read_text().splitlines()) if line.get("event") == "node"}
     assert results["light"]["mean"] > 20             # the LED lights the sample
     assert results["cells"]["count"] >= 3 and results["find"]["count"] == 3
+
+
+def test_macro_runs_by_name_and_leaves_other_light_alone(api_server):
+    lasers = "/imswitch/api/LaserController"
+    job = {"schema": "aufgaben.job/1", "name": "api macro", "metadata": {"macro": True},
+           "parameters": {"hold_s": {"type": "number", "default": 0.2, "maximum": 5}},
+           "tasks": [{"id": "on", "task": "set_illumination",
+                      "params": {"source": "LASER", "intensity": 100, "on": True}},
+                     {"id": "hold", "task": "wait", "params": {"seconds": "${param.hold_s}"}},
+                     {"id": "off", "task": "set_illumination",
+                      "params": {"source": "LASER", "on": False}}]}
+    name = api_server.post(f"{API}/saveAufgabenJob", json=job).json()["name"]
+    try:
+        macros = {m["name"]: m for m in api_server.get(f"{API}/listAufgabenMacros").json()}
+        assert macros[name]["title"] == "api macro" and "hold_s" in macros[name]["parameters"]
+        # the LED is on for the live view; a macro that never touches it leaves it on
+        api_server.get(f"{lasers}/setLaserValue", params={"laserName": "LED", "value": LED})
+        api_server.get(f"{lasers}/setLaserActive", params={"laserName": "LED", "active": True})
+        response = api_server.post(f"{API}/runAufgabenMacro",
+                                   json={"name": name, "parameters": {"hold_s": 0.1}})
+        assert response.status_code == 200, response.text
+        assert response.json()["folder"] is None   # takes no frames: no run folder
+        assert _wait_done(api_server)["state"] == "finished"
+        assert api_server.get(f"{lasers}/getLaserActive", params={"laserName": "LED"}).json()
+        assert not api_server.get(f"{lasers}/getLaserActive", params={"laserName": "LASER"}).json()
+        timeline = api_server.get(f"{API}/getAufgabenTimeline").json()
+        assert [r["id"] for r in timeline["rows"]] == ["on", "hold", "off"]
+        assert [e[1:] for e in timeline["events"]][:2] == [["on", 1], ["on", 0]]
+        too_long = api_server.post(f"{API}/runAufgabenMacro",
+                                   json={"name": name, "parameters": {"hold_s": 50}})
+        assert too_long.status_code == 400 and "out of range" in too_long.text
+        assert api_server.post(f"{API}/runAufgabenMacro",
+                               json={"name": "no_such_macro"}).status_code == 404
+    finally:
+        api_server.get(f"{API}/deleteAufgabenJob", params={"name": name})
+        api_server.get(f"{lasers}/setLaserActive", params={"laserName": "LED", "active": False})

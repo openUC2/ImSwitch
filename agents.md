@@ -159,7 +159,9 @@ imswitch/
                                controllers/uc2config/can_network_api.py)
     model/aufgaben/            Aufgaben job format, tasks, validator, useq bridge (no ImSwitch
                                imports; plan in docs/AUFGABEN_ROADMAP.md); storage.py is the one
-                               OME-Zarr/OME-TIFF writer for all of ImSwitch (save_image, NgffImage)
+                               OME-Zarr/OME-TIFF writer for all of ImSwitch (save_image, NgffImage).
+                               The deconvolution recipe and its HTTP worker are the package
+                               uc2-deconvolution (github.com/openUC2/uc2-deconvolution)
     model/SetupInfo.py         setup-JSON schema (dataclasses)
     model/io/recording_service.py   SaveFormat / RecMode enums, writers
     _test/                     unit + api tests
@@ -295,6 +297,7 @@ setup declares its hardware.
 | `moveToTransportPosition` / `getTransportPosition` / `setTransportPosition` | **Ask first** |
 | `setMotorsEnabled(positionerName, is_enabled)` / `enalbeMotors(enable, enableauto)` | Note the upstream typo in the second name |
 | `getStageOffsetAxis` / `setStageOffsetAxis` / `resetStageOffsetAxis` | User-frame ↔ device-frame offset |
+| `getStageTravelLimits()` | Per positioner and axis `{min, max, enabled}` in the user frame; moves outside an enabled range are refused (409, `sigStageLimit`) |
 | `getDevicePositionAxis` / `getTruePositionerPositionWithoutOffset` | Raw device frame |
 | `startStageScan(xstart, xstep, nx, ystart, ystep, ny, tsettle)` (POST) / `stopStageScan` | Firmware-timed raster |
 | `startZStageSync` / `cancelZStageSync` / `getZStageSyncState` | |
@@ -304,12 +307,17 @@ offset. `getPositionerPositions` gives the user frame; `getDevicePositionAxis` g
 device frame. Absolute moves are interpreted in the user frame. If the two disagree,
 investigate the offset before moving.
 
+**Travel limits.** `min<ax>` / `max<ax>` / `limit<ax>enabled` (setup managerProperties, measured for X/Y by
+the FRAME calibration step `travel`) are in the **device frame**. A move outside them returns **409** with the
+reason and a `sigStageLimit` toast; a jog stops at the limit. Homing, transport, sample loading and firmware
+stage scans are not checked. A 409 is the answer — do not disable the limit to get past it.
+
 ### 4.2 Cameras and detectors — `SettingsController`
 
 | Function | Notes |
 |---|---|
 | `getDetectorNames()` | |
-| `getDetectorParameters()` / `getDetectorParameter(detectorName, parameterName)` | |
+| `getDetectorParameters()` / `getDetectorParameter(detectorName, parameterName)` | `bitDepth` = bits of the raw frames (from `previewMaxValue`; null if the camera does not say) |
 | `getDetectorParameterTree(detectorName)` | Structured, typed parameter tree — best for agents |
 | `setDetectorParameterValue(body)` (POST) | Typed setter |
 | `setDetectorParameter(detectorName, parameterName, value)` | Generic setter |
@@ -360,7 +368,14 @@ Backends live in `model/managers/detectors/`: `HikCamManager`, `ToupCamManager`,
 - `setStreamParameters(protocol, params)` (POST) / `getStreamParameters`
 - `setDetectorStreamParameters(detectorName, params)` (POST)
 - `getStreamDiagnostics(detectorName)` — FPS, drops, backpressure
+- `getCameraHealth()` — per camera `placeholder` (the real camera did not open; a simulated one
+  stands in and its images are fake) and `stalled` (the live stream gets no new frames, e.g.
+  unplugged). Recordings, saved snaps, experiments, stage map, FRAME calibration and jobs that take
+  frames refuse to start (409) while an acquisition camera is a placeholder; restarting ImSwitch
+  re-opens the cameras
 - `mjpeg_stream(startStream=True, detectorName)` — plain MJPEG over HTTP
+- `getLiveViewPresets` / `setLiveViewPresets(body{presets})` (POST) — the instrument's saved
+  live-view presets (objective, exposure, gain, stream settings), shared by all browsers
 - `getLongExposureInfo` / `stopLiveViewForLongExposure` — live view must yield for exposures
   longer than the stream period
 - `webrtc_offer(request)` (POST) / `webrtc_ice_candidate`
@@ -371,7 +386,9 @@ Backends live in `model/managers/detectors/`: `HikCamManager`, `ToupCamManager`,
 `JPG=6`, `OME_TIFF=7`, `OME_ZARR=8`, `STITCHED_TIFF=9`.
 
 - `startSnap(fileName, saveFormat=1, returnPreview=True, previewMaxSize=1024)` — async job;
-  poll `getSnapStatus(jobId)`, abort with `cancelSnap(jobId)`
+  poll `getSnapStatus(jobId)`, abort with `cancelSnap(jobId)`. Snaps write OME-TIFF (1, 7),
+  OME-Zarr (3, 8) through `storage.py`, PNG or JPG; any other format, or a write that fails,
+  ends the job as `error` with the reason
 - `snapImageToPath(fileName, saveFormat, …)` — snap straight to disk
 - `snapImage(output=False, toList=True)` — return pixels in the response
 - `snapNumpyToFastAPI(detectorName, resizeFactor)` — single frame as an image response
@@ -487,10 +504,20 @@ prescan and firmware stage scans, digital I/O, temperature; plan and format in
 - `startAufgabenJob(request{job, parameters, confirmed})` (POST) — refused while anything else
   drives the microscope; homing/objective steps need `confirmed`. **Ask first** on hardware.
 - `getAufgabenStatus()`, `pauseAufgabenJob`, `resumeAufgabenJob`, `finishAufgabenJob`,
-  `abortAufgabenJob(force)`, `answerAufgabenQuestion(answer)`
+  `abortAufgabenJob(force)`, `answerAufgabenQuestion(answer)`; `getAufgabenTimeline(since)` —
+  step start/end marks `[t_s, node, 1|0]` of the current or last run (poll with `since=next`)
 - `listAufgabenJobs`, `getAufgabenJob(name)`, `saveAufgabenJob(job)` (POST),
   `deleteAufgabenJob(name)`, `listAufgabenRuns(limit)`, `getAufgabenJobSchema()`
 - `importAufgabenUseq(sequence)` / `exportAufgabenUseq(job)` (POST) — useq-schema bridge
+- Macros: a saved job with `metadata.macro: true` (the "Macro button in Live View" switch) is a
+  button in the Live View sidebar. `listAufgabenMacros()` returns name, title, description and
+  parameters; `runAufgabenMacro(request{name, parameters, confirmed})` (POST) starts one with the
+  same refusals as `startAufgabenJob`. `listAufgabenMacroTemplates()` lists the bundled example
+  macros (autofocus, shutter, bead PSF stack) that the Live View "From template" button copies under a new name. A macro leaves the light as its steps leave it (all off
+  only when it is stopped or fails) and gets a run folder only when it takes frames. Any job
+  switches the camera to software trigger only when it takes frames. `AufgabenController` is
+  loaded on every setup, listed in `availableWidgets` or not. **Ask first** before running a
+  macro on hardware, as for any job.
 - Frontend: the "Aufgaben" app (`frontend/src/components/aufgaben/`) edits, validates, starts and
   follows jobs; `sigAufgabenEvent` carries state, step, log, question and task-progress events.
 - Peripherals for jobs: the `pumps`, `valves` and `digitalIO` setup blocks (managers in
@@ -542,7 +569,42 @@ prescan and firmware stage scans, digital I/O, temperature; plan and format in
   `get_config_paths()`, `update_config_paths(config_path, data_path, persist)`
 
 File manager (plain FastAPI routes, not `@APIExport`) under `/imswitch/api/FileManager/…`:
-list, `folder` (POST), `upload`, `download/{path}`, rename, copy/move, delete.
+list (a `*.zarr` store is one folder, its chunks are not listed), `datasets` (OME-Zarr stores and
+OME-TIFF files, for the viewer), `folder` (POST), `upload`, `download/{path}`, rename, copy/move,
+delete, `tiffzarr/{file}/{key}` (a TIFF read as a Zarr v2 store, one tile per chunk; the OME-Zarr
+viewer opens OME-TIFF through it). `/imswitch/data/…` serves the data folder as it is now, also
+after `set_active_path`.
+
+`ProcessingController` — 3D deconvolution of stored stacks (`docs/DECONVOLUTION.md`; loaded on
+every setup). The recipe is the package `uc2-deconvolution` (`uc2deconvolution.recipe`, its own
+repo, git-pinned in `pyproject.toml`); large stacks go to a processing worker
+(`uc2deconvolution.worker`, image `ghcr.io/openuc2/uc2-deconvolution`) that the Pi sends planes to.
+The worker URL is the setup's `processing.workerUrl`, else `IMSWITCH_PROCESSING_WORKER_URL`, which
+os-rpi's `processing-worker` feature sets for the worker it runs beside ImSwitch. Methods: `map`,
+`rl`, `lbfgs`, `admm` (`getProcessingDefaults` returns the noise models and penalties each takes):
+
+- `getProcessingDefaults(path, image)` — recipe defaults and limits, optics per channel (µm; NA
+  from the dataset or the current objective, emission from the channel name) and their origin
+- `previewProcessing(request)` (POST) — a crop deconvolved on the Pi, before/after (xy, xz) as
+  base64 float32; refused (409) while the microscope acquires, and when the run would need more
+  than 75 % of the memory free (`recipe.memory_bytes`). Parameters: `method` map | rl,
+  `loss` poisson | anscombe | gauss, `penalty` good | hessian, `regularization`, `iterations`
+- `startProcessingJob(request)` (POST) — every volume of an image on the registered worker, or
+  on the Pi up to 10 M voxels per volume and within the same memory check; writes `<source>_deconvolved.ome.zarr` with
+  `recipe.json` next to the source. `getProcessingStatus`, `cancelProcessingJob`
+- `getProcessingWorker` / `setProcessingWorker(url)` — the worker URL, saved in the setup file as
+  `processing.workerUrl`
+- `previewProcessingPSF(request{optics, planes})` (POST) — the PSF of `optics.psf_model` (scalar,
+  vectorial, gaussian, measured with `psf_path`): xy and xz as base64 float32, FWHM and the FWHM the
+  optics lead one to expect (µm)
+- `distillProcessingPSF(request{path, image, t, c, window_um})` (POST) — averages the beads of a
+  bead stack into `<stack>_psf.ome.zarr` (the stack's voxels and objective); bead counts and the view
+
+Every OME-TIFF and OME-Zarr `storage.py` writes records the objective it was taken with (OME
+Instrument / Objective linked from the Image; zarr `acquisition` keys `objective_name`,
+`objective_na`, `objective_magnification`, `objective_immersion`), from `ObjectiveController`
+unless the writer passes another (`ImageSpec.objective`, `save_image(objective=)`; `{}` for none).
+Immersion comes from the setup's `objective.immersions` (OME names) or is guessed from the NA.
 
 Logs: `/imswitch/api/LogController/listLogFiles`, `…/downloadLogFile?filename=…`.
 
@@ -584,6 +646,7 @@ Confirm before calling:
 - Triggers/GPIO: `setDigitalOut`, `setupDigitalOutPin`, `setTrigger(...)`, `sendTrigger`,
   `resetTriggerTable`, `getDigitalIn`, `actDigitalIn`
 - Lifecycle: `espRestart`, `restartCANDevice`, `stopImSwitch`, `restartImSwitch`,
+  `powerOffHost(reboot)` (POST; stops motors, lights off, then logind power-off/reboot on the host),
   `moveToSampleMountingPosition`
 - **OS upgrade (experimental, openUC2 OS only):** `startPalletUpgrade()` starts the host unit
   `imswitch-pallet-upgrade.service` over the mounted D-Bus socket, which runs
@@ -620,6 +683,7 @@ Present only when the setup enables them. Discover with `getAvailableControllers
 | `InLineHoloController`, `OffAxisHoloController`, `HoloController` | Digital holography |
 | `LightsheetController` | Light-sheet scanning |
 | `OPMController` | dvOPM digital twin (`model/opm`, model axes linked to stage axes by setup `opm.axisMap`; `moveOPMAxes(virtual=True)` shifts the drawing onto the real sheet without moving, `setOPMReference` resets it), launch ray trace, sample-X stage scan placed by the measured speed and camera frame counter, optional deskew. `moveOPMAxes` / `setOPMMedium` move linked axes: **ask first** on hardware; `force=True` skips only the twin's own travel check, never the stage's soft limits |
+| `SpectrometerController` | Grating spectrometer on a camera (`model/spectrometer`, setup block `spectrometer`, `docs/SPECTROMETER.md`): live spectrum (px / nm / cm⁻¹), dark, averaging, smile, calibration wizard (`startSpectrometerWizard` → `getSpectrometerWizard` → `continueSpectrometerWizard` for sources switched by hand → `applySpectrometerWizard`), grating alignment with a known line, HDF5/CSV export. The wizard and `setSpectrometerSource` switch lasers (at `laserPowerFraction` of the range) and LED-matrix channels: **ask first** on hardware, like a laser |
 | `GalvoScannerController` | Galvo scanning, incl. FLIM Labs bridge |
 | `SLMController` | SLM / DMD on an external display conjugate to the sample (`docs/SLM.md`): `showSLMPattern` / `showSLMImage` / `showSLMCameraMask` (mask drawn over the camera, warped with the camera→display affine), `runSLMAutoCalibration` / `computeSLMAffine`, `uploadSLMSequence` + `startSLMSequenceAcquisition` (one software-triggered camera frame per pattern, OME-TIFF). On hardware every `show*` is illumination: **ask first** like a laser |
 | `FLIMLabsController` | FLIM acquisition |

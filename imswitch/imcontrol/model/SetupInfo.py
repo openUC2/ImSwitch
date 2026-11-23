@@ -296,6 +296,9 @@ class ObjectiveInfo:
     magnifications: List
     objectiveNames: List
     objectivePositions: List
+    immersions: List = field(default_factory=list)
+    """ Immersion per slot as OME names: Air, Water, WaterDipping, Oil, Glycerol, Multi, Other.
+    Written into every image file with NA, magnification and name; empty: guessed from the NA. """
     zPositions: List = field(default_factory=lambda: [0, 0])
     xyOffsets: List = field(default_factory=lambda: [[0, 0], [0, 0]])
     """ Parcentricity per slot (µm, stage XY). Switching slots moves XY by the
@@ -344,6 +347,72 @@ class OPMInfo:
 
     tiltedAxis: int = 0
     """ Image axis along the tilted sensor direction: 0 rows, 1 columns. """
+
+
+def _spectrometerDefaultManualSources():
+    return [
+        {"id": "qbox520", "label": "Q-Box 520 nm laser (switched by hand)", "kind": "laser",
+         "wavelengthNm": 520.0, "sigmaNm": 2.0},
+        {"id": "neon", "label": "neon glow lamp (NE-2)", "kind": "lamp", "lineList": "neon"},
+        {"id": "cfl", "label": "compact fluorescent lamp (mercury lines)", "kind": "lamp",
+         "lineList": "mercury"},
+    ]
+
+
+@dataclass(frozen=False)
+class SpectrometerInfo:
+    """ Grating spectrometer on an area camera (SpectrometerController). Every field is
+    optional; see docs/SPECTROMETER.md. """
+
+    detector: Optional[str] = None
+    """ Camera behind the grating; default the first one. """
+
+    name: str = "spectrometer"
+    """ Names the settings/calibration file <config>/spectrometer/<name>.json. """
+
+    processing: Dict[str, Any] = field(default_factory=dict)
+    """ Start values of the processing: rowStart, rowStop, colStart, colStop, collapse,
+    nAverage, removeSpikes, spikeThreshold, subtractDark, smileCorrection. """
+
+    design: Dict[str, Any] = field(default_factory=dict)
+    """ Nominal optics: grooveDensityPerMm, diffractionOrder, deviationDeg,
+    cameraFocalLengthMm, collimatorFocalLengthMm, pixelPitchUm, sensorWidthPx, slitWidthUm,
+    wavelengthDecreasesWithPixel, centerWavelengthNm, leverArmMm. Default: openRAMAN block. """
+
+    laserWavelengthNm: Optional[float] = None
+    """ Excitation laser for the Raman-shift axis (cm^-1). """
+
+    ledMatrix: Optional[str] = None
+    """ LED matrix (NeoPixel ring) whose R, G, B channels calibrate; default the first one. """
+
+    ledIntensity: int = 64
+    """ Channel value (0..255) while an LED channel is measured. """
+
+    referenceSpectraFile: Optional[str] = None
+    """ JSON or CSV with the ring's R, G, B spectra measured on another spectrometer
+    (relative paths: in <config>/spectrometer). Without it, placeholders are used. """
+
+    calibrationLasers: Optional[List[str]] = None
+    """ Lasers offered as calibration lines; default every laser with a wavelength. """
+
+    laserPowerFraction: float = 0.05
+    """ Laser value during calibration, as a fraction of its range. """
+
+    manualSources: List[Dict[str, Any]] = field(default_factory=_spectrometerDefaultManualSources)
+    """ Sources switched by hand: {id, label, kind, wavelengthNm, sigmaNm} for a laser,
+    {id, label, kind: "lamp", lineList: "neon" | "mercury"} for a lamp. """
+
+    alignmentTargetNm: Optional[float] = None
+    """ Wavelength that should sit on the camera axis after alignment (Raman: 592.4). """
+
+    bitDepthParameter: Optional[str] = None
+    """ Detector parameter that switches the bit depth, if the camera has one. """
+
+    simulate: bool = False
+    """ Render frames with the built-in simulator instead of reading the camera. """
+
+    simulation: Dict[str, Any] = field(default_factory=dict)
+    """ Simulator settings (rows, cols, focalLengthMm, centerNm, smileBowPx, ...). """
 
 
 @dataclass(frozen=False)
@@ -956,6 +1025,12 @@ class SetupInfo:
     channel), ``DigitalOutValveManager`` (board outputs), ``VirtualValveManager``;
     ``managerProperties.positions`` names the positions a job can switch to. """
 
+    processing: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
+    """ Processing options. ``{"workerUrl": "http://lab-pc:8090"}`` sends deconvolution jobs
+    to a processing worker (uc2-deconvolution, image ghcr.io/openuc2/uc2-deconvolution); set it
+    with ProcessingController.setProcessingWorker. Without it, ImSwitch uses
+    IMSWITCH_PROCESSING_WORKER_URL (os-rpi sets it for the worker it runs beside ImSwitch). """
+
     aufgaben: Optional[Dict[str, Any]] = field(default_factory=lambda: None)
     """ Aufgaben options. ``{"allowScripts": true}`` offers the python_script and
     external_process steps (unsandboxed code; a run with them must be confirmed). """
@@ -998,6 +1073,9 @@ class SetupInfo:
 
     opm: Optional[OPMInfo] = field(default_factory=lambda: None)
     """ dvOPM digital twin settings (OPMController); defaults apply when missing. """
+
+    spectrometer: Optional[SpectrometerInfo] = field(default_factory=lambda: None)
+    """ Grating spectrometer (SpectrometerController); defaults apply when missing. """
 
     webrtc: Optional[WebRTCInfo] = field(default_factory=lambda: None)
     """ WebRTC settings. Required to be defined to use WebRTC functionality. """

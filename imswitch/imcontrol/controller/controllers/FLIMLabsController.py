@@ -493,7 +493,8 @@ class FLIMLabsController(ImConWidgetController):
         # 65535; uint32 TIFFs are poorly supported by downstream viewers)
         tif16 = np.clip(frame, 0, 65535).astype(np.uint16)
         tiffPath = os.path.join(outDir, f'{base}_intensity.tif')
-        cv2.imwrite(tiffPath, tif16)
+        from imswitch.imcontrol.model.aufgaben.storage import save_image
+        save_image(tiffPath, tif16)  # OME-TIFF: it records the objective
 
         decay = self.getFlimDecayCurve()
         decayPath = os.path.join(outDir, f'{base}_decay.json')

@@ -1,0 +1,5 @@
+[
+{"name": "Bene", "does": ["ImSwitch and FRAME software lead: backend, UI, firmware", "Merges the team's pull requests", "Calibration, alignment and stage-safety tooling"]},
+{"name": "haikew", "does": ["Tests on the office FRAMEs and brings in user feedback", "UI fixes, e.g. openUC2/ImSwitch#331", "Crash-sensor and alignment experiments"]},
+{"name": "Ethan", "does": ["Stable release and a smaller Docker image"]}
+]

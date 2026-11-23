@@ -8,13 +8,14 @@
 //  - livestream format (binary | jpeg | webrtc) and parameters
 //    (subsampling factor, jpeg quality, etc.)
 //
-// Presets live in localStorage under STORAGE_KEY. They are independent of the
-// backend config and survive page reloads. Users can save the current state
+// Presets live on the server (LiveViewController/getLiveViewPresets), so every
+// browser of an instrument sees the same list; localStorage (STORAGE_KEY) is the
+// copy used while the backend is unreachable. Users can save the current state
 // as a new named preset, apply an existing one (which dispatches all the
 // relevant Redux actions and fires the matching backend calls), or delete
 // presets they no longer need.
 //
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import {
   Box,
@@ -61,6 +62,10 @@ import apiLiveViewControllerGetStreamParameters from "../backendapi/apiLiveViewC
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView";
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
 import apiObjectiveControllerMoveToObjective from "../backendapi/apiObjectiveControllerMoveToObjective";
+import {
+  apiLiveViewControllerGetLiveViewPresets,
+  apiLiveViewControllerSetLiveViewPresets,
+} from "../backendapi/apiLiveViewControllerLiveViewPresets";
 
 const STORAGE_KEY_V1 = "imswitch.streamPresets.v1";
 const STORAGE_KEY = "imswitch.streamPresets.v2";
@@ -144,9 +149,32 @@ const StreamPresets = () => {
   // to preserve current behaviour.
   const [saveApplyObjectiveZ, setSaveApplyObjectiveZ] = useState(false);
 
-  // Keep storage in sync when presets list mutates.
+  // Load the server's list once per backend. If the server has none yet,
+  // upload this browser's presets so they are not lost.
+  const serverLoaded = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    serverLoaded.current = false;
+    apiLiveViewControllerGetLiveViewPresets()
+      .then((server) => {
+        if (cancelled) return;
+        serverLoaded.current = true;
+        if (Array.isArray(server)) setPresets(server.map(migrateV1ToV2));
+        else apiLiveViewControllerSetLiveViewPresets(readPresets()).catch(() => {});
+      })
+      .catch(() => {}); // backend down: keep the browser copy, do not overwrite the server
+    return () => {
+      cancelled = true;
+    };
+  }, [hostIP, hostPort]);
+
+  // Keep both copies in sync when the list changes (the server only after it was read).
   useEffect(() => {
     writePresets(presets);
+    if (serverLoaded.current)
+      apiLiveViewControllerSetLiveViewPresets(presets).catch(() =>
+        setError("Presets saved in this browser only: the server did not answer."),
+      );
   }, [presets]);
 
   // Snapshot of "what the user would save right now."

@@ -7,6 +7,7 @@
 // the stage; channels can be toggled/tinted as color overlays; the raw
 // full-resolution tiles can be fused into a stitched OME-TIFF on the backend.
 
+import useTravelLimits from "../utils/useTravelLimits";
 import {
   AddAPhoto as SnapIcon,
   CenterFocusStrong as FitIcon,
@@ -167,6 +168,8 @@ const StageMapController = () => {
     [requestDraw],
   );
 
+  const { limits: travelLimits } = useTravelLimits();
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -254,6 +257,28 @@ const StageMapController = () => {
     });
     ctx.globalCompositeOperation = "source-over";
 
+    // --- travel limits: grey no-go area, dashed red edge of the allowed range ---
+    const lx = travelLimits.X?.enabled ? travelLimits.X : null;
+    const ly = travelLimits.Y?.enabled ? travelLimits.Y : null;
+    if (lx || ly) {
+      const left = lx?.min != null ? toScreenX(lx.min) : -1;
+      const right = lx?.max != null ? toScreenX(lx.max) : w + 1;
+      const ya = ly?.min != null ? toScreenY(ly.min) : view.flipY ? h + 1 : -1;
+      const yb = ly?.max != null ? toScreenY(ly.max) : view.flipY ? -1 : h + 1;
+      const top = Math.min(ya, yb);
+      const bottom = Math.max(ya, yb);
+      ctx.fillStyle = isDark ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.12)";
+      ctx.beginPath();
+      ctx.rect(0, 0, w, h);
+      ctx.rect(left, top, right - left, bottom - top);
+      ctx.fill("evenodd");
+      ctx.strokeStyle = theme.palette.error.main;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([8, 5]);
+      ctx.strokeRect(left, top, right - left, bottom - top);
+      ctx.setLineDash([]);
+    }
+
     // --- current FOV rectangle + position marker ---
     const px = positionState.x ?? 0;
     const py = positionState.y ?? 0;
@@ -297,7 +322,7 @@ const StageMapController = () => {
       bx,
       by - 6,
     );
-  }, [channels, tiles, positionState, status, theme, getTileBitmap]);
+  }, [channels, tiles, positionState, status, theme, getTileBitmap, travelLimits]);
 
   // Keep the ref pointing at the latest draw closure
   useEffect(() => {

@@ -5,6 +5,10 @@ on this microscope through ``ImSwitchMicroscope``. Saved jobs live in
 ``<config>/aufgaben/*.json``; each run writes OME-Zarr (and optional OME-TIFF),
 ``job.json`` and ``run.jsonl`` to ``<data>/Aufgaben/<timestamp>_<job>/``.
 Events (state, node, log, question) go out on ``sigAufgabenEvent``.
+
+A saved job with ``metadata.macro`` is a macro: a button in the Live View
+(listAufgabenMacros, runAufgabenMacro). A macro leaves the light as its steps
+leave it, and it gets a run folder only when it takes frames.
 """
 import json
 import re
@@ -23,7 +27,7 @@ from imswitch.imcontrol.model import aufgaben
 from imswitch.imcontrol.model.aufgaben.engine import Run
 from imswitch.imcontrol.model.aufgaben.storage import OmeStore
 from ..basecontrollers import ImConWidgetController
-from ..busy import busy_reasons
+from ..busy import busy_reasons, camera_reasons
 from .aufgaben import ImSwitchMicroscope
 from .aufgaben.host import register_labware
 
@@ -39,8 +43,35 @@ class StartAufgabenRequest(BaseModel):
     confirmed: bool = Field(False, description="The operator accepted the ask-first steps")
 
 
+class RunAufgabenMacroRequest(BaseModel):
+    name: str = Field(..., description="Macro file name without .json, from listAufgabenMacros")
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    confirmed: bool = Field(False, description="The operator accepted the ask-first steps")
+
+
 def _safe(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_") or "job"
+
+
+def _macro(path: Path) -> Optional[dict]:
+    """The saved job at ``path`` when it is marked as a macro, else None."""
+    try:
+        job = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return job if isinstance(job, dict) and (job.get("metadata") or {}).get("macro") else None
+
+
+def _macro_entries(folder: Path) -> list:
+    """name, title, description and parameters of every macro job in ``folder``."""
+    macros = []
+    for path in sorted(folder.glob("*.json")):
+        job = _macro(path)
+        if job is not None:
+            macros.append({"name": path.stem, "title": job.get("name") or path.stem,
+                           "description": job.get("description", ""),
+                           "parameters": job.get("parameters") or {}})
+    return macros
 
 
 class AufgabenController(ImConWidgetController):
@@ -207,33 +238,74 @@ class AufgabenController(ImConWidgetController):
         """Validate and start a job. Refused while anything else drives the microscope.
 
         Steps flagged ask-first (homing, objective change) need ``confirmed``.
-        Returns the run id and folder; follow it with getAufgabenStatus or
-        sigAufgabenEvent.
+        The camera switches to software trigger only for jobs that take frames,
+        so the live view keeps running otherwise. A macro (``metadata.macro``)
+        leaves the light as its steps leave it and writes no run folder unless
+        it takes frames. Returns the run id and folder (None without one);
+        follow it with getAufgabenStatus or sigAufgabenEvent.
         """
         job = self._job(request.job)
+        macro = bool(job.metadata.get("macro"))
         with self._lock:
             if self.isAufgabenRunning():
                 raise HTTPException(status_code=409, detail="A job is already running")
             others = busy_reasons(self._master, self._logger, ignore=("Aufgaben",))
             if others:
                 raise HTTPException(status_code=409, detail=f"Refused: {', '.join(others)}")
-            folder = self._runs_dir() / f"{datetime.now():%Y%m%d_%H%M%S}_{_safe(job.name)}"
-            run = Run(job, self._host, parameters=request.parameters,
-                      on_event=self._on_event, run_dir=folder)
             try:
-                run.prepare(request.confirmed)
+                run = Run(job, self._host, parameters=request.parameters,
+                          on_event=self._on_event, lights_off_at_end=not macro)
+                report = run.prepare(request.confirmed)
             except PermissionError as e:
                 raise HTTPException(status_code=403, detail=str(e)) from e
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e)) from e
-            run.sink = OmeStore(folder, formats=job.storage.formats, layout=job.storage.layout,
-                                stitch=job.storage.stitching if job.storage.stitched_preview
-                                else None)
-            (folder / "job.json").write_text(job.to_json(indent=1))
-            self._host.begin()
+            fake = camera_reasons(self._master) if report.uses_camera else []
+            if fake:
+                raise HTTPException(status_code=409, detail=f"Refused: {', '.join(fake)}")
+            folder = None
+            if report.uses_camera or not macro:
+                folder = self._runs_dir() / f"{datetime.now():%Y%m%d_%H%M%S}_{_safe(job.name)}"
+                run.run_dir = folder
+                run.sink = OmeStore(folder, formats=job.storage.formats,
+                                    layout=job.storage.layout,
+                                    stitch=job.storage.stitching if job.storage.stitched_preview
+                                    else None)
+                (folder / "job.json").write_text(job.to_json(indent=1))
+            if report.uses_camera:
+                self._host.begin()
             self._run = run
             run.start(request.confirmed)
-        return {"run_id": run.run_id, "folder": str(folder)}
+        return {"run_id": run.run_id, "folder": str(folder) if folder else None}
+
+    @APIExport()
+    def listAufgabenMacros(self) -> list:
+        """Saved jobs marked as macros (``metadata.macro``): one Live View button each.
+
+        Returns per macro its file ``name`` (for runAufgabenMacro), ``title``,
+        ``description`` and the ``parameters`` asked for before a run.
+        """
+        return _macro_entries(self._jobs_dir)
+
+    @APIExport()
+    def listAufgabenMacroTemplates(self) -> list:
+        """Bundled example macros (autofocus, shutter, ...) to copy: load one with
+        getAufgabenJob(name), rename it and save it with saveAufgabenJob. Same fields as
+        listAufgabenMacros."""
+        return _macro_entries(aufgaben.EXAMPLES_DIR)
+
+    @APIExport(requestType="POST")
+    def runAufgabenMacro(self, request: RunAufgabenMacroRequest) -> dict:
+        """Start a saved macro by its file name, as its Live View button does.
+
+        Same rules as startAufgabenJob: refused while anything else drives the
+        microscope, ask-first steps need ``confirmed``.
+        """
+        job = _macro(self._jobs_dir / f"{_safe(request.name)}.json")
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"No macro {request.name!r}")
+        return self.startAufgabenJob(StartAufgabenRequest(
+            job=job, parameters=request.parameters, confirmed=request.confirmed))
 
     @APIExport()
     def pauseAufgabenJob(self) -> dict:
@@ -262,6 +334,19 @@ class AufgabenController(ImConWidgetController):
     def getAufgabenStatus(self) -> dict:
         """State, current node, loop path, frames, pending question, variables."""
         return self._run.status() if self._run else {"state": "idle"}
+
+    @APIExport()
+    def getAufgabenTimeline(self, since: int = 0) -> dict:
+        """Step start/end marks of the current (or last) run, for the run view's timeline.
+
+        ``events`` are ``[t_s, node_id, 1 start | 0 end]`` from index ``since`` on, t in s
+        since the run started; poll again with ``since=next``. ``since=0`` adds the job's
+        steps as ``rows``. Read-only.
+        """
+        if self._run is None:
+            return {"run_id": None, "state": "idle", "next": 0, "now": 0, "events": [],
+                    "rows": []}
+        return self._run.timeline_since(max(0, since))
 
     @APIExport()
     def answerAufgabenQuestion(self, answer: str) -> dict:

@@ -893,6 +893,28 @@ Verified on 2026-10-14: 12 unit tests (synthetic frames; the three templates and
 the simulated sample) and an API test on the virtual microscope (count objects in a brightfield
 frame, visit three of them). The virtual microscope needed two fixes for that (§7.11).
 
+### Macros — **done 2026-11-18**
+
+A saved job with `metadata.macro: true` (switch "Macro button in Live View" in the job panel) is a
+button in the Live View sidebar; the arrow next to it opens the job's runtime parameters, and the
+button of a running macro stops it. `listAufgabenMacros` / `runAufgabenMacro` (by file name, same
+refusals as `startAufgabenJob`). Macros are plain jobs with two differences: a macro that runs to
+its end leaves the light as its steps left it (`Run(lights_off_at_end=False)`; stopped or failed,
+all light goes off as for any job), and it gets a run folder only when it takes frames, so a
+shutter button does not fill `<data>/Aufgaben/` and the run list. For every job, the camera goes to
+software trigger only when the job takes frames (`Report.uses_camera`), so the live view keeps
+running during a light, I/O or fluidics job. `AufgabenController` is loaded on every setup. Template:
+`shutter_close_macro.json`, `shutter_turret_macro.json`. Not yet: macros while a recording runs (refused like any job).
+
+### Run timeline — **done 2026-11-18**
+
+The Run tab draws a Gantt chart of the current or last run: one row per step in outline order, one
+bar per execution, coloured by task category; scroll zooms, drag pans, double click fits. The engine
+appends `[t_s, node_id, 1|0]` start/end marks (`Run.timeline`, capped at `TIMELINE_MAX`);
+`getAufgabenTimeline(since)` returns the marks from index `since` on, so the page polls only what is
+new. Bars narrower than a pixel at the current zoom are merged (hover shows the count). Not yet:
+timelines of earlier runs (`run.jsonl` has per-node seconds, but no start times).
+
 ### Phase 6 — operator mode, results, consolidation (3–4 weeks)
 
 Operator wizard and kiosk page; run index (SQLite) with a per-well heatmap of a chosen result; OMERO
@@ -1103,6 +1125,8 @@ Runnable with the v1 catalogue and validated in CI (`imswitch/imcontrol/model/au
 | `stop_flow_fluidics.json` | FlowStop plus a heater and a valve | temperature, `wait_until` on a device reading, valve, pump, variables, `break` |
 | `tile_scan_focus_check.json` | Tile scan with quality control | operator question, `$from` resource, `on_error`, condition on `result.<id>`, `exit_with_error`, `continue` |
 | `region_overview_focus_map.json` | Slide overview, then tissue regions at high magnification | `stage_prescan`, `create_focus_map` per region, `loop_regions`, region-covering `loop_grid` on the focus surface, a dark-field ring channel, Ashlar-stitched output |
+| `shutter_close_macro.json` | A shutter driven by two laser channels (one pin per direction) | a Live View macro (`metadata.macro`), a run parameter in an expression, light steps as pin drives |
+| `shutter_turret_macro.json` | A 3-slot turret (open, beta light, shut) on a DC motor with a friction clutch, two laser channels as an H-bridge: home towards open past the end stop, then drive towards shut for the slot's time | a choice parameter, a `condition` on it, a conditional expression for the drive time |
 
 Needs later phases:
 

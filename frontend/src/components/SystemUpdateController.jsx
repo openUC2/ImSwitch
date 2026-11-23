@@ -8,6 +8,10 @@ import apiUC2ConfigControllerSetBusPower from "../backendapi/apiUC2ConfigControl
 import apiUC2ConfigControllerGetFanState from "../backendapi/apiUC2ConfigControllerGetFanState";
 import apiUC2ConfigControllerSetFanMode from "../backendapi/apiUC2ConfigControllerSetFanMode";
 import apiUC2ConfigControllerGetBoardTemperature from "../backendapi/apiUC2ConfigControllerGetBoardTemperature";
+import apiUC2ConfigControllerGetDisplayState from "../backendapi/apiUC2ConfigControllerGetDisplayState";
+import apiUC2ConfigControllerSetDisplayEnabled from "../backendapi/apiUC2ConfigControllerSetDisplayEnabled";
+import apiUC2ConfigControllerSetDisplayFlip from "../backendapi/apiUC2ConfigControllerSetDisplayFlip";
+import apiUC2ConfigControllerUpdateDisplayDeviceName from "../backendapi/apiUC2ConfigControllerUpdateDisplayDeviceName";
 import apiUC2ConfigControllerStartPalletUpgrade from "../backendapi/apiUC2ConfigControllerStartPalletUpgrade";
 import apiUC2ConfigControllerGetPalletUpgradeStatus from "../backendapi/apiUC2ConfigControllerGetPalletUpgradeStatus";
 import {
@@ -55,6 +59,7 @@ import {
   Bolt as BoltIcon,
   Air as AirIcon,
   Thermostat as ThermostatIcon,
+  Monitor as DisplayIcon,
   ReportProblem as ReportProblemIcon,
   HelpOutline as HelpOutlineIcon,
   SystemUpdateAlt as SystemUpdateAltIcon,
@@ -269,6 +274,64 @@ const SystemUpdateController = () => {
     applyFanMode(newMode, fanWiper);
   };
 
+  // --- Status display (0.91" OLED on the CAN-HAT master) -------------------
+  // {} = firmware without display module; present=0 = module there, no panel found
+  const [displayState, setDisplayState] = useState({});
+  const [isSettingDisplay, setIsSettingDisplay] = useState(false);
+
+  const refreshDisplayState = async () => {
+    if (!isBackendConnected) return;
+    try {
+      const d = await apiUC2ConfigControllerGetDisplayState();
+      setDisplayState(d && typeof d === "object" ? d : {});
+    } catch (e) {
+      console.error("getDisplayState failed:", e);
+    }
+  };
+
+  // Run one display action, then read the state back from the ESP32.
+  const runDisplayAction = async (label, action) => {
+    setIsSettingDisplay(true);
+    try {
+      const result = await action();
+      if (result?.status === "error") throw new Error(result.message);
+      setTimeout(refreshDisplayState, 300);
+    } catch (e) {
+      dispatch(
+        setNotification({
+          message: label + " failed: " + (e.message || e),
+          type: "error",
+        }),
+      );
+    } finally {
+      setIsSettingDisplay(false);
+    }
+  };
+
+  const handleDisplayEnabled = (event) =>
+    runDisplayAction("Display on/off", () =>
+      apiUC2ConfigControllerSetDisplayEnabled(event.target.checked),
+    );
+
+  const handleDisplayFlip = (event) =>
+    runDisplayAction("Display rotation", () =>
+      apiUC2ConfigControllerSetDisplayFlip(event.target.checked),
+    );
+
+  const handleSendDeviceName = () =>
+    runDisplayAction("Sending the device name", async () => {
+      const result = await apiUC2ConfigControllerUpdateDisplayDeviceName();
+      if (result?.status === "success" && !result.name) {
+        dispatch(
+          setNotification({
+            message: "The device name could not be determined on this machine.",
+            type: "warning",
+          }),
+        );
+      }
+      return result;
+    });
+
   // --- Board temperature polling (every 10s while enabled) ----------------
   const [tempPollingEnabled, setTempPollingEnabled] = useState(false);
   const [temperature, setTemperature] = useState(null);
@@ -287,6 +350,7 @@ const SystemUpdateController = () => {
     if (isBackendConnected) {
       refreshBusStatus();
       refreshFanState();
+      refreshDisplayState();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isBackendConnected]);
@@ -845,6 +909,74 @@ const SystemUpdateController = () => {
           )}
         </CardContent>
       </Card>
+
+      {/* Status Display Card (only when the firmware has the display module) */}
+      {displayState && Object.keys(displayState).length > 0 && (
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
+              <DisplayIcon color="primary" />
+              <Typography variant="h6">Status Display</Typography>
+              <Chip
+                label={displayState.present ? "OLED detected" : "no OLED found"}
+                color={displayState.present ? "success" : "default"}
+                size="small"
+                variant="outlined"
+              />
+              {displayState.name && (
+                <Chip label={displayState.name} size="small" variant="outlined" />
+              )}
+            </Box>
+
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              The small OLED on the CAN HAT shows the firmware version at
+              power-up, then this device&apos;s name (its Wi-Fi name) and the
+              current experiment step. Turning it off switches the panel
+              completely dark; the setting is kept on the ESP32.
+            </Typography>
+
+            <Box sx={{ display: "flex", flexDirection: "column", mb: 1 }}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={Boolean(displayState.on)}
+                    onChange={handleDisplayEnabled}
+                    disabled={!isBackendConnected || isSettingDisplay}
+                  />
+                }
+                label="Display on"
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={Boolean(displayState.flip)}
+                    onChange={handleDisplayFlip}
+                    disabled={!isBackendConnected || isSettingDisplay}
+                  />
+                }
+                label="Rotate picture by 180°"
+              />
+            </Box>
+          </CardContent>
+          <CardActions>
+            <Button
+              size="small"
+              onClick={handleSendDeviceName}
+              disabled={!isBackendConnected || isSettingDisplay}
+            >
+              Send device name
+            </Button>
+            <Button
+              size="small"
+              startIcon={<Refresh />}
+              onClick={refreshDisplayState}
+              disabled={!isBackendConnected || isSettingDisplay}
+            >
+              Refresh
+            </Button>
+          </CardActions>
+        </Card>
+      )}
 
       {/* LED Matrix Status Card */}
       <Card sx={{ mb: 3 }}>

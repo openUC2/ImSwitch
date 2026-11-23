@@ -100,13 +100,25 @@
 - **STORM reconstruction**
 - **Composite imaging** (multi-modal combinations)
   - ExperimentController where we provide a protocol for multi dimensional acquisitions (xyz, multi channel, autofocus )
+- **Spectrometer** (grating spectrometer on a camera, e.g. the openUC2 openRAMAN block;
+  `docs/SPECTROMETER.md`)
+  - live spectrum in pixels, nm or Raman shift (cm⁻¹), dark, averaging, spike removal, smile correction
+  - calibration wizard with lasers, NeoPixel R/G/B LEDs (reference spectra), sources switched by hand
+    (Q-Box 520 nm laser, neon or fluorescent lamp); grating model or polynomial fit with residuals
+  - grating alignment with a known line, resolution check, HDF5 or CSV + JSON export
 
 ### Computational Imaging
 - **DPC processing**
 - **Phase retrieval**
 - **Flatfield correction**
+- **3D deconvolution** of stored stacks (wide field, light sheet): preview on a crop in the OME-Zarr
+  viewer, whole stacks on the Pi or a processing worker container; scalar, vectorial or Gaussian PSF
+  from the optics, or a PSF measured from a bead stack, shown with its FWHM (`docs/DECONVOLUTION.md`)
 
 ## Data Acquisition & Storage
+
+- Every OME-TIFF and OME-Zarr records the objective it was taken with (name, NA, magnification,
+  immersion)
 
 ### Recording Capabilities
 - **Snap single images**

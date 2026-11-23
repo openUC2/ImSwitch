@@ -564,7 +564,6 @@ class ToupCamManager(DetectorManager):
 
         # Add Toupcam-specific information
         status['cameraType'] = 'Toupcam'
-        status['isMock'] = self._camera.model == "mock"
         status['isConnected'] = getattr(self._camera, 'is_connected', False)
         status['parameterRanges'] = self.getParameterRanges()
         status['isLongExposure'] = self.isLongExposure()

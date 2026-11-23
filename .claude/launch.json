@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "frontend", "start"],
       "port": 3000
+    },
+    {
+      "name": "roadmap-board",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["docs/roadmap/board/board.py"],
+      "port": 8771
     }
   ]
 }

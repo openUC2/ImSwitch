@@ -15,7 +15,7 @@ import {
   Typography,
 } from "@mui/material";
 
-import { parseNumberInput, resourcesOfKind } from "../../utils/aufgabenJob";
+import { explainExpression, parseNumberInput, resourcesOfKind } from "../../utils/aufgabenJob";
 import { useT } from "../../i18n";
 
 const mono = { fontFamily: "monospace", fontSize: 13 };
@@ -137,7 +137,7 @@ const ResourceField = ({ field, value, job, onChange, onCreateResource }) => {
 
 export const ParamField = ({ field, value, job, onChange, onCreateResource }) => {
   const t = useT();
-  const help = field.description || undefined;
+  const help = [field.description, explainExpression(value, job)].filter(Boolean).join(" ") || undefined;
   switch (field.kind) {
     case "boolean":
       if (typeof value === "string") break;   // an expression: edit as text below

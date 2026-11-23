@@ -1,0 +1,27 @@
+# Publishes the WP board to https://youseetoo.github.io/projectmanagement/imswitch-frame/
+# Uses the YOUSEETOO_SSH_DEPLOY_KEY that deploy-frontend-preview.yml already pushes with.
+name: board-pages
+on:
+  push:
+    paths: ["docs/roadmap/board/**", ".github/workflows/board-pages.yml"]
+  workflow_dispatch:
+concurrency: board-pages
+jobs:
+  publish:
+    if: github.repository == 'openUC2/ImSwitch'  # forks have no deploy key
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: youseetoo/youseetoo.github.io
+          ssh-key: ${{ secrets.YOUSEETOO_SSH_DEPLOY_KEY }}
+          path: pm
+      - run: python3 docs/roadmap/board/board.py export pm/projectmanagement/imswitch-frame/index.html
+      - working-directory: pm
+        run: |
+          git add projectmanagement/imswitch-frame/index.html
+          git diff --cached --quiet && exit 0
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com \
+            commit -m "imswitch-frame board from ${GITHUB_REPOSITORY}@${GITHUB_SHA::7} (${GITHUB_REF_NAME})"
+          git push

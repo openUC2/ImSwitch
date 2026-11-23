@@ -63,6 +63,8 @@ def computeCropWindow(fullShape, frameStart, shape,
     return hpos, vpos, hsize, vsize
 
 
+
+
 class SettingsController(ImConWidgetController):
     """ Linked to SettingsWidget."""
 
@@ -407,6 +409,7 @@ class SettingsController(ImConWidgetController):
                 return getattr(parameter, 'valueMin', None), getattr(parameter, 'valueMax', None)
             except Exception:
                 return None, None
+        mBitDepth = getattr(detector, "bitDepth", None)
         mExposureMin, mExposureMax = _limits('exposure')
         mGainMin, mGainMax = _limits('gain')
         mParameterDict = {
@@ -417,6 +420,7 @@ class SettingsController(ImConWidgetController):
             'supportedBinnings': mSupportedBinnings,
             'blacklevel': mBlacklevel,
             'isRGB': mRGB,
+            'bitDepth': mBitDepth,
             'mode': camMode,
             'exposureMin': mExposureMin,
             'exposureMax': mExposureMax,

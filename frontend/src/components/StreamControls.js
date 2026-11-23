@@ -47,6 +47,8 @@ export default function StreamControls({
   isLongExposure = false,
   exposureMs = 0,
   longExposureThresholdMs = 2000,
+  // false: the caller shows the exposure row elsewhere (desktop: above the image)
+  showDetectorParameters = true,
   onToggleStream,
   onSnap,
   onSnapAndDownload,
@@ -469,6 +471,22 @@ export default function StreamControls({
             sx={{ ml: 1 }}
           />
 
+          <Tooltip arrow title="Heat map of the sharpness across the field, with a guide through the FRAME's alignment screws (JPEG stream)">
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={!!liveStreamState.showSharpnessMap}
+                  onChange={(e) =>
+                    dispatch(liveStreamSlice.setShowSharpnessMap(e.target.checked))
+                  }
+                  size="small"
+                  color="success"
+                />
+              }
+              label="Alignment"
+            />
+          </Tooltip>
+
           <Tooltip
             arrow
             title="All camera parameters (black level, trigger, cooling, …) and the live-stream format, compression and display range"
@@ -486,13 +504,15 @@ export default function StreamControls({
           </Tooltip>
         </Box>
 
-        <Box data-tour="camera-controls">
-          <DetectorParameters
-            hostIP={hostIP}
-            hostPort={hostPort}
-            refreshKey={paramsRefresh}
-          />
-        </Box>
+        {showDetectorParameters && (
+          <Box data-tour="camera-controls">
+            <DetectorParameters
+              hostIP={hostIP}
+              hostPort={hostPort}
+              refreshKey={paramsRefresh}
+            />
+          </Box>
+        )}
 
         {/* Named bundles of objective + exposure + gain + stream settings. */}
         <StreamPresets />

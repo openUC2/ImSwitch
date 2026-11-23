@@ -1,0 +1,19 @@
+{
+  "schema": "aufgaben.job/1",
+  "name": "Shutter close",
+  "description": "Macro for a shutter (or any two-wire motor) on two laser channels: pin B off, pin A on for the pulse, then both off. Pick your setup's channels and the 'on' value in the light steps, save it, then save a copy with the pins swapped as 'Shutter open'.",
+  "parameters": {
+    "pulse_s": {"type": "number", "default": 1.0, "minimum": 0.05, "maximum": 10, "unit": "s",
+                "title": "Pulse"}
+  },
+  "tasks": [
+    {"id": "pin_b_off", "task": "set_illumination", "label": "Pin B off",
+     "params": {"source": "LED", "on": false}},
+    {"id": "pin_a_on", "task": "set_illumination", "label": "Pin A on",
+     "params": {"source": "LASER", "intensity": 1023, "on": true}},
+    {"id": "hold", "task": "wait", "params": {"seconds": "${param.pulse_s}"}},
+    {"id": "pin_a_off", "task": "set_illumination", "label": "Pin A off",
+     "params": {"source": "LASER", "on": false}}
+  ],
+  "metadata": {"macro": true}
+}

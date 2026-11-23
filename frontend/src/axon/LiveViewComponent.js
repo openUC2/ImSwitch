@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Box, Typography } from "@mui/material";
 import * as liveViewSlice from "../state/slices/LiveStreamSlice.js";
+import { sharpnessGrid } from "../utils/sharpnessMap";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import apiPositionerControllerMovePositionerXYZ from "../backendapi/apiPositionerControllerMovePositionerXYZ.js";
 
@@ -116,6 +117,24 @@ const LiveViewComponent = ({
       console.warn("JPEG histogram computation failed:", error);
     }
   }, [dispatch, liveStreamState.showHistogram]);
+
+  // Alignment aid: per-cell sharpness of the frame, every 5th frame while shown.
+  const sharpnessCounterRef = useRef(0);
+  const computeSharpnessFromCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !liveStreamState.showSharpnessMap) return;
+    if (++sharpnessCounterRef.current % 5 !== 0) return;
+    try {
+      const { data } = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+      const cols = 8;
+      const rows = 6;
+      const stride = Math.max(1, Math.round(canvas.width / 640)); // ~640 samples per line
+      const values = sharpnessGrid(data, canvas.width, canvas.height, cols, rows, stride);
+      dispatch(liveViewSlice.setSharpnessGrid({ cols, rows, values }));
+    } catch (error) {
+      console.warn("Sharpness map failed:", error);
+    }
+  }, [dispatch, liveStreamState.showSharpnessMap]);
 
   // Linear intensity windowing applied IN PLACE to the already-drawn canvas.
   // Only invoked when the window is non-default ([0,255] is an identity map),
@@ -285,6 +304,7 @@ const LiveViewComponent = ({
             }
             // Histogram (throttled internally; only when the panel is open).
             computeHistogramFromCanvas();
+            computeSharpnessFromCanvas();
 
             if (
               bitmap.width !== lastDimsRef.current.width ||
@@ -312,6 +332,7 @@ const LiveViewComponent = ({
     liveStreamState.maxVal,
     windowCanvasInPlace,
     computeHistogramFromCanvas,
+    computeSharpnessFromCanvas,
     applyResponsiveSizing,
     imageLoaded,
   ]);

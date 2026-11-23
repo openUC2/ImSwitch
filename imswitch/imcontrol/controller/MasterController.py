@@ -162,6 +162,14 @@ class MasterController:
             self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
         if "Lepmon" in self.__setupInfo.availableWidgets:
             self.LepmonManager = LepmonManager(self.__setupInfo.Lepmon)
+        if "Spectrometer" in self.__setupInfo.availableWidgets:
+            try:
+                from imswitch.imcontrol.model.managers.SpectrometerManager import (
+                    SpectrometerManager)
+                self.spectrometerManager = SpectrometerManager(
+                    getattr(self.__setupInfo, "spectrometer", None), self.detectorsManager)
+            except Exception as e:
+                self.__logger.error(f"SpectrometerManager could not start: {e}")
         # PixelCalibration is the single source of truth for per-detector
         # affine calibration (pixel size + flip). Always instantiate so that
         # downstream code can rely on its presence regardless of the setup

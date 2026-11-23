@@ -218,7 +218,7 @@ def test_overview_regions_template():
     run = _template("overview_regions_zstack", hw)
     regions = run.results["find"]["regions"]
     assert len(regions) == 2
-    assert ("objective", 2) in hw.calls
+    assert ("objective", 1) in hw.calls
     xy = [(c[2]["X"], c[2]["Y"]) for c in hw.calls if c[0] == "snap"]
     assert xy and all(any(r["min_x"] <= x <= r["max_x"] and r["min_y"] <= y <= r["max_y"]
                           for r in regions) for x, y in xy)

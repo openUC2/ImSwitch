@@ -398,6 +398,22 @@ class DetectorManager(SignalInterface):
         return self.__forFocusLock
 
     @property
+    def isPlaceholder(self) -> bool:
+        """ True when the real camera did not open and the simulated stand-in
+        (MockCameraTIS, model "mock") delivers the frames: images are fake. """
+        return self._isMock or getattr(getattr(self, '_camera', None), 'model', None) == 'mock'
+
+    @property
+    def bitDepth(self) -> Optional[int]:
+        """ Bits per pixel of the raw frames (8, 10, 12, 14, 16), from the manager's
+        ``previewMaxValue`` parameter (2**bits - 1); None where the manager has none. """
+        try:
+            maxValue = int(self.parameters['previewMaxValue'].value)
+        except Exception:
+            return None
+        return maxValue.bit_length() if maxValue > 0 else None
+
+    @property
     def scale(self) -> List[int]:
         """ The pixel sizes in micrometers, all axes, in the format high dim
         to low dim (ex. [..., 'Z', 'Y', 'X']). Override in managers handling
@@ -480,8 +496,8 @@ class DetectorManager(SignalInterface):
         """
         status = {
             'model': self.__model,
-            'isMock': self._isMock,
-            'isConnected': not self._isMock,  # Override in subclasses if needed
+            'isMock': self.isPlaceholder,
+            'isConnected': not self.isPlaceholder,  # a stand-in camera means the real one did not open
             'isRGB': self._isRGB,
             'sensorWidth': self.__fullShape[0],
             'sensorHeight': self.__fullShape[1],

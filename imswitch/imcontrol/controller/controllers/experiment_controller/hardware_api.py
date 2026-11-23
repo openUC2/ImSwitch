@@ -183,6 +183,13 @@ class HardwareMixin:
     # registration code, which consumes the canvas-style dict.
     # ------------------------------------------------------------------
 
+    def _announceDisplay(self, text: str, progress: int = -1) -> None:
+        """Show ``text`` (+ optional progress 0-100) on the HAT's OLED via sigDisplayStatus. Never raises."""
+        try:
+            self._commChannel.sigDisplayStatus.emit(str(text), int(progress))
+        except Exception as e:
+            self._logger.debug(f"Could not announce on the display: {e}")
+
     @APIExport(requestType="GET")
     def set_led_status(self, status: str = "idle"):
         """
@@ -191,6 +198,11 @@ class HardwareMixin:
         Args:
             status: Status string - "idle", "rainbow" (busy), "error", etc.
         """
+        # The same three states go to the status OLED on the CAN-HAT master
+        # (idle clears the status line; the running steps are sent by _announceStep).
+        displayText = {"rainbow": "Experiment running", "error": "Experiment error", "idle": ""}.get(status)
+        if displayText is not None:
+            self._announceDisplay(displayText)
         try:
             # Check if LED matrix manager is available
             if hasattr(self._master, 'LEDMatrixsManager'):

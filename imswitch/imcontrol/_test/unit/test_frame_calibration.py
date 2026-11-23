@@ -68,36 +68,55 @@ class Stage:
 
 class Camera:
     """Renders the plate: the via (~100x brighter than the plate), sunburst rays around
-    it, the rect hole; blurred with defocus, scaled with the exposure."""
+    it, the rect hole; blurred with defocus, scaled with the exposure. The scene is rendered
+    once per stage position and objective (the controller takes three frames per position,
+    ~800 per run); every frame gets its own noise."""
 
     def __init__(self, stage, slides=False):
         self.stage, self.n, self.slides, self.slot = stage, 0, slides, 0
-        self.yy, self.xx = np.mgrid[0:H, 0:W]
         self.parameters = {"exposure": SimpleNamespace(value=40.0)}
+        self.key = self.scene = None
+        # per objective, position-independent: each pixel's stage-frame offset from the optical
+        # axis, and (slides) that of its ghost, point-inverted about an off-axis image point
+        yy, xx = np.mgrid[0:H, 0:W]
+        c = np.array([(W - 1) / 2, (H - 1) / 2])
+        px = np.stack([xx - c[0], yy - c[1]]).reshape(2, -1)
+        gx = np.stack([2 * GHOST[0] - xx, 2 * GHOST[1] - yy]).reshape(2, -1)
+        self.off = [-np.linalg.solve(m * J_TRUE, px) for m in MAG]
+        self.ghostOff = [-np.linalg.solve(m * J_TRUE, gx) for m in MAG] if slides else None
 
     def setParameter(self, name, value):
         self.parameters[name].value = value
 
     def getLatestFrame(self, returnFrameNumber=False):
         self.n += 1
+        key = (self.stage.real["X"], self.stage.real["Y"], self.stage.real["Z"], self.slot)
+        if key != self.key:
+            self.key, self.scene = key, self._render()
+        gain = self.parameters["exposure"].value / 40 / MAG[self.slot] ** 2  # light ~ 1/mag^2
+        noise = np.random.default_rng(self.n).standard_normal((H, W))
+        img = self.scene * gain + 8 + 3 * noise if self.slides else self.scene * gain + 20 * noise
+        img = np.clip(img, 0, 4095)
+        return (img, self.n) if returnFrameNumber else img
+
+    def _render(self):
+        """The scene at the current stage position and objective, before exposure and noise."""
         d = np.array([self.stage.real["X"], self.stage.real["Y"]])
-        c = np.array([(W - 1) / 2, (H - 1) / 2])
         R = np.array([[math.cos(THETA), -math.sin(THETA)], [math.sin(THETA), math.cos(THETA)]])
         # plate coordinates of every pixel: stage-frame offset from the optical axis, rotated into the plate
         m = MAG[self.slot]
-        off = -np.linalg.solve(m * J_TRUE, np.stack([self.xx - c[0], self.yy - c[1]]).reshape(2, -1))
-        P = (R.T @ (off + (d + AXIS_OFF[self.slot] - D0)[:, None])).reshape(2, H, W)
+        P = (R.T @ (self.off[self.slot] + (d + AXIS_OFF[self.slot] - D0)[:, None])).reshape(2, H, W)
         dz = -self.stage.zIn * self.stage.real["Z"] - self.stage.zFocus - DZ[self.slot]
-        gain = self.parameters["exposure"].value / 40 / m ** 2          # light per pixel ~ 1/magnification^2
         if self.slides:      # black PCB slides: only the pinholes (0.2/0.3/0.4 mm along +y) let light through
             img = np.zeros((H, W), np.float32)      # float32: the defocus blur is the slow part
             # as on the rig (2026-11-04): a halo reaches a frame ~1 FOV from the hole; a ~1/260 ghost of
             # the hole moves against the stage (point-inverted about an off-axis image point)
-            ghost = R.T @ (-np.linalg.solve(m * J_TRUE, np.stack([2 * GHOST[0] - self.xx, 2 * GHOST[1] - self.yy]).reshape(2, -1))
-                           + (d + AXIS_OFF[self.slot] - D0)[:, None])
+            ghost = R.T @ (self.ghostOff[self.slot] + (d + AXIS_OFF[self.slot] - D0)[:, None])
             ghost = ghost.reshape(2, H, W)
             halo = np.zeros((H, W), np.float32)
             for i, (px, py) in enumerate(fct.SLIDES["pinholes"]):
+                if math.hypot(P[0, H // 2, W // 2] - px, P[1, H // 2, W // 2] - py) > 16000:
+                    continue      # > 15 mm from every pixel and ghost pixel: halo < 1e-17 counts, no disc
                 r = np.hypot(P[0] - px, P[1] - py)
                 halo += 2000 * np.exp(-r / (0.6 * H * PS / m)).astype(np.float32)
                 img[np.hypot(ghost[0] - px, ghost[1] - py) < fct.SLIDES["pinholeDiameters"][i % 3] / 2] = 30000 / 260
@@ -107,9 +126,7 @@ class Camera:
             sigma = min(abs(dz), 2 * abs(dz - rim) + 240) / 40
             if sigma > 0.3:
                 img = cv2.GaussianBlur(img, (0, 0), sigma)
-            img = (img + halo) * gain + 8 + 3 * np.random.default_rng(self.n).standard_normal((H, W))
-            img = np.clip(img, 0, 4095)
-            return (img, self.n) if returnFrameNumber else img
+            return img + halo
         img = np.full((H, W), 200.0, np.float32)
         vx, vy = fct.PLATE["via"]
         r, ang = np.hypot(P[0] - vx, P[1] - vy), np.arctan2(P[1] - vy, P[0] - vx)
@@ -120,9 +137,7 @@ class Camera:
         sigma = abs(dz) / 40
         if sigma > 0.3:
             img = cv2.GaussianBlur(img, (0, 0), sigma)
-        img = img * gain + 20 * np.random.default_rng(self.n).standard_normal((H, W))
-        img = np.clip(img, 0, 4095)
-        return (img, self.n) if returnFrameNumber else img
+        return img
 
 
 class Objective:

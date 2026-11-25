@@ -97,3 +97,11 @@ jobs:
               -v --tb=short
           fi
         shell: bash
+
+      - name: SiLA 2 check against the virtual microscope
+        run: |
+          # Starts ImSwitch (virtual setup + sila2 block) and runs every step of
+          # imswitch-sila-check against it. On its own: the API test server is one per session.
+          python3 -m pytest --pyargs imswitch.imcontrol._test.api.test_sila2 \
+            -p no:arkitekt_next -v --tb=short
+        shell: bash

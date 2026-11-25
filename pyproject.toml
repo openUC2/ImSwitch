@@ -138,6 +138,7 @@ Homepage = "https://github.com/openuc2/ImSwitch"
 
 [project.scripts]
 imswitch = "imswitch.__main__:main"
+imswitch-sila-check = "imswitch.imcontrol.controller.controllers.sila2.check:main"
 
 [tool.setuptools.packages.find]
 include = ["imswitch*"]
